@@ -243,6 +243,20 @@ test("board event streams keep the last valid content while an incomplete write 
   const repaired = await stream.next(p => !p.stale && p.html.includes("Sample repaired title")); assert.deepEqual(repaired.diagnostics, []);
 });
 
+test("F-T216-19: a root that appears while the board starts does not stop the start, and close ends", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const server = createBoardServer({ sources: [{ id: "sample", path: root, label: "Sample source" }], secret: randomBytes(32).toString("base64url"), port });
+  // A generous deadlock guard, not a latency assertion: before the fix, start never settled.
+  const within = (promise, what) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`${what} did not finish`)), 10_000).unref())]);
+  const started = server.start();
+  await new Promise(wake => setTimeout(wake, 30));
+  populate(root);
+  try { assert.equal((await within(started, "start")).port, port); }
+  finally { await within(server.close(), "close"); }
+  assert.equal(server.address(), null);
+});
+
 test("board watches a missing root and reattaches after root replacement without polling", async t => {
   const f = await fixture(t, { missing: true }), stream = events(f); t.after(() => stream.close());
   // T216: a root that does not exist is not set up yet (an owner who uses one provider only): a quiet note, no failure.

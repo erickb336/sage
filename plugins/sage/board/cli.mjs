@@ -147,7 +147,8 @@ function notOurs(found, configPath, config, env) {
   const at = `127.0.0.1:${config.port}`, elsewhere = `Stop it, or set another "port" in ${configPath}.`;
   if (found.kind === "none") return null;
   if (found.kind === "board") return found.id === configId(configPath) ? null : `another board config holds ${at}. ${elsewhere}`;
-  if (found.kind === "older") return `an older board server runs on ${at}. Restart it: run ${boardCommand("--stop", configPath, env)} then ask for the board again.`;
+  // An older board does not name its process, so no command of this version stops it (F-T216-11, 16).
+  if (found.kind === "older") return `an older board server runs on ${at}. Stop it where it started: press Ctrl+C in its terminal, or for the login service run launchctl bootout gui/$(id -u)/dev.sage.board. Then ask for the board again.`;
   if (found.kind === "timeout") return `the board does not answer: a program holds ${at} and gives no answer within 2 s. ${elsewhere}`;
   return `the board server is not running: another program answers on ${at}. ${elsewhere}`;
 }
@@ -191,22 +192,24 @@ function readPid(configPath) {
     return /^[1-9]\d{0,9}\n?$/.test(text) ? Number(text) : null;
   } finally { closeSync(fd); }
 }
+/** A new file renamed over board.pid: a link at that name, hard or symbolic, is replaced, never followed (F-T216-13). */
 function writePid(configPath, pid) {
-  const fd = openSync(pidPath(configPath), constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
-  try { writeFileSync(fd, `${pid}\n`); } finally { closeSync(fd); }
+  const temporary = join(dirname(configPath), `.board-${randomBytes(6).toString("hex")}.pid`);
+  writeFileSync(temporary, `${pid}\n`, { flag: "wx", mode: 0o600 });
+  try { renameSync(temporary, pidPath(configPath)); } catch (error) { rmSync(temporary, { force: true }); throw error; }
 }
 
 /**
  * Stop this config's board server: only the pid in board.pid, and only when the board on the port names this config
- * and that same pid. An older server does not name them: then board.pid, which the older ensure wrote, is the proof.
+ * and that same pid. A board that does not name them (an older one) gets no signal, whatever board.pid holds.
  */
 async function stopBoard(configPath, config, env, kill) {
   const at = `127.0.0.1:${config.port}`, found = await probe(config), pid = readPid(configPath);
   if (found.kind === "none") return `No board server runs on ${at}.`;
   const problem = notOurs(found, configPath, config, env);
-  if (problem && found.kind !== "older") throw new Error(problem);
+  if (problem) throw new Error(problem);
   if (!pid) throw new Error(`the board on ${at} has no board.pid next to ${configPath}, so this command cannot tell its process. Stop it where it started (for example launchctl bootout).`);
-  if (found.kind === "board" && found.pid !== pid) throw new Error(`the board on ${at} is process ${found.pid}, but board.pid says ${pid}. Stop it where it started (for example launchctl bootout).`);
+  if (found.pid !== pid) throw new Error(`the board on ${at} is process ${found.pid}, but board.pid says ${pid}. Stop it where it started (for example launchctl bootout).`);
   kill(pid, "SIGTERM");
   // A wide guard for a busy Mac: the server closes in milliseconds.
   for (const end = Date.now() + 10_000; Date.now() < end; await new Promise(wake => setTimeout(wake, 100))) {
@@ -275,7 +278,8 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
     // The server writes board.pid only once it listens, and removes it when it stops, so a pid there is a running board.
     const configPath = boundedPath(options.config), server = createBoardServer({ ...config, id: configId(configPath) });
     await server.start();
-    writePid(configPath, process.pid);
+    // No listener stays without board.pid: then no command could tell its process (F-T216-12).
+    try { writePid(configPath, process.pid); } catch (error) { await server.close(); throw error; }
     output(`Sage board: http://127.0.0.1:${config.port}/ · no sign-in needed on this Mac.`);
     return { ...server, close: () => server.close().finally(() => { if (readPid(configPath) === process.pid) rmSync(pidPath(configPath), { force: true }); }) };
   }

@@ -4,7 +4,7 @@ import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -191,23 +191,24 @@ const olderBoard = () => createHttpServer((request, response) => {
   response.end("Sign in to the Sage board.\n");
 });
 
-test("T216: ensure names an older board server and the restart; stop restarts it from its board.pid (F-T216-3)", async (t) => {
+const olderLine = (port) => `an older board server runs on 127.0.0.1:${port}. Stop it where it started: press Ctrl+C in its terminal, or for the login service run launchctl bootout gui/$(id -u)/dev.sage.board. Then ask for the board again.`;
+
+test("T216: ensure names an older board server and how to stop it; stop sends it no signal, whatever board.pid holds (F-T216-3, 11, 16)", async (t) => {
   const { dir, env, config } = scratch(t);
   const older = olderBoard(), port = await listen(older);
-  let open = true;
   try {
     assert.equal((await board(CLI, ["--setup", "--port", String(port)], env)).status, 0);
     const found = await board(CLI, ["--ensure"], env);
     assert.equal(found.status, 1);
-    assert.equal(found.stderr, `sage board: an older board server runs on 127.0.0.1:${port}. Restart it: run node ${CLI} board --stop then ask for the board again.\n`);
-    // The older ensure wrote board.pid for the server it started. A fake kill stands in for the signal.
+    assert.equal(found.stderr, `sage board: ${olderLine(port)}\n`);
+    // A board.pid may name any process: an older board does not name its own, so nothing proves that pid is the board.
     writeFileSync(join(dirname(config), "board.pid"), "424242\n");
     const signals = [], lines = [];
-    const kill = (pid, signal) => { signals.push([pid, signal]); open = false; shut(older); };
-    await runBoardCli(["board", "--stop"], { env, output: (line) => lines.push(line), kill });
-    assert.deepEqual(signals, [[424242, "SIGTERM"]]);
-    assert.deepEqual(lines, [`Board server stopped: 127.0.0.1:${port} is free. Ask for the board again to start it.`]);
-  } finally { if (open) await shut(older); }
+    await assert.rejects(runBoardCli(["board", "--stop"], { env, output: (line) => lines.push(line), kill: (...args) => signals.push(args) }), { message: olderLine(port) });
+    assert.deepEqual(signals, [], "no signal to a process that the board does not name");
+    assert.deepEqual(lines, []);
+    assert.equal(await signIn(port, `127.0.0.1:${port}`), 401, "the older board still runs");
+  } finally { await shut(older); }
   // A board server from 859df8d answers on the Mac without the X-Sage-Board header: it is older too.
   const unnamed = createBoardServer({ ...readBoardConfig(config), port: await freePort() });
   try {
@@ -215,7 +216,7 @@ test("T216: ensure names an older board server and the restart; stop restarts it
     const at = unnamed.address().port, path = join(dir, "unnamed", "board.json");
     createBoardConfig(path, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port: at });
     const found = await board(CLI, ["--ensure", "--config", path], env);
-    assert.equal(found.stderr, `sage board: an older board server runs on 127.0.0.1:${at}. Restart it: run node ${CLI} board --stop --config ${path} then ask for the board again.\n`);
+    assert.equal(found.stderr, `sage board: ${olderLine(at)}\n`);
   } finally { await unnamed.close(); }
 });
 
@@ -266,6 +267,40 @@ test("T216: stop sends no signal when board.pid does not name the process that a
   } finally { await server.close(); }
 });
 
+test("F-T216-12: when board.pid cannot be written, the server closes and the command fails, so no listener stays without it", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const port = await freePort();
+  createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port });
+  // A folder at board.pid, with a file in it, makes the write fail after the listener opened.
+  mkdirSync(join(dirname(config), "board.pid", "inside"), { recursive: true });
+  const child = spawn(process.execPath, [CLI, "board", "--serve"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = ""; child.stderr.on("data", (chunk) => { stderr += chunk; });
+  try {
+    // A generous deadlock guard, not a speed check: before the fix, the command kept listening and never exited.
+    const status = await Promise.race([new Promise((done) => child.once("close", done)), new Promise((done) => setTimeout(done, 15_000, "still running").unref())]);
+    assert.equal(status, 1, stderr);
+    assert.match(stderr, /^sage board: /);
+    assert.equal((await get(port)).error, "ECONNREFUSED");
+  } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM"); }
+});
+
+test("F-T216-13: the server writes board.pid as a new file, so a hard link at that name does not change the file it points to", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const port = await freePort();
+  createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port });
+  const other = join(dir, "other.txt"), pidFile = join(dirname(config), "board.pid");
+  writeFileSync(other, "sample text that stays\n");
+  linkSync(other, pidFile);
+  const server = await runBoardCli(["board", "--serve"], { env, output: () => {} });
+  try {
+    assert.equal(readFileSync(other, "utf8"), "sample text that stays\n");
+    assert.equal(readFileSync(pidFile, "utf8"), `${process.pid}\n`);
+    assert.deepEqual(readdirSync(dirname(config)).sort(), ["board.json", "board.pid"], "no temporary file is left");
+  } finally { await server.close(); }
+  assert.equal(existsSync(pidFile), false);
+  assert.equal(readFileSync(other, "utf8"), "sample text that stays\n");
+});
+
 test("T216: with allowedHosts, the line gives the phone steps and a set-password command that runs as printed (F-T216-5)", async (t) => {
   const { dir, env, config } = scratch(t);
   const port = await freePort();
@@ -295,6 +330,73 @@ test("T216: the board guide says that the Mac needs no sign-in, and gives ensure
   assert.match(guide, /On the Mac itself, browser pages need no sign-in/);
   assert.match(guide, /`board --ensure` does the first and the last step for you/);
   assert.match(guide, /node <path to board\/cli\.mjs> board --stop/);
+  // F-T216-18: the login service runs --serve too, so its board writes board.pid.
+  assert.doesNotMatch(guide, /login service started has no `board\.pid`/);
+  assert.match(guide, /The login service runs the same `--serve` command, so its board writes `board\.pid` too/);
+  // F-T216-15: a plain TCP forward has no proxy header, so the guide names it as unsupported.
+  assert.match(guide, /Only this HTTPS form of `tailscale serve` is supported\. Do not forward the port as plain TCP \(`tailscale serve --tcp`, `ssh -L`, `socat`/);
+  // F-T216-16: an older board is stopped where it started, not with --stop.
+  assert.match(guide, /`--stop` sends it no signal, whatever `board\.pid` holds/);
+});
+
+/** The words of one README command line, as a shell would pass them: quotes, \" inside double quotes, and $HOME. Never run by a shell. */
+function words(line, home) {
+  const out = []; let word = null, quote = null;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (quote) {
+      if (char === quote) quote = null;
+      else if (quote === '"' && char === "\\" && line[i + 1] === '"') { word += '"'; i++; }
+      else if (quote === '"' && line.startsWith("$HOME", i)) { word += home; i += 4; }
+      else if (quote === '"' && char === "$") throw new TypeError(`unexpected $ in the README command: ${line}`);
+      else word += char;
+    } else if (char === " ") { if (word !== null) out.push(word); word = null; }
+    else if (char === '"' || char === "'") { quote = char; word ??= ""; }
+    else if (/[$`\\;&|<>(){}*?]/.test(char)) throw new TypeError(`unexpected shell character in the README command: ${line}`);
+    else word = (word ?? "") + char;
+  }
+  if (quote) throw new TypeError(`open quote in the README command: ${line}`);
+  if (word !== null) out.push(word);
+  return out;
+}
+
+test("F-T216-17: the board guide's set-up commands run as written in the board folder of an isolated plugin copy", async (t) => {
+  const { dir, env } = scratch(t);
+  const home = env.HOME, plugin = join(dir, "plugin");
+  cpSync(fileURLToPath(new URL("../plugins/sage", import.meta.url)), plugin, { recursive: true });
+  const guide = readFileSync(fileURLToPath(new URL("../packages/sage-board/README.md", import.meta.url)), "utf8");
+  const block = guide.slice(guide.indexOf("To set it up by hand")).match(/```sh\n([\s\S]*?)```/)[1];
+  const [setup, install, serve] = block.trim().split("\n").map((line) => words(line, home));
+  assert.deepEqual([setup[0], install[0], serve[0]], ["node", "node", "node"]);
+  const run = (args) => new Promise((done, fail) => {
+    const child = spawn(process.execPath, args, { cwd: join(plugin, "board"), env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = ""; child.stdout.on("data", (chunk) => { stdout += chunk; }); child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", fail); child.once("close", (status) => done({ status, stdout, stderr }));
+  });
+  const made = await run(setup.slice(1));
+  assert.equal(made.status, 0, made.stderr);
+  const installed = await run(install.slice(1));
+  assert.equal(installed.status, 0, installed.stderr);
+  const cli = join(home, ".local", "share", "sage-board", "service", "packages", "board", "cli.mjs");
+  assert.equal(installed.stdout.split("\n")[0], `Installed board command: ${cli}`);
+  assert.equal(serve[1], cli, "the serve line names the path that install prints");
+  // The guide uses the default port; the test moves it to a free port, so it never touches a running board.
+  const config = join(home, ".config", "sage-board", "board.json"), port = await freePort();
+  writeFileSync(config, JSON.stringify({ ...JSON.parse(readFileSync(config, "utf8")), port }));
+  const child = spawn(process.execPath, serve.slice(1), { cwd: join(plugin, "board"), env, stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    let stdout = "";
+    // A generous deadlock guard, not a speed check.
+    const line = await new Promise((done, fail) => {
+      const timer = setTimeout(() => fail(new Error(`no serve line: ${stdout}`)), 15_000);
+      child.stdout.on("data", (chunk) => { stdout += chunk; if (stdout.includes("\n")) { clearTimeout(timer); done(stdout); } });
+      child.once("close", (status) => { clearTimeout(timer); fail(new Error(`serve exited with ${status}`)); });
+    });
+    assert.equal(line, `Sage board: http://127.0.0.1:${port}/ · no sign-in needed on this Mac.\n`);
+    assert.equal((await get(port)).status, 200);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { const closed = new Promise((done) => child.once("close", done)); child.kill("SIGTERM"); await closed; }
+  }
 });
 
 // Sample passwords only: none is a real password.

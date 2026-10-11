@@ -104,7 +104,7 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
   let checking = false; // one password check at a time: scrypt is slow on purpose, and the delay after a wrong one counts too
   let boardHeader = null;
   const watchers = new Map(), watchErrors = new Map(), clients = new Set();
-  let model, lastGood, revision = 0, refreshTimer, boundaryTimer, settleTimer, startPromise, closePromise, closed = false;
+  let model, lastGood, revision = 0, refreshTimer, boundaryTimer, settleTimer, startTimer, startPromise, closePromise, closed = false;
 
   /** true, false, or "busy" while another password check runs. */
   async function authenticated(request) {
@@ -309,7 +309,8 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
         };
         server.once("error", failed);
         // The first watchers settle before the listener opens: the second read sees what changed while they started.
-        settleTimer = setTimeout(() => {
+        // The start has its own timer, so a watcher event in these 250 ms cannot cancel it (F-T216-19).
+        startTimer = setTimeout(() => {
           if (closed) return failed({});
           refresh();
           server.listen(port, "127.0.0.1", () => {
@@ -326,7 +327,7 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
       if (closePromise) return closePromise;
       closed = true;
       for (const { watcher } of watchers.values()) watcher.close(); watchers.clear();
-      clearTimeout(refreshTimer); clearTimeout(boundaryTimer); // a pending start's settle timer ends that start
+      clearTimeout(refreshTimer); clearTimeout(boundaryTimer); // a pending start's own timer ends that start
       for (const client of clients) { client.response.destroy(); removeClient(client); }
       closePromise = (async () => {
         if (startPromise) await startPromise.catch(() => {});

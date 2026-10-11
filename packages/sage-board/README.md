@@ -14,15 +14,19 @@ Each server sends a non-secret id of its config on the Mac, so `board --ensure` 
 node <path to board/cli.mjs> board --stop
 ```
 
-Then ask for the board again (or run `board --ensure`). `--stop` stops only this config's board: it checks that the board on the port names this config and the pid in `board.pid`, sends that pid a stop signal, and waits until the port is free. A board that a login service started has no `board.pid`; stop it with `launchctl bootout` (below).
+Then ask for the board again (or run `board --ensure`). `--stop` stops only this config's board: it checks that the board on the port names this config and the pid in `board.pid`, sends that pid a stop signal, and waits until the port is free. The login service runs the same `--serve` command, so its board writes `board.pid` too and `--stop` stops it; to stop the login service itself, use `launchctl bootout` (below).
 
-To set it up by hand, run these commands from the Sage checkout, or from the `board/` folder of an installed plugin. `board --ensure` does the first and the last step for you; the install step makes a copy that does not change when the plugin updates. Replace the source paths when your provider uses another root.
+An older board server, from before the board sent its id, does not name its process. `--stop` sends it no signal, whatever `board.pid` holds, and `board --ensure` says so. Stop it where it started: press Ctrl+C in its terminal, or run `launchctl bootout "gui/$(id -u)/dev.sage.board"` for the login service. Then ask for the board again.
+
+To set it up by hand, run these commands in the `board/` folder of the installed plugin. `board --ensure` does the first and the last step for you; the install step makes a copy that does not change when the plugin updates. Replace the source paths when your provider uses another root.
 
 ```sh
-node packages/sage-board/cli.mjs board --setup --config "$HOME/.config/sage-board/board.json" --sources "[{\"id\":\"claude\",\"path\":\"$HOME/.claude/sage\"},{\"id\":\"codex\",\"path\":\"$HOME/.codex/sage\"}]" --pages "$HOME/.local/share/sage-board/pages"
-node packages/sage-board/cli.mjs board --install --config "$HOME/.config/sage-board/board.json" --install-dir "$HOME/.local/share/sage-board/service" --login-file "$HOME/Library/LaunchAgents/dev.sage.board.plist"
-node "$HOME/.local/share/sage-board/service/packages/sage-board/cli.mjs" board --serve --config "$HOME/.config/sage-board/board.json"
+node cli.mjs board --setup --config "$HOME/.config/sage-board/board.json" --sources "[{\"id\":\"claude\",\"path\":\"$HOME/.claude/sage\"},{\"id\":\"codex\",\"path\":\"$HOME/.codex/sage\"}]" --pages "$HOME/.local/share/sage-board/pages"
+node cli.mjs board --install --config "$HOME/.config/sage-board/board.json" --install-dir "$HOME/.local/share/sage-board/service" --login-file "$HOME/Library/LaunchAgents/dev.sage.board.plist"
+node "$HOME/.local/share/sage-board/service/packages/board/cli.mjs" board --serve --config "$HOME/.config/sage-board/board.json"
 ```
+
+The last line runs the installed copy: use the path that the install step prints after "Installed board command". From the Sage checkout, run the same commands in `packages/sage-board/`; the installed copy is then `service/packages/sage-board/cli.mjs`.
 
 Open the printed localhost URL. On the Mac itself (Host `127.0.0.1`, `localhost` or `[::1]` at the board's port) the board needs no sign-in. Through an allowed host, such as the Tailscale name, sign in as `sage` with your board password. Set it in a terminal with `board --set-password`: it asks twice with the echo off, needs 12 characters or more, and keeps only a salted scrypt hash in the configuration file, in place of the random `secret`. Until you set one, the password is the `secret` value from the private configuration file. Restart a running server after a change. Keep that file private.
 
@@ -47,6 +51,8 @@ Inspect it with `launchctl print "gui/$(id -u)/dev.sage.board"`. Stop it with `l
 Sign in to Tailscale on the Mac and phone. Add the Mac’s exact Tailscale DNS name to `allowedHosts` in the board configuration, then restart the service with `board --stop` and `board --ensure`. Until `allowedHosts` names a host, the `board --ensure` line says that phone access is off.
 
 Forward HTTPS with `tailscale serve --bg --https=443 http://127.0.0.1:43123`. Open its printed HTTPS URL on the phone and use the board sign-in. A request that comes through `tailscale serve` always needs the sign-in, also when it names a loopback host: the server treats a request as from the Mac only when it comes from loopback, names a loopback host, and has no header that a proxy adds (`X-Forwarded-*`, `Forwarded` or `Tailscale-*`). The server checks one password at a time and waits one second after a wrong one.
+
+Only this HTTPS form of `tailscale serve` is supported. Do not forward the port as plain TCP (`tailscale serve --tcp`, `ssh -L`, `socat` or a similar tool): such a forward connects from loopback and adds no proxy header, so a request with a loopback Host gets the board with no sign-in.
 
 Use `tailscale serve status` to inspect the forwarding rule. To stop this forwarding rule, use `tailscale serve --bg --https=443 off`.
 
