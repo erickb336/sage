@@ -389,7 +389,21 @@ async function preparationServerFixture(t) {
   const core = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   const events = await import(pathToFileURL(join(f.plugin, "runtime/events.mjs")));
   const api = await import(pathToFileURL(join(f.plugin, "runtime/preparation.mjs")));
-  const options = { directory: f.mode.directory, project: f.mode.project, sessionsDir: f.mode.sessionsDir, observationsRoot: join(f.dir, "observations") };
+  const options = { directory: f.mode.directory, project: f.mode.project, sessionsDir: f.mode.sessionsDir, observationsRoot: join(f.dir, "observations"),
+    projectDirectory: join(f.dir, "assignment-project"), logbookRoot: join(f.dir, "assignment-logbook") };
+  mkdirSync(options.projectDirectory); mkdirSync(options.observationsRoot);
+  const assignmentTool = core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+  const assignmentEnv = { ...process.env, SAGE_HOME: options.logbookRoot };
+  const assignmentCli = (...args) => assignmentTool.sage([...args, "--project", options.projectDirectory], assignmentEnv);
+  const assignmentGit = (...args) => execFileSync("git", ["-C", options.projectDirectory, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+    "-c", "user.name=Fixture", "-c", "user.email=fixture@users.noreply.github.com", ...args], { env: assignmentEnv, encoding: "utf8" });
+  assignmentGit("init", "--quiet", "-b", "codex/t1-fixture"); assignmentGit("commit", "--quiet", "--allow-empty", "-m", "fixture");
+  assignmentCli("init"); assignmentCli("task", "add", "--title", "Fixture task", "--size", "small");
+  assignmentCli("task", "T1", "set", "branch=codex/t1-fixture");
+  assignmentCli("run", "add", "T1", "--role", "lead"); assignmentCli("run", "add", "T1", "--role", "qa");
+  assignmentCli("task", "add", "--title", "Second fixture task", "--size", "small");
+  assignmentCli("run", "add", "T2", "--role", "lead");
+  const assignmentLogbook = assignmentTool.storeDir(options.projectDirectory, assignmentEnv);
   core.configureAdmission(options.directory, { total: 5, projects: [{ project: options.project, limit: 5 }] });
   const owner = core.activateAdmission(options.directory, { project: options.project, session: `codex:${session}`, activation: turns[0] });
   const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
@@ -426,7 +440,7 @@ async function preparationServerFixture(t) {
       call: "spawn-1", child: childActor, turn: turns[1] });
   };
   const connectVisible = version => connect(t, f, version, "", "sage_prepare_task");
-  return { ...f, core, events, api, options, scope, input, native, spawnInput, childTranscript, bindLead, connectVisible };
+  return { ...f, core, events, api, options, scope, input, native, spawnInput, childTranscript, bindLead, connectVisible, assignmentTool, assignmentEnv, assignmentCli, assignmentLogbook };
 }
 
 test("visible preparation server saves the native owner's brief without dispatch or capacity", async t => {
@@ -442,7 +456,7 @@ test("visible preparation server saves the native owner's brief without dispatch
   assert.equal(state.preparations[0].issuer, session);
   assert.deepEqual(state.preparations[0].brief, f.input.brief);
   assert.deepEqual(state.reservations, []);
-  assert.equal(existsSync(f.options.observationsRoot), false);
+  assert.equal(existsSync(join(f.options.observationsRoot, session)), false);
 });
 
 test("visible preparation server refuses forged identity unsupported versions and invalid work", async t => {
@@ -461,7 +475,7 @@ test("visible preparation server refuses forged identity unsupported versions an
 
 test("visible preparation server uses a verified lead binding and rejects ambiguous native history", async t => {
   const f = await preparationServerFixture(t); f.bindLead(); const client = await f.connectVisible();
-  const task = { ...f.input, name: "qa_child", role: "qa" };
+  const task = { ...f.input, name: "qa_child", run: "R2", role: "qa", reviewCycle: 1 };
   assert.equal((await client.call(task, childActor)).decision, "prepared");
   assert.equal(typeof (await client.call({ ...task, name: "nested_lead", role: "lead" }, childActor)).error, "string");
   f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: "0.160.0", session,
@@ -511,7 +525,7 @@ test("visible preparation server contains missing modules and unavailable storag
     assert.deepEqual(output, { error: "Sage could not prepare this task. Check the active role, task brief, and unique agent name." });
     await client.close();
   }
-  const specialist = await preparationServerFixture(t); specialist.input.role = "qa"; specialist.bindLead();
+  const specialist = await preparationServerFixture(t); specialist.input.role = "qa"; specialist.input.run = "R2"; specialist.input.reviewCycle = 1; specialist.bindLead();
   const client = await specialist.connectVisible();
   assert.equal(typeof (await client.call({ ...specialist.input, name: "third_layer" }, childActor)).error, "string");
   await client.close();
@@ -521,11 +535,17 @@ test("visible preparation server contains missing modules and unavailable storag
 async function sharedConfiguration(t) {
   const f = await configured(t);
   const observationsRoot = join(f.dir, "observations"); mkdirSync(observationsRoot);
-  const config = { version: 2, mode: { ...f.mode, observationsRoot } };
+  f.mode.projectDirectory = join(f.dir, "configuration-project"); mkdirSync(f.mode.projectDirectory);
+  const logbookRoot = join(f.dir, "configuration-logbook");
+  const { createStateTool } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+  const tool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+  const cli = (...args) => tool.sage([...args, "--project", f.mode.projectDirectory], { ...process.env, SAGE_HOME: logbookRoot });
+  cli("init"); cli("task", "add", "--title", "Configuration fixture", "--size", "small"); cli("run", "add", "T1", "--role", "lead");
+  const config = { version: 3, mode: { ...f.mode, observationsRoot, logbookRoot } };
   writeFileSync(f.configFile, JSON.stringify(config));
   const preparationEntry = join(f.dir, "preparation.mjs");
   writeFileSync(preparationEntry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(f.configFile)});`);
-  return { ...f, config, preparationEntry };
+  return { ...f, config, preparationEntry, prompt: (...args) => ({ ...f.prompt(...args), cwd: f.mode.projectDirectory }) };
 }
 
 test("shared server configuration fixes the same journal project and event store for both launchers", async t => {
@@ -559,7 +579,7 @@ test("shared server configuration rejects missing linked or unknown observation 
   const root = f.config.mode.observationsRoot;
   const linked = join(f.dir, "linked-observations"); symlinkSync(root, linked, "dir");
   const missing = join(f.dir, "missing-observations");
-  for (const config of [{ ...f.config, version: 3 },
+  for (const config of [{ ...f.config, version: 2 },
     { version: 1, mode: f.config.mode }, { version: 2, mode: f.mode },
     ...[linked, missing, f.configFile, "relative", f.mode.directory, f.dir].map(observationsRoot => ({ ...f.config, mode: { ...f.config.mode, observationsRoot } }))]) {
     writeFileSync(f.configFile, JSON.stringify(config));
@@ -602,9 +622,9 @@ async function composedPolicyFixture(t) {
 
 test("composed native policy connects configured preparation spawn and nested child instructions", async t => {
   const f = await composedPolicyFixture(t);
-  mkdirSync(f.options.observationsRoot);
+  mkdirSync(f.options.observationsRoot, { recursive: true });
   const config = join(f.dir, "policy.json");
-  writeFileSync(config, JSON.stringify({ version: 2, mode: { ...f.mode, observationsRoot: f.options.observationsRoot } }));
+  writeFileSync(config, JSON.stringify({ version: 3, mode: f.options }));
   const hiddenEntry = join(f.dir, "hidden.mjs");
   writeFileSync(hiddenEntry, `import { serveConfiguredHooks } from './plugin/runtime/configuration.mjs';
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
@@ -621,7 +641,7 @@ test("composed native policy connects configured preparation spawn and nested ch
   };
   for (const [request, actor, child, path, turn] of [
     [f.input, session, childActor, "/root/fixture_lead", turns[1]],
-    [{ ...f.input, name: "qa_child", role: "qa" }, childActor, qa, "/root/fixture_lead/qa_child", turns[2]],
+    [{ ...f.input, name: "qa_child", run: "R2", role: "qa", reviewCycle: 1 }, childActor, qa, "/root/fixture_lead/qa_child", turns[2]],
   ]) {
     assert.equal((await visible.call(request, actor)).decision, "prepared");
     const spawn = f.spawnInput(request.name, request.name);
@@ -774,7 +794,7 @@ test("native admission refuses altered prepared instructions before consuming a 
     assert.throws(() => f.api.reservePreparedSpawn(spawn, f.native(session), f.options), /could not verify/);
     assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
   }
-  const other = f.api.prepareNativeTask({ ...f.input, name: "second_lead", task: "T2" }, f.native(session), f.options);
+  const other = f.api.prepareNativeTask({ ...f.input, name: "second_lead", task: "T2", run: "R3" }, f.native(session), f.options);
   const swapped = f.spawnInput(); swapped.tool_input.message = other.message;
   assert.throws(() => f.api.reservePreparedSpawn(swapped, f.native(session), f.options), /could not verify/);
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
@@ -1178,7 +1198,7 @@ async function reviewPreparationFixture(t, role = "code-reviewer") {
   cli("init"); cli("task", "add", "--title", "Pinned review", "--size", "small");
   cli("task", "T1", "set", "branch=codex/t1-review");
   cli("run", "add", "T1", "--role", role);
-  mkdirSync(f.options.observationsRoot);
+  mkdirSync(f.options.observationsRoot, { recursive: true });
   const options = { ...f.options, projectDirectory, logbookRoot: env.SAGE_HOME };
   const input = { ...f.input, role, reviewCycle: 1 };
   const prepare = (request = input) => f.api.prepareNativeTask(request, f.native(session), options);
@@ -1505,7 +1525,7 @@ test("chief saved report inspection reads a lead's recorded nested report withou
   const leadTranscript = f.childTranscript();
   await f.evaluate(policy, { ...patch(turns[1]), transcript_path: leadTranscript }, childActor);
   const qa = "a22422c7-509c-43aa-8c42-827c556f8a59", path = "/root/fixture_lead/qa_child";
-  const request = { ...f.input, name: "qa_child", run: "R2", role: "qa" };
+  const request = { ...f.input, name: "qa_child", run: "R2", role: "qa", reviewCycle: 1 };
   f.api.prepareNativeTask(request, f.native(childActor), f.options);
   const spawn = { ...f.spawnInput(request.name, "spawn-qa"), turn_id: turns[1], transcript_path: leadTranscript };
   await f.evaluate(policy, spawn, childActor);
@@ -1774,7 +1794,7 @@ test("native failed dispatch reconciliation retains any dispatch with child or s
 });
 
 test("native failed dispatch reconciliation lets an admitted lead recover its own rejected child only", async t => {
-  const f = await completionFixture(t), request = { ...f.input, name: "failed_qa", run: "R2", role: "qa" };
+  const f = await completionFixture(t), request = { ...f.input, name: "failed_qa", run: "R2", role: "qa", reviewCycle: 1 };
   f.api.prepareNativeTask(request, f.native(childActor), f.options);
   const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
   const spawn = { ...f.spawnInput(request.name, "failed-qa"), turn_id: turns[1], transcript_path: transcript };
@@ -2052,7 +2072,7 @@ test('off-mode ordinary child stops without a Sage report or admission writes', 
   assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'unmanaged' });
   assert.deepEqual(await f.output({ ...f.stop, stop_hook_active: false, last_assistant_message: 'ordinary answer' }), {});
   assert.deepEqual(f.core.readAdmission(f.options.directory), before);
-  assert.equal(existsSync(f.options.observationsRoot), false);
+  assert.equal(existsSync(join(f.options.observationsRoot, session)), false);
 });
 
 test('off-mode ordinary stop requires matching protected child and current-turn evidence', async t => {
@@ -2189,7 +2209,7 @@ async function taskCreationFixture(t) {
   const env = { ...process.env, SAGE_HOME: join(f.dir, 'logbook') };
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); } });
   const cli = (...args) => tool.sage([...args, '--project', projectDirectory], env);
-  cli('init'); mkdirSync(f.options.observationsRoot);
+  cli('init'); mkdirSync(f.options.observationsRoot, { recursive: true });
   const options = { ...f.options, projectDirectory, logbookRoot: env.SAGE_HOME };
   const { createNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-create.mjs')));
   const input = { request: turns[0], title: 'Native task request', size: 'small', risk: ['input'], add: ['ux-review'], why: 'Check the agreed experience' };
@@ -2499,4 +2519,90 @@ test('native task updates serialize conflicting changes and preserve off-mode ow
   assert.equal(f.read().version, outputs.find(out => out.decision === 'task-updated').version);
   assert.equal(f.read().task.state, 'framed');
   await Promise.all(clients.map(client => client.close()));
+});
+
+function editAssignmentRows(f, table, change) {
+  const file = join(f.assignmentLogbook, `${table}.tsv`), text = readFileSync(file, 'utf8');
+  const lines = text.trimEnd().split('\n'), keys = lines.shift().split('\t');
+  const rows = lines.map(line => Object.fromEntries(line.split('\t').map((value, index) => [keys[index], value])));
+  const next = change(rows);
+  writeFileSync(file, keys.join('\t') + '\n' + next.map(row => keys.map(key => row[key] ?? '').join('\t')).join('\n') + '\n');
+  return () => writeFileSync(file, text);
+}
+
+test('native assignment preparation requires one actual matching active task and run', async t => {
+  const f = await preparationServerFixture(t);
+  for (const input of [{ ...f.input, task: 'T3' }, { ...f.input, run: 'R4' },
+    { ...f.input, task: 'T2' }, { ...f.input, role: 'implementer' }])
+    assert.throws(() => f.api.prepareNativeTask(input, f.native(session), f.options));
+  for (const [table, field, value] of [
+    ['runs', 'status', 'done'], ['runs', 'report', 'reports/saved.md'], ['runs', 'ended', '2026-01-01T00:00:00Z'],
+    ['runs', 'round', '1'], ['runs', 'task', 'T2'], ['runs', 'role', 'qa'], ['runs', 'branch', 'codex/t1-other'],
+    ['tasks', 'round', '-1'], ['tasks', 'round', '9007199254740992'], ['tasks', 'state', 'abandoned'],
+    ['tasks', 'state', 'merged'], ['tasks', 'state', 'concluded'], ['tasks', 'state', 'unknown'], ['tasks', 'branch', 'codex/t2-foreign']]) {
+    const restore = editAssignmentRows(f, table, rows => rows.map((row, index) => index ? row : { ...row, [field]: value }));
+    assert.throws(() => f.api.prepareNativeTask(f.input, f.native(session), f.options), `${table}.${field}=${value}`);
+    restore();
+  }
+  for (const table of ['tasks', 'runs']) for (const duplicate of [false, true]) {
+    const restore = editAssignmentRows(f, table, rows => duplicate ? [...rows, rows[0]] : rows.slice(1));
+    assert.throws(() => f.api.prepareNativeTask(f.input, f.native(session), f.options)); restore();
+  }
+  assert.equal(f.core.readAdmission(f.options.directory).preparations.length, 0);
+  assert.equal(f.api.prepareNativeTask(f.input, f.native(session), f.options).decision, 'prepared');
+});
+
+test('native assignment dispatch rechecks records changed after preparation without taking capacity', async t => {
+  const f = await preparationServerFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  for (const [table, field, value] of [['runs', 'status', 'failed'], ['runs', 'round', '1'],
+    ['runs', 'branch', 'codex/t1-other'], ['tasks', 'state', 'abandoned'], ['runs', 'role', 'qa']]) {
+    const restore = editAssignmentRows(f, table, rows => rows.map((row, index) => index ? row : { ...row, [field]: value }));
+    assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options));
+    assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0); restore();
+  }
+  assert.equal(f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options).decision, 'permit-once');
+});
+
+test('native assignment checks cannot bypass missing aliased or pending logbooks', async t => {
+  const f = await preparationServerFixture(t), alias = join(f.dir, 'assignment-alias');
+  symlinkSync(f.options.logbookRoot, alias);
+  for (const fixed of [{ ...f.options, logbookRoot: undefined }, { ...f.options, logbookRoot: alias },
+    { ...f.options, projectDirectory: f.dir }])
+    assert.throws(() => f.api.prepareNativeTask(f.input, f.native(session), fixed));
+  const pending = join(f.assignmentLogbook, 'review-pending.json'); writeFileSync(pending, '{}');
+  assert.throws(() => f.api.prepareNativeTask(f.input, f.native(session), f.options)); rmSync(pending);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  writeFileSync(pending, '{}');
+  assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options)); rmSync(pending);
+  assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), { ...f.options, logbookRoot: undefined }));
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});
+
+test('shared assignment capture enforces writer ownership and leaves recorded work unchanged', async t => {
+  const f = await preparationServerFixture(t);
+  f.assignmentCli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-fixture');
+  const input = { project: f.options.projectDirectory, task: 'T1', run: 'R4', role: 'implementer' };
+  const before = Object.fromEntries(['tasks', 'runs', 'decisions'].map(table => [table, readFileSync(join(f.assignmentLogbook, `${table}.tsv`), 'utf8')]));
+  const captured = f.assignmentTool.captureRunAssignment(input, f.assignmentEnv);
+  assert.deepEqual(captured, { task: 'T1', run: 'R4', role: 'implementer', round: 0,
+    taskBranch: 'codex/t1-fixture', runBranch: 'codex/t1-fixture', candidate: '' });
+  assert.deepEqual(Object.fromEntries(Object.keys(before).map(table => [table, readFileSync(join(f.assignmentLogbook, `${table}.tsv`), 'utf8')])), before);
+  for (const change of [rows => rows.map(row => row.id === 'R4' ? { ...row, branch: '' } : row),
+    rows => [...rows, { ...rows.at(-1), id: 'R5', role: 'designer' }]]) {
+    const restore = editAssignmentRows(f, 'runs', change);
+    assert.throws(() => f.assignmentTool.captureRunAssignment(input, f.assignmentEnv)); restore();
+  }
+  assert.throws(() => f.assignmentTool.captureRunAssignment({ ...input, role: '' }, f.assignmentEnv));
+  assert.throws(() => f.assignmentTool.captureRunAssignment({ ...input, owner: session }, f.assignmentEnv));
+});
+
+test('native assignment server refuses invented work with a redacted error and no preparation', async t => {
+  const f = await preparationServerFixture(t), client = await f.connectVisible();
+  const result = await client.call({ ...f.input, run: 'R99' });
+  assert.match(result.error, /Sage could not prepare this task/);
+  assert.equal(result.error.includes(f.dir), false);
+  assert.equal(f.core.readAdmission(f.options.directory).preparations.length, 0);
+  assert.equal((await client.call(f.input)).decision, 'prepared');
+  await client.close();
 });

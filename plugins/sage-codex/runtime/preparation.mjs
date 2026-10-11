@@ -34,6 +34,13 @@ function actorScope(options, native) {
   return { scope: { project: owner.project, session: owner.session, epoch: owner.epoch }, role: "lead" };
 }
 
+function checkRun(options, input) {
+  validateLogbookLocation(options);
+  const tool = createStateTool({ defaultRoot: refuse });
+  return tool.captureRunAssignment({ project: options.projectDirectory, task: input.task, run: input.run,
+    role: input.role }, { ...process.env, SAGE_HOME: options.logbookRoot });
+}
+
 function captureReview(options, input, cycle) {
   validateLogbookLocation(options);
   const tool = createStateTool({ defaultRoot: refuse });
@@ -49,6 +56,7 @@ export function prepareNativeTask(input, context, options) {
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
     || keys.some(key => !Object.hasOwn(input, key)) || typeof input.name !== "string" || !NAME.test(input.name)) refuse();
   const { scope, role } = actorScope(options, native);
+  checkRun(options, input);
   const reviewRole = REVIEW_ROLES.includes(input.role);
   if (hasCycle && (!reviewRole || !options.logbookRoot)) refuse();
   const review = reviewRole && options.logbookRoot ? captureReview(options, input, input.reviewCycle) : undefined;
@@ -77,6 +85,7 @@ export function reservePreparedSpawn(input, context, options) {
   const prepared = readAdmission(options.directory).preparations.filter(row => row.project === scope.project
     && row.session === scope.session && row.epoch === scope.epoch && row.issuer === native.actor && row.name === observed.name);
   if (prepared.length !== 1 || message !== preparedTaskMessage(prepared[0])) refuse();
+  checkRun(options, { ...prepared[0], role: prepared[0].rolePlan.role });
   if (REVIEW_ROLES.includes(prepared[0].rolePlan.role) && (options.logbookRoot || prepared[0].review)) {
     if (!prepared[0].review) refuse();
     const current = captureReview(options, { ...prepared[0], role: prepared[0].rolePlan.role }, prepared[0].review.cycle);

@@ -12,8 +12,15 @@ recorded model from the current task and shared settings.
 
 A writer needs a branch. Another running writer cannot use that branch,
 whether the CLI or native tool created its run. The shared core owns this rule.
-A run record grants no role authority; preparation and native admission still
-refuse unsupported roles and invalid dispatches.
+A run record grants no role authority. Preparation and dispatch both require a
+configured logbook and one matching active task and run. They refuse missing or
+duplicate records, a changed role or round, ended or reported runs, terminal
+tasks, and mismatched branches. Writers need the task's branch and cannot share
+it with another active writer. Unsupported roles still cannot run.
+
+These checks read current records at each boundary. They do not pin every task
+field at preparation, answer gates, or enforce every workflow route. Review
+preparation also pins its current commit, round, and cycle.
 
 Reuse the same request UUID and fields after a lost response. A retry returns
 the original creation record. It does not reopen a completed run or reset its
