@@ -61,6 +61,35 @@ test("provider packages are complete outside the checkout, with no opposite adap
   }
 });
 
+test("T216: each plugin's board is a cross-provider reader: it imports only Node built-ins and the bundled core, and installs from the plugin", async (t) => {
+  for (const provider of ["claude", "codex"]) {
+    const { dir, plugin } = isolated(t, provider);
+    const files = filesUnder(join(plugin, "board"));
+    assert.deepEqual(files.map((file) => relative(join(plugin, "board"), file)).sort(), ["cli.mjs", "install.mjs", "server.mjs"]);
+    const { parse } = await import("es-module-lexer/minimal");
+    for (const file of files) {
+      const [imports] = parse(readFileSync(file, "utf8"));
+      for (const { n: name } of imports.filter((item) => item.d !== -2)) { // -2 is import.meta, not an import
+        const allowed = name?.startsWith("node:") || name === "../core/index.mjs" || /^\.\/(?:cli|install|server)\.mjs$/.test(name ?? "");
+        assert.ok(allowed, `${provider} ${relative(plugin, file)} imports ${name}`);
+      }
+    }
+    // The install copies the plugin's board and core, so the stable copy runs without the checkout or the plugin.
+    const env = { ...process.env, HOME: join(dir, "home") };
+    delete env.SAGE_HOME; delete env.CODEX_HOME;
+    const config = join(dir, "board.json"), installDir = join(dir, "stable");
+    const run = (cli, ...args) => spawnSync(process.execPath, [cli, "board", ...args, "--config", config], { encoding: "utf8", env });
+    assert.equal(run(join(plugin, "board/cli.mjs"), "--setup").status, 0);
+    const installed = run(join(plugin, "board/cli.mjs"), "--install", "--install-dir", installDir);
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.equal(installed.stdout, `Installed board command: ${join(installDir, "packages", "board", "cli.mjs")}\n`);
+    rmSync(plugin, { recursive: true, force: true });
+    const status = run(join(installDir, "packages", "board", "cli.mjs"), "all", "--status");
+    assert.equal(status.status, 0, status.stderr);
+    assert.match(status.stdout, /^Tasks: none recorded/);
+  }
+});
+
 test("core instances isolate provider defaults and validation without changing process environment", (t) => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-core-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -349,7 +378,7 @@ test("shared file and mode extraction preserves classified mode phrases in both 
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const none = { autopilotWord: false, autopilotAsked: false, autopilotGap: "", ownOff: false, offAfter: false, offWord: "", joined: false, pasted: false, question: false };
+    const none = { autopilotWord: false, autopilotAsked: false, autopilotGap: "", ownOff: false, offAfter: false, offWord: "", joined: false, pasted: false, question: false, unreadOff: false };
     assert.deepEqual(api.modeSignals(prompt("sage mode")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true, ...none });
     assert.deepEqual(api.modeSignals(prompt("sage mode off")), { sageOff: true, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offWord: "off" });
     assert.deepEqual(api.modeSignals(prompt("sage mode, autopilot on")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: true, modeWord: true, ...none, autopilotAsked: true });
@@ -366,8 +395,13 @@ test("shared file and mode extraction preserves classified mode phrases in both 
     // (F-R741-3, F-R741-4); a BOM is no space for the on rule (R737).
     assert.deepEqual(api.modeSignals(prompt("sage mode stopwatch app")), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offAfter: true, offWord: "stop" });
     assert.deepEqual(api.modeSignals(prompt("\ufeffsage mode")), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: false, modeWord: true, ...none, joined: true, pasted: true });
-    // Only the owner's own off is ownOff: an agent's off line turns autopilot off, but it is not the owner's (F-R724-L2).
-    assert.deepEqual(api.modeSignals({ owner: true, text: "autopilot on", outside: "autopilot on", all: "autopilot on\nautopilot off" }), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: true, modeWord: true, ...none, autopilotWord: true, autopilotAsked: true });
+    // An agent's off line (in all, not in outside) switches nothing (T215).
+    assert.deepEqual(api.modeSignals({ owner: true, text: "autopilot on", outside: "autopilot on", all: "autopilot on\nautopilot off" }), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: true, modeWord: true, ...none, autopilotWord: true, autopilotAsked: true });
+    // An unreadable prompt switches nothing, but its note reads the wider off forms, at the start of any line (T210, T215).
+    for (const all of ["sage mode please turn it all off", "report\nsage mode\u200b. stop", "report\n> sage mode stopwatch"]) {
+      assert.deepEqual(api.modeSignals({ owner: false, text: "", outside: "", all }), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: false, modeWord: false, ...none, unreadOff: true }, JSON.stringify(all));
+    }
+    assert.equal(api.modeSignals({ owner: false, text: "", outside: "", all: "report\nsage mode fix the login, then stop the old server" }).unreadOff, false);
     assert.equal(api.modeSignals(prompt("sage mode continue on the project")).sageOn, true);
     // The on rule's tail is the same for both providers (T200): an off after "on", an off-meaning word, a hidden or
     // look-alike off, any question mark, and a Markdown paste with more words switch nothing on.
@@ -387,8 +421,12 @@ test("shared file and mode extraction preserves classified mode phrases in both 
       assert.equal(signals.sageOff, false, text);
       assert.equal(signals.autopilotOn, false, text);
     }
-    assert.equal(api.modeSignals(prompt("Please stop autopilot", false)).autopilotOff, true);
-    assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nautopilot off" }).autopilotOff, true);
+    // Text that the hook cannot read switches nothing, in either direction; its off only asks for the note (F-T215-1).
+    assert.deepEqual([api.modeSignals(prompt("Please stop autopilot", false))].map(({ autopilotOff, unreadOff }) => ({ autopilotOff, unreadOff })), [{ autopilotOff: false, unreadOff: true }]);
+    assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nautopilot off" }).autopilotOff, false);
+    assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode\nautopilot off", all: "sage mode\nautopilot off" }).autopilotOff, true);
+    assert.equal(api.modeSignals({ owner: false, text: "", outside: "", all: "sage mode\nautopilot off" }).autopilotOff, false, "nothing switches");
+    assert.equal(api.modeSignals({ owner: false, text: "", outside: "", all: "sage mode\nautopilot on" }).unreadOff, false, "no off, no note");
     assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nReport: no autopilot changes" }).autopilotOff, false);
     for (const input of [{}, { owner: "user", text: "sage mode", outside: "", all: "" }, { owner: true, text: "sage mode", all: "" }]) assert.throws(() => api.modeSignals(input), /Invalid mode prompt/);
     // A mark or a format character on the last letter of the phrase makes it no phrase (R733): no on, and the note.

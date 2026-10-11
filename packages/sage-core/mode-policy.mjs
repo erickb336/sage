@@ -7,11 +7,12 @@
 // T200, T210). The words may go on only on a plain line: a Markdown quote, a list item or a code line that starts with the phrase and more words is a paste, not a request. "autopilot on" stays
 // strict: it must stand alone or end at that punctuation or its line, so "autopilot on?" and "autopilot on main" switch
 // nothing. "sage mode off" must not run on into a longer word ("sage mode off-topic"), and its line must have no "?"
-// ("sage mode off? what does it do?"). Because a missed off is the unsafe one, any line that starts with "sage mode off"
-// or "autopilot off" switches autopilot off, even as a question or in a frame. The owner's own text also switches it
-// off when it mentions autopilot and has an off word anywhere, in any letter form. A frame does not, because its
-// boilerplate has off words ("NOT a message from the user"). Off wins over on. Only OFF_LINE has the m flag: with it,
-// "^" also matches the start of each later line.
+// ("sage mode off? what does it do?"). Because a missed off is the unsafe one, any line of the owner's text that starts
+// with "sage mode off" or "autopilot off" switches autopilot off, even as a question. The owner's own text also switches
+// it off when it mentions autopilot and has an off word anywhere, in any letter form. Agent text (a frame) switches
+// nothing, in either direction (T215), and so does a prompt whose frames the hook cannot read: such a prompt with an off
+// in any of the owner's forms gets a note (unreadOff). Off wins over on. Only OFF_LINE and OFF_LINES have the m flag:
+// with it, "^" also matches the start of each later line.
 // A BOM (U+FEFF) is no space here, so a BOM before or after the phrase makes it no phrase (R737).
 const START = String.raw`^(?:(?!\uFEFF)[\s"'“‘*_>-])*`;
 const SP = String.raw`[^\S\r\n\u2028\u2029\uFEFF]`; // a space, a tab or an NBSP, never a line break
@@ -82,15 +83,18 @@ const PLAIN = String.raw`^(?:(?:(?!\uFEFF)\s)*[\r\n])? {0,3}`;
 // run never backtracks into a re-scan of the line: a lookahead after a greedy run reads the line again at each step of
 // the run, quadratic time on a long first line (T34, T194 cycle 1).
 const SAGE_ON = new RegExp(`${START}${SAGE}${AND_AUTOPILOT}?${END}|${PLAIN}${SAGE}${AND_AUTOPILOT}?(?!.*\\?)${SP}+`, "i"); // "." stops at a line break
-// An off word soon after the phrase: after any gap and at most 5 small words (T210, T213). It blocks the on rule and
-// switches autopilot off, because off is the safe direction. The group is the off word, for the note. The caller runs it
-// on the text with the phrase as it is and the rest folded, as main does, and on the whole text folded, so that a mark,
-// a hidden character or a look-alike in or right after the phrase cannot hide the off word (T214).
+// An off word soon after the phrase: after any gap and at most 5 small words (T210, T213). In the owner's text, it
+// blocks the on rule and switches autopilot off, because off is the safe direction. The group is the off word, for the
+// note. offNear runs it on the text with the phrase as it is and the rest folded, as main does, and on the whole text
+// folded, so that a mark, a hidden character or a look-alike in or right after the phrase cannot hide the off word (T214).
 const OFF_PHRASE_START = String.raw`${OFF_START}(?:enter${OFF_SP}+)?sage${OFF_SP}+mode`;
 const OFF_AFTER = new RegExp(`${OFF_PHRASE_START}(?:${OFF_SP}+on)?${GAP}(?:${FILLER}${SEP}+){0,5}(${OFF_NEAR})`, "iu");
 const OFF_HEAD = new RegExp(OFF_PHRASE_START, "iu");
+// The phrase at the start of any line: in a prompt whose frames the hook cannot read, any line can be the owner's
+// (F-T215-6).
+const OFF_LINES = new RegExp(`${LINE_START}(?:enter${OFF_SP}+)?sage${OFF_SP}+mode`, "gimu");
 const OFF_PHRASE = new RegExp(`${OFF_START}sage${OFF_SP}+mode${OFF_SP}+off`, "iu"); // the off phrase has its own rules
-const OFF_LINE = new RegExp(`${LINE_START}(?:sage${OFF_SP}+mode|autopilot)${OFF_SP}+off\\b`, "im"); // in any text, at the start of any line
+const OFF_LINE = new RegExp(`${LINE_START}(?:sage${OFF_SP}+mode|autopilot)${OFF_SP}+off\\b`, "im"); // in the owner's text, at the start of any line
 const SAGE_OFF = new RegExp(`${OFF_START}sage${OFF_SP}+mode${OFF_SP}+off(?![\\p{L}\\p{N}-])(?!.*\\?)`, "iu"); // "." stops at a line break
 const AUTOPILOT_ON = new RegExp(`${START}(?:autopilot${SP}+on|${SAGE}${AND_AUTOPILOT})${END}`, "i");
 // A message that starts with a mode word, but whose switch did not happen, gets a note (the caller), so that a miss is
@@ -129,36 +133,55 @@ const offName = (match = "") => {
   return name ? name.at(-1) : "";
 };
 
+/**
+ * The text in up to three forms, for the off rule: the phrase as it is and the rest folded, as on main; the same with a
+ * space for a hidden character joined to the phrase, so that a symbol that folds into letters (U+2116, U+2100, a circled
+ * letter) cannot hide the off word after it (F-R740-1); and the whole text folded, so that a mark or a look-alike in the
+ * phrase cannot either (T214).
+ */
+const offForms = (text, loose = foldAll(text)) => {
+  const head = OFF_HEAD.exec(text)?.[0];
+  if (head === undefined) return [loose];
+  const c = String.fromCodePoint(text.codePointAt(head.length) ?? 32);
+  return [...(hiddenNext(c) ? [`${head} ${foldAll(text.slice(head.length + c.length))}`] : []), head + foldAll(text.slice(head.length)), loose];
+};
+/** The off word soon after the phrase in the first form that has one, or undefined. */
+const offNear = (forms) => forms.map((form) => OFF_AFTER.exec(form)?.[1]).find((word) => word !== undefined);
+/**
+ * An off word soon after the phrase at the start of any line, in the same forms. Each line with the phrase is read up to
+ * the next such line only, so that the fold reads each character once: linear time on a long report (T34).
+ */
+const offAtLines = (text) => {
+  const starts = [...text.matchAll(OFF_LINES)].map((match) => match.index);
+  return starts.some((start, i) => offNear(offForms(text.slice(start, starts[i + 1]))) !== undefined);
+};
+
 /** Origin is supplied by the provider; this function does not authenticate text. */
 export function modeSignals({ owner, text, outside, all }) {
   if (typeof owner !== "boolean" || [text, outside, all].some(value => typeof value !== "string")) {
     throw Error("Invalid mode prompt");
   }
-  const nextOf = (start) => String.fromCodePoint(text.codePointAt(start.length) ?? 32);
   const head = RAW_WORD.exec(text)?.[0];
-  const hidden = head !== undefined && hiddenNext(nextOf(head));
-  // The off rule reads the owner's text in up to three forms: the phrase as it is and the rest folded, as on main; the
-  // same with a space for a hidden character joined to the phrase, so that a symbol that folds into letters (U+2116,
-  // U+2100, a circled letter) cannot hide the off word after it (F-R740-1); and the whole text folded, so that a mark or
-  // a look-alike in the phrase cannot either (T214). The mode word reads them too.
+  const hidden = head !== undefined && hiddenNext(String.fromCodePoint(text.codePointAt(head.length) ?? 32));
   const loose = owner ? foldAll(text) : "";
-  const offHead = owner ? OFF_HEAD.exec(text)?.[0] : undefined;
-  const c = offHead === undefined ? "" : nextOf(offHead);
-  const forms = offHead === undefined ? [loose] : [...(hiddenNext(c) ? [`${offHead} ${foldAll(text.slice(offHead.length + c.length))}`] : []), offHead + foldAll(text.slice(offHead.length)), loose];
-  const near = forms.map((form) => OFF_AFTER.exec(form)?.[1]).find((word) => word !== undefined);
+  const forms = owner ? offForms(text, loose) : []; // the mode word reads them too
+  const near = offNear(forms);
   const offNext = near !== undefined;
   // The phrase and an off word soon after it, other than the off phrase, which has its own rules (T200).
   const offAfter = offNext && !OFF_PHRASE.test(text);
-  // An off in the owner's own text, in any letter form. Only this off may make an autopilot on a planned miss: an off
-  // line in an agent's frame turns autopilot off too, but the owner still gets the note (F-R724-L2).
-  // The rule reads the text as it is too, so that the fold can never hide an off that main's rule read (F-R741).
+  // An off in the owner's own text, in any letter form: the only off when the hook can read the frames (T215). The rule
+  // reads the text as it is too, so that the fold can never hide an off that main's rule read (F-R741).
   const ownOff = owner && (offAfter || broadOff(outside) || broadOff(foldAll(outside)));
   const autopilotWord = owner && AUTOPILOT_WORD.test(text);
   const modeWord = owner && (offNext || [text, ...forms].some((form) => MODE_WORD.test(form))); // "sage modeoff" too
   return {
     sageOff: owner && SAGE_OFF.test(text),
     sageOn: owner && !offNext && SAGE_ON.test(fold(text)),
-    autopilotOff: OFF_LINE.test(all) || ownOff || (!owner && broadOff(all)),
+    // Only the owner's text switches autopilot off. When the hook cannot read the frames (owner is false), it cannot tell
+    // the owner's text from an agent's, so nothing switches; the caller tells the chief when the prompt has an off (T215).
+    // That note reads every off form of the owner's text, at the start of any line too.
+    autopilotOff: ownOff,
+    unreadOff: !owner && (broadOff(all) || broadOff(foldAll(all)) || offAtLines(all)),
     autopilotOn: owner && AUTOPILOT_ON.test(text),
     modeWord,
     autopilotWord,
