@@ -25,5 +25,9 @@ a native child, so delivery is not enforcement.
 The supplied tool policy must enforce command, path, role, and workflow rules,
 including follow-up and message permissions. This composition does not invent
 those rules or authorize operations the callback rejects. It does not detect
-missing callbacks, accept reports, release slots, restore compacted context,
+missing callbacks, restore compacted context,
 or provide lifecycle recovery. Those remain required before activation.
+
+Native stop observations retain capacity until the transcript confirms the assigned turn ended.
+Parent list, wait, and report-read operations reconcile that evidence.
+Report recording and review acceptance use separate explicit operations.

@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { readAdmission, recordReportAdmission, parseReport } from "sage-core";
 import { nativeToolContext } from "./native-tool.mjs";
 import { readObservations } from "./events.mjs";
+import { reconcileNativeCompletions } from "./child-stop.mjs";
 import { readNativeReport } from "./identity.mjs";
 
 const refuse = () => { throw Error("Sage could not verify this child's report"); };
@@ -14,13 +15,16 @@ const inputFields = (input, keys) => {
 
 function verifiedReport(name, context, options) {
   const native = nativeToolContext(context);
-  const state = readAdmission(options.directory);
+  let state = readAdmission(options.directory);
   const candidates = state.reservations.filter(row => row.assignment.project === options.project
     && row.assignment.issuer === native.actor && row.dispatch.name === name
     && state.sessions.some(owner => owner.project === options.project && owner.session === row.assignment.session
       && owner.epoch === row.assignment.epoch));
   if (candidates.length !== 1) refuse();
   const assigned = candidates[0];
+  if (!assigned.assignment.session.startsWith("codex:")) refuse();
+  reconcileNativeCompletions(native, assigned.assignment.session.slice(6), options);
+  state = readAdmission(options.directory);
   const bound = state.bindings.find(row => row.assignment === assigned.assignment.id);
   const complete = state.completions?.find(row => row.assignment === assigned.assignment.id);
   if (!bound || !complete || JSON.stringify(bound) !== JSON.stringify(complete) || !assigned.dispatch.taskHash

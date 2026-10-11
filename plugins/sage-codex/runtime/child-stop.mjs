@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { readAdmission, completeAdmission } from "../core/index.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
-import { readAssignmentTurn } from "./identity.mjs";
+import { readNativeCompletion } from "./identity.mjs";
 import { bindNativeChildTranscript } from "./child-tool.mjs";
 import { RUNTIME_VERSION, publish, readObservations } from "./events.mjs";
 
@@ -24,7 +24,7 @@ function nativeStopContext(input, context) {
   return native;
 }
 
-/** Native stop identity, exact admitted task, and the saved child transcript authorize slot release only. */
+/** Record an authenticated stop; release its slot only with native terminal evidence. */
 export function completeNativeChild(input, context, options) {
   const native = nativeStopContext(input, context);
   let state = readAdmission(options.directory);
@@ -43,25 +43,48 @@ export function completeNativeChild(input, context, options) {
     && row.epoch === owner.epoch && row.child === native.actor && row.turn === input.turn_id);
   if (bindings.length !== 1) refuse();
   const bound = bindings[0];
+  const evidence = completionEvidence(state, bound, input.session_id, options, input.agent_transcript_path);
+  publish(evidence.directory, { schema: 1, runtime: RUNTIME_VERSION, kind: "child-stop", session: input.session_id,
+    child: native.actor, turn: input.turn_id });
+  if (!evidence.completed) return { decision: "stop-observed" };
+  return { decision: completeAdmission(options.directory, bound).decision };
+}
+
+function completionEvidence(state, bound, session, options, suppliedPath) {
   const assigned = state.reservations.find(row => row.assignment.id === bound.assignment);
   if (!assigned?.dispatch.taskHash) refuse();
-  const directory = join(options.observationsRoot, input.session_id);
+  const directory = join(options.observationsRoot, session);
   const observations = readObservations(directory);
-  const transcripts = observations.filter(row => row.kind === "child-transcript" && row.child === native.actor);
-  const starts = observations.filter(row => row.kind === "child-start" && row.child === native.actor);
-  if (transcripts.length !== 1 || starts.length !== 1 || transcripts[0].turn !== input.turn_id
-    || starts[0].turn !== input.turn_id || starts[0].parent !== bound.issuer
-    || (input.agent_transcript_path && input.agent_transcript_path !== transcripts[0].transcript)) refuse();
+  const transcripts = observations.filter(row => row.kind === "child-transcript" && row.child === bound.child);
+  const starts = observations.filter(row => row.kind === "child-start" && row.child === bound.child);
+  if (transcripts.length !== 1 || starts.length !== 1 || transcripts[0].turn !== bound.turn
+    || starts[0].turn !== bound.turn || starts[0].parent !== bound.issuer
+    || (suppliedPath && suppliedPath !== transcripts[0].transcript)) refuse();
   const path = starts[0].path;
-  // The callback can name the parent transcript. Only the saved, verified child path is authoritative.
-  readAssignmentTurn(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, {
-    session: input.session_id, child: native.actor, parent: bound.issuer, path,
-    author: path.slice(0, path.lastIndexOf("/")), turn: input.turn_id, taskHash: assigned.dispatch.taskHash,
+  const completed = readNativeCompletion(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, {
+    session, child: bound.child, parent: bound.issuer, path,
+    author: path.slice(0, path.lastIndexOf("/")), turn: bound.turn, taskHash: assigned.dispatch.taskHash,
   });
-  const result = completeAdmission(options.directory, bound);
-  publish(directory, { schema: 1, runtime: RUNTIME_VERSION, kind: "child-stop", session: input.session_id,
-    child: native.actor, turn: input.turn_id });
-  return { decision: result.decision };
+  return { directory, observations, completed };
+}
+
+/** Only a native parent reconciles its own stopped children; the transcript is the terminal evidence. */
+export function reconcileNativeCompletions(context, session, options) {
+  const native = nativeToolContext(context);
+  if (typeof session !== "string" || !UUID.test(session)) refuse();
+  const state = readAdmission(options.directory);
+  const key = `codex:${session}`;
+  const owner = state.sessions.find(row => row.project === options.project && row.session === key);
+  if (!owner) refuse();
+  for (const bound of state.bindings.filter(row => row.project === options.project && row.session === key
+    && row.epoch === owner.epoch && row.issuer === native.actor)) {
+    if (state.completions?.some(row => row.assignment === bound.assignment)) continue;
+    const observations = readObservations(join(options.observationsRoot, session));
+    if (!observations.some(row => row.kind === "child-stop" && row.child === bound.child && row.turn === bound.turn)) continue;
+    const evidence = completionEvidence(state, bound, session, options);
+    if (evidence.completed) completeAdmission(options.directory, bound);
+  }
+  return { decision: "reconciled" };
 }
 
 export async function childStopOutput(input, context, loadPolicy) {
@@ -70,6 +93,6 @@ export async function childStopOutput(input, context, loadPolicy) {
   const policy = await loadPolicy();
   const result = await policy.completeChild(snapshot, native);
   if (!result || typeof result !== "object" || Array.isArray(result) || Object.keys(result).length !== 1
-    || !Object.hasOwn(result, "decision") || !["completed", "already-completed"].includes(result.decision)) refuse();
+    || !Object.hasOwn(result, "decision") || !["stop-observed", "completed", "already-completed"].includes(result.decision)) refuse();
   return {};
 }

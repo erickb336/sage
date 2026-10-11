@@ -51,3 +51,15 @@ Later tasks on the same child remain a separate case; an initial-task binding ca
 The isolated `--sage-no-tool` native probe returns a structured review without any child tool call.
 The chief then reads, records, inspects, finishes, and accepts it on the actual temporary branch commit.
 The responses are simulated. This checks the configured fixture hooks, not every combination of other stop hooks or interruption behavior.
+
+## A stop hook can block completion
+
+A stop callback records an observation. It does not prove that the child finished.
+Another hook can block that stop and let the same child continue.
+Sage retains capacity until the protected native transcript contains `task_complete` for the admitted turn and its retained final message.
+The parent's list, wait, or report-read operation checks that evidence and releases the slot once.
+A tool result that says “completed” cannot replace transcript evidence.
+
+The isolated `--sage-stop-block` probe adds a second hook that blocks the first stop.
+It checks that Sage keeps the slot while the child continues, then records one completion after the native turn ends.
+This uses a simulated model. It does not verify interruption, later assignments, or a real project pilot.

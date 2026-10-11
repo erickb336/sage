@@ -36,6 +36,7 @@ if(['SubagentStart','SubagentStop'].includes(input.hook_event_name)){
    if(input.hook_event_name==='SubagentStop'){
     const rows=buf.subarray(0,size).toString('utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line));
     let turn,context;
+    record.terminalAtCallback=rows.some(row=>row.type==='event_msg'&&row.payload?.type==='task_complete'&&row.payload.turn_id===input.turn_id);
     record.assignments=[];
     for(const row of rows){
      const p=row.payload;

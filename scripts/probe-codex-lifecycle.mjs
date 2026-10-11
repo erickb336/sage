@@ -13,12 +13,13 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
 const followUp = process.argv.includes("--follow-up");
-const noTool = process.argv.includes("--sage-no-tool");
+const blockStop = process.argv.includes("--sage-stop-block");
+const noTool = process.argv.includes("--sage-no-tool") || blockStop;
 const nestedReport = process.argv.includes("--sage-nested-report");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
@@ -89,7 +90,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,blockStop,deadlineMs});
   const initialLogbook = sage ? integrated.readLogbook() : null;
   if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
     `EVIDENCE ${JSON.stringify({ commit: integrated.reviewTarget.sha, round: 0, cycle: 1, summary: "Fixed native fixture completed; simulated review only." })}`,
@@ -97,7 +98,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   if (nestedReport) GRAND_MARKER = ["STATUS done", "RESULT CLEAN",
     `EVIDENCE ${JSON.stringify({ commit: integrated.reviewTarget.sha, round: 0, cycle: 1, summary: "Fixed nested review; simulated evidence only." })}`,
     "FINDINGS []", "QUESTIONS none", "NOT VERIFIED real model or real review", "BRANCH codex/t1-review"].join("\n");
-  let finishedRun, acceptedReview;
+  let finishedRun, acceptedReview, prematureCompletions;
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -235,6 +236,16 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if (blockStop && thread === childThread && childRequests === 1) {
+          childRequests++;
+          prematureCompletions = integrated.readJournal().completions?.length ?? 0;
+          const transcript = JSON.parse(readFileSync(join(root, `child-path-${childThread}.json`), "utf8"));
+          const rows = readFileSync(transcript, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line));
+          const terminalMarkers = rows.filter(row => row.type === "event_msg" && row.payload?.type === "task_complete").length;
+          print({ type: "stop_continuation_evidence", sameNativeChild: true, modelContinuedAfterBlockedStop: true,
+            savedCompletionsWhileContinuing: prematureCompletions, terminalMarkers, simulatedModel: true });
+          respond(res, message(CHILD_MARKER)); return;
+        }
         if (nestedReport && thread === childThread) {
           childRequests++; nestedFlow.lead(info, res); return;
         }
@@ -549,7 +560,7 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : rootRequests === (followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : blockStop || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
@@ -583,7 +594,7 @@ data: ${JSON.stringify(event)}
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
     assert.equal(before.length,nested ? 2 : 1);
     assert.equal(start.length, noChild ? 0 : nested ? 2 : 1);
-    assert.equal(stop.length, noChild ? 0 : followUp || nested ? 2 : 1);
+    assert.equal(stop.length, noChild ? 0 : blockStop || followUp || nested ? 2 : 1);
     if (followUp) {
       assert.equal(new Set(stop.map(row => row.turn_id)).size, 2);
       assert(stop.every(row => row.agent_id === start[0].agent_id && row.session_id === start[0].session_id));
@@ -621,6 +632,11 @@ data: ${JSON.stringify(event)}
       assert.equal(started.metadata.id, started.agent_id);
       assert.equal(started.metadata.session_id, request.session_id);
       assert(stop.some(row => row.agent_id === started.agent_id));
+    }
+    if (blockStop) {
+      check(prematureCompletions !== undefined, "stop_block_did_not_resume_child");
+      print({ type: "stop_block_evidence", heldWhileContinuing: prematureCompletions === 0, simulatedModel: true });
+      if (prematureCompletions !== 0) process.exitCode = 1;
     }
     if (outage) {
       const fault = integrated.readFault();

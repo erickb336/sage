@@ -872,6 +872,7 @@ async function completionFixture(t) {
 
 test("native completion uses the saved child transcript and releases once even after Sage off", async t => {
   const f = await completionFixture(t);
+  appendReport(f);
   f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
   assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
   assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "already-completed" });
@@ -895,6 +896,7 @@ test("native completion refuses forged stale unbound and changed assignment evid
   assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
   assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === "child-stop").length, 0);
   f.childTranscript();
+  appendReport(f);
   assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
   const unbound = await composedPolicyFixture(t);
   unbound.api.prepareNativeTask(unbound.input, unbound.native(session), unbound.options);
@@ -906,6 +908,7 @@ test("native completion refuses forged stale unbound and changed assignment evid
 
 test("packaged MCP stop accepts exact completion and contains invalid stop requests", async t => {
   const f = await completionFixture(t);
+  appendReport(f);
   writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(f.options)};
@@ -931,6 +934,53 @@ function appendReport(f, text = reportText, child = childActor, turn = turns[1])
     { type: "event_msg", payload: { type: "task_complete", turn_id: turn, last_agent_message: text } },
   ].map(row => JSON.stringify(row) + "\n").join(""));
 }
+
+test("native blocked stop retains capacity until the transcript confirms completion", async t => {
+  const f = await completionFixture(t);
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "stop-observed" });
+    assert.deepEqual(reconcileNativeCompletions(f.native(session), session, f.options), { decision: "reconciled" });
+    assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  }
+  appendReport(f);
+  // A child cannot release its own slot through the parent's reconciliation route.
+  reconcileNativeCompletions(f.native(childActor), session, f.options);
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  reconcileNativeCompletions(f.native(session), session, f.options);
+  reconcileNativeCompletions(f.native(session), session, f.options);
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
+test("native status hooks require terminal evidence instead of a reported done status", async t => {
+  const f = await completionFixture(t);
+  const { postToolOutput } = await import(pathToFileURL(join(f.plugin, "runtime/post-tool.mjs")));
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "stop-observed" });
+  appendReport(f);
+  const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+  const complete = readFileSync(transcript, "utf8");
+  writeFileSync(transcript, complete.trimEnd().split("\n").slice(0, -1).join("\n") + "\n");
+  const input = { ...postSpawn(), tool_name: "collaborationlist_agents", tool_input: {},
+    tool_response: JSON.stringify({ status: "completed" }) };
+  assert.deepEqual(await postToolOutput(input, f.native(session), async () => f.policy), {});
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  writeFileSync(transcript, complete);
+  assert.deepEqual(await postToolOutput({ ...input, tool_name: "collaborationwait_agent" }, f.native(session), async () => f.policy), {});
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
+test("native report read reconciles a stopped child only after terminal evidence", async t => {
+  const f = await completionFixture(t);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "stop-observed" });
+  assert.throws(() => readChildReport({ name: f.input.name }, f.native(session), f.options));
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  appendReport(f);
+  const report = readChildReport({ name: f.input.name }, f.native(session), f.options);
+  assert.equal(report.decision, "report-ready");
+  assert.equal(report.report.STATUS, "done");
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
 
 test("native parent reads its completed child's validated report without changing task or admission state", async t => {
   const f = await completionFixture(t);

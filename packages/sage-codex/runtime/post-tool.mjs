@@ -5,6 +5,13 @@ import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 export async function postToolOutput(input, context, loadPolicy) {
   const native = nativeToolContext(context);
   const event = nativeToolEvent(input, native, "PostToolUse");
+  if (["collaborationlist_agents", "collaborationwait_agent"].includes(event.tool_name)) {
+    const policy = await loadPolicy();
+    const receipt = await policy.reconcileCompletions(input, native);
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt) || Object.keys(receipt).length !== 1
+      || receipt.decision !== "reconciled") throw Error("Completion reconciliation failed");
+    return {};
+  }
   const observation = decodeEvent(event, { version: native.version });
   if (!observation) return {};
   const policy = await loadPolicy();

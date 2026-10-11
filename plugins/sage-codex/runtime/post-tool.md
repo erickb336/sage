@@ -21,3 +21,6 @@ The full launcher still needs continuous authenticated request, result, and chil
 capture across mode changes and resume. It also needs a defined delivery path
 when a child starts before its result is published. No installed hook enables
 this runtime yet.
+
+Native list and wait results trigger reconciliation of the parent's stopped children.
+The adapter reads protected transcript evidence; a reported status alone cannot release capacity.
