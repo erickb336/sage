@@ -99,8 +99,12 @@ The composed policy now binds the child at its first tool call using the verifie
 A missing parent result or conflicting identity denies the tool and retains the reservation.
 The preparation receipt requires `fork_turns: "none"`; admission rejects inherited histories.
 The verified child transcript path is saved for later stop processing.
-Stop processing must use that saved child transcript, not the parent path in the stop callback.
-These integration steps remain unfinished; the existing MCP start adapter alone cannot establish installed instruction delivery.
+The stop adapter now uses that saved child transcript, not the parent path in the stop callback.
+It checks the current connection, session, assignment, exact turn, and saved task hash before releasing capacity.
+Duplicate stops release no additional capacity. Stops after Sage off can still release their own bound assignment.
+Missing binding or transcript evidence retains the reservation; completion does not accept a report or mark a task successful.
+The packaged MCP tests cover these paths. The complete installed workflow and real-model pilot remain unverified.
+Later native fixture runs also received the MCP start callback. The first-tool check does not depend on its delivery.
 
 
 ## Nested native lifecycle evidence
@@ -114,3 +118,11 @@ The reader now ignores plain result notifications when it checks encrypted task 
 A plain notification cannot establish task delivery, and duplicate encrypted task payloads still fail.
 Baseline, denied-spawn, follow-up, and nested routes passed against the local CLI.
 These checks use simulated model responses and temporary profiles. They do not prove installed Sage or a real-model pilot.
+
+
+## Native owner activation evidence
+
+An isolated local 0.160.0 run sent `sage mode` through the native `UserPromptSubmit` MCP callback.
+The production owner-mode adapter verified the connection and transcript, then recorded one active owner in the temporary journal.
+The probe used simulated model responses. It did not install or enable Sage in the owner's real profile.
+The next integrated check must connect this activation to preparation, child binding, and completion through native callbacks.

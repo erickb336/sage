@@ -3,6 +3,7 @@ import { decodeEvent, observation, publish, RUNTIME_VERSION } from "./events.mjs
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn } from "./preparation.mjs";
+import { completeNativeChild } from "./child-stop.mjs";
 import { bindNativeChildTool } from "./child-tool.mjs";
 import { boundChildInstructions } from "./instructions.mjs";
 
@@ -58,6 +59,9 @@ export function createNativePolicy(options, evaluateTool) {
       if (!["spawn-result", "dispatch-result"].includes(event.kind)) refuse();
       record(event);
       return { decision: "recorded" };
+    },
+    completeChild(input, context) {
+      return completeNativeChild(input, context, fixed);
     },
     startChild(identity) {
       // nativeChildStart has already authenticated this identity against the current connection.

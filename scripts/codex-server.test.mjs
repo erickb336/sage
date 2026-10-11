@@ -853,3 +853,66 @@ test("configured MCP child tools bind without any SubagentStart call", async t =
   assert.equal(refused.hookSpecificOutput.permissionDecision, "deny");
   await client.close();
 });
+
+
+async function completionFixture(t) {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const transcript_path = f.childTranscript();
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy, { ...patch(turns[1]), transcript_path }, childActor);
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor,
+    turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, "root.jsonl") };
+  return { ...f, policy, stop };
+}
+
+test("native completion uses the saved child transcript and releases once even after Sage off", async t => {
+  const f = await completionFixture(t);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "already-completed" });
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 1);
+  assert.deepEqual(state.completions[0], state.bindings[0]);
+  assert.equal(state.reservations.length, 1);
+  assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === "child-stop").length, 1);
+});
+
+test("native completion refuses forged stale unbound and changed assignment evidence", async t => {
+  const f = await completionFixture(t);
+  for (const input of [{ ...f.stop, agent_id: session }, { ...f.stop, turn_id: turns[2] },
+    { ...f.stop, session_id: childActor }, { ...f.stop, role: "lead" }, { ...f.stop, transcript_path: null }]) {
+    assert.throws(() => f.policy.completeChild(input, f.native(childActor)));
+  }
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(session)));
+  assert.throws(() => f.policy.completeChild(f.stop, { version: "unsupported", actor: childActor }));
+  f.childTranscript({ message: "Changed assignment" });
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === "child-stop").length, 0);
+  f.childTranscript();
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
+  const unbound = await composedPolicyFixture(t);
+  unbound.api.prepareNativeTask(unbound.input, unbound.native(session), unbound.options);
+  unbound.api.reservePreparedSpawn(unbound.spawnInput(), unbound.native(session), unbound.options);
+  const policy = unbound.createNativePolicy(unbound.options, () => ({ decision: "pass" }));
+  assert.throws(() => policy.completeChild(f.stop, unbound.native(childActor)));
+  assert.equal((unbound.core.readAdmission(unbound.options.directory).completions ?? []).length, 0);
+});
+
+test("packaged MCP stop accepts exact completion and contains invalid stop requests", async t => {
+  const f = await completionFixture(t);
+  writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';
+    import { createNativePolicy } from './plugin/runtime/policy.mjs';
+    const options = ${JSON.stringify(f.options)};
+    serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(options, () => ({decision: 'pass'})) });`);
+  const client = await connect(t, f);
+  assert.equal((await client.call({ ...f.stop, turn_id: turns[2] }, childActor)).decision, "block");
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  assert.deepEqual(await client.call(f.stop, childActor), {});
+  assert.deepEqual(await client.call(f.stop, childActor), {});
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  await client.close();
+});

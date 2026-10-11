@@ -30,6 +30,10 @@ export function createHookServer({ mode, loadPolicy } = {}) {
         const { postToolOutput } = await import("./post-tool.mjs");
         return result(await postToolOutput(input, native, loadPolicy));
       }
+      if (input.hook_event_name === "SubagentStop") {
+        const { childStopOutput } = await import("./child-stop.mjs");
+        return result(await childStopOutput(input, native, loadPolicy));
+      }
       if (input.hook_event_name === "SubagentStart") {
         const { childStartOutput } = await import("./child-start.mjs");
         return result(await childStartOutput(input, native, configuredMode, loadPolicy));
