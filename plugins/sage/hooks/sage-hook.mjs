@@ -634,7 +634,7 @@ function linkOnPattern(word, cwd) {
 function linksNear(text, root, cwd) {
   for (const { words } of shellCommands(text)) {
     const k = words.findIndex((w) => !/^\w+=/.test(w));
-    if (!/^(?:ln|link)$/.test(basename(words[k] ?? ""))) continue;
+    if (!/^(?:ln|link)$/.test(commandReader.programName(words[k]))) continue;
     const variable = words.find((w) => w.includes("$")); // also $(…) and a backtick, which shellCommands gives as $(…)
     if (variable) return variable;
     const operands = words.slice(k + 1).filter((w) => !w.startsWith("-"));
@@ -703,7 +703,7 @@ function readerRuns(name, args) {
 }
 /** Function arguments are data; only an actual reader dispatch owns its options. */
 const readerDispatch = entry => !entry.wrapper && !entry.shellFunction && !entry.resolvedDeclaration &&
-  readerRuns(basename(entry.run.word).toLowerCase(), entry.run.args);
+  readerRuns(commandReader.programName(entry.run.word), entry.run.args);
 /** A redirection (operator and target, as shellCommands keeps it) to a file: not /dev/null, /dev/stdout or /dev/stderr, an input or a &N duplicate. */
 function toFile(redirect) {
   const [, op, to] = /^(&>>?|>>|>\||>&|<>|<&|>|<)([^]*)$/.exec(redirect);
@@ -713,7 +713,7 @@ function toFile(redirect) {
 function writesIn({ words, redirects }) {
   if (redirects.some(toFile)) return true;
   const low = words.map((w) => w.toLowerCase());
-  const base = low.map((w) => basename(w));
+  const base = low.map((w) => commandReader.programName(w));
   if (READERS.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")) return false;
   const has = (re) => base.some((w) => re.test(w));
   return (
@@ -798,7 +798,7 @@ function runsNamed(text, cwd) {
     return name;
   }
   for (const { word, args } of runs) {
-    const base = basename(word).toLowerCase();
+    const base = commandReader.programName(word);
     if (word.includes("$") || !READER.test(base)) return word;
     if (/^g?(?:sed|awk)$/.test(base) && args.some((a) => /^-[a-z]*i|^--in-place|^inplace$/i.test(a))) return word;
     if (base === "git" && (!GIT_PLAIN.test(subcommand(args, 0)) || args.some((a) => /^(?:-c|--exec-path)/.test(a)))) return word;
@@ -889,8 +889,8 @@ function commandFields(ti) {
 
 /** PowerShell expansions cannot be judged by the shared shell reader. Refuse protected words conservatively. */
 function powerShellProblem(command) {
-  return /[`(]/.test(command) && /\b(?:gh|git|pr|merge|push)\b/i.test(command.replace(/`/g, ""))
-    ? "PowerShell expansion can hide a protected command. Use literal git and gh commands without backticks or parentheses."
+  return (/[`(]/.test(command) || /\\"/.test(command)) && /\b(?:gh|git|pr|merge|push)\b/i.test(command.replace(/`/g, ""))
+    ? "PowerShell expansion can hide a protected command. Use literal git and gh commands without backticks, parentheses or a backslash before a double quote."
     : undefined;
 }
 
@@ -935,7 +935,7 @@ const UNIX_PROCESS = "ps|pgrep|pkill|kill|killall|lsof|top|htop|fuser|pidof|kill
 const POWERSHELL_PROCESS = "get-process|stop-process|gps|spps";
 /** A program name, without the version that npx and its kind take after "@" (kill-port@2). */
 const isProcess = (name = "") => {
-  const bare = name.replace(/(?<=.)@.*$/, "");
+  const bare = commandReader.programName(name.replace(/(?<=.)@.*$/, ""));
   return new RegExp(`^(?:${UNIX_PROCESS})$`).test(bare) || new RegExp(`^(?:${POWERSHELL_PROCESS})$`, "i").test(bare);
 };
 const NO_PROCESS = (word) => `an agent never reads or signals the real process list (standing order 14), so ${quoted(word)} is refused. Put a fake ps first on PATH, in the temp folder or your scratch folder, that prints a start time in the past (for example "Sat Jan  1 00:00:00 2000"), and run a fake kill by its path: a bare kill is the shell's builtin. Use literal paths: the hook does not expand variables. To stop your own server or background job, use TaskStop, or run it as a background task.`;
@@ -1080,7 +1080,7 @@ export function agentProblem(command, cwd, path = process.env.PATH ?? "") {
     return `${NO_GH} (The hook cannot read executable evidence: ${error.message}.)`;
   }
   for (const { word, file, args } of runs) {
-    const name = word.split(/[\\/]/).pop();
+    const name = commandReader.programName(word);
     if (name === "git" && /^stash$/i.test(subcommand(args, 0))) return NO_STASH;
     if ((isProcess(name) || isProcess(file?.split("/").pop())) && !inTemp(file)) return NO_PROCESS(word);
   }
@@ -1162,7 +1162,7 @@ function ghProblem(command, cwd, path, inherited) {
   const dispatches = leaves.filter(({ run }) => !shellFunctions.has(run));
   const redirects = scoped.redirects;
   const writesCommand = redirects.some(({ redirect }) => toFile(redirect)) || dispatches.some(({ run }) =>
-    writesIn({ words: [run.word, ...run.args], redirects: [] }) || readerRuns(basename(run.word).toLowerCase(), run.args));
+    writesIn({ words: [run.word, ...run.args], redirects: [] }) || readerRuns(commandReader.programName(run.word), run.args));
   if (writesCommand && (redirects.some(({ redirect }) => ghAliasWrite(redirect)) ||
     dispatches.some(({ run }) => ghAliasWrite([run.word, ...run.args, ...run.stdin].join(" "))))) return NO_GH;
   for (const { redirect, dir, uncertainDirectory } of redirects) {
@@ -1170,7 +1170,7 @@ function ghProblem(command, cwd, path, inherited) {
     if (toFile(redirect) && ((uncertainDirectory && !isAbsolute(target)) || aliasDestination(target, dir))) return NO_GH;
     if (uncertainDirectory && writesCommand && /^<[^<&]/.test(redirect) && !isAbsolute(target)) return NO_GH;
   }
-  if (dispatches.some(({ run, uncertainDirectory }) => [run.word, run.file].some(name => name && basename(name) === "cp") && copyDestinations(run.args, run.dir, uncertainDirectory).some(file => aliasDestination(file, run.dir)))) return NO_GH;
+  if (dispatches.some(({ run, uncertainDirectory }) => [run.word, run.file].some(name => name && commandReader.programName(name) === "cp") && copyDestinations(run.args, run.dir, uncertainDirectory).some(file => aliasDestination(file, run.dir)))) return NO_GH;
   const commands = shellCommands(command);
   const inputs = commands.flatMap(item => item.redirects).filter(ref => /^<[^<&]/.test(ref)).map(ref => ref.replace(/^<>?/, ""));
   // Control flow can keep any observed PATH in effect. Never discard a known gh identity.
@@ -1200,7 +1200,7 @@ function ghProblem(command, cwd, path, inherited) {
     .some(ref => /^<[^<&]/.test(ref) && referencesGhFile(ref.replace(/^<>?/, "")));
   for (const run of evidence) {
     const { word, file } = run;
-    const name = word.split(/[\\/]/).pop();
+    const name = commandReader.programName(word);
     if (!shellFunctions.has(run) && uncertain.has(run) && !isAbsolute(word) && (word.includes("/") || (!file && !/^(?:echo|printf|cd|export|unset|readonly|local|declare|typeset|alias|unalias|true|false|test|:|\[)$/.test(word)))) return NO_GH;
     const possible = shellFunctions.has(run) ? [] : word.includes("/") ? [...folders].map(folder => resolve(folder, word)) : [...folders].flatMap(folder => [...paths].map(value =>
       value.split(":").map(entry => resolve(folder, entry || ".", word)).find(candidate => {
@@ -1211,7 +1211,7 @@ function ghProblem(command, cwd, path, inherited) {
     if (isGh && (inherited?.alias || !plainGh(command))) return NO_GH;
   }
   for (const { run: { word, file, args, dir, path: runPath }, uncertainDirectory } of dispatches) {
-    const name = word.split(/[\\/]/).pop();
+    const name = commandReader.programName(word);
     const aliasName = /^(?:git|git\.exe)$/i.test(basename(file ?? "")) ? "git" : name;
     if (aliasBodies(aliasName, args).some(body => ghAliasBodyProblem(body, dir, runPath, { ...context, uncertainDirectory }))) return NO_GH;
     const alias = /^(?:alias|set-alias|new-alias|sal|nal)$/i.test(name) || (aliasName === "git" && args.some(arg => /(?:^|[. ])alias[. ]/i.test(arg)));

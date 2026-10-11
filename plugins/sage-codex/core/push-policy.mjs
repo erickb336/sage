@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { shellCommands } from "./command-reader.mjs";
+import { shellCommands, programName } from "./command-reader.mjs";
 import { createCommandPolicy, GIT_VALUE, gitSubcommand } from "./command-policy.mjs";
 
 /** Shared push rules. The provider supplies a synchronous reader of the checkout's current branch.
@@ -25,7 +25,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     let dir = cwd;
     for (const { cmd, words, bodies } of runnable(commands)) {
       if (cmd.words[0] === "cd" && cmd.words.length === 2) dir = resolve(dir, cmd.words[1]);
-      const git = words.findIndex((w, k) => /(?:^|\/)git$/.test(w) && /^push$/i.test(gitSubcommand(words, k + 1)));
+      const git = words.findIndex((w, k) => programName(w) === "git" && /^push$/i.test(gitSubcommand(words, k + 1)));
       const why = git >= 0 ? pushForm(words, git, dir) : ghApi(words) && words.some((w) => REFS_ENDPOINT.test(w)) && words.some((w) => MAIN_FIELD.test(w)) ? mainReason : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
       if (why) return refuse(why);
     }
@@ -85,8 +85,8 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
   /** Whether the command is gh api: gh as the command word, as gh or a path that ends in /gh, after any NAME=value, env and command. */
   function ghApi(words) {
     let k = 0;
-    while (/^(?:[A-Za-z_]\w*=|env$|command$)/.test(words[k] ?? "")) k++;
-    return /(?:^|\/)gh$/.test(words[k] ?? "") && words[k + 1] === "api";
+    while (/^[A-Za-z_]\w*=/.test(words[k] ?? "") || ["env", "command"].includes(programName(words[k]))) k++;
+    return programName(words[k]) === "gh" && words[k + 1] === "api";
   }
 
   /** A gh api endpoint of git refs: repos/<o>/<r>/git/refs or repos/<o>/<r>/git/refs/<ref>. */

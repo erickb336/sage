@@ -1,4 +1,4 @@
-import { shellCommands, programsRun, commandText } from "./command-reader.mjs";
+import { shellCommands, programsRun, commandText, programName } from "./command-reader.mjs";
 import { PR } from "./pull-request.mjs";
 
 const MERGE_FORM = "gh pr merge <n> --squash --delete-branch --match-head-commit <sha>";
@@ -31,11 +31,12 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     try {
       runs = programsRun(command, cwd);
     } catch (e) {
+      if (e.code === "SAGE_START_PROCESS") return `The hook cannot read this Start-Process form (${e.message}), so it refuses it.`;
       return expansion.test(command) ? `${reason} The hook cannot read this command (${e.message}).` : undefined;
     }
     for (const { word, args, stdin, piped } of runs) {
       if (expands(word)) return reason;
-      const name = word.split("/").pop();
+      const name = programName(word);
       // A shell can run text from a pipe, including through filters. Its output is unknown: refuse expansion in that text.
       if (piped && commandText(name, args, stdin) === stdin && runnable(shellCommands(command)).some(({ words, bodies }) => [...words, ...bodies].some(expands))) return reason;
       if (name === "git" && expansion.test(gitSubcommand(args, 0))) return reason;

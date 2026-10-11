@@ -44,6 +44,9 @@ function longOptionName(option, names = []) {
 /** Shell keywords before a command: the command after them runs in the same shell. After for, select or case come words, not a program. */
 const KEYWORD = /^(?:!|\{|\}|if|then|elif|else|fi|while|until|do|done|esac|coproc)$/;
 const LIST = /^(?:for|select|case)$/;
+/** Compare policy identities without changing the path or shell function lookup. */
+export const programName = (word = "") => word.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, "");
+
 const SHELLS = /^(?:sh|bash|zsh|dash|ksh|fish)$/;
 
 /**
@@ -433,7 +436,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
     let nextDir = dir, status, negate = false, nextUncertain = uncertain;
     for (let k = 0; k < words.length; k++) {
       const w = words[k];
-      const name = w.split("/").pop();
+      const name = programName(w);
       const assignment = !argv && syntax[k]?.assignment;
       const keyword = !argv && !syntax[k]?.quoted;
       if (assignment && /^PATH=/.test(w)) here = set(w);
@@ -447,7 +450,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
       const file = program(w, at, here, uncertain);
       const lexicalWrapper = !argv && !w.includes("/") && (/^(?:command|builtin|exec)$/.test(name) || (keyword && /^(?:time|noglob|nocorrect)$/.test(name)));
       const functionId = !viaExec && !bypassFunctions && Object.hasOwn(functions, w) ? functions[w] : undefined;
-      const wrapperNames = functionId ? [] : lexicalWrapper ? [name] : [file?.split("/").pop(), name].filter(Boolean);
+      const wrapperNames = functionId ? [] : lexicalWrapper ? [name] : [file && programName(file), name].filter(Boolean);
       let wrapper = wrapperNames.flatMap(base => [`${base} ${words[k + 1]}`, base]).find(key =>
         WRAPPER.has(key) && (key !== "npm" || words.slice(k + 1).some(word => /(?:^|=)(?:exec|x)$/.test(word))));
       const originalArgs = words.slice(k + 1);
@@ -735,6 +738,7 @@ function cdDirectory(args, dir, home, cdpath, uncertain) {
 
 /** The text that a shell, eval or PowerShell runs as commands: -c text, eval's words, or stdin when there is no script. */
 export function commandText(name, args, bodies) {
+  name = programName(name);
   if (name === "eval") return [args.join(" ")];
   if (/^(?:pwsh|powershell)(?:\.exe)?$/i.test(name)) {
     const c = args.findIndex((a) => /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(a));
@@ -777,12 +781,48 @@ function program(word, dir, path, uncertain = false) {
  */
 const FLOWS = new WeakMap();
 const COMMAND_CONTEXT = new WeakMap();
+const WORD_COMMAS = new WeakMap();
 
 export function shellCommands(src) {
   const out = [], flow = { nodes: [] };
   FLOWS.set(out, flow);
   readCommands(src, 0, "", out, undefined, flow);
+  for (const command of out) startProcess(command);
   return out;
+}
+
+/** Start-Process joins ArgumentList values before dispatch. Unsupported forms stay unproved. */
+function startProcess(command) {
+  const { words, syntax } = command;
+  let first = 0;
+  while (command.syntax[first]?.assignment) first++;
+  if (!/^(?:start-process|start)$/.test(programName(words[first]))) return;
+  let file, list;
+  const fail = () => { throw Object.assign(new TypeError("Start-Process needs a literal FilePath and ArgumentList"), { code: "SAGE_START_PROCESS" }); };
+  for (let k = first + 1; k < words.length; k++) {
+    const option = words[k].toLowerCase();
+    if (option === "-filepath") {
+      if (file !== undefined || words[k + 1] === undefined) fail();
+      file = words[++k];
+    } else if (option === "-argumentlist" || option === "-args") {
+      if (list !== undefined || words[k + 1] === undefined) fail();
+      list = [];
+      let more;
+      do {
+        const value = words[++k], cuts = WORD_COMMAS.get(command)?.[k] ?? [];
+        let offset = 0;
+        for (const cut of cuts) { list.push(value.slice(offset, cut)); offset = cut + 1; }
+        list.push(value.slice(offset));
+        more = cuts.at(-1) === value.length - 1;
+      } while (more && words[k + 1] !== undefined);
+    } else if (/^-(?:wait|nonewwindow|passthru)$/.test(option)) continue;
+    else if (!option.startsWith("-") && file === undefined) file = words[k];
+    else fail();
+  }
+  if (!file || /[$`@'";()]/.test(file) || /[$`@'";()]/.test((list ?? []).join(" "))) fail();
+  const args = (list ?? []).join(" ").trim().split(/\s+/).filter(Boolean);
+  command.words = [...words.slice(0, first), file, ...args];
+  command.syntax = [...syntax.slice(0, first), ...command.words.slice(first).map(() => ({ quoted: true, assignment: false }))];
 }
 
 function readCommands(src, i, close, out, host, flow) {
@@ -798,11 +838,13 @@ function readCommands(src, i, close, out, host, flow) {
   const fresh = () => {
     const command = { words: [], syntax: [], bodies: [], host, piped: false, grouped: false, writes: false, redirects: [], heredoc: false };
     COMMAND_CONTEXT.set(command, { children: [] });
+    WORD_COMMAS.set(command, []);
     return command;
   };
   let cmd = fresh();
   let word;
   let quoted = false, assignment = false;
+  let commas = [];
   let depth = 0;
   let target; // after a redirection: its operator, kept with its target in redirects, or "body" for the text of a here-string
   const cases = []; // each open case: { depth } where it opens, and pattern: true before an arm's ")", false after it
@@ -823,10 +865,11 @@ function readCommands(src, i, close, out, host, flow) {
         flow.functionName = functionName;
       }
       if (!quoted && !cmd.words.length && word === "}" && /^(?:brace|function)$/.test(flow.kind)) COMMAND_CONTEXT.get(cmd).closesScope = true;
+      WORD_COMMAS.get(cmd).push(commas);
       cmd.words.push(word); cmd.syntax.push({ quoted, assignment });
     }
     word = target = undefined;
-    quoted = assignment = false;
+    quoted = assignment = false; commas = [];
     const [first, , third] = cmd.words;
     if (first === "case" && !cmd.syntax[0].quoted && cmd.words.length === 3 && third === "in" && !cmd.syntax[2].quoted) {
       endCommand();
@@ -947,6 +990,7 @@ function readCommands(src, i, close, out, host, flow) {
       i += (c === "|" || c === "&") && src[i + 1] === c ? 2 : 1;
     } else {
       if (c === "=" && !quoted && /^[A-Za-z_]\w*$/.test(word ?? "")) assignment = true;
+      if (c === ",") commas.push((word ?? "").length);
       add(c);
       i++;
     }

@@ -1,1 +1,1 @@
-export { shellCommands, programsRun } from "sage-core";
+export { shellCommands, programsRun, programName } from "sage-core";

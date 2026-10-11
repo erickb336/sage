@@ -4510,3 +4510,45 @@ test("T181: terminal child events cannot consume and release a fresh legacy rese
   }
   assert.deepEqual(failures, [], "recorded child provenance cannot move to a later call");
 });
+
+
+test("issue 97: policy program names ignore case, paths and the exe suffix", () => {
+  const s = session(); s.send(prompt("sage mode"));
+  for (const program of ["GIT", "/opt/homebrew/bin/GIT", "Git.exe", "'C:\\Tools\\Git.exe'"]) {
+    for (const command of [`${program} push origin main`, `${program} push --force origin task`]) {
+      assert.ok(denied(s.send(bash(command))), command);
+      assert.ok(denied(s.send(bash(command, FEATURE, AGENT))), command);
+    }
+    assert.match(denied(s.send(bash(`${program} stash`, FEATURE, AGENT))), /never runs git stash/);
+    assert.equal(s.send(bash(`${program} status`, FEATURE, AGENT)), undefined);
+  }
+  for (const program of ["PS", "/usr/bin/PGREP", "Kill.exe"]) assert.ok(denied(s.send(bash(`${program} 123`, FEATURE, AGENT))));
+  assert.ok(denied(s.send(bash("GH.exe auth status", FEATURE, AGENT))));
+  assert.ok(denied(s.send(bash("NPX Kill.exe@2 123", FEATURE, AGENT))));
+  assert.ok(denied(s.send(bash("ENV GH.exe api repos/sample/project/git/refs -f ref=refs/heads/main"))));
+  const target = `${s.vars.SAGE_HOME}/projects/sample/tasks.tsv`;
+  assert.ok(denied(s.send(bash(`TEE.exe ${target}`, FEATURE, AGENT))));
+  assert.ok(denied(s.send(bash(`RG.exe --pre helper ${target}`, FEATURE, AGENT))));
+  assert.equal(s.send(bash("git status", FEATURE, AGENT)), undefined);
+});
+
+test("issue 97: literal Start-Process arguments reach push and stash policies", () => {
+  const s = session(); s.send(prompt("sage mode"));
+  for (const verb of ["Start-Process", "start"]) for (const arguments_ of ['"push", "origin", "main"', '"push","origin","main"', '"push --force origin task"']) {
+    for (const command of [`${verb} -FilePath Git.exe -ArgumentList ${arguments_}`, `${verb} -ArgumentList ${arguments_} -FilePath git`]) {
+      assert.ok(denied(s.send(tool("PowerShell", { command }, { cwd: FEATURE }))), command);
+      assert.ok(denied(s.send(tool("PowerShell", { command }, { cwd: FEATURE, ...AGENT }))), command);
+    }
+  }
+  for (const command of ['Start-Process git -ArgumentList "stash"', 'start -Args "stash" -FilePath git']) assert.ok(denied(s.send(tool("PowerShell", { command }, { cwd: FEATURE, ...AGENT }))));
+  for (const command of ['Start-Process git -ArgumentList "status"', 'start -ArgumentList "status" -FilePath git', 'Start-Process -FilePath git -ArgumentList "status","--short"']) assert.equal(s.send(tool("PowerShell", { command }, { cwd: FEATURE, ...AGENT })), undefined, command);
+});
+
+test("issue 97: PowerShell quote boundaries cannot hide protected commands", () => {
+  const s = session(); s.send(prompt("sage mode"));
+  for (const guarded of ["git push origin main", "gh pr merge 1 --admin"]) {
+    const command = String.raw`echo "\"; ${guarded}; echo "\"`;
+    for (const actor of [{}, AGENT]) assert.ok(denied(s.send(tool("PowerShell", { command }, { cwd: FEATURE, ...actor }))), command);
+  }
+  assert.equal(s.send(tool("PowerShell", { command: 'Write-Output "ordinary text"' }, { cwd: FEATURE, ...AGENT })), undefined);
+});
