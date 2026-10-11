@@ -82,6 +82,8 @@ const missingFields = (fields, text) => fields.filter((f) => !new RegExp(`^(?:${
  *     one. So a queued message counts only for an autopilot off, never for an on: the owner sends an on again when
  *     Claude is idle.
  *   - outside: text with the queued messages. It counts only for an autopilot off (the broad off rule).
+ *   - stray: the queued messages before another frame. They switch nothing, because an agent can forge them; an off in
+ *     them gets the unread note, so that the owner's off is not lost without a word (F-T215-12).
  *   - owner: false when the hook cannot read the frames: a close with no open frame, a close of another kind than the
  *     innermost open frame, a frame still open at the end, or a frame's marker in the text (F-T215-2, F-T215-4). Then
  *     nothing in the prompt switches a mode, in either direction.
@@ -121,14 +123,17 @@ export function promptOf(input) {
   }
   if (stack.length) return { owner: false, text: "", outside: "", all };
   const text = frames.length ? `${all.slice(0, frames[0][0])}\n${all.slice(frames.at(-1)[1])}` : all;
-  // The queued messages after the last other frame: whole frames with only their own open and close.
+  // The queued messages after the last other frame: whole frames with only their own open and close. A queued message
+  // before another frame (stray) switches nothing, but its off gets the unread note (F-T215-12).
   const queued = [];
+  const stray = [];
+  let tail = true;
   for (const [s, e, n] of frames.toReversed()) {
     const own = n === 2 ? queuedText(all.slice(s, e)) : [];
-    if (!own.length) break;
-    queued.push(...own);
+    tail &&= own.length > 0;
+    (tail ? queued : stray).push(...own);
   }
-  return { owner: !MARKERS.test(text), text, outside: [text, ...queued].join("\n"), all };
+  return { owner: !MARKERS.test(text), text, outside: [text, ...queued].join("\n"), all, stray: stray.join("\n") };
 }
 
 /**
@@ -137,14 +142,16 @@ export function promptOf(input) {
  * also reads the owner's queued messages. When the hook cannot read the frames, it cannot tell the owner's text from an
  * agent's, so nothing switches; when the prompt has an off, a note asks the owner to send it again alone (F-T215-1).
  */
-function switchModes({ owner, text, outside, all }, state) {
+function switchModes({ owner, text, outside, all, stray = "" }, state) {
   if (modePolicy.error) {
     state.autopilot = false;
     return ["sage: the mode policy cannot load. Autopilot is off. Reinstall or update the sage plugin."];
   }
   const signals = modePolicy.modeSignals({ owner, text, outside, all });
+  // A stray queued message is text the hook cannot attribute: the same off tests as an unreadable prompt (F-T215-12).
+  const unreadOff = signals.unreadOff || modePolicy.modeSignals({ owner: false, text: "", outside: "", all: stray }).unreadOff;
   // The note describes the phrases and never quotes them (T201).
-  const notes = signals.unreadOff ? ["sage: the hook could not read the frames of this prompt, so it switched no mode. An off in this prompt was not applied: if the user sent one, ask the user to send it again as a message alone."] : [];
+  const notes = unreadOff ? ["sage: the hook could not read the frames of this prompt, so it switched no mode. An off in this prompt was not applied: if the user sent one, ask the user to send it again as a message alone."] : [];
   const modes = () => `${Boolean(state.sage)} ${Boolean(state.autopilot)}`; // a new session's state has neither key
   const before = modes();
   if (signals.sageOff) {
