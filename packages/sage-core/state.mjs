@@ -17,7 +17,7 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { BRANCH } from "./branch.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
-import { assertNoPendingReview, reviewReadVersion, readReviewReceipt, recoverReviewWrite, commitReviewWrite } from "./review-write.mjs";
+import { recordedWrites, assertNoPendingReview, reviewReadVersion, readReviewReceipt, recoverReviewWrite, commitReviewWrite } from "./review-write.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -430,6 +430,51 @@ function reviewHead(project, branch, env) {
   return git(["-C", project, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], clean).trim();
 }
 
+const taskWrites = recordedWrites({ schema: 2, tables: ["tasks", "decisions"], folder: "task-requests",
+  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json" });
+
+/** Create one task for a durable caller request. The provider authenticates the opaque owner scope. */
+function createRequestedTask(input, env = process.env) {
+  const fields = ["project", "owner", "request", "title", "size", "risk", "add", "why"];
+  const deny = () => refuse("Task creation needs a complete, unchanged request and a valid route.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
+    || fields.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
+    || typeof input.owner !== "string" || !input.owner || input.owner.length > 1024 || /\p{Cc}/u.test(input.owner)
+    || typeof input.request !== "string" || !new RegExp(`^${UUID}$`).test(input.request)
+    || !["title", "why"].every(key => typeof input[key] === "string" && input[key].length <= 4096 && cell(input[key]) === input[key])
+    || !input.title.trim() || typeof input.size !== "string" || !Object.hasOwn(SIZES, input.size)
+    || !Array.isArray(input.risk) || input.risk.length > RISKS.length || input.risk.some(value => !RISKS.includes(value))
+    || !Array.isArray(input.add) || input.add.length > BLOCKS.length || input.add.some(value => !BLOCKS.includes(value))
+    || new Set(input.risk).size !== input.risk.length || new Set(input.add).size !== input.add.length
+    || (input.add.length && !input.why.trim()) || (!input.add.length && input.why)
+    || (input.size === "investigate" && input.add.includes("build"))) deny();
+  const { project, ...request } = input;
+  // Property order supplied by a transport must not change retry identity.
+  const reference = Object.fromEntries(fields.filter(key => key !== "project").map(key => [key, request[key]]));
+  const dir = storeDir(project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  const checked = receipt => {
+    const result = receipt.result;
+    if (!result || !/^T[1-9]\d*$/.test(result.id) || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, input.title, input.size, input.risk, input.add))) deny();
+    const matches = read(dir, "tasks").filter(row => row.id === result.id);
+    if (matches.length !== 1) deny();
+    return result;
+  };
+  return withLock(dir, () => {
+    const recovered = taskWrites.recover(dir, reference);
+    if (recovered) { const task = checked(recovered); status(dir, true); return { decision: "task-created", task }; }
+    const prior = taskWrites.readReceipt(dir, reference);
+    if (prior) return { decision: "already-created", task: checked(prior) };
+    ready(dir);
+    const task = taskFrame(nextId(dir, "T"), input.title, input.size, input.risk, input.add);
+    const decisions = read(dir, "decisions");
+    if (input.add.length) decisions.push({ at: now(), task: task.id, decision: `added ${input.add.join(",")}`, why: input.why });
+    taskWrites.commit(dir, { reference, result: task }, { tasks: tableText("tasks", [...read(dir, "tasks"), task]), decisions: tableText("decisions", decisions) });
+    status(dir, true);
+    return { decision: "task-created", task };
+  });
+}
+
 /** Capture a review subject from the actual logbook and local branch, never from a reported SHA. */
 function captureReviewTarget(input, env = process.env) {
   const keys = ["project", "task", "run", "role", "cycle"];
@@ -668,9 +713,13 @@ function taskOf(dir, id) {
 }
 
 /** Frames a task with its route and writes it: the least route of its size, the security review for a risk, and the added blocks. */
-function frame(dir, title, size, risk, add) {
+function taskFrame(id, title, size, risk, add) {
   const blocks = new Set([...SIZES[size], ...(risk.length && size !== "investigate" ? ["security-review"] : []), ...add]);
-  const task = { id: nextId(dir, "T"), title, size, risk: risk.join(","), route: BLOCKS.filter((b) => blocks.has(b)).join(","), state: "framed", round: 0 }; // the blocks in their order
+  const task = { id, title, size, risk: risk.join(","), route: BLOCKS.filter((b) => blocks.has(b)).join(","), state: "framed", round: 0 }; // the blocks in their order
+  return task;
+}
+function frame(dir, title, size, risk, add) {
+  const task = taskFrame(nextId(dir, "T"), title, size, risk, add);
   write(dir, "tasks", [...read(dir, "tasks"), task]);
   return task;
 }
@@ -1455,5 +1504,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, finishReportedRun, captureReviewTarget, acceptReportedReview, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, createRequestedTask, finishReportedRun, captureReviewTarget, acceptReportedReview, withLock, board, answerPaths, runCli };
 }

@@ -67,7 +67,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_accept_review", "sage_finish_run", "sage_prepare_task", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -1376,8 +1376,8 @@ for (const table of ["tasks", "ledger"]) test(`review acceptance recovers a fail
   const restore = await stopReviewWrite(t, f, table);
   assert.throws(() => f.accept(), /Injected review write failure/);
   assert(existsSync(join(f.logbook, "review-pending.json")));
-  assert.match(f.tool.mergeCheck(f.preparation.review.sha, f.env).reason, /review update is incomplete/);
-  assert.throws(() => f.cli("log", "T1", "unrelated change", "--why", "must wait"), /review update is incomplete/);
+  assert.match(f.tool.mergeCheck(f.preparation.review.sha, f.env).reason, /recorded update is incomplete/);
+  assert.throws(() => f.cli("log", "T1", "unrelated change", "--why", "must wait"), /recorded update is incomplete/);
   restore();
   // A changed Git head does not erase a write intent already validated for the older commit.
   f.git("commit", "--quiet", "--allow-empty", "-m", "later head");
@@ -2181,4 +2181,101 @@ test('chief context refuses oversized rules and recovers all parts after repair'
     assert.equal((await client.call({ ...f.prompt('sage mode'), instruction_part: part }, childActor)).decision, 'block');
   }
   await client.close();
+});
+
+async function taskCreationFixture(t) {
+  const f = await composedPolicyFixture(t);
+  const projectDirectory = join(f.dir, 'project'); mkdirSync(projectDirectory);
+  const env = { ...process.env, SAGE_HOME: join(f.dir, 'logbook') };
+  const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); } });
+  const cli = (...args) => tool.sage([...args, '--project', projectDirectory], env);
+  cli('init'); mkdirSync(f.options.observationsRoot);
+  const options = { ...f.options, projectDirectory, logbookRoot: env.SAGE_HOME };
+  const { createNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-create.mjs')));
+  const input = { request: turns[0], title: 'Native task request', size: 'small', risk: ['input'], add: ['ux-review'], why: 'Check the agreed experience' };
+  const create = (data = input, actor = session) => createNativeTask(data, f.native(actor), options);
+  const logbook = tool.storeDir(projectDirectory, env);
+  return { ...f, options, env, tool, cli, logbook, input, create };
+}
+
+test('native task creation preserves core routes and retries across server connections', async t => {
+  const f = await taskCreationFixture(t);
+  const file = join(f.dir, 'task-config.json');
+  writeFileSync(file, JSON.stringify({ version: 3, mode: f.options }));
+  writeFileSync(f.entry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(file)});`);
+  const firstClient = await connect(t, f, '0.160.0', '', 'sage_create_task');
+  const first = await firstClient.call(f.input);
+  assert.equal(first.decision, 'task-created'); assert.equal(first.task.id, 'T1');
+  assert.equal(first.task.route, 'build,code-review,security-review,ux-review,qa');
+  assert.equal(first.task.state, 'framed');
+  await firstClient.close();
+  const retry = await connect(t, f, '0.160.0', '', 'sage_create_task');
+  assert.deepEqual(await retry.call(f.input), { ...first, decision: 'already-created' });
+  assert.match((await retry.call({ ...f.input, title: 'conflicting reuse' })).error, /could not create/);
+  assert.match((await retry.call(f.input, childActor)).error, /could not create/);
+  assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
+  assert.equal(f.tool.read(f.logbook, 'decisions').length, 1);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 0);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  await retry.close();
+});
+
+test('native task creation refuses foreign identity storage and invalid requests without changes', async t => {
+  const f = await taskCreationFixture(t);
+  const before = Object.fromEntries(readdirSync(f.logbook).filter(name => name.endsWith('.tsv')).map(name => [name, readFileSync(join(f.logbook, name), 'utf8')]));
+  for (const input of [{ ...f.input, project: f.options.projectDirectory }, { ...f.input, owner: session },
+    { ...f.input, request: '../outside' }, { ...f.input, size: ['small'] }, { ...f.input, title: '' },
+    { ...f.input, title: 'hidden\ntext' }, { ...f.input, risk: ['unknown'] }, { ...f.input, add: ['build', 'build'] },
+    { ...f.input, why: '' }, { ...f.input, size: 'investigate', add: ['build'] }]) assert.throws(() => f.create(input));
+  assert.throws(() => f.create(f.input, childActor));
+  assert.throws(() => f.create(f.input, turns[2]));
+  const alias = join(f.dir, 'logbook-alias'); symlinkSync(f.options.logbookRoot, alias);
+  const { createNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-create.mjs')));
+  assert.throws(() => createNativeTask(f.input, f.native(session), { ...f.options, logbookRoot: alias }));
+  assert.deepEqual(Object.fromEntries(Object.keys(before).map(name => [name, readFileSync(join(f.logbook, name), 'utf8')])), before);
+});
+
+test('native task creation recovers partial publication and blocks unrelated writes until recovery', async t => {
+  const f = await taskCreationFixture(t);
+  const receipts = join(f.logbook, 'task-requests');
+  const restore = await stopReviewWrite(t, f, 'decisions');
+  assert.throws(() => f.create(), /Injected/);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
+  assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
+  assert.throws(() => f.cli('task', 'add', '--title', 'unrelated', '--size', 'tiny'), /incomplete/);
+  assert.equal(f.tool.mergeCheck('1'.repeat(40), f.env).ok, false);
+  assert.throws(() => f.create({ ...f.input, title: 'changed retry' }));
+  restore();
+  assert.equal(f.create().decision, 'task-created');
+  assert.equal(f.create().decision, 'already-created');
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+  assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
+  assert.equal(f.tool.read(f.logbook, 'decisions').length, 1);
+  assert.equal(readdirSync(receipts).length, 1);
+});
+
+test('native task creation refuses recovery after an unrelated partial-table edit', async t => {
+  const f = await taskCreationFixture(t);
+  const receipts = join(f.logbook, 'task-requests');
+  const restore = await stopReviewWrite(t, f, 'decisions');
+  assert.throws(() => f.create(), /Injected/); restore();
+  appendFileSync(join(f.logbook, 'decisions.tsv'), 'changed outside the tool\n');
+  assert.throws(() => f.create());
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
+  assert.equal(existsSync(receipts), false);
+});
+
+test('native task creation allows manual off-mode records without dispatch and serializes concurrent retries', async t => {
+  const f = await taskCreationFixture(t);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const file = join(f.dir, 'task-config.json');
+  writeFileSync(file, JSON.stringify({ version: 3, mode: f.options }));
+  writeFileSync(f.entry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(file)});`);
+  const clients = await Promise.all([connect(t, f, '0.160.0', '', 'sage_create_task'), connect(t, f, '0.160.0', '', 'sage_create_task')]);
+  const outputs = await Promise.all(clients.map(client => client.call(f.input)));
+  assert.deepEqual(outputs.map(out => out.decision).sort(), ['already-created', 'task-created']);
+  assert.deepEqual(outputs[0].task, outputs[1].task);
+  assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  await Promise.all(clients.map(client => client.close()));
 });

@@ -1,13 +1,12 @@
-// Recoverable review writes. Call under the logbook lock; never accept paths from a report.
+// Recoverable logbook writes. Call under the logbook lock; never accept paths from a report.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const TABLES = ["tasks", "findings", "ledger", "decisions"];
 const PENDING = "review-pending.json";
-const NAME = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-[0-9a-f]{64}\.json$/;
+const REVIEW_NAME = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-[0-9a-f]{64}\.json$/;
 const MAX = 64 * 1024 * 1024;
-const fail = () => { throw Error("A review update is incomplete or damaged. Retry its acceptance before changing or merging this logbook."); };
+const fail = () => { throw Error("A recorded update is incomplete or damaged. Retry its original request before changing or merging this logbook."); };
 const json = value => JSON.stringify(value);
 const hash = text => createHash("sha256").update(text).digest("hex");
 const keys = (value, names) => value && typeof value === "object" && !Array.isArray(value)
@@ -61,39 +60,41 @@ function atomic(dir, name, text, immutable = false) {
 export function assertNoPendingReview(dir) {
   if (lstatSync(join(dir, PENDING), { throwIfNoEntry: false })) fail();
 }
-export function reviewReceiptName(reference) {
-  const name = `${reference.assignment}-${reference.reportHash}.json`;
+/** Fixed core record types share one pending marker, so old clients also refuse partial writes. */
+export function recordedWrites({ schema, tables: TABLES, folder: FOLDER, name: NAME, receiptName }) {
+function recordName(reference) {
+  const name = receiptName(reference);
   if (!NAME.test(name)) fail();
   return name;
 }
 function receiptFolder(dir) {
   canonical(dir);
-  const folder = join(dir, "reviews");
+  const folder = join(dir, FOLDER);
   if (lstatSync(folder, { throwIfNoEntry: false })) canonical(folder);
   return folder;
 }
 /** Immutable receipt names detect a review committed while a reader read the separate tables. */
-export function reviewReadVersion(dir) {
+function readVersion(dir) {
   // Read-only merge checks already support logbook aliases. Refuse a redirected receipts folder only.
-  const folder = join(dir, "reviews");
-  if (lstatSync(folder, { throwIfNoEntry: false }) && realpathSync(folder) !== join(realpathSync(dir), "reviews")) fail();
+  const folder = join(dir, FOLDER);
+  if (lstatSync(folder, { throwIfNoEntry: false }) && realpathSync(folder) !== join(realpathSync(dir), FOLDER)) fail();
   let names;
   try { names = readdirSync(folder).filter(name => NAME.test(name)).sort(); }
   catch (error) { if (error.code !== "ENOENT") throw error; names = []; }
   assertNoPendingReview(dir);
   return json(names);
 }
-export function readReviewReceipt(dir, reference) {
-  const value = decode(join(receiptFolder(dir), reviewReceiptName(reference)));
+function readReceipt(dir, reference) {
+  const value = decode(join(receiptFolder(dir), recordName(reference)));
   if (value && (!keys(value, ["reference", "result"]) || json(value.reference) !== json(reference))) fail();
   return value;
 }
 /** Pending intent preserves all before/after bytes. Recovery refuses any unrelated table edit. */
-export function recoverReviewWrite(dir, reference) {
+function recover(dir, reference) {
   canonical(dir);
   const pending = decode(join(dir, PENDING));
   if (!pending) return undefined;
-  if (!keys(pending, ["schema", "receipt", "tables"]) || pending.schema !== 1
+  if (!keys(pending, ["schema", "receipt", "tables"]) || pending.schema !== schema
     || !keys(pending.receipt, ["reference", "result"]) || json(pending.receipt.reference) !== json(reference)
     || !keys(pending.tables, TABLES)) fail();
   for (const table of TABLES) {
@@ -108,11 +109,11 @@ export function recoverReviewWrite(dir, reference) {
   }
   const folder = receiptFolder(dir);
   mkdirSync(folder, { recursive: true, mode: 0o700 }); canonical(folder); sync(dir);
-  atomic(folder, reviewReceiptName(reference), encode(pending.receipt), true);
+  atomic(folder, recordName(reference), encode(pending.receipt), true);
   unlinkSync(join(dir, PENDING)); sync(dir);
   return pending.receipt;
 }
-export function commitReviewWrite(dir, receipt, after) {
+function commit(dir, receipt, after) {
   canonical(dir); assertNoPendingReview(dir);
   if (!keys(after, TABLES)) fail();
   const tables = Object.fromEntries(TABLES.map(table => {
@@ -120,8 +121,23 @@ export function commitReviewWrite(dir, receipt, after) {
     if (typeof before !== "string" || typeof after[table] !== "string") fail();
     return [table, { before, after: after[table] }];
   }));
-  const bytes = encode({ schema: 1, receipt, tables });
+  const bytes = encode({ schema, receipt, tables });
   if (Buffer.byteLength(bytes) > MAX) fail();
   atomic(dir, PENDING, bytes, true);
-  return recoverReviewWrite(dir, receipt.reference);
+  return recover(dir, receipt.reference);
+}
+
+return { readVersion, readReceipt, recover, commit };
+}
+
+const reviews = recordedWrites({ schema: 1, tables: ["tasks", "findings", "ledger", "decisions"], folder: "reviews",
+  name: REVIEW_NAME, receiptName: reference => `${reference.assignment}-${reference.reportHash}.json` });
+export const reviewReadVersion = reviews.readVersion;
+export const readReviewReceipt = reviews.readReceipt;
+export const recoverReviewWrite = reviews.recover;
+export const commitReviewWrite = reviews.commit;
+export function reviewReceiptName(reference) {
+  const name = `${reference.assignment}-${reference.reportHash}.json`;
+  if (!REVIEW_NAME.test(name)) fail();
+  return name;
 }

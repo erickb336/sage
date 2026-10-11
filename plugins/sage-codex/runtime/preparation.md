@@ -171,3 +171,9 @@ The stop callback's `agent_transcript_path` supplies the child transcript. The a
 The chief report workflow then proceeds through one accepted verdict and an identical retry.
 Missing, changed, foreign, or stale transcript evidence refuses completion and retains the reservation.
 This does not add follow-up task binding or cross-session recovery.
+
+
+The prepared server also exposes `sage_create_task`; see `task-create.md`.
+It frames a task through the shared state tool with a durable request UUID.
+Preparation still requires task and run IDs; creating a task does not create
+its run or grant an agent slot.

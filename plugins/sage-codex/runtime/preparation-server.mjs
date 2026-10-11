@@ -5,6 +5,20 @@ export function createPreparationServer(options = {}) {
   const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot, sessionsDir: options.sessionsDir,
     projectDirectory: options.projectDirectory, logbookRoot: options.logbookRoot });
   const server = new McpServer({ name: "sage-preparation", version: "0.1.0" });
+  server.registerTool("sage_create_task", {
+    description: "Chief only: create one framed task in the configured logbook. Reuse the same request UUID and identical fields after a lost response. Returns the original creation record on retry; it does not start a run, approve a route, dispatch an agent, or merge. Extra blocks require a reason. Unsupported routes remain unavailable for dispatch.",
+    inputSchema: z.object({ request: z.string(), title: z.string(), size: z.string(), risk: z.array(z.string()),
+      add: z.array(z.string()), why: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      if (Buffer.byteLength(JSON.stringify(input), "utf8") > 16 * 1024) throw Error("Invalid request size");
+      const { createNativeTask } = await import("./task-create.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(createNativeTask(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not create this task. Check the chief identity, configured logbook, request UUID, and route. Retry an incomplete request with the same fields." }] };
+    }
+  });
   server.registerTool("sage_prepare_task", {
     description: "Save a complete Sage task brief before spawning a named agent. Configured review roles also require reviewCycle and receive a fixed commit target. Preparation does not start the agent or reserve capacity. Copy the returned name, message, and fork_turns unchanged into the later spawn.",
     inputSchema: z.object({ task: z.string(), run: z.string(), name: z.string(), role: z.string(), reviewCycle: z.number().int().min(1).max(10).optional(),
