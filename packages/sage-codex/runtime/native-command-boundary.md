@@ -6,7 +6,8 @@ The command adapter must account for this change before Sage can enforce its sha
 Run the native check with `node scripts/probe-codex-command.mjs`.
 Add `--deny-command` to verify denial of the same fixed harmless command.
 Add `--default-command` to omit the shell, working directory, and terminal fields.
-The two flags can be combined.
+Add `--sage-off` to verify original command recovery with Sage mode off.
+These flags can be combined.
 Use fake `ps`, `pgrep`, and `kill` first on PATH, as for the other native checks.
 The check uses a fresh temporary profile and a local server with fixed simulated responses.
 It does not use model credentials or the owner's settings.
@@ -49,7 +50,8 @@ This reader does not authenticate the hook caller or grant command permission.
 Then apply the shared rules to the complete input, including shell, working directory, and permission changes.
 An instruction that asks the model to omit these fields is not enforcement.
 
-The probe now runs the composed native Sage policy with Sage mode on.
+The probe runs the composed native Sage policy with the requested Sage mode.
+The default is on. Off mode still requires exact original command evidence.
 A receipt from its evaluator confirms the exact recovered fields and call identity.
 The allow route checks the native exit code and exact command output.
 The deny route checks the fixed denial response, no command execution, and no post-tool callback.

@@ -1802,10 +1802,9 @@ test("native failed dispatch reconciliation runs before a new admitted spawn", a
   assert.notEqual(state.failures[0].assignment, state.reservations[1].assignment.id);
 });
 
-function commandPolicyInput(f, actor = session, command = 'printf fixed') {
-  const turn = actor === session ? turns[0] : turns[1];
+function commandPolicyInput(f, actor = session, command = 'printf fixed', turn = actor === session ? turns[0] : turns[1], message) {
   const envelope = { cmd: command, shell: '/bin/sh', workdir: f.dir, tty: false, sandbox_permissions: 'use_default' };
-  const transcript_path = actor === session ? join(f.mode.sessionsDir, 'command.jsonl') : f.childTranscript();
+  const transcript_path = actor === session ? join(f.mode.sessionsDir, 'command.jsonl') : f.childTranscript({ turn, message });
   const call = { type: 'response_item', metadata: { client_authored: false }, payload: { type: 'function_call',
     name: 'exec_command', call_id: 'command-1', arguments: JSON.stringify(envelope),
     internal_chat_message_metadata_passthrough: { turn_id: turn } } };
@@ -1868,4 +1867,87 @@ test('native command policy verifies the admitted child before providing its env
   const state = f.core.readAdmission(f.options.directory); f.core.completeAdmission(f.options.directory, state.bindings[0]);
   await assert.rejects(f.evaluate(policy, input, childActor));
   assert.equal(evaluated, 1);
+});
+
+
+test('native off-mode command evidence supports protected-path decisions without granting admission', async t => {
+  const f = await composedPolicyFixture(t);
+  const logbookRoot = join(f.dir, 'logbook'); mkdirSync(logbookRoot);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const { shellPathDecision } = await import(pathToFileURL(join(f.plugin, 'runtime/file-policy.mjs')));
+  let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, (input, context) => {
+    assert.equal(context.sage, false); assert.equal(context.command.cmd, input.tool_input.command);
+    assert.equal(context.command.shell, '/bin/sh'); assert.equal(context.command.workdir, f.dir);
+    evaluated++;
+    return shellPathDecision(context.command.cmd, { cwd: f.dir, roots: [logbookRoot] });
+  });
+  const safe = commandPolicyInput(f, session, 'touch ordinary.txt', turns[2]);
+  assert.equal((await f.evaluate(policy, safe.input)).decision, 'pass');
+  // Parser input only. No command from this test reaches a shell.
+  const protectedWrite = commandPolicyInput(f, session, `touch ${logbookRoot}/ledger.tsv`, turns[2]);
+  assert.equal((await f.evaluate(policy, protectedWrite.input)).decision, 'deny');
+  assert.equal(evaluated, 2);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  assert.equal(existsSync(join(f.dir, 'ordinary.txt')), false);
+});
+
+test('native off-mode command refuses missing and conflicting original evidence before evaluation', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: 'pass' }; });
+  const { input } = commandPolicyInput(f, session, 'printf fixed', turns[2]);
+  const { transcript_path, ...missing } = input;
+  for (const changed of [missing, { ...input, tool_use_id: 'another' },
+    { ...input, tool_input: { command: 'different' } }, { ...input, tool_input: { ...input.tool_input, shell: '/bin/sh' } }])
+    await assert.rejects(f.evaluate(policy, changed));
+  assert.equal(evaluated, 0);
+  assert.equal((await f.evaluate(policy, input)).decision, 'pass');
+  assert.equal(evaluated, 1);
+});
+
+test('native off-mode child command verifies its transcript without a Sage admission or start callback', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  mkdirSync(join(f.options.observationsRoot, session), { recursive: true });
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const policy = f.createNativePolicy(f.options, (input, context) => {
+    assert.equal(context.sage, false); assert.equal(context.actor, childActor);
+    assert.equal(context.command.cmd, input.tool_input.command);
+    evaluated++; return { decision: 'pass' };
+  });
+  const { input } = commandPolicyInput(f, childActor, 'printf fixed', turns[1], 'fixed off-mode task');
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, 'pass');
+  assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).length, 0);
+  const root = commandPolicyInput(f, session, 'printf fixed', turns[2]);
+  await assert.rejects(f.evaluate(policy, { ...input, transcript_path: root.input.transcript_path }, childActor));
+  assert.equal(evaluated, 1);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.reservations.length, 0); assert.equal(state.bindings.length, 0);
+});
+
+
+test('native off-mode command follows the current child turn and rejects conflicting stored identity', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  mkdirSync(join(f.options.observationsRoot, session), { recursive: true });
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const policy = f.createNativePolicy(f.options, (input, context) => {
+    assert.equal(context.command.cmd, input.tool_input.command); evaluated++; return { decision: 'pass' };
+  });
+  const first = commandPolicyInput(f, childActor, 'printf fixed', turns[1], 'fixed first task');
+  const original = readFileSync(first.input.transcript_path, 'utf8');
+  const next = commandPolicyInput(f, childActor, 'printf followup', turns[2], 'fixed later task');
+  const call = JSON.parse(readFileSync(next.input.transcript_path, 'utf8').trim().split('\n').at(-1));
+  call.payload.call_id = 'command-2'; next.input.tool_use_id = 'command-2';
+  writeFileSync(next.input.transcript_path, original + [
+    { type: 'response_item', payload: { type: 'function_call_output', call_id: first.input.tool_use_id, output: 'fixed' } },
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: turns[1] } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: turns[2] } },
+    { type: 'turn_context', payload: { turn_id: turns[2] } }, call,
+  ].map(row => JSON.stringify(row) + '\n').join(''));
+  assert.equal((await f.evaluate(policy, next.input, childActor)).decision, 'pass');
+  await assert.rejects(f.evaluate(policy, first.input, childActor));
+  policy.startChild({ ...f.identity, path: '/root/conflicting_child' });
+  await assert.rejects(f.evaluate(policy, next.input, childActor));
+  assert.equal(evaluated, 1);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
 });

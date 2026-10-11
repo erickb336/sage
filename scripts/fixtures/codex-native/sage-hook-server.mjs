@@ -12,7 +12,7 @@ serveHooks({ mode: options, loadPolicy: async () => {
     recordOutage(input);
     process.exit(0); // Exit this test server only; never signal another process.
   }
-  if (input.tool_name === "Bash" && context.sage && context.actor === input.session_id
+  if (input.tool_name === "Bash" && context.actor === input.session_id
     && context.command?.cmd === "printf sage-native-command-ok; pwd" && context.command.max_output_tokens === 1000
     && ((context.command.shell === "/bin/sh" && context.command.workdir === options.projectDirectory + "/command-workdir"
       && context.command.tty === false && Object.keys(context.command).length === 5)

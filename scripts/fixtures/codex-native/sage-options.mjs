@@ -20,7 +20,7 @@ export function commandDecision(input, context) {
   const deny = JSON.parse(readFileSync(join(root, "fixture-fault.json"), "utf8")).denyCommand === true;
   const result = deny ? { decision: "deny", reason: "sage-fixed-command-denial" } : { decision: "pass" };
   writeFileSync(join(root, "command-policy-receipt.json"), JSON.stringify({ session: input.session_id,
-    turn: input.turn_id, call: input.tool_use_id, command: context.command, result }), { flag: "wx" });
+    turn: input.turn_id, call: input.tool_use_id, sage: context.sage, command: context.command, result }), { flag: "wx" });
   return result;
 }
 

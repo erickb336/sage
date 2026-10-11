@@ -8,7 +8,8 @@ import {join} from 'node:path';
 import {setupCapture} from './fixtures/codex-native/setup-capture.mjs';
 import {waitNative} from './fixtures/codex-native/wait-native.mjs';
 
-assert(process.argv.slice(2).every(arg=>['--deny-command','--default-command'].includes(arg))&&new Set(process.argv.slice(2)).size===process.argv.length-2,'unknown_probe_arguments');
+assert(process.argv.slice(2).every(arg=>['--deny-command','--default-command','--sage-off'].includes(arg))&&new Set(process.argv.slice(2)).size===process.argv.length-2,'unknown_probe_arguments');
+const sageOff=process.argv.includes('--sage-off');
 const defaultCommand=process.argv.includes('--default-command');
 const denyCommand=process.argv.includes('--deny-command');
 const root=realpathSync(mkdtempSync(join(tmpdir(),'sage-command-boundary-')));
@@ -61,7 +62,7 @@ try {
  for(const [key,value]of Object.entries(config))args.push('-c',`${key}=${JSON.stringify(value)}`);
  args.push('-c',`model_providers.sage_command_fixture={name="Fixed command fixture",base_url="http://127.0.0.1:${server.address().port}/v1",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`,'-');
  const child=launch(args);let stdout='',stderrBytes=0;
- child.stdout.on('data',d=>{stdout+=d;});child.stderr.on('data',d=>stderrBytes+=d.length);child.stdin.on('error',()=>{});child.stdin.end('sage mode\n');
+ child.stdout.on('data',d=>{stdout+=d;});child.stderr.on('data',d=>stderrBytes+=d.length);child.stdin.on('error',()=>{});child.stdin.end(sageOff?'sage mode off\n':'sage mode\n');
  const result=await waitNative(child,{onTimeout:()=>{server.closeAllConnections();}});
  server.closeAllConnections();await new Promise(resolve=>server.close(resolve));server=null;
  const events=readdirSync(join(root,'events')).map(n=>JSON.parse(readFileSync(join(root,'events',n),'utf8')));
@@ -69,7 +70,7 @@ try {
  assert.equal(result.code,0);assert.equal(fixtureError,undefined);assert.equal(requests,2);
  assert.equal(events.filter(e=>e.hook_event_name==='PreToolUse'&&e.fixedCommandMatched).length,1);
  assert.equal(events.filter(e=>e.hook_event_name==='PostToolUse'&&e.fixedCommandMatched).length,denyCommand?0:1);
- assert.equal(integrated.readJournal().modes.at(-1)?.sage,true,'sage_mode_required');
+ assert.equal(integrated.readJournal().modes.at(-1)?.sage,!sageOff,'requested_sage_mode_required');
  for(const event of events){assert.equal(event.tool_name,'Bash');assert.deepEqual(event.toolInputShape,{command:'string'});}
  const before=events.find(event=>event.hook_event_name==='PreToolUse');
  assert.equal(before.hookCwdIsWorkspace,true);assert.equal(before.hookCwdIsCommandDirectory,false);
@@ -86,9 +87,10 @@ try {
  const receipt=JSON.parse(readFileSync(join(root,'command-policy-receipt.json'),'utf8'));
  assert.equal(receipt.session,before.session_id);assert.equal(receipt.turn,before.turn_id);assert.equal(receipt.call,before.tool_use_id);
  assert.deepEqual(receipt.command,commandArgs);
+ assert.equal(receipt.sage,!sageOff);
  assert.equal(receipt.result.decision,denyCommand?'deny':'pass');
  assert(stdout.includes('command boundary checked'));
- console.log(JSON.stringify({type:'result',verified:true,simulatedModel:true,policyReceivedOriginalFields:true,deniedCommand:denyCommand,defaultCommand,executionShell:completed[0]?.item.command?.match(/^([^ ]+)/)?.[1],effectiveDirectoryVerified:!denyCommand,installedSageVerified:false}));
+ console.log(JSON.stringify({type:'result',verified:true,simulatedModel:true,policyReceivedOriginalFields:true,deniedCommand:denyCommand,defaultCommand,sageMode:!sageOff,executionShell:completed[0]?.item.command?.match(/^([^ ]+)/)?.[1],effectiveDirectoryVerified:!denyCommand,installedSageVerified:false}));
 }finally{
  server?.closeAllConnections();server?.close();rmSync(root,{recursive:true,force:true});
 }

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
-import { readNativeCommand } from "./identity.mjs";
+import { readInitialSession, readNativeCommand } from "./identity.mjs";
 import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn } from "./preparation.mjs";
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
@@ -47,14 +47,27 @@ export function createNativePolicy(options, evaluateTool) {
       const before = mode(event.session_id);
       if (before.sage && child) bindNativeChildTool(raw, native, fixed);
       let command;
-      if (before.sage && event.tool_name === "Bash") {
+      // Path and state-tool protection also need original inputs while Sage is off.
+      if (event.tool_name === "Bash") {
         if (Object.keys(event.tool_input).length !== 1 || !Object.hasOwn(event.tool_input, "command")) refuse();
         let parent = null, path = "/root";
         if (child) {
           const starts = readObservations(join(fixed.observationsRoot, event.session_id))
-            .filter(row => row.kind === "child-start" && row.child === native.actor && row.turn === event.turn_id);
-          if (starts.length !== 1) refuse();
-          ({ parent, path } = starts[0]);
+            .filter(row => row.kind === "child-start" && row.child === native.actor);
+          if (before.sage) {
+            const current = starts.filter(row => row.turn === event.turn_id);
+            if (current.length !== 1) refuse();
+            ({ parent, path } = current[0]);
+          } else {
+            // An inactive child needs no Sage admission or start callback. Its native
+            // transcript supplies stable identity; readNativeCommand verifies the current turn.
+            const initial = readInitialSession(event.transcript_path, { sessionsDir: fixed.sessionsDir });
+            if (initial.metadata.cli_version !== RUNTIME_VERSION) refuse();
+            const started = decodeEvent({ hook_event_name: "SubagentStart", session_id: event.session_id,
+              agent_id: native.actor, turn_id: initial.turn }, { ...native, metadata: initial.metadata });
+            ({ parent, path } = started);
+            if (parent === native.actor || starts.some(row => row.parent !== parent || row.path !== path)) refuse();
+          }
         }
         command = readNativeCommand(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
           session: event.session_id, actor: native.actor, parent, path, turn: event.turn_id,
