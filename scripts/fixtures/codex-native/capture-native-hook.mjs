@@ -16,12 +16,14 @@ if(input.hook_event_name==='PostToolUse'){
  if(value&&typeof value==='object')record.responseKeys=Object.keys(value);
 }
 if(['SubagentStart','SubagentStop'].includes(input.hook_event_name)){
+ record.inputKeys=Object.keys(input).sort();
  try{
   const base=realpathSync(join(root,'codex/sessions'));
   if(!/^[0-9a-f-]{36}$/.test(input.agent_id))throw Error('invalid_test_child');
   const saved=join(root,'child-path-'+input.agent_id+'.json');
   if(input.hook_event_name==='SubagentStart')writeFileSync(saved,JSON.stringify(input.transcript_path),{flag:'wx'});
   const path=realpathSync(JSON.parse(readFileSync(saved,'utf8')));
+  record.childTranscriptFields=Object.keys(input).filter(key=>input[key]===path).sort();
   const rel=relative(base,path);
   if(!rel||rel.startsWith('..')||isAbsolute(rel))throw Error('outside_fresh_session_tree');
   const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);

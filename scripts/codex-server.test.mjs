@@ -1,5 +1,6 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1475,4 +1476,100 @@ test("chief saved report inspection reads a lead's recorded nested report withou
   assert.equal(report.run, "R2"); assert.equal(report.text, reportText);
   assert.throws(() => read(f.finishInput, childActor)); assert.throws(() => read(f.finishInput, qa));
   assert.throws(() => api.readChildReport({ name: request.name }, f.native(session), f.options));
+});
+
+
+async function noToolCompletionFixture(t) {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  await f.evaluate(f.createNativePolicy(f.options, () => ({ decision: "pass" })));
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const transcript = f.childTranscript(); appendReport(f);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, "root.jsonl"), agent_transcript_path: transcript };
+  return { ...f, policy, stop, transcript };
+}
+
+test("no-tool completion binds the exact initial task and exposes its completed report once", async t => {
+  const f = await noToolCompletionFixture(t);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "already-completed" });
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 1); assert.equal(state.completions.length, 1);
+  assert.deepEqual(state.completions[0], state.bindings[0]);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  const report = readChildReport({ name: f.input.name }, f.native(session), f.options);
+  assert.equal(report.reportHash, createHash("sha256").update(reportText).digest("hex"));
+  assert.equal(report.assignment, state.bindings[0].assignment);
+});
+
+test("no-tool completion refuses missing foreign changed or stale transcript evidence", async t => {
+  const f = await noToolCompletionFixture(t);
+  const { agent_transcript_path, ...missing } = f.stop;
+  for (const input of [missing, { ...f.stop, agent_transcript_path: f.stop.transcript_path },
+    { ...f.stop, agent_transcript_path: "relative" }, { ...f.stop, turn_id: turns[2] },
+    { ...f.stop, agent_id: session }, { ...f.stop, extra: true }]) assert.throws(() => f.policy.completeChild(input, f.native(childActor)));
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(session)));
+  assert.throws(() => f.policy.completeChild(f.stop, { version: "unsupported", actor: childActor }));
+  f.childTranscript({ message: "Changed task" }); assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 0); assert.equal(state.completions?.length ?? 0, 0);
+  f.childTranscript(); appendReport(f);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
+});
+
+test("no-tool completion retains missing-result work then completes it after the result even when mode is off", async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy);
+  const transcript = f.childTranscript(); appendReport(f);
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, "root.jsonl"), agent_transcript_path: transcript };
+  assert.throws(() => policy.completeChild(stop, f.native(childActor)));
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(policy.completeChild(stop, f.native(childActor)), { decision: "completed" });
+  assert.equal(f.core.readAdmission(f.options.directory).modes.at(-1).sage, false);
+});
+
+test("no-tool completion through the packaged stop tool refuses a conflicting path after completion", async t => {
+  const f = await noToolCompletionFixture(t);
+  writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';
+    import { createNativePolicy } from './plugin/runtime/policy.mjs';
+    const options = ${JSON.stringify(f.options)};
+    serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(options, () => ({decision: 'pass'})) });`);
+  const client = await connect(t, f);
+  assert.deepEqual(await client.call(f.stop, childActor), {});
+  assert.deepEqual(await client.call(f.stop, childActor), {});
+  assert.equal((await client.call({ ...f.stop, agent_transcript_path: f.stop.transcript_path }, childActor)).decision, "block");
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  await client.close();
+});
+
+
+test("no-tool completion recovers a binding whose transcript publication failed", async t => {
+  const f = await noToolCompletionFixture(t);
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = fs.linkSync;
+  t.mock.method(fs, "linkSync", (from, to) => {
+    if (String(from).startsWith(join(f.options.observationsRoot, session))
+      && JSON.parse(readFileSync(from, "utf8")).kind === "child-transcript") {
+      throw Object.assign(Error("Injected transcript publication failure"), { code: "EIO" });
+    }
+    return original(from, to);
+  });
+  syncBuiltinESMExports();
+  const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); }; t.after(restore);
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)), /Injected transcript publication failure/);
+  const before = f.core.readAdmission(f.options.directory);
+  assert.equal(before.bindings.length, 1); assert.equal(before.completions?.length ?? 0, 0);
+  restore();
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "already-completed" });
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
 });

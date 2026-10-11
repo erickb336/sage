@@ -38,7 +38,7 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
     // Deliberately omit MCP SubagentStart: the first tool must establish the child's binding.
     if (event === "SubagentStart") return [];
     const fields = event === "UserPromptSubmit" ? ["cwd", "hook_event_name", "model", "permission_mode", "prompt", "session_id", "transcript_path", "turn_id"]
-      : event === "SubagentStop" ? ["hook_event_name", "session_id", "agent_id", "turn_id", "transcript_path"]
+      : event === "SubagentStop" ? ["hook_event_name", "session_id", "agent_id", "turn_id", "transcript_path", "agent_transcript_path"]
       : ["hook_event_name", "session_id", "turn_id", "tool_name", "tool_use_id", "tool_input", "transcript_path", ...(event === "PostToolUse" ? ["tool_response"] : [])];
     return [{ type: "mcp_tool", server: "sage_fixture", tool: "sage_native_hook", timeout: 10,
       input: Object.fromEntries(fields.map(key => [key, "${" + key + "}"])) }];

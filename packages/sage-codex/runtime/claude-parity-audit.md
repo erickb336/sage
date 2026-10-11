@@ -262,3 +262,15 @@ It also checks native dispatch, start, and stop identities for both children.
 The test uses an actual temporary Git commit and simulated model responses. Task and gate state stay unchanged, and merge readiness remains false.
 Required project checks, other review roles and cycles, repair scheduling, and a real-project pilot remain unfinished.
 This verifies the existing runtime operations together; it does not activate the installed workflow or resolve required-hook disconnection.
+
+
+## Initial no-tool child completion
+
+A native reviewer that returned immediately previously remained unbound, and Sage blocked its stop.
+A callback field probe identified `agent_transcript_path` as the child transcript; the ordinary transcript field identified the parent.
+The stop adapter now uses that verified field to perform the same exact initial-task binding as the first-tool path.
+The real 0.160.0 CLI probe passes with one child model request and no child tool calls, through chief review acceptance.
+It uses simulated responses and an actual temporary Git commit. The temporary profile is removed.
+
+Packaged tests cover wrong identities and turns, changed task text, missing results, mode-off recovery, duplicate stops, and interrupted observation publication.
+Later assignments, other blocking stop hooks, interruption, broader recovery, and installed activation remain separate checks.

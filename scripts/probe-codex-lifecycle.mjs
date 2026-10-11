@@ -13,17 +13,18 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
 const followUp = process.argv.includes("--follow-up");
+const noTool = process.argv.includes("--sage-no-tool");
 const nestedReport = process.argv.includes("--sage-nested-report");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
-const reportProbe = process.argv.includes("--sage-report");
-const sage = process.argv.includes("--sage") || outage || reportProbe || nestedReport;
-assert([outage, reportProbe, nestedReport].filter(Boolean).length <= 1, "incompatible_probe_routes");
+const reportProbe = process.argv.includes("--sage-report") || noTool;
+const sage = process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool;
+assert([outage, process.argv.includes("--sage-report"), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
 assert([denySpawn, followUp, process.argv.includes("--nested"), sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
 const MARKER = "sage-native-parent-ok";
@@ -334,7 +335,7 @@ data: ${JSON.stringify(event)}
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
         respond(res, call(calls.wait, "wait_agent", {}));
         if (sage) check(integrated.readJournal().bindings.length === 0, "binding_existed_before_first_tool");
-        respond(childResponse, sage ? { type: "function_call", name: "list_mcp_resources", call_id: calls.childControl, arguments: "{}" } : nested ? call(calls.childSpawn, "spawn_agent", {task_name: "probe_grandchild", message: GRAND_PROMPT, fork_turns: "none"}) : message(CHILD_MARKER));
+        respond(childResponse, sage && !noTool ? { type: "function_call", name: "list_mcp_resources", call_id: calls.childControl, arguments: "{}" } : nested ? call(calls.childSpawn, "spawn_agent", {task_name: "probe_grandchild", message: GRAND_PROMPT, fork_turns: "none"}) : message(CHILD_MARKER));
         childResponseSent = true;
       } else if (rootRequests === 4) {
         const result = info.outputs[calls.wait];
@@ -548,7 +549,7 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : rootRequests === (followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
@@ -558,6 +559,12 @@ data: ${JSON.stringify(event)}
       unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
     if (!verified) process.exitCode = 1;
+    if (noTool) {
+      const observed = readdirSync(join(root, "events")).map(name => JSON.parse(readFileSync(join(root, "events", name), "utf8")));
+      print({ type: "no_tool_callback_evidence", callbacks: observed.filter(row => ["SubagentStart", "SubagentStop"].includes(row.hook_event_name))
+        .map(row => ({ event: row.hook_event_name, fields: row.inputKeys, childTranscriptFields: row.childTranscriptFields })),
+        bindings: integrated.readJournal().bindings.length, completions: integrated.readJournal().completions?.length ?? 0 });
+    }
     if (sage && !outage) {
       const saved = integrated.readJournal();
       assert.equal(saved.sessions.length, 1); assert.equal(saved.modes.at(-1)?.sage, true);
@@ -567,7 +574,7 @@ data: ${JSON.stringify(event)}
       assert.equal(saved.bindings[0].child, childThread);
       for (const bound of saved.bindings) assert.deepEqual(saved.completions.find(row => row.assignment === bound.assignment), bound);
       print({ type: "integrated_sage_evidence", owners: 1, preparations: count, reservations: count, bindings: count, completions: count,
-        firstToolBinding: true, simulatedModel: true, fullPolicyVerified: false, realModelConsumptionVerified: false });
+        firstToolBinding: !noTool, stopBinding: noTool, simulatedModel: true, fullPolicyVerified: false, realModelConsumptionVerified: false });
     }
     const rows=readdirSync(join(root,"events")).map(name=>JSON.parse(readFileSync(join(root,"events",name),"utf8")));
     const start=rows.filter(row=>row.hook_event_name==="SubagentStart");

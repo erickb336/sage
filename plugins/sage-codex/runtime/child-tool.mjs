@@ -12,6 +12,18 @@ export function bindNativeChildTool(input, context, options) {
   const native = nativeToolContext(context);
   const event = nativeToolEvent(input, native, "PreToolUse");
   if (native.actor === event.session_id || typeof event.transcript_path !== "string") refuse();
+  return bindNativeChildTranscript({ session: event.session_id, turn: event.turn_id, transcript: event.transcript_path }, native, options);
+}
+
+/** A native callback can verify initial task delivery without inventing a tool call. */
+export function bindNativeChildTranscript(input, context, options) {
+  const native = nativeToolContext(context);
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 3
+    || !["session", "turn", "transcript"].every(key => Object.hasOwn(input, key))
+    || typeof input.session !== "string" || !uuid.test(input.session) || input.session === native.actor
+    || typeof input.turn !== "string" || !uuid.test(input.turn)) refuse();
+  const event = { session_id: input.session, turn_id: input.turn, transcript_path: input.transcript };
   const initial = readInitialSession(event.transcript_path, { sessionsDir: options.sessionsDir });
   if (initial.turn !== event.turn_id || initial.metadata.cli_version !== RUNTIME_VERSION) refuse();
   // This is an observation of the transcript's initial task, not a received MCP start callback.

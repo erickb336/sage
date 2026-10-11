@@ -162,3 +162,12 @@ Both native completions must match their saved bindings. Task and gate state sta
 
 This route uses two real native agents with simulated model responses and temporary state that the probe removes.
 It verifies report transport and acceptance, not review quality, project checks, a complete review cycle, or installed automatic operation.
+
+
+## A reviewer that returns without a tool
+
+`node scripts/probe-codex-lifecycle.mjs --sage-no-tool` checks a native reviewer that returns its report immediately.
+The stop callback's `agent_transcript_path` supplies the child transcript. The adapter verifies and binds its exact initial assignment at that point.
+The chief report workflow then proceeds through one accepted verdict and an identical retry.
+Missing, changed, foreign, or stale transcript evidence refuses completion and retains the reservation.
+This does not add follow-up task binding or cross-session recovery.

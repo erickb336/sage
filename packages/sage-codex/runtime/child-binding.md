@@ -35,3 +35,19 @@ to the binding result. The snapshot is part of the same immutable reservation as
 the role. Legacy reservations return no brief. The delivery policy must refuse
 missing instructions when the task requires a brief; it must not fill the gap
 with unverified new input.
+
+
+## Initial children that use no tool
+
+The native `SubagentStop` callback provides `agent_transcript_path` for the child and `transcript_path` for its parent.
+The adapter can bind an admitted initial child from the child path before it records completion.
+It verifies the current native actor and version, owner epoch, spawn result, transcript metadata, exact turn, and prepared task hash.
+This uses the same binding checks as the first-tool path; it does not invent a tool call or scan for a transcript.
+
+A missing or conflicting result retains the reservation. A retry can complete after the matching result arrives, including after Sage off.
+A failed transcript-observation write can retry an already saved binding. Identical completion retries preserve one record.
+Later tasks on the same child remain a separate case; an initial-task binding cannot authorize a different turn.
+
+The isolated `--sage-no-tool` native probe returns a structured review without any child tool call.
+The chief then reads, records, inspects, finishes, and accepts it on the actual temporary branch commit.
+The responses are simulated. This checks the configured fixture hooks, not every combination of other stop hooks or interruption behavior.
