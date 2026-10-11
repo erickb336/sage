@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1684,5 +1684,28 @@ test("package public imports package both quote styles and dynamic imports outsi
     assert.equal(result.data, 'from "sage-core"');
     const escaped = 'export { shellCommands } from "sage-\\u0063ore";';
     assert.equal(rewriteCoreImports(escaped, "./core/index.mjs"), 'export { shellCommands } from "./core/index.mjs";');
+  }
+});
+
+
+test("native probe removes its profile after version failure and a stalled version process", t => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-probe-cleanup-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const stalled of [false, true]) {
+    const temporary = join(dir, stalled ? "stalled" : "failed"); mkdirSync(temporary);
+    const fake = join(dir, stalled ? "stalled-codex" : "failed-codex");
+    // The timeout fixture exits on its own after EOF. No signal or process-list query is needed.
+    writeFileSync(fake, stalled
+      ? "#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on('end', () => setTimeout(() => process.exit(0), 100));\n"
+      : "#!/usr/bin/env node\nprocess.exit(0);\n", { mode: 0o700 });
+    const result = spawnSync(process.execPath, [join(ROOT, "scripts/probe-codex-lifecycle.mjs")], {
+      env: { ...process.env, TMPDIR: temporary, SAGE_CODEX_BIN: fake, ...(stalled ? { SAGE_PROBE_TEST_DEADLINE_MS: "1" } : {}) },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1, result.stderr);
+    const rows = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+    assert.equal(rows.find(row => row.type === "result").reason, stalled ? "native_deadline" : "version_check_failed");
+    assert.equal(rows.at(-1).temporaryRootRemoved, true);
+    assert.deepEqual(readdirSync(temporary), [], "the actual temporary profile is gone");
   }
 });

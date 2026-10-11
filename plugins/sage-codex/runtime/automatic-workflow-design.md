@@ -33,7 +33,7 @@ The full target includes Claude's gated autopilot. Coordination with manual merg
 
 ## Reviewable units
 
-1. Verify the installed event contract, authenticated metadata and delivery order with an isolated real-transport probe.
+1. Verify native spawn/result/start/stop identity and running/completed states with an isolated real-transport probe.
 2. Add explicit project setup, verified owner activation, capability status and chief instruction delivery. Refuse activation until required enforcement exists.
 3. Complete command, write, role and dispatch enforcement; bind children and deliver saved instructions.
 4. Add validated reports, verdict recording, authoritative capacity release, interruption and recovery.
@@ -46,7 +46,7 @@ Each unit gets a separate PR. Authorization changes require independent code, se
 
 The current manifest contains advice hooks only. The prepared runtime implements parts of owner mode, preparation and child binding, but has no installed complete policy.
 
-The first probe must establish supported runtime versions, dispatch/start ordering, stop delivery and compaction events. Official documentation establishes packaging and separate hook trust, not the local event contract.
+The first probe checks the supported runtime version, matching spawn/result/start/stop identities, and native running/completed states. Owner prompt identity, race ordering and compaction belong to later units. Official documentation establishes packaging and separate hook trust, not the local event contract.
 
 References:
 - https://developers.openai.com/plugins/build/plugins

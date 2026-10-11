@@ -1,19 +1,27 @@
 // Isolated native V2 transport check with simulated model responses; not a live Sage pilot.
-// No timeout or process signal: retain the caller's tool session handle if the child stalls.
+// A wide deadlock guard ends the isolated transport without a process signal.
 import http from "node:http";
 import assert from "node:assert/strict";
-import {readdirSync,readFileSync} from "node:fs";
+import {existsSync,readdirSync,readFileSync} from "node:fs";
+import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
 import {setupCapture} from "./fixtures/codex-native/setup-capture.mjs";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
+assert(process.argv.slice(2).every(arg => arg === "--deny-spawn"), "unknown_probe_argument");
+const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
+  ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const denySpawn = process.argv.includes("--deny-spawn");
+let denied = false;
 const MARKER = "sage-native-parent-ok";
 const CHILD_MARKER = "sage-native-child-ok";
 const CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const binary = process.env.SAGE_CODEX_BIN ?? "codex";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-one-child-")));
+try {
+assert(/^[A-Za-z0-9/._-]+$/.test(root), "unsafe_probe_root");
 const workspace = join(root, "workspace");
 const baselineHome = join(root, "home");
 const codexHome = join(root, "codex");
@@ -35,9 +43,11 @@ const env = {
   CODEX_HOME: codexHome,
   TMPDIR: temporary,
   LANG: "en_US.UTF-8",
+  DO_NOT_TRACK: "1",
 };
 const print = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
-const launch = (args) => spawn(binary, args, { cwd: workspace, env, shell: false, stdio: ["pipe", "pipe", "pipe"] });
+const telemetryArgs = ["-c", "analytics.enabled=false", "-c", 'otel.exporter="none"', "-c", 'otel.metrics_exporter="none"', "-c", 'otel.trace_exporter="none"'];
+const launch = (args) => spawn(binary, [...telemetryArgs, ...args], { cwd: workspace, env, shell: false, stdio: ["pipe", "pipe", "pipe"] });
 const binaryPaths = new Set();
 for (const candidate of isAbsolute(binary) ? [binary] : env.PATH.split(delimiter).map((dir) => join(dir, binary))) {
   try { binaryPaths.add(candidate); binaryPaths.add(realpathSync(candidate)); } catch { /* Not this PATH entry. */ }
@@ -56,17 +66,14 @@ versionChild.stdout.on("data", (data) => { versionText = (versionText + data).sl
 versionChild.stderr.on("data", (data) => { versionStderr = (versionStderr + data).slice(0, 4096); });
 versionChild.stdin.on("error", () => {});
 versionChild.stdin.end();
-const versionResult = await new Promise((resolve) => {
-  versionChild.once("error", () => resolve({ spawnFailed: true }));
-  versionChild.once("close", (code, signal) => resolve({ code, signal }));
-});
+const versionResult = await waitNative(versionChild, { deadlineMs });
 const version = /^codex-cli \d+\.\d+\.\d+(?:[-+.][A-Za-z0-9.-]+)?$/.test(versionText.trim()) ? versionText.trim() : null;
 if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
-  print({ type: "result", verified: false, reason: "version_check_failed", diagnostic: diagnostic(versionStderr) });
+  print({ type: "result", verified: false, reason: versionResult.timedOut ? "native_deadline" : "version_check_failed", diagnostic: diagnostic(versionStderr) });
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  await setupCapture({root,codexHome,workspace,env,binary});
+  await setupCapture({root,codexHome,workspace,env,binary,denySpawn,deadlineMs});
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -107,7 +114,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       const output = typeof item.output === "string" ? item.output
         : Array.isArray(item.output) && item.output.length === 1 && item.output[0]?.type === "input_text" ? item.output[0].text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
-      try { outputs[item.call_id] = JSON.parse(output); } catch { throw new Error("native_tool_result_is_not_json"); }
+      try { outputs[item.call_id] = JSON.parse(output); } catch {
+        if (denySpawn && item.call_id === calls.spawn) outputs[item.call_id] = output;
+        else throw new Error("native_tool_result_is_not_json");
+      }
     }
     const agentTools = [];
     for (const tool of request.tools ?? []) {
@@ -200,6 +210,12 @@ data: ${JSON.stringify(event)}
         respond(res, call(calls.spawn, "spawn_agent", { task_name: "probe_child", message: CHILD_PROMPT, fork_turns: "none" }));
       } else if (rootRequests === 2) {
         const result = info.outputs[calls.spawn];
+        if (denySpawn) {
+          check(typeof result === "string" && result.includes("sage-native-denial-fixture"), "native_denial_reason_missing");
+          denied = true;
+          respond(res, message(MARKER));
+          return;
+        }
         check(typeof result?.task_name === "string" && result.task_name === "/root/probe_child", "native_spawn_result_missing_expected_task");
         taskName = result.task_name;
         print({ type: "native_tool_result", tool: "spawn_agent", task_name: taskName });
@@ -315,15 +331,16 @@ data: ${JSON.stringify(event)}
     child.stdin.on("error", () => {});
     child.stdin.end(`Run the fixed one-child native lifecycle probe. Finish with exactly ${MARKER}. Do not use shell tools.\n`);
     print({ type: "event", event: "baseline_started" });
-    const result = await new Promise((resolve) => {
-      child.once("error", () => resolve({ spawnFailed: true }));
-      child.once("close", (code, signal) => resolve({ code, signaled: signal !== null }));
-    });
+    const result = await waitNative(child, { deadlineMs, onTimeout: () => failFixture("native_root_deadline") });
     acceptLine(buffer);
     if (pending.size) failFixture("native_root_exited_with_held_response");
+    server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
-    const verified = result.code === 0 && !fixtureFailure && rootRequests === 5 && childRequests === 1
-      && rootThread !== childThread && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted
+    const routeVerified = denySpawn
+      ? rootRequests === 2 && childRequests === 0 && denied
+      : rootRequests === 5 && childRequests === 1 && rootThread !== childThread
+        && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
+    const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && malformedEvents === 0 && rejectedRequests === 0;
     print({ type: "result", ...result, responseRequests, rootRequests, childRequests, childTaskSeen, childResponseSent,
@@ -336,13 +353,24 @@ data: ${JSON.stringify(event)}
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");
     const before=rows.filter(row=>row.hook_event_name==="PreToolUse"&&row.tool_name==="collaborationspawn_agent");
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
-    assert.equal(start.length,1);assert.equal(stop.length,1);assert.equal(before.length,1);assert.equal(after.length,1);
+    assert.equal(before.length,1);
+    assert.equal(start.length,denySpawn ? 0 : 1);
+    assert.equal(stop.length,denySpawn ? 0 : 1);
+    assert.equal(after.length,denySpawn ? 0 : 1);
+    if (!denySpawn) {
     assert.equal(start[0].captureError,undefined);
     assert.equal(start[0].agent_id,stop[0].agent_id);
     assert.equal(start[0].metadata.id,start[0].agent_id);
     assert.equal(start[0].metadata.session_id,before[0].session_id);
     assert.equal(before[0].tool_use_id,after[0].tool_use_id);
     assert.equal(after[0].resultTaskName,start[0].metadata.agent_path);
-    print({type:"hook_evidence",spawnRequest:before.length,spawnResult:after.length,childStart:start.length,childStop:stop.length,exactIdentityJoin:true,simulatedModel:true,automaticSage:false,realModelConsumptionVerified:false});
+    }
+    print({type:"hook_evidence",spawnRequest:before.length,spawnResult:after.length,childStart:start.length,childStop:stop.length,exactIdentityJoin:!denySpawn,noChildStarted:denySpawn,simulatedModel:true,automaticSage:false,realModelConsumptionVerified:false});
   }
+}
+
+} finally {
+  rmSync(root, { recursive: true, force: true });
+  assert.equal(existsSync(root), false);
+  process.stdout.write(JSON.stringify({ type: "cleanup", temporaryRootRemoved: true }) + "\n");
 }

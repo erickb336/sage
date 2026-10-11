@@ -31,7 +31,7 @@ Claude's lease expiry and registry cleanup cannot be assumed to map to Codex. Is
 
 ## First implementation unit
 
-Produce a reproducible isolated native transport probe for the supported installed runtime. Record owner prompt identity, dispatch/result/start/stop ordering, denial behavior and compaction. Do not activate the automatic workflow until those boundaries and the complete tool policy pass.
+Produce a reproducible isolated native transport probe for the supported installed runtime. Record matching dispatch/result/start/stop identities and running/completed states. Check owner prompt identity, race ordering and compaction in later units. Do not activate the automatic workflow until those boundaries and the complete tool policy pass.
 
 Current local CLI reports version 0.160.0, matching the prepared adapter's exact version. Generated native schemas expose turn interruption keyed by both thread and turn, and a separate turn-completed notification. Schema presence is not proof that an active child stopped.
 
@@ -50,4 +50,8 @@ The native task arrived as an `agent_message` with an opaque payload. The fixtur
 
 Run `node scripts/probe-codex-lifecycle.mjs` with fake process tools first on PATH. It requires Codex 0.160.0 and a loopback listener. It creates an isolated temporary profile and trusts only the test observer there. It does not trust or change hooks in the owner's profile.
 
-Denial enforcement, event ordering under races, compaction, subsequent child tasks and real-model consumption remain separate checks. This result does not activate Sage.
+Run the same probe with `--deny-spawn` to check a fixed pre-tool denial. The native parent receives the exact denial reason and finishes. The observer must record one spawn attempt, no successful spawn result, no child start and no child stop. The simulated response server must receive no child request.
+
+Both saved variants passed locally on Codex 0.160.0. This proves the denial boundary for this native spawn path. It does not prove complete Sage command policy or coverage of other tools.
+
+Event ordering under races, compaction, subsequent child tasks and real-model consumption remain separate checks. These results do not activate Sage.
