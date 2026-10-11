@@ -2744,55 +2744,91 @@ test("T216: the board note's two commands pass the hook for the chief, as the no
   }
 });
 
-test("T229: no session and no agent, in any mode, runs the board command with --set-password", async () => {
+// T229: the board password rule, as one table. Each row is a command line (or a file tool's input), the folder it
+// runs in, and what the hook answers: SET (the set-password refusal), CONFIG (the config refusal), EXPANSION (the
+// board command's words) or OK (not this rule). The strings are data for handle() only: no test runs them in a shell.
+// HOME is a temporary home with its own .config/sage-board/board.json, so no row touches the owner's real one.
+test("T229: the board password rule refuses the ordinary shapes, and allows repository paths and searches (table)", async () => {
   const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
   const BOARD = fileURLToPath(new URL("../plugins/sage/board/cli.mjs", import.meta.url));
-  const who = [["the chief", { sage: true, given: true }, {}], ["an agent", { sage: true }, { agent_id: "a1", agent_type: "sage:implementer" }], ["a session outside sage mode", { sage: false }, {}], ["another agent outside sage mode", { sage: false }, { agent_id: "e1", agent_type: "Explore" }]];
-  for (const [name, state, extra] of who) {
-    for (const command of [`node ${BOARD} board --set-password`, `node ${BOARD} board --set-password --config /tmp/sample/sage-board/board.json`, `cd /tmp && node ${BOARD} board --set-password`, `sh -c 'node ${BOARD} board --set-password'`, `env node ${BOARD} board "--set-password"`, `node packages/sage-board/cli.mjs board --set-password`]) {
-      assert.match(denied(handle(bash(command, FEATURE, extra), { ...state }, slots)) ?? "", /^sage: the board password rule \(T229\): only the owner sets the board password, in Terminal on the Mac\. Never run board --set-password: give the owner the command to run there/, `${name}: ${command}`);
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-rule-"))), home = join(dir, "home"), folder = join(home, ".config", "sage-board"), config = join(folder, "board.json");
+  mkdirSync(folder, { recursive: true }); writeFileSync(config, "{}\n"); writeFileSync(join(folder, "board.log"), "log\n");
+  mkdirSync(join(dir, "other", "sage-board"), { recursive: true }); writeFileSync(join(dir, "other", "sage-board", "board.json"), "{}\n");
+  symlinkSync(config, join(dir, "plain-name.txt")); // a link to the config is the config
+  symlinkSync(join(home, ".config"), join(dir, "linked-config")); // and so is a path through a link to a folder above it
+  const SET = /^sage: the board password rule \(T229\): only the owner sets the board password, in Terminal on the Mac\. Never run board --set-password/;
+  const CONFIG = /^sage: the board password rule \(T229\): no agent reads, copies or replaces the board config \(~\/\.config\/sage-board\/board\.json\), or searches, copies or moves a folder that holds it/;
+  const EXPANSION = /^sage: the board password rule \(T229\): a board command takes no variable, substitution or pattern in its words, and no words from xargs/;
+  const OK = null, REPO = FEATURE;
+  const rows = [
+    // F-T229-4: the option in any word or quoted argument, unless every program is grep or rg.
+    [`node ${BOARD} board --set-password`, SET], [`cd /tmp && node ${BOARD} board --set-password`, SET], [`env node ${BOARD} board "--set-password"`, SET],
+    [`node ${BOARD} board --set-pass''word`, SET], [`node ${BOARD} board --set-pass\\word`, SET], [`node ${BOARD} board "--set-"password`, SET],
+    [`sh -c 'node ${BOARD} board --set-password'`, SET], [`expect -c "spawn node ${BOARD} board --set-password"`, SET],
+    [`git -c alias.x="!node ${BOARD} board --set-password" x`, SET], [`node packages/sage-board/cli.mjs board --set-password`, SET],
+    ["grep -n -- --set-password packages/sage-board/README.md", OK], ["rg -n -- --set-password packages", OK], ["git log --grep=set-password", OK], [`node ${BOARD} board --ensure`, OK],
+    // F-T229-8: a variable, a substitution, a pattern or xargs words in a board command.
+    [`A=x; node ${BOARD} board $A`, EXPANSION], [`node ${BOARD} board --ensure --config $C`, EXPANSION], [`node ${BOARD} board $(printf x)`, EXPANSION],
+    [`node ${BOARD} board --ensure *.json`, EXPANSION], [`printf x | xargs node ${BOARD} board`, EXPANSION],
+    // F-T229-5: each path resolves against its folder (., .., //, ~, $HOME, links) before the match.
+    ["cat ~/.config/sage-board/board.json", CONFIG], ["cat $HOME/.config/sage-board/board.json", CONFIG], ["cat ${HOME}/.config/sage-board/board.json", CONFIG], [`cat "${config}"`, CONFIG],
+    ["cat ~/.config/sage-board/./board.json", CONFIG], ["cat ~/.config/sage-board/x/../board.json", CONFIG], ["cat ~/.config//sage-board//board.json", CONFIG],
+    ["cat ~/.config/sage-board/*", CONFIG], ["cat ~/.config/sage-b*/board.json", CONFIG], ["cat ~/.config/sage-board/board.js?n", CONFIG], ["D=/tmp/x; cat $D/board.json", CONFIG],
+    ["cat ~/.config/sage-board/.board-0123456789ab.json", CONFIG], ["cat board.json", CONFIG, folder], ["cat ./x/../board.json", CONFIG, folder], ["cat ../sage-board/board.json", CONFIG, folder],
+    ["cd ~/.config && cat sage-board/board.json", CONFIG], [`cd ${home}/.config && cat sage-board/board.json`, CONFIG], [`cd ${home} && cat .config/sage-board/board.json`, CONFIG],
+    [`cat ${dir}/plain-name.txt`, CONFIG], [`cat ${dir}/linked-config/sage-board/board.json`, CONFIG], ["head < ~/.config/sage-board/board.json", CONFIG],
+    ["cat ~/.config/sage-board/board.json \"", CONFIG], // the hook cannot read the line: it refuses (fail closed)
+    // F-T229-6: replacing the config or the folder, and a recursive read from the folder or a folder above it.
+    ["cp /tmp/x.json ~/.config/sage-board/board.json", CONFIG], ["printf x > ~/.config/sage-board/board.json", CONFIG], ["mv /tmp/x ~/.config/sage-board", CONFIG],
+    ["grep -r hash ~/.config", CONFIG], ["grep -rn hash ~", CONFIG], ["rg hash ~/.config", CONFIG], ["rg hash", CONFIG, home], ["find ~ -name x -exec cat {} \\;", CONFIG],
+    ["cp -R ~/.config /tmp/copy", CONFIG], ["tar -cf /tmp/x.tar -C ~ .config", CONFIG], [`cd ${home} && grep -r hash .`, CONFIG], ["mv ~/.config /tmp/moved", CONFIG], ["ln -s ~/.config /tmp/l", CONFIG],
+    // The board command alone may name its config, as the value of --config.
+    [`node ${BOARD} board --ensure --config ${config}`, OK], [`node ${BOARD} board --stop --config=${config}`, OK],
+    [`node ${BOARD} board --ensure --config ${config} ${config}`, CONFIG], [`node ${BOARD} board --ensure --config ${config} | tee ${config}`, CONFIG],
+    [`node ${BOARD} board --ensure --config ${config}; cat ${config}`, CONFIG],
+    // F-T229-9: repository paths, search words and other files are not the config.
+    ["ls packages/sage-board", OK], ["cat packages/sage-board/README.md", OK], ["ls packages/sage-board/*.mjs", OK], ["grep -n board.json packages/sage-board/cli.mjs", OK],
+    ["grep -rn board.json packages/sage-board", OK], ["rg -n hash packages", OK], ["find . -name board.json", OK], ["cat ~/.config/sage-board/board.log", OK],
+    // A recursive search from a folder that is not above the config (not /tmp: the temporary home is under it).
+    [`cd ${dir}/other && grep -r x .`, OK], ["rm -rf $OUT/*", OK], ["cat board.json", OK, join(dir, "other", "sage-board")], [`cat ${dir}/other/sage-board/board.json`, OK], ["echo \"a", OK],
+  ];
+  const files = [
+    [{ file_path: config }, CONFIG], [{ file_path: "~/.config/sage-board/board.json" }, CONFIG], [{ file_path: join(dir, "plain-name.txt") }, CONFIG],
+    [{ file_path: "board.json" }, CONFIG, folder], [{ file_path: "./x/../board.json" }, CONFIG, folder], [{ file_path: join(folder, ".board-0123456789ab.json") }, CONFIG],
+    [{ file_path: join(dir, "linked-config", "sage-board", "board.json") }, CONFIG], [{ file_path: "packages/sage-board/board.json" }, OK], [{ file_path: `${REPO}/README.md` }, OK],
+  ];
+  const greps = [
+    [{ pattern: "hash", path: `${home}/.config` }, CONFIG], [{ pattern: "hash", path: folder }, CONFIG], [{ pattern: "hash", path: "~" }, CONFIG], [{ pattern: "hash" }, CONFIG, home],
+    [{ pattern: "hash", path: "packages" }, OK], [{ pattern: "board.json", glob: "**/*.json" }, OK],
+  ];
+  const who = [["the chief", { sage: true, given: true }, {}], ["an agent", { sage: true }, { agent_id: "a1", agent_type: "sage:implementer" }], ["a session outside sage mode", { sage: false }, {}]];
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  const wrong = [];
+  try {
+    // For an agent, an earlier rule (the logbook rule, an open quote) may refuse first: a refusal is enough there.
+    // The chief and the plain session give the board rule's own text.
+    const check = (label, event, state, expected) => {
+      const reason = denied(handle(event, { ...state }, slots)) ?? "";
+      const ok = expected ? expected.test(reason) || (event.agent_id !== undefined && reason !== "") : !/board password rule/.test(reason);
+      if (!ok) wrong.push(`${label}: got ${reason || "allowed"}`);
+    };
+    for (const [name, state, extra] of who) {
+      for (const [command, expected, cwd = REPO] of rows) check(`${name}: ${command}`, bash(command, cwd, extra), state, expected);
+      for (const toolName of ["Read", "Write", "Edit", "MultiEdit"]) {
+        for (const [input, expected, cwd = REPO] of files) check(`${name}: ${toolName} ${input.file_path}`, tool(toolName, input, { cwd, ...extra }), state, expected);
+      }
+      for (const [input, expected, cwd = REPO] of files) check(`${name}: NotebookEdit ${input.file_path}`, tool("NotebookEdit", { notebook_path: input.file_path }, { cwd, ...extra }), state, expected);
+      for (const [input, expected, cwd = REPO] of greps) check(`${name}: Grep ${JSON.stringify(input)}`, tool("Grep", input, { cwd, ...extra }), state, expected);
     }
-    for (const command of [`node ${BOARD} board --ensure`, "grep -n -- --set-password packages/sage-board/README.md", "git log --grep=set-password"]) {
-      assert.equal(denied(handle(bash(command, FEATURE, extra), { ...state }, slots)), undefined, `${name}: ${command}`);
-    }
+  } finally {
+    process.env.HOME = saved;
+    rmSync(dir, { recursive: true, force: true });
   }
+  assert.deepEqual(wrong, []);
   const matcher = JSON.parse(readFileSync(fileURLToPath(new URL("../plugins/sage/hooks/claude.json", import.meta.url)), "utf8")).hooks.PreToolUse[0].matcher;
-  for (const name of ["Read", "Grep"]) assert.match(name, new RegExp(`^(?:${matcher})$`), `Claude Code sends ${name} to the hook`);
-});
-
-test("T229: no session and no agent reads the board config with a command, Read or Grep; the board command may name it", async () => {
-  const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
-  const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
-  const BOARD = fileURLToPath(new URL("../plugins/sage/board/cli.mjs", import.meta.url));
-  const home = process.env.HOME, config = `${home}/.config/sage-board/board.json`;
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-rule-")));
-  mkdirSync(join(dir, "sage-board")); writeFileSync(join(dir, "sage-board", "board.json"), "{}\n");
-  symlinkSync(join(dir, "sage-board", "board.json"), join(dir, "plain-name.txt"));
-  const RULE = /^sage: the board password rule \(T229\): no agent reads the board config \(board\.json in a sage-board folder\), because it holds the owner's password hash\./;
-  const who = [["the chief", { sage: true, given: true }, {}], ["an agent", { sage: true }, { agent_id: "a1", agent_type: "sage:qa" }], ["a session outside sage mode", { sage: false }, {}]];
-  for (const [name, state, extra] of who) {
-    for (const [command, cwd = FEATURE] of [
-      ["cat ~/.config/sage-board/board.json"], ["cat $HOME/.config/sage-board/board.json"], ["cat ${HOME}/.config/sage-board/board.json"], [`cat "${config}"`],
-      ["jq . /tmp/sample/sage-board/board.json"], ["cat ~/.config/sage-board/*"], ["cat ~/.config/sage-b*/board.json"], ["cat ~/.config/sage-board/board.js?n"],
-      ["grep -r hash ~/.config/sage-board"], ["cd ~/.config/sage-board/ && cat board.json"], ["head < ~/.config/sage-board/board.json"], ["D=/tmp/x; cat $D/board.json"],
-      [`node ${BOARD} board --ensure --config /tmp/sample/sage-board/board.json; cat /tmp/sample/sage-board/board.json`],
-      [`node ${BOARD} board --ensure --config /tmp/sample/sage-board/board.json | tee /tmp/sample/sage-board/board.json`],
-      ["cat board.json", join(dir, "sage-board")], ["cp ~/.config/sage-board/board.json /tmp/copy.json"],
-    ]) assert.match(denied(handle(bash(command, cwd, extra), { ...state }, slots)) ?? "", RULE, `${name}: ${command}`);
-    for (const input of [{ file_path: config }, { file_path: "~/.config/sage-board/board.json" }, { file_path: join(dir, "plain-name.txt") }, { file_path: "board.json" }]) {
-      assert.match(denied(handle(tool("Read", input, { cwd: join(dir, "sage-board"), ...extra }), { ...state }, slots)) ?? "", RULE, `${name}: Read ${input.file_path}`);
-    }
-    assert.match(denied(handle(tool("Grep", { pattern: "hash", path: `${home}/.config/sage-board` }, { cwd: FEATURE, ...extra }), { ...state }, slots)) ?? "", RULE, `${name}: Grep`);
-    for (const command of [`node ${BOARD} board --ensure`, `node ${BOARD} board --ensure --config /tmp/sample/sage-board/board.json`, `node ${BOARD} board --stop --config=/tmp/sample/sage-board/board.json`,
-      "cat ~/.config/sage-board/board.log", "ls packages/sage-board", "cat packages/sage-board/README.md", "ls packages/sage-board/*.mjs"]) {
-      assert.equal(denied(handle(bash(command, FEATURE, extra), { ...state }, slots)), undefined, `${name}: ${command}`);
-    }
-    for (const input of [{ file_path: `${FEATURE}/README.md` }, { file_path: fileURLToPath(new URL("../packages/sage-board/cli.mjs", import.meta.url)) }]) {
-      assert.equal(denied(handle(tool("Read", input, { cwd: FEATURE, ...extra }), { ...state }, slots)), undefined, `${name}: Read ${input.file_path}`);
-    }
-  }
-  rmSync(dir, { recursive: true, force: true });
+  for (const name of ["Read", "Grep", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]) assert.match(name, new RegExp(`^(?:${matcher})$`), `Claude Code sends ${name} to the hook`);
 });
 
 // T94: sandbox part 2. The sandbox runs the state tool outside it only for its unquoted absolute spelling, and refuses

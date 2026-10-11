@@ -859,59 +859,139 @@ function agentCheck(input, file) {
   return word && `an agent never writes, moves or removes a logbook file from the shell, and never writes near one with a pattern, a variable or a link to it. ${quoted(word)} makes this command near the logbook: change or remove it.${hint}`;
 }
 /**
- * The board password rule (T229): the board password is the owner's alone. No session and no agent, in any mode, runs
- * the board command with --set-password, or reads the board config (board.json in a sage-board folder, or the
- * ~/.config/sage-board folder) with a command, Read or Grep. A word with a pattern or a variable that can stand for that
- * file counts too (fail closed). Only the board command itself may name its config, as the value of --config.
+ * The board password rule (T229): the board password is the owner's alone. No session and no agent, in any mode:
+ *   - runs shell text that has --set-password in its words or quotes, unless every program it runs is grep or rg;
+ *   - gives a board command a variable, a substitution or a pattern (one can hide that option), or words from xargs;
+ *   - names the board config folder ~/.config/sage-board, its board.json or a temporary .board-*.json, in a command, a
+ *     redirection, Read, Write, Edit, MultiEdit or NotebookEdit. A path resolves against its working folder first
+ *     (., .., //, ~ and links); a pattern or a variable counts when it can stand for one of them (fail closed);
+ *   - searches, copies, moves or links that folder or a folder above it (grep -r, rg, find, cp -R, tar, mv, ln, the
+ *     Grep tool and others).
+ * Only the board command may name its config, as the value of --config. Only the real home folder counts: a repository
+ * path such as packages/sage-board, or a search word such as board.json, is not the config. A command that builds the
+ * path or the command while it runs can still pass: full protection needs the sandbox (T97 to T99, and T238).
  * Undefined, or the reason for the refusal.
  */
 const BOARD_RULE = "the board password rule (T229)";
 const SET_PASSWORD = `${BOARD_RULE}: only the owner sets the board password, in Terminal on the Mac. Never run board --set-password: give the owner the command to run there, and never ask for the password in the chat.`;
-const BOARD_CONFIG = `${BOARD_RULE}: no agent reads the board config (board.json in a sage-board folder), because it holds the owner's password hash. The board command's own output (board --ensure, the chat board) says what you need.`;
-/** Can one path part, which may hold a pattern or a variable, stand for this name? Case-insensitive, as APFS is. */
-function partMatches(part, name) {
-  if (part.length > 255) return false; // longer than any file name on APFS: this also keeps the pattern small
-  const pattern = part.replace(/\$\{[^}]*\}|\$\w+|\{[^}]*\}|\[[^\]]*\]|[*?]|[^$*?[{]+|./g, (piece) =>
-    piece.startsWith("$") || piece.startsWith("{") || piece === "*" ? ".*" : piece.startsWith("[") || piece === "?" ? "." : piece.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return new RegExp(`^(?:${pattern})$`, "is").test(name);
+const BOARD_CONFIG = `${BOARD_RULE}: no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or searches, copies or moves a folder that holds it, because it holds the owner's password hash. The board command's own output (board --ensure, the chat board) says what you need.`;
+const BOARD_EXPANSION = `${BOARD_RULE}: a board command takes no variable, substitution or pattern in its words, and no words from xargs, because one can hide the set-password option or the config path. Write each word as it is.`;
+/** A variable, a substitution or a pattern in a word (as the command reader gives it: $(…) for a substitution). */
+const EXPANSION = /\$\{[^}]*\}|\$\([^)]*\)|\$\w+|\$.?|`[^`]*`?|\{[^}]*\}?|\[[^\]]*\]?|[*?]/g;
+const VARIABLE = /[$`]/;
+/** The board config folder, as written from HOME and as its real path, in lower case: the two spellings a path can have. */
+function boardFolders() {
+  const folder = join(process.env.HOME || homedir(), ".config", "sage-board");
+  let physical = folder;
+  try { physical = real(folder); } catch {}
+  return [...new Set([fold(folder), fold(physical)])];
 }
-/** Does a word (a path, maybe relative to cwd, with ~ or a pattern) name the board config or its ~/.config/sage-board folder? */
-function namesBoardConfig(word, cwd) {
-  if (!word) return false;
-  const path = word.replace(/^~(?=\/|$)/, process.env.HOME ?? homedir());
-  const parts = [...(/^[/$~]/.test(path) ? [] : cwd.split("/")), ...path.split("/")].filter(Boolean);
-  // Two parts that are only patterns or variables ($OUT/*) name no file in particular: one of them must have a letter.
-  const literal = (part) => /[\w.-]/.test(part.replace(/\$\{[^}]*\}|\$\w+|\{[^}]*\}|\[[^\]]*\]/g, ""));
-  const pair = (a, b, first, second) => partMatches(a, first) && partMatches(b, second) && (literal(a) || literal(b));
-  return parts.some((part, k) => k > 0 && (pair(parts[k - 1], part, "sage-board", "board.json") ||
-    (k === parts.length - 1 && pair(parts[k - 1], part, ".config", "sage-board"))));
+/** The parts of a path word from its folder (undefined: not known), with ., .. and // resolved. A variable stays a part. */
+function pathParts(word, dir) {
+  const home = process.env.HOME || homedir();
+  const start = word.startsWith("/") ? [] : /^~(?:\/|$)/.test(word) ? home.split("/") : /^[$`~]/.test(word) ? [] : dir === undefined ? ["$"] : dir.split("/");
+  const parts = [];
+  for (const part of [...start, ...word.replace(/^~[^/]*/, (t) => (t === "~" ? "" : "$")).split("/")]) {
+    if (!part || part === ".") continue;
+    // ".." removes the part before it, unless that part is a variable, which can stand for any number of parts.
+    if (part === "..") { if (parts.length && !VARIABLE.test(parts.at(-1))) parts.pop(); continue; }
+    parts.push(part);
+  }
+  return parts;
 }
-const boardWords = (text) => unquote(text).split(/[\s;|&<>()=`]+/).filter(Boolean);
+/** A pattern for the absolute paths that these parts can stand for: a variable for any text, * and ? within one part. */
+function pathPattern(parts) {
+  const piece = (part) => part.replace(new RegExp(`${EXPANSION.source}|[^$\`*?[{]+`, "g"), (p) =>
+    /^[$`{]/.test(p) ? ".*" : p === "*" ? "[^/]*" : /^[?[]/.test(p) ? "[^/]" : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`^/${parts.map(piece).join("/").replace(/(?:\.\*)+/g, ".*")}$`, "is");
+}
+/**
+ * What a word (a path from the folder dir, maybe with ~, a pattern or a variable) can stand for: config, the board
+ * config folder, its board.json or a temporary .board-*.json; above, that folder or a folder above it.
+ */
+function boardReach(word, dir, folders) {
+  // A word of only variables and patterns ($OUT/*) names no file in particular.
+  if (!word || word.length > 4096 || /^[$`]/.test(word) && !/[\w.-]/.test(word.replace(EXPANSION, ""))) return {};
+  const parts = pathParts(word, dir);
+  let is, temporary;
+  if (parts.some((part) => /[$`*?[{]/.test(part))) {
+    // A pattern, a variable or an unknown folder: the paths it can stand for.
+    const whole = pathPattern(parts), parent = pathPattern(parts.slice(0, -1));
+    is = (path) => whole.test(path);
+    temporary = (f) => /^\.board-.*(?:\.json|[$`*?\]}])$/i.test(parts.at(-1) ?? "") && parent.test(f);
+  } else {
+    // A plain path: as written, and its real path (a link to the config is the config).
+    const spellings = [fold(`/${parts.join("/")}`)];
+    try { spellings.push(canonical(from(dir ?? "/", word.replace(/^~(?=\/|$)/, process.env.HOME || homedir())))); } catch {}
+    is = (path) => spellings.includes(path);
+    temporary = (f) => spellings.some((s) => dirname(s) === f && /^\.board-.*\.json$/.test(basename(s)));
+  }
+  return {
+    config: folders.some((f) => is(f) || is(`${f}/board.json`) || is(`${f}/.board-000000000000.json`) || temporary(f)),
+    above: folders.some((f) => f.split("/").some((_, k, all) => is(all.slice(0, k + 1).join("/") || "/"))),
+  };
+}
+/** Programs that read, copy or move a whole folder: always, or with a recursive option. They also search their folder. */
+const SEARCHES = /^(?:e|f)?grep$|^(?:rg|ag|ack|find|fd)$/;
+const WHOLE = (name, args) => /^(?:rg|ag|ack|find|fd|ditto|tar|bsdtar|zip|rsync|mv|ln)$/.test(name) ||
+  (/^(?:e|f)?grep$/.test(name) && args.some((a) => /^-[^-]*[rR]|^--(?:recursive|dereference-recursive|directories=recurse)$|^recurse$/.test(a))) ||
+  (/^(?:cp|gcp|scp)$/.test(name) && args.some((a) => /^-[^-]*[rRa]|^--(?:recursive|archive)$/.test(a)));
+const BOARD_RUN = ({ word, args }) => (basename(word) === "cli.mjs" || args.some((a) => /(?:^|\/)cli\.mjs$/i.test(a)) || /^(?:npm|pnpm|yarn|bun)$/.test(basename(word))) && args.includes("board");
+/** The programs and redirections of one command line, each with its folder (undefined when the hook cannot tell it). */
+function boardCommands(text, cwd) {
+  try {
+    const { programs, redirects } = programsRun(text, cwd, undefined, { contextEvidence: true });
+    return { runs: programs.map(({ run, uncertainDirectory }) => ({ ...run, dir: uncertainDirectory ? undefined : run.dir })), redirects: redirects.map(({ redirect, dir, uncertainDirectory }) => ({ redirect, dir: uncertainDirectory ? undefined : dir })) };
+  } catch {
+    // The reader cannot follow a cd here (cd ~, cd $X): read the words alone, with no known folder.
+    const commands = shellCommands(text); // throws when it cannot read the line at all
+    return { runs: commands.map(({ words }) => ({ word: words[0] ?? "", args: words.slice(1), dir: undefined })), redirects: commands.flatMap(({ redirects = [] }) => redirects.map((redirect) => ({ redirect, dir: undefined }))) };
+  }
+}
 function boardProblem(input) {
   const tool = input.tool_name ?? "", ti = input.tool_input ?? {}, cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-  if (tool === "Read" || tool === "Grep") {
-    const path = typeof ti.file_path === "string" ? ti.file_path : typeof ti.path === "string" ? ti.path : "";
-    if (!path) return undefined;
-    // The real path too: a link to the config is the config.
-    let target = path;
-    try { target = real(from(cwd, path.replace(/^~(?=\/|$)/, process.env.HOME ?? homedir()))); } catch {}
-    return namesBoardConfig(path, cwd) || namesBoardConfig(target, cwd) ? BOARD_CONFIG : undefined;
+  // Each word once per call: a long command line often repeats its words.
+  const folders = boardFolders(), seen = new Map();
+  const reachOf = (word, dir) => {
+    const key = `${dir}\0${word}`;
+    if (!seen.has(key)) seen.set(key, boardReach(word, dir, folders));
+    return seen.get(key);
+  };
+  if (/^(?:Read|Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
+    const path = [ti.file_path, ti.notebook_path].find((p) => typeof p === "string" && p);
+    return path && reachOf(path, cwd).config ? BOARD_CONFIG : undefined;
+  }
+  if (tool === "Grep") {
+    const reach = reachOf(typeof ti.path === "string" && ti.path ? ti.path : ".", cwd);
+    return reach.config || reach.above ? BOARD_CONFIG : undefined;
   }
   if (!SHELL_TOOLS.test(tool)) return undefined;
   for (const text of commandFields({ ...ti, description: undefined })) {
-    const words = boardWords(text);
-    if (words.includes("--set-password")) {
-      let runs;
-      try { runs = programsRun(text, cwd); } catch { return SET_PASSWORD; } // the hook cannot read it: fail closed
-      if (runs.some(({ word, args }) => args.includes("--set-password") && !READER.test(basename(word).toLowerCase()))) return SET_PASSWORD;
+    let read;
+    try { read = boardCommands(text, cwd); } catch {
+      // The hook cannot read the line: it refuses one that names the board or a config (fail closed).
+      if (/--set-password/.test(text.replace(/['"\\]/g, ""))) return SET_PASSWORD;
+      if (/board|config/i.test(text)) return BOARD_CONFIG;
+      continue;
     }
-    if (!words.some((word) => namesBoardConfig(word, cwd))) continue;
-    // The board command alone, as one plain command, may name its config after --config.
-    let commands;
-    try { commands = shellCommands(text); } catch { return BOARD_CONFIG; }
-    const [c, ...more] = commands;
-    const board = c && !more.length && !c.redirects.length && !c.piped && !c.grouped && !c.bodies.length && c.words[0] === "node" && basename(c.words[1] ?? "") === "cli.mjs" && c.words[2] === "board";
-    if (!board || c.words.some((word, k) => namesBoardConfig(word.replace(/^--config=/, ""), cwd) && !(c.words[k - 1] === "--config" || word.startsWith("--config=")))) return BOARD_CONFIG;
+    const { runs, redirects } = read;
+    // Quotes and backslashes join a word, so the option counts with them taken out. Searching for it is harmless.
+    if (/--set-password/.test(text.replace(/['"\\]/g, "")) && !(runs.length && runs.every(({ word }) => /^(?:e|f)?grep$|^rg$/.test(basename(word).toLowerCase())))) return SET_PASSWORD;
+    for (const run of runs) {
+      const name = basename(run.word).toLowerCase(), board = BOARD_RUN(run);
+      if (board && (/^(?:xargs|parallel)$/.test(name) || run.args.some((a) => /[$`*?[{]/.test(a)))) return BOARD_EXPANSION;
+      const whole = WHOLE(name, run.args);
+      for (const [k, arg] of run.args.entries()) {
+        const value = arg.startsWith("-") ? arg.slice(arg.indexOf("=") + 1 || arg.length) : arg;
+        if (!value) continue;
+        const reach = reachOf(value, run.dir);
+        // Only the board command may name its config, as the value of --config.
+        if (reach.config && !(board && (run.args[k - 1] === "--config" || arg.startsWith("--config=")))) return BOARD_CONFIG;
+        if (reach.above && whole) return BOARD_CONFIG;
+      }
+      if (SEARCHES.test(name) && whole && reachOf(".", run.dir).above) return BOARD_CONFIG;
+    }
+    for (const { redirect, dir } of redirects) if (reachOf(redirect.replace(/^\d*[<>&|]+/, ""), dir).config) return BOARD_CONFIG;
   }
   return undefined;
 }
