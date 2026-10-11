@@ -67,3 +67,10 @@ A wait can time out when completion already reached the parent. The fixture chec
 The probe uses simulated model responses. It does not establish real-model report acceptance or authorize capacity release.
 The runtime must bind each accepted assignment to its own child turn before a stop can release that assignment.
 A child's earlier stop must never release its later assignment. This binding remains unfinished.
+
+The stop callback's transcript path names the parent transcript in the isolated 0.160.0 probe.
+The observer instead reads the child transcript saved at its verified start.
+Each task message follows a matching `task_started` and `turn_context` record.
+The probe checks the message's author, recipient, and content hash against the expected task for each stopped turn.
+These checks pass for the initial task and its follow-up. They establish fixture delivery, not real-model consumption.
+Production binding still needs a protected transcript reader, immutable dispatch evidence, and conflict checks before journal updates.

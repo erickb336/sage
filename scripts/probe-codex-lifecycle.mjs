@@ -1,6 +1,7 @@
 // Isolated native V2 transport check with simulated model responses; not a live Sage pilot.
 // A wide deadlock guard ends the isolated transport without a process signal.
 import http from "node:http";
+import {createHash} from "node:crypto";
 import assert from "node:assert/strict";
 import {existsSync,readdirSync,readFileSync} from "node:fs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
@@ -398,6 +399,18 @@ data: ${JSON.stringify(event)}
       assert(stop.some(row => row.turn_id === start[0].turn_id));
     }
     assert.equal(after.length,denySpawn ? 0 : 1);
+    const expectedTasks = new Set([CHILD_PROMPT, ...(followUp ? [FOLLOWUP_PROMPT] : [])].map(text => createHash("sha256").update(text).digest("hex")));
+    const matchedTasks = new Set();
+    for (const stopped of stop) {
+      assert.equal(stopped.captureError, undefined);
+      const matched = stopped.assignments.filter(row => row.turn === stopped.turn_id);
+      assert.equal(matched.length, 1, "each stopped turn must contain one fixture assignment");
+      assert.equal(matched[0].author, "/root");
+      assert.equal(matched[0].recipient, taskName);
+      assert(expectedTasks.has(matched[0].taskHash));
+      matchedTasks.add(matched[0].taskHash);
+    }
+    if (!denySpawn) assert.equal(matchedTasks.size, expectedTasks.size);
     if (!denySpawn) {
     assert.equal(start[0].captureError,undefined);
     assert.equal(start[0].agent_id,stop[0].agent_id);
