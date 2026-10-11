@@ -604,14 +604,14 @@ function nearLogbook(text, roots, cwd) {
   const leaves =
     /[$`]/.test(text) ||
     words.some(({ low, parts }) => /^(?:cd|pushd)$/.test(low) || parts.includes("..") || parts[0].startsWith("~") || (/^\/(?!\/)/.test(low) && !/^\/dev\/(?:null|stdout|stderr)$/.test(low)));
-  const unique = [...new Set(all)]; // each word once: a long line repeats words
+  const unique = [...new Set(all)], disk = new Map(); // each word once: a long line repeats words; each folder once (F-T229-20)
   const lowWords = all.map(fold);
   const cdHome = lowWords.findIndex((word, k) => /^(?:cd|pushd)$/.test(word) && atHome(lowWords[k + 1] ?? "-"));
   return (
     namesRoot(text, plain, roots, cwd) ??
     plain.find(({ low, parts }) => parts.includes(".claude") && !worktree(low))?.word ??
     (leaves ? words.find(({ word }) => GLOB.test(word))?.word ?? namesTable(words) : undefined) ??
-    unique.find((w) => !/[$`]/.test(w) && overlaps(canonical(from(cwd, pathOf(w))), roots[1])) ??
+    unique.find((w) => !/[$`]/.test(w) && overlaps(fold(physical(from(cwd, pathOf(w)), disk)), roots[1])) ??
     unique.find((w) => linkOnPattern(w, cwd)) ??
     words.find(({ low }) => fromHome(low) && /[*?[{$]/.test(low.replace(/^\$home/, "")))?.word ??
     (/(?:^|[\s;&|(`])(?:cd|pushd)[ \t]*(?:$|[\n;&|)`])/m.test(fold(text)) ? "cd" : undefined) ??
@@ -865,8 +865,9 @@ function agentCheck(input, file) {
  *   - names the board config folder ~/.config/sage-board, its board.json or a temporary .board-*.json, in a command, a
  *     redirection, Read, Write, Edit, MultiEdit or NotebookEdit. A path resolves against its working folder first
  *     (., .., //, ~, links, git -C and the terminal tool's cwd); a pattern or a variable counts when it can stand for
- *     one of them (fail closed). A word names a path also as the value of key=value, as a file:// URL, as an xargs
- *     here-string and, in the code of node -e or python3 -c, as a text with a slash;
+ *     one of them (fail closed). A word names a path also as the value of key=value, as a file: URL, as a file that
+ *     curl reads after @ or =<, as an xargs here-string and, in the code of node -e or python3 -c or an interpreter's
+ *     stdin, as a text with a slash. A word over 4096 characters with a pattern, a variable, board or .config counts;
  *   - searches, copies, moves or links that folder or a folder above it (grep -r, rg, find, cp -R, tar, mv, ln, the
  *     Grep and Glob tools and others).
  * Only the board command may name its config, as the value of --config. Only the real home folder counts: a repository
@@ -884,9 +885,9 @@ const VARIABLE = /[$`]/;
 /** The board config folder, as written from HOME and as its real path, in lower case: the two spellings a path can have. */
 function boardFolders() {
   const folder = join(process.env.HOME || homedir(), ".config", "sage-board");
-  let physical = folder;
-  try { physical = real(folder); } catch {}
-  return [...new Set([fold(folder), fold(physical)])];
+  let resolved = folder;
+  try { resolved = real(folder); } catch {}
+  return [...new Set([fold(folder), fold(resolved)])];
 }
 /** The parts of a path word from its folder (undefined: not known), with ., .. and // resolved. A variable stays a part. */
 function pathParts(word, dir) {
@@ -945,23 +946,54 @@ function pathMatcher(parts) {
   };
 }
 /**
+ * The real path of an absolute path, as canonical gives it before the fold, at the cost of one lstat for each new part
+ * (F-T229-20). It steps down from /: each part is lstat-ed once per call (the cache disk), only a link is resolved with
+ * real, and ".." after a real folder is its parent. From the first missing part on, the rest is joined as text.
+ */
+function physical(path, disk) {
+  const parts = path.split("/");
+  let at = "/";
+  for (const [k, part] of parts.entries()) {
+    if (!part || part === ".") continue;
+    if (part === "..") { at = dirname(at); continue; }
+    const next = join(at, part);
+    if (!disk.has(next)) {
+      let kind = false; // missing, also for a part under a file
+      try { const stat = lstatSync(next, { throwIfNoEntry: false }); kind = stat && (stat.isSymbolicLink() ? real(next) : true); } catch {}
+      disk.set(next, kind);
+    }
+    const kind = disk.get(next);
+    if (!kind) return join(next, ...parts.slice(k + 1));
+    at = kind === true ? next : kind;
+  }
+  return at;
+}
+/**
  * What a word (a path from the folder dir, maybe with ~, a pattern or a variable) can stand for: config, the board
  * config folder, its board.json or a temporary .board-*.json; above, that folder or a folder above it.
  */
-function boardReach(word, dir, folders) {
+function boardReach(word, dir, folders, disk) {
+  if (!word) return {};
+  // The system opens no path this long, but a pattern or a variable can make the word shorter, and a program can clean
+  // up its ".." parts. Such a word with a pattern, a variable or the text board or .config fails closed (F-T229-21).
+  if (word.length > 4096) return /[$`*?[{]|board|\.config/i.test(word) ? { config: true } : {};
   // A word of only variables and patterns ($OUT/*) names no file in particular.
-  if (!word || word.length > 4096 || /^[$`]/.test(word) && !/[\w.-]/.test(word.replace(EXPANSION, ""))) return {};
+  if (/^[$`]/.test(word) && !/[\w.-]/.test(word.replace(EXPANSION, ""))) return {};
   const parts = pathParts(word, dir);
   let is, temporary;
   if (parts.some((part) => /[$`*?[{]/.test(part))) {
-    // A pattern, a variable or an unknown folder: the paths it can stand for.
+    // A pattern, a variable or an unknown folder: the paths it can stand for. Each text between its pattern pieces must
+    // be in the config's path (a temporary file's name aside), or the word names none of them (F-T229-20).
+    const named = folders.flatMap((f) => [`${f}/board.json`, `${f}/.board-000000000000.json`]);
+    const texts = parts.slice(0, /^\.board-/i.test(parts.at(-1)) ? -1 : undefined).flatMap((part) => part.split(EXPANSION).map(fold));
+    if (!texts.every((t) => named.some((n) => n.includes(t)))) return {};
     is = pathMatcher(parts);
     const parent = pathMatcher(parts.slice(0, -1));
     temporary = (f) => /^\.board-.*(?:\.json|[$`*?\]}])$/i.test(parts.at(-1) ?? "") && parent(f);
   } else {
     // A plain path: as written, and its real path (a link to the config is the config).
     const spellings = [fold(`/${parts.join("/")}`)];
-    try { spellings.push(canonical(from(dir ?? "/", word.replace(/^~(?=\/|$)/, process.env.HOME || homedir())))); } catch {}
+    try { spellings.push(fold(physical(from(dir ?? "/", word.replace(/^~(?=\/|$)/, process.env.HOME || homedir())), disk))); } catch {}
     is = (path) => spellings.includes(path);
     temporary = (f) => spellings.some((s) => dirname(s) === f && /^\.board-.*\.json$/.test(basename(s)));
   }
@@ -979,19 +1011,26 @@ const BOARD_RUN = ({ word, args }) => (basename(word) === "cli.mjs" || args.some
 /** Programs that take code in a word after a CODE option (node -e, python3 -c); the shells' code is read as commands. */
 const INTERPRETERS = /^(?:node|deno|bun|python[\d.]*|perl|ruby|php|osascript)$/;
 /**
- * The paths that one word can name: the word, the value of key=value (dd if=, of=), the path of a file:// URL (curl)
- * and, in code, each text between quotes, spaces and other marks that has a slash or "board" in it.
+ * The paths that one word can name: the word, the value of key=value (dd if=, of=), the path of a file: URL (curl), with
+ * and without its query and fragment, and, in code, each text between quotes, spaces and other marks that has a slash
+ * or "board" in it. For curl (at), also the file that it reads after @ (-d @f, -F name=@f) or =< (-F name=<f).
  */
-function boardPaths(word, code) {
+function boardPaths(word, code, at) {
   const paths = code ? word.split(/[\s'"`;,()<>|&=+]+/).filter((t) => /\/|board/i.test(t)) : [word];
   for (const path of [...paths]) {
     const value = /^[\w.-]+=(.+)$/s.exec(path)?.[1];
     if (value) paths.push(value);
+    // A ; or a , can end the file name (-F name=@f;type=x), or be part of it: both count.
+    if (at) for (const m of path.matchAll(/@|=</g)) { const rest = path.slice(m.index + m[0].length); paths.push(rest, ...rest.split(/[;,]/)); }
     for (const p of [path, value]) {
-      const url = /^file:\/\/[^/]*(\/.*)?$/is.exec(p ?? "");
+      // Any number of slashes after file:; with two, a host name comes first (file://localhost/...).
+      const url = /^file:(\/*)(.*)$/is.exec(p ?? "");
       if (!url) continue;
-      paths.push(url[1] ?? "/");
-      try { paths.push(decodeURIComponent(url[1] ?? "/")); } catch {}
+      const rest = url[1].length === 2 ? url[2].replace(/^[^/]*/, "") || "/" : `${url[1] ? "/" : ""}${url[2]}`;
+      for (const t of [rest, rest.replace(/[?#].*$/s, "") || "/"]) {
+        paths.push(t);
+        try { paths.push(decodeURIComponent(t)); } catch {}
+      }
     }
   }
   return paths;
@@ -1010,7 +1049,7 @@ function boardCommands(text, cwd, uncertain) {
   } catch {
     // The reader cannot follow a cd here (cd ~, cd $X): read the words alone, with no known folder.
     const commands = shellCommands(text); // throws when it cannot read the line at all
-    return { runs: commands.map(({ words }) => ({ word: words[0] ?? "", args: words.slice(1), dir: undefined })), redirects: commands.flatMap(({ redirects = [] }) => redirects.map((redirect) => ({ redirect, dir: undefined }))) };
+    return { runs: commands.map(({ words, bodies }) => ({ word: words[0] ?? "", args: words.slice(1), stdin: bodies, dir: undefined })), redirects: commands.flatMap(({ redirects = [] }) => redirects.map((redirect) => ({ redirect, dir: undefined }))) };
   }
 }
 function boardProblem(input) {
@@ -1021,10 +1060,10 @@ function boardProblem(input) {
   if (terminal) cwd = from(cwd, terminal.replace(/^~(?=\/|$)/, home));
   const uncertain = terminal !== undefined && /[$`~]/.test(terminal.replace(/^~(?=\/|$)/, ""));
   // Each word once per call: a long command line often repeats its words.
-  const folders = boardFolders(), seen = new Map();
+  const folders = boardFolders(), seen = new Map(), disk = new Map();
   const reachOf = (word, dir) => {
     const key = `${dir}\0${word}`;
-    if (!seen.has(key)) seen.set(key, boardReach(word, dir, folders));
+    if (!seen.has(key)) seen.set(key, boardReach(word, dir, folders, disk));
     return seen.get(key);
   };
   if (/^(?:Read|Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
@@ -1050,12 +1089,15 @@ function boardProblem(input) {
     for (const run of runs) {
       const name = basename(run.word).toLowerCase(), board = BOARD_RUN(run);
       if (board && (/^(?:xargs|parallel)$/.test(name) || run.args.some((a) => /[$`*?[{]/.test(a)))) return BOARD_EXPANSION;
-      const whole = WHOLE(name, run.args), code = INTERPRETERS.test(name);
+      const whole = WHOLE(name, run.args), code = INTERPRETERS.test(name), curl = name === "curl";
+      // An interpreter's code on stdin (a heredoc, a here-string or a pipe) is read as a code argument (F-T229-24).
+      for (const body of code ? run.stdin ?? [] : []) for (const path of boardPaths(body, true)) if (reachOf(path, run.dir).config) return BOARD_CONFIG;
       let dir = run.dir;
       for (const [k, arg] of run.args.entries()) {
-        const value = arg.startsWith("-") ? arg.slice(arg.indexOf("=") + 1 || arg.length) : arg;
+        // curl takes a file also in an option word (-d@f): it keeps the whole word.
+        const value = arg.startsWith("-") && !curl ? arg.slice(arg.indexOf("=") + 1 || arg.length) : arg;
         if (!value) continue;
-        for (const path of boardPaths(value, code && CODE.test(run.args[k - 1] ?? ""))) {
+        for (const path of boardPaths(value, code && CODE.test(run.args[k - 1] ?? ""), curl)) {
           const reach = reachOf(path, dir);
           // Only the board command may name its config, as the value of --config.
           if (reach.config && !(board && (run.args[k - 1] === "--config" || arg.startsWith("--config=")))) return BOARD_CONFIG;
@@ -1082,6 +1124,9 @@ const CODE = /^-(?:[a-z]*[ce]|p|-eval|-print|command)$/;
 const canonical = (path) => fold(real(path));
 function real(path, strict = false) {
   let rest = [];
+  // The system opens no path over 4096 characters, so the walk below starts at the last part within them. Step by step,
+  // a word of a million characters took over a minute (F-T229-20).
+  if (!strict && path.length > 4096) [path, rest] = [path.slice(0, path.lastIndexOf("/", 4096)) || "/", path.slice(path.lastIndexOf("/", 4096) + 1).split("/")];
   for (let hops = 0; ; ) {
     try {
       return join(realpathSync.native(path), ...rest); // the system resolves ".." after each link; only the missing rest is joined
@@ -1406,9 +1451,16 @@ function ghProblem(command, cwd, path, inherited) {
   const identities = new Set([...(inherited?.identities ?? []), ...[...lookups].flatMap(dir => [fileIdentity(join(dir, "gh")), fileIdentity(join(dir, "gh.exe"))])].filter(Boolean));
   const context = { ...inherited, paths, folders, identities };
   if (writesCommand && dispatches.some(({ run, uncertainDirectory }) => [...run.args, ...run.stdin].some(text => ghAliasConfiguration(text, run.dir, run.path, { ...context, uncertainDirectory })))) return NO_GH;
+  const ghFiles = new Map(); // each file once: a long line repeats its words (F-T229-20)
   const isGhFile = file => {
     if (!file) return false;
+    if (!ghFiles.has(file)) ghFiles.set(file, isGh(file));
+    return ghFiles.get(file);
+  };
+  const isGh = file => {
     try {
+      // Most words name no file: one stat says so, before the realpath (F-T229-20).
+      if (!statSync(file, { throwIfNoEntry: false })?.isFile()) return false;
       const real = realpathSync.native(file);
       const identity = fileIdentity(real);
       return !!identity && (GH_NAME.test(basename(file)) || GH_NAME.test(basename(real)) || identities.has(identity));
