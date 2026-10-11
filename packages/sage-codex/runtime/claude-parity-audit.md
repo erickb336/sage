@@ -180,3 +180,20 @@ Run `node scripts/probe-codex-lifecycle.mjs --sage-report` with the test process
 The isolated 0.160.0 check passed from owner activation through the parent's native report tool call.
 Its model responses are simulated. Claim verification, durable report acceptance, verdict recording, and a real-project pilot remain unfinished.
 The required hook outage still blocks automatic activation.
+
+
+## Durable report receipts
+
+The parent now uses `sage_record_report` with the hash returned by `sage_read_report`.
+The core journal records the exact completed binding, task, run, message identity, hash, and report text in one atomic record.
+The adapter rechecks native provenance before the first write. A changed hash or another caller is refused.
+Concurrent identical writes create one receipt. A conflicting report cannot replace it.
+Retries return the original receipt, including after a connection restart or removal of the native transcript.
+The journal checks the stored report's hash, required fields, and completed assignment when it reads the receipt.
+Valid late reports can be recorded after Sage off; they cannot change mode or release another assignment.
+
+The native `--sage-report` route now reads, records, retries, and reads back the same report through actual MCP calls.
+The isolated 0.160.0 run passed with one saved report and no duplicate.
+These checks use simulated model responses. They prove receipt persistence, not the report's claims or a real-project workflow.
+The receipt does not change task/run status or record a review verdict.
+The bridge to the shared task logbook, verdict gates, broader recovery, and installed activation remain unfinished.

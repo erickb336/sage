@@ -66,7 +66,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_prepare_task", "sage_read_report"]);
+    ? ["sage_native_hook"] : ["sage_prepare_task", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -968,4 +968,44 @@ test("packaged report tool refuses forged callers and incomplete reports before 
   const unsupported = await connect(t, f, "unsupported", "", "sage_read_report");
   assert.match((await unsupported.call(input)).error, /could not read this report/);
   await unsupported.close();
+});
+
+
+test("native durable reports pin the read hash and retain evidence after transcript removal", async t => {
+  const f = await completionFixture(t);
+  const api = await import(pathToFileURL(join(f.plugin,"runtime/report-intake.mjs")));
+  assert.equal(typeof api.recordChildReport,"function");
+  appendReport(f);f.policy.completeChild(f.stop,f.native(childActor));
+  const initial=api.readChildReport({name:f.input.name},f.native(session),f.options);
+  const input={name:f.input.name,reportHash:initial.reportHash};
+  assert.throws(()=>api.recordChildReport(input,f.native(childActor),f.options));
+  assert.throws(()=>api.recordChildReport({...input,reportHash:"a".repeat(64)},f.native(session),f.options));
+  f.childTranscript();appendReport(f,reportText.replace("RESULT PASS","RESULT FAIL"));
+  assert.throws(()=>api.recordChildReport(input,f.native(session),f.options));
+  assert.equal(f.core.readAdmission(f.options.directory).reports?.length??0,0);
+  f.childTranscript();appendReport(f);
+  assert.equal(api.recordChildReport(input,f.native(session),f.options).decision,"report-recorded");
+  rmSync(join(f.mode.sessionsDir,`${childActor}.jsonl`));
+  assert.deepEqual(api.readChildReport({name:f.input.name},f.native(session),f.options),initial);
+  assert.equal(api.recordChildReport(input,f.native(session),f.options).decision,"already-recorded");
+  assert.throws(()=>api.readChildReport({name:f.input.name},f.native(childActor),f.options));
+  const saved=f.core.readAdmission(f.options.directory).reports;
+  assert.equal(saved.length,1);assert.equal(saved[0].text,reportText);assert.equal(saved[0].reportHash,initial.reportHash);
+});
+
+test("packaged report receipt survives reconnect and refuses another actor without duplicate writes", async t => {
+  const f=await completionFixture(t);appendReport(f);f.policy.completeChild(f.stop,f.native(childActor));
+  const {readChildReport}=await import(pathToFileURL(join(f.plugin,"runtime/report-intake.mjs")));
+  const report=readChildReport({name:f.input.name},f.native(session),f.options);
+  writeFileSync(f.entry,`import {servePreparations} from './plugin/runtime/preparation-server.mjs';servePreparations(${JSON.stringify(f.options)});`);
+  const input={name:f.input.name,reportHash:report.reportHash};
+  const client=await connect(t,f,"0.160.0","","sage_record_report");
+  assert.match((await client.call(input,childActor)).error,/could not record this report/);
+  assert.equal((await client.call(input)).decision,"report-recorded");await client.close();
+  rmSync(join(f.mode.sessionsDir,`${childActor}.jsonl`));
+  const retry=await connect(t,f,"0.160.0","","sage_record_report");
+  assert.equal((await retry.call(input)).decision,"already-recorded");await retry.close();
+  const reader=await connect(t,f,"0.160.0","","sage_read_report");
+  assert.deepEqual(await reader.call({name:f.input.name}),report);await reader.close();
+  assert.equal(f.core.readAdmission(f.options.directory).reports.length,1);
 });
