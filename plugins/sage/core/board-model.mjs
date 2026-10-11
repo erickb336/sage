@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { githubRepository } from "./board-reader.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -57,7 +58,12 @@ function card(source, project, task, now) {
     if (!mode || !mode.data.autopilot) reasons.push({ kind: "merge", text: mode ? "Autopilot is off. The owner can review the merge." : "Autopilot state is unknown. The owner must review the merge." });
   }
   // N2: an observed PR head wins; else the newest ledger verdict's head for the task's PR (the ledger is append-only).
-  const reviewed = task.pr ? ledger.filter(row => String(row.pr) === task.pr && /^[0-9a-f]{40}$/.test(row.sha)).at(-1)?.sha ?? null : null;
+  // A repair pushes a new head that has no verdict yet, so the ledger head counts only while the task is not repairing and
+  // the newest verdict that names a known run comes from a run of the task's round (with no such verdict: round 0 only).
+  const verdicts = task.pr ? ledger.filter(row => String(row.pr) === task.pr && /^[0-9a-f]{40}$/.test(row.sha)) : [];
+  const roundOf = row => { const run = runs.find(run => run.id === row.run); return run ? Number(run.round || 0) : null; };
+  const newestRound = verdicts.map(roundOf).filter(round => round !== null).at(-1) ?? 0;
+  const reviewed = task.state !== "repairing" && newestRound === Number(task.round || 0) ? verdicts.at(-1)?.sha ?? null : null;
   const head = pr?.data.head ?? reviewed;
   const headBasis = pr?.data.head ? "observed" : head ? "ledger" : null;
   const current = head ? ledger.filter(row => row.sha === head && String(row.pr) === task.pr) : [];
@@ -95,7 +101,7 @@ function card(source, project, task, now) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: moves.find(({ move }) => move[2] === task.id && move[3] === row.key)?.row.task ?? null })),
     ...moves.filter(({ row }) => row.task === task.id).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: source.provider ?? source.label ?? source.id, repository: pr?.data.repository ?? project.repository ?? null, lastActivity, headBasis, project: project.key, projectName: project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""), ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: loopFor(task, route, cycles, head, reasons, runs), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: source.provider ?? source.label ?? source.id, repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, projectName: project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""), ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: loopFor(task, route, cycles, head, reasons, runs), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
 }
 
 export function buildBoardModel(sources, { now = new Date().toISOString() } = {}) {

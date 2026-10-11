@@ -169,3 +169,26 @@ test("T218 N1 and N4: the provider stand-in is the logbook's source, and the PR 
   assert.equal(logbook(t, tables, { remote: "https://github.com/../evil" }).tasks[0].repository, null);
   assert.equal(logbook(t, tables).tasks[0].repository, null);
 });
+
+test("T218 F-T218-3: after a repair pushes a new head, the old head's verdicts from an earlier round neither show nor need you", t => {
+  const tables = round => ({
+    tasks: [task("T1", "reviewing", { pr: "12", round })],
+    runs: [{ id: "R1", task: "T1", role: "code-reviewer", round: "0", status: "done", started: at(50), ended: at(40) }, { id: "R2", task: "T1", role: "qa", round: "0", status: "done", started: at(40), ended: at(30) }],
+    ledger: [
+      { task: "T1", pr: "12", sha: head, kind: "checks-pass", cycle: "1", at: at(45) },
+      { task: "T1", pr: "12", sha: head, kind: "review-clean", cycle: "1", run: "R1", at: at(40) },
+      { task: "T1", pr: "12", sha: head, kind: "qa-fail", cycle: "1", run: "R2", at: at(30) },
+    ],
+  });
+  const repaired = logbook(t, tables("1")).tasks[0];
+  assert.equal(repaired.currentHead, null);
+  assert.equal(repaired.headBasis, null);
+  assert.deepEqual(repaired.reasons, []);
+  assert.deepEqual(repaired.cycles[0].steps.map(s => s.status), ["unknown", "unknown", "unknown"]);
+  const repairing = tables("0");
+  repairing.tasks[0].state = "repairing";
+  assert.equal(logbook(t, repairing).tasks[0].currentHead, null);
+  const same = logbook(t, tables("0")).tasks[0];
+  assert.equal(same.currentHead, head);
+  assert.deepEqual(same.reasons.map(r => r.text), ["QA failed on the recorded PR head."]);
+});

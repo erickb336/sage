@@ -54,6 +54,10 @@ function table(file, name, budget) {
   });
 }
 
+const REPOSITORY = String.raw`([A-Za-z0-9][A-Za-z0-9-]*)\/([\w-][\w.-]*?)`;
+/** A repository link the board accepts, from a remote or a PR observation: https://github.com/<owner>/<repo>, or null. */
+export const githubRepository = value => new RegExp(String.raw`^https:\/\/github\.com\/${REPOSITORY}$`).test(value) ? value : null;
+
 /** The origin remote of a Git config file as https://github.com/<owner>/<repo>, or null for any other remote. */
 function githubRemote(config) {
   let origin = false;
@@ -61,7 +65,7 @@ function githubRemote(config) {
     const section = /^\s*\[([^\]]*)\]/.exec(line);
     if (section) { origin = /^remote\s+"origin"$/.test(section[1].trim()); continue; }
     const url = origin && /^\s*url\s*=\s*(\S+)\s*$/.exec(line)?.[1];
-    const match = url && /^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[:/]([A-Za-z0-9][A-Za-z0-9-]*)\/([\w-][\w.-]*?)(?:\.git)?\/?$/.exec(url);
+    const match = url && new RegExp(String.raw`^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[:/]${REPOSITORY}(?:\.git)?\/?$`).exec(url);
     if (match) return `https://github.com/${match[1]}/${match[2]}`;
   }
   return null;
