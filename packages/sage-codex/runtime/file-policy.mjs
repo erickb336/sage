@@ -1,4 +1,5 @@
 import { chiefEditDenied } from "sage-core";
+export { commandWrites } from "sage-core";
 
 /** This is one policy check, not a complete tool policy. Mode and chief identity must be verified by the caller. */
 export function directEditDecision(input, context) {

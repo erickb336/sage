@@ -2122,3 +2122,56 @@ test("concurrent failure and binding preserve one terminal history", async t => 
   const state = f.api.readAdmission(f.journal);
   assert.equal(state.bindings.length + (state.failures?.length ?? 0), 1);
 });
+
+test("shared shell write classification detects writes without executing payloads in either bundle", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    // All strings below reach the parser only. None reaches a shell or interpreter.
+    for (const command of [
+      "printf fixed > ledger.tsv", "cat <> ledger.tsv", "echo fixed >& ledger.tsv",
+      "cp source target", "rm target", "ln source target", "uniq source target", "less -o target source",
+      "sed -i s/a/b/ target", "perl -pi -e x target", "awk -i inplace x target",
+      "sort --out=target source", "find . -delete", "find . -exec touch target ;",
+      "node -e 'writeFileSync(\"target\",\"fixed\")'", "python -c 'open(\"target\",\"w\")'",
+      "source script", "eval fixed", "exec fixed", "Set-Content target fixed",
+      "Out-File target", "New-Item target", "echo $(touch target)", "echo fixed | tee target",
+    ]) assert.equal(commandWrites(command, f.dir), true, command);
+    for (const command of ["cat ledger.tsv", "echo touch target", "printf rm", "grep -e tee ledger.tsv",
+      "cat < ledger.tsv", "echo fixed >/dev/null", "echo fixed >&2", "ls .", "jq . ledger.json"])
+      assert.equal(commandWrites(command, f.dir), false, command);
+    assert.equal(existsSync(join(f.dir, "target")), false);
+    assert.equal(existsSync(join(f.dir, "ledger.tsv")), false);
+  }
+});
+
+test("shared shell reader options preserve option values and function dispatch in either bundle", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    for (const command of ["rg --pre cat x", "rg --pre-glob '*.txt' x", "rg --search-zip x", "rg -z x",
+      "rg --hostname-bin program x", "file -C -m magic", "file --comp magic", "file -z ordinary",
+      "diff --paginate left right", "diff --pa left right", "diff -l left right",
+      "env rg --pre cat x", "LANG=C rg --pre cat x", "f() { rg --pre cat x; }; f",
+      "rg() { :; }; command rg --pre cat x"])
+      assert.equal(commandWrites(command, f.dir), true, command);
+    for (const command of ["rg -e --pre x", "rg -e--pre x", "rg --regexp=--pre x", "rg -- --pre x",
+      "rg --no-pre x", "file -m --compile ordinary", "file -- --compile", "diff -L --paginate left right",
+      "diff --label=--paginate left right", "diff -- --paginate right", "echo rg --pre cat x",
+      "rg() { :; }; rg --pre cat x", "f() { env rg --pre cat x; }; env() { :; }; f"])
+      assert.equal(commandWrites(command, f.dir), false, command);
+  }
+});
+
+test("Codex shell write classification refuses unreadable text and uses the public core API", async t => {
+  const f = isolated(t, "codex");
+  const adapter = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof adapter.commandWrites, "function");
+  for (const command of ["echo 'unfinished", "$(unfinished", null, {}])
+    assert.equal(adapter.commandWrites(command, f.dir), true, JSON.stringify(command));
+  assert.equal(adapter.commandWrites("rg --pre cat x", f.dir), true);
+  assert.equal(adapter.commandWrites("rg --regexp=--pre x", f.dir), false);
+  assert.equal(adapter.commandWrites("", f.dir), false);
+});
