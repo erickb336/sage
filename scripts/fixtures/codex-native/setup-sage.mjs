@@ -14,7 +14,7 @@ export async function setupSage(root, { disconnectOnSpawn = false } = {}) {
   configureAdmission(directory, { total: 5, projects: [{ project: "native-fixture", limit: 5 }] });
   const servers = [["sage_fixture", "sage-hook-server.mjs"], ["sage_preparation", "sage-preparation-server.mjs"]];
   const config = servers.map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\n`).join("")
-    + '[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n';
+    + '[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
   return { config, readFault: () => JSON.parse(readFileSync(join(root, "hook-outage.json"), "utf8")), readJournal: () => readAdmission(directory), hook: event => {
     // Deliberately omit MCP SubagentStart: the first tool must establish the child's binding.
     if (event === "SubagentStart") return [];

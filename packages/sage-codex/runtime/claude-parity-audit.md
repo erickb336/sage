@@ -160,3 +160,23 @@ Activation requires a supported boundary that denies before dispatch when requir
 Verify disconnected, absent, untrusted, timed-out, malformed, and unmatched validators, plus permission-request failure and configuration reload.
 This fixture proves only the persistent disconnection case. The other failure cases remain unverified.
 Report acceptance, recovery, and the complete policy can proceed while this activation dependency remains open.
+
+
+## Native report intake
+
+The preparation server now exposes `sage_read_report` for a parent's own named child.
+It requires the current owner epoch, exact assignment binding, and recorded native completion.
+The reader checks the assigned task and report in one bounded transcript snapshot.
+It accepts only a retained assistant message that matches the completed turn's final text.
+It refuses incomplete, foreign, forged, duplicate, or conflicting terminal evidence.
+
+The shared parser requires seven nonempty report fields and status `done`, `blocked`, or `question`.
+It accepts plain field labels, common Markdown labels, and a whole report enclosed in a text fence.
+The 32 KiB limit applies to the complete report. The repository check keeps the fields aligned with Claude's existing contract.
+The report tool returns task, run, child, turn, message identity, content hash, and parsed fields.
+It reads only: it does not accept a verdict, mark a task successful, or change capacity.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-report` with the test process fixtures first on PATH.
+The isolated 0.160.0 check passed from owner activation through the parent's native report tool call.
+Its model responses are simulated. Claim verification, durable report acceptance, verdict recording, and a real-project pilot remain unfinished.
+The required hook outage still blocks automatic activation.

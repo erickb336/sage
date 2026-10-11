@@ -12,20 +12,22 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
 const followUp = process.argv.includes("--follow-up");
 const nested = process.argv.includes("--nested");
 const outage = process.argv.includes("--sage-hook-outage");
-const sage = process.argv.includes("--sage") || outage;
+const reportProbe = process.argv.includes("--sage-report");
+const sage = process.argv.includes("--sage") || outage || reportProbe;
+assert(!(outage && reportProbe), "incompatible_probe_routes");
 assert([denySpawn, followUp, nested, sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
 const MARKER = "sage-native-parent-ok";
 const GRAND_MARKER = "sage-native-grandchild-ok";
 const GRAND_PROMPT = `Return exactly ${GRAND_MARKER}. Do not call any tool.`;
-const CHILD_MARKER = "sage-native-child-ok";
+const CHILD_MARKER = reportProbe ? ["STATUS done", "RESULT PASS", "EVIDENCE fixed native fixture completed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n") : "sage-native-child-ok";
 let CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const FOLLOWUP_MARKER = "sage-native-followup-ok";
 const FOLLOWUP_PROMPT = `Return exactly ${FOLLOWUP_MARKER}. Do not call any tool.`;
@@ -106,7 +108,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
   let prepared = false;
-  const calls = { prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  const calls = { report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -128,7 +130,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= (item.call_id === calls.prepare ? 2 : 1)
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report].includes(item.call_id) ? 2 : 1)
           && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
@@ -155,10 +157,11 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       && followupTask.content?.some(part => part.type === "encrypted_content" && part.encrypted_content === FOLLOWUP_PROMPT);
     const grandchildPromptSeen = task?.author === "/root/probe_child" && task?.recipient === "/root/probe_child/probe_grandchild"
       && task.content?.some(part => part.type === "encrypted_content" && part.encrypted_content === GRAND_PROMPT);
-    const prepareTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
-      ? (tool.tools ?? []).filter(member => member.name === "sage_prepare_task").map(member => ({ namespace: tool.name, name: member.name }))
-      : tool.type === "function" && tool.name === "mcp__sage_preparation__sage_prepare_task" ? [{ name: tool.name }] : []);
-    return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen, prepareTools };
+    const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({ namespace: tool.name, name: member.name }))
+      : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{ name: tool.name }] : []);
+    return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen,
+      prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report") };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -187,7 +190,8 @@ data: ${JSON.stringify(event)}
 `);
     res.end();
   };
-  const message = (text) => ({ id: `message_${text}`, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
+  let messageId = 0;
+  const message = (text) => ({ id: `message_${++messageId}`, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
   // This separate namespace field matches the current Responses protocol and upstream fixtures.
   const call = (call_id, name, args) => ({ type: "function_call", namespace: "collaboration", name, call_id, arguments: JSON.stringify(args) });
   const childEntry = (result) => {
@@ -317,8 +321,20 @@ data: ${JSON.stringify(event)}
         check(agent.agent_status?.completed === CHILD_MARKER, "native_child_completion_marker_mismatch");
         nativeCompleted = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "completed", agent_name: taskName, agent_status: { completed: CHILD_MARKER } });
-        if (followUp) respond(res, call(calls.followup, "followup_task", { target: taskName, message: FOLLOWUP_PROMPT }));
+        if (reportProbe) {
+          check(info.reportTools.length === 1, "report_tool_missing");
+          respond(res, { type: "function_call", ...info.reportTools[0], call_id: calls.report, arguments: JSON.stringify({ name: "probe_child" }) });
+        } else if (followUp) respond(res, call(calls.followup, "followup_task", { target: taskName, message: FOLLOWUP_PROMPT }));
         else respond(res, message(MARKER));
+      } else if (rootRequests === 6 && reportProbe) {
+        const receipt = info.outputs[calls.report];
+        check(receipt?.decision === "report-ready" && receipt.task === "T1" && receipt.run === "R1"
+          && receipt.child === childThread && receipt.report?.STATUS === "done" && receipt.report?.RESULT === "PASS"
+          && receipt.reportHash === createHash("sha256").update(CHILD_MARKER).digest("hex"), "invalid_report_receipt");
+        const saved = integrated.readJournal();
+        check(receipt.assignment === saved.bindings[0]?.assignment && receipt.turn === saved.bindings[0]?.turn, "report_assignment_mismatch");
+        print({type:"report_evidence",exactAssignment:true,completedTurn:true,completeFields:true,claimsVerified:false,simulatedModel:true});
+        respond(res, message(MARKER));
       } else if (rootRequests === 6) {
         check(info.outputs[calls.followup] !== undefined, "followup_result_missing");
         check(info.outputs[calls.followup] === "", "unexpected_followup_result");
@@ -433,7 +449,7 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followUp ? 8 : 5) && childRequests === (nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
+      : rootRequests === (followUp ? 8 : reportProbe ? 6 : 5) && childRequests === (nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0

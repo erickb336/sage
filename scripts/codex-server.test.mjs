@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -65,8 +65,9 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   assert.equal(init.result.protocolVersion, "2025-06-18");
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
-  assert.equal(listed.result.tools.length, 1);
-  assert.equal(listed.result.tools[0].name, toolName);
+  assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
+    ? ["sage_native_hook"] : ["sage_prepare_task", "sage_read_report"]);
+  assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
   return {
@@ -915,4 +916,56 @@ test("packaged MCP stop accepts exact completion and contains invalid stop reque
   assert.deepEqual(await client.call(f.stop, childActor), {});
   assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
   await client.close();
+});
+
+
+const reportText = ["STATUS done", "RESULT PASS", "EVIDENCE fixed fixture: 1 passed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n");
+function appendReport(f, text = reportText) {
+  const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+  appendFileSync(transcript, [
+    { type: "response_item", payload: { type: "message", id: "fixture_report", role: "assistant",
+      content: [{ type: "output_text", text }], internal_chat_message_metadata_passthrough: { turn_id: turns[1] } },
+      metadata: { client_authored: false, retained_source: { complete: true,
+        id: { role: "assistant", turn_id: turns[1], message_id: "fixture_report" } } } },
+    { type: "event_msg", payload: { type: "task_complete", turn_id: turns[1], last_agent_message: text } },
+  ].map(row => JSON.stringify(row) + "\n").join(""));
+}
+
+test("native parent reads its completed child's validated report without changing task or admission state", async t => {
+  const f = await completionFixture(t);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  assert.equal(typeof readChildReport, "function");
+  appendReport(f);
+  assert.throws(() => readChildReport({ name: f.input.name }, f.native(session), f.options));
+  f.policy.completeChild(f.stop, f.native(childActor));
+  const before = f.core.readAdmission(f.options.directory);
+  const read = readChildReport({ name: f.input.name }, f.native(session), f.options);
+  assert.equal(read.decision, "report-ready"); assert.equal(read.report.STATUS, "done");
+  assert.equal(read.task, "T1"); assert.equal(read.run, "R1"); assert.equal(read.child, childActor);
+  assert.equal(read.assignment, before.bindings[0].assignment);
+  for (const actor of [childActor, "a22422c7-509c-43aa-8c42-827c556f8a59"]) {
+    assert.throws(() => readChildReport({ name: f.input.name }, f.native(actor), f.options));
+  }
+  for (const input of [{ name: "another" }, { name: f.input.name, text: reportText }, { name: f.input.name, assignment: read.assignment }]) {
+    assert.throws(() => readChildReport(input, f.native(session), f.options));
+  }
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
+
+test("packaged report tool refuses forged callers and incomplete reports before returning a verified report", async t => {
+  const f = await completionFixture(t);
+  f.policy.completeChild(f.stop, f.native(childActor));
+  writeFileSync(f.entry, `import { servePreparations } from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
+  const client = await connect(t, f, "0.160.0", "", "sage_read_report");
+  const input = { name: f.input.name };
+  assert.match((await client.call(input)).error, /could not read this report/);
+  appendReport(f, "STATUS done");
+  assert.match((await client.call(input)).error, /could not read this report/);
+  f.childTranscript(); appendReport(f);
+  assert.match((await client.call(input, childActor)).error, /could not read this report/);
+  assert.equal((await client.call(input)).report.RESULT, "PASS");
+  await client.close();
+  const unsupported = await connect(t, f, "unsupported", "", "sage_read_report");
+  assert.match((await unsupported.call(input)).error, /could not read this report/);
+  await unsupported.close();
 });

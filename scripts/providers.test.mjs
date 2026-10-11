@@ -1,3 +1,4 @@
+import * as reportApi from "../packages/sage-core/index.mjs";
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
@@ -1838,4 +1839,29 @@ test('completed native children cannot regain instructions through a repeated st
   f.api.completeAdmission(f.journal, bound.binding);
   assert.throws(() => f.bind(f.identity()), /could not bind/);
   assert.equal(f.api.readAdmission(f.journal).completions[0].assignment, assignment.id);
+});
+
+const report = ["STATUS done", "RESULT PASS", "EVIDENCE node check.mjs: 3 passed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n");
+
+test("report structure retains evidence without converting a child claim into a verdict", () => {
+  assert.equal(typeof reportApi.parseReport, "function");
+  assert.equal(reportApi.parseReport(report).EVIDENCE, "node check.mjs: 3 passed");
+  for (const status of ["done", "blocked", "question"]) {
+    assert.equal(reportApi.parseReport(report.replace("STATUS done", `**STATUS**: ${status}`)).STATUS, status);
+  }
+  assert.deepEqual(Object.keys(reportApi.parseReport(report)), reportApi.REPORT_FIELDS);
+  assert.deepEqual(reportApi.parseReport("```text\n" + report + "\n```"), reportApi.parseReport(report));
+});
+
+test("report structure rejects missing empty repeated malformed and oversized fields", () => {
+  assert.equal(typeof reportApi.parseReport, "function");
+  for (const field of reportApi.REPORT_FIELDS) {
+    const rows = report.split("\n");
+    assert.throws(() => reportApi.parseReport(rows.filter(line => !line.startsWith(field)).join("\n")));
+    assert.throws(() => reportApi.parseReport(rows.map(line => line.startsWith(field) ? field : line).join("\n")));
+    assert.throws(() => reportApi.parseReport(report + `\n${field} other`));
+  }
+  for (const value of [null, {}, report.replace("STATUS done", "STATUS success"), report + "\0", report + "\ud800", report + "x".repeat(32 * 1024)]) {
+    assert.throws(() => reportApi.parseReport(value));
+  }
 });

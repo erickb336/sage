@@ -81,3 +81,45 @@ test('assignment evidence ignores result notifications without accepting them as
   f.write([...task(turn, 'first'), malformed]);
   assert.throws(() => f.read(), /assignment evidence is unavailable/);
 });
+
+
+const output = (id, text, extra = {}) => ({ type: "response_item", payload: { type: "message", id: `msg_${id}`,
+  role: "assistant", content: [{ type: "output_text", text }], internal_chat_message_metadata_passthrough: { turn_id: id }, ...extra },
+  metadata: { client_authored: false, retained_source: { complete: true, id: { role: "assistant", turn_id: id, message_id: `msg_${id}` } } } });
+const complete = (id, text) => ({ type: "event_msg", payload: { type: "task_complete", turn_id: id, last_agent_message: text } });
+
+test("native report requires its exact completed turn and retained assistant message", t => {
+  const f = fixture(t);
+  assert.equal(typeof identity.readNativeReport, "function");
+  f.write([...task(turn, "first"), output(turn, "first report"), complete(turn, "first report"),
+    ...task(later, "second"), output(later, "second report"), complete(later, "second report")]);
+  const read = expected => identity.readNativeReport(f.file, { sessionsDir: f.sessionsDir }, expected);
+  assert.equal(read(expected()).text, "first report");
+  assert.equal(read(expected(later, "second")).text, "second report");
+  assert.equal(read(expected()).reportHash, hash("first report"));
+  assert.throws(() => read(expected(turn, "second")), /report evidence is unavailable/);
+});
+
+test("native report rejects incomplete mismatched forged and duplicate terminal evidence", t => {
+  const f = fixture(t);
+  assert.equal(typeof identity.readNativeReport, "function");
+  const valid = output(turn, "report");
+  const forged = structuredClone(valid); forged.metadata.client_authored = true;
+  const foreign = structuredClone(valid); foreign.metadata.retained_source.id.turn_id = later;
+  const pending = structuredClone(valid); pending.metadata.retained_source.complete = false;
+  const rows = [[], [valid], [complete(turn, "report")], [valid, complete(later, "report")],
+    [valid, complete(turn, "other")], [valid, complete(turn, "report"), complete(turn, "report")],
+    [valid, complete(turn, "report"), valid], [forged, complete(turn, "report")], [foreign, complete(turn, "report")],
+    [pending, complete(turn, "report")], [output(turn, "report", { phase: "commentary" }), complete(turn, "report")],
+    [output(turn, "report", { role: "user" }), complete(turn, "report")]];
+  for (const suffix of rows) {
+    f.write([...task(turn, "first"), ...suffix]);
+    assert.throws(() => identity.readNativeReport(f.file, { sessionsDir: f.sessionsDir }, expected()), /report evidence is unavailable/);
+  }
+  const assigned = task(turn, "first");
+  f.write([assigned[0], assigned[1], valid, complete(turn, "report"), assigned[2]]);
+  assert.throws(() => identity.readNativeReport(f.file, { sessionsDir: f.sessionsDir }, expected()), /report evidence is unavailable/);
+  f.write([...task(turn, "first"), valid, complete(turn, "report")]);
+  const linked = join(f.sessionsDir, "report-link.jsonl"); symlinkSync(f.file, linked);
+  assert.throws(() => identity.readNativeReport(linked, { sessionsDir: f.sessionsDir }, expected()), /report evidence is unavailable/);
+});

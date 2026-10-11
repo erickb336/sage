@@ -81,7 +81,7 @@ export function readInitialSession(transcriptPath, options) {
 
 /** The caller supplies immutable assignment evidence and a verified child transcript path.
  * This checks delivery, not report acceptance or authority to modify the journal. */
-export function readAssignmentTurn(transcriptPath, options, expected) {
+function assignmentFromRecords(records, expected) {
   const unavailable = () => { throw Error("Codex assignment evidence is unavailable"); };
   try {
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -93,13 +93,13 @@ export function readAssignmentTurn(transcriptPath, options, expected) {
       || !["path", "author"].every(key => typeof expected[key] === "string" && taskPath.test(expected[key]))
       || expected.path.slice(0, expected.path.lastIndexOf("/")) !== expected.author
       || typeof expected.taskHash !== "string" || !/^[0-9a-f]{64}$/.test(expected.taskHash)) unavailable();
-    const [header, ...rows] = readSessionRecords(transcriptPath, options, Infinity);
+    const [header, ...rows] = records;
     const wanted = { id: expected.child, session_id: expected.session, parent_thread_id: expected.parent,
       agent_path: expected.path, cli_version: "0.160.0" };
     if (Object.entries(wanted).some(([key, value]) => header.payload[key] !== value)) unavailable();
     let turn, context;
     const turns = new Set(), matches = [];
-    for (const row of rows) {
+    for (const [index, row] of rows.entries()) {
       if (!record(row) || typeof row.type !== "string" || !record(row.payload)) unavailable();
       const payload = row.payload;
       if (row.type === "session_meta") unavailable();
@@ -121,9 +121,56 @@ export function readAssignmentTurn(transcriptPath, options, expected) {
       if (taskHash !== expected.taskHash) continue;
       if (payload.author !== expected.author || payload.recipient !== expected.path
         || typeof payload.id !== "string" || !/^amsg_[A-Za-z0-9_-]{1,256}$/.test(payload.id)) unavailable();
-      matches.push({ session: expected.session, child: expected.child, turn, message: payload.id, taskHash });
+      matches.push({ session: expected.session, child: expected.child, turn, message: payload.id, taskHash, position: index + 1 });
     }
     if (matches.length !== 1 || matches[0].turn !== expected.turn) unavailable();
     return matches[0];
+  } catch { unavailable(); }
+}
+
+
+export function readAssignmentTurn(transcriptPath, options, expected) {
+  try {
+    const { position, ...evidence } = assignmentFromRecords(readSessionRecords(transcriptPath, options, Infinity), expected);
+    return evidence;
+  }
+  catch { throw Error("Codex assignment evidence is unavailable"); }
+}
+
+/** Read one completed turn from the same protected snapshot as its assigned task.
+ * This verifies report provenance, not its claims or a review verdict. */
+export function readNativeReport(transcriptPath, options, expected) {
+  const unavailable = () => { throw Error("Codex report evidence is unavailable"); };
+  try {
+    const rows = readSessionRecords(transcriptPath, options, Infinity);
+    const { position, ...assigned } = assignmentFromRecords(rows, expected);
+    let turn, final, completed;
+    for (const [index, row] of rows.entries()) {
+      if (index === 0) continue;
+      const payload = row.payload;
+      if (row.type === "event_msg" && payload.type === "task_started") turn = payload.turn_id;
+      if (turn !== expected.turn) continue;
+      if (row.type === "response_item" && payload.type === "message" && payload.role === "assistant") {
+        if (completed || index <= position) unavailable();
+        if (payload.phase !== undefined && payload.phase !== "final_answer") continue;
+        const retained = row.metadata?.retained_source;
+        if (typeof payload.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(payload.id)
+          || row.metadata?.client_authored !== false || retained?.complete !== true
+          || retained.id?.role !== "assistant" || retained.id?.turn_id !== turn || retained.id?.message_id !== payload.id
+          || payload.internal_chat_message_metadata_passthrough?.turn_id !== turn
+          || !Array.isArray(payload.content) || !payload.content.length
+          || payload.content.some(part => !record(part) || part.type !== "output_text" || typeof part.text !== "string")) unavailable();
+        const text = payload.content.map(part => part.text).join("");
+        if (!text.trim() || Buffer.byteLength(text, "utf8") > 32 * 1024 || text.includes("\0")
+          || Buffer.from(text, "utf8").toString("utf8") !== text) unavailable();
+        final = { reportMessage: payload.id, reportHash: createHash("sha256").update(text).digest("hex"), text };
+      }
+      if (row.type === "event_msg" && payload.type === "task_complete") {
+        if (completed || payload.turn_id !== turn || !final || payload.last_agent_message !== final.text) unavailable();
+        completed = final;
+      }
+    }
+    if (!completed) unavailable();
+    return { ...assigned, ...completed };
   } catch { unavailable(); }
 }

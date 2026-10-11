@@ -2,7 +2,7 @@ import { McpServer, serveStdio, z } from "./mcp-sdk.mjs";
 
 /** Keep visible tools off the hidden hook server so native children start their hooks eagerly. */
 export function createPreparationServer(options = {}) {
-  const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot });
+  const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot, sessionsDir: options.sessionsDir });
   const server = new McpServer({ name: "sage-preparation", version: "0.1.0" });
   server.registerTool("sage_prepare_task", {
     description: "Save a complete Sage task brief before spawning a named agent. Preparation does not start the agent or reserve capacity. Copy the returned name, message, and fork_turns unchanged into the later spawn.",
@@ -18,6 +18,18 @@ export function createPreparationServer(options = {}) {
       return { content: [{ type: "text", text: JSON.stringify(output) }] };
     } catch {
       return { isError: true, content: [{ type: "text", text: "Sage could not prepare this task. Check the active role, task brief, and unique agent name." }] };
+    }
+  });
+  server.registerTool("sage_read_report", {
+    description: "Read the validated final report for your completed named child. This does not mark a task successful or record a review verdict.",
+    inputSchema: z.object({ name: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { readChildReport } = await import("./report-intake.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(readChildReport(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not read this report. Check the child name, completed assignment, and report fields." }] };
     }
   });
   return server;
