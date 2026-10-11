@@ -70,16 +70,16 @@ test("T216: setup without --sources lists the standard Claude and Codex roots of
   const { dir, env, config } = scratch(t);
   const made = await board(CLI, ["--setup"], env);
   assert.equal(made.status, 0, made.stderr);
-  assert.equal(made.stdout, `Board config created: ${config}. The phone sign-in password stays in this private file; set your own with board --set-password.\n`);
+  assert.equal(made.stdout, `Board config created: ${config}. Access from outside this Mac stays off until you set a board password: run in a terminal node ${CLI} board --set-password\n`);
   const written = JSON.parse(readFileSync(config, "utf8"));
   assert.deepEqual(written.sources, [
     { id: "claude", label: "Claude", provider: "claude", path: join(dir, "home", ".claude", "sage") },
     { id: "codex", label: "Codex", provider: "codex", path: join(dir, "home", ".codex", "sage") },
   ]);
   assert.equal(written.port, 43123);
-  assert.match(written.secret, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(written.secret, undefined, "T229: setup writes no random secret");
+  assert.equal(written.password, undefined, "and no password: only the owner sets it, in a terminal");
   assert.equal(statSync(config).mode & 0o777, 0o600);
-  assert.ok(!made.stdout.includes(written.secret));
   // The provider variables move the roots, as they move each provider's state tool.
   const moved = { ...env, CLAUDE_CONFIG_DIR: join(dir, "claude-config"), CODEX_HOME: join(dir, "codex-home") };
   const other = join(dir, "other", "board.json");
@@ -95,7 +95,7 @@ test("T216: setup without --sources lists the standard Claude and Codex roots of
   assert.deepEqual(JSON.parse(readFileSync(explicit, "utf8")).sources, [{ id: "one", path: join(dir, "one") }]);
   const again = await board(CLI, ["--setup"], env);
   assert.equal(again.status, 1);
-  assert.equal(JSON.parse(readFileSync(config, "utf8")).secret, written.secret);
+  assert.deepEqual(JSON.parse(readFileSync(config, "utf8")), written);
 });
 
 test("T216: ensure sets the board up, starts one detached server, and leaves a running server as it is", async (t) => {
@@ -105,8 +105,9 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
     const first = await board(CLI, ["--ensure", "--port", String(port)], env);
     assert.equal(first.status, 0, first.stderr);
     // F-T216-5: with no allowedHosts the line gives no phone steps.
-    assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}.\n`);
-    const { secret, sources } = JSON.parse(readFileSync(config, "utf8"));
+    assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}. To turn it on, add the host name of your private HTTPS tunnel to allowedHosts in that file.\n`);
+    const { secret, password, sources } = JSON.parse(readFileSync(config, "utf8"));
+    assert.deepEqual([secret, password], [undefined, undefined], "T229: ensure writes no random secret");
     assert.deepEqual(sources.map((source) => source.id), ["claude", "codex"]);
     const page = await get(port);
     assert.equal(page.status, 200);
@@ -118,13 +119,12 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
     assert.equal(statSync(log).mode & 0o777, 0o600);
     const second = await board(CLI, ["--ensure"], env);
     assert.equal(second.status, 0, second.stderr);
-    assert.equal(second.stdout, `Sage board is running: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}.\n`);
+    assert.equal(second.stdout, `Sage board is running: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}. To turn it on, add the host name of your private HTTPS tunnel to allowedHosts in that file.\n`);
     assert.equal(readFileSync(pidFile, "utf8"), pid, "no second server started");
     // The config exists, so a setup setting is refused rather than ignored.
     const settings = await board(CLI, ["--ensure", "--port", String(port)], env);
     assert.equal(settings.status, 1);
     assert.match(settings.stderr, /the board config exists/);
-    for (const text of [first.stdout, first.stderr, second.stdout, second.stderr, settings.stderr, readFileSync(log, "utf8")]) assert.ok(!text.includes(secret));
   } finally { await stop(dir, port); }
 });
 
@@ -189,6 +189,31 @@ const shut = async (server) => { server.closeAllConnections?.(); await new Promi
 const olderBoard = () => createHttpServer((request, response) => {
   response.writeHead(401, { "Content-Security-Policy": "default-src 'none'", "Cross-Origin-Resource-Policy": "same-origin", "WWW-Authenticate": 'Basic realm="Sage board", charset="UTF-8"' });
   response.end("Sign in to the Sage board.\n");
+});
+
+test("F-T229-32: after an upgrade, ensure asks for a restart of a board that started before the new code, not that phone access is off", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const code = Math.max(...["cli.mjs", "server.mjs"].map((name) => statSync(join(dirname(CLI), name)).mtimeMs));
+  // A board server of the older code: it names this config and started after the config, but before the code that runs ensure.
+  let started = Math.floor(code - 10_000);
+  const older = createHttpServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "default-src 'none'", "Cross-Origin-Resource-Policy": "same-origin", "X-Sage-Board": `id=${configId(config)}; pid=424242; started=${started}` });
+    response.end();
+  });
+  const port = await listen(older);
+  try {
+    // An old-style config: a random secret and a phone host, as setup wrote it before T229. Sample values only.
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(config, JSON.stringify({ version: 1, sources: [{ id: "sample", path: join(dir, "logbooks") }], port, allowedHosts: ["sample.tailnet.ts.net"], secret: "sample-old-secret-sample-old-secret-sample-old" }));
+    const written = new Date(code - 20_000); utimesSync(config, written, written);
+    const found = await board(CLI, ["--ensure"], env);
+    assert.equal(found.status, 0, found.stderr);
+    assert.equal(found.stdout, `Sage board is running: http://127.0.0.1:${port}/, but the board command was updated after it started. Restart needed: run node ${CLI} board --stop then ask for the board again.\n`);
+    // After the restart, a server of this code ignores the old secret: the line says that phone access is off, and asks no restart again.
+    started = Date.now();
+    const restarted = await board(CLI, ["--ensure"], env);
+    assert.equal(restarted.stdout, `Sage board is running: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off until you set a board password: run in a terminal on this Mac: node ${CLI} board --set-password\n`);
+  } finally { await shut(older); }
 });
 
 const olderLine = (port) => `an older board server runs on 127.0.0.1:${port}. Stop it where it started: press Ctrl+C in its terminal, or for the login service run launchctl bootout gui/$(id -u)/dev.sage.board. Then ask for the board again.`;
@@ -301,7 +326,7 @@ test("F-T216-13: the server writes board.pid as a new file, so a hard link at th
   assert.equal(readFileSync(other, "utf8"), "sample text that stays\n");
 });
 
-test("T216: with allowedHosts, the line gives the phone steps and a set-password command that runs as printed (F-T216-5)", async (t) => {
+test("T216, T229: with allowedHosts and no password, phone access is off until the owner sets a password in a terminal", async (t) => {
   const { dir, env, config } = scratch(t);
   const port = await freePort();
   try {
@@ -309,18 +334,36 @@ test("T216: with allowedHosts, the line gives the phone steps and a set-password
     const first = await board(PLUGIN_CLI, ["--ensure"], env);
     assert.equal(first.status, 0, first.stderr);
     const command = `node ${PLUGIN_CLI} board --set-password`;
-    assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. On the phone, open https://sample.tailnet.ts.net/ and sign in as sage with the "secret" value in ${config}. To set your own password, run in a terminal: ${command}\n`);
-    // Run the printed command as its words (no shell): it asks twice on standard input.
+    assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off until you set a board password: run in a terminal on this Mac: ${command}\n`);
+    // Through a tunnel, the board says that access is off.
+    const tunnel = await new Promise((done) => {
+      const req = request({ host: "127.0.0.1", port, path: "/", agent: false, headers: { Host: `127.0.0.1:${port}`, "X-Forwarded-For": "203.0.113.9" } }, (response) => {
+        let body = ""; response.setEncoding("utf8"); response.on("data", (chunk) => { body += chunk; }); response.on("end", () => done({ status: response.statusCode, body }));
+      });
+      req.end();
+    });
+    // The remote text is fixed: no plugin path and no user name (F-T229-7). The exact command stays in the output above.
+    assert.deepEqual(tunnel, { status: 403, body: "Access from outside this Mac is off until the owner sets a board password on the Mac.\n" });
+    // The printed command as its words (no shell). From a pipe, as an agent would run it, it refuses.
     const [node, ...args] = command.split(" ");
     assert.equal(node, "node");
-    const set = spawn(process.execPath, args, { env, stdio: ["pipe", "pipe", "pipe"] });
-    set.stdin.end("sample board pass 01\nsample board pass 01\n");
-    let out = ""; set.stdout.on("data", (chunk) => { out += chunk; });
-    assert.equal(await new Promise((done) => set.once("close", done)), 0);
-    assert.match(out, /^Board password set in /);
+    const before = readFileSync(config, "utf8");
+    const piped = spawn(process.execPath, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    piped.stdin.end("sample board pass 01\nsample board pass 01\n");
+    let err = ""; piped.stderr.on("data", (chunk) => { err += chunk; });
+    assert.equal(await new Promise((done) => piped.once("close", done)), 1);
+    assert.equal(err, "sage board: board --set-password needs a terminal: open Terminal on this Mac and run the command there yourself. It does not read a password from a pipe, a file or an agent.\n");
+    assert.equal(readFileSync(config, "utf8"), before, "the config did not change");
+    // In a terminal (here an injected terminal check: a test has no terminal) it asks twice and sets the password.
+    const lines = [];
+    await runBoardCli(["board", "--set-password", "--config", config], { output: (line) => lines.push(line), input: typed(SAMPLE, SAMPLE), terminal: true, prompt: quiet });
+    assert.deepEqual(lines, [`Board password set in ${config}. A board server that is already running keeps the old sign-in until it starts again.`]);
     assert.equal(readBoardConfig(config).password.scheme, "scrypt");
     const after = await board(PLUGIN_CLI, ["--ensure"], env);
     assert.match(after.stdout, /changed after it started\. Restart needed: run node \S+plugins\/sage\/board\/cli\.mjs board --stop then ask for the board again\.\n$/);
+    await stop(dir, port);
+    const again = await board(PLUGIN_CLI, ["--ensure"], env);
+    assert.equal(again.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. On the phone, open https://sample.tailnet.ts.net/ and sign in as sage with your board password. To set a new password, run in a terminal: ${command}\n`);
   } finally { await stop(dir, port); }
 });
 
@@ -333,8 +376,18 @@ test("T216: the board guide says that the Mac needs no sign-in, and gives ensure
   // F-T216-18: the login service runs --serve too, so its board writes board.pid.
   assert.doesNotMatch(guide, /login service started has no `board\.pid`/);
   assert.match(guide, /The login service runs the same `--serve` command, so its board writes `board\.pid` too/);
-  // F-T216-15: a plain TCP forward has no proxy header, so the guide names it as unsupported.
-  assert.match(guide, /Only this HTTPS form of `tailscale serve` is supported\. Do not forward the port as plain TCP \(`tailscale serve --tcp`, `ssh -L`, `socat`/);
+  // F-T216-15, T229: a raw TCP forward has no proxy header, so the guide says plainly that it bypasses the sign-in.
+  assert.match(guide, /A raw TCP forward is not supported: it bypasses the sign-in\. Such a forward \(`ssh -L`, `socat`, `tailscale serve --tcp`/);
+  assert.match(guide, /An SSH tunnel is a raw TCP forward of this kind\./);
+  // T229: a private HTTPS tunnel of any vendor; tailscale serve is one example, and no vendor header is a proxy sign.
+  assert.match(guide, /only through a private HTTPS tunnel that forwards to `http:\/\/127\.0\.0\.1:43123` and adds an `X-Forwarded-For` header\. The board does not depend on one tunnel tool\. One example is Tailscale Serve/);
+  assert.doesNotMatch(guide, /Tailscale-\*|"secret" value|Until you set one, the password is the `secret`/);
+  // F-T229-8: the guide does not claim that the terminal check or the hook stops every agent; it names the sandbox.
+  assert.doesNotMatch(guide, /so a pipe, a script or an agent cannot set the password/);
+  assert.match(guide, /The terminal check accepts any pseudo-terminal, so it alone does not stop an agent\./);
+  assert.match(guide, /An agent runs as your own user, so a script that builds the command or the path while it runs can still pass the hook\. Full protection needs the sandbox \(tasks T97 to T99\)\./);
+  // F-T229-7: the remote 403 text names no path.
+  assert.match(guide, /The text names no path; the exact command is only in the output of `board --ensure` on the Mac\./);
   // F-T216-16: an older board is stopped where it started, not with --stop.
   assert.match(guide, /`--stop` sends it no signal, whatever `board\.pid` holds/);
 });
@@ -410,19 +463,22 @@ const signIn = (port, host, user, password) => new Promise((done) => {
   req.end();
 });
 
-test("T216: --set-password keeps only a salted scrypt hash, replaces the secret, and the server checks the sign-in against it", async (t) => {
+test("T216, T229: --set-password keeps only a salted scrypt hash and drops an old secret; the old secret never signs in", async (t) => {
   const { dir, config } = scratch(t);
   const tailnet = "sample.tailnet.ts.net", port = await freePort();
-  createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port, allowedHosts: [tailnet] });
-  const { secret } = readBoardConfig(config);
+  // A config from before T229, with its random secret: it still loads.
+  const secret = "sampleOldSecretSampleOldSecretSampleOldSecr";
+  mkdirSync(dirname(config), { recursive: true });
+  writeFileSync(config, `${JSON.stringify({ version: 1, sources: [{ id: "sample", path: join(dir, "logbooks") }], port, allowedHosts: [tailnet], secret })}\n`, { mode: 0o600 });
   let server = createBoardServer(readBoardConfig(config));
   try {
     await server.start();
-    assert.equal(await signIn(port, tailnet, "sage", secret), 200, "a config with the old secret still signs in");
-    assert.equal(await signIn(port, tailnet, "sage", SAMPLE), 401);
+    assert.equal(await signIn(port, tailnet, "sage", secret), 403, "the old secret no longer signs in: there is no password yet");
+    assert.equal(await signIn(port, tailnet, "sage", SAMPLE), 403);
+    assert.equal(await signIn(port, `127.0.0.1:${port}`, "sage", undefined), 200, "the Mac needs no sign-in");
   } finally { await server.close(); }
   const lines = [];
-  await runBoardCli(["board", "--set-password", "--config", config], { output: (line) => lines.push(line), input: typed(SAMPLE, SAMPLE), prompt: quiet });
+  await runBoardCli(["board", "--set-password", "--config", config], { output: (line) => lines.push(line), input: typed(SAMPLE, SAMPLE), terminal: true, prompt: quiet });
   assert.deepEqual(lines, [`Board password set in ${config}. A board server that is already running keeps the old sign-in until it starts again.`]);
   const text = readFileSync(config, "utf8"), saved = JSON.parse(text);
   assert.ok(!text.includes(SAMPLE), "the password itself is not in the file");
@@ -444,7 +500,7 @@ test("T216: --set-password keeps only a salted scrypt hash, replaces the secret,
     assert.equal(await signIn(port, `127.0.0.1:${port}`, "sage", undefined), 200, "on the Mac no sign-in is needed");
   } finally { await server.close(); }
   // A second password replaces the first.
-  await runBoardCli(["board", "--set-password", "--config", config], { output: () => {}, input: typed(OTHER, OTHER), prompt: quiet });
+  await runBoardCli(["board", "--set-password", "--config", config], { output: () => {}, input: typed(OTHER, OTHER), terminal: true, prompt: quiet });
   assert.notEqual(JSON.parse(readFileSync(config, "utf8")).password.salt, saved.password.salt);
 });
 
@@ -453,11 +509,17 @@ test("T216: --set-password refuses an empty, short or mismatched entry and leave
   createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }] });
   const before = readFileSync(config, "utf8");
   for (const [entries, reason] of [[[], /no password entered/], [[""], /no password entered/], [["short pass1", "short pass1"], /12 characters or more/], [[SAMPLE, OTHER], /the two entries differ/], [[SAMPLE], /the two entries differ/]]) {
-    await assert.rejects(runBoardCli(["board", "--set-password", "--config", config], { output: () => {}, input: typed(...entries), prompt: quiet }), reason);
+    await assert.rejects(runBoardCli(["board", "--set-password", "--config", config], { output: () => {}, input: typed(...entries), terminal: true, prompt: quiet }), reason);
     assert.equal(readFileSync(config, "utf8"), before);
   }
-  await assert.rejects(runBoardCli(["board", "--set-password", SAMPLE, "--config", config], { output: () => {}, input: typed(SAMPLE, SAMPLE), prompt: quiet }), /set-password takes only --config/);
+  await assert.rejects(runBoardCli(["board", "--set-password", SAMPLE, "--config", config], { output: () => {}, input: typed(SAMPLE, SAMPLE), terminal: true, prompt: quiet }), /set-password takes only --config/);
   assert.equal(readFileSync(config, "utf8"), before, "a password given as an argument is refused, never saved");
+  // T229: an input that is not a terminal (a pipe, a file, an agent's command) is refused before any prompt.
+  const asked = [];
+  const prompt = new Writable({ write(chunk, _encoding, done) { asked.push(String(chunk)); done(); } });
+  await assert.rejects(runBoardCli(["board", "--set-password", "--config", config], { output: () => {}, input: typed(SAMPLE, SAMPLE), prompt }), { message: "board --set-password needs a terminal: open Terminal on this Mac and run the command there yourself. It does not read a password from a pipe, a file or an agent." });
+  assert.deepEqual(asked, [], "it asks nothing");
+  assert.equal(readFileSync(config, "utf8"), before);
 });
 
 test("T216: the plugin carries the board command that the hook's note names, and it runs outside the checkout layout", async (t) => {
