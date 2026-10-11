@@ -71,8 +71,19 @@ export async function checkPassword(password, record) {
   return validPasswordRecord(record) && timingSafeEqual(await derive(password, record), Buffer.from(record.hash, "base64url"));
 }
 
-/** The caller supplies a secret made from at least 32 random bytes (length cannot establish entropy), or a password record from hashPassword. */
-export function createBoardServer({ sources, secret, password, port = 43123, allowedHosts = [] } = {}) {
+// After a wrong password the next check waits this long; with one check at a time, a guesser gets about one try a second.
+const WRONG_PASSWORD_DELAY = 1000;
+// Headers that a proxy adds. tailscale serve connects from 127.0.0.1, keeps the client's Host and always adds
+// X-Forwarded-For, so a request that has any of them came through a proxy, not from the Mac itself.
+const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-") || name.startsWith("tailscale-");
+
+/**
+ * The caller supplies a secret made from at least 32 random bytes (length cannot establish entropy), or a password record
+ * from hashPassword. With an id (a non-secret name of the caller's config), a response on the Mac carries the
+ * X-Sage-Board header: the id, this process's pid and the time the listener started, so the board command can tell
+ * which board answers on the port.
+ */
+export function createBoardServer({ sources, secret, password, port = 43123, allowedHosts = [], id } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (password !== undefined ? !validPasswordRecord(password) || secret !== undefined : typeof secret !== "string" || !/^[!-~]{32,1024}$/.test(secret)) throw new TypeError("board needs a secret of 32 to 1024 printable ASCII bytes, or a valid password record instead");
   if (!Array.isArray(sources) || !sources.length || sources.length > 32) throw new TypeError("board needs 1 to 32 explicit sources");
@@ -84,14 +95,18 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
     return Object.freeze({ id: source.id, path: source.path, ...(own(source, "label") ? { label: source.label } : {}), ...(own(source, "provider") ? { provider: source.provider } : {}) });
   });
   if (!Array.isArray(allowedHosts) || allowedHosts.length > 32) throw new TypeError("invalid allowed board hosts");
+  if (id !== undefined && (typeof id !== "string" || !/^[a-f0-9]{16,64}$/.test(id))) throw new TypeError("the board id must be 16 to 64 lowercase hex characters");
   const local = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
   const hosts = new Set([...local, ...Array.from(allowedHosts, authority)]);
   const origins = new Map([...hosts].map(host => [host, new URL(`${local.has(host) ? "http" : "https"}://${host}`).origin]));
   const expected = digest(`sage:${secret ?? randomBytes(32).toString("base64url")}`);
   let remembered = null; // the digest of the last sign-in that passed the scrypt check, so a page's next requests cost no scrypt
+  let checking = false; // one password check at a time: scrypt is slow on purpose, and the delay after a wrong one counts too
+  let boardHeader = null;
   const watchers = new Map(), watchErrors = new Map(), clients = new Set();
-  let model, lastGood, revision = 0, refreshTimer, boundaryTimer, startPromise, closePromise, closed = false;
+  let model, lastGood, revision = 0, refreshTimer, boundaryTimer, settleTimer, startPromise, closePromise, closed = false;
 
+  /** true, false, or "busy" while another password check runs. */
   async function authenticated(request) {
     const value = oneHeader(request, "authorization");
     if (typeof value !== "string" || value.length > 2048) return false;
@@ -103,8 +118,20 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
     const seen = digest(decoded);
     if (remembered && timingSafeEqual(seen, remembered)) return true;
     const text = decoded.toString("utf8"), colon = text.indexOf(":");
-    if (colon === -1 || text.slice(0, colon) !== "sage" || !await checkPassword(text.slice(colon + 1), password).catch(() => false)) return false;
-    remembered = seen;
+    if (colon === -1 || text.slice(0, colon) !== "sage") return false;
+    if (checking) return "busy";
+    checking = true;
+    try {
+      if (await checkPassword(text.slice(colon + 1), password).catch(() => false)) { remembered = seen; return true; }
+      await new Promise(wake => setTimeout(wake, WRONG_PASSWORD_DELAY));
+      return false;
+    } finally { checking = false; }
+  }
+
+  /** On the Mac itself: a loopback peer, a loopback Host, and no header that a proxy adds. */
+  function onMac(request) {
+    if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress) || !local.has(oneHeader(request, "host").toLowerCase())) return false;
+    for (let i = 0; i < request.rawHeaders.length; i += 2) if (forwarded(request.rawHeaders[i].toLowerCase())) return false;
     return true;
   }
 
@@ -177,7 +204,8 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
   }
 
   function reconcileWatchers() {
-    const plans = watchPlans();
+    const plans = watchPlans(), first = revision === 0;
+    let added = false;
     for (const [key, item] of watchers) if (!plans.has(key) || plans.get(key).identity !== item.plan.identity) { item.watcher.close(); watchers.delete(key); }
     for (const [key] of watchErrors) if (!plans.has(key)) watchErrors.delete(key);
     for (const [key, plan] of plans) {
@@ -194,9 +222,12 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
           watchErrors.set(key, { source: "board", message: "File watching is unavailable; the displayed board may be stale." });
           schedule();
         });
-        watchers.set(key, item);
+        watchers.set(key, item); added = true;
       } catch { watchErrors.set(key, { source: "board", message: "File watching is unavailable; the displayed board may be stale." }); }
     }
+    // A new watcher misses the changes made while it starts, for example the files of a logbook just created. One more
+    // read, once it has settled, sees them. This is one read per new watcher, not polling.
+    if (added && !first) { clearTimeout(settleTimer); settleTimer = setTimeout(schedule, 250); settleTimer.unref(); }
   }
 
   function refresh() {
@@ -205,14 +236,21 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
     let next;
     try {
       reconcileWatchers();
-      next = buildBoardModel(readBoardSources(configured));
+      // A root that does not exist is not set up yet (an owner may use only one provider): a quiet note, not a failure.
+      const read = readBoardSources(configured), notSetUp = [];
+      for (const [index, source] of read.entries()) {
+        if (lstatSync(configured[index].path, { throwIfNoEntry: false })) continue;
+        source.diagnostics = source.diagnostics.filter(message => message !== "ENOENT");
+        notSetUp.push(source.label);
+      }
+      next = { ...buildBoardModel(read), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
       // Validate the complete HTML before replacing a good snapshot.
       const preview = renderBoardHtml(next, { snapshot: false, live: true });
       if (Buffer.byteLength(preview) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
     } catch { next = { ...buildBoardModel([]), diagnostics: unavailable }; }
     if (!next.diagnostics.length) { lastGood = next; model = { ...next, stale: false }; }
-    else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics };
+    else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp };
     revision++;
     for (const client of clients) publish(client);
     // A clock boundary changes the seven-day column; this never polls files on an interval.
@@ -227,10 +265,14 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
     securityHeaders(response);
     const fail = (status, text) => { response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" }); response.end(request.method === "HEAD" ? undefined : `${text}\n`); };
     if (!browserBoundary(request)) return fail(403, "This request is not permitted.");
-    // The owner's decision (T216): on the Mac itself the board needs no sign-in. A request through an allowed host (the
-    // Tailscale name that tailscale serve forwards to the loopback listener) still signs in.
-    const onMac = local.has(oneHeader(request, "host").toLowerCase()) && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress);
-    if (!onMac && !await authenticated(request)) { response.setHeader("WWW-Authenticate", 'Basic realm="Sage board", charset="UTF-8"'); return fail(401, "Sign in to the Sage board."); }
+    // The owner's decision (T216): on the Mac itself the board needs no sign-in. Every other request signs in: also one
+    // that tailscale serve forwards, which reaches the loopback listener from 127.0.0.1, maybe with a loopback Host.
+    if (onMac(request)) { if (boardHeader) response.setHeader("X-Sage-Board", boardHeader); }
+    else {
+      const signedIn = await authenticated(request);
+      if (signedIn === "busy") { response.setHeader("Retry-After", "1"); return fail(429, "Another sign-in is being checked. Try again in a second."); }
+      if (!signedIn) { response.setHeader("WWW-Authenticate", 'Basic realm="Sage board", charset="UTF-8"'); return fail(401, "Sign in to the Sage board."); }
+    }
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
     const selected = route(request.url);
     if (!selected || selected.task && !model.tasks.some(task => task.key === selected.task)) return fail(404, "This board page does not exist.");
@@ -262,11 +304,20 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
         refresh();
         const failed = error => {
           for (const { watcher } of watchers.values()) watcher.close(); watchers.clear();
-          clearTimeout(refreshTimer); clearTimeout(boundaryTimer);
+          clearTimeout(refreshTimer); clearTimeout(boundaryTimer); clearTimeout(settleTimer);
           reject(Object.assign(new Error(error.code === "EADDRINUSE" ? `Board port ${port} is already in use.` : "The board listener could not start."), { code: error.code }));
         };
         server.once("error", failed);
-        server.listen(port, "127.0.0.1", () => { server.off("error", failed); accept(server.address()); });
+        // The first watchers settle before the listener opens: the second read sees what changed while they started.
+        settleTimer = setTimeout(() => {
+          if (closed) return failed({});
+          refresh();
+          server.listen(port, "127.0.0.1", () => {
+            server.off("error", failed);
+            if (id) boardHeader = `id=${id}; pid=${process.pid}; started=${Date.now()}`;
+            accept(server.address());
+          });
+        }, 250);
       });
       return startPromise;
     },
@@ -275,7 +326,7 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
       if (closePromise) return closePromise;
       closed = true;
       for (const { watcher } of watchers.values()) watcher.close(); watchers.clear();
-      clearTimeout(refreshTimer); clearTimeout(boundaryTimer);
+      clearTimeout(refreshTimer); clearTimeout(boundaryTimer); // a pending start's settle timer ends that start
       for (const client of clients) { client.response.destroy(); removeClient(client); }
       closePromise = (async () => {
         if (startPromise) await startPromise.catch(() => {});

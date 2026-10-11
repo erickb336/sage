@@ -61,6 +61,35 @@ test("provider packages are complete outside the checkout, with no opposite adap
   }
 });
 
+test("T216: each plugin's board is a cross-provider reader: it imports only Node built-ins and the bundled core, and installs from the plugin", async (t) => {
+  for (const provider of ["claude", "codex"]) {
+    const { dir, plugin } = isolated(t, provider);
+    const files = filesUnder(join(plugin, "board"));
+    assert.deepEqual(files.map((file) => relative(join(plugin, "board"), file)).sort(), ["cli.mjs", "install.mjs", "server.mjs"]);
+    const { parse } = await import("es-module-lexer/minimal");
+    for (const file of files) {
+      const [imports] = parse(readFileSync(file, "utf8"));
+      for (const { n: name } of imports.filter((item) => item.d !== -2)) { // -2 is import.meta, not an import
+        const allowed = name?.startsWith("node:") || name === "../core/index.mjs" || /^\.\/(?:cli|install|server)\.mjs$/.test(name ?? "");
+        assert.ok(allowed, `${provider} ${relative(plugin, file)} imports ${name}`);
+      }
+    }
+    // The install copies the plugin's board and core, so the stable copy runs without the checkout or the plugin.
+    const env = { ...process.env, HOME: join(dir, "home") };
+    delete env.SAGE_HOME; delete env.CODEX_HOME;
+    const config = join(dir, "board.json"), installDir = join(dir, "stable");
+    const run = (cli, ...args) => spawnSync(process.execPath, [cli, "board", ...args, "--config", config], { encoding: "utf8", env });
+    assert.equal(run(join(plugin, "board/cli.mjs"), "--setup").status, 0);
+    const installed = run(join(plugin, "board/cli.mjs"), "--install", "--install-dir", installDir);
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.equal(installed.stdout, `Installed board command: ${join(installDir, "packages", "board", "cli.mjs")}\n`);
+    rmSync(plugin, { recursive: true, force: true });
+    const status = run(join(installDir, "packages", "board", "cli.mjs"), "all", "--status");
+    assert.equal(status.status, 0, status.stderr);
+    assert.match(status.stdout, /^Tasks: none recorded/);
+  }
+});
+
 test("core instances isolate provider defaults and validation without changing process environment", (t) => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-core-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

@@ -4,14 +4,14 @@ import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { createBoardConfig, readBoardConfig, runBoardCli } from "../packages/sage-board/cli.mjs";
+import { configId, createBoardConfig, readBoardConfig, runBoardCli } from "../packages/sage-board/cli.mjs";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
 
 const CLI = fileURLToPath(new URL("../packages/sage-board/cli.mjs", import.meta.url));
@@ -22,6 +22,7 @@ function scratch(t) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const env = { ...process.env, HOME: join(dir, "home") };
   delete env.CODEX_HOME; // test-env.mjs removes CLAUDE_*; the Codex root must come from HOME too
+  delete env.SAGE_HOME; // and SAGE_HOME, when it is set, replaces both roots
   return { dir, env, config: join(dir, "home", ".config", "sage-board", "board.json") };
 }
 
@@ -48,7 +49,7 @@ async function freePort() {
 const get = (port) => new Promise((done) => {
   const req = request({ host: "127.0.0.1", port, path: "/", agent: false, headers: { Host: `127.0.0.1:${port}` } }, (response) => {
     let body = ""; response.setEncoding("utf8"); response.on("data", (chunk) => { body += chunk; });
-    response.on("end", () => done({ status: response.statusCode, body }));
+    response.on("end", () => done({ status: response.statusCode, body, board: response.headers["x-sage-board"] }));
   });
   req.once("error", (error) => done({ error: error.code }));
   req.end();
@@ -84,6 +85,10 @@ test("T216: setup without --sources lists the standard Claude and Codex roots of
   const other = join(dir, "other", "board.json");
   assert.equal((await board(CLI, ["--setup", "--config", other], moved)).status, 0);
   assert.deepEqual(JSON.parse(readFileSync(other, "utf8")).sources.map((source) => source.path), [join(dir, "claude-config", "sage"), join(dir, "codex-home", "sage")]);
+  // F-T216-4: SAGE_HOME is the one root of every provider's state tool, so it is the one standard root too.
+  const shared = join(dir, "shared", "board.json");
+  assert.equal((await board(CLI, ["--setup", "--config", shared], { ...moved, SAGE_HOME: join(dir, "sage-home") })).status, 0);
+  assert.deepEqual(JSON.parse(readFileSync(shared, "utf8")).sources, [{ id: "sage", label: "Sage", path: join(dir, "sage-home") }]);
   // --sources still works, and a second setup never replaces a config.
   const explicit = join(dir, "explicit", "board.json");
   assert.equal((await board(CLI, ["--setup", "--config", explicit, "--sources", JSON.stringify([{ id: "one", path: join(dir, "one") }])], env)).status, 0);
@@ -99,7 +104,8 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
   try {
     const first = await board(CLI, ["--ensure", "--port", String(port)], env);
     assert.equal(first.status, 0, first.stderr);
-    assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. On the phone, sign in as sage with the "secret" value in ${config}, or set your own password in a terminal with board --set-password.\n`);
+    // F-T216-5: with no allowedHosts the line gives no phone steps.
+    assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}.\n`);
     const { secret, sources } = JSON.parse(readFileSync(config, "utf8"));
     assert.deepEqual(sources.map((source) => source.id), ["claude", "codex"]);
     const page = await get(port);
@@ -108,10 +114,11 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
     const pidFile = join(dir, "home", ".config", "sage-board", "board.pid"), log = join(dir, "home", ".config", "sage-board", "board.log");
     const pid = readFileSync(pidFile, "utf8");
     assert.match(pid, /^[1-9]\d*\n$/);
+    assert.match(page.board, new RegExp(`^id=${configId(config)}; pid=${pid.trim()}; started=\\d+$`), "the server names this config and its own pid");
     assert.equal(statSync(log).mode & 0o777, 0o600);
     const second = await board(CLI, ["--ensure"], env);
     assert.equal(second.status, 0, second.stderr);
-    assert.equal(second.stdout, `Sage board is running: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. On the phone, sign in as sage with the "secret" value in ${config}, or set your own password in a terminal with board --set-password.\n`);
+    assert.equal(second.stdout, `Sage board is running: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}.\n`);
     assert.equal(readFileSync(pidFile, "utf8"), pid, "no second server started");
     // The config exists, so a setup setting is refused rather than ignored.
     const settings = await board(CLI, ["--ensure", "--port", String(port)], env);
@@ -139,6 +146,155 @@ test("T216: ensure gives one line when another program holds the port, and start
     await new Promise((accept) => other.close(accept));
     await stop(dir, port);
   }
+});
+
+test("T216: two ensures at once start one board, and board.pid names the process that answers (F-T216-6)", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const port = await freePort();
+  try {
+    assert.equal((await board(CLI, ["--setup", "--port", String(port)], env)).status, 0);
+    const both = await Promise.all([board(CLI, ["--ensure"], env), board(CLI, ["--ensure"], env)]);
+    for (const run of both) assert.equal(run.status, 0, run.stderr);
+    for (const run of both) assert.match(run.stdout, /^Sage board (?:started|is running): /);
+    const answering = (await get(port)).board.match(/pid=(\d+)/)[1];
+    assert.equal(readFileSync(join(dirname(config), "board.pid"), "utf8"), `${answering}\n`);
+  } finally { await stop(dir, port); }
+});
+
+test("T216: board --stop stops this config's board, and ensure says when the config changed after the start (F-T216-7)", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const port = await freePort(), pidFile = join(dirname(config), "board.pid");
+  try {
+    assert.equal((await board(CLI, ["--ensure", "--port", String(port)], env)).status, 0);
+    assert.equal((await get(port)).status, 200);
+    // A config written after the start, as --set-password writes it.
+    const later = new Date(Date.now() + 5000); utimesSync(config, later, later);
+    const changed = await board(CLI, ["--ensure"], env);
+    assert.equal(changed.status, 0, changed.stderr);
+    assert.equal(changed.stdout, `Sage board is running: http://127.0.0.1:${port}/, but ${config} changed after it started. Restart needed: run node ${CLI} board --stop then ask for the board again.\n`);
+    const stopped = await board(CLI, ["--stop"], env);
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(stopped.stdout, `Board server stopped: 127.0.0.1:${port} is free. Ask for the board again to start it.\n`);
+    assert.equal((await get(port)).error, "ECONNREFUSED");
+    assert.equal(existsSync(pidFile), false, "the server removes its board.pid when it stops");
+    assert.equal((await board(CLI, ["--stop"], env)).stdout, `No board server runs on 127.0.0.1:${port}.\n`);
+    const again = await board(CLI, ["--ensure"], env);
+    assert.match(again.stdout, /^Sage board started: /);
+  } finally { await stop(dir, port); }
+});
+
+const listen = async (server) => { await new Promise((accept) => server.listen(0, "127.0.0.1", accept)); return server.address().port; };
+const shut = async (server) => { server.closeAllConnections?.(); await new Promise((accept) => server.close(accept)); };
+/** A board server from before this repair: it asks for a sign-in and does not name its config. */
+const olderBoard = () => createHttpServer((request, response) => {
+  response.writeHead(401, { "Content-Security-Policy": "default-src 'none'", "Cross-Origin-Resource-Policy": "same-origin", "WWW-Authenticate": 'Basic realm="Sage board", charset="UTF-8"' });
+  response.end("Sign in to the Sage board.\n");
+});
+
+test("T216: ensure names an older board server and the restart; stop restarts it from its board.pid (F-T216-3)", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const older = olderBoard(), port = await listen(older);
+  let open = true;
+  try {
+    assert.equal((await board(CLI, ["--setup", "--port", String(port)], env)).status, 0);
+    const found = await board(CLI, ["--ensure"], env);
+    assert.equal(found.status, 1);
+    assert.equal(found.stderr, `sage board: an older board server runs on 127.0.0.1:${port}. Restart it: run node ${CLI} board --stop then ask for the board again.\n`);
+    // The older ensure wrote board.pid for the server it started. A fake kill stands in for the signal.
+    writeFileSync(join(dirname(config), "board.pid"), "424242\n");
+    const signals = [], lines = [];
+    const kill = (pid, signal) => { signals.push([pid, signal]); open = false; shut(older); };
+    await runBoardCli(["board", "--stop"], { env, output: (line) => lines.push(line), kill });
+    assert.deepEqual(signals, [[424242, "SIGTERM"]]);
+    assert.deepEqual(lines, [`Board server stopped: 127.0.0.1:${port} is free. Ask for the board again to start it.`]);
+  } finally { if (open) await shut(older); }
+  // A board server from 859df8d answers on the Mac without the X-Sage-Board header: it is older too.
+  const unnamed = createBoardServer({ ...readBoardConfig(config), port: await freePort() });
+  try {
+    await unnamed.start();
+    const at = unnamed.address().port, path = join(dir, "unnamed", "board.json");
+    createBoardConfig(path, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port: at });
+    const found = await board(CLI, ["--ensure", "--config", path], env);
+    assert.equal(found.stderr, `sage board: an older board server runs on 127.0.0.1:${at}. Restart it: run node ${CLI} board --stop --config ${path} then ask for the board again.\n`);
+  } finally { await unnamed.close(); }
+});
+
+test("T216: a program that takes the port and never answers gives one line that the board does not answer (F-T216-3)", async (t) => {
+  const { env, config } = scratch(t);
+  const sockets = new Set(), silent = createServer((socket) => { sockets.add(socket); socket.on("error", () => {}); });
+  const port = await listen(silent);
+  try {
+    assert.equal((await board(CLI, ["--setup", "--port", String(port)], env)).status, 0);
+    const found = await board(CLI, ["--ensure"], env);
+    assert.equal(found.status, 1);
+    assert.equal(found.stderr, `sage board: the board does not answer: a program holds 127.0.0.1:${port} and gives no answer within 2 s. Stop it, or set another "port" in ${config}.\n`);
+  } finally { for (const socket of sockets) socket.destroy(); await new Promise((accept) => silent.close(accept)); }
+});
+
+test("T216: a board of another config on the port is not reported as this one, and stop leaves it running (F-T216-10)", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const port = await freePort();
+  createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port });
+  const otherConfig = join(dir, "other", "board.json");
+  createBoardConfig(otherConfig, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port });
+  const other = createBoardServer({ ...readBoardConfig(otherConfig), id: configId(otherConfig) });
+  try {
+    await other.start();
+    const found = await board(CLI, ["--ensure"], env);
+    assert.equal(found.status, 1);
+    assert.equal(found.stderr, `sage board: another board config holds 127.0.0.1:${port}. Stop it, or set another "port" in ${config}.\n`);
+    writeFileSync(join(dirname(config), "board.pid"), `${process.pid}\n`);
+    const signals = [];
+    await assert.rejects(runBoardCli(["board", "--stop"], { env, output: () => {}, kill: (...args) => signals.push(args) }), /another board config holds/);
+    assert.deepEqual(signals, [], "no signal to another config's board");
+    assert.equal((await get(port)).status, 200);
+  } finally { await other.close(); }
+});
+
+test("T216: stop sends no signal when board.pid does not name the process that answers, or is missing (F-T216-7)", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const port = await freePort();
+  createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port });
+  const server = createBoardServer({ ...readBoardConfig(config), id: configId(config) });
+  const signals = [], kill = (...args) => signals.push(args);
+  try {
+    await server.start();
+    await assert.rejects(runBoardCli(["board", "--stop"], { env, output: () => {}, kill }), /has no board\.pid next to/);
+    writeFileSync(join(dirname(config), "board.pid"), "999999\n");
+    await assert.rejects(runBoardCli(["board", "--stop"], { env, output: () => {}, kill }), new RegExp(`is process ${process.pid}, but board\\.pid says 999999`));
+    assert.deepEqual(signals, []);
+  } finally { await server.close(); }
+});
+
+test("T216: with allowedHosts, the line gives the phone steps and a set-password command that runs as printed (F-T216-5)", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const port = await freePort();
+  try {
+    assert.equal((await board(CLI, ["--setup", "--port", String(port), "--allowed-hosts", JSON.stringify(["sample.tailnet.ts.net"])], env)).status, 0);
+    const first = await board(PLUGIN_CLI, ["--ensure"], env);
+    assert.equal(first.status, 0, first.stderr);
+    const command = `node ${PLUGIN_CLI} board --set-password`;
+    assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. On the phone, open https://sample.tailnet.ts.net/ and sign in as sage with the "secret" value in ${config}. To set your own password, run in a terminal: ${command}\n`);
+    // Run the printed command as its words (no shell): it asks twice on standard input.
+    const [node, ...args] = command.split(" ");
+    assert.equal(node, "node");
+    const set = spawn(process.execPath, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    set.stdin.end("sample board pass 01\nsample board pass 01\n");
+    let out = ""; set.stdout.on("data", (chunk) => { out += chunk; });
+    assert.equal(await new Promise((done) => set.once("close", done)), 0);
+    assert.match(out, /^Board password set in /);
+    assert.equal(readBoardConfig(config).password.scheme, "scrypt");
+    const after = await board(PLUGIN_CLI, ["--ensure"], env);
+    assert.match(after.stdout, /changed after it started\. Restart needed: run node \S+plugins\/sage\/board\/cli\.mjs board --stop then ask for the board again\.\n$/);
+  } finally { await stop(dir, port); }
+});
+
+test("T216: the board guide says that the Mac needs no sign-in, and gives ensure and the restart (F-T216-9)", () => {
+  const guide = readFileSync(fileURLToPath(new URL("../packages/sage-board/README.md", import.meta.url)), "utf8");
+  assert.doesNotMatch(guide, /Browser pages require a sign-in/);
+  assert.match(guide, /On the Mac itself, browser pages need no sign-in/);
+  assert.match(guide, /`board --ensure` does the first and the last step for you/);
+  assert.match(guide, /node <path to board\/cli\.mjs> board --stop/);
 });
 
 // Sample passwords only: none is a real password.

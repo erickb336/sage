@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { closeSync, constants, fstatSync, mkdirSync, lstatSync, statSync, openSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, mkdirSync, lstatSync, statSync, openSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { request } from "node:http";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -73,8 +73,12 @@ export function createBoardConfig(path, { sources, port = 43123, allowedHosts = 
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx", mode: 0o600 });
   return config;
 }
-/** The standard logbook roots of the current user, as each provider's state tool computes them. A missing root stays listed: the server attaches when it appears. */
-export const standardSources = (env = process.env) => [
+/**
+ * The standard logbook roots of the current user, as each provider's state tool computes them: SAGE_HOME, when it is
+ * set, is the one root of every provider. A missing root stays listed: the server attaches when it appears. The board
+ * reads every provider's logbook, so it names their settings, as a cross-provider reader may (AGENTS.md).
+ */
+export const standardSources = (env = process.env) => env.SAGE_HOME ? [{ id: "sage", label: "Sage", path: resolve(env.SAGE_HOME) }] : [
   { id: "claude", label: "Claude", provider: "claude", path: resolve(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage") },
   { id: "codex", label: "Codex", provider: "codex", path: resolve(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage") },
 ];
@@ -111,47 +115,104 @@ async function setPassword(configPath, input, prompt) {
   return `Board password set in ${configPath}. A board server that is already running keeps the old sign-in until it starts again.`;
 }
 
+/** A non-secret name of one board config, from its real path: the server sends it, and ensure and stop compare it. */
+export const configId = configPath => createHash("sha256").update(`sage-board-config:${realpathSync(configPath)}`).digest("hex").slice(0, 16);
+/** A command that a shell runs as pasted: this file's full path, and --config when it is not the default one. */
+function boardCommand(option, configPath, env) {
+  const quote = text => /[^\w@%+=:,./-]/.test(text) ? `"${text.replace(/(["\\$`])/g, "\\$1")}"` : text;
+  return ["node", quote(fileURLToPath(import.meta.url)), "board", option, ...(configPath === defaultConfigPath(env) ? [] : ["--config", quote(configPath)])].join(" ");
+}
+
 /**
- * What answers on the board's port: "board", "none" (nothing listens) or "other". On the Mac the board needs no sign-in,
- * so the request carries no secret, and a program that does not answer with the board's page and headers is "other".
+ * What answers on the board's port, on the Mac and with no sign-in: { kind: "none" } (nothing listens), "timeout",
+ * "other", "older" (a board server from before T216's repair, which does not name its config) or "board" with the
+ * id, pid and start time of its X-Sage-Board header.
  */
 const probe = ({ port }) => new Promise(done => {
   const req = request({ host: "127.0.0.1", port, path: "/", method: "HEAD", agent: false, timeout: 2000, headers: { Host: `127.0.0.1:${port}` } }, response => {
     response.resume();
-    const { "content-type": type = "", "content-security-policy": policy = "", "cross-origin-resource-policy": resource } = response.headers;
-    done(response.statusCode === 200 && type.startsWith("text/html") && policy.startsWith("default-src 'none'") && resource === "same-origin" ? "board" : "other");
+    const { "content-type": type = "", "content-security-policy": policy = "", "cross-origin-resource-policy": resource, "www-authenticate": realm = "", "x-sage-board": named = "" } = response.headers;
+    const boardHeaders = policy.startsWith("default-src 'none'") && resource === "same-origin";
+    const own = /^id=([a-f0-9]{16,64}); pid=([1-9]\d{0,9}); started=(\d{1,16})$/.exec(named);
+    if (boardHeaders && response.statusCode === 200 && type.startsWith("text/html")) done(own ? { kind: "board", id: own[1], pid: Number(own[2]), started: Number(own[3]) } : { kind: "older" });
+    else done({ kind: boardHeaders && response.statusCode === 401 && realm.startsWith('Basic realm="Sage board"') ? "older" : "other" });
   });
-  req.once("timeout", () => req.destroy(new Error("timeout")));
-  req.once("error", error => done(error.code === "ECONNREFUSED" ? "none" : "other"));
+  req.once("timeout", () => req.destroy(Object.assign(new Error("timeout"), { code: "TIMEOUT" })));
+  req.once("error", error => done({ kind: error.code === "ECONNREFUSED" ? "none" : error.code === "TIMEOUT" ? "timeout" : "other" }));
   req.end();
 });
 
-/** Start the server as a detached process when nothing answers: its output goes to board.log and its pid to board.pid, next to the config. */
-async function ensureBoard(configPath, config) {
-  const phone = config.password ? "sign in as sage with your board password" : `sign in as sage with the "secret" value in ${configPath}, or set your own password in a terminal with board --set-password`;
-  const ready = how => `Sage board ${how}: http://127.0.0.1:${config.port}/ · no sign-in needed on this Mac. On the phone, ${phone}.`;
-  const busy = `the board server is not running: another program answers on 127.0.0.1:${config.port}. Stop it, or set another "port" in ${configPath}.`;
-  const found = await probe(config);
-  if (found === "board") return ready("is running");
-  if (found === "other") throw new Error(busy);
-  const log = join(dirname(configPath), "board.log"), write = constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW;
-  const out = openSync(log, write | constants.O_APPEND, 0o600);
+/** The one line for a port where this config's board does not answer; null when nothing listens. */
+function notOurs(found, configPath, config, env) {
+  const at = `127.0.0.1:${config.port}`, elsewhere = `Stop it, or set another "port" in ${configPath}.`;
+  if (found.kind === "none") return null;
+  if (found.kind === "board") return found.id === configId(configPath) ? null : `another board config holds ${at}. ${elsewhere}`;
+  if (found.kind === "older") return `an older board server runs on ${at}. Restart it: run ${boardCommand("--stop", configPath, env)} then ask for the board again.`;
+  if (found.kind === "timeout") return `the board does not answer: a program holds ${at} and gives no answer within 2 s. ${elsewhere}`;
+  return `the board server is not running: another program answers on ${at}. ${elsewhere}`;
+}
+
+/** Start the server as a detached process when nothing answers. Its output goes to board.log next to the config; the server writes board.pid itself. */
+async function ensureBoard(configPath, config, env) {
+  const url = `http://127.0.0.1:${config.port}/`;
+  const phone = !config.allowedHosts.length ? `Phone access is off: no allowedHosts in ${configPath}.`
+    : `On the phone, open https://${config.allowedHosts[0]}/ and sign in as sage with ${config.password ? "your board password" : `the "secret" value in ${configPath}`}. To set ${config.password ? "a new" : "your own"} password, run in a terminal: ${boardCommand("--set-password", configPath, env)}`;
+  const ready = how => `Sage board ${how}: ${url} · no sign-in needed on this Mac. ${phone}`;
+  const found = await probe(config), refused = notOurs(found, configPath, config, env);
+  if (refused) throw new Error(refused);
+  if (found.kind === "board") {
+    return lstatSync(configPath).mtimeMs > found.started ? `Sage board is running: ${url}, but ${configPath} changed after it started. Restart needed: run ${boardCommand("--stop", configPath, env)} then ask for the board again.` : ready("is running");
+  }
+  const log = join(dirname(configPath), "board.log");
+  const out = openSync(log, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_APPEND, 0o600);
   let exited = false, child;
   try { child = spawn(process.execPath, [fileURLToPath(import.meta.url), "board", "--serve", "--config", configPath], { cwd: dirname(configPath), detached: true, stdio: ["ignore", out, out] }); }
   finally { closeSync(out); }
   child.once("exit", () => { exited = true; }).once("error", () => { exited = true; }).unref();
-  if (child.pid) {
-    const fd = openSync(join(dirname(configPath), "board.pid"), write | constants.O_TRUNC, 0o600);
-    try { writeFileSync(fd, `${child.pid}\n`); } finally { closeSync(fd); }
-  }
   // 10 s: the server reads every logbook before it listens. That takes well under a second on a large logbook today.
-  for (const end = Date.now() + 10_000; !exited && Date.now() < end;) {
-    const now = await probe(config);
-    if (now === "board") return ready("started");
-    if (now === "other") throw new Error(busy);
+  // A child that exits (another ensure won the port) still gives one more probe: the winner may be this config's board.
+  for (const end = Date.now() + 10_000; Date.now() < end;) {
+    const done = exited, now = await probe(config), problem = notOurs(now, configPath, config, env);
+    if (now.kind === "board" && !problem) return ready("started");
+    if (problem && now.kind !== "timeout") throw new Error(problem);
+    if (done) break;
     await new Promise(wake => setTimeout(wake, 100));
   }
   throw new Error(`the board server ${exited ? "did not start" : "did not answer within 10 s"}. See its log: ${log}`);
+}
+
+const pidPath = configPath => join(dirname(configPath), "board.pid");
+function readPid(configPath) {
+  let fd;
+  try { fd = openSync(pidPath(configPath), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  try {
+    const buffer = Buffer.alloc(32), text = buffer.subarray(0, fstatSync(fd).isFile() ? readSync(fd, buffer, 0, 32, 0) : 0).toString("ascii");
+    return /^[1-9]\d{0,9}\n?$/.test(text) ? Number(text) : null;
+  } finally { closeSync(fd); }
+}
+function writePid(configPath, pid) {
+  const fd = openSync(pidPath(configPath), constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  try { writeFileSync(fd, `${pid}\n`); } finally { closeSync(fd); }
+}
+
+/**
+ * Stop this config's board server: only the pid in board.pid, and only when the board on the port names this config
+ * and that same pid. An older server does not name them: then board.pid, which the older ensure wrote, is the proof.
+ */
+async function stopBoard(configPath, config, env, kill) {
+  const at = `127.0.0.1:${config.port}`, found = await probe(config), pid = readPid(configPath);
+  if (found.kind === "none") return `No board server runs on ${at}.`;
+  const problem = notOurs(found, configPath, config, env);
+  if (problem && found.kind !== "older") throw new Error(problem);
+  if (!pid) throw new Error(`the board on ${at} has no board.pid next to ${configPath}, so this command cannot tell its process. Stop it where it started (for example launchctl bootout).`);
+  if (found.kind === "board" && found.pid !== pid) throw new Error(`the board on ${at} is process ${found.pid}, but board.pid says ${pid}. Stop it where it started (for example launchctl bootout).`);
+  kill(pid, "SIGTERM");
+  // A wide guard for a busy Mac: the server closes in milliseconds.
+  for (const end = Date.now() + 10_000; Date.now() < end; await new Promise(wake => setTimeout(wake, 100))) {
+    if ((await probe(config)).kind === "none") return `Board server stopped: ${at} is free. Ask for the board again to start it.`;
+  }
+  throw new Error(`the board server got the stop signal, but ${at} is still taken after 10 s.`);
 }
 
 function parse(argv) {
@@ -161,17 +222,17 @@ function parse(argv) {
     const value = argv[i];
     if (!value.startsWith("--")) { values.push(value); continue; }
     const key = value.slice(2);
-    if (!["config", "out", "project", "scope", "serve", "html", "status", "setup", "ensure", "set-password", "sources", "pages", "port", "allowed-hosts", "install", "install-dir", "login-file"].includes(key) || Object.hasOwn(options, key)) throw new TypeError("unknown or repeated board option");
-    if (["serve", "html", "status", "setup", "ensure", "set-password", "install"].includes(key)) options[key] = true;
+    if (!["config", "out", "project", "scope", "serve", "html", "status", "setup", "ensure", "stop", "set-password", "sources", "pages", "port", "allowed-hosts", "install", "install-dir", "login-file"].includes(key) || Object.hasOwn(options, key)) throw new TypeError("unknown or repeated board option");
+    if (["serve", "html", "status", "setup", "ensure", "stop", "set-password", "install"].includes(key)) options[key] = true;
     else { if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new TypeError(`--${key} needs a value`); options[key] = argv[++i]; }
   }
-  if (values.length > 1 || [options.serve, options.html, options.status, options.setup, options.ensure, options["set-password"], options.install].filter(Boolean).length > 1) throw new TypeError("board needs one scope and one format");
+  if (values.length > 1 || [options.serve, options.html, options.status, options.setup, options.ensure, options.stop, options["set-password"], options.install].filter(Boolean).length > 1) throw new TypeError("board needs one scope and one format");
   return { options, value: values[0] ?? "all" };
 }
-export async function runBoardCli(argv, { output = line => process.stdout.write(`${line}\n`), env = process.env, input = process.stdin, prompt = process.stderr } = {}) {
+export async function runBoardCli(argv, { output = line => process.stdout.write(`${line}\n`), env = process.env, input = process.stdin, prompt = process.stderr, kill = (pid, signal) => process.kill(pid, signal) } = {}) {
   const { options, value } = parse(argv);
   options.config ??= defaultConfigPath(env);
-  if (options.scope && (options.serve || options.setup || options.ensure || options["set-password"] || options.install)) throw new TypeError("--scope is only for a task lookup");
+  if (options.scope && (options.serve || options.setup || options.ensure || options.stop || options["set-password"] || options.install)) throw new TypeError("--scope is only for a task lookup");
   // --ensure first sets the board up when its config is missing, with the settings that --setup takes.
   const missing = options.ensure && !lstatSync(boundedPath(options.config), { throwIfNoEntry: false });
   if (options.setup || missing) {
@@ -182,7 +243,11 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   } else if (options.sources || options.pages || options.port || options["allowed-hosts"]) throw new TypeError(options.ensure ? "the board config exists: change its settings in the file" : "source and service settings require --setup");
   if (options.ensure) {
     if (value !== "all" || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("ensure takes --config, and the setup settings for a new config");
-    output(await ensureBoard(boundedPath(options.config), readBoardConfig(options.config))); return null;
+    output(await ensureBoard(boundedPath(options.config), readBoardConfig(options.config), env)); return null;
+  }
+  if (options.stop) {
+    if (value !== "all" || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("stop takes only --config");
+    output(await stopBoard(boundedPath(options.config), readBoardConfig(options.config), env, kill)); return null;
   }
   if (options["set-password"]) {
     if (value !== "all" || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("set-password takes only --config; it asks for the password");
@@ -207,9 +272,12 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options["install-dir"] || options["login-file"]) throw new TypeError("installation paths require --install");
   if (options.serve) {
     if (value !== "all" || options.out || options.project) throw new TypeError("server uses all configured sources; no output or project option");
-    const server = createBoardServer(config); await server.start();
+    // The server writes board.pid only once it listens, and removes it when it stops, so a pid there is a running board.
+    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, id: configId(configPath) });
+    await server.start();
+    writePid(configPath, process.pid);
     output(`Sage board: http://127.0.0.1:${config.port}/ · no sign-in needed on this Mac.`);
-    return server;
+    return { ...server, close: () => server.close().finally(() => { if (readPid(configPath) === process.pid) rmSync(pidPath(configPath), { force: true }); }) };
   }
   const taskId = /^T[1-9]\d*$/.test(value) ? value : null;
   if (options.scope && !taskId) throw new TypeError("--scope selects the exact project of a task lookup");

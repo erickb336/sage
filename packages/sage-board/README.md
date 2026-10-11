@@ -2,13 +2,21 @@
 
 The Sage board shows recorded tasks from explicit Claude and Codex logbook roots. It reads them without changing them.
 
-The service runs independently of a chat session. Browser pages require a sign-in. Chat and offline views use the same task model.
+The service runs independently of a chat session. On the Mac itself, browser pages need no sign-in; through an allowed host, such as the Tailscale name, they do. Chat and offline views use the same task model.
 
 ## Start locally
 
-Use Node.js 20 or later. In Claude, the board phrase does this for you: the chief runs `board --ensure`, which sets the board up when `~/.config/sage-board/board.json` is missing, starts the server in the background when nothing answers on its port, and prints the address or why the server is not running. The server log and pid go to `board.log` and `board.pid` next to the config. Without `--config`, every board command uses that file; without `--sources`, setup uses the standard Claude and Codex roots (`$CLAUDE_CONFIG_DIR/sage` or `~/.claude/sage`, and `$CODEX_HOME/sage` or `~/.codex/sage`).
+Use Node.js 20 or later. In Claude, the board phrase does this for you: the chief runs `board --ensure`, which sets the board up when `~/.config/sage-board/board.json` is missing, starts the server in the background when nothing answers on its port, and prints the address or why the server is not running. The server log goes to `board.log` next to the config. The server writes its pid to `board.pid` there once it listens, and removes the file when it stops. Without `--config`, every board command uses that file; without `--sources`, setup uses the standard roots: `$SAGE_HOME` when it is set, or else `$CLAUDE_CONFIG_DIR/sage` or `~/.claude/sage`, and `$CODEX_HOME/sage` or `~/.codex/sage`. A root that does not exist shows as "not set up yet" until it appears.
 
-To set it up by hand, run these commands from the Sage checkout. Replace the source paths when your provider uses another root.
+Each server sends a non-secret id of its config on the Mac, so `board --ensure` tells this config's board from an older board server or a board of another config on the same port, and says which. A server reads its config once, when it starts. After you change the config or the password, `board --ensure` says that a restart is needed. To restart, run:
+
+```sh
+node <path to board/cli.mjs> board --stop
+```
+
+Then ask for the board again (or run `board --ensure`). `--stop` stops only this config's board: it checks that the board on the port names this config and the pid in `board.pid`, sends that pid a stop signal, and waits until the port is free. A board that a login service started has no `board.pid`; stop it with `launchctl bootout` (below).
+
+To set it up by hand, run these commands from the Sage checkout, or from the `board/` folder of an installed plugin. `board --ensure` does the first and the last step for you; the install step makes a copy that does not change when the plugin updates. Replace the source paths when your provider uses another root.
 
 ```sh
 node packages/sage-board/cli.mjs board --setup --config "$HOME/.config/sage-board/board.json" --sources "[{\"id\":\"claude\",\"path\":\"$HOME/.claude/sage\"},{\"id\":\"codex\",\"path\":\"$HOME/.codex/sage\"}]" --pages "$HOME/.local/share/sage-board/pages"
@@ -36,9 +44,9 @@ Inspect it with `launchctl print "gui/$(id -u)/dev.sage.board"`. Stop it with `l
 
 ## Private phone access
 
-Sign in to Tailscale on the Mac and phone. Add the Mac’s exact Tailscale DNS name to `allowedHosts` in the board configuration, then restart the service.
+Sign in to Tailscale on the Mac and phone. Add the Mac’s exact Tailscale DNS name to `allowedHosts` in the board configuration, then restart the service with `board --stop` and `board --ensure`. Until `allowedHosts` names a host, the `board --ensure` line says that phone access is off.
 
-Forward HTTPS with `tailscale serve --bg --https=443 http://127.0.0.1:43123`. Open its printed HTTPS URL on the phone and use the board sign-in.
+Forward HTTPS with `tailscale serve --bg --https=443 http://127.0.0.1:43123`. Open its printed HTTPS URL on the phone and use the board sign-in. A request that comes through `tailscale serve` always needs the sign-in, also when it names a loopback host: the server treats a request as from the Mac only when it comes from loopback, names a loopback host, and has no header that a proxy adds (`X-Forwarded-*`, `Forwarded` or `Tailscale-*`). The server checks one password at a time and waits one second after a wrong one.
 
 Use `tailscale serve status` to inspect the forwarding rule. To stop this forwarding rule, use `tailscale serve --bg --https=443 off`.
 
