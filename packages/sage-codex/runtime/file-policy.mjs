@@ -1,5 +1,5 @@
 import { patchTargets } from "./patch-targets.mjs";
-import { chiefEditDenied, fileWriteOutsideRoots } from "sage-core";
+import { chiefEditDenied, fileWriteOutsideRoots, shellWriteOutsideRoots } from "sage-core";
 export { commandWrites } from "sage-core";
 
 /** This is one policy check, not a complete tool policy. Mode and chief identity must be verified by the caller. */
@@ -19,4 +19,10 @@ export function patchEditDecision(input, context, { cwd, roots }) {
     || Object.keys(value).length !== 1 || !Object.hasOwn(value, "command")) throw Error("Codex patch input is unavailable");
   return fileWriteOutsideRoots({ paths: patchTargets(value.command), cwd, roots }) ? { decision: "pass" }
     : { decision: "deny", reason: "This patch reaches a protected path or a file with another hard link. Use the authorized state operation for logbook changes." };
+}
+
+/** The caller supplies verified command text and execution cwd. Other command/role rules still apply. */
+export function shellPathDecision(command, { cwd, roots }) {
+  return shellWriteOutsideRoots({ command, cwd, roots }) ? { decision: "pass" }
+    : { decision: "deny", reason: "This write command reaches a protected path or has unresolved path evidence. Use literal paths outside the logbook." };
 }
