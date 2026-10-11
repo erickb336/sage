@@ -381,6 +381,11 @@ test("shared file and mode extraction preserves classified mode phrases in both 
     assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nautopilot off" }).autopilotOff, true);
     assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nReport: no autopilot changes" }).autopilotOff, false);
     for (const input of [{}, { owner: "user", text: "sage mode", outside: "", all: "" }, { owner: true, text: "sage mode", all: "" }]) assert.throws(() => api.modeSignals(input), /Invalid mode prompt/);
+    // A mark or a format character on the last letter of the phrase makes it no phrase (R733): no on, and the note.
+    for (const text of ["sage mode\u0301", "sage mode\u0301 continue on the project", "enter sage mode\u0301 continue", "sage mode\u200b continue", "sage mode\u00ad continue", "sage mode\ufe0f continue", "sage mode\u2060 continue", "sage mode\u0301, autopilot on"]) {
+      const signals = api.modeSignals(prompt(text));
+      assert.deepEqual([signals.sageOn, signals.modeWord], [false, true], JSON.stringify(text));
+    }
     if (provider === "claude") {
       const adapter = await import(pathToFileURL(join(f.plugin, "hooks/mode-policy.mjs")));
       assert.equal(adapter.modeSignals(prompt("sage mode")).sageOn, true);

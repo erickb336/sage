@@ -31,7 +31,8 @@ const OFF_WORDS = String.raw`(?:(?:off|no|without|don['’]?t|do\s+not|end(?:s|e
 // Cyrillic and Greek look-alikes of "o" and "f", and the small capitals. The tail's punctuation keeps its form, so
 // "sage mode！" stays a miss (F-T72-20); each question mark becomes "?". So "sage mode o<soft hyphen>ff", "sage mode
 // оff" (a Cyrillic "о") and "sage mode ᴏꜰꜰ" have an off word after the phrase, not more words (T200).
-const HEAD = new RegExp(`${START}(?:enter${SP}+)?sage${SP}+mode`, "i");
+// The phrase ends at its last letter: a letter, a mark, a digit or a format character next makes it no phrase (R733).
+const HEAD = new RegExp(`${START}(?:enter${SP}+)?sage${SP}+mode(?![\\p{L}\\p{M}\\p{N}\\p{Cf}])`, "iu");
 const LIKE = "оοօⲟОΟՕⲞꬵϝϜғҒᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢ";
 const PLAIN_LETTERS = "oooooooofffffabcdefghijklmnoprstuvwyz";
 const FOLD = [[/[^\s\p{P}]+/gu, (word) => word.normalize("NFKD")], [/[\p{M}\p{Cf}]/gu, ""], [new RegExp(QUESTION, "g"), "?"], [new RegExp(`[${LIKE}]`, "g"), (c) => PLAIN_LETTERS[LIKE.indexOf(c)]]];

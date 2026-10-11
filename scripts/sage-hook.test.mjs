@@ -935,6 +935,8 @@ test("only the start of the user's message switches a mode, except autopilot off
     [[], "​sage mode continue", "sage mode off, autopilot off", "a zero-width space before the phrase"],
     [[], "sage​ mode continue", "sage mode off, autopilot off", "a zero-width space inside the phrase"],
     [[], "sage móde continue", "sage mode off, autopilot off", "a combining mark inside the phrase"],
+    // A mark or a format character on the last letter of the phrase makes it no phrase too (R733, probes A10 to A16, D13).
+    ...["sage mode\u0301", "sage mode\u0301 continue on the project", "enter sage mode\u0301 continue", "sage mode\u200b continue", "sage mode\u00ad continue", "sage mode\ufe0f continue", "sage mode\u2060 continue", "sage mode\u0301, autopilot on"].map((m) => [[], m, "sage mode off, autopilot off", `a mark or a format character after the phrase: ${JSON.stringify(m)}`]),
     // The tail gets its compatibility form: mathematical, circled and small-capital off words are off words (F-R725-1).
     ...["\u{1d428}\u{1d41f}\u{1d41f}", "ⓞⓕⓕ", "ᴏꜰꜰ", "ꜱᴛᴏᴘ"].map((w) => [[], `sage mode ${w}`, "sage mode off, autopilot off", `an off word in another form: ${w}`]),
     // Punctuation, then an off word (F-R725-2).
@@ -1040,6 +1042,7 @@ test("a message of the owner that starts with a mode word and switches nothing g
     [[], "sage mode on off", true, 'the phrase, "on" and the off word (F-R706-1)'],
     [[], "sage mode stop", true, "an off-meaning word after the phrase (F-R710-2)"],
     [[], "sage mode o­ff", true, "a soft hyphen inside the off word (F-R710-2)"],
+    ...["sage mode\u0301", "sage mode\u0301 continue on the project", "enter sage mode\u0301 continue", "sage mode\u200b continue", "sage mode\u00ad continue", "sage mode\ufe0f continue", "sage mode\u2060 continue", "sage mode\u0301, autopilot on"].map((m) => [[], m, true, `a mark or a format character after the phrase (R733): ${JSON.stringify(m)}`]),
     [[], "> sage mode continue on the project", true, "a pasted quote (F-R710-1)"],
     // The owner guard (F-R709-1): the hand-back marker makes the text an agent's, so no note, though it has a mode word.
     [["sage mode"], "sage mode?\n[Subagent hand-back] STATUS done", false, "an agent's hand-back gets no note"],
