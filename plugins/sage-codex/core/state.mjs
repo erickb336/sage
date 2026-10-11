@@ -529,6 +529,114 @@ function runFrame(dir, task, role, branch, candidate, env) {
     status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env)) };
 }
 
+function proveTask(dir, task, proof) {
+  const rows = read(dir, "ledger").filter(row => row.task === task.id);
+  const head = proof?.head ?? rows.at(-1)?.sha ?? refuse(`${task.id} has no verdicts yet`);
+  const result = judge(dir, task, read(dir, "findings"), task.id, rows.filter(row => row.sha === head), proof?.cycles ?? 1, undefined, proof?.cfg);
+  if (!result.ok) refuse(`${task.id} is not verified on ${head.slice(0, 7)}: ${result.reason}`);
+}
+
+/** One implementation for CLI task edits and recorded updates. The latter supplies current-commit proof. */
+function applyTaskFields(dir, task, fields, { proofFor, why = "task set" } = {}) {
+  const decided = [];
+  for (const [k, v] of fields) {
+    if (k === "state") {
+      if (v === "repairing") refuse("start a repair with: sage round <task>");
+      move(task, v); // the design's states first; the table is written only if every check below passes
+      const build = builds(task);
+      if ((v === "verified" && !build) || (v === "concluded" && build)) refuse(`${task.id} ${build ? "has a build block, so it ends at verified" : "has no build block, so it ends at concluded"}`);
+      if (v === "verifying" || v === "concluded") {
+        const open = read(dir, "findings").filter((f) => f.task === task.id && f.status === "open");
+        if (open.length) refuse(`${task.id} has open findings: ${open.map((f) => `${f.key} (${f.triage || "not triaged"})`).join(", ")}. Close or dismiss each one first.`);
+      }
+      if (v === "concluded" && read(dir, "ledger").filter((r) => r.task === task.id).at(-1)?.kind !== "evidence-clean") {
+        refuse(`${task.id} needs a clean evidence review as its latest verdict: sage verdict ${task.id} --kind evidence-clean --run <R>`);
+      }
+      if (v === "verified" || (proofFor && v === "pr-ready")) {
+        if (v === "pr-ready" && !task.pr) refuse(`${task.id} needs a pull request number`);
+        proveTask(dir, task, proofFor?.(task));
+      }
+      if (["merged", "concluded", "abandoned"].includes(v)) decided.push({ at: now(), task: task.id, decision: `state ${v}`, why });
+    } else if (k === "pr") decided.push(...setPr(task, v, why));
+    else if (k === "branch") task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
+    else if (k === "title") task.title = v;
+    else refuse(`task set takes state=, branch=, pr= or title=`);
+  }
+  return decided;
+}
+
+const taskUpdates = recordedWrites({ schema: 4, tables: ["tasks", "decisions"], folder: "task-updates",
+  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json" });
+const taskVersion = task => createHash("sha256").update(JSON.stringify(task)).digest("hex");
+
+function taskSnapshot(dir, id) {
+  const matches = read(dir, "tasks").filter(row => row.id === id);
+  if (matches.length !== 1) refuse("The task is missing or ambiguous.");
+  return { task: matches[0], version: taskVersion(matches[0]) };
+}
+
+/** Read a current task and a precondition token; neither grants permission to change it. */
+function readTaskSnapshot(input, env = process.env) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 2
+    || typeof input.project !== "string" || !input.project || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)) refuse("Invalid task read");
+  const dir = storeDir(input.project, env);
+  if (realpathSync(dir) !== resolve(dir)) refuse("Invalid logbook location");
+  return withLock(dir, () => { ready(dir); return taskSnapshot(dir, input.task); });
+}
+
+/** Apply a version-checked task change with durable retry evidence and full configured readiness checks. */
+function updateRequestedTask(input, env = process.env) {
+  const fields = ["project", "owner", "request", "task", "version", "changes"];
+  const deny = () => refuse("Task update needs the current version and an unchanged complete request.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
+    || fields.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
+    || typeof input.owner !== "string" || !input.owner || input.owner.length > 1024 || /\p{Cc}/u.test(input.owner)
+    || typeof input.request !== "string" || !new RegExp(`^${UUID}$`).test(input.request)
+    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
+    || typeof input.version !== "string" || !/^[0-9a-f]{64}$/.test(input.version)
+    || !input.changes || typeof input.changes !== "object" || Array.isArray(input.changes)
+    || !Object.keys(input.changes).length || Object.entries(input.changes).some(([key, value]) =>
+      !["title", "branch", "pr", "state"].includes(key) || typeof value !== "string" || value.length > 4096 || cell(value) !== value)) deny();
+  const changes = Object.fromEntries(["title", "branch", "pr", "state"].filter(key => Object.hasOwn(input.changes, key)).map(key => [key, input.changes[key]]));
+  const reference = { owner: input.owner, request: input.request, task: input.task, version: input.version, changes };
+  const dir = storeDir(input.project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  const checked = receipt => {
+    const value = receipt.result;
+    if (!value || Object.keys(value).length !== 2 || !value.task || Object.keys(value.task).length !== TABLES.tasks.length
+      || TABLES.tasks.some(key => typeof value.task[key] !== "string") || value.task.id !== input.task || value.version !== taskVersion(value.task)) deny();
+    taskSnapshot(dir, input.task); // A receipt never recreates a removed task.
+    return value;
+  };
+  return withLock(dir, () => {
+    const recovered = taskUpdates.recover(dir, reference);
+    if (recovered) { const value = checked(recovered); status(dir, true); return { decision: "task-updated", ...value }; }
+    const prior = taskUpdates.readReceipt(dir, reference);
+    if (prior) return { decision: "already-updated", ...checked(prior) };
+    ready(dir);
+    const before = taskSnapshot(dir, input.task);
+    if (before.version !== input.version) deny();
+    const task = { ...before.task }, cfg = config(env);
+    const proofFor = subject => ({ head: reviewHead(input.project, branchOf(subject.branch), env), cycles: cyclesFor(subject, cfg), cfg });
+    const decided = applyTaskFields(dir, task, Object.entries(changes), { why: "recorded task update", proofFor });
+    const readyState = ["verified", "pr-ready"].includes(task.state);
+    if (!changes.state && readyState) {
+      if (task.state === "pr-ready" && !task.pr) refuse(`${task.id} needs a pull request number`);
+      proveTask(dir, task, proofFor(task));
+    }
+    if ((changes.state || readyState) && ["briefed", "building", "verifying", "verified", "pr-ready", "concluded"].includes(task.state)
+      && read(dir, "gates").some(gate => gate.task === task.id && !gate.answer)) refuse(`${task.id} has an unanswered gate`);
+    if (changes.state && !["merged", "concluded", "abandoned"].includes(task.state))
+      decided.push({ at: now(), task: task.id, decision: `state ${before.task.state} → ${task.state}`, why: "recorded task update" });
+    const result = { task, version: taskVersion(task) };
+    taskUpdates.commit(dir, { reference, result }, {
+      tasks: tableText("tasks", read(dir, "tasks").map(row => row.id === task.id ? task : row)),
+      decisions: tableText("decisions", [...read(dir, "decisions"), ...decided]) });
+    status(dir, true);
+    return { decision: "task-updated", ...result };
+  });
+}
+
 /** Capture a review subject from the actual logbook and local branch, never from a reported SHA. */
 function captureReviewTarget(input, env = process.env) {
   const keys = ["project", "task", "run", "role", "cycle"];
@@ -1173,33 +1281,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       }
       const { tasks, task } = taskOf(dir, need(sub, "the task id")); // task <T> [set key=value ...]
       if (id === "set") {
-        const decided = [];
-        for (const kv of more) {
-          const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
-          if (k === "state") {
-            if (v === "repairing") refuse("start a repair with: sage round <task>");
-            move(task, v); // the design's states first; the table is written only if every check below passes
-            const build = builds(task);
-            if ((v === "verified" && !build) || (v === "concluded" && build)) refuse(`${task.id} ${build ? "has a build block, so it ends at verified" : "has no build block, so it ends at concluded"}`);
-            if (v === "verifying" || v === "concluded") {
-              const open = read(dir, "findings").filter((f) => f.task === task.id && f.status === "open");
-              if (open.length) refuse(`${task.id} has open findings: ${open.map((f) => `${f.key} (${f.triage || "not triaged"})`).join(", ")}. Close or dismiss each one first.`);
-            }
-            if (v === "concluded" && read(dir, "ledger").filter((r) => r.task === task.id).at(-1)?.kind !== "evidence-clean") {
-              refuse(`${task.id} needs a clean evidence review as its latest verdict: sage verdict ${task.id} --kind evidence-clean --run <R>`);
-            }
-            if (v === "verified") {
-              const rows = read(dir, "ledger").filter((r) => r.task === task.id);
-              const head = rows.at(-1)?.sha ?? refuse(`${task.id} has no verdicts yet`);
-              const r = judge(dir, task, read(dir, "findings"), task.id, rows.filter((r) => r.sha === head), 1);
-              if (!r.ok) refuse(`${task.id} is not verified on ${head.slice(0, 7)}: ${r.reason}`);
-            }
-            if (["merged", "concluded", "abandoned"].includes(v)) decided.push({ at: now(), task: task.id, decision: `state ${v}`, why: "task set" });
-          } else if (k === "pr") decided.push(...setPr(task, v, "task set"));
-          else if (k === "branch") task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
-          else if (k === "title") task.title = v;
-          else refuse(`task set takes state=, branch=, pr= or title=`);
-        }
+        const decided = applyTaskFields(dir, task, more.map(kv => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
         if (decided.length) write(dir, "decisions", [...read(dir, "decisions"), ...decided]);
         write(dir, "tasks", tasks);
       }
@@ -1553,5 +1635,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, createRequestedTask, createRequestedRun, finishReportedRun, captureReviewTarget, acceptReportedReview, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, createRequestedTask, createRequestedRun, readTaskSnapshot, updateRequestedTask, finishReportedRun, captureReviewTarget, acceptReportedReview, withLock, board, answerPaths, runCli };
 }

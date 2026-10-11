@@ -29,7 +29,8 @@ Use the same or a newer tool to retry the original request.
 The route keeps all shared requirements. A large or investigation task can be
 framed, but unsupported native roles still cannot run. Task creation does not
 establish full automatic coordination. Use the prepared `sage_create_run` tool to record a run; see `run-create.md`.
-Task transitions remain separate integration work.
+Use `sage_read_task` and `sage_update_task` for versioned task changes; see
+`task-update.md`.
 
 Run `node scripts/probe-codex-lifecycle.mjs --sage-create-task` with fake process
 tools first on PATH. It creates one task and retries through the actual 0.160.0

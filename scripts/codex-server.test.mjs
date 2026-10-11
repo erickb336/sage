@@ -67,7 +67,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_recorded_report", "sage_read_report", "sage_read_task", "sage_record_report", "sage_update_task"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -2381,5 +2381,122 @@ test('native run creation serializes competing writers while preserving manual o
   assert.equal(outputs.filter(out => /could not create/.test(out.error)).length, 1);
   assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  await Promise.all(clients.map(client => client.close()));
+});
+
+async function taskUpdateFixture(t) {
+  const f = await taskCreationFixture(t); f.create();
+  const api = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
+  const read = (actor = session) => api.readNativeTask({ task: 'T1' }, f.native(actor), f.options);
+  const update = (input, actor = session) => api.updateNativeTask(input, f.native(actor), f.options);
+  const request = (changes, id = turns[1], version = read().version) => ({ request: id, task: 'T1', version, changes });
+  const file = join(f.dir, 'task-update-config.json');
+  writeFileSync(file, JSON.stringify({ version: 3, mode: f.options }));
+  writeFileSync(f.entry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(file)});`);
+  return { ...f, read, update, request };
+}
+
+test('native task updates read real versions and replay one transition without reverting later work', async t => {
+  const f = await taskUpdateFixture(t);
+  const reader = await connect(t, f, '0.160.0', '', 'sage_read_task');
+  const before = await reader.call({ task: 'T1' });
+  assert.equal(before.task.state, 'framed'); assert.match(before.version, /^[0-9a-f]{64}$/);
+  assert.match((await reader.call({ task: 'T1' }, childActor)).error, /could not read/);
+  await reader.close();
+  const client = await connect(t, f, '0.160.0', '', 'sage_update_task');
+  const input = f.request({ state: 'briefed', branch: 'codex/t1-update' }, turns[1], before.version);
+  const first = await client.call(input); assert.equal(first.decision, 'task-updated');
+  assert.equal(first.task.state, 'briefed'); assert.notEqual(first.version, before.version);
+  assert.match((await client.call(input, childActor)).error, /could not update/);
+  await client.close();
+  const later = f.update(f.request({ state: 'building' }, turns[2]));
+  const retry = await connect(t, f, '0.160.0', '', 'sage_update_task');
+  assert.deepEqual(await retry.call(input), { ...first, decision: 'already-updated' });
+  assert.deepEqual(f.read(), { task: later.task, version: later.version });
+  assert.equal(f.tool.read(f.logbook, 'decisions').length, 3);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  await retry.close();
+});
+
+test('native task updates refuse stale versions illegal states merges and invalid metadata', async t => {
+  const f = await taskUpdateFixture(t), before = f.read();
+  for (const changes of [{ state: 'verified' }, { state: 'merged' }, { state: 'repairing' }, { state: 'unknown' },
+    { branch: 'codex/t99-other' }, { pr: '01' }, { title: 'line\nbreak' }, { risk: 'none' }, {}])
+    assert.throws(() => f.update(f.request(changes)));
+  assert.throws(() => f.update({ ...f.request({ state: 'briefed' }), owner: session }));
+  assert.throws(() => f.update(f.request({ state: 'briefed' }), turns[2]));
+  const input = f.request({ title: 'Updated title' }); f.update(input);
+  assert.throws(() => f.update(f.request({ state: 'briefed' }, turns[2], before.version)));
+  assert.throws(() => f.update({ ...input, changes: { title: 'Conflicting reuse' } }));
+  assert.equal(f.read().task.state, 'framed'); assert.equal(f.read().task.title, 'Updated title');
+});
+
+test('native task updates preserve PR history and refuse progress through unanswered gates or findings', async t => {
+  const f = await taskUpdateFixture(t);
+  f.cli('gate', 'add', 'T1', '--question', 'Choose the design', '--options', 'One|Two', '--recommend', '1');
+  assert.throws(() => f.update(f.request({ state: 'briefed' })), /unanswered gate/);
+  f.cli('gate', 'answer', 'G1', '--option', '1');
+  f.update(f.request({ state: 'briefed', pr: '7' }));
+  f.update(f.request({ pr: '8' }, turns[2]));
+  assert.equal(f.read().task.pr, '8');
+  assert.deepEqual(f.tool.read(f.logbook, 'decisions').filter(row => row.decision.startsWith('PR ')).map(row => row.decision), ['PR none → 7', 'PR 7 → 8']);
+  f.cli('task', 'T1', 'set', 'state=building'); f.cli('task', 'T1', 'set', 'state=reviewing');
+  f.cli('finding', 'add', 'T1', '--source', 'qa', '--severity', 'high', '--summary', 'Unresolved fixture finding');
+  assert.throws(() => f.update(f.request({ state: 'verifying' }, turns[0])), /open findings/);
+  assert.equal(f.read().task.state, 'reviewing');
+});
+
+test('native task updates require configured cycles on the current commit before verified or pr-ready', async t => {
+  const f = await taskUpdateFixture(t);
+  const git = (...args) => f.tool.git(['-C', f.options.projectDirectory, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@users.noreply.github.com', ...args], f.env).trim();
+  git('init', '--quiet', '-b', 'codex/t1-update'); git('commit', '--quiet', '--allow-empty', '-m', 'fixture');
+  const sha = git('rev-parse', 'HEAD');
+  f.cli('task', 'T1', 'set', 'branch=codex/t1-update');
+  for (const state of ['briefed', 'building', 'reviewing', 'verifying']) f.cli('task', 'T1', 'set', `state=${state}`);
+  const kinds = ['checks-pass', 'review-clean', 'security-clean', 'ux-clean', 'qa-pass'];
+  for (const kind of kinds) f.cli('verdict', 'T1', '--sha', sha, '--kind', kind, '--cycle', '1');
+  const input = f.request({ state: 'verified' });
+  assert.throws(() => f.update(input), /1 of 2 clean cycles/);
+  for (const kind of kinds.slice(1)) f.cli('verdict', 'T1', '--sha', sha, '--kind', kind, '--cycle', '2');
+  assert.equal(f.update(input).task.state, 'verified');
+  assert.throws(() => f.update(f.request({ state: 'pr-ready' }, turns[2])), /pull request number/);
+  git('commit', '--quiet', '--allow-empty', '-m', 'new head');
+  assert.throws(() => f.update(f.request({ state: 'pr-ready', pr: '7' }, turns[2])), /not verified/);
+  assert.throws(() => f.update(f.request({ title: 'Keep stale readiness' }, turns[2])), /not verified/);
+  assert.equal(f.read().task.state, 'verified'); assert.equal(f.read().task.pr, '');
+  const current = git('rev-parse', 'HEAD');
+  for (const cycle of ['1', '2']) for (const kind of kinds) f.cli('verdict', 'T1', '--sha', current, '--kind', kind, '--cycle', cycle);
+  assert.equal(f.update(f.request({ state: 'pr-ready', pr: '7' }, turns[2])).task.state, 'pr-ready');
+});
+
+test('native task updates recover partial writes without duplicate decisions and refuse unrelated edits', async t => {
+  const f = await taskUpdateFixture(t), input = f.request({ state: 'briefed' });
+  const restore = await stopReviewWrite(t, f, 'decisions');
+  assert.throws(() => f.update(input), /Injected/);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
+  assert.throws(() => f.read(), /incomplete/);
+  assert.throws(() => f.cli('task', 'T1', 'set', 'title=unrelated'), /incomplete/);
+  assert.equal(f.tool.mergeCheck('1'.repeat(40), f.env).ok, false);
+  restore();
+  assert.throws(() => f.update({ ...input, changes: { state: 'building' } }));
+  const first = f.update(input); assert.equal(first.task.state, 'briefed');
+  assert.deepEqual(f.update(input), { ...first, decision: 'already-updated' });
+  assert.equal(f.tool.read(f.logbook, 'decisions').length, 2);
+  const second = f.request({ state: 'building' }, turns[2]), restoreAgain = await stopReviewWrite(t, f, 'tasks');
+  assert.throws(() => f.update(second), /Injected/); restoreAgain();
+  appendFileSync(join(f.logbook, 'decisions.tsv'), 'unrelated edit\n');
+  assert.throws(() => f.update(second));
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
+});
+
+test('native task updates serialize conflicting changes and preserve off-mode owner access', async t => {
+  const f = await taskUpdateFixture(t), version = f.read().version;
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const clients = await Promise.all([connect(t, f, '0.160.0', '', 'sage_update_task'), connect(t, f, '0.160.0', '', 'sage_update_task')]);
+  const outputs = await Promise.all(clients.map((client, index) => client.call(f.request({ title: `Choice ${index}` }, turns[index + 1], version))));
+  assert.equal(outputs.filter(out => out.decision === 'task-updated').length, 1);
+  assert.equal(outputs.filter(out => /could not update/.test(out.error)).length, 1);
+  assert.equal(f.read().version, outputs.find(out => out.decision === 'task-updated').version);
+  assert.equal(f.read().task.state, 'framed');
   await Promise.all(clients.map(client => client.close()));
 });

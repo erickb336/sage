@@ -32,6 +32,32 @@ export function createPreparationServer(options = {}) {
       return { isError: true, content: [{ type: "text", text: "Sage could not create this run. Check the chief identity, request UUID, task, role, and branch writer. Retry an incomplete request with the same fields." }] };
     }
   });
+  server.registerTool("sage_read_task", {
+    description: "Chief only: read a current task and its version for a later update. This does not grant transition or merge permission.",
+    inputSchema: z.object({ task: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { readNativeTask } = await import("./task-update.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(readNativeTask(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not read this task. Check the chief identity, task ID, and configured logbook." }] };
+    }
+  });
+  server.registerTool("sage_update_task", {
+    description: "Chief only: update a task using its last read version and a fresh request UUID. Repeat identical fields after a lost response. Shared state and PR-history rules apply; verified and pr-ready need configured clean cycles on the current branch commit. Unanswered gates block forward progress. A retry returns its original update, not current status. This tool cannot mark a task merged or start a repair round.",
+    inputSchema: z.object({ request: z.string(), task: z.string(), version: z.string(), changes: z.object({
+      title: z.string().optional(), branch: z.string().optional(), pr: z.string().optional(), state: z.string().optional() }).strict() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      if (Buffer.byteLength(JSON.stringify(input), "utf8") > 20 * 1024) throw Error("Invalid request size");
+      const { updateNativeTask } = await import("./task-update.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(updateNativeTask(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not update this task. Check the current version, state route, unanswered gates, findings, and current-commit reviews. Retry an incomplete request with identical fields." }] };
+    }
+  });
   server.registerTool("sage_prepare_task", {
     description: "Save a complete Sage task brief before spawning a named agent. Configured review roles also require reviewCycle and receive a fixed commit target. Preparation does not start the agent or reserve capacity. Copy the returned name, message, and fork_turns unchanged into the later spawn.",
     inputSchema: z.object({ task: z.string(), run: z.string(), name: z.string(), role: z.string(), reviewCycle: z.number().int().min(1).max(10).optional(),

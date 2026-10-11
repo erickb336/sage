@@ -34,7 +34,9 @@ record its report, and finish the run. Another creation retry does not reopen
 that completed run. Direct reads verify one task, run, report, and completion.
 The task remains framed; no review verdict or merge permission is produced.
 
+Versioned task transitions are described in `task-update.md`.
+
 This uses disposable profiles and simulated model responses. Project setup,
-task transitions, full policy, independent review cycles, a real-project pilot,
+full policy, independent review cycles, a real-project pilot,
 and installed automatic operation remain separate work. The installed manifest
 is unchanged, and autopilot remains off.

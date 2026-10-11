@@ -13,10 +13,11 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
-const createRun = process.argv.includes("--sage-create-run");
+const taskLifecycle = process.argv.includes("--sage-task-lifecycle");
+const createRun = taskLifecycle || process.argv.includes("--sage-create-run");
 const createTask = createRun || process.argv.includes("--sage-create-task");
 assert(!createTask || process.argv.slice(2).length === 1, "task_creation_is_a_separate_route");
 const sageOff = process.argv.includes("--sage-off");
@@ -100,7 +101,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,blockStop,captureFailure:failedSpawn,emptyLogbook:createRun,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,blockStop,captureFailure:failedSpawn,emptyLogbook:createRun,taskLifecycle,deadlineMs});
   const initialLogbook = sage || sageOff ? integrated.readLogbook() : null;
   if (createRun) { assert.equal(initialLogbook.tasks.length, 0); assert.equal(initialLogbook.runs.length, 0); }
   if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
@@ -135,11 +136,13 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
+  let taskStarted = false, taskTransitionsVerified = false, initialTask, briefedTask, buildingTask, reviewingTask, verifyingTask;
+  const taskChange = (index, version, changes) => ({ request: `c1111111-2222-4333-8444-55555555555${index}`, task: "T1", version, changes });
   let createdTask, createdTaskVerified = false, createdRun, createdRunVerified = false, finishedCreatedRun = false;
   const runRequest = { request: "b1111111-2222-4333-8444-555555555555", task: "T1", role: "lead", branch: "", candidate: "" };
   const taskRequest = { request: "a1111111-2222-4333-8444-555555555555", title: "Native task creation", size: "small", risk: ["input"], add: ["ux-review"], why: "Check the fixed experience" };
   let prepared = false, reportReceipt, failedDispatchRecovered = false;
-  const calls = { createRun: "probe_create_run", createRunRetry: "probe_create_run_retry", createdRunAfterFinish: "probe_created_run_after_finish", create: "probe_create", createRetry: "probe_create_retry", failureList: "probe_failure_list", prepareRetry: "probe_prepare_retry", spawnRetry: "probe_spawn_retry", inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  const calls = { readTask: "probe_read_task", brief: "probe_brief", briefRetry: "probe_brief_retry", build: "probe_build", review: "probe_review", verify: "probe_verify", verifyWithoutReviews: "probe_verify_without_reviews", createRun: "probe_create_run", createRunRetry: "probe_create_run_retry", createdRunAfterFinish: "probe_created_run_after_finish", create: "probe_create", createRetry: "probe_create_retry", failureList: "probe_failure_list", prepareRetry: "probe_prepare_retry", spawnRetry: "probe_spawn_retry", inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set([...Object.values(calls), ...Object.values(NESTED_CALLS)]);
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -161,12 +164,12 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.createRun, calls.createRunRetry, calls.createdRunAfterFinish, calls.create, calls.createRetry, calls.prepare, calls.prepareRetry, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry, calls.accept, calls.acceptRetry, calls.inspect, ...Object.values(NESTED_CALLS)].includes(item.call_id) ? 2 : 1)
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.readTask, calls.brief, calls.briefRetry, calls.build, calls.review, calls.verify, calls.verifyWithoutReviews, calls.createRun, calls.createRunRetry, calls.createdRunAfterFinish, calls.create, calls.createRetry, calls.prepare, calls.prepareRetry, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry, calls.accept, calls.acceptRetry, calls.inspect, ...Object.values(NESTED_CALLS)].includes(item.call_id) ? 2 : 1)
           && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
         if ((denySpawn || outage || failedSpawn) && [calls.spawn, calls.spawnRetry].includes(item.call_id)) outputs[item.call_id] = output;
-        else if ([calls.followup, calls.childControl, NESTED_CALLS.control].includes(item.call_id)) outputs[item.call_id] = output;
+        else if ([calls.verifyWithoutReviews, calls.followup, calls.childControl, NESTED_CALLS.control].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -194,7 +197,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen,
       chiefCopies: chiefParts.map(part => textValues(input).reduce((count, text) => count + text.split(part).length - 1, 0)),
       chiefOrder: chiefParts.map(part => textValues(input).join("\n").indexOf(part)),
-      createRunTools: mcpTools("sage_create_run"), createTools: mcpTools("sage_create_task"), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review"), inspectTools: mcpTools("sage_read_recorded_report") };
+      readTaskTools: mcpTools("sage_read_task"), updateTaskTools: mcpTools("sage_update_task"), createRunTools: mcpTools("sage_create_run"), createTools: mcpTools("sage_create_task"), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review"), inspectTools: mcpTools("sage_read_recorded_report") };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -373,6 +376,32 @@ data: ${JSON.stringify(event)}
         print({ type: "run_creation_evidence", createdRuns: 1, retryReusedRun: true, preseededTasks: 0, preseededRuns: 0,
           admissionUnchanged: true, simulatedModel: true });
       }
+      if (taskLifecycle && !taskStarted) {
+        check(info.readTaskTools.length === 1 && info.updateTaskTools.length === 1, "task_lifecycle_tools_missing");
+        if (!Object.hasOwn(info.outputs, calls.readTask)) {
+          respond(res, { type: "function_call", ...info.readTaskTools[0], call_id: calls.readTask, arguments: JSON.stringify({ task: "T1" }) }); return;
+        }
+        initialTask = info.outputs[calls.readTask];
+        check(initialTask?.task?.state === "framed" && /^[0-9a-f]{64}$/.test(initialTask.version), "task_snapshot_missing");
+        const brief = taskChange(1, initialTask.version, { state: "briefed", branch: "codex/t1-lifecycle" });
+        if (!Object.hasOwn(info.outputs, calls.brief)) {
+          respond(res, { type: "function_call", ...info.updateTaskTools[0], call_id: calls.brief, arguments: JSON.stringify(brief) }); return;
+        }
+        briefedTask = info.outputs[calls.brief];
+        check(briefedTask?.decision === "task-updated" && briefedTask.task.state === "briefed" && briefedTask.task.branch === "codex/t1-lifecycle", "briefed_task_missing");
+        if (!Object.hasOwn(info.outputs, calls.briefRetry)) {
+          respond(res, { type: "function_call", ...info.updateTaskTools[0], call_id: calls.briefRetry, arguments: JSON.stringify(brief) }); return;
+        }
+        check(JSON.stringify(info.outputs[calls.briefRetry]) === JSON.stringify({ ...briefedTask, decision: "already-updated" }), "task_update_retry_mismatch");
+        if (!Object.hasOwn(info.outputs, calls.build)) {
+          respond(res, { type: "function_call", ...info.updateTaskTools[0], call_id: calls.build,
+            arguments: JSON.stringify(taskChange(2, briefedTask.version, { state: "building" })) }); return;
+        }
+        buildingTask = info.outputs[calls.build];
+        check(buildingTask?.decision === "task-updated" && buildingTask.task.state === "building"
+          && integrated.readLogbook().tasks[0].state === "building", "building_task_missing");
+        taskStarted = true;
+      }
       const preparationCall = failedDispatchRecovered ? calls.prepareRetry : calls.prepare;
       if (sage && !prepared) {
         if (!Object.hasOwn(info.outputs, preparationCall)) {
@@ -480,14 +509,37 @@ data: ${JSON.stringify(event)}
         const retry = info.outputs[calls.createdRunAfterFinish], logbook = integrated.readLogbook(), journal = integrated.readJournal();
         check(retry?.decision === "already-created" && JSON.stringify(retry.run) === JSON.stringify(createdRun)
           && logbook.runs.length === 1 && logbook.runs[0].status === "done" && logbook.runs[0].ended
-          && integrated.readRunReport() === CHILD_MARKER && logbook.tasks[0].state === "framed"
+          && integrated.readRunReport() === CHILD_MARKER && logbook.tasks[0].state === (taskLifecycle ? "building" : "framed")
           && logbook.ledger.length === 0 && logbook.gates.length === 0 && journal.completions.length === 1
           && journal.reservations[0].assignment.task === createdTask.id && journal.reservations[0].assignment.run === createdRun.id,
           "created_run_completion_mismatch");
         finishedCreatedRun = true;
         print({ type: "created_run_completion_evidence", createdTasks: 1, createdRuns: 1, completedRuns: 1,
           recordedReports: journal.reports.length, retryDidNotReopenRun: true, preseededTasks: 0, preseededRuns: 0,
-          taskStillFramed: true, acceptedVerdicts: 0, simulatedModel: true });
+          taskStillFramed: !taskLifecycle, acceptedVerdicts: 0, simulatedModel: true });
+        if (taskLifecycle) respond(res, { type: "function_call", ...info.updateTaskTools[0], call_id: calls.review,
+          arguments: JSON.stringify(taskChange(3, buildingTask.version, { state: "reviewing" })) });
+        else respond(res, message(MARKER));
+      } else if (rootRequests === 10 && taskLifecycle) {
+        reviewingTask = info.outputs[calls.review];
+        check(reviewingTask?.decision === "task-updated" && reviewingTask.task.state === "reviewing", "reviewing_task_missing");
+        respond(res, { type: "function_call", ...info.updateTaskTools[0], call_id: calls.verify,
+          arguments: JSON.stringify(taskChange(4, reviewingTask.version, { state: "verifying" })) });
+      } else if (rootRequests === 11 && taskLifecycle) {
+        verifyingTask = info.outputs[calls.verify];
+        check(verifyingTask?.decision === "task-updated" && verifyingTask.task.state === "verifying", "verifying_task_missing");
+        respond(res, { type: "function_call", ...info.updateTaskTools[0], call_id: calls.verifyWithoutReviews,
+          arguments: JSON.stringify(taskChange(5, verifyingTask.version, { state: "verified" })) });
+      } else if (rootRequests === 12 && taskLifecycle) {
+        const refusal = info.outputs[calls.verifyWithoutReviews], logbook = integrated.readLogbook();
+        check(typeof refusal === "string" && refusal.includes("Sage could not update this task"), "premature_verification_not_refused");
+        check(logbook.tasks.length === 1 && logbook.tasks[0].state === "verifying" && logbook.runs.length === 1
+          && logbook.runs[0].status === "done" && logbook.ledger.length === 0 && logbook.decisions.length === 5
+          && logbook.decisions.filter(row => row.decision.startsWith("state ")).length === 4, "task_transition_logbook_mismatch");
+        taskTransitionsVerified = true;
+        print({ type: "task_transition_evidence", states: ["framed", "briefed", "building", "reviewing", "verifying"],
+          recordedTransitions: 4, retryCreatedDuplicate: false, prematureVerificationRefused: true,
+          completedRuns: 1, recordedVerdicts: 0, simulatedModel: true });
         respond(res, message(MARKER));
       } else if (rootRequests === 6 && reportProbe) {
         const receipt = info.outputs[calls.report];
@@ -632,7 +684,7 @@ data: ${JSON.stringify(event)}
     let otherMessages = 0;
     let completedTurns = 0;
     let failedTurns = 0;
-    let unexpectedItems = 0;
+    let unexpectedItems = 0, refusedTaskUpdates = 0;
     let stderrBytes = 0;
     let stderrText = "";
     const eventTypes = new Set(["thread.started", "turn.started", "item.started", "item.updated", "item.completed", "turn.completed", "turn.failed", "error"]);
@@ -642,7 +694,7 @@ data: ${JSON.stringify(event)}
       try { event = JSON.parse(line); } catch { malformedEvents++; return; }
       const itemType = event.type === "item.completed" ? event.item?.type : undefined;
       const itemDiagnostic = itemType && !["agent_message", "reasoning"].includes(itemType)
-        ? diagnostic(JSON.stringify({ type: itemType, level: event.item.level, message: event.item.message, text: event.item.text }))
+        ? diagnostic(JSON.stringify({ type: itemType, level: event.item.level, message: event.item.message, text: event.item.text, status: event.item.status, server: event.item.server, tool: event.item.tool }))
         : undefined;
       print({ type: "event", event: eventTypes.has(event.type) ? event.type : "unknown", itemType, itemDiagnostic });
       if (event.type === "turn.completed") completedTurns++;
@@ -659,6 +711,10 @@ data: ${JSON.stringify(event)}
         // The native tool result in the next request supplies the stricter state assertion.
       } else if (sage && event.type === "item.completed" && event.item?.type === "mcp_tool_call" && event.item.status === "completed") {
         // The exact preparation receipt and final journal assertions verify this visible tool call.
+      } else if (taskLifecycle && event.type === "item.completed" && event.item?.type === "mcp_tool_call"
+        && event.item.status === "failed" && event.item.server === "sage_preparation" && event.item.tool === "sage_update_task"
+        && rootRequests === 11 && JSON.stringify(event.item.arguments) === JSON.stringify(taskChange(5, verifyingTask.version, { state: "verified" }))) {
+        refusedTaskUpdates++;
       } else if (event.type === "item.completed" && event.item?.type !== "reasoning") {
         unexpectedItems++;
       }
@@ -684,19 +740,20 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : rootRequests === (taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
-      && unexpectedItems === 0 && malformedEvents === 0 && rejectedRequests === 0;
+      && unexpectedItems === 0 && refusedTaskUpdates === (taskLifecycle ? 1 : 0) && malformedEvents === 0 && rejectedRequests === 0;
     print({ type: "result", ...result, responseRequests, rootRequests, ...(failedSpawn ? { rejectedDispatchRootRequests: 3 } : {}), childRequests, childTaskSeen, childResponseSent,
       nativeRunning, nativeWait, nativeCompleted, exactMessages, otherMessages, completedTurns, failedTurns,
-      unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
+      unexpectedItems, refusedTaskUpdates, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
     if (!verified) process.exitCode = 1;
     if (sage || sageOff) assert(chiefContextVerified, "chief_context_not_observed");
     if (createTask) assert(createdTaskVerified, "task_creation_not_observed");
     if (createRun) assert(createdRunVerified && finishedCreatedRun, "run_creation_not_observed");
+    if (taskLifecycle) assert(taskTransitionsVerified, "task_transitions_not_observed");
     if (sageOff) {
       const saved = integrated.readJournal();
       assert.equal(saved.modes.at(-1)?.sage, false);

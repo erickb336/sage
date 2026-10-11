@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** All files and the scoped tool approvals belong only to setupCapture's validated temporary root. */
-export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, denyCommand = false, emptyLogbook = false } = {}) {
+export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, denyCommand = false, emptyLogbook = false, taskLifecycle = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   for (const file of ["sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
     writeFileSync(join(root, file), readFileSync(new URL(file, import.meta.url)));
@@ -18,8 +18,8 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   const tool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
   const env = { ...process.env, SAGE_HOME: mode.logbookRoot, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   const git = (...args) => tool.git(["-C", mode.projectDirectory, ...args], env);
-  if (review) {
-    git("init", "--quiet", "-b", "codex/t1-review");
+  if (review || taskLifecycle) {
+    git("init", "--quiet", "-b", review ? "codex/t1-review" : "codex/t1-lifecycle");
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@users.noreply.github.com", "commit", "--quiet", "--allow-empty", "-m", "fixture");
   }
   const command = (...args) => tool.sage([...args, "--project", mode.projectDirectory], env);
@@ -35,7 +35,7 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   const readLogbook = () => Object.fromEntries(["tasks", "runs", "ledger", "findings", "gates", "decisions"].map(name => [name, tool.read(logbook, name)]));
   const servers = [["sage_fixture", "sage-hook-server.mjs"], ["sage_preparation", "sage-preparation-server.mjs"]];
   const config = servers.map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\n`).join("")
-    + '[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n';
+    + '[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_update_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n';
   return { config, reviewTarget, readLogbook, mergeReady: () => tool.mergeCheck(reviewTarget.sha, env).ok, readRunReport: () => readFileSync(join(logbook, tool.read(logbook, "runs")[0].report), "utf8"), readFault: () => JSON.parse(readFileSync(join(root, "hook-outage.json"), "utf8")), readJournal: () => readAdmission(directory), hook: event => {
     // Deliberately omit MCP SubagentStart: the first tool must establish the child's binding.
     if (event === "SubagentStart") return [];
