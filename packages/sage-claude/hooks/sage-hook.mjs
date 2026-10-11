@@ -967,9 +967,10 @@ function physical(path, disk) {
     if (part === "..") { at = dirname(at); continue; }
     const next = join(at, part);
     if (!disk.has(next)) {
-      let kind = false; // missing, also for a part under a file
-      try { const stat = lstatSync(next, { throwIfNoEntry: false }); kind = stat && (stat.isSymbolicLink() ? real(next) : true); } catch {}
-      disk.set(next, kind);
+      let stat; // missing, also for a part under a file
+      try { stat = lstatSync(next, { throwIfNoEntry: false }); } catch {}
+      // A link loop throws, as real does: the path is unknown, and the caller fails closed (F-T229-29).
+      disk.set(next, stat ? (stat.isSymbolicLink() ? real(next) : true) : false);
     }
     const kind = disk.get(next);
     if (!kind) return join(next, ...parts.slice(k + 1));

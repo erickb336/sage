@@ -1558,6 +1558,32 @@ test("when the rule cannot run, every command and file change of an agent is ref
   assert.equal(denied(s.send(bash("npm test"))), undefined, "the chief is unchanged");
 });
 
+// F-T229-29: a write through a link loop is an unknown path, so the logbook rule refuses it for an agent (fail closed),
+// as before the cheap path walk of F-T229-20. A read through the loop and the chief stay allowed.
+test("F-T229-29: an agent's write through a link loop is refused; a read and the chief are not (table)", () => {
+  const s = session();
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-loop-")));
+  const loop = join(dir, "loop"), a = join(dir, "a");
+  symlinkSync("loop", loop); symlinkSync("b", a); symlinkSync("a", join(dir, "b"));
+  const LOOP = /could not check this agent's command \(too many links in /;
+  const rows = [
+    [`printf x > ${loop}/f`, LOOP], [`touch ${loop}/f`, LOOP], [`rm ${a}/f`, LOOP], [`cp /etc/hosts ${loop}`, LOOP],
+    [`cat ${loop}/f`, null], [`touch ${dir}/plain`, null],
+  ];
+  const wrong = [];
+  try {
+    for (const [command, expected] of rows) {
+      const agent = denied(s.send(bash(command, FEATURE, AGENT))) ?? "";
+      if (expected ? !expected.test(agent) : agent) wrong.push(`an agent: ${command}: got ${agent || "allowed"}`);
+      const chief = denied(s.send(bash(command))) ?? "";
+      if (chief) wrong.push(`the chief: ${command}: got ${chief}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.deepEqual(wrong, []);
+});
+
 test("the rule holds for every tool that runs a command: Monitor, PowerShell and the terminal tools (T83)", () => {
   const s = session();
   const forged = `node ${TOOL} verdict T2 --kind qa-pass --sha ${SHA} --project /p`;
@@ -2725,12 +2751,28 @@ test("F-T229-17: the board rule is fast on a word of many variable and ? pieces"
 // F-T229-20: the cost of one call grows in line with its text on every shape, also for an agent. Before the repair, the
 // board rule and the gh and logbook rules called realpath on each word, and walked up a long word one part at a time:
 // 1 MB of short words took 3 to 4 s, and a 1 MB code argument 69 s for an agent. Now the hook lstat-s each new folder
-// once per call, and a path longer than the system allows starts within it. Each shape runs first as Claude Code runs the
-// hook, in its own process with the 10 s limit, so that the old code fails here instead of stopping the test run.
-test("F-T229-20: the hook reads 1 MB of words, of code or of code on stdin within its limit, for the chief and an agent", async () => {
-  const s = session();
-  const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
+// once per call, and a path longer than the system allows starts within it. Each shape runs in a child process that
+// measures the hook's own CPU time, so that the old code fails here instead of stopping the test run. The child's
+// 120 s wall-clock limit only stops a hung test: it is not the assertion (F-T229-28; the 10 s limit failed under load).
+const CPU_CHILD = `
+  import { handle } from ${JSON.stringify(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url).href)};
+  import { readFileSync } from "node:fs";
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+  const out = {};
+  for (const { who, event, state } of JSON.parse(readFileSync(0, "utf8"))) {
+    let ms = Infinity;
+    for (let i = 0; i < 3 && ms > 5000; i++) { // the fastest of up to 3, so that one garbage collection does not count
+      const t = process.cpuUsage();
+      handle(event, { ...state }, slots);
+      const { user, system } = process.cpuUsage(t);
+      ms = Math.min(ms, (user + system) / 1000);
+    }
+    out[who] = ms;
+  }
+  process.stdout.write(JSON.stringify(out));
+`;
+test("F-T229-20: the hook reads 1 MB of words, of code or of code on stdin within its limit, for the chief and an agent", () => {
+  const s = session();
   const size = 1 << 20;
   const many = (f) => { let text = ""; for (let i = 0; text.length < size; i++) text += f(i); return text; };
   const shapes = {
@@ -2739,31 +2781,20 @@ test("F-T229-20: the hook reads 1 MB of words, of code or of code on stdin withi
     "code of paths": `node -e '${many((i) => `require("./lib/m${i}.js");`)}'`, "code of one word": `node -e '${"lib/".repeat(size / 4)}'`,
     "code on stdin": `node <<'EOF'\n${many((i) => `require("./lib/m${i}.js");\n`)}EOF`,
   };
-  const saved = process.env.HOME;
   const slow = [];
   try {
     for (const [name, command] of Object.entries(shapes)) {
-      const r = spawnSync("node", LAUNCHER, { input: JSON.stringify({ session_id: "s1", ...bash(command, FEATURE, AGENT) }), encoding: "utf8", env: s.vars, timeout: 10_000 });
-      assert.equal(r.signal, null, `${name}: the hook finished within its 10 s timeout`);
+      const calls = [{ who: "the chief", event: bash(command), state: { sage: true, given: true } }, { who: "an agent", event: bash(command, FEATURE, AGENT), state: { sage: true } }];
+      const r = spawnSync("node", ["--input-type=module", "-e", CPU_CHILD], { input: JSON.stringify(calls), encoding: "utf8", env: { ...process.env, HOME: join(s.dir, "fake-home") }, timeout: 120_000 });
+      assert.equal(r.signal, null, `${name}: the child ran past 120 s of wall-clock time, so the hook hangs (a guard, not the bound)`);
       assert.equal(r.status, 0, r.stderr);
-    }
-    process.env.HOME = join(s.dir, "fake-home");
-    for (const [name, command] of Object.entries(shapes)) {
-      for (const [who, state, extra] of [["the chief", { sage: true, given: true }, {}], ["an agent", { sage: true }, AGENT]]) {
-        let ms = Infinity;
-        for (let i = 0; i < 3 && ms > 5000; i++) { // the fastest of up to 3, so that one garbage collection does not count
-          const t = process.cpuUsage();
-          handle(bash(command, FEATURE, extra), { ...state }, slots);
-          const { user, system } = process.cpuUsage(t);
-          ms = Math.min(ms, (user + system) / 1000);
-        }
+      for (const [who, ms] of Object.entries(JSON.parse(r.stdout))) {
         // CPU time, not wall time. A call takes about 0.02 to 1.6 s of CPU (2026-10-11, a Mac with 5 agents), so 5 s is 3
         // times the slowest shape and half the hook's 10 s limit; the old code took 69 s on a code argument.
         if (!(ms < 5000)) slow.push(`${name}, ${who}: ${Math.round(ms)} ms of CPU`); // timing-ok: 3 times the slowest shape, half the hook limit; the old code took 69 s
       }
     }
   } finally {
-    process.env.HOME = saved;
     rmSync(s.dir, { recursive: true, force: true });
   }
   assert.deepEqual(slow, [], "each 1 MB shape takes under 5 s of CPU");
