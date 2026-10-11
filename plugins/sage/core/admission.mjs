@@ -264,16 +264,14 @@ function apply(state, event) {
     if (copy.reservations.some(row => row.preparation === event.preparation)) refuse("preparation already has a dispatch");
   }
   if (copy.reservations.some(({ assignment: a }) => a.id === value.id)) refuse("assignment ID already exists");
-  if (event.rolePlan) {
-    if (event.uniqueName && copy.reservations.some(row => row.assignment.project === value.project && row.assignment.session === value.session
-      && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
-      && row.dispatch.name === event.dispatch.name)) refuse("child dispatch name is already reserved");
-    checkRoleReservation(active, value, event.rolePlan);
-  }
+  if (event.rolePlan && event.uniqueName && copy.reservations.some(row => row.assignment.project === value.project && row.assignment.session === value.session
+    && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
+    && row.dispatch.name === event.dispatch.name)) refuse("child dispatch name is already reserved");
   // A run is one execution, across all owners in this participating store. A proven
   // failure before child creation may retry; completion does not create a new run.
   if (copy.reservations.some(row => row.assignment.project === value.project && row.assignment.run === value.run
     && !failed.has(row.assignment.id))) refuse("run already has a dispatch; record a new run");
+  if (event.rolePlan) checkRoleReservation(active, value, event.rolePlan);
   if (active.length >= copy.config.total) refuse("total capacity is occupied");
   const projectLimit = copy.config.projects.find((p) => p.project === value.project).limit;
   if (active.filter(({ assignment: a }) => a.project === value.project).length >= projectLimit) refuse("project capacity is occupied");

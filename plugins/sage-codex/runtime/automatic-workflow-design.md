@@ -14,6 +14,11 @@ Status shows the mode, task, occupied slots, open questions and missing capabili
 
 Core owns project configuration, session epochs, tasks, immutable briefs, atomic assignments, bound runs, report receipts and exact-head review cycles. Codex owns trusted event decoding and installed transport. Native permissions remain in force.
 
+Prepared runtime enforcement now limits each recorded task to one active lead
+and its team within one admission journal. Native lead delegation stays within
+the lead's current task and run. Distinct task IDs with the same PR number still
+need separate reconciliation; this rule does not establish global PR ownership.
+
 Only verified owner input changes mode. Missing identity, unsupported events and capture gaps refuse protected work. Only the chief starts leads; bound leads start permitted children within shared limits.
 
 A failed start retains its reservation until authoritative failure evidence permits release. Duplicate events are idempotent. Conflicting identities refuse. Late events cannot release newer assignments.

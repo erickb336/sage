@@ -22,6 +22,16 @@ These checks read current records at each boundary. They do not pin every task
 field at preparation, answer gates, or enforce every workflow route. Review
 preparation also pins its current commit, round, and cycle.
 
+One active lead owns a recorded task in the participating admission journal.
+A replacement lead waits until the previous lead and its team finish, or until
+an exact pre-child failure releases their reservations. Other tasks can proceed
+within the shared limits. A verified Codex lead can prepare and dispatch children
+only for its own task. Both boundaries recheck the parent lead's current run.
+
+This ownership key is the project and task ID. It does not deduplicate a PR
+number assigned to different task IDs or coordinate separate journals. Older
+history with overlapping leads for one task is refused without rewriting it.
+
 One run can receive one dispatch across owners in the same admission journal.
 Another name, task label, or owner cannot reuse it. Concurrent requests choose
 one winner. An exact dispatch retry returns the original receipt without a new

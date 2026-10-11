@@ -2618,3 +2618,46 @@ test('native run claims refuse a second prepared agent while preserving the firs
   f.api.prepareNativeTask({ ...f.input, task: 'T2', run: 'R3', name: 'other_task' }, f.native(session), f.options);
   assert.equal(f.api.reservePreparedSpawn(f.spawnInput('other_task', 'spawn-other'), f.native(session), f.options).decision, 'permit-once');
 });
+
+async function foreignLeadWork(t) {
+  const f = await preparationServerFixture(t); f.bindLead();
+  f.assignmentCli('task', 'T2', 'set', 'branch=codex/t2-other');
+  f.assignmentCli('run', 'add', 'T2', '--role', 'implementer', '--branch', 'codex/t2-other');
+  const input = { ...f.input, task: 'T2', run: 'R4', role: 'implementer', name: 'foreign_builder' };
+  assert.equal(f.assignmentTool.captureRunAssignment({ project: f.options.projectDirectory, task: input.task,
+    run: input.run, role: input.role }, f.assignmentEnv).task, 'T2');
+  return { ...f, foreign: input };
+}
+
+test('native lead ownership refuses valid work on another task at preparation', async t => {
+  const f = await foreignLeadWork(t);
+  assert.throws(() => f.api.prepareNativeTask(f.foreign, f.native(childActor), f.options), /could not verify/);
+  const own = { ...f.input, name: 'own_qa', run: 'R2', role: 'qa', reviewCycle: 1 };
+  assert.equal(f.api.prepareNativeTask(own, f.native(childActor), f.options).decision, 'prepared');
+  assert.equal(f.core.readAdmission(f.options.directory).preparations.length, 2);
+});
+
+test('native lead ownership refuses an older foreign-task preparation at dispatch', async t => {
+  const f = await foreignLeadWork(t);
+  f.core.prepareAdmission(f.options.directory, f.scope,
+    { task: f.foreign.task, run: f.foreign.run, name: f.foreign.name, issuer: childActor },
+    { issuerRole: 'lead', role: 'implementer' }, f.input.brief);
+  const spawn = { ...f.spawnInput(f.foreign.name, 'foreign-spawn'), turn_id: turns[1], transcript_path: f.childTranscript() };
+  assert.throws(() => f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options), /could not verify/);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
+});
+
+test('native lead ownership rechecks the parent run before preparing or dispatching children', async t => {
+  const f = await preparationServerFixture(t); f.bindLead();
+  const input = { ...f.input, run: 'R2', name: 'own_qa', role: 'qa', reviewCycle: 1 };
+  f.api.prepareNativeTask(input, f.native(childActor), f.options);
+  const spawn = { ...f.spawnInput(input.name, 'qa-spawn'), turn_id: turns[1], transcript_path: f.childTranscript() };
+  for (const [field, value] of [['status', 'done'], ['round', '1'], ['role', 'qa'], ['task', 'T2'], ['report', 'reports/old.md']]) {
+    const restore = editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R1' ? { ...row, [field]: value } : row));
+    assert.throws(() => f.api.prepareNativeTask({ ...input, name: 'late_qa' }, f.native(childActor), f.options), field);
+    assert.throws(() => f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options), field);
+    restore();
+  }
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
+  assert.equal(f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options).decision, 'permit-once');
+});

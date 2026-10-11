@@ -31,7 +31,8 @@ function actorScope(options, native) {
   const requests = observations.filter(row => row.kind === "spawn-request" && row.actor === session && row.name === reservation.dispatch.name);
   if (requests.length !== 1 || requests[0].call !== bound.call || requests[0].turn !== reservation.dispatch.turn
     || !observations.some(row => row.kind === "child-start" && row.child === native.actor && row.turn === bound.turn)) refuse();
-  return { scope: { project: owner.project, session: owner.session, epoch: owner.epoch }, role: "lead" };
+  checkRun(options, { ...reservation.assignment, role: "lead" });
+  return { scope: { project: owner.project, session: owner.session, epoch: owner.epoch }, role: "lead", task: reservation.assignment.task };
 }
 
 function checkRun(options, input) {
@@ -55,7 +56,8 @@ export function prepareNativeTask(input, context, options) {
   const keys = ["task", "run", "name", "role", "brief", ...(hasCycle ? ["reviewCycle"] : [])];
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
     || keys.some(key => !Object.hasOwn(input, key)) || typeof input.name !== "string" || !NAME.test(input.name)) refuse();
-  const { scope, role } = actorScope(options, native);
+  const { scope, role, task } = actorScope(options, native);
+  if (role === "lead" && input.task !== task) refuse();
   checkRun(options, input);
   const reviewRole = REVIEW_ROLES.includes(input.role);
   if (hasCycle && (!reviewRole || !options.logbookRoot)) refuse();
@@ -80,11 +82,12 @@ export function reservePreparedSpawn(input, context, options) {
   if (typeof message !== "string" || !message || Buffer.byteLength(message, "utf8") > 1024 * 1024
     || Buffer.from(message, "utf8").toString("utf8") !== message) refuse();
   const taskHash = createHash("sha256").update(message).digest("hex");
-  const { scope, role } = actorScope(options, native);
+  const { scope, role, task } = actorScope(options, native);
   if (scope.session !== `codex:${observed.session}`) refuse();
   const prepared = readAdmission(options.directory).preparations.filter(row => row.project === scope.project
     && row.session === scope.session && row.epoch === scope.epoch && row.issuer === native.actor && row.name === observed.name);
   if (prepared.length !== 1 || message !== preparedTaskMessage(prepared[0])) refuse();
+  if (role === "lead" && prepared[0].task !== task) refuse();
   checkRun(options, { ...prepared[0], role: prepared[0].rolePlan.role });
   if (REVIEW_ROLES.includes(prepared[0].rolePlan.role) && (options.logbookRoot || prepared[0].review)) {
     if (!prepared[0].review) refuse();

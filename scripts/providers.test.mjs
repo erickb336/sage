@@ -812,7 +812,7 @@ async function roleAdmissionFixture(t, limits = { total: 50, projects: [{ projec
   const owner = api.activateAdmission(journal, { project: "project-a", session: "root", activation });
   const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
   const args = (index, issuer = "root", current = scope) => [journal, current,
-    { task: "T1", run: `R${index}`, issuer, call: `spawn-${index}` },
+    { task: `T${index}`, run: `R${index}`, issuer, call: `spawn-${index}` },
     { tool: "spawn", turn: activation, name: `agent-${index}`, argumentsHash: "a".repeat(64) }];
   const reserve = (index, role = "lead", issuerRole = "chief-of-staff", issuer = "root", current = scope) =>
     api.reserveRoleAdmission(...args(index, issuer, current), { issuerRole, role });
@@ -1400,7 +1400,7 @@ async function nativeBindingFixture(t) {
   const owner = f.api.activateAdmission(f.journal, { project: f.scope.project, session: `codex:${root}`, activation: f.activation });
   const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
   const reserve = (index, role, issuerRole, issuer = root, name = `agent_${index}`, confirm = true, brief) => {
-    const args = f.args(index, issuer, scope); args[3].name = name; args[3].tool = "collaborationspawn_agent";
+    const args = f.args(index, issuer, scope); if (issuerRole === "lead") args[2].task = "T1"; args[3].name = name; args[3].tool = "collaborationspawn_agent";
     const assignment = (brief === undefined ? f.api.reserveRoleAdmission(...args, { issuerRole, role })
       : f.api.reserveBriefAdmission(...args, { issuerRole, role }, brief)).assignment;
     const base = { schema: 1, runtime: "0.160.0", session: root, actor: issuer, call: assignment.call, turn: f.activation };
@@ -1867,7 +1867,7 @@ async function reportReceiptFixture(t) {
   const binding = bindingFor(assigned);
   f.api.bindAdmission(f.journal, binding);
   const { createHash } = await import("node:crypto");
-  const receipt = (text = report, bound = binding, run = assigned.run) => ({ binding: bound, task: assigned.task,
+  const receipt = (text = report, bound = binding, run = assigned.run, task = assigned.task) => ({ binding: bound, task,
     run, reportMessage: "report-message", reportHash: createHash("sha256").update(text).digest("hex"), text });
   return { ...f, binding, receipt };
 }
@@ -1917,7 +1917,7 @@ test("concurrent durable report receipts publish once and conflicting reports ca
   assert.deepEqual(retries.map(row=>row.decision).sort(), ["already-recorded", "report-recorded"]);
   const second = f.reserve(2).assignment, bound = bindingFor(second,"child-2","turn-2");
   f.api.bindAdmission(f.journal,bound);f.api.completeAdmission(f.journal,bound);
-  const different = await Promise.all([run(f.receipt(report,bound,second.run)),run(f.receipt(report.replace("RESULT PASS","RESULT FAIL"),bound,second.run))]);
+  const different = await Promise.all([run(f.receipt(report,bound,second.run,second.task)),run(f.receipt(report.replace("RESULT PASS","RESULT FAIL"),bound,second.run,second.task))]);
   assert.equal(different.filter(row=>row.decision==="report-recorded").length,1);
   assert.equal(different.filter(row=>row.refused).length,1);
   const saved=f.api.readAdmission(f.journal).reports;
@@ -2383,4 +2383,58 @@ test('run claims refuse correctly hashed journal history that dispatches one run
   assert.throws(() => f.api.readAdmission(f.journal), /run already has a dispatch/);
   assert.throws(() => f.reserve(3), /run already has a dispatch/);
   assert.equal(readFileSync(file, 'utf8'), damaged);
+});
+
+test('lead ownership permits only one active lead for a task across owners', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await roleAdmissionFixture(t, undefined, provider), first = f.reserve(1);
+    const other = f.api.activateAdmission(f.journal, { project: f.scope.project, session: 'other-owner', activation: f.activation });
+    const args = f.args(2, other.session, admissionScope(other)); args[2].task = 'T1';
+    assert.throws(() => f.api.reserveRoleAdmission(...args, { issuerRole: 'chief-of-staff', role: 'lead' }), /active lead or team/);
+    assert.equal(f.reserve(1).decision, 'already-reserved');
+    assert.equal(f.reserve(3).decision, 'permit-once');
+    const binding = bindingFor(first.assignment); f.api.bindAdmission(f.journal, binding); f.api.completeAdmission(f.journal, binding);
+    assert.equal(f.api.reserveRoleAdmission(...args, { issuerRole: 'chief-of-staff', role: 'lead' }).decision, 'permit-once');
+  }
+});
+
+test('lead ownership retains a task while the old team runs and releases proven failures', async t => {
+  const f = await roleAdmissionFixture(t), first = f.reserve(1), lead = bindingFor(first.assignment, 'lead-child');
+  f.api.bindAdmission(f.journal, lead);
+  const args = f.args(2, 'lead-child'); args[2].task = 'T1';
+  const child = f.api.reserveRoleAdmission(...args, { issuerRole: 'lead', role: 'qa' });
+  f.api.completeAdmission(f.journal, lead);
+  const next = f.args(3); next[2].task = 'T1';
+  const replace = () => f.api.reserveRoleAdmission(...next, { issuerRole: 'chief-of-staff', role: 'lead' });
+  assert.throws(replace, /active lead or team/);
+  const bound = bindingFor(child.assignment, 'qa-child'); f.api.bindAdmission(f.journal, bound); f.api.completeAdmission(f.journal, bound);
+  const replacement = replace(); assert.equal(replacement.decision, 'permit-once');
+  f.api.failAdmission(f.journal, failureFor(replacement.assignment));
+  const fresh = f.args(4); fresh[2].task = 'T1';
+  assert.equal(f.api.reserveRoleAdmission(...fresh, { issuerRole: 'chief-of-staff', role: 'lead' }).decision, 'permit-once');
+});
+
+test('lead ownership chooses one task owner under concurrent distinct run requests', async t => {
+  const { spawn } = await import('node:child_process'), f = await roleAdmissionFixture(t);
+  const program = `import {reserveRoleAdmission} from ${JSON.stringify(f.url)};
+    process.send({ready:true}); process.once('message', args=>{try{process.send({result:reserveRoleAdmission(...args)});}
+    catch(error){process.send({error:error.message});}process.disconnect();});`;
+  const children = [1, 2].map(index => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', program], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: process.env });
+    let result, stdout = '', stderr = '';
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    const ready = new Promise((resolve, reject) => { child.once('error', reject); child.once('message', value => value.ready ? resolve() : reject(Error('worker not ready'))); });
+    child.on('message', value => { if (!value.ready) result = value; });
+    const closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => {
+      try { assert.equal(code, 0, stderr); assert.equal(signal, null); assert.equal(stdout, ''); assert.equal(stderr, ''); assert(result); resolve(result); }
+      catch(error) { reject(error); }
+    }); });
+    const args = f.args(index); args[2].task = 'T1'; args.push({ issuerRole: 'chief-of-staff', role: 'lead' });
+    return { child, args, ready, closed };
+  });
+  await Promise.all(children.map(row => row.ready)); for (const row of children) row.child.send(row.args);
+  const results = await Promise.all(children.map(row => row.closed));
+  assert.equal(results.filter(row => row.result?.decision === 'permit-once').length, 1);
+  assert.equal(results.filter(row => /active lead or team/.test(row.error)).length, 1);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 1);
 });

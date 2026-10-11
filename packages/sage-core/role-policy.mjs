@@ -18,6 +18,10 @@ export function checkRoleReservation(reservations, assignment, input) {
   }
   if (plan.issuerRole === "lead" && !TEAM.has(plan.role)) throw Error("A lead can start only its permitted team");
   const project = reservations.filter(row => row.assignment.project === assignment.project);
+  if (plan.role === "lead" && project.some(row => row.assignment.task === assignment.task
+    && (!row.rolePlan || row.rolePlan.role === "lead" || row.rolePlan.issuerRole === "lead"))) {
+    throw Error("The task already has an active lead or team");
+  }
   if (plan.role === "lead" && project.filter(row => !row.rolePlan || row.rolePlan.role === "lead").length >= 3) {
     throw Error("The project already holds three lead slots");
   }
