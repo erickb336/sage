@@ -197,3 +197,18 @@ The isolated 0.160.0 run passed with one saved report and no duplicate.
 These checks use simulated model responses. They prove receipt persistence, not the report's claims or a real-project workflow.
 The receipt does not change task/run status or record a review verdict.
 The bridge to the shared task logbook, verdict gates, broader recovery, and installed activation remain unfinished.
+
+
+## Native report-to-run connection
+
+The chief can now call `sage_finish_run` with the saved assignment ID and report hash.
+The adapter checks native chief identity and the journal's current owner epoch.
+Version 3 configuration fixes an external logbook location; older versions cannot finish a run.
+The shared operation checks the actual task, run, and assigned role, then saves exact evidence and finishes that run.
+Task state and review gates remain unchanged. A child cannot record its own verdict through this tool.
+
+The isolated 0.160.0 native report probe passes through run completion and an identical retry.
+It directly checks the saved report, terminal run, unchanged task and gate tables, and original completion time.
+The probe uses simulated responses. It does not prove report claims, a real-project workflow, or installed automatic operation.
+Review verdicts, broader recovery, full policy assembly, and activation remain incomplete.
+The required-hook disconnection gap still blocks activation on the tested transport.

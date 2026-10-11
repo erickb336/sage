@@ -3,7 +3,7 @@ import { serveHooks } from "./plugin/runtime/mcp-server.mjs";
 import { createNativePolicy } from "./plugin/runtime/policy.mjs";
 import { options, disconnectOnSpawn, recordOutage, outageRecorded } from "./sage-options.mjs";
 const allowed = new Set(["collaborationspawn_agent", "collaborationlist_agents", "collaborationwait_agent",
-  "list_mcp_resources", "mcp__sage_preparation__sage_prepare_task", "mcp__sage_preparation__sage_read_report", "mcp__sage_preparation__sage_record_report"]);
+  "list_mcp_resources", "mcp__sage_preparation__sage_prepare_task", "mcp__sage_preparation__sage_read_report", "mcp__sage_preparation__sage_record_report", "mcp__sage_preparation__sage_finish_run"]);
 serveHooks({ mode: options, loadPolicy: async () => {
   // Keep the injected outage active on every connection after the root spawn attempt.
   if (disconnectOnSpawn && outageRecorded()) process.exit(0);

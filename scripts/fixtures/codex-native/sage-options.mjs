@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url));
 export const options = { directory: join(root, "admission"), project: "native-fixture",
   projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
-  observationsRoot: join(root, "observations") };
+  observationsRoot: join(root, "observations"), logbookRoot: join(root, "logbook") };
 
 export const disconnectOnSpawn = JSON.parse(readFileSync(join(root, "fixture-fault.json"), "utf8")).disconnectOnSpawn;
 export function recordOutage(input) {

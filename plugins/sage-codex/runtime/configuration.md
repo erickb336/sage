@@ -6,7 +6,8 @@ path and the policy loader. Hook requests cannot select either one.
 
 The JSON file has exactly two fields: `version` and `mode`. Version 1 keeps
 the mode-only contract. Version 2 adds `observationsRoot` to the mode object.
-Both versions require `directory`, `project`, `projectDirectory`, and `sessionsDir`.
+Version 3 also requires `logbookRoot` for chief run completion.
+All versions require `directory`, `project`, `projectDirectory`, and `sessionsDir`.
 
 - `directory` names an existing admission journal.
 - `project` is an identity key already configured in that journal.
@@ -15,6 +16,10 @@ Both versions require `directory`, `project`, `projectDirectory`, and `sessionsD
 - `observationsRoot` names an existing canonical directory for native event records.
   It must be separate from the admission journal: neither directory can contain
   the other. Event subdirectories would otherwise invalidate the journal.
+
+- `logbookRoot` names an existing canonical external logbook root. It cannot
+  overlap the project checkout, admission journal, event store, or native session directory.
+  Neither path in each pair can contain the other. Tool input cannot override this location.
 
 All paths must be absolute and canonical. The journal and project directories
 must already exist. The session directory may be absent under an existing
@@ -40,10 +45,12 @@ No installed manifest uses it yet. Full role policy and lifecycle recovery are
 still required before activation.
 
 `serveConfiguredPreparations(file)` starts the separate visible preparation
-server from version 2 of the same file. The hidden server passes the complete
+server from version 2 or 3 of the same file. The hidden server passes the complete
 frozen configuration to its trusted policy loader. The visible server uses its
 journal, project, and observation root. Version 1 cannot start a working
 preparation connection because it does not name the event store.
+Version 2 keeps preparation and report receipt tools available, but cannot finish a run.
+The run tool requires version 3; it never falls back to ambient home or logbook settings.
 
 Invalid configuration leaves the visible tool available but every preparation
 fails with its fixed public error; no request can repair that connection.

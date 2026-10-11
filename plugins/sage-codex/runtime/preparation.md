@@ -1,7 +1,7 @@
 # Native task preparation
 
-`servePreparations(options)` exposes one model-visible tool, `sage_prepare_task`,
-in a separate MCP server. Keep the hidden hook server required, with connection
+`servePreparations(options)` exposes task preparation, report reading, report recording,
+and chief run completion in a separate MCP server. Keep the hidden hook server required, with connection
 startup readiness. A visible tool on that server can delay a child's hooks.
 
 The launcher fixes `directory`, `project`, and `observationsRoot`. The last path
@@ -53,3 +53,22 @@ nested check caught that fixture error. Codex's pinned
 [tool-selection source](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/spec_plan.rs)
 requires this capability for a V2 child's collaboration tools. Installation must
 verify the selected model's capabilities too.
+
+
+## Chief run completion
+
+`sage_finish_run` accepts only a recorded assignment ID and its exact report hash.
+The current native root chief must own the receipt's project, session, and epoch.
+A child or another chief cannot finish that run. The receipt must already be in the shared journal.
+The tool uses the launcher's fixed external logbook root and project directory.
+It checks the actual task, run, and assigned role through the shared state tool.
+
+The report status finishes only the run. Task state, findings, gates, and review verdicts stay unchanged.
+The saved report file contains the receipt's exact text. Identical retries preserve the first completion time.
+Manual terminal results or conflicting evidence cannot be replaced.
+A report recorded before interruption can finish preserved work after Sage off or transcript removal.
+This does not enable Sage, grant capacity, or dispatch new work.
+
+The native `--sage-report` probe includes actual chief tool calls to finish and retry the run.
+It checks the logbook and saved report directly, with simulated model responses in a temporary profile.
+Review-claim verification, verdict gates, broader recovery, and a real-project pilot remain unfinished.

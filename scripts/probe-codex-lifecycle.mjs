@@ -87,6 +87,8 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
 } else {
   print({ type: "version", version });
   const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,disconnectOnSpawn:outage,deadlineMs});
+  const initialLogbook = sage ? integrated.readLogbook() : null;
+  let finishedRun;
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -108,7 +110,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
   let prepared = false, reportReceipt;
-  const calls = { record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  const calls = { finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -130,7 +132,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.recordRetry, calls.reread].includes(item.call_id) ? 2 : 1)
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry].includes(item.call_id) ? 2 : 1)
           && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
@@ -161,7 +163,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({ namespace: tool.name, name: member.name }))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{ name: tool.name }] : []);
     return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen,
-      prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report") };
+      prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run") };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -356,6 +358,24 @@ data: ${JSON.stringify(event)}
       } else if (rootRequests === 9 && reportProbe) {
         check(JSON.stringify(info.outputs[calls.reread]) === JSON.stringify(reportReceipt), "recorded_report_read_changed");
         print({type:"report_receipt_evidence",recordedReports:1,retryCreatedDuplicate:false,readBackMatches:true,claimsVerified:false,simulatedModel:true});
+        check(info.finishTools.length === 1, "finish_run_tool_missing");
+        respond(res, { type: "function_call", ...info.finishTools[0], call_id: calls.finish,
+          arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
+      } else if (rootRequests === 10 && reportProbe) {
+        finishedRun = info.outputs[calls.finish];
+        const logbook = integrated.readLogbook();
+        check(finishedRun?.decision === "run-finished" && finishedRun.task === "T1" && finishedRun.run === "R1"
+          && finishedRun.status === "done" && logbook.runs.length === 1 && logbook.runs[0].status === "done"
+          && logbook.runs[0].report === finishedRun.report && integrated.readRunReport() === CHILD_MARKER, "run_finish_mismatch");
+        check(["tasks", "ledger", "findings", "gates", "decisions"].every(key =>
+          JSON.stringify(logbook[key]) === JSON.stringify(initialLogbook[key])), "report_changed_task_or_gates");
+        check(info.finishTools.length === 1, "finish_run_tool_missing");
+        respond(res, { type: "function_call", ...info.finishTools[0], call_id: calls.finishRetry,
+          arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
+      } else if (rootRequests === 11 && reportProbe) {
+        check(JSON.stringify(info.outputs[calls.finishRetry]) === JSON.stringify({ ...finishedRun, decision: "already-finished" })
+          && integrated.readLogbook().runs[0].ended === finishedRun.ended, "run_retry_changed_result");
+        print({type:"run_report_evidence",savedRunFinished:true,reportMatches:true,retryPreservesResult:true,taskAndGatesUnchanged:true,claimsVerified:false,simulatedModel:true});
         respond(res, message(MARKER));
       } else if (rootRequests === 6) {
         check(info.outputs[calls.followup] !== undefined, "followup_result_missing");
@@ -471,7 +491,7 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followUp ? 8 : reportProbe ? 9 : 5) && childRequests === (nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
+      : rootRequests === (followUp ? 8 : reportProbe ? 11 : 5) && childRequests === (nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0

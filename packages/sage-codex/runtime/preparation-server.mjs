@@ -2,7 +2,8 @@ import { McpServer, serveStdio, z } from "./mcp-sdk.mjs";
 
 /** Keep visible tools off the hidden hook server so native children start their hooks eagerly. */
 export function createPreparationServer(options = {}) {
-  const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot, sessionsDir: options.sessionsDir });
+  const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot, sessionsDir: options.sessionsDir,
+    projectDirectory: options.projectDirectory, logbookRoot: options.logbookRoot });
   const server = new McpServer({ name: "sage-preparation", version: "0.1.0" });
   server.registerTool("sage_prepare_task", {
     description: "Save a complete Sage task brief before spawning a named agent. Preparation does not start the agent or reserve capacity. Copy the returned name, message, and fork_turns unchanged into the later spawn.",
@@ -42,6 +43,18 @@ export function createPreparationServer(options = {}) {
       return { content: [{ type: "text", text: JSON.stringify(recordChildReport(input, native, fixed)) }] };
     } catch {
       return { isError: true, content: [{ type: "text", text: "Sage could not record this report. Check the child name, completed assignment, and exact report hash." }] };
+    }
+  });
+  server.registerTool("sage_finish_run", {
+    description: "Chief only: finish the assigned logbook run from an already recorded report and its exact hash. Retries preserve the first result. This does not accept a review verdict or change task state.",
+    inputSchema: z.object({ assignment: z.string(), reportHash: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { finishRecordedRun } = await import("./run-report.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(finishRecordedRun(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not finish this run. Check the chief identity, saved report, assigned run, and configured logbook." }] };
     }
   });
   return server;
