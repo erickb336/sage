@@ -192,3 +192,52 @@ test("T218 F-T218-3: after a repair pushes a new head, the old head's verdicts f
   assert.equal(same.currentHead, head);
   assert.deepEqual(same.reasons.map(r => r.text), ["QA failed on the recorded PR head."]);
 });
+
+// T218 repair round 2 (made-up data): one head rule for the ledger, and no failure while a task is repairing.
+const sha = digit => digit.repeat(40);
+test("T218 F-T218-17: a repairing task whose PR observation still names the old, failed head neither fails nor needs you", () => {
+  const runs = [{ id: "R1", task: "T1", role: "qa", round: "0", status: "done" }];
+  const ledger = [{ task: "T1", pr: "30", sha: sha("7"), kind: "checks-pass", cycle: "1", at: now }, { task: "T1", pr: "30", sha: sha("7"), kind: "qa-fail", cycle: "1", run: "R1", at: now }];
+  const records = [observation("pr", { number: 30, head: sha("7"), state: "open" })];
+  const model = (state, round) => buildBoardModel([source("one", [task("T1", state, { pr: "30", round })], { runs, ledger }, records)], { now });
+  const before = model("reviewing", "0");
+  assert.deepEqual(before.tasks[0].reasons.map(r => r.text), ["QA failed on the recorded PR head."]);
+  assert.equal(before.counts.needsOwner, 1);
+  const repairing = model("repairing", "1");
+  assert.equal(repairing.tasks[0].currentHead, sha("7"));
+  assert.deepEqual(repairing.tasks[0].reasons, []);
+  assert.equal(repairing.counts.needsOwner, 0);
+  assert.deepEqual(repairing.tasks[0].cycles[0].steps.map(s => `${s.role} ${s.status}`), ["checks pending", "code-review pending", "qa pending"]);
+});
+
+test("T218 F-T218-18: after a repair, run-less verdicts on a head newer than the failed one are the current head", () => {
+  const old = sha("5"), fresh = sha("6");
+  const ledger = [
+    ...[["checks-pass", ""], ["review-clean", ""], ["qa-fail", "R1"]].map(([kind, run]) => ({ task: "T1", pr: "29", sha: old, kind, cycle: "1", run, at: now })),
+    ...["checks-pass", "review-clean", "qa-pass"].map(kind => ({ task: "T1", pr: "29", sha: fresh, kind, cycle: "1", at: now })),
+  ];
+  const runs = [{ id: "R1", task: "T1", role: "qa", round: "0", status: "done" }, { id: "R2", task: "T1", role: "implementer", round: "1", status: "done" }];
+  const board = rows => buildBoardModel([source("one", [task("T1", "reviewing", { pr: "29", round: "1" })], { runs, ledger: rows })], { now }).tasks[0];
+  const card = board(ledger);
+  assert.equal(card.currentHead, fresh);
+  assert.equal(card.headBasis, "ledger");
+  assert.deepEqual(card.cycles[0].steps.map(s => `${s.role} ${s.status}`), ["checks done", "code-review done", "qa done"]);
+  assert.deepEqual(card.reasons, []);
+  assert.equal(board(ledger.slice(0, 3)).currentHead, null, "before the new head's verdicts, the old head stays hidden");
+});
+
+test("T218 F-T218-20: a late run-less verdict on an old commit does not make the old head current again", () => {
+  const A = sha("a"), B = sha("b");
+  const runs = [{ id: "R2", task: "T1", role: "qa", round: "0", status: "done" }, { id: "R5", task: "T1", role: "code-reviewer", round: "1", status: "done" }];
+  const ledger = [
+    { task: "T1", pr: "12", sha: A, kind: "qa-fail", cycle: "1", run: "R2", at: now },
+    { task: "T1", pr: "12", sha: B, kind: "review-clean", cycle: "1", run: "R5", at: now },
+    { task: "T1", pr: "12", sha: A, kind: "checks-pass", cycle: "1", at: now },
+  ];
+  const model = buildBoardModel([source("one", [task("T1", "reviewing", { pr: "12", round: "1" })], { runs, ledger })], { now });
+  assert.equal(model.tasks[0].currentHead, B);
+  assert.deepEqual(model.tasks[0].reasons, []);
+  assert.equal(model.counts.needsOwner, 0);
+  const runless = ledger.map(row => ({ ...row, run: "" }));
+  assert.equal(buildBoardModel([source("one", [task("T1", "reviewing", { pr: "12" })], { ledger: runless })], { now }).tasks[0].currentHead, B, "round 0: the newest commit by its first verdict");
+});

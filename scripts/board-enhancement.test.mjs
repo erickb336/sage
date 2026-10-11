@@ -42,10 +42,15 @@ function model({ gamma = null, delta = false, current = false, rich = false } = 
     projects[0].tables.tasks.push(...Array.from({ length: 7 }, (_, i) => task(`T${10 + i}`, `Sample alpha queued ${10 + i}`, "framed")));
     projects[1].tables.tasks[1].pr = "9";
     projects[0].tables.decisions = [{ at: NOW, task: "T2", decision: "Sample decision", why: "sample" }];
+    // An earlier head in the evidence, and a second source, whose agents get the alternate pill colour.
+    projects[0].tables.ledger = [{ task: "T2", pr: "7", sha: "b".repeat(40), kind: "checks-fail", cycle: "1", at: NOW }, { task: "T2", pr: "7", sha: "a".repeat(40), kind: "checks-pass", cycle: "1", at: NOW }];
   }
   if (gamma) projects.push(project("gamma", [task("T5", "Sample gamma work", gamma)]));
   if (delta) projects.push(project("delta", [task("T6", "Sample delta queued", "framed")]));
-  return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects }], { now: NOW });
+  const epsilon = project("epsilon", [task("T7", "Sample second-source work", "building")]);
+  epsilon.tables.runs = [{ id: "R2", task: "T7", role: "implementer", status: "running", started: NOW }];
+  const second = rich ? [{ id: "codex", label: "codex", diagnostics: [], projects: [epsilon] }] : [];
+  return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects }, ...second], { now: NOW });
 }
 
 async function pageFor(t, { live = false, snapshot = !live, scripts = true, phone = false, current = false } = {}) {
@@ -203,8 +208,8 @@ test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 co
   await context.route("**/*", route => route.abort());
   const results = [];
   for (const [view, html, list] of [
-    ["board", renderBoardHtml(data, { snapshot: false }), [["faint on a card", ".card .faint"], ["faint in a column", ".rest .faint"]]],
-    ["task", renderBoardHtml(data, { snapshot: false, taskKey: task.key }), [["faint on the page", ".ptop .faint"], ["faint in a section", ".log .faint"], ["skipped step", ".ls.skip"]]],
+    ["board", renderBoardHtml(data, { snapshot: false }), [["faint on a card", ".card .faint"], ["faint in a column", ".rest .faint"], ["provider on a pill", ".card .agent:not(.alt) .prov"], ["alternate pill", ".card .agent.alt"], ["provider on an alternate pill", ".card .agent.alt .prov"], ["legend pill", ".legend .agent:not(.alt) .prov"], ["legend alternate pill", ".legend .agent.alt .prov"]]],
+    ["task", renderBoardHtml(data, { snapshot: false, taskKey: task.key }), [["faint on the page", ".ptop .faint"], ["faint in a section", ".log .faint"], ["skipped step", ".ls.skip"], ["earlier head", ".head .faint"], ["head", ".head"]]],
   ]) {
     const page = await context.newPage();
     await page.setContent(html);
@@ -218,6 +223,7 @@ test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 co
     if (view === "task") assert.equal(await page.locator(".ls.skip").first().evaluate(element => getComputedStyle(element).textDecorationLine), "line-through");
   }
   assert.ok(results.includes("task light skipped step") && results.includes("board dark faint on a card") && results.includes("board light faint in a column"));
+  assert.ok(["board light provider on a pill", "board light provider on an alternate pill", "board dark legend alternate pill", "task light earlier head", "task dark earlier head"].every(kind => results.includes(kind)));
 });
 
 test("T218 F-T218-9, F-T218-7 and F-T218-13: chips only with scripts, the stand-in legend on both views, and a 24 px way back", async t => {
@@ -233,6 +239,9 @@ test("T218 F-T218-9, F-T218-7 and F-T218-13: chips only with scripts, the stand-
     assert.equal(await page.locator("label[for=light]").isVisible(), true, "the theme switch needs no script");
     const sentence = "a stand-in value: the logbook does not record the real one.";
     assert.equal(await page.locator(".legend").getByText(sentence, { exact: false }).isVisible(), true);
+    // F-T218-16: one legend pill for each pill colour, named by its source.
+    assert.deepEqual(await page.locator(".legend .agent").evaluateAll(pills => pills.map(pill => `${pill.className}: ${pill.parentElement.textContent}`)), ["agent: Sample source · role an agent at work now", "agent alt: Codex · role the same for Codex"]);
+    assert.equal(await page.locator(".card .agent.alt").textContent(), "Codex · implementer");
     await page.setContent(renderBoardHtml(data, { snapshot: false, taskKey: task.key }));
     assert.equal(await page.locator(".legend").getByText(sentence, { exact: false }).isVisible(), true);
     assert.equal(await page.locator(".legend .step.failed").isVisible(), true, "the cycle-chip legend is on the task page too");

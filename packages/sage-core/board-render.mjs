@@ -45,7 +45,7 @@ const tokens = value => /^\d+$/.test(String(value)) ? Number(value) >= 1000 ? `$
 /** The page's view of the model: project colour slots (8, by sorted key) and the source of each alternate agent colour. */
 function context(model, snapshot) {
   const keys = [...new Set(model.tasks.map(task => task.project))].sort();
-  return { snapshot, slot: new Map(keys.map((key, i) => [key, `p${i % 8}`])), sources: model.sources.map(source => source.id), at: model.at };
+  return { snapshot, slot: new Map(keys.map((key, i) => [key, `p${i % 8}`])), sources: model.sources.map(source => source.id), names: model.sources.map(source => title(source.standIn)), at: model.at };
 }
 const dot = (ctx, key) => `<span class="dot ${ctx.slot.get(key) ?? "p0"}" aria-hidden="true"></span>`;
 const project = (ctx, task) => `<span class="proj">${dot(ctx, task.project)}${esc(task.projectName)}</span>`;
@@ -97,7 +97,7 @@ function runsTable(task, now) {
 
 function evidence(task) {
   const heads = [...new Set(task.ledger.map(row => row.sha))];
-  const ledger = heads.map((sha, i) => `<div class="head${i < heads.length - 1 ? " old" : ""}">head <span class="id">${esc(String(sha).slice(0, 7))}</span>${i < heads.length - 1 ? ` <span class="faint">· earlier head</span>` : ""}</div><dl class="kv">${task.ledger.filter(row => row.sha === sha).map(row => `<dt>${esc(row.kind)} · cycle ${esc(row.cycle)}</dt><dd>${row.run ? esc(row.run) : "CI"} · ${esc(hhmm(row.at))}</dd>`).join("")}</dl>`).join("");
+  const ledger = heads.map((sha, i) => `<div class="head">head <span class="id">${esc(String(sha).slice(0, 7))}</span>${i < heads.length - 1 ? ` <span class="faint">· earlier head</span>` : ""}</div><dl class="kv">${task.ledger.filter(row => row.sha === sha).map(row => `<dt>${esc(row.kind)} · cycle ${esc(row.cycle)}</dt><dd>${row.run ? esc(row.run) : "CI"} · ${esc(hhmm(row.at))}</dd>`).join("")}</dl>`).join("");
   const proof = evidenceArtifacts(task).map(record => `<h4>${esc(record.data.label)}</h4><p class="faint">${esc(record.source)} · ${esc(record.observedAt)} · ${esc(record.data.run ?? "run unknown")} · digest verified</p><pre>${esc(record.content.text)}</pre>`).join("");
   return ledger || proof ? ledger + proof : `<div class="empty">No verdicts recorded.</div>`;
 }
@@ -132,12 +132,17 @@ function page(ctx, task, { routed = false } = {}) {
     + `<${routed ? "h1" : "h2"} class="ptitle">${esc(task.title)}</${routed ? "h1" : "h2"}>${task.reasons.map(flag).join("")}`
     + `<div class="detail"><section class="wide"><h3>Where in the loop</h3><div class="loop">${task.loop.steps.map(step => `<span class="${["ls", LOOP[step.status]].filter(Boolean).join(" ")}">${esc(step.label)}</span>`).join("")}</div><div class="nowline">${esc(task.loop.explanation)}</div><div class="nowmeta">${esc(task.state)} · repair round ${esc(task.round)}${headLine(task)}</div>${agents(ctx, task, " nowagents")}${cycleRows(task, true)}</section>`
     + `<div class="colL"><section><h3>Brief</h3>${brief}</section><section><h3>Agent runs <span class="n">${task.runs.length}</span></h3>${runsTable(task, ctx.at)}</section><section><h3>Findings <span class="n">${task.findings.filter(row => row.status === "open").length} open</span></h3>${findings(task)}</section></div>`
-    + `<div class="colR"><section><h3>Evidence <span class="n">${task.ledger.length}</span></h3>${evidence(task)}</section><section><h3>Latest decisions</h3>${decisions}</section><section><h3>Artifacts</h3>${artifacts(task)}</section></div></div>${legend(false)}`;
+    + `<div class="colR"><section><h3>Evidence <span class="n">${task.ledger.length}</span></h3>${evidence(task)}</section><section><h3>Latest decisions</h3>${decisions}</section><section><h3>Artifacts</h3>${artifacts(task)}</section></div></div>${legend(null)}`;
   return routed ? content : `<section class="page" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="#">← Board</a></div>${content}</section>`;
 }
 
 /** The marks of the board and the task page, with one visible sentence for the dotted stand-in values (F-T218-7). */
-const legend = (withAgent = true) => `<div class="legend">${withAgent ? `<span><span class="agent"><span class="live" aria-hidden="true"></span><span class="prov">Provider ·</span> role</span> an agent at work now</span>` : ""}<span><span class="step done">code ✓</span><span class="step running">qa …</span><span class="step failed">sec ✗</span><span class="step pending">ux ○</span> one review cycle on the PR's head</span><span>${standIn("Dotted", "A stand-in value.")} a stand-in value: the logbook does not record the real one. Put the pointer on it to see the reason.</span></div>`;
+// F-T218-16: one agent pill for each pill colour, named by the sources that use it (sources alternate the two colours).
+const legendPill = (alt, name, text) => `<span><span class="agent${alt ? " alt" : ""}"><span class="live" aria-hidden="true"></span><span class="prov">${esc(name)} ·</span> role</span> ${esc(text)}</span>`;
+const legend = ctx => {
+  const names = parity => ctx?.names.filter((_, i) => i % 2 === parity).join(" or ");
+  return `<div class="legend">${ctx ? legendPill(false, names(0) || "Provider", "an agent at work now") + (names(1) ? legendPill(true, names(1), `the same for ${names(1)}`) : "") : ""}<span><span class="step done">code ✓</span><span class="step running">qa …</span><span class="step failed">sec ✗</span><span class="step pending">ux ○</span> one review cycle on the PR's head</span><span>${standIn("Dotted", "A stand-in value.")} a stand-in value: the logbook does not record the real one. Put the pointer on it to see the reason.</span></div>`;
+};
 
 function banners(model) {
   if (!model.diagnostics.length) return "";
@@ -184,7 +189,7 @@ a.card:hover{border-color:var(--accent)}.card.needs{border-color:var(--need);box
 .agent{display:inline-flex;align-items:center;gap:5px;background:var(--run-soft);color:var(--run);border-radius:5px;padding:2px 7px;font-size:11.5px;font-weight:550}
 .agent .live{width:6px;height:6px;border-radius:50%;background:var(--run);animation:pulse 1.6s infinite}
 .agent.alt{background:var(--ok-soft);color:var(--ok)}.agent.alt .live{background:var(--ok)}
-.prov{opacity:.8;font-weight:500}
+.prov{font-weight:500}
 @keyframes pulse{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 .cycle{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);flex-wrap:wrap;margin-bottom:2px}
@@ -222,7 +227,7 @@ body:has(.page:target) .boardview{display:none}
 .ls.need{color:var(--need);border-color:var(--need);background:var(--need-soft);font-weight:650}
 .nowline{font-size:13px;margin-bottom:2px;overflow-wrap:anywhere}.nowmeta{font-size:12px;color:var(--muted);margin-bottom:8px}.nowagents{margin-bottom:8px}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:12px;margin:0 0 8px}.kv dt{color:var(--muted)}.kv dd{margin:0}
-.head{font-size:11.5px;color:var(--muted);margin:2px 0 4px}.head.old{opacity:.8}
+.head{font-size:11.5px;color:var(--muted);margin:2px 0 4px}
 table.runs{width:100%;border-collapse:collapse;font-size:11.5px}
 table.runs th{text-align:left;color:var(--muted);font-weight:550;padding:2px 4px;border-bottom:1px solid var(--line)}
 table.runs td{padding:3px 4px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -275,7 +280,7 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
     const summary = `<div class="summary" id="board-summary"><span><b class="needn" id="s-needs">${counts.needsOwner}</b> needs you</span><span><b id="s-agents">${counts.recordedAgents}</b> agents at work</span>${counts.inferredWork ? `<span><b id="s-inferred">${counts.inferredWork}</b> inferred PRs</span>` : ""}<span><b id="s-review">${counts.inReview}</b> in review</span><span><b id="s-tasks">${counts.tasks}</b> tasks</span><span>built ${esc(day(model.at))} UTC</span></div>`;
     const empty = counts.tasks ? "" : `<div class="emptyboard"><b>No tasks recorded yet.</b> The board reads the logbooks. Frame a task in a sage session, and it shows here.</div>`;
     const nomatch = `<div class="emptyboard" id="nomatch" hidden><b>No task matches.</b> No visible task fits this filter. <button class="linkbtn" type="button" data-reset>Show all projects</button></div>`;
-    body =`<div class="boardview"><header><h1>Task board</h1>${pill}<span class="spacer"></span>${theme}${filters}</header>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${empty}${nomatch}<main class="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${legend()}</div></div>`
+    body =`<div class="boardview"><header><h1>Task board</h1>${pill}<span class="spacer"></span>${theme}${filters}</header>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${empty}${nomatch}<main class="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${legend(ctx)}</div></div>`
       + (snapshot ? `<div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}</div>` : "");
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${task ? `${esc(task.id)} · ` : ""}Sage task board</title><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(taskKey) : ""}</script></body></html>`;

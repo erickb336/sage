@@ -14,7 +14,9 @@ const FAILED = { checks: ["checks-fail"], qa: ["qa-fail"], "code-review": ["find
 const RUN_ROLE = { "code-review": "code-reviewer", "security-review": "security-reviewer", "ux-review": "ux-reviewer" };
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 const rows = (project, name, task) => (project.tables[name] ?? []).filter(row => row.task === task.id);
-const positive = value => /^([1-9]\d*)$/.test(String(value)) ? Number(value) : null;
+// N1: the name that stands in for a run's provider when the run does not record it: the source's provider, else its label.
+const standIn = source => source.provider ?? source.label ?? source.id;
+const positive =value => /^([1-9]\d*)$/.test(String(value)) ? Number(value) : null;
 
 function latest(records, kind, accept = () => true) {
   return records.filter(record => record.kind === kind && accept(record.data)).reduce((best, record) => !best || Date.parse(record.observedAt) >= Date.parse(best.observedAt) ? record : best, null);
@@ -57,16 +59,19 @@ function card(source, project, task, now) {
   if (["verified", "pr-ready"].includes(task.state)) {
     if (!mode || !mode.data.autopilot) reasons.push({ kind: "merge", text: mode ? "Autopilot is off. The owner can review the merge." : "Autopilot state is unknown. The owner must review the merge." });
   }
-  // N2: an observed PR head wins; else the newest ledger verdict's head for the task's PR (the ledger is append-only).
-  // A repair pushes a new head that has no verdict yet, so the ledger head counts only while the task is not repairing and
-  // the newest verdict that names a known run comes from a run of the task's round (with no such verdict: round 0 only).
+  // N2: an observed PR head wins. Else the ledger head: the newest commit of the task's PR by its first verdict (the ledger
+  // is append-only), when that first verdict comes after every verdict by a run of an earlier round. At round 1 or later, a
+  // verdict by a run of round 1 or earlier must show where the round starts. A repairing task pushes a new head, so it
+  // has no ledger head, and no verdict makes it fail or need the owner.
+  const round = Number(task.round || 0), repairing = task.state === "repairing";
   const verdicts = task.pr ? ledger.filter(row => String(row.pr) === task.pr && /^[0-9a-f]{40}$/.test(row.sha)) : [];
-  const roundOf = row => { const run = runs.find(run => run.id === row.run); return run ? Number(run.round || 0) : null; };
-  const newestRound = verdicts.map(roundOf).filter(round => round !== null).at(-1) ?? 0;
-  const reviewed = task.state !== "repairing" && newestRound === Number(task.round || 0) ? verdicts.at(-1)?.sha ?? null : null;
+  const rounds = verdicts.map(row => { const run = runs.find(run => run.id === row.run); return run ? Number(run.round || 0) : null; });
+  const first = verdicts.findLastIndex((row, i) => verdicts.findIndex(other => other.sha === row.sha) === i);
+  const known = round === 0 || rounds.some(r => r !== null && r <= round);
+  const reviewed = !repairing && known && first > rounds.findLastIndex(r => r !== null && r < round) ? verdicts[first].sha : null;
   const head = pr?.data.head ?? reviewed;
   const headBasis = pr?.data.head ? "observed" : head ? "ledger" : null;
-  const current = head ? ledger.filter(row => row.sha === head && String(row.pr) === task.pr) : [];
+  const current = head && !repairing ? ledger.filter(row => row.sha === head && String(row.pr) === task.pr) : [];
   const route = task.route.split(",").filter(Boolean);
   const steps = [...(route.includes("build") ? ["checks"] : []), ...route.filter(block => CLEAN[block])];
   const required = Math.max(positive(source.config?.["cycles.small"]) ?? 1, task.size === "large" ? Math.max(2, positive(source.config?.["cycles.large"] ?? source.config?.autopilot_cycles) ?? 2) : 1, task.risk ? Math.max(2, positive(source.config?.["cycles.risk"]) ?? 2) : 1);
@@ -101,7 +106,7 @@ function card(source, project, task, now) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: moves.find(({ move }) => move[2] === task.id && move[3] === row.key)?.row.task ?? null })),
     ...moves.filter(({ row }) => row.task === task.id).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: source.provider ?? source.label ?? source.id, repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, projectName: project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""), ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: loopFor(task, route, cycles, head, reasons, runs), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, projectName: project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""), ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: loopFor(task, route, cycles, head, reasons, runs), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
 }
 
 export function buildBoardModel(sources, { now = new Date().toISOString() } = {}) {
@@ -110,5 +115,5 @@ export function buildBoardModel(sources, { now = new Date().toISOString() } = {}
   const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, task, at))));
   const recent = task => task.lastActivity ? Date.parse(task.lastActivity) : 0;
   const visible = tasks.filter(task => task.visible && task.column).sort((a, b) => (b.reasons.length > 0) - (a.reasons.length > 0) || recent(b) - recent(a));
-  return { at: new Date(at).toISOString(), tasks, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: visible.filter(task => task.column === key), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message })))]) };
+  return { at: new Date(at).toISOString(), tasks, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: visible.filter(task => task.column === key), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message })))]) };
 }
