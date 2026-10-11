@@ -281,3 +281,34 @@ export function readNativeCommand(transcriptPath, options, expected) {
     return structuredClone(command);
   } catch { unavailable(); }
 }
+
+
+/** Current child-turn identity only. This does not prove task admission or completion. */
+export function readChildTurn(transcriptPath, options, expected) {
+  const unavailable = () => { throw Error("Codex child turn evidence is unavailable"); };
+  try {
+    const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+    if (!record(expected) || Object.keys(expected).length !== 3
+      || !["session", "child", "turn"].every(key => Object.hasOwn(expected, key) && uuid.test(expected[key]))
+      || expected.child === expected.session) unavailable();
+    const [header, ...rows] = readSessionRecords(transcriptPath, options, Infinity);
+    const metadata = identity(header);
+    if (metadata.id !== expected.child || metadata.session_id !== expected.session || metadata.cli_version !== "0.160.0") unavailable();
+    const seen = new Set(); let initialTurn, turn, context;
+    for (const row of rows) {
+      if (!record(row) || !record(row.payload) || row.type === "session_meta") unavailable();
+      const p = row.payload;
+      if (row.type === "event_msg" && p.type === "task_started") {
+        if (typeof p.turn_id !== "string" || !uuid.test(p.turn_id) || seen.has(p.turn_id)) unavailable();
+        seen.add(p.turn_id); initialTurn ??= p.turn_id; turn = p.turn_id; context = undefined;
+      }
+      if (row.type === "turn_context") {
+        if (!turn || p.turn_id !== turn) unavailable();
+        context = turn;
+      }
+      if (row.type === "event_msg" && p.type === "task_complete" && p.turn_id !== turn) unavailable();
+    }
+    if (!initialTurn || turn !== expected.turn || context !== turn) unavailable();
+    return { metadata, initialTurn, turn };
+  } catch { unavailable(); }
+}

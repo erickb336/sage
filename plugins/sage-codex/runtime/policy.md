@@ -46,3 +46,16 @@ or provide lifecycle recovery. Those remain required before activation.
 Native stop observations retain capacity until the transcript confirms the assigned turn ended.
 Parent list, wait, and report-read operations reconcile that evidence.
 Report recording and review acceptance use separate explicit operations.
+
+
+When Sage is off, an ordinary child with no matching run or pending first-task
+reservation can finish without a Sage report. The stop handler verifies the
+protected native identity and returns `unmanaged`. It changes no admission or
+logbook record. Existing Sage bindings still require completion evidence, and
+pending first-task reservations still require binding. An unmatched active-mode
+child does not receive this exception.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-off` with fake process tools
+first on PATH. The isolated native check verifies an ordinary child's completion,
+its exact stop receipt, no Sage capacity use, and an unchanged logbook. Responses
+are simulated; this does not prove installed operation or recovery of tracked work.

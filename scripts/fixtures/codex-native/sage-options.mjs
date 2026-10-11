@@ -31,3 +31,9 @@ export function patchDecision(input, context) {
     turn: input.turn_id, call: input.tool_use_id, result }), { flag: "wx" });
   return result;
 }
+
+
+export function recordUnmanagedStop(input, context, result) {
+  writeFileSync(join(root, "unmanaged-stop-receipt.json"), JSON.stringify({ session: input.session_id,
+    child: context.actor, turn: input.turn_id, decision: result.decision }), { flag: "wx" });
+}

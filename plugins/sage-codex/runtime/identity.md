@@ -10,3 +10,9 @@ The native profile directory and its ancestors must remain controlled by the cal
 
 
 `readInitialSession` reads exactly the first two complete records within the same 256 KiB total limit. It requires session metadata followed by the native `event_msg` named `task_started`, with a UUID turn ID. It returns projected metadata and that initial turn. It never scans for a later replacement or claims that the initial turn is still current. Unknown ordering refuses the request.
+
+`readChildTurn` verifies the protected transcript's native child/session identity
+and latest turn context. It rejects duplicate turns, conflicting context, and a
+request for an older turn. It also returns the initial turn so off-mode stop
+handling can distinguish an ordinary child from a pending first-task reservation.
+This read proves identity only; it grants no admission and proves no completion.

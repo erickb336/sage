@@ -13,9 +13,11 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const sageOff = process.argv.includes("--sage-off");
+assert(!sageOff || process.argv.slice(2).length === 1, "sage_off_is_a_separate_route");
 const denySpawn = process.argv.includes("--deny-spawn");
 const failedSpawn = process.argv.includes("--sage-failed-spawn");
 const followUp = process.argv.includes("--follow-up");
@@ -95,8 +97,8 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,blockStop,captureFailure:failedSpawn,deadlineMs});
-  const initialLogbook = sage ? integrated.readLogbook() : null;
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,blockStop,captureFailure:failedSpawn,deadlineMs});
+  const initialLogbook = sage || sageOff ? integrated.readLogbook() : null;
   if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
     `EVIDENCE ${JSON.stringify({ commit: integrated.reviewTarget.sha, round: 0, cycle: 1, summary: "Fixed native fixture completed; simulated review only." })}`,
     "FINDINGS []", "QUESTIONS none", "NOT VERIFIED real model or real review", "BRANCH codex/t1-review"].join("\n");
@@ -575,7 +577,7 @@ data: ${JSON.stringify(event)}
     });
     child.stderr.on("data", (data) => { stderrBytes += data.length; stderrText = (stderrText + data).slice(0, 4096); });
     child.stdin.on("error", () => {});
-    child.stdin.end(sage ? "sage mode\n" : `Run the fixed one-child native lifecycle probe. Finish with exactly ${MARKER}. Do not use shell tools.\n`);
+    child.stdin.end(sageOff ? "sage mode off\n" : sage ? "sage mode\n" : `Run the fixed one-child native lifecycle probe. Finish with exactly ${MARKER}. Do not use shell tools.\n`);
     print({ type: "event", event: "baseline_started" });
     const result = await waitNative(child, { deadlineMs, onTimeout: () => failFixture("native_root_deadline") });
     acceptLine(buffer);
@@ -595,6 +597,21 @@ data: ${JSON.stringify(event)}
       unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
     if (!verified) process.exitCode = 1;
+    if (sageOff) {
+      const saved = integrated.readJournal();
+      assert.equal(saved.modes.at(-1)?.sage, false);
+      for (const key of ["preparations", "reservations", "bindings", "completions", "reports"])
+        assert.equal(saved[key]?.length ?? 0, 0);
+      assert.deepEqual(integrated.readLogbook(), initialLogbook);
+      const receipt = JSON.parse(readFileSync(join(root, "unmanaged-stop-receipt.json"), "utf8"));
+      assert.equal(receipt.session, rootThread); assert.equal(receipt.child, childThread);
+      assert.equal(receipt.decision, "unmanaged");
+      const stops = readdirSync(join(root, "events")).map(name => JSON.parse(readFileSync(join(root, "events", name), "utf8")))
+        .filter(row => row.hook_event_name === "SubagentStop");
+      assert.equal(stops.length, 1); assert.equal(receipt.turn, stops[0].turn_id);
+      print({ type: "inactive_child_evidence", nativeCompletionVerified: nativeCompleted, exactStopIdentity: true,
+        reportCorrectionRequired: false, sageCapacityUsed: false, logbookUnchanged: true, simulatedModel: true });
+    }
     if (noTool) {
       const observed = readdirSync(join(root, "events")).map(name => JSON.parse(readFileSync(join(root, "events", name), "utf8")));
       print({ type: "no_tool_callback_evidence", callbacks: observed.filter(row => ["SubagentStart", "SubagentStop"].includes(row.hook_event_name))

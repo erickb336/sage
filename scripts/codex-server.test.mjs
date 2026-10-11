@@ -2031,3 +2031,83 @@ test('native command policy validates recovered argument shapes before its callb
     assert.equal(evaluated, 1);
   }
 });
+
+
+async function unmanagedStopFixture(t) {
+  const f = await composedPolicyFixture(t);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const transcript = f.childTranscript({ message: 'ordinary native task' });
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  const stop = { hook_event_name: 'SubagentStop', session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, 'root.jsonl'), agent_transcript_path: transcript };
+  const { childStopOutput } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  return { ...f, transcript, policy, stop, output: input => childStopOutput(input, f.native(childActor), async () => policy) };
+}
+
+test('off-mode ordinary child stops without a Sage report or admission writes', async t => {
+  const f = await unmanagedStopFixture(t);
+  const before = f.core.readAdmission(f.options.directory);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'unmanaged' });
+  assert.deepEqual(await f.output({ ...f.stop, stop_hook_active: false, last_assistant_message: 'ordinary answer' }), {});
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  assert.equal(existsSync(f.options.observationsRoot), false);
+});
+
+test('off-mode ordinary stop requires matching protected child and current-turn evidence', async t => {
+  const f = await unmanagedStopFixture(t);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'unmanaged' });
+  const { agent_transcript_path, ...missing } = f.stop;
+  for (const input of [missing, { ...f.stop, agent_id: session }, { ...f.stop, turn_id: turns[2] },
+    { ...f.stop, agent_transcript_path: join(f.mode.sessionsDir, 'root.jsonl') }])
+    assert.throws(() => f.policy.completeChild(input, f.native(childActor)));
+  appendFileSync(f.transcript, [
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: turns[1] } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: turns[2] } },
+    { type: 'turn_context', payload: { turn_id: turns[2] } },
+  ].map(row => JSON.stringify(row) + '\n').join(''));
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+  assert.deepEqual(f.policy.completeChild({ ...f.stop, turn_id: turns[2] }, f.native(childActor)), { decision: 'unmanaged' });
+});
+
+test('off-mode ordinary child cannot hide a pending Sage reservation or release another run', async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  await f.evaluate(policy);
+  const transcript = f.childTranscript();
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const stop = { hook_event_name: 'SubagentStop', session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, 'root.jsonl'), agent_transcript_path: transcript };
+  assert.throws(() => policy.completeChild(stop, f.native(childActor)));
+  const before = f.core.readAdmission(f.options.directory);
+  const other = 'a22422c7-509c-43aa-8c42-827c556f8a59';
+  const otherTranscript = f.childTranscript({ child: other, path: '/root/ordinary', message: 'ordinary task' });
+  assert.deepEqual(policy.completeChild({ ...stop, agent_id: other, agent_transcript_path: otherTranscript }, f.native(other)), { decision: 'unmanaged' });
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  assert.equal(before.reservations.length, 1); assert.equal(before.completions?.length ?? 0, 0);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  assert.deepEqual(policy.completeChild(stop, f.native(childActor)), { decision: 'stop-observed' });
+  const bound = f.core.readAdmission(f.options.directory);
+  const reused = f.childTranscript({ child: other, message: 'ordinary task with a reused name' });
+  assert.deepEqual(policy.completeChild({ ...stop, agent_id: other, agent_transcript_path: reused }, f.native(other)), { decision: 'unmanaged' });
+  assert.deepEqual(f.core.readAdmission(f.options.directory), bound);
+});
+
+test('active-mode ordinary child still needs a Sage admission at stop', async t => {
+  const f = await unmanagedStopFixture(t);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'unmanaged' });
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[2], turn: turns[1], sage: true });
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+});
+
+test('ordinary native stop before owner activation leaves Sage state unchanged', async t => {
+  const f = await unmanagedStopFixture(t);
+  const directory = join(f.dir, 'unused-admission');
+  f.core.configureAdmission(directory, { total: 5, projects: [{ project: f.options.project, limit: 5 }] });
+  const policy = f.createNativePolicy({ ...f.options, directory }, () => ({ decision: 'pass' }));
+  const before = f.core.readAdmission(directory);
+  assert.equal(before.sessions.length, 0);
+  assert.deepEqual(policy.completeChild(f.stop, f.native(childActor)), { decision: 'unmanaged' });
+  assert.deepEqual(f.core.readAdmission(directory), before);
+});
