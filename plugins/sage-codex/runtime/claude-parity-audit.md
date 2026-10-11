@@ -240,3 +240,12 @@ One clean review does not approve a task or PR. Required project checks and othe
 This unit does not prove review quality or full automatic coordination.
 Broader recovery, full command policy, installation, and a real-project pilot remain unfinished.
 The required-hook disconnection gap still blocks activation.
+
+
+## Chief inspection of a lead's saved reports
+
+The chief can inspect a recorded assignment and exact report hash through `sage_read_recorded_report`.
+A lead still owns its child's initial report read and recording. The chief sees the saved text and provenance without changing state.
+Packaged tests cover the nested lead-to-reviewer route, foreign caller refusal, and transcript loss after recording.
+The isolated native report probe checks the visible chief read tool before run completion and review acceptance.
+This does not complete cross-session recovery, independent review scheduling, or a real-project pilot.

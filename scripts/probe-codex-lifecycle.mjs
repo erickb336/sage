@@ -113,7 +113,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
   let prepared = false, reportReceipt;
-  const calls = { accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  const calls = { inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -135,7 +135,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry, calls.accept, calls.acceptRetry].includes(item.call_id) ? 2 : 1)
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry, calls.accept, calls.acceptRetry, calls.inspect].includes(item.call_id) ? 2 : 1)
           && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
@@ -166,7 +166,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({ namespace: tool.name, name: member.name }))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{ name: tool.name }] : []);
     return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen,
-      prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review") };
+      prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review"), inspectTools: mcpTools("sage_read_recorded_report") };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -366,10 +366,22 @@ data: ${JSON.stringify(event)}
       } else if (rootRequests === 9 && reportProbe) {
         check(JSON.stringify(info.outputs[calls.reread]) === JSON.stringify(reportReceipt), "recorded_report_read_changed");
         print({type:"report_receipt_evidence",recordedReports:1,retryCreatedDuplicate:false,readBackMatches:true,claimsVerified:false,simulatedModel:true});
+        check(info.inspectTools.length === 1, "saved_report_read_tool_missing");
+        respond(res, { type: "function_call", ...info.inspectTools[0], call_id: calls.inspect,
+          arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
+      } else if (rootRequests === 10 && reportProbe) {
+        const report = info.outputs[calls.inspect];
+        check(report?.decision === "recorded-report" && report.text === CHILD_MARKER && report.role === "code-reviewer"
+          && report.assignment === reportReceipt.assignment && report.reportHash === reportReceipt.reportHash
+          && report.child === childThread && report.issuer === rootThread
+          && JSON.stringify(report.review) === JSON.stringify(integrated.reviewTarget), "saved_report_read_mismatch");
+        check(JSON.stringify(integrated.readLogbook()) === JSON.stringify(initialLogbook), "saved_report_read_changed_logbook");
+        print({type:"chief_report_read_evidence",exactSavedText:true,provenanceMatches:true,reviewTargetMatches:true,
+          logbookUnchanged:true,simulatedModel:true});
         check(info.finishTools.length === 1, "finish_run_tool_missing");
         respond(res, { type: "function_call", ...info.finishTools[0], call_id: calls.finish,
           arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
-      } else if (rootRequests === 10 && reportProbe) {
+      } else if (rootRequests === 11 && reportProbe) {
         finishedRun = info.outputs[calls.finish];
         const logbook = integrated.readLogbook();
         check(finishedRun?.decision === "run-finished" && finishedRun.task === "T1" && finishedRun.run === "R1"
@@ -380,14 +392,14 @@ data: ${JSON.stringify(event)}
         check(info.finishTools.length === 1, "finish_run_tool_missing");
         respond(res, { type: "function_call", ...info.finishTools[0], call_id: calls.finishRetry,
           arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
-      } else if (rootRequests === 11 && reportProbe) {
+      } else if (rootRequests === 12 && reportProbe) {
         check(JSON.stringify(info.outputs[calls.finishRetry]) === JSON.stringify({ ...finishedRun, decision: "already-finished" })
           && integrated.readLogbook().runs[0].ended === finishedRun.ended, "run_retry_changed_result");
         print({type:"run_report_evidence",savedRunFinished:true,reportMatches:true,retryPreservesResult:true,taskAndGatesUnchanged:true,claimsVerified:false,simulatedModel:true});
         check(info.acceptTools.length === 1, "review_accept_tool_missing");
         respond(res, { type: "function_call", ...info.acceptTools[0], call_id: calls.accept,
           arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
-      } else if (rootRequests === 12 && reportProbe) {
+      } else if (rootRequests === 13 && reportProbe) {
         acceptedReview = info.outputs[calls.accept];
         const logbook = integrated.readLogbook(), row = logbook.ledger[0];
         check(acceptedReview?.decision === "review-accepted" && acceptedReview.kind === "review-clean"
@@ -399,7 +411,7 @@ data: ${JSON.stringify(event)}
         check(info.acceptTools.length === 1, "review_accept_tool_missing");
         respond(res, { type: "function_call", ...info.acceptTools[0], call_id: calls.acceptRetry,
           arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
-      } else if (rootRequests === 13 && reportProbe) {
+      } else if (rootRequests === 14 && reportProbe) {
         check(JSON.stringify(info.outputs[calls.acceptRetry]) === JSON.stringify({ ...acceptedReview, decision: "already-accepted" })
           && integrated.readLogbook().ledger.length === 1 && !integrated.mergeReady(), "review_retry_changed_result");
         print({type:"review_acceptance_evidence",recordedVerdicts:1,actualBranchHead:true,retryCreatedDuplicate:false,
@@ -519,7 +531,7 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followUp ? 8 : reportProbe ? 13 : 5) && childRequests === (nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
+      : rootRequests === (followUp ? 8 : reportProbe ? 14 : 5) && childRequests === (nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0

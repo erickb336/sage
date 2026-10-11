@@ -128,3 +128,20 @@ If the branch changes after a saved intent, recovery retains evidence for the or
 The native report probe checks acceptance and a retry through actual Codex tools, then reads the saved verdict.
 Its model responses are simulated. Acceptance validates provenance and report structure, not the truth of review claims.
 Full review cycles, repair scheduling, project checks, and a real-project pilot still need integration.
+
+
+## Chief inspection of saved reports
+
+`sage_read_recorded_report` lets the chief inspect an assignment's saved report by ID and exact hash.
+This includes reports that a lead recorded for its own children. The lead must first read and record the child's report.
+The chief gets the saved text, assigned role, native issuer, child, turn, and prepared review target when present.
+The tool checks the current native root chief, project, owner epoch, and recorded receipt.
+It uses the fixed version 3 configuration and cannot select another logbook or project from tool input.
+
+The read changes no task, run, finding, verdict, or admission record. A missing receipt refuses the read.
+The chief still cannot read an unrecorded grandchild report through the parent's name-based tool.
+A saved report remains readable after Sage off or transcript removal under the same owner.
+Cross-session recovery remains separate work.
+
+Packaged tests cover nested lead reports and chief-only access. The native report probe checks the tool and returned evidence directly.
+Native model responses remain simulated; these checks do not establish a real-project review.

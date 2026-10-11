@@ -66,7 +66,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_accept_review", "sage_finish_run", "sage_prepare_task", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_accept_review", "sage_finish_run", "sage_prepare_task", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -920,14 +920,14 @@ test("packaged MCP stop accepts exact completion and contains invalid stop reque
 
 
 const reportText = ["STATUS done", "RESULT PASS", "EVIDENCE fixed fixture: 1 passed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n");
-function appendReport(f, text = reportText) {
-  const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+function appendReport(f, text = reportText, child = childActor, turn = turns[1]) {
+  const transcript = join(f.mode.sessionsDir, `${child}.jsonl`);
   appendFileSync(transcript, [
     { type: "response_item", payload: { type: "message", id: "fixture_report", role: "assistant",
-      content: [{ type: "output_text", text }], internal_chat_message_metadata_passthrough: { turn_id: turns[1] } },
+      content: [{ type: "output_text", text }], internal_chat_message_metadata_passthrough: { turn_id: turn } },
       metadata: { client_authored: false, retained_source: { complete: true,
-        id: { role: "assistant", turn_id: turns[1], message_id: "fixture_report" } } } },
-    { type: "event_msg", payload: { type: "task_complete", turn_id: turns[1], last_agent_message: text } },
+        id: { role: "assistant", turn_id: turn, message_id: "fixture_report" } } } },
+    { type: "event_msg", payload: { type: "task_complete", turn_id: turn, last_agent_message: text } },
   ].map(row => JSON.stringify(row) + "\n").join(""));
 }
 
@@ -1391,4 +1391,88 @@ test("review acceptance during a merge read cannot hide a new open finding", asy
   const result = f.tool.mergeCheck(f.preparation.review.sha, f.env);
   assert.equal(accepted, true);
   assert.equal(result.ok, false);
+});
+
+
+async function recordedReader(f) {
+  const api = await import(pathToFileURL(join(f.plugin, "runtime/run-report.mjs")));
+  assert.equal(typeof api.readRecordedReport, "function");
+  return (input = f.finishInput, actor = session, options = f.options) => api.readRecordedReport(input, f.native(actor), options);
+}
+
+test("chief saved report inspection reads exact evidence without finishing or accepting it", async t => {
+  const f = await runReportFixture(t), read = await recordedReader(f);
+  assert.throws(() => read()); f.record();
+  const before = JSON.stringify(f.core.readAdmission(f.options.directory));
+  const tables = ["tasks", "runs", "ledger", "findings", "gates", "decisions"];
+  const snapshot = () => tables.map(name => readFileSync(join(f.logbook, `${name}.tsv`), "utf8"));
+  const prior = snapshot(), report = read();
+  assert.equal(report.decision, "recorded-report"); assert.equal(report.text, reportText);
+  assert.equal(report.reportHash, f.finishInput.reportHash); assert.equal(report.assignment, f.finishInput.assignment);
+  assert.equal(report.role, "lead"); assert.equal(report.issuer, session); assert.equal(report.child, childActor);
+  assert.equal(report.turn, turns[1]); assert.equal(report.task, "T1"); assert.equal(report.run, "R1");
+  assert.equal(Object.hasOwn(report, "project"), false); assert.equal(Object.hasOwn(report, "review"), false);
+  assert.deepEqual(read(), report); assert.deepEqual(snapshot(), prior);
+  assert.equal(JSON.stringify(f.core.readAdmission(f.options.directory)), before);
+  assert.equal(f.tool.read(f.logbook, "runs")[0].status, "running");
+});
+
+test("chief saved report inspection refuses other actors hashes scope and versions but survives transcript loss", async t => {
+  const f = await runReportFixture(t), read = await recordedReader(f); f.record();
+  for (const actor of [childActor, turns[0]]) assert.throws(() => read(f.finishInput, actor));
+  for (const extra of [{ reportHash: "a".repeat(64) }, { assignment: turns[0] }, { text: reportText }, { session }])
+    assert.throws(() => read({ ...f.finishInput, ...extra }));
+  assert.throws(() => read(f.finishInput, session, { ...f.options, project: "other" }));
+  const api = await import(pathToFileURL(join(f.plugin, "runtime/run-report.mjs")));
+  assert.throws(() => api.readRecordedReport(f.finishInput, { version: "unsupported", actor: session }, f.options));
+  const expected = read();
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  rmSync(f.mode.sessionsDir, { recursive: true }); assert.deepEqual(read(), expected);
+});
+
+test("chief saved report inspection exposes the pinned review target through the packaged tool", async t => {
+  const f = await reviewAcceptanceFixture(t, { finish: false });
+  writeFileSync(f.entry, `import { servePreparations } from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
+  const client = await connect(t, f, "0.160.0", "", "sage_read_recorded_report");
+  assert.match((await client.call(f.acceptInput, childActor)).error, /could not read/);
+  const report = await client.call(f.acceptInput); await client.close();
+  assert.equal(report.decision, "recorded-report"); assert.equal(report.text, f.text);
+  assert.deepEqual(report.review, f.preparation.review);
+  assert.equal(f.tool.read(f.logbook, "runs")[0].status, "running");
+  assert.equal(f.tool.read(f.logbook, "ledger").length, 0);
+  const retry = await connect(t, f, "0.160.0", "", "sage_read_recorded_report");
+  assert.deepEqual(await retry.call(f.acceptInput), report); await retry.close();
+});
+
+test("chief saved report inspection reads a lead's recorded nested report without taking parent authority", async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy); f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const leadTranscript = f.childTranscript();
+  await f.evaluate(policy, { ...patch(turns[1]), transcript_path: leadTranscript }, childActor);
+  const qa = "a22422c7-509c-43aa-8c42-827c556f8a59", path = "/root/fixture_lead/qa_child";
+  const request = { ...f.input, name: "qa_child", run: "R2", role: "qa" };
+  f.api.prepareNativeTask(request, f.native(childActor), f.options);
+  const spawn = { ...f.spawnInput(request.name, "spawn-qa"), turn_id: turns[1], transcript_path: leadTranscript };
+  await f.evaluate(policy, spawn, childActor);
+  f.events.publish(join(f.options.observationsRoot, session), { ...f.result, actor: childActor, call: "spawn-qa", turn: turns[1], path });
+  const transcript = f.childTranscript({ child: qa, parent: childActor, path, turn: turns[2] });
+  await f.evaluate(policy, { ...patch(turns[2]), transcript_path: transcript }, qa);
+  appendReport(f, reportText, qa, turns[2]);
+  policy.completeChild({ hook_event_name: "SubagentStop", session_id: session, agent_id: qa, turn_id: turns[2],
+    transcript_path: leadTranscript }, f.native(qa));
+  const api = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  assert.throws(() => api.readChildReport({ name: request.name }, f.native(session), f.options));
+  const receipt = api.readChildReport({ name: request.name }, f.native(childActor), f.options);
+  api.recordChildReport({ name: request.name, reportHash: receipt.reportHash }, f.native(childActor), f.options);
+  const projectDirectory = join(f.dir, "project"), logbookRoot = join(f.dir, "logbook");
+  mkdirSync(projectDirectory); mkdirSync(logbookRoot);
+  f.options = { ...f.options, projectDirectory, logbookRoot };
+  f.finishInput = { assignment: receipt.assignment, reportHash: receipt.reportHash };
+  const read = await recordedReader(f), report = read();
+  assert.equal(report.issuer, childActor); assert.equal(report.child, qa); assert.equal(report.role, "qa");
+  assert.equal(report.run, "R2"); assert.equal(report.text, reportText);
+  assert.throws(() => read(f.finishInput, childActor)); assert.throws(() => read(f.finishInput, qa));
+  assert.throws(() => api.readChildReport({ name: request.name }, f.native(session), f.options));
 });

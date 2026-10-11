@@ -57,3 +57,14 @@ export function acceptRecordedReview(input, context, options) {
   if (!review) refuse();
   return tool.acceptReportedReview({ ...work, review }, env);
 }
+
+
+/** The chief inspects a saved report, including a lead's child, without accepting any claim. */
+export function readRecordedReport(input, context, options) {
+  const { state, assigned, work } = recordedRun(input, context, options);
+  const saved = state.reports.find(row => row.binding.assignment === input.assignment);
+  const review = state.preparations.find(row => row.id === assigned.preparation)?.review;
+  return { decision: "recorded-report", assignment: input.assignment, task: work.task, run: work.run,
+    role: work.role, issuer: saved.binding.issuer, child: saved.binding.child, turn: saved.binding.turn,
+    reportHash: work.reportHash, text: work.text, ...(review ? { review } : {}) };
+}
