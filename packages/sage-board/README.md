@@ -30,7 +30,9 @@ Use `--html --out <absolute-path.html>` for an offline file. The command prints 
 
 The install command creates a private launchd file but does not start a service. On macOS, stop the foreground board first. Start login service with `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.sage.board.plist"`.
 
-Inspect it with `launchctl print "gui/$(id -u)/dev.sage.board"`. Stop it with `launchctl bootout "gui/$(id -u)/dev.sage.board"`. Keep the installed Node executable available at the path recorded in the launchd file.
+Inspect it with `launchctl print "gui/$(id -u)/dev.sage.board"`. Stop it with `launchctl bootout "gui/$(id -u)/dev.sage.board"`. New login files use the current Node through its stable command on PATH. With Homebrew, the file keeps the bin alias instead of a version under Cellar. The installer checks that the alias names the running Node.
+
+After a Node upgrade, inspect the login service with `launchctl print "gui/$(id -u)/dev.sage.board"`. Check its Node path, then open the board’s configured address. An older login file that names a Cellar version needs a new file with a stable Node path.
 
 ## Private phone access
 

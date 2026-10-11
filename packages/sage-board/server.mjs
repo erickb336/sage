@@ -153,6 +153,7 @@ export function createBoardServer({ sources, secret, port = 43123, allowedHosts 
 
   function reconcileWatchers() {
     const plans = watchPlans();
+    let attached = false;
     for (const [key, item] of watchers) if (!plans.has(key) || plans.get(key).identity !== item.plan.identity) { item.watcher.close(); watchers.delete(key); }
     for (const [key] of watchErrors) if (!plans.has(key)) watchErrors.delete(key);
     for (const [key, plan] of plans) {
@@ -160,8 +161,9 @@ export function createBoardServer({ sources, secret, port = 43123, allowedHosts 
       if (watchErrors.has(key)) continue;
       try {
         const item = { plan, watcher: null };
-        item.watcher = watch(plan.path, { recursive: plan.recursive }, (_event, filename) => {
-          if (!item.plan.recursive && filename && !item.plan.children.has(String(filename).split(sep)[0])) return;
+        item.watcher = watch(plan.path, { recursive: plan.recursive }, (event, filename) => {
+          // A rename can name only the destination. Recheck the source even when that name differs.
+          if (event !== "rename" && !item.plan.recursive && filename && !item.plan.children.has(String(filename).split(sep)[0])) return;
           watchErrors.clear(); schedule();
         });
         item.watcher.on("error", () => {
@@ -169,9 +171,11 @@ export function createBoardServer({ sources, secret, port = 43123, allowedHosts 
           watchErrors.set(key, { source: "board", message: "File watching is unavailable; the displayed board may be stale." });
           schedule();
         });
-        watchers.set(key, item);
+        watchers.set(key, item); attached = true;
       } catch { watchErrors.set(key, { source: "board", message: "File watching is unavailable; the displayed board may be stale." }); }
     }
+    // Read once more after attachment to cover changes during watcher replacement. This is not polling.
+    if (attached) schedule();
   }
 
   function refresh() {
