@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { readAdmission, prepareAdmission, reservePreparedAdmission } from "../core/index.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { bindings, decodeEvent, publish, readObservations } from "./events.mjs";
+import { preparedTaskMessage } from "./instructions.mjs";
 
 const NAME = /^(?!root$)[a-z0-9_]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -43,7 +44,7 @@ export function prepareNativeTask(input, context, options) {
     { task: input.task, run: input.run, issuer: native.actor, name: input.name },
     { issuerRole: role, role: input.role }, input.brief);
   const saved = result.preparation;
-  return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role };
+  return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role, message: preparedTaskMessage(saved) };
 }
 
 /** Input is the raw native PreToolUse payload, before any derived agent_id is added. */
@@ -62,7 +63,7 @@ export function reservePreparedSpawn(input, context, options) {
   if (scope.session !== `codex:${observed.session}`) refuse();
   const prepared = readAdmission(options.directory).preparations.filter(row => row.project === scope.project
     && row.session === scope.session && row.epoch === scope.epoch && row.issuer === native.actor && row.name === observed.name);
-  if (prepared.length !== 1) refuse();
+  if (prepared.length !== 1 || message !== preparedTaskMessage(prepared[0])) refuse();
   return reservePreparedAdmission(options.directory, scope,
     { preparation: prepared[0].id, issuer: native.actor, call: observed.call },
     { tool: input.tool_name, turn: observed.turn, name: observed.name,

@@ -90,7 +90,11 @@ Root tool templates must omit `agent_id`: that field is absent from root tool ev
 After correcting those templates, root tool callbacks and child stop callbacks arrived, but the MCP start callback remained absent.
 The [hook contract](https://learn.chatgpt.com/docs/hooks) requires an existing MCP connection; hooks do not start or reconnect servers.
 
-The next integration must deliver the saved role and brief through the validated spawn message.
+The preparation tool now returns the saved role, report format, and brief as one message.
+Native spawn admission requires that exact message before it reserves a slot.
+The caller copies the returned name and message unchanged; Sage does not override native approval.
+Local server tests verify delivery, unchanged retries, and refusal of altered or swapped instructions.
+Both new tests fail on main: it returns no message and admits arbitrary task content.
 At the child's first tool call, bind its verified transcript identity to the admitted dispatch and saved task hash.
 A missing parent result or conflicting identity must deny the tool and retain the reservation.
 Stop processing must use that saved child transcript, not the parent path in the stop callback.
