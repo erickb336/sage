@@ -594,7 +594,7 @@ test("T151: without uptime, as in the macOS sandbox, the tool works and the lock
   assert.equal(existsSync(lock), true, "a live pid keeps the lock");
   rmSync(lock, { recursive: true });
 
-  lock = crash(s, { host: "other-host" }); // another host, whose pid this machine cannot check
+  lock = crash(s, { host: "other-host", machineId: "other-machine" }); // another host, whose pid this machine cannot check
   r = s.run("task", "T1", "set", "branch=t1-other-host");
   assert.match(r.stderr, /^sage: the logbook is busy: pid \d+ on other-host has held /);
   assert.equal(existsSync(lock), true, "a holder on another host is never cleared on a guess");
@@ -631,7 +631,7 @@ test("T151-Q1: a lock taken without a boot time stays with its live holder, for 
   s.ok("task", "add", "--title", "t", "--size", "small");
   const lock = crash(s, {}, { NODE_OPTIONS: NO_UPTIME }); // taken in the sandbox
   const record = JSON.parse(readFileSync(join(lock, readdirSync(lock)[0]), "utf8"));
-  assert.deepEqual(Object.keys(record), ["pid", "host", "start", "at"], "an unknown boot time has no key");
+  assert.deepEqual(Object.keys(record), ["pid", "host", "machineId", "start", "at"], "an unknown boot time has no key");
   delete s.pids[record.pid]; // the holder is alive, start unknown
   const old = spawnSync("node", [OLD_TOOL, "task", "T1", "set", "branch=t1-old", "--project", s.project], { encoding: "utf8", env: testEnv({ ...vars, SAGE_HOME: s.home, SAGE_TEST_PIDS: JSON.stringify(s.pids) }), timeout });
   assert.match(old.stderr, /^sage: the logbook is busy: pid \d+ on /, "the older sage keeps the lock");
@@ -653,6 +653,10 @@ test("T91-F1: SAGE_TEST_PIDS weakens no lock outside a node test run or outside 
   // tool ignores the map and asks the system: the kill spy answers "alive" and records the call, so the lock stays.
   const lock = crash(s);
   const holder = Object.keys(s.pids)[0];
+  // This test isolates PID probing with a legacy owner, independent of machine-id availability.
+  const owner = join(lock, readdirSync(lock)[0]);
+  const record = JSON.parse(readFileSync(owner, "utf8")); delete record.machineId;
+  writeFileSync(owner, JSON.stringify(record));
   for (const [i, vars] of [{ NODE_TEST_CONTEXT: undefined }, { TMPDIR: mkdtempSync(join(tmpdir(), "sage-other-tmp-")) }].entries()) {
     const kills = join(fakes, `kills-${i}`);
     const r = set({ ...vars, SAGE_TEST_PIDS: JSON.stringify(s.pids), SAGE_TEST_KILLS: kills });
@@ -696,7 +700,7 @@ test("a holder that may be alive keeps the lock: a waiter waits for it, or refus
   assert.equal(rows(s.dir, "tasks")[0].branch, "t1-after-wait", "it took the lock when the holder let go");
   await h.exited;
 
-  const lock = crash(s, { host: "other-host", boot: 1 }); // this machine cannot check a process on another one
+  const lock = crash(s, { host: "other-host", machineId: "other-machine", boot: 1 }); // this machine cannot check a process on another one
   t0 = Date.now();
   r = s.run("task", "T1", "set", "branch=t1-other-host");
   assert.equal(r.status, 1);
@@ -2464,4 +2468,56 @@ test("T152: cleanup retains foreign waiters and removes only dead local waiters"
   assert.equal(readFileSync(alive.owner, "utf8"), alive.text, "a live local waiter remains");
   assert.equal(existsSync(join(fakes, "calls")), false, "no command ran ps");
   assert.equal(existsSync(kills), false, "no command called process.kill");
+});
+
+
+test("stable lock identity clears a dead renamed host and keeps a same-name foreign machine", () => {
+  const s = store(undefined, undefined, { SAGE_TEST_MACHINE_ID: "sample-machine-a" });
+  s.ok("task", "add", "--title", "sample", "--size", "small");
+  const pid = 424290; s.pids[pid] = null;
+  const ownerName = `${randomUUID()}.json`;
+  const owner = { pid, host: `${hostname()}-old-name`, machineId: "sample-machine-a", start: 1000, at: 0 };
+  const lock = plant(s.dir, ownerName, owner);
+  s.ok("task", "T1", "set", "branch=codex/t1-renamed");
+  assert.equal(existsSync(lock), false);
+  const foreign = { ...owner, host: hostname(), machineId: "sample-machine-b" };
+  plant(s.dir, ownerName, foreign);
+  const before = readFileSync(join(lock, ownerName), "utf8");
+  assert.match(s.no("task", "T1", "set", "branch=codex/t1-foreign"), /logbook is busy/);
+  assert.equal(readFileSync(join(lock, ownerName), "utf8"), before);
+  assert.equal(rows(s.dir, "tasks")[0].branch, "codex/t1-renamed");
+  writeFileSync(join(lock, ownerName), JSON.stringify({ ...owner, host: hostname(), machineId: undefined }));
+  s.ok("task", "T1", "set", "branch=codex/t1-legacy");
+  assert.equal(existsSync(lock), false, "legacy owners keep the host rule");
+});
+
+test("stable lock identity applies to waiter cleanup", () => {
+  const s = store(undefined, undefined, { SAGE_TEST_MACHINE_ID: "sample-machine-a" });
+  const make = (machineId, host) => {
+    const token = randomUUID(), name = `${token}.json`, pending = join(s.dir, `.lock.${token}`);
+    const owner = { pid: 424291, host, machineId, start: 1000, at: 0 };
+    renameSync(plant(s.dir, name, owner), pending);
+    return { pending, file: join(pending, name), original: JSON.stringify(owner) };
+  };
+  s.pids[424291] = null;
+  const local = make("sample-machine-a", `${hostname()}-renamed`);
+  const foreign = make("sample-machine-b", hostname());
+  s.ok("task", "add", "--title", "sample", "--size", "small");
+  assert.equal(existsSync(local.pending), false);
+  assert.equal(readFileSync(foreign.file, "utf8"), foreign.original);
+});
+
+
+test("stable machine identity is recorded while a command holds the lock", async t => {
+  const { withLock } = await import(LIB);
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-machine-lock-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  withLock(dir, () => {
+    const lock = join(dir, ".lock"), names = readdirSync(lock);
+    assert.equal(names.length, 1);
+    const owner = JSON.parse(readFileSync(join(lock, names[0]), "utf8"));
+    assert.equal(owner.machineId, "test-machine");
+    assert.equal(owner.host, hostname());
+  });
+  assert.equal(existsSync(join(dir, ".lock")), false);
 });

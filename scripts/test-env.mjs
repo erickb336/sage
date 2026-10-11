@@ -8,3 +8,6 @@ for (const name of Object.keys(process.env)) if (LEAKS.test(name)) delete proces
 // commit.gpgsign or core.hooksPath there fails every commit a test makes (R679). /dev/null replaces both global files.
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
+
+// State-tool fixtures use a made-up stable identity; no test reads the real machine identity.
+process.env.SAGE_TEST_MACHINE_ID = "test-machine";
