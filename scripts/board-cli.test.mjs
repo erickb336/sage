@@ -33,7 +33,7 @@ test("standalone HTML export includes task detail, prints its path and does not 
   const file = lines[0];
   assert.ok(file.startsWith(join(dir, "pages/board-")));
   const html = readFileSync(file, "utf8");
-  assert.ok(html.includes("Sample CLI task")); assert.ok(html.includes("<h3>Evidence</h3>"));
+  assert.ok(html.includes("Sample CLI task")); assert.ok(html.includes('<h3>Evidence <span class="n">0</span></h3>'));
   assert.ok(!html.includes(value.secret));
   await runBoardCli(["board", "all", "--html", "--config", config], { output: line => lines.push(line) });
   assert.notEqual(lines[1], file);
