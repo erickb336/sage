@@ -2792,6 +2792,19 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
     ["grep -rn board.json packages/sage-board", OK], ["rg -n hash packages", OK], ["find . -name board.json", OK], ["cat ~/.config/sage-board/board.log", OK],
     // A recursive search from a folder that is not above the config (not /tmp: the temporary home is under it).
     [`cd ${dir}/other && grep -r x .`, OK], ["rm -rf $OUT/*", OK], ["cat board.json", OK, join(dir, "other", "sage-board")], [`cat ${dir}/other/sage-board/board.json`, OK], ["echo \"a", OK],
+    // F-T229-18: the value of key=value, a file:// URL, the folder of git -C, an xargs here-string and code arguments.
+    [`dd if=${config} of=/tmp/x`, CONFIG], ["dd if=/tmp/x of=~/.config/sage-board/board.json", CONFIG], [`curl -s file://${config}`, CONFIG],
+    [`curl -s file://localhost${home}/.config/sage-board/board%2Ejson`, CONFIG], [`git -C ${home} diff --no-index .config/sage-board/board.json /tmp/x`, CONFIG],
+    ["git -C ~/.config diff --no-index sage-board/board.json /tmp/x", CONFIG], ["xargs cat <<< ~/.config/sage-board/board.json", CONFIG], [`xargs -n1 cat <<< "/tmp/a ${config}"`, CONFIG],
+    [`node -e "process.stdout.write(require('fs').readFileSync('${config}'))"`, CONFIG], [`python3 -c "print(open('${home}/.config/sage-board/board.json').read())"`, CONFIG],
+    ["dd if=/dev/zero of=/tmp/x bs=1 count=1", OK], ["make PREFIX=/usr/local install", OK], ["curl -s file:///tmp/x https://example.com/board.json", OK],
+    [`git -C ${REPO} diff --no-index packages/sage-board/cli.mjs /tmp/x`, OK], ["git -C packages status", OK], ["xargs cat <<< packages/sage-board/README.md", OK],
+    ["node -e \"console.log(require('fs').readFileSync('packages/sage-board/cli.mjs', 'utf8').length)\"", OK], ["python3 -c \"import json; print(json.load(open('package.json'))['name'])\"", OK],
+  ];
+  // F-T229-19: the terminal tool runs in its own cwd: [command, its cwd, expected].
+  const terminals = [
+    ["cat board.json", folder, CONFIG], ["cat sage-board/board.json", "~/.config", CONFIG], ["cat .config/sage-board/board.json", "$HOME", CONFIG],
+    ["cat board.json", join(dir, "other", "sage-board"), OK], ["cat README.md", "packages/sage-board", OK],
   ];
   const files = [
     [{ file_path: config }, CONFIG], [{ file_path: "~/.config/sage-board/board.json" }, CONFIG], [{ file_path: join(dir, "plain-name.txt") }, CONFIG],
@@ -2820,7 +2833,13 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
         for (const [input, expected, cwd = REPO] of files) check(`${name}: ${toolName} ${input.file_path}`, tool(toolName, input, { cwd, ...extra }), state, expected);
       }
       for (const [input, expected, cwd = REPO] of files) check(`${name}: NotebookEdit ${input.file_path}`, tool("NotebookEdit", { notebook_path: input.file_path }, { cwd, ...extra }), state, expected);
-      for (const [input, expected, cwd = REPO] of greps) check(`${name}: Grep ${JSON.stringify(input)}`, tool("Grep", input, { cwd, ...extra }), state, expected);
+      // F-T229-14: the Glob tool has the same path check as Grep.
+      for (const toolName of ["Grep", "Glob"]) {
+        for (const [input, expected, cwd = REPO] of greps) check(`${name}: ${toolName} ${JSON.stringify(input)}`, tool(toolName, input, { cwd, ...extra }), state, expected);
+      }
+      for (const [command, terminalCwd, expected] of terminals) {
+        check(`${name}: terminal in ${terminalCwd}: ${command}`, tool("mcp__terminal__run_in_terminal", { command, cwd: terminalCwd }, { cwd: REPO, ...extra }), state, expected);
+      }
     }
   } finally {
     process.env.HOME = saved;
@@ -2828,7 +2847,42 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
   }
   assert.deepEqual(wrong, []);
   const matcher = JSON.parse(readFileSync(fileURLToPath(new URL("../plugins/sage/hooks/claude.json", import.meta.url)), "utf8")).hooks.PreToolUse[0].matcher;
-  for (const name of ["Read", "Grep", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]) assert.match(name, new RegExp(`^(?:${matcher})$`), `Claude Code sends ${name} to the hook`);
+  for (const name of ["Read", "Grep", "Glob", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]) assert.match(name, new RegExp(`^(?:${matcher})$`), `Claude Code sends ${name} to the hook`);
+});
+
+// F-T229-17: a word of many variable and ? pieces must not make the board rule backtrack. Before the repair, a 52-character
+// word ran past the hook's 10 s timeout; a word of this shape takes under 5 ms now. The hook runs as Claude Code runs
+// it, in its own process with the 10 s limit, so that the old code fails here instead of stopping the test run. The
+// limit for one call in this process is 1 s: 200 times the time it needs, so that a busy machine does not fail it.
+// Above 16 pieces in one word, the hook keeps the word's first and last text, with any text between: the word still
+// counts when it can name the config.
+test("F-T229-17: the board rule is fast on a word of many variable and ? pieces", async () => {
+  const s = session();
+  const home = join(s.dir, "fake-home");
+  const words = [[`/${"${x}?".repeat(10)}Q`, false], [`/${"${x}?".repeat(400)}Q`, false], [`~/.config/sage-board/${"${x}*?".repeat(10)}Q`, false],
+    [`~/.config/sage-board/${"${x}?".repeat(20)}json`, true], [`${home}/.config/${"${x}?".repeat(10)}.json`, true]];
+  const saved = process.env.HOME;
+  try {
+    for (const [word] of words) {
+      const event = { session_id: "s1", ...bash(`cat ${word}`) };
+      const r = spawnSync("node", LAUNCHER, { input: JSON.stringify(event), encoding: "utf8", env: s.vars, timeout: 10_000 });
+      assert.equal(r.signal, null, `the hook finished within its 10 s timeout for a word of ${word.length} characters`);
+      assert.equal(r.status, 0, r.stderr);
+    }
+    const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
+    const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+    process.env.HOME = home;
+    for (const [word, config] of words) {
+      const start = performance.now();
+      const reason = denied(handle(bash(`cat ${word}`), { sage: false }, slots)) ?? "";
+      const ms = performance.now() - start;
+      assert.ok(ms < 1000, `one call took ${Math.round(ms)} ms for a word of ${word.length} characters`); // timing-ok: 200 times the 5 ms a call needs; the old code took over 10 s
+      assert.equal(/board password rule/.test(reason), config, `${word}: ${reason || "allowed"}`);
+    }
+  } finally {
+    process.env.HOME = saved;
+    rmSync(s.dir, { recursive: true, force: true });
+  }
 });
 
 // T94: sandbox part 2. The sandbox runs the state tool outside it only for its unquoted absolute spelling, and refuses

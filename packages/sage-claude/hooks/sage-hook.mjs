@@ -864,9 +864,11 @@ function agentCheck(input, file) {
  *   - gives a board command a variable, a substitution or a pattern (one can hide that option), or words from xargs;
  *   - names the board config folder ~/.config/sage-board, its board.json or a temporary .board-*.json, in a command, a
  *     redirection, Read, Write, Edit, MultiEdit or NotebookEdit. A path resolves against its working folder first
- *     (., .., //, ~ and links); a pattern or a variable counts when it can stand for one of them (fail closed);
+ *     (., .., //, ~, links, git -C and the terminal tool's cwd); a pattern or a variable counts when it can stand for
+ *     one of them (fail closed). A word names a path also as the value of key=value, as a file:// URL, as an xargs
+ *     here-string and, in the code of node -e or python3 -c, as a text with a slash;
  *   - searches, copies, moves or links that folder or a folder above it (grep -r, rg, find, cp -R, tar, mv, ln, the
- *     Grep tool and others).
+ *     Grep and Glob tools and others).
  * Only the board command may name its config, as the value of --config. Only the real home folder counts: a repository
  * path such as packages/sage-board, or a search word such as board.json, is not the config. A command that builds the
  * path or the command while it runs can still pass: full protection needs the sandbox (T97 to T99, and T238).
@@ -899,11 +901,48 @@ function pathParts(word, dir) {
   }
   return parts;
 }
-/** A pattern for the absolute paths that these parts can stand for: a variable for any text, * and ? within one part. */
-function pathPattern(parts) {
-  const piece = (part) => part.replace(new RegExp(`${EXPANSION.source}|[^$\`*?[{]+`, "g"), (p) =>
-    /^[$`{]/.test(p) ? ".*" : p === "*" ? "[^/]*" : /^[?[]/.test(p) ? "[^/]" : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return new RegExp(`^/${parts.map(piece).join("/").replace(/(?:\.\*)+/g, ".*")}$`, "is");
+/** More pattern pieces than this in one word: the hook keeps only the word's first and last text, with any text between (fail closed). */
+const PIECES = 16;
+/**
+ * The absolute paths that these parts can stand for, as a test. A variable or {…} stands for any text, also across a
+ * slash; * for any text in one part; ? and […] for one character of one part. The test steps through the path once for
+ * each piece, so its time grows with the path times the pieces: no pattern can make it backtrack (F-T229-17).
+ */
+function pathMatcher(parts) {
+  const pieces = [];
+  const text = (t) => (pieces.at(-1)?.text !== undefined ? (pieces.at(-1).text += t) : pieces.push({ text: t }));
+  if (!parts.length) text("/");
+  for (const part of parts) {
+    text("/");
+    for (const [p] of part.matchAll(new RegExp(`${EXPANSION.source}|[^$\`*?[{]+`, "g"))) {
+      if (/^[$`{]/.test(p)) pieces.push({ any: true });
+      else if (p === "*") pieces.push({ part: true });
+      else if (/^[?[]/.test(p)) pieces.push({ one: true });
+      else text(fold(p));
+    }
+  }
+  const steps = pieces.filter((p) => p.text === undefined).length > PIECES
+    ? [pieces[0], { any: true }, ...(pieces.at(-1).text !== undefined ? [pieces.at(-1)] : [])]
+    : pieces;
+  return (path) => {
+    let at = new Uint8Array(path.length + 1);
+    at[0] = 1;
+    for (const step of steps) {
+      const next = new Uint8Array(path.length + 1);
+      let open = 0; // for a variable or *: a start before this place that the piece can stretch from
+      for (let i = 0; i <= path.length; i++) {
+        if (step.any || step.part) {
+          open |= at[i];
+          next[i] = open;
+          if (step.part && path[i] === "/") open = 0;
+        } else if (step.one) {
+          if (at[i] && i < path.length && path[i] !== "/") next[i + 1] = 1;
+        } else if (at[i] && path.startsWith(step.text, i)) next[i + step.text.length] = 1;
+      }
+      at = next;
+    }
+    return at[path.length] === 1;
+  };
 }
 /**
  * What a word (a path from the folder dir, maybe with ~, a pattern or a variable) can stand for: config, the board
@@ -916,9 +955,9 @@ function boardReach(word, dir, folders) {
   let is, temporary;
   if (parts.some((part) => /[$`*?[{]/.test(part))) {
     // A pattern, a variable or an unknown folder: the paths it can stand for.
-    const whole = pathPattern(parts), parent = pathPattern(parts.slice(0, -1));
-    is = (path) => whole.test(path);
-    temporary = (f) => /^\.board-.*(?:\.json|[$`*?\]}])$/i.test(parts.at(-1) ?? "") && parent.test(f);
+    is = pathMatcher(parts);
+    const parent = pathMatcher(parts.slice(0, -1));
+    temporary = (f) => /^\.board-.*(?:\.json|[$`*?\]}])$/i.test(parts.at(-1) ?? "") && parent(f);
   } else {
     // A plain path: as written, and its real path (a link to the config is the config).
     const spellings = [fold(`/${parts.join("/")}`)];
@@ -937,11 +976,37 @@ const WHOLE = (name, args) => /^(?:rg|ag|ack|find|fd|ditto|tar|bsdtar|zip|rsync|
   (/^(?:e|f)?grep$/.test(name) && args.some((a) => /^-[^-]*[rR]|^--(?:recursive|dereference-recursive|directories=recurse)$|^recurse$/.test(a))) ||
   (/^(?:cp|gcp|scp)$/.test(name) && args.some((a) => /^-[^-]*[rRa]|^--(?:recursive|archive)$/.test(a)));
 const BOARD_RUN = ({ word, args }) => (basename(word) === "cli.mjs" || args.some((a) => /(?:^|\/)cli\.mjs$/i.test(a)) || /^(?:npm|pnpm|yarn|bun)$/.test(basename(word))) && args.includes("board");
+/** Programs that take code in a word after a CODE option (node -e, python3 -c); the shells' code is read as commands. */
+const INTERPRETERS = /^(?:node|deno|bun|python[\d.]*|perl|ruby|php|osascript)$/;
+/**
+ * The paths that one word can name: the word, the value of key=value (dd if=, of=), the path of a file:// URL (curl)
+ * and, in code, each text between quotes, spaces and other marks that has a slash or "board" in it.
+ */
+function boardPaths(word, code) {
+  const paths = code ? word.split(/[\s'"`;,()<>|&=+]+/).filter((t) => /\/|board/i.test(t)) : [word];
+  for (const path of [...paths]) {
+    const value = /^[\w.-]+=(.+)$/s.exec(path)?.[1];
+    if (value) paths.push(value);
+    for (const p of [path, value]) {
+      const url = /^file:\/\/[^/]*(\/.*)?$/is.exec(p ?? "");
+      if (!url) continue;
+      paths.push(url[1] ?? "/");
+      try { paths.push(decodeURIComponent(url[1] ?? "/")); } catch {}
+    }
+  }
+  return paths;
+}
 /** The programs and redirections of one command line, each with its folder (undefined when the hook cannot tell it). */
-function boardCommands(text, cwd) {
+function boardCommands(text, cwd, uncertain) {
   try {
-    const { programs, redirects } = programsRun(text, cwd, undefined, { contextEvidence: true });
-    return { runs: programs.map(({ run, uncertainDirectory }) => ({ ...run, dir: uncertainDirectory ? undefined : run.dir })), redirects: redirects.map(({ redirect, dir, uncertainDirectory }) => ({ redirect, dir: uncertainDirectory ? undefined : dir })) };
+    const { programs, redirects } = programsRun(text, cwd, undefined, { contextEvidence: true, uncertainDirectory: uncertain });
+    let xargs = false; // xargs runs the next program, with the words of its stdin (a here-string too) as arguments
+    const runs = programs.map(({ run, wrapper, uncertainDirectory }) => {
+      const args = xargs && !wrapper ? [...run.args, ...(run.stdin ?? []).flatMap((body) => body.split(/\s+/).filter(Boolean))] : run.args;
+      xargs = wrapper && (xargs || basename(run.word) === "xargs");
+      return { ...run, args, dir: uncertainDirectory ? undefined : run.dir };
+    });
+    return { runs, redirects: redirects.map(({ redirect, dir, uncertainDirectory }) => ({ redirect, dir: uncertainDirectory ? undefined : dir })) };
   } catch {
     // The reader cannot follow a cd here (cd ~, cd $X): read the words alone, with no known folder.
     const commands = shellCommands(text); // throws when it cannot read the line at all
@@ -949,7 +1014,12 @@ function boardCommands(text, cwd) {
   }
 }
 function boardProblem(input) {
-  const tool = input.tool_name ?? "", ti = input.tool_input ?? {}, cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  const tool = input.tool_name ?? "", ti = input.tool_input ?? {}, home = process.env.HOME || homedir();
+  let cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  // The terminal tool runs in its own cwd, as the agent rule reads it; a variable there leaves the folder unknown.
+  const terminal = /^mcp__terminal__/.test(tool) && typeof ti.cwd === "string" && ti.cwd ? ti.cwd : undefined;
+  if (terminal) cwd = from(cwd, terminal.replace(/^~(?=\/|$)/, home));
+  const uncertain = terminal !== undefined && /[$`~]/.test(terminal.replace(/^~(?=\/|$)/, ""));
   // Each word once per call: a long command line often repeats its words.
   const folders = boardFolders(), seen = new Map();
   const reachOf = (word, dir) => {
@@ -961,14 +1031,14 @@ function boardProblem(input) {
     const path = [ti.file_path, ti.notebook_path].find((p) => typeof p === "string" && p);
     return path && reachOf(path, cwd).config ? BOARD_CONFIG : undefined;
   }
-  if (tool === "Grep") {
+  if (tool === "Grep" || tool === "Glob") {
     const reach = reachOf(typeof ti.path === "string" && ti.path ? ti.path : ".", cwd);
     return reach.config || reach.above ? BOARD_CONFIG : undefined;
   }
   if (!SHELL_TOOLS.test(tool)) return undefined;
-  for (const text of commandFields({ ...ti, description: undefined })) {
+  for (const text of commandFields({ ...ti, description: undefined, ...(terminal ? { cwd: undefined } : {}) })) {
     let read;
-    try { read = boardCommands(text, cwd); } catch {
+    try { read = boardCommands(text, cwd, uncertain); } catch {
       // The hook cannot read the line: it refuses one that names the board or a config (fail closed).
       if (/--set-password/.test(text.replace(/['"\\]/g, ""))) return SET_PASSWORD;
       if (/board|config/i.test(text)) return BOARD_CONFIG;
@@ -980,14 +1050,19 @@ function boardProblem(input) {
     for (const run of runs) {
       const name = basename(run.word).toLowerCase(), board = BOARD_RUN(run);
       if (board && (/^(?:xargs|parallel)$/.test(name) || run.args.some((a) => /[$`*?[{]/.test(a)))) return BOARD_EXPANSION;
-      const whole = WHOLE(name, run.args);
+      const whole = WHOLE(name, run.args), code = INTERPRETERS.test(name);
+      let dir = run.dir;
       for (const [k, arg] of run.args.entries()) {
         const value = arg.startsWith("-") ? arg.slice(arg.indexOf("=") + 1 || arg.length) : arg;
         if (!value) continue;
-        const reach = reachOf(value, run.dir);
-        // Only the board command may name its config, as the value of --config.
-        if (reach.config && !(board && (run.args[k - 1] === "--config" || arg.startsWith("--config=")))) return BOARD_CONFIG;
-        if (reach.above && whole) return BOARD_CONFIG;
+        for (const path of boardPaths(value, code && CODE.test(run.args[k - 1] ?? ""))) {
+          const reach = reachOf(path, dir);
+          // Only the board command may name its config, as the value of --config.
+          if (reach.config && !(board && (run.args[k - 1] === "--config" || arg.startsWith("--config=")))) return BOARD_CONFIG;
+          if (reach.above && whole) return BOARD_CONFIG;
+        }
+        // git -C <folder>: the path words after it are from that folder.
+        if (name === "git" && run.args[k - 1] === "-C") dir = /[$`]|^~[^/]/.test(value) || (dir === undefined && !/^[/~]/.test(value)) ? undefined : from(dir ?? "/", value.replace(/^~(?=\/|$)/, home));
       }
       if (SEARCHES.test(name) && whole && reachOf(".", run.dir).above) return BOARD_CONFIG;
     }
