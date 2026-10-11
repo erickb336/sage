@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** All files and the scoped tool approvals belong only to setupCapture's validated temporary root. */
-export async function setupSage(root, { disconnectOnSpawn = false, review = false } = {}) {
+export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   for (const file of ["sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
     writeFileSync(join(root, file), readFileSync(new URL(file, import.meta.url)));
@@ -25,7 +25,8 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   const command = (...args) => tool.sage([...args, "--project", mode.projectDirectory], env);
   command("init"); command("task", "add", "--title", "Native report fixture", "--size", "small");
   if (review) command("task", "T1", "set", "branch=codex/t1-review");
-  command("run", "add", "T1", "--role", review ? "code-reviewer" : "lead");
+  command("run", "add", "T1", "--role", review && !nestedReview ? "code-reviewer" : "lead");
+  if (nestedReview) command("run", "add", "T1", "--role", "code-reviewer");
   const reviewTarget = review ? { branch: "codex/t1-review", sha: git("rev-parse", "--verify", "HEAD").trim(), round: 0, cycle: 1 } : undefined;
   const logbook = tool.storeDir(mode.projectDirectory, env);
   writeFileSync(join(root, "sage-config.json"), JSON.stringify({ version: 3, mode }));

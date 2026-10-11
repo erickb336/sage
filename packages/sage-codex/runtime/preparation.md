@@ -145,3 +145,20 @@ Cross-session recovery remains separate work.
 
 Packaged tests cover nested lead reports and chief-only access. The native report probe checks the tool and returned evidence directly.
 Native model responses remain simulated; these checks do not establish a real-project review.
+
+
+## Native lead-to-reviewer handoff
+
+`node scripts/probe-codex-lifecycle.mjs --sage-nested-report` checks the complete report handoff through Codex CLI 0.160.0.
+The chief prepares a lead. That lead prepares and spawns a code reviewer for an actual temporary Git commit.
+The reviewer receives its fixed role, brief, and target. Its first tool binds the assignment to the native child.
+The lead waits for completion, reads its child's report, and records the exact hash.
+Its own report passes the saved assignment ID and hash to the chief.
+
+The chief reads and records the lead report, then finishes the lead's run.
+It inspects the review through `sage_read_recorded_report`, finishes that run, and accepts the review.
+A repeated acceptance returns the first result. Direct logbook checks require two completed runs, two saved reports, and one verdict.
+Both native completions must match their saved bindings. Task and gate state stay unchanged; merge readiness stays false.
+
+This route uses two real native agents with simulated model responses and temporary state that the probe removes.
+It verifies report transport and acceptance, not review quality, project checks, a complete review cycle, or installed automatic operation.

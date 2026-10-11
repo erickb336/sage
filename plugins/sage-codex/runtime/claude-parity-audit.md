@@ -249,3 +249,16 @@ A lead still owns its child's initial report read and recording. The chief sees 
 Packaged tests cover the nested lead-to-reviewer route, foreign caller refusal, and transcript loss after recording.
 The isolated native report probe checks the visible chief read tool before run completion and review acceptance.
 This does not complete cross-session recovery, independent review scheduling, or a real-project pilot.
+
+
+## Native lead-to-reviewer report handoff
+
+The `--sage-nested-report` route now verifies the complete chief-to-lead-to-reviewer path through CLI 0.160.0.
+The lead prepares its reviewer, waits, reads and records the child's report, then returns the saved reference in its own report.
+The chief reads and records that handoff, finishes both runs, inspects the saved review, and accepts one exact-commit verdict.
+A retry creates no duplicate. The probe directly checks two preparations, reservations, bindings, completions, reports, and completed logbook runs.
+It also checks native dispatch, start, and stop identities for both children.
+
+The test uses an actual temporary Git commit and simulated model responses. Task and gate state stay unchanged, and merge readiness remains false.
+Required project checks, other review roles and cycles, repair scheduling, and a real-project pilot remain unfinished.
+This verifies the existing runtime operations together; it does not activate the installed workflow or resolve required-hook disconnection.
