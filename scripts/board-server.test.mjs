@@ -119,18 +119,36 @@ test("board server serves authenticated pages and HEAD with exact CSP hashes and
   assert.deepEqual(readFileSync(file), before);
 });
 
-test("board server authenticates every page and event route, with no credential or source disclosure", async t => {
-  const f = await fixture(t);
+test("board server authenticates every page and event route through an allowed host, with no credential or source disclosure", async t => {
+  const tailnet = "sample.tailnet.ts.net", f = await fixture(t, { allowedHosts: [tailnet] });
   for (const path of ["/", `/task/${key}`, "/?events=1", `/?events=1&task=${key}`]) {
-    for (const authorization of ["", `Basic ${Buffer.from(`wrong:${f.secret}`).toString("base64")}`, `Basic ${Buffer.from("sage:wrong").toString("base64")}`]) {
-      const result = await read(f, path, { headers: { Authorization: authorization } });
+    for (const authorization of [undefined, `Basic ${Buffer.from(`wrong:${f.secret}`).toString("base64")}`, `Basic ${Buffer.from("sage:wrong").toString("base64")}`]) {
+      const result = await read(f, path, { rawHeaders: ["Host", tailnet, ...(authorization ? ["Authorization", authorization] : [])] });
       assert.equal(result.status, 401); assert.match(result.headers["www-authenticate"], /^Basic /);
       assert.doesNotMatch(result.body, /Sample first task/); assert.ok(!result.body.includes(f.root)); assert.ok(!result.body.includes(f.secret));
     }
   }
-  const duplicate = await read(f, "/", { rawHeaders: ["Host", `127.0.0.1:${f.port}`, "Authorization", f.authorization, "Authorization", f.authorization] });
+  const duplicate = await read(f, "/", { rawHeaders: ["Host", tailnet, "Authorization", f.authorization, "Authorization", f.authorization] });
   assert.equal(duplicate.status, 401);
+  const signed = await read(f, "/", { rawHeaders: ["Host", tailnet, "Authorization", f.authorization] });
+  assert.equal(signed.status, 200); assert.match(signed.body, /Sample first task/);
   const eventHead = await read(f, "/?events=1", { method: "HEAD" }); assert.equal(eventHead.status, 200); assert.equal(eventHead.body, "");
+});
+
+test("T216: on the Mac itself (a loopback Host) the board needs no sign-in, and the browser checks still hold", async t => {
+  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] });
+  for (const host of [`127.0.0.1:${f.port}`, `localhost:${f.port}`, `LOCALHOST:${f.port}`, `[::1]:${f.port}`]) {
+    const page = await read(f, "/", { rawHeaders: ["Host", host] });
+    assert.equal(page.status, 200, host); assert.match(page.body, /Sample first task/); assert.equal(page.headers["www-authenticate"], undefined);
+  }
+  assert.equal((await read(f, `/task/${key}`, { rawHeaders: ["Host", `127.0.0.1:${f.port}`] })).status, 200);
+  assert.equal((await read(f, "/?events=1", { method: "HEAD", rawHeaders: ["Host", `127.0.0.1:${f.port}`] })).status, 200);
+  for (const extra of [["Origin", "https://attacker.test"], ["Origin", "https://sample.tailnet.ts.net"], ["Sec-Fetch-Site", "cross-site"]]) {
+    const refused = await read(f, "/", { rawHeaders: ["Host", `127.0.0.1:${f.port}`, ...extra] });
+    assert.equal(refused.status, 403, extra.join(": ")); assert.doesNotMatch(refused.body, /Sample first task/);
+  }
+  for (const host of ["attacker.test", `127.0.0.1:${f.port + 1}`, `localhost`]) assert.equal((await read(f, "/", { rawHeaders: ["Host", host] })).status, 403, host);
+  assert.equal((await read(f, "/", { method: "POST", rawHeaders: ["Host", `127.0.0.1:${f.port}`] })).status, 405);
 });
 
 test("board server rejects foreign, duplicate and mismatched browser authority headers", async t => {

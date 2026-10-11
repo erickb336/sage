@@ -6,7 +6,9 @@ The service runs independently of a chat session. Browser pages require a sign-i
 
 ## Start locally
 
-Use Node.js 20 or later. Run these commands from the Sage checkout. Replace the source paths when your provider uses another root.
+Use Node.js 20 or later. In Claude, the board phrase does this for you: the chief runs `board --ensure`, which sets the board up when `~/.config/sage-board/board.json` is missing, starts the server in the background when nothing answers on its port, and prints the address or why the server is not running. The server log and pid go to `board.log` and `board.pid` next to the config. Without `--config`, every board command uses that file; without `--sources`, setup uses the standard Claude and Codex roots (`$CLAUDE_CONFIG_DIR/sage` or `~/.claude/sage`, and `$CODEX_HOME/sage` or `~/.codex/sage`).
+
+To set it up by hand, run these commands from the Sage checkout. Replace the source paths when your provider uses another root.
 
 ```sh
 node packages/sage-board/cli.mjs board --setup --config "$HOME/.config/sage-board/board.json" --sources "[{\"id\":\"claude\",\"path\":\"$HOME/.claude/sage\"},{\"id\":\"codex\",\"path\":\"$HOME/.codex/sage\"}]" --pages "$HOME/.local/share/sage-board/pages"
@@ -14,7 +16,7 @@ node packages/sage-board/cli.mjs board --install --config "$HOME/.config/sage-bo
 node "$HOME/.local/share/sage-board/service/packages/sage-board/cli.mjs" board --serve --config "$HOME/.config/sage-board/board.json"
 ```
 
-Open the printed localhost URL. Sign in as `sage`. Use the `secret` value from the private configuration file as the password. Keep that file private.
+Open the printed localhost URL. On the Mac itself (Host `127.0.0.1`, `localhost` or `[::1]` at the board's port) the board needs no sign-in. Through an allowed host, such as the Tailscale name, sign in as `sage` with your board password. Set it in a terminal with `board --set-password`: it asks twice with the echo off, needs 12 characters or more, and keeps only a salted scrypt hash in the configuration file, in place of the random `secret`. Until you set one, the password is the `secret` value from the private configuration file. Restart a running server after a change. Keep that file private.
 
 The default port is 43123. Setup accepts `--port` from 1024 to 65535. A busy port causes an error; the service does not choose another port.
 
