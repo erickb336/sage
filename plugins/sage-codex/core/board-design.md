@@ -16,7 +16,7 @@ Abandoned tasks remain available through task lookup, outside the active columns
 - A separate provider-neutral board package owns the command, server, file watchers and optional login setup. It imports only the public core API.
 - The server listens only on 127.0.0.1. The default configurable port is 43123. A busy port causes a clear failure; the server never stops another process or changes ports silently.
 - A stable installed command supports optional per-user launchd startup. Provider cache changes must not replace the service.
-- Tailscale Serve supplies private HTTPS phone access. No Funnel or LAN listener is used. A board secret protects every board, task and event request. Exact allowed hosts protect the browser boundary.
+- A private HTTPS tunnel that adds X-Forwarded-For supplies phone access; Tailscale Serve is one example, and the code names no tunnel vendor. No public tunnel or LAN listener is used. On the Mac, a request needs no sign-in. Every other board, task and event request signs in with the owner's password, which the owner sets once in a terminal (T229); until then such a request gets 403. There is no random secret. Exact allowed hosts protect the browser boundary.
 - The initial page contains its content without scripts. File events update an open page. Watch errors show stale data, not an empty board.
 
 Read-only access can still expose private briefs and reports. A private tailnet can include other readers. The owner's PE instruction permits authentication when the review finds a risk. The browser sign-in prompt still needs phone and event-stream verification.

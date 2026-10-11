@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { modeSignals, activateAdmission, changeAdmissionMode, readAdmission } from "sage-core";
+import { PHRASES, exactPhrase, phrasesNear, activateAdmission, changeAdmissionMode, readAdmission } from "sage-core";
 import { nativeOwnerPrompt } from "./owner.mjs";
 import { readSessionIdentity } from "./identity.mjs";
 
@@ -25,14 +25,16 @@ export function updateOwnerMode(input, context, { directory, project, projectDir
   const metadata = readSessionIdentity(input.transcript_path, { sessionsDir });
   const prompt = nativeOwnerPrompt(input, context, metadata);
   if (!prompt) return null;
-  const signals = modeSignals({ owner: true, text: prompt.text, outside: prompt.text, all: prompt.text });
+  // The same exact rule as the Claude hook: only a prompt that is exactly a phrase switches sage mode (T240).
+  const phrase = exactPhrase(prompt.text);
+  const sageChange = PHRASES[phrase]?.sage;
   const before = readMode(directory, project, prompt.session);
   if (!before.owner) {
-    if (signals.sageOn || signals.sageOff) {
-      activateAdmission(directory, { project, session: sessionKey(prompt.session), activation: prompt.turn }, { sage: !signals.sageOff });
+    if (sageChange !== undefined) {
+      activateAdmission(directory, { project, session: sessionKey(prompt.session), activation: prompt.turn }, { sage: sageChange });
     }
-  } else if (signals.sageOn || signals.sageOff) {
-    const sage = !signals.sageOff;
+  } else if (sageChange !== undefined) {
+    const sage = sageChange;
     const earlier = before.modes.find(row => row.turn === prompt.turn);
     if (earlier?.after === null) {
       if (earlier.sage !== sage) throw Error("Activation turn has a different mode request");
@@ -43,5 +45,5 @@ export function updateOwnerMode(input, context, { directory, project, projectDir
   }
   const current = readMode(directory, project, prompt.session);
   return { kind: "owner-mode", project, session: prompt.session, turn: prompt.turn,
-    sage: current.sage, autopilot: false, signals };
+    sage: current.sage, autopilot: false, phrase, near: phrasesNear(prompt.text) };
 }
