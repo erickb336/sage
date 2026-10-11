@@ -12,19 +12,20 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
 const followUp = process.argv.includes("--follow-up");
 const nested = process.argv.includes("--nested");
-assert([denySpawn, followUp, nested].filter(Boolean).length <= 1, "incompatible_probe_routes");
+const sage = process.argv.includes("--sage");
+assert([denySpawn, followUp, nested, sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
 const MARKER = "sage-native-parent-ok";
 const GRAND_MARKER = "sage-native-grandchild-ok";
 const GRAND_PROMPT = `Return exactly ${GRAND_MARKER}. Do not call any tool.`;
 const CHILD_MARKER = "sage-native-child-ok";
-const CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
+let CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const FOLLOWUP_MARKER = "sage-native-followup-ok";
 const FOLLOWUP_PROMPT = `Return exactly ${FOLLOWUP_MARKER}. Do not call any tool.`;
 const binary = process.env.SAGE_CODEX_BIN ?? "codex";
@@ -82,7 +83,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  await setupCapture({root,codexHome,workspace,env,binary,denySpawn,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,deadlineMs});
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -103,7 +104,8 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  let prepared = false;
+  const calls = { prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -125,11 +127,12 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length === 1 && item.output[0]?.type === "input_text" ? item.output[0].text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= (item.call_id === calls.prepare ? 2 : 1)
+          && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
         if (denySpawn && item.call_id === calls.spawn) outputs[item.call_id] = output;
-        else if (item.call_id === calls.followup) outputs[item.call_id] = output;
+        else if ([calls.followup, calls.childControl].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -151,7 +154,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       && followupTask.content?.some(part => part.type === "encrypted_content" && part.encrypted_content === FOLLOWUP_PROMPT);
     const grandchildPromptSeen = task?.author === "/root/probe_child" && task?.recipient === "/root/probe_child/probe_grandchild"
       && task.content?.some(part => part.type === "encrypted_content" && part.encrypted_content === GRAND_PROMPT);
-    return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen };
+    const prepareTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.name === "sage_prepare_task").map(member => ({ namespace: tool.name, name: member.name }))
+      : tool.type === "function" && tool.name === "mcp__sage_preparation__sage_prepare_task" ? [{ name: tool.name }] : []);
+    return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen, prepareTools };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -210,6 +216,10 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if (sage && Object.hasOwn(info.outputs, calls.childControl)) {
+          check(thread === childThread, "child_control_changed_identity"); childRequests++;
+          respond(res, message(CHILD_MARKER)); return;
+        }
         if (nested && info.grandchildPromptSeen) {
           check(thread !== rootThread && thread !== childThread && grandchildRequests === 0, "grandchild_identity_invalid");
           grandchildThread = thread; grandchildRequests++;
@@ -252,6 +262,17 @@ data: ${JSON.stringify(event)}
       check(!subagent, "unexpected_non_spawn_agent_request");
       rootThread ??= thread;
       check(thread === rootThread, "unexpected_root_thread_identity");
+      if (sage && !prepared) {
+        if (!Object.hasOwn(info.outputs, calls.prepare)) {
+          check(info.prepareTools.length === 1, "preparation_tool_missing");
+          const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
+          respond(res, { type: "function_call", ...info.prepareTools[0], call_id: calls.prepare,
+            arguments: JSON.stringify({ task: "T1", run: "R1", name: "probe_child", role: "lead", brief }) }); return;
+        }
+        const receipt = info.outputs[calls.prepare];
+        check(receipt?.decision === "prepared" && typeof receipt.message === "string" && receipt.fork_turns === "none", "invalid_preparation_receipt");
+        CHILD_PROMPT = receipt.message; prepared = true;
+      }
       rootRequests++;
       if (rootRequests === 1) {
         check(["spawn_agent", "list_agents", "wait_agent"].every((name) => info.agentTools.includes(name)), "required_native_tools_missing");
@@ -276,7 +297,8 @@ data: ${JSON.stringify(event)}
         nativeRunning = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
         respond(res, call(calls.wait, "wait_agent", {}));
-        respond(childResponse, nested ? call(calls.childSpawn, "spawn_agent", {task_name: "probe_grandchild", message: GRAND_PROMPT, fork_turns: "none"}) : message(CHILD_MARKER));
+        if (sage) check(integrated.readJournal().bindings.length === 0, "binding_existed_before_first_tool");
+        respond(childResponse, sage ? { type: "function_call", name: "list_mcp_resources", call_id: calls.childControl, arguments: "{}" } : nested ? call(calls.childSpawn, "spawn_agent", {task_name: "probe_grandchild", message: GRAND_PROMPT, fork_turns: "none"}) : message(CHILD_MARKER));
         childResponseSent = true;
       } else if (rootRequests === 4) {
         const result = info.outputs[calls.wait];
@@ -378,6 +400,8 @@ data: ${JSON.stringify(event)}
       } else if (event.type === "item.completed" && event.item?.type === "collab_tool_call"
         && ["spawn_agent", "wait"].includes(event.item.tool) && event.item.status === "completed") {
         // The native tool result in the next request supplies the stricter state assertion.
+      } else if (sage && event.type === "item.completed" && event.item?.type === "mcp_tool_call" && event.item.status === "completed") {
+        // The exact preparation receipt and final journal assertions verify this visible tool call.
       } else if (event.type === "item.completed" && event.item?.type !== "reasoning") {
         unexpectedItems++;
       }
@@ -393,7 +417,7 @@ data: ${JSON.stringify(event)}
     });
     child.stderr.on("data", (data) => { stderrBytes += data.length; stderrText = (stderrText + data).slice(0, 4096); });
     child.stdin.on("error", () => {});
-    child.stdin.end(`Run the fixed one-child native lifecycle probe. Finish with exactly ${MARKER}. Do not use shell tools.\n`);
+    child.stdin.end(sage ? "sage mode\n" : `Run the fixed one-child native lifecycle probe. Finish with exactly ${MARKER}. Do not use shell tools.\n`);
     print({ type: "event", event: "baseline_started" });
     const result = await waitNative(child, { deadlineMs, onTimeout: () => failFixture("native_root_deadline") });
     acceptLine(buffer);
@@ -402,7 +426,7 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followUp ? 8 : 5) && childRequests === (nested ? 4 : followUp ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
+      : rootRequests === (followUp ? 8 : 5) && childRequests === (nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
@@ -412,6 +436,16 @@ data: ${JSON.stringify(event)}
       unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
     if (!verified) process.exitCode = 1;
+    if (sage) {
+      const saved = integrated.readJournal();
+      assert.equal(saved.sessions.length, 1); assert.equal(saved.modes.at(-1)?.sage, true);
+      assert.equal(saved.preparations.length, 1); assert.equal(saved.reservations.length, 1);
+      assert.equal(saved.bindings.length, 1); assert.equal(saved.completions?.length, 1);
+      assert.equal(saved.bindings[0].child, childThread);
+      assert.deepEqual(saved.completions[0], saved.bindings[0]);
+      print({ type: "integrated_sage_evidence", owners: 1, preparations: 1, reservations: 1, bindings: 1, completions: 1,
+        firstToolBinding: true, simulatedModel: true, fullPolicyVerified: false, realModelConsumptionVerified: false });
+    }
     const rows=readdirSync(join(root,"events")).map(name=>JSON.parse(readFileSync(join(root,"events",name),"utf8")));
     const start=rows.filter(row=>row.hook_event_name==="SubagentStart");
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");

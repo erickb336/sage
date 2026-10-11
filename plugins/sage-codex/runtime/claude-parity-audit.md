@@ -125,4 +125,12 @@ These checks use simulated model responses and temporary profiles. They do not p
 An isolated local 0.160.0 run sent `sage mode` through the native `UserPromptSubmit` MCP callback.
 The production owner-mode adapter verified the connection and transcript, then recorded one active owner in the temporary journal.
 The probe used simulated model responses. It did not install or enable Sage in the owner's real profile.
-The next integrated check must connect this activation to preparation, child binding, and completion through native callbacks.
+The repeatable integrated check now connects activation, preparation, child binding, and completion through native callbacks.
+Run `node scripts/probe-codex-lifecycle.mjs --sage` with the test process fixtures first on PATH.
+It uses the packaged hook and preparation servers in a new temporary profile.
+Only the temporary preparation tool receives an explicit tool approval.
+The MCP start hook is absent; the journal has no binding before the child's first tool call.
+The final journal contains one owner, preparation, reservation, binding, and exact completion.
+The local 0.160.0 run passed and removed its temporary profile.
+This fixture uses a fixed harmless tool policy and simulated responses.
+It does not verify the complete product policy, installed operation, report acceptance, or real-model consumption.
