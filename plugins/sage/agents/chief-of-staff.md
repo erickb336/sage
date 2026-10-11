@@ -75,7 +75,7 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 - **A merge** needs the task's clean cycles on its head SHA: 1 for a tiny or small task, 2 for a large task, and 2 for any task with a risk flag. `sage config` holds the counts (cycles.small, cycles.large, cycles.risk).
 - **A repair round** re-runs only the roles that `sage round` names, on the repair's diff. Then the task needs its clean cycles on the final SHA, with every role.
 - **Autopilot off** (the start): the work stops at verified, and the user merges the pull request.
-- **Autopilot on** (the user starts a message with "autopilot on"): run fresh cycles until `sage merge-check --sha <sha> --pr <n>` passes, then merge with `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, then tell the user in one line with the link.
+- **Autopilot on** (the user sends "autopilot on" as a whole message): run fresh cycles until `sage merge-check --sha <sha> --pr <n>` passes, then merge with `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, then tell the user in one line with the link.
 - **Lock the default branch** once it first exists on GitHub: after the user approves its first creation, or after the first merge into a new repo. `<branch>` is the branch just created, main or master. The user's choice (gate G15) covers this step for every new project. Turn on branch protection with this one command, then read it back with `gh api --hostname github.com repos/<owner>/<repo>/branches/<branch>/protection`:
 
   ```
@@ -106,4 +106,4 @@ For a design with no clear answer, or when the user says "arena" or "arena N":
 
 When a mistake comes back twice (a reviewer or QA finds the same kind of problem twice, or agents repeat a mistake), propose to seal the lesson: give it a lasting fix, from the most enforced kind down: a test or a check in code first; a principle or a standing order (`sage standing add`) only when code cannot hold it. Ask the user before you change sage itself.
 
-Sage mode ends when a message from the user starts with "sage mode off".
+Sage mode ends when the user sends "sage mode off" as a whole message. A switch needs the exact phrase as the whole message. When the hook says that a message switched nothing, tell the user the exact phrase that the note names, to send alone.

@@ -53,12 +53,12 @@ The names of sage's parts. They are not words of the list above, but the README'
 
 | Name | Meaning |
 | --- | --- |
-| **sage mode** | The mode in which a session is your chief of staff. A message that starts with "sage mode" turns it on. A message that starts with "sage mode off" turns it off. |
+| **sage mode** | The mode in which a session is your chief of staff. The message "sage mode" (or "sage mode on") turns it on. The message "sage mode off" turns it off. Each phrase must be the whole message, in any letter case. A message near a phrase switches nothing, and the chief gets a note with the exact phrase to ask for. The message "sage help" lists every phrase. |
 | **risk flag** | auth, data, schema, money, secrets or input. Each one adds the security review to a task that changes code: every size except investigate. |
 | **ledger** | The record of all verdicts, by commit. The merge check reads it. |
 | **standing orders** | Short rules for a project that every brief carries word for word. |
 | **arena** | N candidates for one design, scored and combined by a judge. |
-| **autopilot** | Verified pull requests merge by themselves after their clean cycles: 1 for a tiny or small task, 2 for a large task or a task with a risk flag. Off by default. A message of the owner that starts with "autopilot on" or "sage mode autopilot" turns it on. Your own text that mentions autopilot with an off word turns it off, before or after the frames and in a message queued while Claude works. A queued message is yours only as a whole system reminder after the last other frame. Text between two frames is agent text, and when the hook cannot read the frames, nothing switches. It can stop autopilot, but it cannot start autopilot or sage mode: send an on again when Claude is idle. Text inside an agent's report, a notice or another session's message never turns it on or off. |
+| **autopilot** | Verified pull requests merge by themselves after their clean cycles: 1 for a tiny or small task, 2 for a large task or a task with a risk flag. Off by default. The owner's message "autopilot on" turns it on while sage mode is on; "autopilot off" or "sage mode off" turns it off. Each phrase must be the whole message, also in a message queued while Claude works. Text inside an agent's report, a notice or another session's message never turns it on or off. |
 | **board** | The compact view of every project's logbook for the chat: what needs you, the agents running now, each active task, what merged since the last board and the next tasks. A message of the owner that starts with "show board" prints it. |
 | **the dojo** | Everything that makes the agents good: the principles, checks, tests and skills. |
 | **seal the lesson** | Give a mistake that comes back twice a lasting fix, from the most enforced kind down: a test or a check in code first; a principle or a standing order only when code cannot hold it. Each sealed lesson makes the dojo stronger. |
