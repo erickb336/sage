@@ -2451,3 +2451,36 @@ test('role edit policy matches the shared writer and independent review roles in
       { sage: 'on', role: 'lead' }, { sage: true }, {}]) assert.throws(() => f.api.roleEditDenied(context));
   }
 });
+
+
+test('prepared run target is immutable and persists in both isolated provider bundles', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await roleAdmissionFixture(t, undefined, provider);
+    const request = { task: 'T1', run: 'R1', issuer: 'root', name: 'pinned' };
+    const plan = { issuerRole: 'chief-of-staff', role: 'lead' }, brief = completeBrief('Use the saved target.');
+    const target = { task: 'T1', run: 'R1', role: 'lead', round: 0, taskBranch: 'codex/t1-work', runBranch: '', candidate: '' };
+    const prepare = value => f.api.prepareAdmission(f.journal, f.scope, request, plan, brief, undefined, value);
+    const saved = prepare(target).preparation;
+    assert.deepEqual(saved.runTarget, target);
+    assert.equal(prepare({ ...target }).decision, 'already-prepared');
+    for (const key of ['taskBranch', 'runBranch', 'candidate', 'round'])
+      assert.throws(() => prepare({ ...target, [key]: key === 'round' ? 1 : 'changed' }), /different work/);
+    target.candidate = 'mutated caller';
+    assert.equal(f.api.readAdmission(f.journal).preparations[0].runTarget.candidate, '');
+    assert.equal(f.api.readAdmission(f.journal).reservations.length, 0);
+  }
+});
+
+test('prepared run target rejects malformed or mismatched assignment fields before saving', async t => {
+  const f = await roleAdmissionFixture(t);
+  const target = { task: 'T1', run: 'R1', role: 'lead', round: 0, taskBranch: '', runBranch: '', candidate: '' };
+  for (const value of [null, {}, { ...target, extra: true }, { ...target, task: 'T2' }, { ...target, run: 'R2' },
+    { ...target, role: 'qa' }, { ...target, round: -1 }, { ...target, round: '0' },
+    { ...target, round: Number.MAX_SAFE_INTEGER + 1 }, { ...target, candidate: 'bad\nfield' },
+    { ...target, taskBranch: 1 }, { ...target, runBranch: 'x'.repeat(4097) }]) {
+    assert.throws(() => f.api.prepareAdmission(f.journal, f.scope,
+      { task: 'T1', run: 'R1', issuer: 'root', name: 'pinned' },
+      { issuerRole: 'chief-of-staff', role: 'lead' }, completeBrief('Use the saved target.'), undefined, value));
+  }
+  assert.equal(f.api.readAdmission(f.journal).preparations.length, 0);
+});

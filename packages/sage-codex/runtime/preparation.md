@@ -178,3 +178,15 @@ It frames a task through the shared state tool with a durable request UUID.
 Preparation still requires task and run IDs; creating a task does not create
 its run or grant an agent slot. `sage_create_run` records the run separately;
 see `run-create.md`.
+
+## Saved run target
+
+Native preparation captures the current task, run, role, round, task branch,
+run branch, and candidate through the shared state tool. It saves that target
+with the brief and includes its branch, round, and candidate in the instructions.
+Dispatch, lead delegation, and child tool evaluation compare the current logbook
+with the saved target. A changed target requires a new run and brief.
+
+An older preparation without a target cannot authorize new native work. Its
+records remain available for report and completion handling. This does not
+rewrite old history, infer a target, or change the task's recorded branch.

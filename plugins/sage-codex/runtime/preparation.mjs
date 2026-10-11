@@ -5,7 +5,7 @@ import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { bindings, decodeEvent, publish, readObservations } from "./events.mjs";
 import { preparedTaskMessage } from "./instructions.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
-import { captureNativeRunAssignment as checkRun } from "./run-assignment.mjs";
+import { captureNativeRunAssignment, checkNativeRunAssignment } from "./run-assignment.mjs";
 
 const NAME = /^(?!root$)[a-z0-9_]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -32,7 +32,8 @@ function actorScope(options, native) {
   const requests = observations.filter(row => row.kind === "spawn-request" && row.actor === session && row.name === reservation.dispatch.name);
   if (requests.length !== 1 || requests[0].call !== bound.call || requests[0].turn !== reservation.dispatch.turn
     || !observations.some(row => row.kind === "child-start" && row.child === native.actor && row.turn === bound.turn)) refuse();
-  checkRun(options, { ...reservation.assignment, role: "lead" });
+  const prepared = state.preparations.find(row => row.id === reservation.preparation);
+  checkNativeRunAssignment(options, { ...reservation.assignment, role: "lead" }, prepared?.runTarget);
   return { scope: { project: owner.project, session: owner.session, epoch: owner.epoch }, role: "lead", task: reservation.assignment.task };
 }
 
@@ -53,13 +54,13 @@ export function prepareNativeTask(input, context, options) {
     || keys.some(key => !Object.hasOwn(input, key)) || typeof input.name !== "string" || !NAME.test(input.name)) refuse();
   const { scope, role, task } = actorScope(options, native);
   if (role === "lead" && input.task !== task) refuse();
-  checkRun(options, input);
+  const runTarget = captureNativeRunAssignment(options, input);
   const reviewRole = REVIEW_ROLES.includes(input.role);
   if (hasCycle && (!reviewRole || !options.logbookRoot)) refuse();
   const review = reviewRole && options.logbookRoot ? captureReview(options, input, input.reviewCycle) : undefined;
   const result = prepareAdmission(options.directory, scope,
     { task: input.task, run: input.run, issuer: native.actor, name: input.name },
-    { issuerRole: role, role: input.role }, input.brief, review);
+    { issuerRole: role, role: input.role }, input.brief, review, runTarget);
   const saved = result.preparation;
   return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role, message: preparedTaskMessage(saved), fork_turns: "none", ...(saved.review ? { review: saved.review } : {}) };
 }
@@ -83,7 +84,7 @@ export function reservePreparedSpawn(input, context, options) {
     && row.session === scope.session && row.epoch === scope.epoch && row.issuer === native.actor && row.name === observed.name);
   if (prepared.length !== 1 || message !== preparedTaskMessage(prepared[0])) refuse();
   if (role === "lead" && prepared[0].task !== task) refuse();
-  checkRun(options, { ...prepared[0], role: prepared[0].rolePlan.role });
+  checkNativeRunAssignment(options, { ...prepared[0], role: prepared[0].rolePlan.role }, prepared[0].runTarget);
   if (REVIEW_ROLES.includes(prepared[0].rolePlan.role) && (options.logbookRoot || prepared[0].review)) {
     if (!prepared[0].review) refuse();
     const current = captureReview(options, { ...prepared[0], role: prepared[0].rolePlan.role }, prepared[0].review.cycle);

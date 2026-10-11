@@ -46,6 +46,7 @@ export function bindNativeChild({ directory, project, observationsDirectory }, i
   if (requests.length !== 1 || requests[0].call !== observed.call || row.dispatch.turn !== requests[0].turn) refuse();
   const result = bindAdmission(directory, { project, session, epoch: owner.epoch, assignment: row.assignment.id,
     issuer: identity.parent, call: row.assignment.call, child: identity.child, turn: identity.turn });
-  const review = snapshot.preparations.find(prepared => prepared.id === row.preparation)?.review;
-  return { ...result, ...(review ? { review } : {}), assignment: row.assignment, ...(row.brief ? { brief: row.brief } : {}) };
+  const prepared = snapshot.preparations.find(prepared => prepared.id === row.preparation);
+  const { review, runTarget } = prepared ?? {};
+  return { ...result, ...(review ? { review } : {}), ...(runTarget ? { runTarget } : {}), assignment: row.assignment, ...(row.brief ? { brief: row.brief } : {}) };
 }

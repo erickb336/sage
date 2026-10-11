@@ -2753,3 +2753,54 @@ test('native current run refuses permission when the assignment changes during e
     await assert.rejects(result, /active run|could not evaluate/, change);
   }
 });
+
+
+test('native saved run target refuses a valid retarget before dispatch or child tools', async t => {
+  for (const afterDispatch of [false, true]) for (const change of ['branch', 'round', 'candidate']) {
+    const f = afterDispatch ? await roleEditFixture(t, 'implementer') : await preparationServerFixture(t);
+    if (!afterDispatch) f.api.prepareNativeTask(f.input, f.native(session), f.options);
+    const run = afterDispatch ? 'R4' : 'R1';
+    const value = change === 'branch' ? 'codex/t1-other' : change === 'round' ? '1' : 'other';
+    editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === run ? { ...row, [change]: value } : row));
+    if (change !== 'candidate') editAssignmentRows(f, 'tasks', rows => rows.map(row => row.id === 'T1' ? { ...row, [change]: value } : row));
+    assert.equal(f.assignmentTool.captureRunAssignment({ project: f.options.projectDirectory, task: 'T1', run,
+      role: afterDispatch ? 'implementer' : 'lead' }, f.assignmentEnv).run, run, 'the changed records are otherwise valid');
+    if (afterDispatch) {
+      let calls = 0;
+      const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: 'pass' }; });
+      await assert.rejects(f.evaluate(policy, f.editInput, childActor), /saved run target changed/);
+      assert.equal(calls, 0);
+    } else {
+      assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options), /saved run target changed/);
+      assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+    }
+  }
+});
+
+test('native saved run target holds lead delegation and is delivered with the saved brief', async t => {
+  const f = await preparationServerFixture(t); f.bindLead();
+  const saved = f.core.readAdmission(f.options.directory).preparations[0];
+  const receipt = f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  assert.match(receipt.message, /# Saved run target/);
+  assert.match(receipt.message, /Task branch: codex\/t1-fixture/);
+  assert.equal(saved.runTarget.round, 0);
+  const child = { ...f.input, name: 'pinned_qa', run: 'R2', role: 'qa', reviewCycle: 1 };
+  f.api.prepareNativeTask(child, f.native(childActor), f.options);
+  editAssignmentRows(f, 'tasks', rows => rows.map(row => row.id === 'T1' ? { ...row, branch: 'codex/t1-other' } : row));
+  assert.throws(() => f.api.prepareNativeTask({ ...child, name: 'late_qa' }, f.native(childActor), f.options), /saved run target changed/);
+  const input = { ...f.spawnInput(child.name, 'qa-spawn'), turn_id: turns[1], transcript_path: f.childTranscript() };
+  assert.throws(() => f.api.reservePreparedSpawn(input, f.native(childActor), f.options), /saved run target changed/);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
+});
+
+test('native saved run target refuses a legacy unpinned preparation without replacing it', async t => {
+  const f = await preparationServerFixture(t);
+  const saved = f.core.prepareAdmission(f.options.directory, f.scope,
+    { task: f.input.task, run: f.input.run, issuer: session, name: f.input.name },
+    { issuerRole: 'chief-of-staff', role: f.input.role }, f.input.brief).preparation;
+  assert.equal(saved.runTarget, undefined);
+  assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options), /saved run target changed/);
+  assert.throws(() => f.api.prepareNativeTask(f.input, f.native(session), f.options), /different work/);
+  assert.deepEqual(f.core.readAdmission(f.options.directory).preparations, [saved]);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});

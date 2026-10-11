@@ -13,8 +13,11 @@ current child binding, or from the authenticated chief. Off mode supplies null.
 Only an exact pass or denial is accepted.
 
 Every active child tool call also checks its bound task and run in the configured
-logbook. The run must remain running, unreported, and on the current task, role,
-branch, and round. An ended run or terminal task cannot keep using tools through
+logbook. Preparation saves the run target in the admission journal: task, run, role, round,
+task branch, run branch, and candidate. Dispatch, lead delegation, and child tool
+calls must match those saved fields. The run must also remain running and unreported.
+An older preparation without a target remains readable for reports and recovery,
+but cannot permit new work. A changed target needs a new run and brief. An ended run or terminal task cannot keep using tools through
 an earlier binding. Before returning a pass, the policy repeats this check and
 compares the assignment fields. A change during an awaited evaluator refuses the
 call. This is a boundary check, not a lock held through native execution; it
@@ -90,3 +93,9 @@ tools first on PATH. The fixture ends its lead run after native dispatch but
 before the child requests a read-only tool. The real hook must deny that call;
 no successful tool event may follow. Completion still records the child's end,
 and the run remains done. The model responses are simulated.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-retargeted-run` to check a
+valid branch change after dispatch. The fixture keeps the run active but changes
+the task branch. The native child must receive a denial, with no successful tool
+event. The original saved target and changed logbook remain intact. Completion
+still records. This is isolated native transport with simulated model responses.

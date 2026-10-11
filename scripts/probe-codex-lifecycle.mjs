@@ -13,9 +13,11 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const retargetedRun = process.argv.includes("--sage-retargeted-run");
+assert(!retargetedRun || process.argv.slice(2).length === 1, "retargeted_run_is_a_separate_route");
 const endedRun = process.argv.includes("--sage-ended-run");
 assert(!endedRun || process.argv.slice(2).length === 1, "ended_run_is_a_separate_route");
 const readonlyPatch = process.argv.includes("--sage-readonly-patch");
@@ -38,7 +40,7 @@ const nestedReport = process.argv.includes("--sage-nested-report");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
 const reportProbe = process.argv.includes("--sage-report") || (noTool && !escapeReport);
-const sage = endedRun || readonlyPatch || createTask || process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
+const sage = retargetedRun || endedRun || readonlyPatch || createTask || process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
 assert([failedSpawn, outage, process.argv.includes("--sage-report"), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
 assert([denySpawn, followUp, process.argv.includes("--nested"), sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
@@ -145,7 +147,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let createdTask, createdTaskVerified = false, createdRun, createdRunVerified = false, finishedCreatedRun = false;
   const runRequest = { request: "b1111111-2222-4333-8444-555555555555", task: "T1", role: "lead", branch: "", candidate: "" };
   const taskRequest = { request: "a1111111-2222-4333-8444-555555555555", title: "Native task creation", size: "small", risk: ["input"], add: ["ux-review"], why: "Check the fixed experience" };
-  let prepared = false, reportReceipt, failedDispatchRecovered = false, childPatchTool, readonlyPatchVerified = false, endedRunVerified = false;
+  let prepared = false, reportReceipt, failedDispatchRecovered = false, childPatchTool, readonlyPatchVerified = false, endedRunVerified = false, retargetedRunVerified = false;
   const calls = { readTask: "probe_read_task", brief: "probe_brief", briefRetry: "probe_brief_retry", build: "probe_build", review: "probe_review", verify: "probe_verify", verifyWithoutReviews: "probe_verify_without_reviews", createRun: "probe_create_run", createRunRetry: "probe_create_run_retry", createdRunAfterFinish: "probe_created_run_after_finish", create: "probe_create", createRetry: "probe_create_retry", failureList: "probe_failure_list", prepareRetry: "probe_prepare_retry", spawnRetry: "probe_spawn_retry", inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set([...Object.values(calls), ...Object.values(NESTED_CALLS)]);
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
@@ -286,6 +288,12 @@ data: ${JSON.stringify(event)}
         }
         if (sage && Object.hasOwn(info.outputs, calls.childControl)) {
           check(thread === childThread && childRequests === 1, "child_control_changed_identity_or_repeated"); childRequests++;
+          if (retargetedRun) {
+            check(JSON.stringify(info.outputs[calls.childControl]).includes("Sage could not verify this tool call"), "retargeted_run_denial_missing");
+            check(integrated.readLogbook().runs[0].status === "running", "retargeted_run_stopped");
+            check(integrated.readLogbook().tasks[0].branch === "codex/t1-retargeted", "retargeted_task_reset");
+            retargetedRunVerified = true;
+          }
           if (endedRun) {
             check(JSON.stringify(info.outputs[calls.childControl]).includes("Sage could not verify this tool call"), "ended_run_denial_missing");
             check(integrated.readLogbook().runs[0].status === "done", "ended_run_reopened");
@@ -491,6 +499,10 @@ data: ${JSON.stringify(event)}
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
         respond(res, call(calls.wait, "wait_agent", {}));
         if (sage) check(integrated.readJournal().bindings.length === 0, "binding_existed_before_first_tool");
+        if (retargetedRun) {
+          integrated.retargetFixtureRun();
+          check(integrated.readLogbook().tasks[0].branch === "codex/t1-retargeted", "fixture_task_not_retargeted");
+        }
         if (endedRun) {
           integrated.endFixtureRun();
           check(integrated.readLogbook().runs[0].status === "done", "fixture_run_not_ended");
@@ -770,7 +782,7 @@ data: ${JSON.stringify(event)}
       ? rootRequests === 2 && childRequests === 0 && denied
       : rootRequests === (taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
-    const verified = result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified)
+    const verified = result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && refusedTaskUpdates === (taskLifecycle ? 1 : 0) && malformedEvents === 0 && rejectedRequests === 0;
     print({ type: "result", ...result, responseRequests, rootRequests, ...(failedSpawn ? { rejectedDispatchRootRequests: 3 } : {}), childRequests, childTaskSeen, childResponseSent,
@@ -880,6 +892,14 @@ data: ${JSON.stringify(event)}
       assert.equal(started.metadata.id, started.agent_id);
       assert.equal(started.metadata.session_id, request.session_id);
       assert(stop.some(row => row.agent_id === started.agent_id));
+    }
+    if (retargetedRun) {
+      assert.equal(retargetedRunVerified, true);
+      assert.equal(rows.filter(event => event.hook_event_name === "PostToolUse" && event.tool_name === "list_mcp_resources").length, 0);
+      assert.equal(integrated.readLogbook().runs[0].status, "running");
+      assert.equal(integrated.readLogbook().tasks[0].branch, "codex/t1-retargeted");
+      assert.equal(integrated.readJournal().preparations[0].runTarget.taskBranch, "");
+      print({ type: "retargeted_run_evidence", denied: true, toolExecuted: false, originalTargetPreserved: true, completionRecorded: true, simulatedModel: true });
     }
     if (endedRun) {
       assert.equal(endedRunVerified, true);

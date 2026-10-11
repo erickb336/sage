@@ -81,3 +81,14 @@ It needs trusted selected-environment and shell context for default arguments.
 Do not substitute the hook's session cwd for an explicit workdir.
 Do not infer the effective shell executable from the original shell path alone.
 These probes cover one local environment with login shells disabled, not remote execution or shell discovery changes.
+
+## Later release source check
+
+A source check of Codex `rust-v0.162.1` found the same command-only pre-tool
+payload. Its hook error handling still allows execution after some invalid or
+failed callbacks. These are source findings, not live tests of that release.
+The Sage adapter and native probes remain pinned to the verified `0.160.0`
+contract. An upgrade alone is not evidence that the activation gates are met.
+
+- [Command payload](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs#L493-L502).
+- [Pre-tool failure handling](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/hooks/src/events/pre_tool_use.rs#L179-L303).
