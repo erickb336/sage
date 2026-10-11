@@ -141,18 +141,16 @@ function switchModes({ owner, text, outside, all }, state) {
   }
   const signals = modePolicy.modeSignals({ owner, text, outside, all });
   const notes = [];
-  let matched = true; // false only when no rule read the message; a rule that kept the state as it was counts as read
+  const modes = () => `${Boolean(state.sage)} ${Boolean(state.autopilot)}`; // a new session's state has neither key
+  const before = modes();
   if (signals.sageOff) {
     Object.assign(state, { sage: false, given: false, autopilot: false });
     notes.push("sage: sage mode is off. You may change files yourself again.");
   } else if (signals.sageOn) state.sage = true;
-  else matched = false;
   if (signals.autopilotOff) {
     if (state.autopilot) notes.push("sage: autopilot is off. Work stops at verified, and the user merges.");
     state.autopilot = false;
-    matched = true;
   } else if (state.sage && signals.autopilotOn) {
-    matched = true;
     state.autopilot = true;
     const c = stateTool.config();
     const broken = Object.keys(c).find((k) => c[k] === "invalid");
@@ -160,10 +158,29 @@ function switchModes({ owner, text, outside, all }, state) {
     if (broken) notes.push(`sage: autopilot is on. ${broken} in config.json is not a number: no merge until it is fixed (sage config ${broken}=<n>).`);
     else notes.push(`sage: autopilot is on. A pull request merges on its head SHA after ${small} clean cycle${small === 1 ? "" : "s"} for a tiny or small task, ${large} for a large task and ${risky} for a task with a risk flag; a large task with a risk flag needs the larger count. Merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.`);
   }
-  // The owner's message starts with a mode word, and no rule read it: say so. A silent miss left a session's hook off
-  // for two days (T194): the owner's first message had words after the on phrase, and nothing told the chief. Only the
-  // owner's text gets the note, never an agent's, and a message that a rule read keeps no note, also when it changed nothing.
-  if (owner && !matched && signals.modeWord) notes.push('sage: this message did not switch anything. The phrases are "sage mode", "sage mode on", "sage mode off", "autopilot on" and "autopilot off", at the start of the message.');
+  // The owner's message starts with a mode word, and a switch that it asks for did not happen: say so, and say which rule
+  // failed. A silent miss left a session's hook off for two days (T194): the owner's first message had words after the
+  // on phrase, and nothing told the chief. Only the owner's text gets the note, never an agent's. A message that changed
+  // nothing gets it, unless a rule read it and kept the state on purpose (the on phrase while sage mode is on, or an
+  // autopilot off while autopilot is off). The phrase with an off word next always gets it: sage's mode stays as it
+  // was, and autopilot goes off (T200). Autopilot asked for gets it whenever autopilot stays off, also when sage mode
+  // went on or an off word won (T200, F-R726-1). The note describes the phrases and never quotes them, so that a report
+  // that quotes the note is no switch text (T201).
+  const read = signals.sageOn || signals.sageOff || (state.sage && signals.autopilotOn) || (signals.autopilotOff && signals.autopilotWord);
+  const autopilotMissed = signals.autopilotAsked && !state.autopilot;
+  if (owner && signals.modeWord && (signals.offAfter || autopilotMissed || (!read && before === modes()))) {
+    const why = signals.offAfter ? "an off word comes after the phrase"
+      : autopilotMissed && signals.ownOff ? "an off word in the message won"
+      : autopilotMissed && signals.autopilotOn && !state.sage ? "autopilot turns on only while sage's mode is on"
+      : autopilotMissed && signals.autopilotOff ? "an off line in an agent's text won"
+      : signals.pasted ? "a pasted quote, bullet or indent comes before the phrase"
+      : signals.question ? "the line has a question mark"
+      : autopilotMissed ? "the autopilot phrase needs a full stop, a comma or a line break after it"
+      : "the words after the phrase match no rule";
+    const what = signals.offAfter ? "sage's mode did not change and autopilot is off"
+      : autopilotMissed ? "autopilot did not switch on" : "this message switched nothing";
+    notes.push(`sage: ${what}, because ${why}. The switches are the on phrase, the off phrase and the autopilot phrases, at the start of the message. Tell the user.`);
+  }
   return notes;
 }
 
