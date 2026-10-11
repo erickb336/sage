@@ -170,9 +170,9 @@ function switchModes({ owner, text, outside, all }, state) {
   const autopilotMissed = signals.autopilotAsked && !state.autopilot;
   if (owner && signals.modeWord && (signals.offAfter || autopilotMissed || (!read && before === modes()))) {
     // The real cause, so that the owner does not retype the same text (R732, R738): a character that the owner cannot
-    // see, and the off word that won, by name.
-    const off = signals.offAfter ? `an off word (${signals.offWord}) comes after the phrase`
-      : autopilotMissed && signals.ownOff ? `an off word (${signals.offWord}) in the message won` : "";
+    // see, and the off word that won, by a fixed name when the owner's own text has it (F-R741-4).
+    const word = `an off word${signals.offWord && ` (${signals.offWord})`}`;
+    const off = signals.offAfter ? `${word} comes after the phrase` : autopilotMissed && signals.ownOff ? `${word} in the message won` : "";
     const why = [signals.joined && "a hidden character, an accent or a look-alike letter is in the phrase or joined to it (retype it)", off].filter(Boolean).join(", and ")
       || (autopilotMissed && signals.autopilotOn && !state.sage ? "autopilot turns on only while sage's mode is on"
       : autopilotMissed && signals.autopilotOff ? "an off line in an agent's text won"

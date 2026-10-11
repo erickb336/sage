@@ -362,8 +362,9 @@ test("shared file and mode extraction preserves classified mode phrases in both 
     // The table form with the autopilot word, a comma and an off word asks for autopilot (T212); "and" first (R732).
     assert.deepEqual(api.modeSignals(prompt("sage mode autopilot, stop when done")), { sageOff: false, sageOn: true, autopilotOff: true, autopilotOn: true, modeWord: true, ...none, autopilotAsked: true, ownOff: true, offWord: "stop" });
     assert.deepEqual(api.modeSignals(prompt("sage mode and autopilot")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true, ...none, autopilotAsked: true, autopilotGap: "and" });
-    // Whole words after the phrase (R733), and a BOM is no space (R737).
-    assert.equal(api.modeSignals(prompt("sage mode stopwatch app")).sageOn, true);
+    // An off word at the start of a longer word blocks the on, as on main, and the note names it by a fixed name
+    // (F-R741-3, F-R741-4); a BOM is no space for the on rule (R737).
+    assert.deepEqual(api.modeSignals(prompt("sage mode stopwatch app")), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offAfter: true, offWord: "stop" });
     assert.deepEqual(api.modeSignals(prompt("\ufeffsage mode")), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: false, modeWord: true, ...none, joined: true, pasted: true });
     // Only the owner's own off is ownOff: an agent's off line turns autopilot off, but it is not the owner's (F-R724-L2).
     assert.deepEqual(api.modeSignals({ owner: true, text: "autopilot on", outside: "autopilot on", all: "autopilot on\nautopilot off" }), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: true, modeWord: true, ...none, autopilotWord: true, autopilotAsked: true });
