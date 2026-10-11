@@ -1,9 +1,12 @@
 // Optional local files only. The caller selects stable paths and starts launchd separately.
 import { accessSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, readdirSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const packages = dirname(dirname(fileURLToPath(import.meta.url)));
+const here = dirname(fileURLToPath(import.meta.url)), packages = dirname(here);
+// The checkout has packages/sage-board and packages/sage-core; a provider plugin has board/ and core/. The copy keeps
+// the names, so the board's import of core works in the installation too.
+const [BOARD, CORE] = basename(here) === "sage-board" ? ["sage-board", "sage-core"] : [basename(here), "core"];
 const MAX_BYTES = 64 * 1024 * 1024;
 const refuse = reason => { throw new TypeError(`board install: ${reason}`); };
 
@@ -95,7 +98,7 @@ function paths({ installDir, configPath, nodePath, allowNodeAlias = false } = {}
   inspect(installDir, "installDir", "directory", !installed);
   if ((!installed && (containsDirectory(packages, installDir) || containsDirectory(installDir, packages))) || /(?:^|\/)plugins\/(?:cache|marketplaces)(?:\/|$)/i.test(installDir)) refuse("installDir must be outside source packages and plugin caches");
   inspect(configPath, "configPath", "file"); inspectNode(nodePath, allowNodeAlias);
-  const cliPath = join(installDir, "packages", "sage-board", "cli.mjs");
+  const cliPath = join(installDir, "packages", BOARD, "cli.mjs");
   if (installed) inspect(cliPath, "installed CLI", "file");
   return { installDir, configPath, nodePath, cliPath };
 }
@@ -132,8 +135,8 @@ function packageFiles() {
       } finally { closeSync(fd); }
     }
   }
-  for (const name of ["sage-board", "sage-core"]) walk(join(packages, name));
-  if (!files.some(file => file.name === join("sage-board", "cli.mjs"))) refuse("source board CLI is missing");
+  for (const name of [BOARD, CORE]) walk(join(packages, name));
+  if (!files.some(file => file.name === join(BOARD, "cli.mjs"))) refuse("source board CLI is missing");
   return { files, folders };
 }
 

@@ -18,9 +18,10 @@ function fixture(t) {
   const value = createBoardConfig(config, { sources: [{ id: "sample", path: root }], pagesDir: join(dir, "pages") });
   return { dir, root, config, value };
 }
-test("standalone config has a generated secret, private mode and no logbook output path", t => {
+test("T229: standalone config has no secret and no password, private mode and no logbook output path", t => {
   const { config, root, value } = fixture(t);
-  assert.equal(value.secret.length, 43);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(config, "utf8"))).sort(), ["allowedHosts", "pagesDir", "port", "sources", "version"]);
+  assert.equal(value.secret, undefined); assert.equal(value.password, undefined);
   assert.throws(() => createBoardConfig(join(root, "low-port.json"), { sources: [{ id: "sample", path: root }], port: 1023 }), /1024 to 65535/);
   assert.equal(statSync(config).mode & 0o777, 0o600);
   assert.deepEqual(readBoardConfig(config), value);
@@ -34,7 +35,6 @@ test("standalone HTML export includes task detail, prints its path and does not 
   assert.ok(file.startsWith(join(dir, "pages/board-")));
   const html = readFileSync(file, "utf8");
   assert.ok(html.includes("Sample CLI task")); assert.ok(html.includes('<h3>Evidence <span class="n">0</span></h3>'));
-  assert.ok(!html.includes(value.secret));
   await runBoardCli(["board", "all", "--html", "--config", config], { output: line => lines.push(line) });
   assert.notEqual(lines[1], file);
   assert.ok(existsSync(file) && existsSync(lines[1]));
@@ -53,18 +53,16 @@ test("standalone refuses linked output parents and exposes status without a serv
   await assert.rejects(runBoardCli(["board", "--config", config, "--config", config]), /repeated/);
 });
 
-test("standalone setup and installation stay explicit, with no service operation or secret output", async t => {
+test("standalone setup and installation stay explicit, with no service operation", async t => {
   const { dir, root } = fixture(t), config = join(dir, "extra/board.json"), lines = [];
   await runBoardCli(["board", "--setup", "--config", config, "--sources", JSON.stringify([{ id: "sample", path: root }])], { output: line => lines.push(line) });
-  const secret = readBoardConfig(config).secret;
+  assert.deepEqual(lines, [`Board config created: ${config}. Access from outside this Mac stays off until you set a board password: run in a terminal node ${fileURLToPath(new URL("../packages/sage-board/cli.mjs", import.meta.url))} board --set-password --config ${config}`]);
   const install = join(dir, "installed"), plist = join(dir, "login/board.plist");
   await assert.rejects(runBoardCli(["board", "--install", "--install-dir", install, "--login-file", join(root, "board.plist"), "--config", config]), /outside logbook roots/);
   assert.equal(existsSync(install), false);
   await runBoardCli(["board", "--install", "--install-dir", install, "--login-file", plist, "--config", config], { output: line => lines.push(line) });
   assert.ok(readFileSync(join(install, "packages/sage-board/cli.mjs"), "utf8").includes("runBoardCli"));
   assert.ok(readFileSync(plist, "utf8").includes("dev.sage.board"));
-  assert.ok(!lines.join("\n").includes(secret));
-  assert.ok(!readFileSync(plist, "utf8").includes(secret));
   const installed = spawnSync(process.execPath, [join(install, "packages/sage-board/cli.mjs"), "board", "all", "--status", "--config", config], { cwd: dir, env: process.env, encoding: "utf8" });
   assert.equal(installed.status, 0, installed.stderr);
   assert.ok(installed.stdout.includes("framed 1"));
@@ -96,4 +94,17 @@ test("standalone current-checkout board and task commands work without explicit 
     assert.ok(result.stdout.includes("Sample CLI task"));
     if (scope === "T1") assert.ok(result.stdout.includes("**Brief**"));
   }
+});
+
+test("T229: a config with an old secret still loads, and the secret is not kept or used", async t => {
+  const { dir, root } = fixture(t), config = join(dir, "old/board.json");
+  mkdirSync(join(dir, "old"));
+  const secret = "sampleOldSecretSampleOldSecretSampleOldSecr";
+  writeFileSync(config, JSON.stringify({ version: 1, sources: [{ id: "sample", path: root }], port: 43123, allowedHosts: [], secret }), { mode: 0o600 });
+  const loaded = readBoardConfig(config);
+  assert.equal(loaded.secret, undefined, "the old secret is dropped on load, so no server gets it");
+  assert.equal(loaded.password, undefined);
+  const lines = [];
+  await runBoardCli(["board", "all", "--status", "--config", config], { output: line => lines.push(line) });
+  assert.ok(lines[0].includes("framed 1"));
 });
