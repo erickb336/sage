@@ -158,6 +158,8 @@ The state lives in the logbook: plain files in `~/.claude/sage/<project>-<hash>/
 
 Only one agent writes on a branch at a time. Reviewers start fresh, so they don't share the builder's blind spots.
 
+Claude Sage uses the Balanced model defaults. Sonnet handles UX review, tiny implementation and code review, and QA for tiny and small tasks. Opus handles the other runs. An optional `model.<role>.risk` setting overrides the size choice when the task has a risk flag.
+
 ### Routes
 
 Each task gets the least route for its size. The chief can add steps, never remove these.
