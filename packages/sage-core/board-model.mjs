@@ -56,17 +56,22 @@ function card(source, project, task, now) {
   if (["verified", "pr-ready"].includes(task.state)) {
     if (!mode || !mode.data.autopilot) reasons.push({ kind: "merge", text: mode ? "Autopilot is off. The owner can review the merge." : "Autopilot state is unknown. The owner must review the merge." });
   }
-  const head = pr?.data.head ?? null;
+  // N2: an observed PR head wins; else the newest ledger verdict's head for the task's PR (the ledger is append-only).
+  const reviewed = task.pr ? ledger.filter(row => String(row.pr) === task.pr && /^[0-9a-f]{40}$/.test(row.sha)).at(-1)?.sha ?? null : null;
+  const head = pr?.data.head ?? reviewed;
+  const headBasis = pr?.data.head ? "observed" : head ? "ledger" : null;
   const current = head ? ledger.filter(row => row.sha === head && String(row.pr) === task.pr) : [];
   const route = task.route.split(",").filter(Boolean);
   const steps = [...(route.includes("build") ? ["checks"] : []), ...route.filter(block => CLEAN[block])];
   const required = Math.max(positive(source.config?.["cycles.small"]) ?? 1, task.size === "large" ? Math.max(2, positive(source.config?.["cycles.large"] ?? source.config?.autopilot_cycles) ?? 2) : 1, task.risk ? Math.max(2, positive(source.config?.["cycles.risk"]) ?? 2) : 1);
-  const cycles = Array.from({ length: Math.min(required, 10) }, (_, i) => ({ number: i + 1, steps: steps.map(role => {
-    const evidence = current.filter(row => role === "checks" || positive(row.cycle) === i + 1);
-    const relevant = evidence.filter(row => row.kind === CLEAN[role] || (FAILED[role] ?? []).includes(row.kind) && (row.kind !== "findings" || runs.some(run => run.id === row.run && run.role === (RUN_ROLE[role] ?? role))));
-    const last = relevant.at(-1);
-    const running = runs.find(run => run.status === "running" && run.role === (RUN_ROLE[role] ?? role) && run.evidence?.data.head === head && run.evidence?.data.cycle === i + 1);
-    return { role, status: !head ? "unknown" : last ? last.kind === CLEAN[role] ? "done" : "failed" : running ? "running" : "pending", evidence: last ?? null, run: running?.id ?? null };
+  const count = Math.min(required, 10);
+  const verdict = (role, number) => current.filter(row => (role === "checks" || positive(row.cycle) === number) && (row.kind === CLEAN[role] || (FAILED[role] ?? []).includes(row.kind) && (row.kind !== "findings" || runs.some(run => run.id === row.run && run.role === (RUN_ROLE[role] ?? role))))).at(-1) ?? null;
+  const cycles = Array.from({ length: count }, (_, i) => ({ number: i + 1, steps: steps.map(role => {
+    const last = verdict(role, i + 1);
+    // A running run of the step's role runs the cycle its evidence names; with no run evidence, the role's first cycle without a verdict.
+    const open = Array.from({ length: count }, (_, j) => j + 1).find(number => !verdict(role, number));
+    const running = runs.find(run => run.status === "running" && run.role === (RUN_ROLE[role] ?? role) && (run.evidence ? run.evidence.data.head === head && run.evidence.data.cycle === i + 1 : open === i + 1));
+    return { role, status: !head ? "unknown" : last ? last.kind === CLEAN[role] ? "done" : "failed" : running ? "running" : "pending", evidence: last, run: running?.id ?? null };
   }) }));
   for (const [index, row] of current.entries()) {
     if (!["checks-fail", "qa-fail"].includes(row.kind)) continue;
@@ -80,13 +85,24 @@ function card(source, project, task, now) {
   const completionDecision = rows(project, "decisions", task).filter(row => row.decision === `state ${task.state}`).at(-1);
   const completedAt = completion ? time(completion.data.at) : ["merged", "concluded", "abandoned"].includes(task.state) ? time(completionDecision?.at) : null;
   const brief = project.contents?.[latest(records, "artifact", data => data.type === "brief")?.id]?.text ?? null;
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, project: project.key, projectName: project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""), ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings: rows(project, "findings", task), decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: loopFor(task, route, cycles, head, reasons, runs), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+  // N7: the newest run, verdict or decision time.
+  const times = [...runs.flatMap(run => [run.started, run.ended]), ...ledger.map(row => row.at), ...rows(project, "decisions", task).map(row => row.at)].map(time).filter(at => at !== null);
+  const lastActivity = times.length ? new Date(Math.max(...times)).toISOString() : null;
+  // N8: a moved finding leaves its task; the move decision on the old task names the new task and key.
+  const moves = (project.tables.decisions ?? []).map(row => ({ row, move: /^(F-\S+) moved to (T[1-9]\d*) as (F-\S+):/.exec(row.decision ?? "") })).filter(item => item.move);
+  const found = (to, key) => (project.tables.findings ?? []).find(row => row.task === to && row.key === key);
+  const findings = [
+    ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: moves.find(({ move }) => move[2] === task.id && move[3] === row.key)?.row.task ?? null })),
+    ...moves.filter(({ row }) => row.task === task.id).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
+  ];
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: source.provider ?? source.label ?? source.id, repository: pr?.data.repository ?? project.repository ?? null, lastActivity, headBasis, project: project.key, projectName: project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""), ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: loopFor(task, route, cycles, head, reasons, runs), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
 }
 
 export function buildBoardModel(sources, { now = new Date().toISOString() } = {}) {
   const at = time(now);
   if (at === null) throw new TypeError("board time must be an ISO date");
   const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, task, at))));
-  const visible = tasks.filter(task => task.visible && task.column);
+  const recent = task => task.lastActivity ? Date.parse(task.lastActivity) : 0;
+  const visible = tasks.filter(task => task.visible && task.column).sort((a, b) => (b.reasons.length > 0) - (a.reasons.length > 0) || recent(b) - recent(a));
   return { at: new Date(at).toISOString(), tasks, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: visible.filter(task => task.column === key), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message })))]) };
 }
