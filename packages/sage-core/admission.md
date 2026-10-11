@@ -1,6 +1,6 @@
 # Atomic admission
 
-This store records session ownership and reserves capacity before a dispatch. It covers only sessions that use this same canonical local directory. Role-aware admission checks role permissions in the same atomic operation as capacity. The older roleless API checks capacity only. The store trusts issuer evidence from its caller. It does not authenticate native identity, release reservations, or recover a session automatically.
+This store records session ownership and reserves capacity before a dispatch. It covers only sessions that use this same canonical local directory. Role-aware admission checks role permissions in the same atomic operation as capacity. The older roleless API checks capacity only. The store trusts issuer evidence from its caller. It does not authenticate native identity or recover a session automatically. Exact completion records can release capacity through the trusted adapter.
 
 The base API has five operations:
 
@@ -12,7 +12,7 @@ The base API has five operations:
 
 Only a newly committed reservation returns `decision: "permit-once"`. An exact retry returns `"already-reserved"` with the saved assignment. It must not permit another native call. Changed arguments, tool, turn, name, task, or run are refused. After an uncertain result, keep the reservation held; do not invent another call identity to repeat the same work.
 
-All reserved assignments count toward both limits. A report submission, native stop, elapsed time, or new activation does not release one. Project and session names are identity keys, not paths. The adapter must validate issuer rights separately and convert every refusal or storage error into an explicit native denial. Throwing from a hook alone might not deny the tool.
+All assignments without a completion record count toward both limits. A report submission, native stop, elapsed time, or new activation does not release one. Project and session names are identity keys, not paths. The adapter must validate issuer rights separately and convert every refusal or storage error into an explicit native denial. Throwing from a hook alone might not deny the tool.
 
 The journal consists of immutable, numbered, hash-linked records. Each reader checks the complete prefix and its state transitions. A writer syncs the pending record before linking it to the next revision. Only one concurrent writer can publish that revision. A loser reads again and rechecks capacity. Directory sync precedes permission, including when a retry finds an existing reservation. A failure after publication keeps the record and its reservation.
 
@@ -47,10 +47,10 @@ and other current workflows. The chief itself is the owner session, never a
 child role.
 
 The project holds at most three leads across its participating sessions. Each
-lead holds at most three children in its session and epoch. All reservations
+lead holds at most three active children in its session and epoch. Active reservations
 also count toward project and total limits, so the lowest applicable limit wins.
-No stop, report, or mode change releases these slots. Completion and recovery
-still need their separate protocol.
+A stop, report, or mode change alone does not release these slots.
+The trusted adapter must record exact completion evidence. Recovery remains separate.
 
 Legacy reservations retain their original shape and consume normal capacity.
 Their role is unknown, so each also counts as a possible lead for the three-lead
@@ -140,3 +140,26 @@ reservation APIs do not automatically enforce preparation. A production adapter
 must use the prepared path consistently. The model-visible preparation server,
 its native identity checks, and the spawn correlation policy remain separate
 integration work. These core APIs do not start native agents.
+
+## Exact completion
+
+`completeAdmission(directory, binding)` records terminal evidence supplied by a trusted adapter.
+All binding fields must equal the saved child binding, including the assignment, child, and turn.
+The first call returns `completed`; an exact retry returns `already-completed` without another journal record.
+A different or missing binding refuses. Completion can arrive after mode-off.
+
+The journal retains the reservation and binding as history.
+Snapshots gain a `completions` field only after the first completion; existing snapshot shapes stay unchanged. Completed assignments no longer consume capacity.
+A lead's completion does not release its children. Each child requires its own completion record.
+A completed issuer cannot prepare or reserve new work. The adapter must also reject its role authority.
+Concurrent completion and admission use the same atomic journal protocol as reservation.
+
+This record is not task success, report acceptance, or a review verdict.
+The core does not authenticate evidence: direct calls with arbitrary JSON are not proof of native completion.
+The provider must verify immutable dispatch evidence and the exact terminal child turn before calling this API.
+Initial child bindings remain unique; later-assignment binding and recovery are separate work.
+
+A dispatch can include `taskHash`, the SHA-256 hash of its exact task text.
+The journal stores it with the reservation and refuses changed dispatch evidence on a retry.
+Older dispatches remain readable without this field. Their missing hash cannot establish task delivery.
+The provider must derive this value from the admitted native input, never from a later report.

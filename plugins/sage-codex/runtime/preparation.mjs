@@ -20,7 +20,7 @@ function actorScope(options, native) {
   if (bound.session !== `codex:${session}` || !UUID.test(session)) refuse();
   const owner = state.sessions.find(row => row.project === options.project && row.session === bound.session && row.epoch === bound.epoch);
   const reservation = state.reservations.find(row => row.assignment.id === bound.assignment);
-  if (!owner || !reservation || reservation.rolePlan?.role !== "lead" || reservation.rolePlan.issuerRole !== "chief-of-staff"
+  if (!owner || !reservation || (state.completions ?? []).some(row => row.assignment === bound.assignment) || reservation.rolePlan?.role !== "lead" || reservation.rolePlan.issuerRole !== "chief-of-staff"
     || bound.issuer !== session || reservation.dispatch.tool !== "collaborationspawn_agent") refuse();
   const observations = readObservations(join(options.observationsRoot, session));
   const joined = bindings(observations).reservations.find(row => row.child === native.actor && row.state === "bound");
@@ -54,6 +54,10 @@ export function reservePreparedSpawn(input, context, options) {
   if (observed?.kind !== "spawn-request") refuse();
   // Keep rejected and inactive attempts too. They can make later path reuse ambiguous.
   publish(join(options.observationsRoot, observed.session), observed);
+  const message = input.tool_input.message;
+  if (typeof message !== "string" || !message || Buffer.byteLength(message, "utf8") > 1024 * 1024
+    || Buffer.from(message, "utf8").toString("utf8") !== message) refuse();
+  const taskHash = createHash("sha256").update(message).digest("hex");
   const { scope, role } = actorScope(options, native);
   if (scope.session !== `codex:${observed.session}`) refuse();
   const prepared = readAdmission(options.directory).preparations.filter(row => row.project === scope.project
@@ -62,5 +66,5 @@ export function reservePreparedSpawn(input, context, options) {
   return reservePreparedAdmission(options.directory, scope,
     { preparation: prepared[0].id, issuer: native.actor, call: observed.call },
     { tool: input.tool_name, turn: observed.turn, name: observed.name,
-      argumentsHash: createHash("sha256").update(JSON.stringify(input.tool_input)).digest("hex") }, role);
+      argumentsHash: createHash("sha256").update(JSON.stringify(input.tool_input)).digest("hex"), taskHash }, role);
 }

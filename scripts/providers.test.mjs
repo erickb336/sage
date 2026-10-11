@@ -1734,3 +1734,79 @@ test("native deadline releases its transport when the timeout callback throws", 
   assert.equal(child.listenerCount("close"), 0);
   assert.equal(child.listenerCount("error"), 0);
 });
+
+// Completion changes capacity only. It does not record a successful task or review.
+test('exact completion releases one slot and repeated stale events cannot release newer work', async t => {
+  const f = await roleAdmissionFixture(t, { total: 1, projects: [{ project: 'project-a', limit: 1 }] });
+  assert.equal(typeof f.api.completeAdmission, 'function');
+  const first = f.reserve(1), binding = bindingFor(first.assignment);
+  f.api.bindAdmission(f.journal, binding);
+  assert.throws(() => f.reserve(2), /capacity is occupied/);
+  assert.equal(f.api.completeAdmission(f.journal, binding).decision, 'completed');
+  const second = f.reserve(2);
+  assert.equal(second.decision, 'permit-once');
+  assert.equal(f.api.completeAdmission(f.journal, binding).decision, 'already-completed');
+  assert.throws(() => f.reserve(3), /capacity is occupied/);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 2, 'history is retained');
+  assert.deepEqual(f.api.readAdmission(f.journal).completions, [binding]);
+});
+
+test('completion refuses missing bindings and every changed identity field', async t => {
+  const f = await roleAdmissionFixture(t);
+  assert.equal(typeof f.api.completeAdmission, 'function');
+  const binding = bindingFor(f.reserve(1).assignment);
+  assert.throws(() => f.api.completeAdmission(f.journal, binding), /matching child binding/);
+  f.api.bindAdmission(f.journal, binding);
+  for (const key of Object.keys(binding)) {
+    const replacement = key === 'assignment' || key === 'epoch' ? f.activation : 'different';
+    assert.throws(() => f.api.completeAdmission(f.journal, { ...binding, [key]: replacement }));
+  }
+  assert.deepEqual(f.api.readAdmission(f.journal).completions ?? [], []);
+  f.api.changeAdmissionMode(f.journal, { ...f.scope, after: f.activation, turn: 'b72422c7-509c-43aa-8c42-827c556f8a57', sage: false });
+  assert.equal(f.api.completeAdmission(f.journal, binding).decision, 'completed', 'off does not discard terminal evidence');
+});
+
+test('a completed lead keeps child capacity held and cannot admit new children', async t => {
+  const f = await roleAdmissionFixture(t, { total: 3, projects: [{ project: 'project-a', limit: 3 }] });
+  assert.equal(typeof f.api.completeAdmission, 'function');
+  const lead = bindingFor(f.reserve(1).assignment, 'lead-a'); f.api.bindAdmission(f.journal, lead);
+  f.reserve(2, 'qa', 'lead', 'lead-a');
+  f.reserve(3, 'implementer', 'lead', 'lead-a');
+  f.api.completeAdmission(f.journal, lead);
+  assert.throws(() => f.reserve(4, 'qa', 'lead', 'lead-a'), /completed issuer/);
+  assert.equal(f.reserve(5).decision, 'permit-once');
+  assert.throws(() => f.reserve(6), /capacity is occupied/);
+});
+
+test('concurrent completion publishes once and reopened capacity still has one winner', async t => {
+  const f = await roleAdmissionFixture(t, { total: 1, projects: [{ project: 'project-a', limit: 1 }] });
+  assert.equal(typeof f.api.completeAdmission, 'function');
+  const binding = bindingFor(f.reserve(1).assignment); f.api.bindAdmission(f.journal, binding);
+  const code = `const input=JSON.parse(process.argv[1]); const api=await import(input.url);
+    try { console.log(JSON.stringify(input.binding ? api.completeAdmission(input.dir,input.binding)
+      : api.reserveRoleAdmission(...input.args,{issuerRole:'chief-of-staff',role:'lead'}))); }
+    catch(error) { console.log(JSON.stringify({refused:error.message})); }`;
+  const run = input => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code, JSON.stringify({ url: f.url, dir: f.journal, ...input })], { stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
+    let output = '', error = '';
+    child.stdout.on('data', bytes => { output += bytes; }); child.stderr.on('data', bytes => { error += bytes; });
+    child.once('error', reject); child.once('close', status => {
+      try { assert.equal(status, 0, error); resolve(JSON.parse(output)); } catch (e) { reject(e); }
+    }); child.stdin.end();
+  });
+  const completed = await Promise.all([run({ binding }), run({ binding })]);
+  assert.deepEqual(completed.map(row => row.decision).sort(), ['already-completed', 'completed']);
+  const admitted = await Promise.all([run({ args: f.args(2) }), run({ args: f.args(3) })]);
+  assert.equal(admitted.filter(row => row.decision === 'permit-once').length, 1);
+  assert.equal(admitted.filter(row => /capacity is occupied/.test(row.refused)).length, 1);
+  assert.equal(f.api.readAdmission(f.journal).completions.length, 1);
+});
+
+test('completed native children cannot regain instructions through a repeated start binding', async t => {
+  const f = await nativeBindingFixture(t);
+  const assignment = f.reserve(1, 'lead', 'chief-of-staff');
+  const bound = f.bind(f.identity());
+  f.api.completeAdmission(f.journal, bound.binding);
+  assert.throws(() => f.bind(f.identity()), /could not bind/);
+  assert.equal(f.api.readAdmission(f.journal).completions[0].assignment, assignment.id);
+});

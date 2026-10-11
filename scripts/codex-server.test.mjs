@@ -694,3 +694,30 @@ test("composed native policy holds incomplete child evidence until the matching 
   assert.throws(() => policy.startChild(f.identity));
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
 });
+
+test('native admission saves the exact task hash and refuses missing task content', async t => {
+  const { createHash } = await import('node:crypto');
+  const f = await preparationServerFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const input = f.spawnInput();
+  f.api.reservePreparedSpawn(input, f.native(session), f.options);
+  const saved = f.core.readAdmission(f.options.directory).reservations[0];
+  assert.equal(saved.dispatch.taskHash, createHash('sha256').update(input.tool_input.message).digest('hex'));
+  input.tool_input.message = 'changed task';
+  assert.throws(() => f.api.reservePreparedSpawn(input, f.native(session), f.options), /different work/);
+  const other = await preparationServerFixture(t);
+  other.api.prepareNativeTask(other.input, other.native(session), other.options);
+  for (const message of [undefined, null, 1, '', 'x'.repeat(1024 * 1024 + 1)]) {
+    const invalid = other.spawnInput(); invalid.tool_input.message = message;
+    assert.throws(() => other.api.reservePreparedSpawn(invalid, other.native(session), other.options));
+  }
+  assert.equal(other.core.readAdmission(other.options.directory).reservations.length, 0);
+});
+
+test('completed native leads cannot prepare further child work', async t => {
+  const f = await preparationServerFixture(t); f.bindLead();
+  const binding = f.core.readAdmission(f.options.directory).bindings[0];
+  f.core.completeAdmission(f.options.directory, binding);
+  assert.throws(() => f.api.prepareNativeTask({ ...f.input, name: 'late_child', role: 'qa' }, f.native(childActor), f.options), /could not verify/);
+  assert.equal(f.core.readAdmission(f.options.directory).preparations.length, 1);
+});
