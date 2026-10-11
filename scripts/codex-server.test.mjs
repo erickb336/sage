@@ -1801,3 +1801,71 @@ test("native failed dispatch reconciliation runs before a new admitted spawn", a
   assert.equal(state.failures[0].assignment, state.reservations[0].assignment.id);
   assert.notEqual(state.failures[0].assignment, state.reservations[1].assignment.id);
 });
+
+function commandPolicyInput(f, actor = session, command = 'printf fixed') {
+  const turn = actor === session ? turns[0] : turns[1];
+  const envelope = { cmd: command, shell: '/bin/sh', workdir: f.dir, tty: false, sandbox_permissions: 'use_default' };
+  const transcript_path = actor === session ? join(f.mode.sessionsDir, 'command.jsonl') : f.childTranscript();
+  const call = { type: 'response_item', metadata: { client_authored: false }, payload: { type: 'function_call',
+    name: 'exec_command', call_id: 'command-1', arguments: JSON.stringify(envelope),
+    internal_chat_message_metadata_passthrough: { turn_id: turn } } };
+  const prefix = actor === session ? [
+    { type: 'session_meta', payload: { id: session, session_id: session, cli_version: '0.160.0' } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: turn } },
+    { type: 'turn_context', payload: { turn_id: turn } },
+  ].map(row => JSON.stringify(row) + '\n').join('') : readFileSync(transcript_path, 'utf8');
+  writeFileSync(transcript_path, prefix + JSON.stringify(call) + '\n');
+  return { envelope, input: { hook_event_name: 'PreToolUse', session_id: session, turn_id: turn,
+    tool_name: 'Bash', tool_use_id: 'command-1', tool_input: { command }, transcript_path } };
+}
+
+test('native command policy receives the original root envelope and shared expansion verdict', async t => {
+  const f = await composedPolicyFixture(t);
+  const rules = f.core.createCommandPolicy({ stateToolPath: join(f.plugin, 'scripts/sage.mjs') });
+  let evaluated = 0, saved;
+  const policy = f.createNativePolicy(f.options, (input, context) => {
+    evaluated++; saved = structuredClone(context.command);
+    assert.equal(context.command.cmd, input.tool_input.command);
+    const reason = rules.expansionProblem(context.command.cmd, context.command.workdir);
+    return reason ? { decision: 'deny', reason } : { decision: 'pass' };
+  });
+  const safe = commandPolicyInput(f);
+  assert.deepEqual(await f.evaluate(policy, safe.input), { decision: 'pass' });
+  assert.deepEqual(saved, safe.envelope);
+  // Parser input only. No command from this test reaches a shell.
+  const expanded = commandPolicyInput(f, session, 'g{it,h} status');
+  assert.equal((await f.evaluate(policy, expanded.input)).decision, 'deny');
+  assert.equal(evaluated, 2);
+});
+
+test('native command policy refuses missing or changed evidence before evaluation', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, (input, context) => {
+    assert.equal(context.command.cmd, input.tool_input.command); evaluated++; return { decision: 'pass' };
+  });
+  const { input } = commandPolicyInput(f);
+  assert.equal((await f.evaluate(policy, input)).decision, 'pass');
+  const { transcript_path, ...missing } = input;
+  for (const changed of [missing, { ...input, tool_use_id: 'another' },
+    { ...input, tool_input: { command: 'different' } }, { ...input, tool_input: { ...input.tool_input, shell: '/bin/sh' } }]) {
+    await assert.rejects(f.evaluate(policy, changed));
+  }
+  assert.equal(evaluated, 1);
+});
+
+test('native command policy verifies the admitted child before providing its envelope', async t => {
+  const f = await composedPolicyFixture(t); f.bindLead();
+  let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, (input, context) => {
+    assert.equal(context.actor, childActor); assert.equal(context.command.cmd, input.tool_input.command);
+    assert.equal(f.core.readAdmission(f.options.directory).bindings[0].child, childActor);
+    evaluated++; return { decision: 'pass' };
+  });
+  const { input } = commandPolicyInput(f, childActor);
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, 'pass');
+  const root = commandPolicyInput(f);
+  await assert.rejects(f.evaluate(policy, { ...input, transcript_path: root.input.transcript_path }, childActor));
+  const state = f.core.readAdmission(f.options.directory); f.core.completeAdmission(f.options.directory, state.bindings[0]);
+  await assert.rejects(f.evaluate(policy, input, childActor));
+  assert.equal(evaluated, 1);
+});

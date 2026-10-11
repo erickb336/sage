@@ -8,7 +8,8 @@ import {join} from 'node:path';
 import {setupCapture} from './fixtures/codex-native/setup-capture.mjs';
 import {waitNative} from './fixtures/codex-native/wait-native.mjs';
 
-assert.equal(process.argv.length,2,'no_probe_arguments');
+assert(process.argv.slice(2).every(arg=>arg==='--deny-command')&&process.argv.length<=3,'unknown_probe_arguments');
+const denyCommand=process.argv.includes('--deny-command');
 const root=realpathSync(mkdtempSync(join(tmpdir(),'sage-command-boundary-')));
 const command='printf sage-native-command-ok', marker='sage-native-command-ok';
 let server;
@@ -23,7 +24,7 @@ try {
  version.stdout.on('data',d=>versionText+=d);version.stderr.resume();version.stdin.end();
  assert.equal((await waitNative(version)).code,0);
  assert.equal(versionText.trim(),'codex-cli 0.160.0','unverified_native_version');
- await setupCapture({root,codexHome,workspace,env,binary});
+ const integrated=await setupCapture({root,codexHome,workspace,env,binary,sage:true,denyCommand});
  const catalog=join(root,'models.json');
  writeFileSync(catalog,JSON.stringify({models:[{slug:'sage-command-fixture',display_name:'Sage command fixture',supported_reasoning_levels:[],shell_type:'unified_exec',visibility:'list',supported_in_api:true,priority:1,support_verbosity:false,truncation_policy:{mode:'bytes',limit:10000},experimental_supported_tools:[],tool_mode:'direct',model_messages:{instructions_template:'Run only the fixed harmless fixture command.'}}]}));
  let requests=0,fixtureError,toolSchema,commandResult;
@@ -42,7 +43,7 @@ try {
    }else{
     assert.equal(requests,2,'unexpected_extra_request');
     const outputs=request.input.filter(i=>i.type==='function_call_output'&&i.call_id==='fixed_command');assert.equal(outputs.length,1);
-    commandResult=outputs[0].output;assert(JSON.stringify(commandResult).includes(marker),'fixed_command_output_missing');
+    commandResult=outputs[0].output;assert(JSON.stringify(commandResult).includes(denyCommand?'sage-fixed-command-denial':marker),'fixed_command_output_missing');
     item={id:'fixed_final',type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:'command boundary checked',annotations:[]}]};
    }
    const id=`command_probe_${requests}`;
@@ -57,23 +58,31 @@ try {
  for(const [key,value]of Object.entries(config))args.push('-c',`${key}=${JSON.stringify(value)}`);
  args.push('-c',`model_providers.sage_command_fixture={name="Fixed command fixture",base_url="http://127.0.0.1:${server.address().port}/v1",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`,'-');
  const child=launch(args);let stdout='',stderrBytes=0;
- child.stdout.on('data',d=>{stdout+=d;});child.stderr.on('data',d=>stderrBytes+=d.length);child.stdin.on('error',()=>{});child.stdin.end('Run the fixed harmless command fixture.\n');
+ child.stdout.on('data',d=>{stdout+=d;});child.stderr.on('data',d=>stderrBytes+=d.length);child.stdin.on('error',()=>{});child.stdin.end('sage mode\n');
  const result=await waitNative(child,{onTimeout:()=>{server.closeAllConnections();}});
  server.closeAllConnections();await new Promise(resolve=>server.close(resolve));server=null;
  const events=readdirSync(join(root,'events')).map(n=>JSON.parse(readFileSync(join(root,'events',n),'utf8')));
  console.log(JSON.stringify({type:'command_boundary',version:versionText.trim(),toolSchema,callbacks:events.map(({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape,commandTranscript})=>({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape,commandTranscript})),result,requests,fixtureError,stderrBytes,simulatedModel:true,fullPolicyVerified:false}));
  assert.equal(result.code,0);assert.equal(fixtureError,undefined);assert.equal(requests,2);
  assert.equal(events.filter(e=>e.hook_event_name==='PreToolUse'&&e.fixedCommandMatched).length,1);
- assert.equal(events.filter(e=>e.hook_event_name==='PostToolUse'&&e.fixedCommandMatched).length,1);
+ assert.equal(events.filter(e=>e.hook_event_name==='PostToolUse'&&e.fixedCommandMatched).length,denyCommand?0:1);
+ assert.equal(integrated.readJournal().modes.at(-1)?.sage,true,'sage_mode_required');
  for(const event of events){assert.equal(event.tool_name,'Bash');assert.deepEqual(event.toolInputShape,{command:'string'});}
  const before=events.find(event=>event.hook_event_name==='PreToolUse');
  assert.deepEqual(before.commandTranscript,{fields:['cmd','max_output_tokens','shell','tty','workdir'],fixedCommand:true,fixedShell:true,fixedDirectory:true,ttyFalse:true});
  const completed=stdout.trim().split('\n').map(line=>JSON.parse(line)).filter(event=>event.type==='item.completed'&&event.item?.type==='command_execution');
- assert.equal(completed.length,1,'one_native_command_execution');
- assert.equal(completed[0].item.exit_code,0,'native_command_failed');
- assert.equal(completed[0].item.aggregated_output,marker,'native_command_output_mismatch');
+ if(denyCommand)assert.equal(completed.length,0,'denied_command_must_not_execute');
+ else{
+  assert.equal(completed.length,1,'one_native_command_execution');
+  assert.equal(completed[0].item.exit_code,0,'native_command_failed');
+  assert.equal(completed[0].item.aggregated_output,marker,'native_command_output_mismatch');
+ }
+ const receipt=JSON.parse(readFileSync(join(root,'command-policy-receipt.json'),'utf8'));
+ assert.equal(receipt.session,before.session_id);assert.equal(receipt.turn,before.turn_id);assert.equal(receipt.call,before.tool_use_id);
+ assert.deepEqual(receipt.command,{cmd:command,shell:'/bin/sh',workdir:workspace,tty:false,max_output_tokens:1000});
+ assert.equal(receipt.result.decision,denyCommand?'deny':'pass');
  assert(stdout.includes('command boundary checked'));
- console.log(JSON.stringify({type:'result',verified:true,simulatedModel:true,installedSageVerified:false}));
+ console.log(JSON.stringify({type:'result',verified:true,simulatedModel:true,policyReceivedOriginalFields:true,deniedCommand:denyCommand,installedSageVerified:false}));
 }finally{
  server?.closeAllConnections();server?.close();rmSync(root,{recursive:true,force:true});
 }

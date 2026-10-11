@@ -9,6 +9,13 @@ start before calling this interface. Tool evaluation records recognized
 identity events even when Sage is off or the tool policy denies the request.
 It then calls the supplied tool policy with a private input copy and the native
 actor, version, and current Sage mode. Only an exact pass or denial is accepted.
+For a `Bash` event while Sage is on, it first verifies the original native command.
+The hook input must contain only `command`. The callback receives the complete
+original arguments in `context.command`, including fields omitted by the hook.
+A child must bind to its admitted task before this read. Its recorded start
+supplies the expected parent and task path. Missing or conflicting command
+proof refuses the operation before the callback runs. The callback must validate
+all recovered arguments and apply the command rules; recovery grants no permission.
 A mode change during evaluation refuses the operation. This check does not
 revoke native permission after it returns. A successful spawn in
 Sage mode must also consume a prepared assignment exactly once. Retries do not

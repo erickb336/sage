@@ -4,6 +4,7 @@ Codex CLI 0.160.0 changes the command input before it calls a hook.
 The command adapter must account for this change before Sage can enforce its shared command rules.
 
 Run the native check with `node scripts/probe-codex-command.mjs`.
+Add `--deny-command` to verify denial of the same fixed harmless command.
 Use fake `ps`, `pgrep`, and `kill` first on PATH, as for the other native checks.
 The check uses a fresh temporary profile and a local server with fixed simulated responses.
 It does not use model credentials or the owner's settings.
@@ -40,5 +41,10 @@ This reader does not authenticate the hook caller or grant command permission.
 Then apply the shared rules to the complete input, including shell, working directory, and permission changes.
 An instruction that asks the model to omit these fields is not enforcement.
 
-This evidence does not verify command denial, full Sage policy, a real model, or an installed automatic workflow.
+The probe now runs the composed native Sage policy with Sage mode on.
+A receipt from its evaluator confirms the exact recovered fields and call identity.
+The allow route checks the native exit code and exact command output.
+The deny route checks the fixed denial response, no command execution, and no post-tool callback.
+This proves denial with a healthy hook connection for this fixed command.
+It does not verify full Sage policy, a real model, or an installed automatic workflow.
 The separate required-hook outage check still gates activation.

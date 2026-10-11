@@ -1,6 +1,7 @@
 import { join } from "node:path";
-import { decodeEvent, observation, publish, RUNTIME_VERSION } from "./events.mjs";
+import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
+import { readNativeCommand } from "./identity.mjs";
 import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn } from "./preparation.mjs";
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
@@ -45,7 +46,23 @@ export function createNativePolicy(options, evaluateTool) {
       if (observed) record(observed); // Keep inactive and denied attempts; name reuse must stay visible.
       const before = mode(event.session_id);
       if (before.sage && child) bindNativeChildTool(raw, native, fixed);
-      const checked = decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage })));
+      let command;
+      if (before.sage && event.tool_name === "Bash") {
+        if (Object.keys(event.tool_input).length !== 1 || !Object.hasOwn(event.tool_input, "command")) refuse();
+        let parent = null, path = "/root";
+        if (child) {
+          const starts = readObservations(join(fixed.observationsRoot, event.session_id))
+            .filter(row => row.kind === "child-start" && row.child === native.actor && row.turn === event.turn_id);
+          if (starts.length !== 1) refuse();
+          ({ parent, path } = starts[0]);
+        }
+        command = readNativeCommand(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
+          session: event.session_id, actor: native.actor, parent, path, turn: event.turn_id,
+          call: event.tool_use_id, command: event.tool_input.command,
+        });
+      }
+      const checked = decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage,
+        ...(command ? { command } : {}) })));
       // A concurrent mode change cannot turn an earlier decision into current permission.
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
       if (checked.decision === "deny") return checked;

@@ -3,13 +3,13 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** All files and the scoped tool approvals belong only to setupCapture's validated temporary root. */
-export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5 } = {}) {
+export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, denyCommand = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   for (const file of ["sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
     writeFileSync(join(root, file), readFileSync(new URL(file, import.meta.url)));
   }
   const { configureAdmission, readAdmission, createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
-  writeFileSync(join(root, "fixture-fault.json"), JSON.stringify({ disconnectOnSpawn }));
+  writeFileSync(join(root, "fixture-fault.json"), JSON.stringify({ disconnectOnSpawn, denyCommand }));
   const directory = join(root, "admission");
   configureAdmission(directory, { total: capacity, projects: [{ project: "native-fixture", limit: capacity }] });
   const mode = { directory, project: "native-fixture", projectDirectory: join(root, "workspace"),
