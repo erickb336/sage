@@ -349,10 +349,17 @@ test("shared file and mode extraction preserves classified mode phrases in both 
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.deepEqual(api.modeSignals(prompt("sage mode")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true });
-    assert.deepEqual(api.modeSignals(prompt("sage mode off")), { sageOff: true, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true });
-    assert.deepEqual(api.modeSignals(prompt("sage mode, autopilot on")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: true, modeWord: true });
+    const none = { autopilotWord: false, autopilotAsked: false, question: false };
+    assert.deepEqual(api.modeSignals(prompt("sage mode")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true, ...none });
+    assert.deepEqual(api.modeSignals(prompt("sage mode off")), { sageOff: true, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none });
+    assert.deepEqual(api.modeSignals(prompt("sage mode, autopilot on")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: true, modeWord: true, ...none, autopilotAsked: true });
+    assert.deepEqual(api.modeSignals(prompt("autopilot on main?")), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: false, modeWord: true, autopilotWord: true, autopilotAsked: true, question: true });
     assert.equal(api.modeSignals(prompt("sage mode continue on the project")).sageOn, true);
+    // The on rule's tail is the same for both providers (T200): an off after "on", an off-meaning word, a hidden or
+    // look-alike off, any question mark, and a Markdown paste with more words switch nothing on.
+    for (const text of ["sage mode on off", "sage mode stop", "sage mode switch it off", "sage mode оff", "sage mode o­ff", "sage mode ​off", "sage mode continue;", "sage mode continue؟", "> sage mode continue", "    sage mode continue"]) {
+      assert.equal(api.modeSignals(prompt(text)).sageOn, false, JSON.stringify(text));
+    }
     for (const text of ["What does sage mode do?", "sage mode?", "sage mode online: is it a thing?", "autopilot on main"]) {
       const signals = api.modeSignals(prompt(text));
       assert.equal(signals.sageOn, false, text);

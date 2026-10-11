@@ -74,7 +74,7 @@ test("sage mode makes the session the chief of staff, and only subagents may cha
 
 test("F-T72-20: full-width punctuation ends only the board phrase; a mode phrase with ！ or 。 switches nothing, and gets the miss note (T194)", () => {
   const s = session();
-  for (const p of ["sage mode！", "sage mode。"]) assert.match(context(s.send(prompt(p))), /^sage: this message did not switch anything\./, p);
+  for (const p of ["sage mode！", "sage mode。"]) assert.match(context(s.send(prompt(p))), /^sage: this message switched nothing, because the words after the phrase match no rule\./, p);
   assert.equal(s.send(edit()), undefined, "still not in sage mode");
 });
 
@@ -912,6 +912,23 @@ test("only the start of the user's message switches a mode, except autopilot off
     [[], "sage mode  offline: the logo first", "sage mode on, autopilot off", "two spaces before a longer word give the same answer as one"],
     [[], "sage mode continue？", "sage mode off, autopilot off", "the full-width question mark counts as a question (R703-3, G68)"],
     [[], "sage mode？", "sage mode off, autopilot off", "the phrase and a full-width question mark"],
+    // Every question mark counts (F-R707-1): Arabic, double, exclamation and question, small, and the Greek one.
+    ...["؟", "⁇", "⁉", "﹖", ";"].map((q) => [[], `sage mode continue${q}`, "sage mode off, autopilot off", `the question mark U+${q.codePointAt(0).toString(16).toUpperCase()}`]),
+    // The off guard holds after "on" too (F-R706-1), and for an off-meaning word or a hidden or look-alike off (F-R710-2).
+    [[], "sage mode on off", "sage mode off, autopilot off", 'the phrase, "on", then the off word'],
+    [[], "sage mode on  off continue", "sage mode off, autopilot off", 'the phrase, "on", two spaces, then the off word'],
+    ...["stop", "exit now", "disable it", "switch it off", "turn off", "quit"].map((w) => [[], `sage mode ${w}`, "sage mode off, autopilot off", `an off-meaning word after the phrase: ${w}`]),
+    [[], "sage mode оff", "sage mode off, autopilot off", "the off word with a Cyrillic look-alike letter"],
+    [[], "sage mode ｏff", "sage mode off, autopilot off", "the off word with a full-width letter"],
+    [[], "sage mode o­ff", "sage mode off, autopilot off", "a soft hyphen inside the off word"],
+    [[], "sage mode ​off", "sage mode off, autopilot off", "a zero-width space before the off word"],
+    [[], "sage mode of​f now", "sage mode off, autopilot off", "a zero-width space inside the off word"],
+    [[], "sage mode endpoint review", "sage mode on, autopilot off", "a longer word that starts with an off word is more words"],
+    // More words after the phrase only on a plain line: a pasted quote, list item or code line is not a request (F-R710-1).
+    ...["> sage mode continue on the project", "- sage mode continue on the project", "* sage mode continue on the project", "    sage mode continue on the project", "\tsage mode continue on the project"].map((m) => [[], m, "sage mode off, autopilot off", `a Markdown paste: ${JSON.stringify(m.slice(0, 4))}`]),
+    ...["> sage mode", "- sage mode", "    sage mode."].map((m) => [[], m, "sage mode on, autopilot off", `the phrase alone keeps the wider start: ${JSON.stringify(m)}`]),
+    [[], "   sage mode continue on the project", "sage mode on, autopilot off", "3 spaces before the phrase are still a plain line"],
+    [[], "\n\nsage mode continue on the project", "sage mode on, autopilot off", "blank lines before the phrase"],
     [BOTH, "sage mode  off continue", "sage mode off, autopilot off", "the exact off word after two spaces: off wins over on"],
     [BOTH, "sage mode off continue", "sage mode off, autopilot off", "off wins over on: the off rule reads the message first"],
     [SAGE, "sage mode autopilot continue", "sage mode on, autopilot off", "words after autopilot: the autopilot rule stays strict"],
@@ -983,13 +1000,30 @@ test("only the start of the user's message switches a mode, except autopilot off
   assert.deepEqual(wrong, [], "each case shows its message and both results");
 });
 
-test("a message of the owner that starts with a mode word and switches nothing gets a note; a read message or an agent's text gets none (T194)", async () => {
-  const NOTE = /^sage: this message did not switch anything\. The phrases are "sage mode", "sage mode on", "sage mode off", "autopilot on" and "autopilot off", at the start of the message\.$/m;
+test("a message of the owner that starts with a mode word and switches nothing gets a note; a read message or an agent's text gets none (T194, T200)", async () => {
+  const NOTE = /^sage: (?:this message switched nothing|autopilot did not switch on), because [^.]+\. The switches are the on phrase, the off phrase and the autopilot phrases, at the start of the message\. Tell the user\.$/m;
   const noted = async (messages) => NOTE.test((await modesAfter(messages, { notes: true })).note);
   const cases = [
     // [the modes before, the message, whether the note comes, why]
     [[], "sage mode continue on sage project with remote control on", false, "the real first message switches sage mode on"],
     [[], "sage mode?", true, "the phrase as a question"],
+    // The autopilot half (T200, R704, R702-4): sage mode goes on, but autopilot named with its on word stays off.
+    [[], "sage mode autopilot continue", true, "the mode phrase, the autopilot word and a trailing word"],
+    [[], "sage mode, autopilot on now", true, "the mode phrase, autopilot on and a trailing word"],
+    [["sage mode", "autopilot on"], "sage mode autopilot continue", false, "autopilot is already on"],
+    [["sage mode"], "sage mode autopilot. Stop when the tests pass", false, "an off word in the same message wins on purpose"],
+    // No rule changed the state (R708-1, F-R706-2), although a rule read the message.
+    [[], "sage mode off-topic: the logo first", true, "the on phrase and a hyphenated off word, while autopilot is off"],
+    [["sage mode"], "sage mode off?", true, "the off phrase as a question, while autopilot is off"],
+    [["sage mode", "autopilot on"], "sage mode off?", false, "the off phrase as a question switches autopilot off: a change"],
+    [["sage mode"], "autopilot off", false, "an autopilot off while autopilot is off keeps the state on purpose"],
+    [[], "sage mode off", false, "the off phrase while sage mode is off keeps the state on purpose"],
+    [[], "sage mode on off", true, 'the phrase, "on" and the off word (F-R706-1)'],
+    [[], "sage mode stop", true, "an off-meaning word after the phrase (F-R710-2)"],
+    [[], "sage mode o­ff", true, "a soft hyphen inside the off word (F-R710-2)"],
+    [[], "> sage mode continue on the project", true, "a pasted quote (F-R710-1)"],
+    // The owner guard (F-R709-1): the hand-back marker makes the text an agent's, so no note, though it has a mode word.
+    [["sage mode"], "sage mode?\n[Subagent hand-back] STATUS done", false, "an agent's hand-back gets no note"],
     [[], "sage mode online: is it a thing?", true, "a longer word and a question"],
     [["sage mode"], "autopilot on main", true, "autopilot on, then a word"],
     [["sage mode"], "autopilot", true, "autopilot alone"],
@@ -1008,6 +1042,30 @@ test("a message of the owner that starts with a mode word and switches nothing g
   assert.deepEqual(wrong, []);
   const { note } = await modesAfter(["sage mode continue on sage project with remote control on"], { notes: true });
   assert.match(note, /^sage: sage mode is on\. You are the user's chief of staff/, "the real first message gives the chief text");
+});
+
+test("the miss note says which rule failed, tells the chief to tell the user, and quotes no phrase (T200, T201, R702-3)", async () => {
+  const TAIL = " The switches are the on phrase, the off phrase and the autopilot phrases, at the start of the message. Tell the user.";
+  const cases = [
+    // [the modes before, the message, the note's first sentence]
+    [[], "sage mode continue, right?", "sage: this message switched nothing, because the line has a question mark."],
+    [[], "sage mode continue؟", "sage: this message switched nothing, because the line has a question mark."],
+    [["sage mode"], "autopilot on main", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
+    [[], "sage mode autopilot continue", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
+    [[], "autopilot on", "sage: autopilot did not switch on, because autopilot turns on only in sage mode."],
+    [["sage mode"], "autopilot on?", "sage: autopilot did not switch on, because the line has a question mark."],
+    [[], "sage mode stop", "sage: this message switched nothing, because the words after the phrase match no rule."],
+  ];
+  const notes = await Promise.all(cases.map(([before, message]) => modesAfter([...before, message], { notes: true })));
+  const wrong = cases.flatMap(([, message, first], i) => {
+    const note = notes[i].note.split("\n\n---\n\n").at(-1);
+    return note === first + TAIL ? [] : [`${JSON.stringify(message)} gives ${JSON.stringify(note)}`];
+  });
+  assert.deepEqual(wrong, []);
+  // T201: the note describes the phrases. A report that quotes it has no phrase word for word, so it is no switch text.
+  for (const note of notes.map((n) => n.note.split("\n\n---\n\n").at(-1))) {
+    assert.doesNotMatch(note,/["“]|sage\s+mode\s+o(?:n|ff)\b|autopilot\s+o(?:n|ff)\b|sage mode autopilot/i, note);
+  }
 });
 
 // The frames that Claude Code 2.1.288 puts around a prompt that the user did not type: a hand-back from another
@@ -1406,6 +1464,11 @@ test("1 MB of padding in an agent's text cannot time out the hook: its time grow
       // run after the mode phrase. Before the repair, 64 KB of spaces took about 0.5 s and 1 MB over 100 s (R702, R703).
       "the mode phrase, then spaces and a question": prompt(`sage mode${pad(" ")}x?`),
       "the mode phrase, then words and a question": prompt(`sage mode${pad(" word")}?`),
+      // The on rule's tail (T200): the off guard after "on", a long word before an off, invisible characters, blank lines.
+      "the mode phrase and on, then spaces and the off word": prompt(`sage mode on${pad(" ")}off`),
+      "the mode phrase, switch, then a long word": prompt(`sage mode switch ${pad("x")} on`),
+      "the mode phrase, then zero-width spaces": prompt(`sage mode ${pad("​")}continue`),
+      "blank lines, then the mode phrase and words": prompt(`${pad(" \n")}sage mode continue?`),
     };
     return [...stops, ...Object.entries(others)];
   };
