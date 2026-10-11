@@ -310,14 +310,15 @@ test("T216, T229: with allowedHosts and no password, phone access is off until t
     assert.equal(first.status, 0, first.stderr);
     const command = `node ${PLUGIN_CLI} board --set-password`;
     assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off until you set a board password: run in a terminal on this Mac: ${command}\n`);
-    // Through a tunnel, the board says the same.
+    // Through a tunnel, the board says that access is off.
     const tunnel = await new Promise((done) => {
       const req = request({ host: "127.0.0.1", port, path: "/", agent: false, headers: { Host: `127.0.0.1:${port}`, "X-Forwarded-For": "203.0.113.9" } }, (response) => {
         let body = ""; response.setEncoding("utf8"); response.on("data", (chunk) => { body += chunk; }); response.on("end", () => done({ status: response.statusCode, body }));
       });
       req.end();
     });
-    assert.deepEqual(tunnel, { status: 403, body: `Access from outside this Mac is off: no board password is set. Set a password on the Mac: run in a terminal ${command}\n` });
+    // The remote text is fixed: no plugin path and no user name (F-T229-7). The exact command stays in the output above.
+    assert.deepEqual(tunnel, { status: 403, body: "Access from outside this Mac is off until the owner sets a board password on the Mac.\n" });
     // The printed command as its words (no shell). From a pipe, as an agent would run it, it refuses.
     const [node, ...args] = command.split(" ");
     assert.equal(node, "node");
@@ -356,7 +357,12 @@ test("T216: the board guide says that the Mac needs no sign-in, and gives ensure
   // T229: a private HTTPS tunnel of any vendor; tailscale serve is one example, and no vendor header is a proxy sign.
   assert.match(guide, /only through a private HTTPS tunnel that forwards to `http:\/\/127\.0\.0\.1:43123` and adds an `X-Forwarded-For` header\. The board does not depend on one tunnel tool\. One example is Tailscale Serve/);
   assert.doesNotMatch(guide, /Tailscale-\*|"secret" value|Until you set one, the password is the `secret`/);
-  assert.match(guide, /The command refuses when its input is not a terminal, so a pipe, a script or an agent cannot set the password\./);
+  // F-T229-8: the guide does not claim that the terminal check or the hook stops every agent; it names the sandbox.
+  assert.doesNotMatch(guide, /so a pipe, a script or an agent cannot set the password/);
+  assert.match(guide, /The terminal check accepts any pseudo-terminal, so it alone does not stop an agent\./);
+  assert.match(guide, /An agent runs as your own user, so a script that builds the command or the path while it runs can still pass the hook\. Full protection needs the sandbox \(tasks T97 to T99\)\./);
+  // F-T229-7: the remote 403 text names no path.
+  assert.match(guide, /The text names no path; the exact command is only in the output of `board --ensure` on the Mac\./);
   // F-T216-16: an older board is stopped where it started, not with --stop.
   assert.match(guide, /`--stop` sends it no signal, whatever `board\.pid` holds/);
 });

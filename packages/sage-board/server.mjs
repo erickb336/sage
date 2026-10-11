@@ -77,17 +77,18 @@ const WRONG_PASSWORD_DELAY = 1000;
 // Host and adds X-Forwarded-For, so a request that has any of them came through a proxy, not from the Mac itself.
 const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-");
 
+/** The 403 text away from the Mac until the owner sets a password. It names no path and no user name (F-T229-7). */
+const OFF = "Access from outside this Mac is off until the owner sets a board password on the Mac.";
 /**
  * The board needs no sign-in on the Mac. Every other request signs in with the owner's password, a record from
- * hashPassword. Until the caller gives one, every other request gets 403 and the text "set a password", which names
- * passwordCommand: the command that the owner runs in a terminal. With an id (a non-secret name of the caller's config),
+ * hashPassword. Until the caller gives one, every other request gets 403 and a fixed text that names no path (F-T229-7):
+ * the exact command is only in the output of board --ensure on the Mac. With an id (a non-secret name of the caller's config),
  * a response on the Mac carries the X-Sage-Board header: the id, this process's pid and the time the listener started,
  * so the board command can tell which board answers on the port.
  */
-export function createBoardServer({ sources, password, passwordCommand = "board --set-password", port = 43123, allowedHosts = [], id } = {}) {
+export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
-  if (typeof passwordCommand !== "string" || passwordCommand.length > 8192 || /[\p{Cc}\p{Cf}]/u.test(passwordCommand)) throw new TypeError("the set-password command must be one line of text");
   if (!Array.isArray(sources) || !sources.length || sources.length > 32) throw new TypeError("board needs 1 to 32 explicit sources");
   const ids = new Set();
   const configured = Array.from(sources, source => {
@@ -269,7 +270,7 @@ export function createBoardServer({ sources, password, passwordCommand = "board 
     // with the owner's password: also one that a tunnel forwards to the loopback listener, maybe with a loopback Host.
     // Until the owner sets a password, there is no sign-in, so such a request gets 403 (no sign-in can change it).
     if (onMac(request)) { if (boardHeader) response.setHeader("X-Sage-Board", boardHeader); }
-    else if (!password) return fail(403, `Access from outside this Mac is off: no board password is set. Set a password on the Mac: run in a terminal ${passwordCommand}`);
+    else if (!password) return fail(403, OFF);
     else {
       const signedIn = await authenticated(request);
       if (signedIn === "busy") { response.setHeader("Retry-After", "1"); return fail(429, "Another sign-in is being checked. Try again in a second."); }

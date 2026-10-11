@@ -42,11 +42,11 @@ async function freePort() {
 const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
 
 /** A board server on a free port. password: null is a board with no password set yet (T229). */
-async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, passwordCommand, id } = {}) {
+async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
   if (!missing) populate(root);
   const sources = [{ id: "sample", path: root, label: "Sample source" }];
-  const server = createBoardServer({ sources, ...(password ? { password } : {}), ...(passwordCommand ? { passwordCommand } : {}), port, allowedHosts, id });
+  const server = createBoardServer({ sources, ...(password ? { password } : {}), port, allowedHosts, id });
   t.after(async () => { await server.close(); rmSync(dir, { recursive: true, force: true }); });
   await server.start();
   return { dir, root, project: join(root, "project-abcdef"), port, sources, server, authorization: `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}` };
@@ -181,10 +181,9 @@ test("T229: a generic proxy that adds only X-Forwarded-For needs the password, a
   assert.equal(vendor.status, 200); assert.match(vendor.headers["x-sage-board"], /^id=0123456789abcdef; /);
 });
 
-test("T229: with no password set, every request that is not the Mac path gets 403 that names the set-password command", async t => {
-  const command = "node /Applications/Sample/board/cli.mjs board --set-password";
-  const tailnet = "sample.tailnet.ts.net", f = await fixture(t, { allowedHosts: [tailnet], password: null, passwordCommand: command }), loopback = `127.0.0.1:${f.port}`;
-  const text = `Access from outside this Mac is off: no board password is set. Set a password on the Mac: run in a terminal ${command}\n`;
+test("T229: with no password set, every request that is not the Mac path gets 403 with a fixed text that names no path", async t => {
+  const tailnet = "sample.tailnet.ts.net", f = await fixture(t, { allowedHosts: [tailnet], password: null }), loopback = `127.0.0.1:${f.port}`;
+  const text = "Access from outside this Mac is off until the owner sets a board password on the Mac.\n";
   for (const rawHeaders of [["Host", tailnet], ["Host", tailnet, "Authorization", f.authorization], ["Host", loopback, "X-Forwarded-For", "203.0.113.9"], ["Host", loopback, "Forwarded", "for=203.0.113.9"], ["Host", loopback, "X-Forwarded-Proto", "https", "Authorization", f.authorization]]) {
     for (const path of ["/", `/task/${key}`, "/?events=1"]) {
       const refused = await read(f, path, { rawHeaders });
@@ -232,7 +231,7 @@ test("board server exposes only canonical read routes and refuses invalid config
   }
   assert.equal((await read(f, "/", { method: "POST" })).status, 405);
   const options = { sources: f.sources, password: RECORD, port: f.port };
-  for (const changed of [{ password: { ...RECORD, scheme: "plain" } }, { password: { ...RECORD, hash: "short" } }, { passwordCommand: "board\n--set-password" }, { passwordCommand: 7 }, { port: 0 }, { sources: [] }, { sources: Array(1) }, { sources: [{ id: 2, path: f.root }] }, { sources: [{ id: "one", path: f.root, label: {} }] }, { allowedHosts: ["127.1"] }, { allowedHosts: ["name."] }, { allowedHosts: ["https://host"] }, { allowedHosts: Array(1) }]) assert.throws(() => createBoardServer({ ...options, ...changed }), TypeError);
+  for (const changed of [{ password: { ...RECORD, scheme: "plain" } }, { password: { ...RECORD, hash: "short" } }, { port: 0 }, { sources: [] }, { sources: Array(1) }, { sources: [{ id: 2, path: f.root }] }, { sources: [{ id: "one", path: f.root, label: {} }] }, { allowedHosts: ["127.1"] }, { allowedHosts: ["name."] }, { allowedHosts: ["https://host"] }, { allowedHosts: Array(1) }]) assert.throws(() => createBoardServer({ ...options, ...changed }), TypeError);
 });
 
 test("board server fails on an occupied fixed port and closes without changing another listener", async t => {

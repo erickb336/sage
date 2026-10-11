@@ -279,7 +279,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options.serve) {
     if (value !== "all" || options.out || options.project) throw new TypeError("server uses all configured sources; no output or project option");
     // The server writes board.pid only once it listens, and removes it when it stops, so a pid there is a running board.
-    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, id: configId(configPath), passwordCommand: boardCommand("--set-password", configPath, env) });
+    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, id: configId(configPath) });
     await server.start();
     // No listener stays without board.pid: then no command could tell its process (F-T216-12).
     try { writePid(configPath, process.pid); } catch (error) { await server.close(); throw error; }
