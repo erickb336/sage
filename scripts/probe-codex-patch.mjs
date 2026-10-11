@@ -47,7 +47,7 @@ try {
    }else{
     assert.equal(requests,2,'unexpected_extra_request');
     const outputs=request.input.filter(i=>['custom_tool_call_output','function_call_output'].includes(i.type)&&i.call_id==='fixed_patch');assert.equal(outputs.length,1);
-    commandResult=outputs[0].output;if(denied)assert(JSON.stringify(commandResult).includes(chief?'chief must give':'protected path'),'patch_denial_missing');
+    commandResult=outputs[0].output;if(denied)assert(JSON.stringify(commandResult).includes(chief?'This Sage role cannot edit files':'protected path'),'patch_denial_missing');
     item={id:'fixed_final',type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:'patch boundary checked',annotations:[]}]};
    }
    const id=`command_probe_${requests}`;
@@ -74,9 +74,12 @@ try {
  assert.equal(before[0].tool_name,'apply_patch');assert.deepEqual(before[0].toolInputShape,{command:'string'});
  assert.equal(events.filter(e=>e.hook_event_name==='PostToolUse').length,denied?0:1);
  assert.equal(integrated.readJournal().modes.at(-1)?.sage===true,chief,'fixture_mode_mismatch');
+ if(chief)assert.equal(existsSync(join(root,'patch-policy-receipt.json')),false,'role_denial_must_precede_evaluator');
+ else {
  const receipt=JSON.parse(readFileSync(join(root,'patch-policy-receipt.json'),'utf8'));
  assert.equal(receipt.session,before[0].session_id);assert.equal(receipt.turn,before[0].turn_id);assert.equal(receipt.call,before[0].tool_use_id);
  assert.equal(receipt.result.decision,denied?'deny':'pass');
+ }
  const items=stdout.trim().split('\n').map(line=>JSON.parse(line));
  const changes=items.filter(event=>event.type==='item.completed'&&event.item?.type==='file_change');
  if(denied){assert.equal(changes.length,0);assert.equal(existsSync(protectedTarget?target:join(workspace,target)),false);}

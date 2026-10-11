@@ -13,9 +13,11 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const readonlyPatch = process.argv.includes("--sage-readonly-patch");
+assert(!readonlyPatch || process.argv.slice(2).length === 1, "readonly_patch_is_a_separate_route");
 const taskLifecycle = process.argv.includes("--sage-task-lifecycle");
 const createRun = taskLifecycle || process.argv.includes("--sage-create-run");
 const createTask = createRun || process.argv.includes("--sage-create-task");
@@ -34,7 +36,7 @@ const nestedReport = process.argv.includes("--sage-nested-report");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
 const reportProbe = process.argv.includes("--sage-report") || (noTool && !escapeReport);
-const sage = createTask || process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
+const sage = readonlyPatch || createTask || process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
 assert([failedSpawn, outage, process.argv.includes("--sage-report"), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
 assert([denySpawn, followUp, process.argv.includes("--nested"), sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
@@ -58,7 +60,7 @@ for (const dir of [workspace, baselineHome, codexHome, temporary]) mkdirSync(dir
 const catalogPath = join(root, "model-catalog.json");
 writeFileSync(catalogPath, JSON.stringify({ models: [{
   slug: "sage-native-parent", display_name: "Sage native lifecycle fixture",
-  supported_reasoning_levels: [], shell_type: "disabled", visibility: "list",
+  supported_reasoning_levels: [], shell_type: "disabled", ...(readonlyPatch ? { apply_patch_tool_type: "freeform" } : {}), visibility: "list",
   supported_in_api: true, priority: 1, support_verbosity: false, multi_agent_version: "v2",
   truncation_policy: { mode: "bytes", limit: 10000 }, experimental_supported_tools: [], tool_mode: "direct",
   model_messages: { instructions_template: "Follow the fixed native-agent probe task. Do not use shell or external tools." },
@@ -141,7 +143,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let createdTask, createdTaskVerified = false, createdRun, createdRunVerified = false, finishedCreatedRun = false;
   const runRequest = { request: "b1111111-2222-4333-8444-555555555555", task: "T1", role: "lead", branch: "", candidate: "" };
   const taskRequest = { request: "a1111111-2222-4333-8444-555555555555", title: "Native task creation", size: "small", risk: ["input"], add: ["ux-review"], why: "Check the fixed experience" };
-  let prepared = false, reportReceipt, failedDispatchRecovered = false;
+  let prepared = false, reportReceipt, failedDispatchRecovered = false, childPatchTool, readonlyPatchVerified = false;
   const calls = { readTask: "probe_read_task", brief: "probe_brief", briefRetry: "probe_brief_retry", build: "probe_build", review: "probe_review", verify: "probe_verify", verifyWithoutReviews: "probe_verify_without_reviews", createRun: "probe_create_run", createRunRetry: "probe_create_run_retry", createdRunAfterFinish: "probe_created_run_after_finish", create: "probe_create", createRetry: "probe_create_retry", failureList: "probe_failure_list", prepareRetry: "probe_prepare_retry", spawnRetry: "probe_spawn_retry", inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set([...Object.values(calls), ...Object.values(NESTED_CALLS)]);
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
@@ -161,7 +163,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const outputs = {};
     const input = Array.isArray(request.input) ? request.input : [];
     for (const item of input) {
-      if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
+      if ((item.type !== "function_call_output" && !(readonlyPatch && item.type === "custom_tool_call_output" && item.call_id === calls.childControl)) || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
         : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.readTask, calls.brief, calls.briefRetry, calls.build, calls.review, calls.verify, calls.verifyWithoutReviews, calls.createRun, calls.createRunRetry, calls.createdRunAfterFinish, calls.create, calls.createRetry, calls.prepare, calls.prepareRetry, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry, calls.accept, calls.acceptRetry, calls.inspect, ...Object.values(NESTED_CALLS)].includes(item.call_id) ? 2 : 1)
@@ -194,7 +196,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({ namespace: tool.name, name: member.name }))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{ name: tool.name }] : []);
-    return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen,
+    const patchTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.name === "apply_patch").map(member => ({ namespace: tool.name, ...member }))
+      : tool.name === "apply_patch" ? [tool] : []);
+    return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen, patchTools,
       chiefCopies: chiefParts.map(part => textValues(input).reduce((count, text) => count + text.split(part).length - 1, 0)),
       chiefOrder: chiefParts.map(part => textValues(input).join("\n").indexOf(part)),
       readTaskTools: mcpTools("sage_read_task"), updateTaskTools: mcpTools("sage_update_task"), createRunTools: mcpTools("sage_create_run"), createTools: mcpTools("sage_create_task"), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review"), inspectTools: mcpTools("sage_read_recorded_report") };
@@ -279,6 +284,12 @@ data: ${JSON.stringify(event)}
         }
         if (sage && Object.hasOwn(info.outputs, calls.childControl)) {
           check(thread === childThread && childRequests === 1, "child_control_changed_identity_or_repeated"); childRequests++;
+          if (readonlyPatch) {
+            check(JSON.stringify(info.outputs[calls.childControl]).includes("This Sage role cannot edit files"), "readonly_role_denial_missing");
+            check(!existsSync(join(workspace, "readonly-lead-probe.txt")), "readonly_role_created_file");
+            check(!existsSync(join(root, "patch-policy-receipt.json")), "readonly_role_reached_evaluator");
+            readonlyPatchVerified = true;
+          }
           respond(res, message(CHILD_MARKER)); return;
         }
         if (nested && info.grandchildPromptSeen) {
@@ -315,6 +326,10 @@ data: ${JSON.stringify(event)}
         childThread = thread;
         childRequests++;
         childTaskSeen = true;
+        if (readonlyPatch) {
+          check(info.patchTools.length === 1 && info.patchTools[0].type === "custom", "child_patch_schema_missing");
+          childPatchTool = info.patchTools[0];
+        }
         childResponse = res;
         print({ type: "evidence", event: "native_child_request_held", distinctThread: true, fixedTaskReceived: true });
         releaseChildReady();
@@ -469,7 +484,9 @@ data: ${JSON.stringify(event)}
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
         respond(res, call(calls.wait, "wait_agent", {}));
         if (sage) check(integrated.readJournal().bindings.length === 0, "binding_existed_before_first_tool");
-        respond(childResponse, sage && !noTool ? { type: "function_call", name: "list_mcp_resources", call_id: calls.childControl, arguments: "{}" } : nested ? call(calls.childSpawn, "spawn_agent", {task_name: "probe_grandchild", message: GRAND_PROMPT, fork_turns: "none"}) : message(correctReport ? "STATUS done" : CHILD_MARKER));
+        respond(childResponse, readonlyPatch ? { type: "custom_tool_call", name: "apply_patch",
+          ...(childPatchTool.namespace ? { namespace: childPatchTool.namespace } : {}), call_id: calls.childControl,
+          input: "*** Begin Patch\n*** Add File: readonly-lead-probe.txt\n+fixed probe\n*** End Patch" } : sage && !noTool ? { type: "function_call", name: "list_mcp_resources", call_id: calls.childControl, arguments: "{}" } : nested ? call(calls.childSpawn, "spawn_agent", {task_name: "probe_grandchild", message: GRAND_PROMPT, fork_turns: "none"}) : message(correctReport ? "STATUS done" : CHILD_MARKER));
         childResponseSent = true;
       } else if (rootRequests === 4) {
         const result = info.outputs[calls.wait];
@@ -742,7 +759,7 @@ data: ${JSON.stringify(event)}
       ? rootRequests === 2 && childRequests === 0 && denied
       : rootRequests === (taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
-    const verified = result.code === 0 && !fixtureFailure && routeVerified
+    const verified = result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified)
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && refusedTaskUpdates === (taskLifecycle ? 1 : 0) && malformedEvents === 0 && rejectedRequests === 0;
     print({ type: "result", ...result, responseRequests, rootRequests, ...(failedSpawn ? { rejectedDispatchRootRequests: 3 } : {}), childRequests, childTaskSeen, childResponseSent,
@@ -852,6 +869,11 @@ data: ${JSON.stringify(event)}
       assert.equal(started.metadata.id, started.agent_id);
       assert.equal(started.metadata.session_id, request.session_id);
       assert(stop.some(row => row.agent_id === started.agent_id));
+    }
+    if (readonlyPatch) {
+      assert.equal(readonlyPatchVerified, true);
+      assert.equal(existsSync(join(workspace, "readonly-lead-probe.txt")), false);
+      print({ type: "readonly_role_evidence", role: "lead", deniedBeforeEvaluator: true, fileCreated: false, simulatedModel: true });
     }
     if (failedSpawn) {
       const saved = integrated.readJournal();

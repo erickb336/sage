@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { roleEditDenied } from "sage-core";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readInitialSession, readNativeCommand } from "./identity.mjs";
@@ -46,7 +47,9 @@ export function createNativePolicy(options, evaluateTool) {
       const observed = decodeEvent(event, native);
       if (observed) record(observed); // Keep inactive and denied attempts; name reuse must stay visible.
       const before = mode(event.session_id);
-      if (before.sage && child) bindNativeChildTool(raw, native, fixed);
+      const bound = before.sage && child ? bindNativeChildTool(raw, native, fixed) : undefined;
+      const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
+      const editDenied = roleEditDenied({ sage: before.sage, role });
       let command;
       // Path and state-tool protection also need original inputs while Sage is off.
       if (event.tool_name === "Bash") {
@@ -75,8 +78,10 @@ export function createNativePolicy(options, evaluateTool) {
           call: event.tool_use_id, command: event.tool_input.command,
         }));
       }
-      const checked = decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage,
-        ...(command ? { command } : {}) })));
+      const checked = event.tool_name === "apply_patch" && editDenied
+        ? { decision: "deny", reason: "This Sage role cannot edit files. Give the change to an implementer." }
+        : decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage, role,
+          ...(command ? { command } : {}) })));
       // A concurrent mode change cannot turn an earlier decision into current permission.
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
       if (checked.decision === "deny") return checked;

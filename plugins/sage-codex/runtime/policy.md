@@ -8,7 +8,16 @@ The MCP boundary authenticates each tool actor, dispatch result, and child
 start before calling this interface. Tool evaluation records recognized
 identity events even when Sage is off or the tool policy denies the request.
 It then calls the supplied tool policy with a private input copy and the native
-actor, version, and current Sage mode. Only an exact pass or denial is accepted.
+actor, version, current Sage mode, and verified role. The role comes from the
+current child binding, or from the authenticated chief. Off mode supplies null.
+Only an exact pass or denial is accepted.
+
+Direct `apply_patch` calls from an active chief, lead, PE, reviewer, or QA agent
+are denied before the supplied evaluator runs. The shared role rule permits
+implementers, designers, and arena judges to reach the evaluator. This is not
+permission to write: the evaluator must still check paths, workflow, and native
+permissions. A callback cannot override a read-only role. Shell writes and other
+write-capable tools require their own rules.
 For every `Bash` event, it first verifies the original native command.
 This also applies while Sage is off, because logbook protection is independent of mode.
 The hook input must contain only `command`. The callback receives the complete
@@ -59,3 +68,9 @@ Run `node scripts/probe-codex-lifecycle.mjs --sage-off` with fake process tools
 first on PATH. The isolated native check verifies an ordinary child's completion,
 its exact stop receipt, no Sage capacity use, and an unchanged logbook. Responses
 are simulated; this does not prove installed operation or recovery of tracked work.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-readonly-patch` with fake
+process tools first on PATH. The real native lead receives a patch tool, attempts
+one fixed harmless patch, and receives the exact role denial. The evaluator
+never runs, the file does not exist, and the child completes its report. The
+responses are simulated; this is not an installed-session or real-model pilot.

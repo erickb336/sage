@@ -812,7 +812,7 @@ test("native child first tool binds the exact admitted task without an MCP start
     assert.equal(f.core.readAdmission(f.options.directory).bindings[0].child, childActor);
     evaluated++; return { decision: "pass" };
   });
-  const input = { ...patch(turns[1]), transcript_path };
+  const input = { ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path };
   assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
   assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
   assert.equal(evaluated, 2);
@@ -871,9 +871,9 @@ test("configured MCP child tools bind without any SubagentStart call", async t =
   assert.deepEqual(await client.call({ ...spawn, hook_event_name: "PostToolUse", tool_response: { task_name: "/root/fixture_lead" } }), {});
   const transcript_path = f.childTranscript();
   assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
-  assert.deepEqual(await client.call({ ...patch(turns[1]), transcript_path }, childActor), {});
+  assert.deepEqual(await client.call({ ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path }, childActor), {});
   assert.equal(f.core.readAdmission(f.options.directory).bindings[0].child, childActor);
-  const refused = await client.call({ ...patch(turns[2]), transcript_path }, childActor);
+  const refused = await client.call({ ...patch(turns[2]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path }, childActor);
   assert.equal(refused.hookSpecificOutput.permissionDecision, "deny");
   await client.close();
 });
@@ -2660,4 +2660,52 @@ test('native lead ownership rechecks the parent run before preparing or dispatch
   }
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
   assert.equal(f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options).decision, 'permit-once');
+});
+
+async function roleEditFixture(t, role) {
+  const f = await composedPolicyFixture(t);
+  f.assignmentCli('run', 'add', 'T1', '--role', role,
+    ...(['implementer', 'designer', 'arena-judge'].includes(role) ? ['--branch', 'codex/t1-fixture'] : []));
+  Object.assign(f.input, { role, run: 'R4' });
+  if (['code-reviewer', 'security-reviewer', 'ux-reviewer', 'qa'].includes(role)) f.input.reviewCycle = 1;
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const input = { ...patch(turns[1]), tool_input: { command: '*** Begin Patch\n*** Add File: example.txt\n+fixed\n*** End Patch' }, transcript_path: f.childTranscript() };
+  return { ...f, editInput: input };
+}
+
+test('native role edit enforcement denies read-only children before a permissive evaluator runs', async t => {
+  for (const role of ['lead', 'pe', 'code-reviewer', 'security-reviewer', 'ux-reviewer', 'qa']) {
+    const f = await roleEditFixture(t, role); let evaluated = 0;
+    const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: 'pass' }; });
+    assert.match((await f.evaluate(policy, f.editInput, childActor)).reason, /role cannot edit files/);
+    assert.equal(evaluated, 0, role);
+    const saved = f.core.readAdmission(f.options.directory);
+    assert.equal(saved.bindings[0].child, childActor);
+    assert.equal(saved.reservations[0].rolePlan.role, role);
+    await assert.rejects(policy.evaluate({ ...f.editInput, agent_id: childActor }, { ...f.native(childActor), role: 'implementer' }));
+  }
+});
+
+test('native role edit context comes from the bound writer and keeps evaluator denials', async t => {
+  for (const role of ['implementer', 'designer', 'arena-judge']) {
+    const f = await roleEditFixture(t, role); let received;
+    const policy = f.createNativePolicy(f.options, (input, context) => { received = context; return { decision: 'deny', reason: 'Further path check refused.' }; });
+    assert.deepEqual(await f.evaluate(policy, f.editInput, childActor), { decision: 'deny', reason: 'Further path check refused.' });
+    assert.equal(received.role, role); assert.equal(received.actor, childActor); assert.equal(received.sage, true);
+    assert.equal(Object.isFrozen(received), true);
+    const passing = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+    assert.deepEqual(await f.evaluate(passing, f.editInput, childActor), { decision: 'pass' });
+  }
+});
+
+test('native role edit enforcement blocks the chief and restores ordinary evaluation when off', async t => {
+  const f = await composedPolicyFixture(t); let received, evaluated = 0;
+  const policy = f.createNativePolicy(f.options, (input, context) => { received = context; evaluated++; return { decision: 'pass' }; });
+  assert.match((await f.evaluate(policy, patch())).reason, /role cannot edit files/);
+  assert.equal(evaluated, 0);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(await f.evaluate(policy, patch(turns[2])), { decision: 'pass' });
+  assert.equal(evaluated, 1); assert.equal(received.role, null); assert.equal(received.sage, false);
 });

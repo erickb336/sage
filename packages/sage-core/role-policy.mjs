@@ -31,3 +31,10 @@ export function checkRoleReservation(reservations, assignment, input) {
   }
   return plan;
 }
+
+/** Providers supply verified mode and role. Null names an unmanaged actor. */
+export function roleEditDenied({ sage, role }) {
+  if (typeof sage !== "boolean" || (role !== null && !ROLES.has(role)) || (sage && role === null))
+    throw Error("Invalid role edit context");
+  return sage && !["implementer", "designer", "arena-judge"].includes(role);
+}

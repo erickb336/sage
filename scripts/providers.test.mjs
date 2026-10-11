@@ -2438,3 +2438,16 @@ test('lead ownership chooses one task owner under concurrent distinct run reques
   assert.equal(results.filter(row => /active lead or team/.test(row.error)).length, 1);
   assert.equal(f.api.readAdmission(f.journal).reservations.length, 1);
 });
+
+test('role edit policy matches the shared writer and independent review roles in both bundles', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await roleAdmissionFixture(t, undefined, provider);
+    for (const role of ['chief-of-staff', 'lead', 'pe', 'code-reviewer', 'security-reviewer', 'ux-reviewer', 'qa'])
+      assert.equal(f.api.roleEditDenied({ sage: true, role }), true, role);
+    for (const role of ['implementer', 'designer', 'arena-judge'])
+      assert.equal(f.api.roleEditDenied({ sage: true, role }), false, role);
+    assert.equal(f.api.roleEditDenied({ sage: false, role: null }), false);
+    for (const context of [{ sage: true, role: null }, { sage: true, role: 'other' }, { sage: false, role: 'other' },
+      { sage: 'on', role: 'lead' }, { sage: true }, {}]) assert.throws(() => f.api.roleEditDenied(context));
+  }
+});

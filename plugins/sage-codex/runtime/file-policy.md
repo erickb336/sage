@@ -7,3 +7,7 @@ An active chief cannot make a direct file change. A child, an inactive session o
 The native policy adapter converts invalid context or loading failures into explicit denial. No installed hook calls this policy yet. Native V2 task messages are encrypted, so brief validation must use a separately verified readable source; do not apply the existing brief matcher to that message field.
 
 Native checks use a required, hidden-hook-only MCP server with connection startup readiness. A visible tool in its cached catalog can defer child startup, so the first patch can miss the hook. With the hidden-only catalog, the child's first patch reaches the policy. Keep model-visible tools on a separate server. The tested mode and chief flags are fixture inputs; production ownership still needs integration.
+
+The composed native policy adds verified role enforcement before this component.
+It denies direct patches from read-only Sage roles. That rule does not replace
+path checks, shell-write checks, or the remaining complete tool policy.
