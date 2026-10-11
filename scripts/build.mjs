@@ -130,6 +130,11 @@ function packageOutputs(generated) {
       const rel = relative(join(ROOT, "packages/sage-core"), file);
       out.set(join(target, "core", rel), readFileSync(file, "utf8"));
     }
+    // The provider-neutral board server, so that the chief can start it from the plugin (T216). Its README and
+    // package.json stay in the checkout.
+    for (const file of filesUnder(join(ROOT, "packages/sage-board")).filter((path) => path.endsWith(".mjs"))) {
+      out.set(join(target, "board", relative(join(ROOT, "packages/sage-board"), file)), rewriteCoreImports(readFileSync(file, "utf8"), "../core/index.mjs"));
+    }
     for (const [path, text] of sharedSkills) out.set(path.replace("plugins/sage", target), text);
     if (provider === "codex") {
       const dependencies = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).devDependencies;

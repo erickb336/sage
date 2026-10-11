@@ -2727,6 +2727,22 @@ test("R466-REGRESSION: no command that main's reader denies for the main session
   assert.deepEqual(allowed, []);
 });
 
+test("T216: the board note's two commands pass the hook for the chief, as the note gives them", async () => {
+  const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
+  const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+  for (const ask of ["show board", "show board for all", "show board for sage"]) {
+    const note = context(handle({ ...prompt(ask), session_id: "s1", cwd: FEATURE }, { sage: true, given: true }, slots));
+    const ensure = note.match(/First run, as a command of its own: (.+)$/m)?.[1];
+    const chat = note.match(/Then run: (.+)$/m)?.[1];
+    assert.equal(ensure, `node ${fileURLToPath(new URL("../plugins/sage/board/cli.mjs", import.meta.url))} board --ensure`, ask);
+    assert.ok(chat?.startsWith(`node ${TOOL} board `), note);
+    for (const command of [ensure, chat]) assert.equal(denied(handle(bash(command), { sage: true, given: true }, slots)), undefined, command);
+    assert.ok(denied(handle(bash("git push origin main"), { sage: true, given: true }, slots)), "the same check refuses a chief's command that the hook forbids");
+    assert.match(note, /On this Mac the board needs no sign-in\. On the phone, the user is sage and the password is the owner's own board password, or, until the owner sets one, the "secret" value in the private config file/);
+    assert.match(note, /--set-password, and types it there: never ask for it in the chat/);
+  }
+});
+
 // T94: sandbox part 2. The sandbox runs the state tool outside it only for its unquoted absolute spelling, and refuses
 // writes to the temp folder of the hook, so the hook spells the tool unquoted and keeps its state under the sage root.
 test("T94: the chief's text, the cap refusal and the state tool's skill spell the state tool unquoted, with its absolute path", async () => {
@@ -2782,7 +2798,8 @@ test("T72-C5-STATECMD: with the plugin in a folder with a space, the read-only b
   assert.equal(r.status, 0, r.stderr);
   const lines = context(JSON.parse(r.stdout)).split("\n");
   const board = `node "${tool}" board this --project '${project}' --view chat`;
-  assert.equal(lines[0], `sage: the owner asked for the board. The plugin path has a space: when the sandbox is on, it needs a plugin path without spaces. Run: ${board}`);
+  assert.equal(lines[0], `sage: the owner asked for the board. The plugin path has a space: when the sandbox is on, it needs a plugin path without spaces. First run, as a command of its own: node "${join(dir, "my plugins", "sage", "board", "cli.mjs")}" board --ensure`);
+  assert.ok(lines[1].endsWith(`Then run: ${board}`), lines[1]);
   assert.ok(!lines.some(line => line.includes("gate answer")));
   const shown = spawnSync("node", [tool, "board", "this", "--project", project, "--view", "chat"], { encoding: "utf8", env });
   assert.equal(shown.status, 0, shown.stderr);
