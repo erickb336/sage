@@ -115,7 +115,7 @@ remain integration work. State files stay private to the local Sage store.
 
 ## Prepare a task before dispatch
 
-`prepareAdmission(directory, scope, request, rolePlan, brief, review, runTarget)` saves the task,
+`prepareAdmission(directory, scope, request, rolePlan, brief, review, runTarget, continuation)` saves the task,
 run, issuer, unique child name, role plan, and complete brief. The request has
 `task`, `run`, `issuer`, and `name`. The trusted adapter supplies the current
 scope and issuer role. A preparation ID is a reference, not proof of authority.
@@ -220,3 +220,11 @@ readers refuse them; update every participant before sharing this journal.
 Existing records retain their bytes and initial-binding rules. The Codex native
 adapter does not yet call these APIs. Recipient resolution, follow-up dispatch,
 later-turn tool binding, report intake, and recovery remain integration work.
+
+
+Preparation can also pin `continuation`, the completed predecessor's assignment
+ID. Core checks the saved owner, task, role, completion, and run target before
+publishing it. A retry cannot change or remove that predecessor. Dispatch must
+use the pinned continuation; the initial-spawn API cannot consume it. Older
+preparations retain their format, but the native continuation path requires this
+pin before accepting the recipient supplied by a tool call.

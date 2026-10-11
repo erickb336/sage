@@ -53,7 +53,11 @@ all recovered arguments and apply the command rules; recovery grants no permissi
 A mode change during evaluation refuses the operation. This check does not
 revoke native permission after it returns. A successful spawn in
 Sage mode must also consume a prepared assignment exactly once. Retries do not
-issue another permission. The callback cannot change the reserved input by
+issue another permission. An active-mode follow-up must likewise consume its
+pinned preparation after exact pending-call verification. Unprepared follow-ups
+refuse even if the callback passes them. Later-turn binding and report handling
+remain unfinished; this admission rule does not activate agent reuse.
+The callback cannot change the reserved input by
 mutating its copy.
 
 Dispatch results are recorded independently of mode. Child starts are recorded

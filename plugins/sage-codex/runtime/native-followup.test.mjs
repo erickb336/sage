@@ -86,3 +86,15 @@ test('native follow-up receipt refuses linked incomplete and out-of-root transcr
   assert.throws(() => identity.readNativeFollowup(f.path, { sessionsDir: join(f.root, 'elsewhere') }, expected), /follow-up evidence is unavailable/);
   writeFileSync(f.path, JSON.stringify(rows()[0])); assert.throws(() => f.read(), /follow-up evidence is unavailable/);
 });
+
+test('native follow-up pending evidence cannot revive an ended or superseded sender turn', t => {
+  const f = fixture(t); assert.equal(f.read().resultMessage, 'fco_fixed');
+  f.save(rows().slice(0, -1)); assert.equal(f.read(), null);
+  for (const tail of [
+    [{ type: 'event_msg', payload: { type: 'task_complete', turn_id: turn } }],
+    [{ type: 'event_msg', payload: { type: 'task_started', turn_id: other } }, { type: 'turn_context', payload: { turn_id: other } }],
+  ]) {
+    f.save([...rows().slice(0, -1), ...tail]);
+    assert.throws(() => f.read(), /follow-up evidence is unavailable/);
+  }
+});

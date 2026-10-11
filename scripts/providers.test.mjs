@@ -2628,3 +2628,20 @@ test('continuation admission resumes the same lead with its running children and
   assert.equal(state.reservations.length - state.completions.length, 4);
   assert.deepEqual(state.completions, [lead]);
 });
+
+test('continuation preparation pins its predecessor and prevents conversion to an initial dispatch', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await continuationFixture(t, provider);
+    const request = { task: 'T1', run: 'R2', issuer: 'root', name: 'pinned-continuation' };
+    const plan = { issuerRole: 'chief-of-staff', role: 'lead' }, brief = completeBrief('Continue the saved work.');
+    const target = { task: 'T1', run: 'R2', role: 'lead', round: 0, taskBranch: '', runBranch: '', candidate: '' };
+    const prepare = previous => f.api.prepareAdmission(f.journal, f.scope, request, plan, brief, undefined, target, previous);
+    const saved = prepare(f.first.assignment.id).preparation;
+    assert.equal(saved.continuation, f.first.assignment.id);
+    assert.equal(prepare(f.first.assignment.id).decision, 'already-prepared');
+    assert.throws(() => prepare(modeNextTurn), /different work/);
+    const args = f.continuationArgs(saved); delete args[2].previous;
+    assert.throws(() => f.api.reservePreparedAdmission(...args), /differs from its preparation/);
+    assert.equal(f.continue(saved).decision, 'permit-once');
+  }
+});

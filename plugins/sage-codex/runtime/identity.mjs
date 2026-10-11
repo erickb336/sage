@@ -366,7 +366,10 @@ export function readNativeFollowup(transcriptPath, options, expected) {
       } else unavailable();
     }
     if (!request) unavailable();
-    if (!result) return null; // Retain pending work; silence is not successful dispatch.
+    if (!result) {
+      if (turn !== expected.turn || context !== turn || completed.has(turn)) unavailable();
+      return null; // A live pending call is not successful dispatch.
+    }
     return { call: expected.call, turn: expected.turn, target: expected.target, taskHash: expected.taskHash,
       resultMessage: result, evidenceHash: createHash("sha256").update(JSON.stringify([...keys.map(key => expected[key]), result])).digest("hex") };
   } catch { unavailable(); }

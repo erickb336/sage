@@ -190,3 +190,32 @@ with the saved target. A changed target requires a new run and brief.
 An older preparation without a target cannot authorize new native work. Its
 records remain available for report and completion handling. This does not
 rewrite old history, infer a target, or change the task's recorded branch.
+
+
+## Outgoing follow-up admission
+
+`sage_prepare_task` accepts optional `previous`, a completed assignment ID.
+The same owner must keep the task and role and record a new run. Use a fresh
+logical name for the new assignment. Core pins the predecessor with the brief
+and target. The response returns its fixed native child ID as `target` and the
+exact task `message`, instead of initial-spawn `fork_turns`.
+
+`reservePreparedFollowup` accepts only that target and complete message. The
+message's preparation ID locates one candidate; it confers no authority. The
+adapter verifies current ownership, task, run target, and review commit before
+reserving capacity. The protected sender transcript must contain the exact
+pending native call in its current unfinished turn. A completed call cannot
+become a new permission. A duplicate reservation never permits another dispatch.
+
+The composed policy applies this admission check after the supplied evaluator
+passes an active-mode follow-up. It saves the sender transcript reference for
+later receipt verification. Preparation alone cannot start a child, and an
+initial-spawn call cannot consume a pinned continuation. Off mode retains
+ordinary policy evaluation.
+
+The packaged checks cover successful reservation and fixed recipients. The
+native `--sage-unprepared-followup` probe verifies refusal through the real CLI
+with simulated responses: the completed child stays stopped, no second turn or
+reservation appears, and the temporary profile is removed. Later-turn binding,
+report handling, and continuation recovery are not yet connected. This outgoing
+path is not a claim of working automatic agent reuse or installed activation.
