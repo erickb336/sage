@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1685,4 +1685,63 @@ test("package public imports package both quote styles and dynamic imports outsi
     const escaped = 'export { shellCommands } from "sage-\\u0063ore";';
     assert.equal(rewriteCoreImports(escaped, "./core/index.mjs"), 'export { shellCommands } from "./core/index.mjs";');
   }
+});
+
+
+test("Codex advice refuses linked or public state directories and cannot overwrite a linked target", t => {
+  const { dir, plugin } = isolated(t, "codex");
+  const event = { session_id: "safe-state", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
+  const base = join(dir, "state"), outside = join(dir, "outside");
+  mkdirSync(outside, { mode: 0o700 });
+  const run = () => spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], {
+    env: { ...process.env, AGENT_KIT_HOOKS_STATE: base }, input: JSON.stringify(event), encoding: "utf8",
+  });
+  symlinkSync(outside, base, "dir");
+  assert.equal(run().stdout, "");
+  assert.equal(existsSync(join(outside, "codex")), false);
+  rmSync(base); mkdirSync(base, { mode: 0o700 });
+  symlinkSync(outside, join(base, "codex"), "dir");
+  assert.equal(run().stdout, "");
+  assert.equal(existsSync(join(outside, `${stateKey(event)}.json`)), false);
+  rmSync(join(base, "codex")); mkdirSync(join(base, "codex"), { mode: 0o700 });
+  chmodSync(base, 0o777);
+  assert.equal(run().stdout, "");
+  chmodSync(base, 0o700);
+  const shared = join(dir, "shared"); mkdirSync(shared); chmodSync(shared, 0o777);
+  const redirected = spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], {
+    env: { ...process.env, AGENT_KIT_HOOKS_STATE: join(shared, "state") }, input: JSON.stringify(event), encoding: "utf8",
+  });
+  assert.equal(redirected.stdout, "");
+  assert.equal(existsSync(join(shared, "state")), false, "a shared nonsticky parent can rename a private child");
+  const target = join(outside, "keep.json");
+  const original = JSON.stringify({ given: ["exhaust-the-design-space"], failures: {}, marker: "unchanged" });
+  writeFileSync(target, original);
+  const file = join(base, "codex", `${stateKey(event)}.json`);
+  symlinkSync(target, file);
+  const result = run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(context(JSON.parse(result.stdout)), /Exhaust the design space/);
+  assert.equal(readFileSync(target, "utf8"), original);
+  assert.equal(lstatSync(file).isSymbolicLink(), false);
+  assert.equal(lstatSync(file).mode & 0o777, 0o600);
+  assert.equal(run().stdout, "", "the private replacement preserves advice deduplication");
+});
+
+
+test("Codex advice defaults to a private Codex home instead of the shared temp folder", t => {
+  const { dir, plugin } = isolated(t, "codex");
+  const codexHome = join(dir, "codex-home"); mkdirSync(codexHome, { mode: 0o700 });
+  const event = { session_id: "private-default", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
+  const temporary = join(dir, "temporary"); mkdirSync(temporary, { mode: 0o700 });
+  const env = { ...process.env, HOME: dir, CODEX_HOME: codexHome, TMPDIR: temporary };
+  delete env.AGENT_KIT_HOOKS_STATE;
+  const result = spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], {
+    env, input: JSON.stringify(event), encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout);
+  const file = join(codexHome, "advice", "codex", `${stateKey(event)}.json`);
+  assert.equal(lstatSync(file).mode & 0o777, 0o600);
+  assert.equal(lstatSync(dirname(file)).mode & 0o777, 0o700);
+  assert.equal(lstatSync(dirname(dirname(file))).mode & 0o777, 0o700);
 });
