@@ -6,6 +6,9 @@ import {randomUUID,createHash} from 'node:crypto';
 const root=dirname(fileURLToPath(import.meta.url));
 const input=JSON.parse(readFileSync(0,'utf8'));
 const record=Object.fromEntries(['hook_event_name','session_id','agent_id','turn_id','tool_name','tool_use_id'].filter(k=>typeof input[k]==='string').map(k=>[k,input[k]]));
+// Record field types only; command content stays private.
+record.toolInputShape=Object.fromEntries(Object.entries(input.tool_input??{}).map(([k,v])=>[k,typeof v]));
+record.fixedCommandMatched=input.tool_input?.command==='printf sage-native-command-ok';
 if(typeof input.tool_input?.task_name==='string')record.inputTaskName=input.tool_input.task_name;
 if(input.hook_event_name==='PostToolUse'){
  const value=input.tool_response;
