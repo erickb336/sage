@@ -163,3 +163,12 @@ A dispatch can include `taskHash`, the SHA-256 hash of its exact task text.
 The journal stores it with the reservation and refuses changed dispatch evidence on a retry.
 Older dispatches remain readable without this field. Their missing hash cannot establish task delivery.
 The provider must derive this value from the admitted native input, never from a later report.
+
+## Dispatch failures
+
+`failAdmission` records a trusted adapter's proof that an exact reservation failed before a child existed.
+The receipt carries the project, session, owner epoch, assignment, issuer, call, and evidence hash.
+A matching receipt frees capacity once. A repeated receipt preserves history; changed evidence refuses.
+A bound assignment cannot fail dispatch, and a failed assignment cannot later bind a child.
+The old dispatch call never receives another permission. A retry needs a new preparation and call.
+Failures do not complete a task or accept a report. Mode off does not discard valid failure evidence.

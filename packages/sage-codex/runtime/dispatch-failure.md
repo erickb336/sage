@@ -1,0 +1,21 @@
+# Native failed dispatch recovery
+
+Codex 0.160.0 records an unknown-model spawn rejection in the parent's protected transcript.
+The isolated probe observed a pre-tool callback, no post-tool callback, no child, and an occupied Sage reservation.
+A configured `PostToolUseFailure` event did not appear in the native hook list or run.
+
+The adapter now reconciles this verified preflight rejection before a new spawn and after native list or wait tools.
+It requires the current transport actor, owner epoch, original request, exact call and turn, and matching argument hash.
+The transcript must identify that actor and session. The call must name native `collaboration.spawn_agent`.
+Native metadata must mark the output as not client-authored. The output must match the unknown-model error for the dispatched model.
+Linked files, conflicting calls, changed arguments, and forged metadata refuse. Other errors retain capacity.
+Any successful dispatch result, child-start evidence, or saved binding also retains capacity on this path.
+
+The adapter saves a failure receipt, not a child completion. The journal rejects a late binding and duplicate release.
+The caller can then prepare a new named child. The failed call and preparation remain in history.
+This does not infer failure from elapsed time, absent hooks, a model's claim, or a list result alone.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-failed-spawn` with fake process tools first on PATH.
+The isolated native check sets the total cap to one, rejects an unknown model, then completes a new child in the freed slot.
+The journal must contain two reservations, one failure, one binding, and one completion.
+Responses are simulated. Other failure kinds, interruption, cross-session recovery, and installed automatic operation remain unverified.

@@ -13,10 +13,11 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
+const failedSpawn = process.argv.includes("--sage-failed-spawn");
 const followUp = process.argv.includes("--follow-up");
 const blockStop = process.argv.includes("--sage-stop-block");
 const correctReport = process.argv.includes("--sage-report-correction");
@@ -27,8 +28,8 @@ const nestedReport = process.argv.includes("--sage-nested-report");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
 const reportProbe = process.argv.includes("--sage-report") || (noTool && !escapeReport);
-const sage = process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool;
-assert([outage, process.argv.includes("--sage-report"), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
+const sage = process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
+assert([failedSpawn, outage, process.argv.includes("--sage-report"), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
 assert([denySpawn, followUp, process.argv.includes("--nested"), sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
 const MARKER = "sage-native-parent-ok";
@@ -94,7 +95,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,blockStop,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,blockStop,captureFailure:failedSpawn,deadlineMs});
   const initialLogbook = sage ? integrated.readLogbook() : null;
   if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
     `EVIDENCE ${JSON.stringify({ commit: integrated.reviewTarget.sha, round: 0, cycle: 1, summary: "Fixed native fixture completed; simulated review only." })}`,
@@ -123,8 +124,8 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  let prepared = false, reportReceipt;
-  const calls = { inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  let prepared = false, reportReceipt, failedDispatchRecovered = false;
+  const calls = { failureList: "probe_failure_list", prepareRetry: "probe_prepare_retry", spawnRetry: "probe_spawn_retry", inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set([...Object.values(calls), ...Object.values(NESTED_CALLS)]);
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -146,11 +147,11 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry, calls.accept, calls.acceptRetry, calls.inspect, ...Object.values(NESTED_CALLS)].includes(item.call_id) ? 2 : 1)
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.prepareRetry, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry, calls.accept, calls.acceptRetry, calls.inspect, ...Object.values(NESTED_CALLS)].includes(item.call_id) ? 2 : 1)
           && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
-        if ((denySpawn || outage) && item.call_id === calls.spawn) outputs[item.call_id] = output;
+        if ((denySpawn || outage || failedSpawn) && [calls.spawn, calls.spawnRetry].includes(item.call_id)) outputs[item.call_id] = output;
         else if ([calls.followup, calls.childControl, NESTED_CALLS.control].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
@@ -303,14 +304,15 @@ data: ${JSON.stringify(event)}
       check(!subagent, "unexpected_non_spawn_agent_request");
       rootThread ??= thread;
       check(thread === rootThread, "unexpected_root_thread_identity");
+      const preparationCall = failedDispatchRecovered ? calls.prepareRetry : calls.prepare;
       if (sage && !prepared) {
-        if (!Object.hasOwn(info.outputs, calls.prepare)) {
+        if (!Object.hasOwn(info.outputs, preparationCall)) {
           check(info.prepareTools.length === 1, "preparation_tool_missing");
           const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
-          respond(res, { type: "function_call", ...info.prepareTools[0], call_id: calls.prepare,
-            arguments: JSON.stringify({ task: "T1", run: "R1", name: "probe_child", role: reportProbe ? "code-reviewer" : "lead", ...(reportProbe ? { reviewCycle: 1 } : {}), brief }) }); return;
+          respond(res, { type: "function_call", ...info.prepareTools[0], call_id: preparationCall,
+            arguments: JSON.stringify({ task: "T1", run: "R1", name: failedSpawn && !failedDispatchRecovered ? "probe_failed" : "probe_child", role: reportProbe ? "code-reviewer" : "lead", ...(reportProbe ? { reviewCycle: 1 } : {}), brief }) }); return;
         }
-        const receipt = info.outputs[calls.prepare];
+        const receipt = info.outputs[preparationCall];
         check(receipt?.decision === "prepared" && typeof receipt.message === "string" && receipt.fork_turns === "none", "invalid_preparation_receipt");
         if (reportProbe) {
           check(JSON.stringify(receipt.review) === JSON.stringify(integrated.reviewTarget)
@@ -320,12 +322,31 @@ data: ${JSON.stringify(event)}
         CHILD_PROMPT = receipt.message; prepared = true;
       }
       rootRequests++;
+      if (failedSpawn && !failedDispatchRecovered && rootRequests === 2) {
+        const result = info.outputs[calls.spawn];
+        check(typeof result === "string" && result.length > 0, "failed_spawn_has_no_native_error");
+        check(result === "Unknown model `sage-fixture-nonexistent-model` for spawn_agent. Available models: sage-native-parent", "unexpected_native_preflight_error");
+        print({ type: "failed_spawn_result", verifiedUnknownModelError: true });
+        respond(res, call(calls.failureList, "list_agents", {})); return;
+      }
+      if (failedSpawn && !failedDispatchRecovered && rootRequests === 3) {
+        const registry = info.outputs[calls.failureList], state = integrated.readJournal();
+        check(registry?.agents?.length === 1 && registry.agents[0].agent_name === "/root", "failed_dispatch_created_child");
+        check(state.failures?.length === 1 && state.bindings.length === 0 && childRequests === 0, "failed_dispatch_not_reconciled");
+        print({ type: "failed_spawn_registry", onlyRoot: true, failures: 1, bindings: 0 });
+        failedDispatchRecovered = true; prepared = false; rootRequests = 0;
+        const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
+        respond(res, { type: "function_call", ...info.prepareTools[0], call_id: calls.prepareRetry,
+          arguments: JSON.stringify({ task: "T1", run: "R1", name: "probe_child", role: "lead", brief }) }); return;
+      }
       if (nestedReport && rootRequests > 5) { nestedFlow.chief(rootRequests - 5, info, res, CHILD_MARKER); return; }
       if (rootRequests === 1) {
         check(["spawn_agent", "list_agents", "wait_agent"].every((name) => info.agentTools.includes(name)), "required_native_tools_missing");
-        respond(res, call(calls.spawn, "spawn_agent", { task_name: "probe_child", message: CHILD_PROMPT, fork_turns: "none" }));
+        respond(res, call(failedDispatchRecovered ? calls.spawnRetry : calls.spawn, "spawn_agent", {
+          task_name: failedSpawn && !failedDispatchRecovered ? "probe_failed" : "probe_child", message: CHILD_PROMPT,
+          fork_turns: "none", ...(failedSpawn && !failedDispatchRecovered ? { model: "sage-fixture-nonexistent-model" } : {}) }));
       } else if (rootRequests === 2) {
-        const result = info.outputs[calls.spawn];
+        const result = info.outputs[failedDispatchRecovered ? calls.spawnRetry : calls.spawn];
         if (outage && typeof result === "string" && result.length > 0) {
           denied = true;
           respond(res, message(MARKER));
@@ -569,7 +590,7 @@ data: ${JSON.stringify(event)}
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && malformedEvents === 0 && rejectedRequests === 0;
-    print({ type: "result", ...result, responseRequests, rootRequests, childRequests, childTaskSeen, childResponseSent,
+    print({ type: "result", ...result, responseRequests, rootRequests, ...(failedSpawn ? { rejectedDispatchRootRequests: 3 } : {}), childRequests, childTaskSeen, childResponseSent,
       nativeRunning, nativeWait, nativeCompleted, exactMessages, otherMessages, completedTurns, failedTurns,
       unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
@@ -584,11 +605,11 @@ data: ${JSON.stringify(event)}
       const saved = integrated.readJournal();
       assert.equal(saved.sessions.length, 1); assert.equal(saved.modes.at(-1)?.sage, true);
       const count = nestedReport ? 2 : 1;
-      assert.equal(saved.preparations.length, count); assert.equal(saved.reservations.length, count);
+      assert.equal(saved.preparations.length, count + (failedSpawn ? 1 : 0)); assert.equal(saved.reservations.length, count + (failedSpawn ? 1 : 0));
       assert.equal(saved.bindings.length, count); assert.equal(saved.completions?.length, count);
       assert.equal(saved.bindings[0].child, childThread);
       for (const bound of saved.bindings) assert.deepEqual(saved.completions.find(row => row.assignment === bound.assignment), bound);
-      print({ type: "integrated_sage_evidence", owners: 1, preparations: count, reservations: count, bindings: count, completions: count,
+      print({ type: "integrated_sage_evidence", owners: 1, preparations: saved.preparations.length, reservations: saved.reservations.length, bindings: count, completions: count,
         firstToolBinding: !noTool, stopBinding: noTool, simulatedModel: true, fullPolicyVerified: false, realModelConsumptionVerified: false });
     }
     const rows=readdirSync(join(root,"events")).map(name=>JSON.parse(readFileSync(join(root,"events",name),"utf8")));
@@ -596,7 +617,7 @@ data: ${JSON.stringify(event)}
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");
     const before=rows.filter(row=>row.hook_event_name==="PreToolUse"&&row.tool_name==="collaborationspawn_agent");
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
-    assert.equal(before.length,nested ? 2 : 1);
+    assert.equal(before.length,nested || failedSpawn ? 2 : 1);
     assert.equal(start.length, noChild ? 0 : nested ? 2 : 1);
     assert.equal(stop.length, noChild ? 0 : blockStop || correctReport || escapeReport || followUp || nested ? 2 : 1);
     if (escapeReport) {
@@ -657,6 +678,16 @@ data: ${JSON.stringify(event)}
       assert.equal(started.metadata.id, started.agent_id);
       assert.equal(started.metadata.session_id, request.session_id);
       assert(stop.some(row => row.agent_id === started.agent_id));
+    }
+    if (failedSpawn) {
+      const saved = integrated.readJournal();
+      assert(failedDispatchRecovered); assert.equal(saved.config.total, 1); assert.equal(saved.failures.length, 1);
+      assert.equal(saved.failures[0].assignment, saved.reservations[0].assignment.id);
+      assert.equal(saved.completions[0].assignment, saved.reservations[1].assignment.id);
+      assert.equal(saved.reports?.length ?? 0, 0);
+      print({ type: "failed_spawn_evidence", failureHookAvailable: integrated.failureHookAvailable, capacity: 1,
+        reservations: 2, failedDispatches: 1, bindings: 1, completedChildren: 1, retryUsedReleasedSlot: true,
+        simulatedModel: true, otherFailureKindsVerified: false });
     }
     if (blockStop) {
       check(prematureCompletions !== undefined, "stop_block_did_not_resume_child");

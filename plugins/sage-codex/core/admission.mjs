@@ -55,6 +55,13 @@ function childBinding(input) {
     issuer: word(input.issuer, "issuer"), call: word(input.call, "call"),
     child: word(input.child, "child"), turn: word(input.turn, "turn") };
 }
+function dispatchFailure(input) {
+  fields(input, ["project", "session", "epoch", "assignment", "issuer", "call", "evidenceHash"]);
+  return { project: word(input.project, "project"), session: word(input.session, "session"),
+    epoch: word(input.epoch, "epoch", UUID), assignment: word(input.assignment, "assignment", UUID),
+    issuer: word(input.issuer, "issuer"), call: word(input.call, "call"),
+    evidenceHash: word(input.evidenceHash, "failure evidence hash", /^[0-9a-f]{64}$/) };
+}
 function preparation(input) {
   const hasReview = Object.hasOwn(input ?? {}, "review");
   fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief", ...(hasReview ? ["review"] : [])]);
@@ -111,6 +118,10 @@ function action(input) {
     fields(input, ["kind", "report"]);
     return { kind: "record-report", report: reportRecord(input.report) };
   }
+  if (input?.kind === "fail-dispatch") {
+    fields(input, ["kind", "failure"]);
+    return { kind: "fail-dispatch", failure: dispatchFailure(input.failure) };
+  }
   if (input?.kind === "complete") {
     fields(input, ["kind", "completion"]);
     return { kind: "complete", completion: childBinding(input.completion) };
@@ -132,7 +143,7 @@ function apply(state, event) {
     return { state: copy, result: event.config, changed: true };
   }
   if (!copy.config) refuse("store is not configured");
-  const value = event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : event.kind === "bind-child" ? event.binding : event.kind === "complete" ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
+  const value = event.kind === "fail-dispatch" ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : event.kind === "bind-child" ? event.binding : event.kind === "complete" ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
   if (!copy.config.projects.some((p) => p.project === value.project)) refuse("project is not configured");
   const owner = copy.sessions.find((s) => s.project === value.project && s.session === value.session);
   if (event.kind === "activate") {
@@ -160,6 +171,18 @@ function apply(state, event) {
     copy.modes.push(value);
     return { state: copy, result: { decision: "changed", mode: value }, changed: true };
   }
+  if (event.kind === "fail-dispatch") {
+    const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
+    if (!reserved || ["project", "session", "epoch", "issuer", "call"].some(key => reserved.assignment[key] !== value[key])) refuse("failure has no matching reservation");
+    if (copy.bindings.some(row => row.assignment === value.assignment)) refuse("a bound assignment cannot fail dispatch");
+    const previous = (copy.failures ?? []).find(row => row.assignment === value.assignment);
+    if (previous) {
+      if (json(previous) !== json(value)) refuse("dispatch already has different failure evidence");
+      return { state, result: { decision: "already-failed", failure: previous }, changed: false };
+    }
+    copy.failures = [...(copy.failures ?? []), value];
+    return { state: copy, result: { decision: "dispatch-failed", failure: value }, changed: true };
+  }
   if (event.kind === "complete") {
     const bound = copy.bindings.find(row => row.assignment === value.assignment);
     if (!bound || json(bound) !== json(value)) refuse("completion has no matching child binding");
@@ -185,7 +208,8 @@ function apply(state, event) {
     return { state: copy, result: { decision: "report-recorded", report: event.report }, changed: true };
   }
   const completed = new Set((copy.completions ?? []).map(row => row.assignment));
-  const active = copy.reservations.filter(row => !completed.has(row.assignment.id));
+  const failed = new Set((copy.failures ?? []).map(row => row.assignment));
+  const active = copy.reservations.filter(row => !completed.has(row.assignment.id) && !failed.has(row.assignment.id));
   if (["prepare", "reserve"].includes(event.kind) && copy.bindings.some(row => row.project === value.project
     && row.session === value.session && row.epoch === value.epoch && row.child === value.issuer && completed.has(row.assignment))) {
     refuse("completed issuer cannot admit new work");
@@ -208,6 +232,7 @@ function apply(state, event) {
     return { state: copy, result: { decision: "prepared", preparation: value }, changed: true };
   }
   if (event.kind === "bind-child") {
+    if (failed.has(value.assignment)) refuse("a failed dispatch cannot bind a child");
     const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
     if (!reserved || ["project", "session", "epoch", "issuer", "call"].some(key => reserved.assignment[key] !== value[key])) refuse("child binding has no matching reservation");
     if (!reserved.rolePlan) refuse("child binding requires a recorded role");
@@ -381,6 +406,8 @@ export function reservePreparedAdmission(dir, scope, request, dispatch, issuerRo
 }
 /** Record a verified initial child identity. This neither permits dispatch nor releases capacity. */
 export const bindAdmission = (dir, binding) => commit(dir, { kind: "bind-child", binding });
+/** The trusted adapter proves dispatch failed before a child existed. Late bindings cannot revive it. */
+export const failAdmission = (dir, failure) => commit(dir, { kind: "fail-dispatch", failure });
 /** Only a trusted adapter may submit authoritative terminal evidence for this exact binding.
  * Completion releases capacity; task success and report acceptance remain separate. */
 export const completeAdmission = (dir, completion) => commit(dir, { kind: "complete", completion });

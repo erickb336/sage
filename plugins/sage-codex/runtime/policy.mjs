@@ -3,6 +3,7 @@ import { decodeEvent, observation, publish, RUNTIME_VERSION } from "./events.mjs
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn } from "./preparation.mjs";
+import { reconcileNativeFailures } from "./dispatch-failure.mjs";
 import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
 import { bindNativeChildTool } from "./child-tool.mjs";
 import { boundChildInstructions } from "./instructions.mjs";
@@ -49,6 +50,7 @@ export function createNativePolicy(options, evaluateTool) {
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
       if (checked.decision === "deny") return checked;
       if (before.sage && observed?.kind === "spawn-request") {
+        reconcileNativeFailures(raw, native, fixed);
         const reserved = reservePreparedSpawn(raw, native, fixed);
         return reserved.decision === "permit-once" ? { decision: "pass" }
           : { decision: "deny", reason: "Sage already reserved this native dispatch." };
@@ -66,7 +68,9 @@ export function createNativePolicy(options, evaluateTool) {
       const event = nativeToolEvent(input, native, "PostToolUse");
       if (!["collaborationlist_agents", "collaborationwait_agent"].includes(event.tool_name)) refuse();
       if (!mode(event.session_id).owner) return { decision: "reconciled" };
-      return reconcileNativeCompletions(native, event.session_id, fixed);
+      const result = reconcileNativeCompletions(native, event.session_id, fixed);
+      reconcileNativeFailures(input, native, fixed);
+      return result;
     },
     completeChild(input, context) {
       return completeNativeChild(input, context, fixed);

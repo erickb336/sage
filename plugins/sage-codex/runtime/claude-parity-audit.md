@@ -284,3 +284,13 @@ Report values still need strict parsing and separate acceptance. A terminal chil
 Run `--sage-report-correction` and `--sage-report-escape` with the native probe and fake process tools first on PATH.
 The first route repairs the report on the same turn and records it. The second ends with the same invalid report and leaves the task run and verdicts unchanged.
 These checks use simulated responses. Full policy, broader recovery, installation, and a real project pilot remain incomplete.
+
+## Unknown-model dispatch recovery
+
+The native failed-spawn probe verified an unknown-model rejection after Sage reserved capacity and before any child existed.
+Codex emitted no post-tool hook, and its hook list omitted the configured `PostToolUseFailure` event.
+The adapter now reads the protected parent transcript for this exact preflight rejection and records an immutable failure receipt.
+It checks before a new spawn and after native list or wait operations. Other errors and ambiguous evidence retain their slots.
+
+The `--sage-failed-spawn` route uses a total cap of one. It rejects one spawn, then binds and completes a new child in the freed slot.
+This uses simulated responses in the actual native CLI. Other failed starts, interruption, follow-up assignments, and broader recovery remain incomplete.
