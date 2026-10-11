@@ -6,7 +6,7 @@ export { createCommandPolicy, mentionsMerge, gitSubcommand } from "./command-pol
 export { createPushPolicy } from "./push-policy.mjs";
 export { PR } from "./pull-request.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";
-export { modeSignals } from "./mode-policy.mjs";
+export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp } from "./mode-policy.mjs";
 export { createAssignment, correlateReport } from "./assignments.mjs";
 export { configureAdmission, activateAdmission, changeAdmissionMode, reserveAdmission, reserveRoleAdmission, reserveBriefAdmission, prepareAdmission, reservePreparedAdmission, bindAdmission, completeAdmission, recordReportAdmission, readAdmission } from "./admission.mjs";
 export { BRIEF_FIELDS, parseBrief, renderBrief } from "./brief.mjs";
@@ -15,7 +15,6 @@ export { readBoardSources } from "./board-reader.mjs";
 export { buildBoardModel } from "./board-model.mjs";
 export { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
 export { boardView } from "./board-view.mjs";
-export { parseBoardIntent } from "./board-intent.mjs";
+export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
 export { REPORT_FIELDS, parseReport } from "./report.mjs";
-
 export { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";

@@ -374,56 +374,39 @@ test("shared file and mode extraction applies the chief edit rule in both isolat
   }
 });
 
-test("shared file and mode extraction preserves classified mode phrases in both isolated bundles", async t => {
-  const prompt = (text, owner = true) => ({ owner, text, outside: text, all: text });
+test("shared mode phrases match only a whole message, the same in both isolated bundles (T240)", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const none = { autopilotWord: false, autopilotAsked: false, ownOff: false, offAfter: false, pasted: false, question: false, unreadOff: false };
-    assert.deepEqual(api.modeSignals(prompt("sage mode")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true, ...none });
-    assert.deepEqual(api.modeSignals(prompt("sage mode off")), { sageOff: true, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true });
-    assert.deepEqual(api.modeSignals(prompt("sage mode, autopilot on")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: true, modeWord: true, ...none, autopilotAsked: true });
-    assert.deepEqual(api.modeSignals(prompt("autopilot on main?")), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: false, modeWord: true, ...none, autopilotWord: true, autopilotAsked: true, question: true });
-    // The phrase, a comma and an off word: no on, and autopilot off (F-R725-2, T200).
-    assert.deepEqual(api.modeSignals(prompt("sage mode, stop")), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offAfter: true });
-    // An agent's off line (in all, not in outside) switches nothing (T215).
-    assert.deepEqual(api.modeSignals({ owner: true, text: "autopilot on", outside: "autopilot on", all: "autopilot on\nautopilot off" }), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: true, modeWord: true, ...none, autopilotWord: true, autopilotAsked: true });
-    assert.equal(api.modeSignals(prompt("sage mode continue on the project")).sageOn, true);
-    // The on rule's tail is the same for both providers (T200): an off after "on", an off-meaning word, a hidden or
-    // look-alike off, any question mark, and a Markdown paste with more words switch nothing on.
-    for (const text of ["sage mode on off", "sage mode stop", "sage mode switch it off", "sage mode оff", "sage mode o­ff", "sage mode ​off", "sage mode continue;", "sage mode continue؟", "> sage mode continue", "    sage mode continue",
-      // Only the tail is folded, never the phrase (F-R725-1); punctuation, then an off word (F-R725-2).
-      "sage mоde: оff", "​sage mode continue", "sage mode: off", "sage mode \u{1d428}\u{1d41f}\u{1d41f}", "sage mode ᴏꜰꜰ"]) {
-      assert.equal(api.modeSignals(prompt(text)).sageOn, false, JSON.stringify(text));
-    }
-    for (const text of ["What does sage mode do?", "sage mode?", "sage mode online: is it a thing?", "autopilot on main"]) {
-      const signals = api.modeSignals(prompt(text));
-      assert.equal(signals.sageOn, false, text);
-      assert.equal(signals.autopilotOn, false, text);
-    }
-    for (const text of ["sage mode", "sage mode off", "autopilot on"]) {
-      const signals = api.modeSignals(prompt(text, false));
-      assert.equal(signals.sageOn, false, text);
-      assert.equal(signals.sageOff, false, text);
-      assert.equal(signals.autopilotOn, false, text);
-    }
-    // Text that the hook cannot read switches nothing, in either direction; its off only asks for the note (F-T215-1).
-    assert.deepEqual([api.modeSignals(prompt("Please stop autopilot", false))].map(({ autopilotOff, unreadOff }) => ({ autopilotOff, unreadOff })), [{ autopilotOff: false, unreadOff: true }]);
-    assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nautopilot off" }).autopilotOff, false);
-    assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode\nautopilot off", all: "sage mode\nautopilot off" }).autopilotOff, true);
-    assert.equal(api.modeSignals({ owner: false, text: "", outside: "", all: "sage mode\nautopilot off" }).autopilotOff, false, "nothing switches");
-    assert.equal(api.modeSignals({ owner: false, text: "", outside: "", all: "sage mode\nautopilot on" }).unreadOff, false, "no off, no note");
-    assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nReport: no autopilot changes" }).autopilotOff, false);
-    for (const input of [{}, { owner: "user", text: "sage mode", outside: "", all: "" }, { owner: true, text: "sage mode", all: "" }]) assert.throws(() => api.modeSignals(input), /Invalid mode prompt/);
-    // A mark or a format character on the last letter of the phrase makes it no phrase (R733): no on, and the note.
-    for (const text of ["sage mode\u0301", "sage mode\u0301 continue on the project", "enter sage mode\u0301 continue", "sage mode\u200b continue", "sage mode\u00ad continue", "sage mode\ufe0f continue", "sage mode\u2060 continue", "sage mode\u0301, autopilot on"]) {
-      const signals = api.modeSignals(prompt(text));
-      assert.deepEqual([signals.sageOn, signals.modeWord], [false, true], JSON.stringify(text));
-    }
+    const cases = [
+      // [the message, the exact phrase or null, the phrases that a near miss asks for]
+      ["sage mode", "sage mode", []],
+      [" Sage Mode On. ", "sage mode on", []],
+      ["SAGE MODE OFF", "sage mode off", []],
+      ["autopilot on.", "autopilot on", []],
+      ["\tAutopilot off\n", "autopilot off", []],
+      ["sage help", "sage help", []],
+      ["sage mode, autopilot on", null, ["sage mode", "autopilot on"]],
+      ["sage mode continue on the project", null, ["sage mode"]],
+      ["sage mode stop", null, ["sage mode off"]],
+      ["autopilot on main?", null, ["autopilot on"]],
+      ["autopilot o\u00adff", null, ["autopilot off"]],
+      ["sage mode\u0301", null, ["sage mode", "sage mode off"]],
+      ["sage mode...", null, ["sage mode", "sage mode off"]],
+      ["What does sage mode do?", null, []],
+      ["fix the autopilot tests", null, []],
+      ["autopilot-off", null, ["autopilot off"]],
+      ["sagemodeoff", null, ["sage mode off"]],
+    ];
+    assert.deepEqual(cases.map(([text]) => [text, api.exactPhrase(text), api.phrasesNear(text)?.phrases ?? []]), cases);
+    // A message that starts like a phrase is a strong near miss; a mention in a sentence is a weak one (F-T240-7).
+    assert.deepEqual(["sage mode stop", "please stop autopilot", "sage mode"].map((text) => api.phrasesNear(text)?.strong ?? null), [true, false, null]);
+    assert.deepEqual(["sage mode\nautopilot off", "the report says sage mode on", "Autopilot Off is next"].map(api.hasPhrase), [true, true, true]);
+    assert.deepEqual(["sage help", "the autopilot run", "sage modes"].map(api.hasPhrase), [false, false, false]);
     if (provider === "claude") {
       const adapter = await import(pathToFileURL(join(f.plugin, "hooks/mode-policy.mjs")));
-      assert.equal(adapter.modeSignals(prompt("sage mode")).sageOn, true);
-      assert.equal(adapter.modeSignals(prompt("sage mode", false)).sageOn, false);
+      assert.equal(adapter.exactPhrase("sage mode"), "sage mode");
+      assert.equal(adapter.exactPhrase("sage mode please"), null);
     }
   }
 });
@@ -1263,8 +1246,13 @@ test("Codex mode adapter persists verified phrases and keeps autopilot disabled"
   const { api, core, input, context, options } = await nativeModeFixture(t);
   assert.equal(api.updateOwnerMode({ ...input, prompt: "What does sage mode do?" }, context, options).sage, false);
   assert.equal(core.readAdmission(options.directory).sessions.length, 0);
-  const active = api.updateOwnerMode({ ...input, prompt: "sage mode, autopilot on" }, context, options);
-  assert.equal(active.sage, true); assert.equal(active.autopilot, false); assert.equal(active.signals.autopilotOn, true);
+  // A near miss switches nothing and names the exact phrases (T240).
+  const near = api.updateOwnerMode({ ...input, prompt: "sage mode, autopilot on" }, context, options);
+  assert.deepEqual([near.sage, near.phrase, near.near], [false, null, { phrases: ["sage mode", "autopilot on"], strong: true }]);
+  const active = api.updateOwnerMode({ ...input, prompt: "Autopilot On." }, context, options);
+  assert.deepEqual([active.sage, active.autopilot, active.phrase], [false, false, "autopilot on"]);
+  const on = api.updateOwnerMode({ ...input, prompt: "Sage Mode." }, context, options);
+  assert.deepEqual([on.sage, on.autopilot, on.phrase], [true, false, "sage mode"]);
   assert.equal(api.updateOwnerMode({ ...input, turn_id: modeNextTurn, prompt: "continue" }, context, options).sage, true);
   assert.equal(api.updateOwnerMode({ ...input, turn_id: "44444444-4444-4444-8444-444444444444", prompt: "sage mode off" }, context, options).sage, false);
   assert.equal(api.readMode(options.directory, options.project, input.session_id).sage, false);
