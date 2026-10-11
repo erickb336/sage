@@ -1,6 +1,6 @@
 # Automatic Sage coordination in Codex
 
-This proposal defines the first stage of #88: automatic coordination with manual merging. Autopilot stays off.
+This proposal defines the first step of #88: automatic coordination with manual merging. Autopilot stays off.
 
 ## Owner experience
 
@@ -31,9 +31,9 @@ The earlier interruption proposal is superseded by parity. Explicit owner cancel
 
 ## Parity audit
 
-Before implementation, map Claude's activation, chief authority, task routes, role and child limits, briefs, reports, review cycles, repair, merge gates, off behavior and recovery. Record each as enforced code, instructions, or live verification. Match user behavior through Codex-native transport; do not label a prompt-only rule as enforced.
+Before implementation, map Claude's activation, chief authority, task routes, role and child limits, briefs, reports, review cycles, repair, merge checks, off behavior and recovery. Record each as enforced code, instructions, or live verification. Match user behavior through Codex-native transport; do not label a prompt-only rule as enforced.
 
-The full target includes Claude's gated autopilot. Coordination with manual merging is the first delivery stage, not a reduction of the parity target. Provider model names and native transport remain provider-specific.
+The full target includes Claude's gated autopilot. Coordination with manual merging is the first delivery step, not a reduction of the parity target. Provider model names and native transport remain provider-specific.
 
 
 ## Reviewable units

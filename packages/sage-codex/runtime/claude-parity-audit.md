@@ -16,8 +16,8 @@ This audit compares repository behavior with the prepared Codex runtime. It is a
 | Slot release | Subagent stop, failed dispatch and registry reconciliation; lease expiry also exists | Native stop/result evidence must identify the exact assignment; no stale event can release a newer slot |
 | Reports/verdicts | Chief records run result, findings and exact-head verdicts using state commands | Add verified report intake and durable records; child claims do not directly write the logbook |
 | Reviews/repairs | Shared rounds, held/replan and clean cycles; a new head restarts cycles | Use shared state/merge-check behavior, including blocking verdict regression |
-| Manual merging | Autopilot starts off; verified work waits for owner merge | First delivery stage matches this behavior |
-| Autopilot | Explicit owner on; chief merges only after exact-head gates; children never merge | Prepared Codex adapter always false; a separate stage is required for full parity |
+| Manual merging | Autopilot starts off; verified work waits for owner merge | First delivery step matches this behavior |
+| Autopilot | Explicit owner on; chief merges only after checks for the exact commit; children never merge | Prepared Codex adapter always false; a separate step is required for full parity |
 | Board/status | Shared rich board and status dispatch, source-qualified questions | Model is shared; installed Codex phrase delivery remains unverified |
 | Arena/models | Shared chief describes candidate/judge workflow; provider binds model settings | Preserve arena workflow, use Codex model names and supported native configuration |
 
@@ -251,11 +251,11 @@ The isolated native report probe checks the visible chief read tool before run c
 This does not complete cross-session recovery, independent review scheduling, or a real-project pilot.
 
 
-## Native lead-to-reviewer report handoff
+## Native lead-to-reviewer report transfer
 
 The `--sage-nested-report` route now verifies the complete chief-to-lead-to-reviewer path through CLI 0.160.0.
 The lead prepares its reviewer, waits, reads and records the child's report, then returns the saved reference in its own report.
-The chief reads and records that handoff, finishes both runs, inspects the saved review, and accepts one exact-commit verdict.
+The chief reads and records that report, finishes both runs, inspects the saved review, and accepts one exact-commit verdict.
 A retry creates no duplicate. The probe directly checks two preparations, reservations, bindings, completions, reports, and completed logbook runs.
 It also checks native dispatch, start, and stop identities for both children.
 
@@ -294,3 +294,17 @@ It checks before a new spawn and after native list or wait operations. Other err
 
 The `--sage-failed-spawn` route uses a total cap of one. It rejects one spawn, then binds and completes a new child in the freed slot.
 This uses simulated responses in the actual native CLI. Other failed starts, interruption, follow-up assignments, and broader recovery remain incomplete.
+
+## Probe cleanup
+
+The probe removes its temporary profile after success, failure, or timeout.
+Its two-minute timeout ends the transport and releases its handles. It does not
+inspect or signal processes, and it does not prove that a stalled native process
+exited. The final cleanup record confirms that the temporary folder is absent.
+
+Older probes can leave folders named `sage-codex-one-child-` followed by random
+characters. To find the temporary directory, run `node -p 'require("node:os").tmpdir()'`.
+After your probe exits, inspect each matching folder in your file manager.
+Remove only old probe folders that contain the test profile, scripts, and captured
+events. Keep any folder used by a probe that is still running. Do not delete the
+whole temporary directory or unrelated Sage folders.
