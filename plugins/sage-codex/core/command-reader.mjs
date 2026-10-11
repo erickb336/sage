@@ -435,6 +435,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
     let argv = false; // external wrappers pass argv; shell modifiers retain assignment and keyword grammar
     let nextDir = dir, status, negate = false, nextUncertain = uncertain;
     for (let k = 0; k < words.length; k++) {
+      if (k === COMMAND_CONTEXT.get(c).externalStart) { viaExec = true; bypassFunctions = true; argv = true; }
       const w = words[k];
       const name = programName(w);
       const assignment = !argv && syntax[k]?.assignment;
@@ -794,8 +795,12 @@ export function shellCommands(src) {
 /** Start-Process joins ArgumentList values before dispatch. Unsupported forms stay unproved. */
 function startProcess(command) {
   const { words, syntax } = command;
+  if (COMMAND_CONTEXT.get(command).functionHeader) return;
   let first = 0;
-  while (command.syntax[first]?.assignment) first++;
+  const prefix = () => syntax[first]?.assignment || (!syntax[first]?.quoted && KEYWORD.test(words[first] ?? ""));
+  while (prefix()) first++;
+  if (words[first] === "function" && !syntax[first]?.quoted) first += 2;
+  while (prefix()) first++;
   if (!/^(?:start-process|start)$/.test(programName(words[first]))) return;
   let file, list;
   const fail = () => { throw Object.assign(new TypeError("Start-Process needs a literal FilePath and ArgumentList"), { code: "SAGE_START_PROCESS" }); };
@@ -821,6 +826,7 @@ function startProcess(command) {
   }
   if (!file || /[$`@'";()]/.test(file) || /[$`@'";()]/.test((list ?? []).join(" "))) fail();
   const args = (list ?? []).join(" ").trim().split(/\s+/).filter(Boolean);
+  COMMAND_CONTEXT.get(command).externalStart = first;
   command.words = [...words.slice(0, first), file, ...args];
   command.syntax = [...syntax.slice(0, first), ...command.words.slice(first).map(() => ({ quoted: true, assignment: false }))];
 }

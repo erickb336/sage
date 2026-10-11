@@ -4552,3 +4552,16 @@ test("issue 97: PowerShell quote boundaries cannot hide protected commands", () 
   }
   assert.equal(s.send(tool("PowerShell", { command: 'Write-Output "ordinary text"' }, { cwd: FEATURE, ...AGENT })), undefined);
 });
+
+
+test("issue 97: Start-Process keeps external dispatch inside function scopes", () => {
+  const f = ghAgentSession();
+  const copied = join(f.dir, "copied-client");
+  const copy = `function cp { echo safe; }; Start-Process cp -ArgumentList "${f.gh} ${copied}"`;
+  assert.ok(denied(f.send(copy, true, "PowerShell")), "a shell function must not hide the external copy of gh");
+  for (const command of [
+    'function launch { Start-Process git -ArgumentList "push origin main"; }; launch',
+    'if true; then Start-Process git -ArgumentList "push origin main"; fi',
+  ]) assert.ok(denied(f.send(command, false, "PowerShell")), command);
+  assert.equal(existsSync(copied), false, "the attack text goes only to the hook parser");
+});
