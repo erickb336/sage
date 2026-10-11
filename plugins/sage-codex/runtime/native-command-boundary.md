@@ -5,6 +5,8 @@ The command adapter must account for this change before Sage can enforce its sha
 
 Run the native check with `node scripts/probe-codex-command.mjs`.
 Add `--deny-command` to verify denial of the same fixed harmless command.
+Add `--default-command` to omit the shell, working directory, and terminal fields.
+The two flags can be combined.
 Use fake `ps`, `pgrep`, and `kill` first on PATH, as for the other native checks.
 The check uses a fresh temporary profile and a local server with fixed simulated responses.
 It does not use model credentials or the owner's settings.
@@ -18,12 +20,18 @@ The model receives an `exec_command` tool with these fields:
 - `sandbox_permissions`, `justification`, and `prefix_rule`;
 - `max_output_tokens` and `yield_time_ms`.
 
-The check sends one fixed harmless command: `printf sage-native-command-ok`.
-It sets the shell to `/bin/sh`, the working directory to the temporary workspace, and `tty` to false.
+The check sends one fixed harmless command: `printf sage-native-command-ok; pwd`.
+It sets the shell to `/bin/sh`, the working directory to a child folder of the temporary workspace, and `tty` to false.
 Both `PreToolUse` and `PostToolUse` receive the name `Bash`.
 Their `tool_input` contains only `command`, with the exact fixed command text.
 The post-tool response is a string.
 The check asserts these fields and the command result directly.
+The `pwd` output confirms the actual command directory without publishing its path.
+The hook's top-level `cwd` still names the session workspace when the command runs in its child folder.
+With no workdir argument, the command runs in the session workspace.
+The saved turn context also names the session cwd, but exposes no shell or selected-environment field in this capture.
+The native execution event names `/bin/sh` for the explicit route and `/bin/zsh` for the default route on the tested Mac.
+The observed default shell depends on the host; it is not a portable default.
 
 ## Consequence for Sage
 
@@ -48,3 +56,24 @@ The deny route checks the fixed denial response, no command execution, and no po
 This proves denial with a healthy hook connection for this fixed command.
 It does not verify full Sage policy, a real model, or an installed automatic workflow.
 The separate required-hook outage check still gates activation.
+
+## Native defaults and fields beyond the visible schema
+
+The [0.160.0 command implementation](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/handlers/unified_exec.rs)
+also accepts `login`, `timeout_ms`, and `additional_permissions`.
+Its environment input accepts `environment_id`.
+The [command handler](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs)
+resolves workdir against the selected environment, which can be remote.
+An empty or omitted workdir uses that environment's current directory.
+
+The [shell resolver](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/shell-command/src/shell_detect.rs)
+uses a supplied shell path to select a shell type, then discovers its executable.
+It does not promise to execute that exact path.
+An omitted shell uses the selected environment's shell or the session shell.
+An omitted login field follows the environment's login-shell setting.
+
+The complete adapter must validate these fields even when the model schema omits them.
+It needs trusted selected-environment and shell context for default arguments.
+Do not substitute the hook's session cwd for an explicit workdir.
+Do not infer the effective shell executable from the original shell path alone.
+These probes cover one local environment with login shells disabled, not remote execution or shell discovery changes.

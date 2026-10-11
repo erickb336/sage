@@ -13,9 +13,10 @@ serveHooks({ mode: options, loadPolicy: async () => {
     process.exit(0); // Exit this test server only; never signal another process.
   }
   if (input.tool_name === "Bash" && context.sage && context.actor === input.session_id
-    && context.command?.cmd === "printf sage-native-command-ok" && context.command.shell === "/bin/sh"
-    && context.command.workdir === options.projectDirectory && context.command.tty === false
-    && context.command.max_output_tokens === 1000 && Object.keys(context.command).length === 5) return commandDecision(input, context);
+    && context.command?.cmd === "printf sage-native-command-ok; pwd" && context.command.max_output_tokens === 1000
+    && ((context.command.shell === "/bin/sh" && context.command.workdir === options.projectDirectory + "/command-workdir"
+      && context.command.tty === false && Object.keys(context.command).length === 5)
+      || Object.keys(context.command).length === 2)) return commandDecision(input, context);
   return allowed.has(input.tool_name) ? { decision: "pass" }
     : { decision: "deny", reason: "Outside the fixed native fixture route." };
 });

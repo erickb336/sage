@@ -9,13 +9,30 @@ const input=JSON.parse(readFileSync(0,'utf8'));
 const record=Object.fromEntries(['hook_event_name','session_id','agent_id','turn_id','tool_name','tool_use_id'].filter(k=>typeof input[k]==='string').map(k=>[k,input[k]]));
 // Record field types only; command content stays private.
 record.toolInputShape=Object.fromEntries(Object.entries(input.tool_input??{}).map(([k,v])=>[k,typeof v]));
-record.fixedCommandMatched=input.tool_input?.command==='printf sage-native-command-ok';
+record.fixedCommandMatched=input.tool_input?.command==='printf sage-native-command-ok; pwd';
 if(record.fixedCommandMatched&&input.hook_event_name==='PreToolUse'){
+ record.commandHookFields=Object.keys(input).sort();
+ record.hookCwdIsWorkspace=input.cwd===join(root,'workspace');
+ record.hookCwdIsCommandDirectory=input.cwd===join(root,'workspace/command-workdir');
  try{
   const args=readNativeCommand(input.transcript_path,{sessionsDir:realpathSync(join(root,'codex/sessions'))},
    {session:input.session_id,actor:input.session_id,parent:null,path:'/root',turn:input.turn_id,call:input.tool_use_id,command:input.tool_input.command});
-  record.commandTranscript={fields:Object.keys(args).sort(),fixedCommand:args.cmd==='printf sage-native-command-ok',
-   fixedShell:args.shell==='/bin/sh',fixedDirectory:args.workdir===join(root,'workspace'),ttyFalse:args.tty===false};
+  const transcript=realpathSync(input.transcript_path);
+  if(!transcript.startsWith(realpathSync(join(root,'codex/sessions'))+'/'))throw Error('outside_test_profile');
+  const contextFd=openSync(transcript,constants.O_RDONLY|constants.O_NOFOLLOW);
+  let contexts;
+  try{
+   const size=fstatSync(contextFd).size;
+   if(!fstatSync(contextFd).isFile()||size>256*1024)throw Error('invalid_test_transcript');
+   const bytes=Buffer.alloc(size);
+   if(readSync(contextFd,bytes,0,size,0)!==size)throw Error('incomplete_test_transcript');
+   contexts=bytes.toString('utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line))
+    .filter(row=>row.type==='turn_context'&&row.payload?.turn_id===input.turn_id);
+  }finally{closeSync(contextFd);}
+  record.turnContextFields=contexts.map(row=>Object.keys(row.payload).sort());
+  record.turnCwdIsWorkspace=contexts.length===1&&contexts[0].payload.cwd===join(root,'workspace');
+  record.commandTranscript={fields:Object.keys(args).sort(),fixedCommand:args.cmd==='printf sage-native-command-ok; pwd',
+   fixedShell:args.shell==='/bin/sh',fixedDirectory:args.workdir===join(root,'workspace/command-workdir'),ttyFalse:args.tty===false};
  }catch(error){record.commandTranscript={error:error.message};}
 }
 if(typeof input.tool_input?.task_name==='string')record.inputTaskName=input.tool_input.task_name;

@@ -8,14 +8,17 @@ import {join} from 'node:path';
 import {setupCapture} from './fixtures/codex-native/setup-capture.mjs';
 import {waitNative} from './fixtures/codex-native/wait-native.mjs';
 
-assert(process.argv.slice(2).every(arg=>arg==='--deny-command')&&process.argv.length<=3,'unknown_probe_arguments');
+assert(process.argv.slice(2).every(arg=>['--deny-command','--default-command'].includes(arg))&&new Set(process.argv.slice(2)).size===process.argv.length-2,'unknown_probe_arguments');
+const defaultCommand=process.argv.includes('--default-command');
 const denyCommand=process.argv.includes('--deny-command');
 const root=realpathSync(mkdtempSync(join(tmpdir(),'sage-command-boundary-')));
-const command='printf sage-native-command-ok', marker='sage-native-command-ok';
+const command='printf sage-native-command-ok; pwd', marker='sage-native-command-ok';
 let server;
 try {
  const workspace=join(root,'workspace'),codexHome=join(root,'codex');
  for(const name of ['workspace','codex','home','tmp'])mkdirSync(join(root,name));
+ const commandDirectory=join(workspace,'command-workdir');mkdirSync(commandDirectory);
+ const commandArgs=defaultCommand?{cmd:command,max_output_tokens:1000}:{cmd:command,shell:'/bin/sh',workdir:commandDirectory,tty:false,max_output_tokens:1000};
  const env={PATH:process.env.PATH??'/usr/bin:/bin',HOME:join(root,'home'),CODEX_HOME:codexHome,TMPDIR:join(root,'tmp'),LANG:'en_US.UTF-8',DO_NOT_TRACK:'1'};
  const binary=process.env.SAGE_CODEX_BIN??'codex';
  const telemetry=['-c','analytics.enabled=false','-c','otel.exporter="none"','-c','otel.metrics_exporter="none"','-c','otel.trace_exporter="none"'];
@@ -39,7 +42,7 @@ try {
     const candidates=(request.tools??[]).flatMap(t=>t.type==='namespace'?(t.tools??[]).filter(m=>m.name==='exec_command').map(m=>({namespace:t.name,...m})):t.name==='exec_command'?[t]:[]);
     assert.equal(candidates.length,1,'exec_command_schema_missing');
     const tool=candidates[0];toolSchema={namespace:tool.namespace??null,name:tool.name,properties:Object.keys(tool.parameters?.properties??{}),required:tool.parameters?.required??[]};
-    item={type:'function_call',...(tool.namespace?{namespace:tool.namespace}:{}),name:tool.name,call_id:'fixed_command',arguments:JSON.stringify({cmd:command,shell:"/bin/sh",workdir:workspace,tty:false,max_output_tokens:1000})};
+    item={type:'function_call',...(tool.namespace?{namespace:tool.namespace}:{}),name:tool.name,call_id:'fixed_command',arguments:JSON.stringify(commandArgs)};
    }else{
     assert.equal(requests,2,'unexpected_extra_request');
     const outputs=request.input.filter(i=>i.type==='function_call_output'&&i.call_id==='fixed_command');assert.equal(outputs.length,1);
@@ -62,27 +65,30 @@ try {
  const result=await waitNative(child,{onTimeout:()=>{server.closeAllConnections();}});
  server.closeAllConnections();await new Promise(resolve=>server.close(resolve));server=null;
  const events=readdirSync(join(root,'events')).map(n=>JSON.parse(readFileSync(join(root,'events',n),'utf8')));
- console.log(JSON.stringify({type:'command_boundary',version:versionText.trim(),toolSchema,callbacks:events.map(({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape,commandTranscript})=>({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape,commandTranscript})),result,requests,fixtureError,stderrBytes,simulatedModel:true,fullPolicyVerified:false}));
+ console.log(JSON.stringify({type:'command_boundary',version:versionText.trim(),toolSchema,callbacks:events.map(({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape,commandTranscript,commandHookFields,hookCwdIsWorkspace,hookCwdIsCommandDirectory,turnContextFields,turnCwdIsWorkspace})=>({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape,commandTranscript,commandHookFields,hookCwdIsWorkspace,hookCwdIsCommandDirectory,turnContextFields,turnCwdIsWorkspace})),result,requests,fixtureError,stderrBytes,simulatedModel:true,fullPolicyVerified:false}));
  assert.equal(result.code,0);assert.equal(fixtureError,undefined);assert.equal(requests,2);
  assert.equal(events.filter(e=>e.hook_event_name==='PreToolUse'&&e.fixedCommandMatched).length,1);
  assert.equal(events.filter(e=>e.hook_event_name==='PostToolUse'&&e.fixedCommandMatched).length,denyCommand?0:1);
  assert.equal(integrated.readJournal().modes.at(-1)?.sage,true,'sage_mode_required');
  for(const event of events){assert.equal(event.tool_name,'Bash');assert.deepEqual(event.toolInputShape,{command:'string'});}
  const before=events.find(event=>event.hook_event_name==='PreToolUse');
- assert.deepEqual(before.commandTranscript,{fields:['cmd','max_output_tokens','shell','tty','workdir'],fixedCommand:true,fixedShell:true,fixedDirectory:true,ttyFalse:true});
+ assert.equal(before.hookCwdIsWorkspace,true);assert.equal(before.hookCwdIsCommandDirectory,false);
+ assert.equal(before.turnCwdIsWorkspace,true);assert.equal(before.turnContextFields.length,1);
+ assert(!before.turnContextFields[0].some(key=>/shell|environment/i.test(key)),'new_native_execution_context_requires_review');
+ assert.deepEqual(before.commandTranscript,defaultCommand?{fields:['cmd','max_output_tokens'],fixedCommand:true,fixedShell:false,fixedDirectory:false,ttyFalse:false}:{fields:['cmd','max_output_tokens','shell','tty','workdir'],fixedCommand:true,fixedShell:true,fixedDirectory:true,ttyFalse:true});
  const completed=stdout.trim().split('\n').map(line=>JSON.parse(line)).filter(event=>event.type==='item.completed'&&event.item?.type==='command_execution');
  if(denyCommand)assert.equal(completed.length,0,'denied_command_must_not_execute');
  else{
   assert.equal(completed.length,1,'one_native_command_execution');
   assert.equal(completed[0].item.exit_code,0,'native_command_failed');
-  assert.equal(completed[0].item.aggregated_output,marker,'native_command_output_mismatch');
+  assert.equal(completed[0].item.aggregated_output,marker+(defaultCommand?workspace:commandDirectory)+'\n','native_command_output_mismatch');
  }
  const receipt=JSON.parse(readFileSync(join(root,'command-policy-receipt.json'),'utf8'));
  assert.equal(receipt.session,before.session_id);assert.equal(receipt.turn,before.turn_id);assert.equal(receipt.call,before.tool_use_id);
- assert.deepEqual(receipt.command,{cmd:command,shell:'/bin/sh',workdir:workspace,tty:false,max_output_tokens:1000});
+ assert.deepEqual(receipt.command,commandArgs);
  assert.equal(receipt.result.decision,denyCommand?'deny':'pass');
  assert(stdout.includes('command boundary checked'));
- console.log(JSON.stringify({type:'result',verified:true,simulatedModel:true,policyReceivedOriginalFields:true,deniedCommand:denyCommand,installedSageVerified:false}));
+ console.log(JSON.stringify({type:'result',verified:true,simulatedModel:true,policyReceivedOriginalFields:true,deniedCommand:denyCommand,defaultCommand,executionShell:completed[0]?.item.command?.match(/^([^ ]+)/)?.[1],effectiveDirectoryVerified:!denyCommand,installedSageVerified:false}));
 }finally{
  server?.closeAllConnections();server?.close();rmSync(root,{recursive:true,force:true});
 }
