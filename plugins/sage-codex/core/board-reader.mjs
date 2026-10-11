@@ -54,6 +54,23 @@ function table(file, name, budget) {
   });
 }
 
+const REPOSITORY = String.raw`([A-Za-z0-9][A-Za-z0-9-]*)\/([\w-][\w.-]*?)`;
+/** A repository link the board accepts, from a remote or a PR observation: https://github.com/<owner>/<repo>, or null. */
+export const githubRepository = value => new RegExp(String.raw`^https:\/\/github\.com\/${REPOSITORY}$`).test(value) ? value : null;
+
+/** The origin remote of a Git config file as https://github.com/<owner>/<repo>, or null for any other remote. */
+function githubRemote(config) {
+  let origin = false;
+  for (const line of config.split(/\r?\n/)) {
+    const section = /^\s*\[([^\]]*)\]/.exec(line);
+    if (section) { origin = /^remote\s+"origin"$/.test(section[1].trim()); continue; }
+    const url = origin && /^\s*url\s*=\s*(\S+)\s*$/.exec(line)?.[1];
+    const match = url && new RegExp(String.raw`^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[:/]${REPOSITORY}(?:\.git)?\/?$`).exec(url);
+    if (match) return `https://github.com/${match[1]}/${match[2]}`;
+  }
+  return null;
+}
+
 /** Missing or damaged input is a diagnostic, never a silently empty board. */
 export function readBoardSources(sources, { now = Date.now() } = {}) {
   if (!Array.isArray(sources) || sources.length > 32) throw new TypeError("board sources must be an array of at most 32 roots");
@@ -92,6 +109,9 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
         }
         try { project.checkout = regular(join(directory, "checkout.txt"), budget).trim(); }
         catch (error) { if (error.code !== "ENOENT") project.diagnostics.push(`checkout: ${error.code ?? error.message}`); }
+        // The PR link needs the checkout's GitHub remote. Read its Git config as a file; run no Git command. No remote: no link.
+        try { project.repository = isAbsolute(project.checkout ?? "") ? githubRemote(regular(join(project.checkout, ".git", "config"), budget)) : null; }
+        catch { project.repository = null; }
         project.contents = {};
         for (const record of project.observations.records.filter(record => record.kind === "artifact" && record.data.path)) {
           try {
