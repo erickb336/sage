@@ -2484,3 +2484,147 @@ test('prepared run target rejects malformed or mismatched assignment fields befo
   }
   assert.equal(f.api.readAdmission(f.journal).preparations.length, 0);
 });
+
+async function continuationFixture(t, provider = 'codex', complete = true) {
+  const f = await roleAdmissionFixture(t, { total: 1, projects: [{ project: 'project-a', limit: 1 }] }, provider);
+  assert.equal(typeof f.api.reservePreparedContinuation, 'function', 'atomic continuation must ship');
+  assert.equal(typeof f.api.bindContinuationAdmission, 'function', 'later-turn binding must ship');
+  const first = f.reserve(1), prior = bindingFor(first.assignment, 'worker', 'turn-1');
+  f.api.bindAdmission(f.journal, prior);
+  if (complete) f.api.completeAdmission(f.journal, prior);
+  const prepare = (n, changes = {}, role = 'lead', target = true) => {
+    const request = { task: 'T1', run: `R${n}`, issuer: 'root', name: `continue-${n}`, ...changes };
+    return f.api.prepareAdmission(f.journal, f.scope, request, { issuerRole: 'chief-of-staff', role }, completeBrief('Continue this task.'), undefined,
+      target ? { task: request.task, run: request.run, role, round: 0, taskBranch: '', runBranch: '', candidate: '' } : undefined).preparation;
+  };
+  const args = (prepared, previous = first.assignment.id, call = `call-${prepared.name}`) => [f.journal, f.scope,
+    { preparation: prepared.id, issuer: 'root', call, previous },
+    { tool: 'followup', turn: 'parent-turn', name: prepared.name, argumentsHash: 'b'.repeat(64), taskHash: 'c'.repeat(64) }, 'chief-of-staff'];
+  const reserve = (...input) => f.api.reservePreparedContinuation(...args(...input));
+  return { ...f, first, prior, prepare, continuationArgs: args, continue: reserve };
+}
+
+test('continuation admission reserves and binds a new turn without releasing it through an old stop', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await continuationFixture(t, provider), prepared = f.prepare(2), saved = f.continue(prepared);
+    assert.equal(saved.decision, 'permit-once');
+    assert.equal(f.continue(prepared).decision, 'already-reserved');
+    const next = bindingFor(saved.assignment, 'worker', 'turn-2');
+    assert.throws(() => f.api.bindAdmission(f.journal, next), /matching assignment kind/);
+    assert.throws(() => f.api.bindContinuationAdmission(f.journal, { ...next, child: 'foreign' }), /child differs/);
+    assert.throws(() => f.api.bindContinuationAdmission(f.journal, { ...next, turn: f.prior.turn }), /turn is occupied/);
+    assert.equal(f.api.bindContinuationAdmission(f.journal, next).decision, 'bound');
+    assert.equal(f.api.bindContinuationAdmission(f.journal, next).decision, 'already-bound');
+    assert.equal(f.api.completeAdmission(f.journal, f.prior).decision, 'already-completed');
+    assert.throws(() => f.reserve(3), /capacity is occupied/);
+    const state = f.api.readAdmission(f.journal);
+    assert.deepEqual(state.bindings, [f.prior, next]);
+    assert.deepEqual(state.completions, [f.prior]);
+    assert.equal(state.reservations[1].continuation, f.first.assignment.id);
+    assert.equal(f.api.completeAdmission(f.journal, next).decision, 'completed');
+    assert.equal(f.reserve(3).decision, 'permit-once');
+  }
+});
+
+test('continuation admission refuses unfinished foreign changed and unpinned work before a reservation', async t => {
+  const f = await continuationFixture(t, 'codex', false), prepared = f.prepare(2);
+  assert.throws(() => f.continue(prepared), /same completed task/);
+  f.api.completeAdmission(f.journal, f.prior);
+  for (const p of [f.prepare(3, { task: 'T2' }), f.prepare(4, {}, 'qa'), f.prepare(5, {}, 'lead', false)])
+    assert.throws(() => f.continue(p), /same completed task|saved run target/);
+  const noHash = f.continuationArgs(prepared); delete noHash[3].taskHash;
+  assert.throws(() => f.api.reservePreparedContinuation(...noHash), /task hash/);
+  const foreign = f.continuationArgs(prepared); foreign[2].issuer = 'other';
+  assert.throws(() => f.api.reservePreparedContinuation(...foreign), /differs from its preparation/);
+  assert.throws(() => f.continue(prepared, modeNextTurn), /same completed task/);
+  const reusedRun = f.prepare(6, { run: 'R1' });
+  assert.throws(() => f.continue(reusedRun), /run already has a dispatch/);
+  assert.throws(() => f.api.bindContinuationAdmission(f.journal, f.prior), /matching assignment kind/);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 1);
+  assert.equal(f.continue(prepared).decision, 'permit-once');
+});
+
+test('continuation admission retains one linear history across retries mode changes and restart reads', async t => {
+  const f = await continuationFixture(t), second = f.prepare(2), competitor = f.prepare(3), third = f.prepare(4);
+  const saved = f.continue(second), next = bindingFor(saved.assignment, 'worker', 'turn-2');
+  f.api.bindContinuationAdmission(f.journal, next);
+  assert.throws(() => f.continue(competitor), /predecessor already has later work/);
+  const initialArgs = f.continuationArgs(second); delete initialArgs[2].previous;
+  assert.throws(() => f.api.reservePreparedAdmission(...initialArgs), /different work/);
+  const { child, turn, ...failure } = next;
+  assert.throws(() => f.api.failAdmission(f.journal, { ...failure, evidenceHash: 'd'.repeat(64) }), /separate evidence/);
+  f.api.changeAdmissionMode(f.journal, { ...f.scope, after: f.activation, turn: modeTurn, sage: false });
+  assert.equal(f.continue(second).decision, 'already-reserved');
+  f.api.completeAdmission(f.journal, next);
+  assert.throws(() => f.continue(third, saved.assignment.id), /mode is off/);
+  f.api.changeAdmissionMode(f.journal, { ...f.scope, after: modeTurn, turn: modeNextTurn, sage: true });
+  const last = f.continue(third, saved.assignment.id), final = bindingFor(last.assignment, 'worker', 'turn-3');
+  f.api.bindContinuationAdmission(f.journal, final);
+  assert.equal(f.api.completeAdmission(f.journal, next).decision, 'already-completed');
+  assert.equal(f.api.readAdmission(f.journal).completions.length, 2);
+  assert.equal(f.api.readAdmission(f.journal).bindings.length, 3);
+  assert.throws(() => f.reserve(8), /capacity is occupied/);
+});
+
+test('continuation admission gives one permit when two processes compete for the same completed child', async t => {
+  const f = await continuationFixture(t), proposals = [f.prepare(2), f.prepare(3)];
+  const script = `const input=JSON.parse(process.argv[1]);const api=await import(input.url);
+    try { console.log(JSON.stringify(api.reservePreparedContinuation(...input.args))); }
+    catch(error) { console.log(JSON.stringify({refused:error.message})); }`;
+  const run = prepared => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script,
+      JSON.stringify({ url: f.url, args: f.continuationArgs(prepared) })], { shell: false });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', b => { stdout += b; }); child.stderr.on('data', b => { stderr += b; });
+    child.once('error', reject); child.once('close', code => {
+      try { assert.equal(code, 0, stderr); assert.equal(stderr, ''); resolve(JSON.parse(stdout)); } catch (e) { reject(e); }
+    }); child.stdin.end();
+  });
+  const result = await Promise.all(proposals.map(run));
+  assert.equal(result.filter(row => row.decision === 'permit-once').length, 1);
+  assert.equal(result.filter(row => /predecessor already has later work/.test(row.refused)).length, 1);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 2);
+});
+
+test('continuation admission restores a lead role only after the new turn binds', async t => {
+  const f = await continuationFixture(t), prepared = f.prepare(2), saved = f.continue(prepared);
+  const prepareChild = () => f.api.prepareAdmission(f.journal, f.scope,
+    { task: 'T1', run: 'R3', issuer: 'worker', name: 'review' }, { issuerRole: 'lead', role: 'qa' }, completeBrief('Review the change.'));
+  assert.throws(prepareChild, /completed issuer/);
+  const next = bindingFor(saved.assignment, 'worker', 'turn-2');
+  f.api.bindContinuationAdmission(f.journal, next);
+  assert.equal(prepareChild().decision, 'prepared');
+  f.api.completeAdmission(f.journal, next);
+  assert.throws(prepareChild, /completed issuer/);
+});
+
+test('continuation admission resumes the same lead with its running children and preserves every slot', async t => {
+  const f = await roleAdmissionFixture(t, { total: 4, projects: [{ project: 'project-a', limit: 4 }] });
+  assert.equal(typeof f.api.reservePreparedContinuation, 'function');
+  const first = f.reserve(1), lead = bindingFor(first.assignment, 'lead-worker', 'lead-turn-1');
+  f.api.bindAdmission(f.journal, lead);
+  const child = n => f.api.reserveRoleAdmission(f.journal, f.scope,
+    { task: 'T1', run: `R${n}`, issuer: 'lead-worker', call: `child-call-${n}` },
+    { tool: 'spawn', turn: 'lead-turn-1', name: `child-${n}`, argumentsHash: 'a'.repeat(64) },
+    { issuerRole: 'lead', role: 'qa' });
+  for (const n of [2, 3]) {
+    const saved = child(n); f.api.bindAdmission(f.journal, bindingFor(saved.assignment, `child-${n}`, `child-turn-${n}`));
+  }
+  f.api.completeAdmission(f.journal, lead);
+  const prepared = f.api.prepareAdmission(f.journal, f.scope,
+    { task: 'T1', run: 'R4', issuer: 'root', name: 'resumed-lead' }, { issuerRole: 'chief-of-staff', role: 'lead' },
+    completeBrief('Continue with the existing team.'), undefined,
+    { task: 'T1', run: 'R4', role: 'lead', round: 0, taskBranch: '', runBranch: '', candidate: '' }).preparation;
+  const resumed = f.api.reservePreparedContinuation(f.journal, f.scope,
+    { preparation: prepared.id, previous: first.assignment.id, issuer: 'root', call: 'resume-lead' },
+    { tool: 'followup', turn: 'parent-turn', name: prepared.name, argumentsHash: 'b'.repeat(64), taskHash: 'c'.repeat(64) }, 'chief-of-staff');
+  assert.equal(resumed.decision, 'permit-once');
+  f.api.bindContinuationAdmission(f.journal, bindingFor(resumed.assignment, lead.child, 'lead-turn-2'));
+  assert.equal(child(5).decision, 'permit-once');
+  assert.throws(() => child(6), /three child slots/);
+  assert.equal(f.api.completeAdmission(f.journal, lead).decision, 'already-completed');
+  assert.throws(() => f.reserve(7), /capacity is occupied/);
+  const state = f.api.readAdmission(f.journal);
+  assert.equal(state.reservations.length - state.completions.length, 4);
+  assert.deepEqual(state.completions, [lead]);
+});

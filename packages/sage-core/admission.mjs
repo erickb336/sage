@@ -110,13 +110,16 @@ function action(input) {
     const uniqueName = Object.hasOwn(input, "uniqueName");
     const hasBrief = Object.hasOwn(input, "brief");
     const hasPreparation = Object.hasOwn(input, "preparation");
-    fields(input, ["kind", "assignment", "dispatch", ...(hasRole ? ["rolePlan"] : []), ...(uniqueName ? ["uniqueName"] : []), ...(hasBrief ? ["brief"] : []), ...(hasPreparation ? ["preparation"] : [])]);
+    const hasContinuation = Object.hasOwn(input, "continuation");
+    fields(input, ["kind", "assignment", "dispatch", ...(hasRole ? ["rolePlan"] : []), ...(uniqueName ? ["uniqueName"] : []), ...(hasBrief ? ["brief"] : []), ...(hasPreparation ? ["preparation"] : []), ...(hasContinuation ? ["continuation"] : [])]);
     if (uniqueName && (!hasRole || input.uniqueName !== true)) refuse("invalid unique-name rule");
     if (hasBrief && (!hasRole || !uniqueName)) refuse("a brief requires a role and unique child name");
     if (hasPreparation && !hasBrief) refuse("prepared dispatch requires its saved brief");
+    if (hasContinuation && !hasPreparation) refuse("a continuation requires prepared work");
     return { kind: "reserve", assignment: parseAssignment(input.assignment), dispatch: dispatchIdentity(input.dispatch),
       ...(hasRole ? { rolePlan: parseRolePlan(input.rolePlan) } : {}), ...(uniqueName ? { uniqueName: true } : {}), ...(hasBrief ? { brief: parseBrief(input.brief) } : {}),
-      ...(hasPreparation ? { preparation: word(input.preparation, "preparation", UUID) } : {}) };
+      ...(hasPreparation ? { preparation: word(input.preparation, "preparation", UUID) } : {}),
+      ...(hasContinuation ? { continuation: word(input.continuation, "prior assignment", UUID) } : {}) };
   }
   if (input?.kind === "record-report") {
     fields(input, ["kind", "report"]);
@@ -130,9 +133,9 @@ function action(input) {
     fields(input, ["kind", "completion"]);
     return { kind: "complete", completion: childBinding(input.completion) };
   }
-  if (input?.kind === "bind-child") {
+  if (["bind-child", "bind-continuation"].includes(input?.kind)) {
     fields(input, ["kind", "binding"]);
-    return { kind: "bind-child", binding: childBinding(input.binding) };
+    return { kind: input.kind, binding: childBinding(input.binding) };
   }
   return refuse("unknown action");
 }
@@ -147,7 +150,7 @@ function apply(state, event) {
     return { state: copy, result: event.config, changed: true };
   }
   if (!copy.config) refuse("store is not configured");
-  const value = event.kind === "fail-dispatch" ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : event.kind === "bind-child" ? event.binding : event.kind === "complete" ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
+  const value = event.kind === "fail-dispatch" ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : ["bind-child", "bind-continuation"].includes(event.kind) ? event.binding : event.kind === "complete" ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
   if (!copy.config.projects.some((p) => p.project === value.project)) refuse("project is not configured");
   const owner = copy.sessions.find((s) => s.project === value.project && s.session === value.session);
   if (event.kind === "activate") {
@@ -178,6 +181,7 @@ function apply(state, event) {
   if (event.kind === "fail-dispatch") {
     const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
     if (!reserved || ["project", "session", "epoch", "issuer", "call"].some(key => reserved.assignment[key] !== value[key])) refuse("failure has no matching reservation");
+    if (reserved.continuation) refuse("continuation failure requires separate evidence");
     if (copy.bindings.some(row => row.assignment === value.assignment)) refuse("a bound assignment cannot fail dispatch");
     const previous = (copy.failures ?? []).find(row => row.assignment === value.assignment);
     if (previous) {
@@ -214,10 +218,10 @@ function apply(state, event) {
   const completed = new Set((copy.completions ?? []).map(row => row.assignment));
   const failed = new Set((copy.failures ?? []).map(row => row.assignment));
   const active = copy.reservations.filter(row => !completed.has(row.assignment.id) && !failed.has(row.assignment.id));
-  if (["prepare", "reserve"].includes(event.kind) && copy.bindings.some(row => row.project === value.project
-    && row.session === value.session && row.epoch === value.epoch && row.child === value.issuer && completed.has(row.assignment))) {
-    refuse("completed issuer cannot admit new work");
-  }
+  const issuerBindings = copy.bindings.filter(row => row.project === value.project
+    && row.session === value.session && row.epoch === value.epoch && row.child === value.issuer);
+  if (["prepare", "reserve"].includes(event.kind) && issuerBindings.length
+    && issuerBindings.every(row => completed.has(row.assignment))) refuse("completed issuer cannot admit new work");
   if (event.kind === "prepare") {
     const previous = copy.preparations.find(row => ["project", "session", "epoch", "issuer", "name"].every(key => row[key] === value[key]));
     if (previous) {
@@ -235,11 +239,12 @@ function apply(state, event) {
     copy.preparations.push(value);
     return { state: copy, result: { decision: "prepared", preparation: value }, changed: true };
   }
-  if (event.kind === "bind-child") {
+  if (["bind-child", "bind-continuation"].includes(event.kind)) {
     if (failed.has(value.assignment)) refuse("a failed dispatch cannot bind a child");
     const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
     if (!reserved || ["project", "session", "epoch", "issuer", "call"].some(key => reserved.assignment[key] !== value[key])) refuse("child binding has no matching reservation");
     if (!reserved.rolePlan) refuse("child binding requires a recorded role");
+    if (Boolean(reserved.continuation) !== (event.kind === "bind-continuation")) refuse("binding requires its matching assignment kind");
     if (value.child === value.issuer) refuse("issuer cannot bind itself as a child");
     const previous = copy.bindings.find(row => row.assignment === value.assignment);
     if (previous) {
@@ -249,14 +254,19 @@ function apply(state, event) {
     if (copy.reservations.filter(row => row.assignment.project === value.project && row.assignment.session === value.session
       && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
       && row.dispatch.name === reserved.dispatch.name).length !== 1) refuse("child dispatch name is ambiguous");
-    if (copy.bindings.some(row => row.session === value.session && row.child === value.child)) refuse("child already belongs to another assignment");
+    if (reserved.continuation) {
+      const prior = copy.bindings.find(row => row.assignment === reserved.continuation);
+      if (!prior || !completed.has(prior.assignment) || value.child !== prior.child) refuse("continuation child differs from its completed predecessor");
+      if (copy.bindings.some(row => row.session === value.session && row.child === value.child
+        && (row.turn === value.turn || !completed.has(row.assignment)))) refuse("continuation child turn is occupied");
+    } else if (copy.bindings.some(row => row.session === value.session && row.child === value.child)) refuse("child already belongs to another assignment");
     copy.bindings.push(value);
     return { state: copy, result: { decision: "bound", binding: value, role: reserved.rolePlan.role }, changed: true };
   }
   const prior = copy.reservations.find(({ assignment: a }) => a.project === value.project && a.session === value.session
     && a.epoch === value.epoch && a.issuer === value.issuer && a.call === value.call);
   if (prior) {
-    if (["task", "run"].some((key) => prior.assignment[key] !== value[key]) || json(prior.dispatch) !== json(event.dispatch) || json(prior.rolePlan) !== json(event.rolePlan) || json(prior.brief) !== json(event.brief) || prior.preparation !== event.preparation) refuse("dispatch call already names different work");
+    if (["task", "run"].some((key) => prior.assignment[key] !== value[key]) || json(prior.dispatch) !== json(event.dispatch) || json(prior.rolePlan) !== json(event.rolePlan) || json(prior.brief) !== json(event.brief) || prior.preparation !== event.preparation || prior.continuation !== event.continuation) refuse("dispatch call already names different work");
     return { state, result: { decision: "already-reserved", assignment: prior.assignment }, changed: false };
   }
   if (!mode.sage) refuse("Sage mode is off");
@@ -267,6 +277,20 @@ function apply(state, event) {
       || json(prepared.brief) !== json(event.brief)) refuse("dispatch differs from its preparation");
     if (copy.reservations.some(row => row.preparation === event.preparation)) refuse("preparation already has a dispatch");
   }
+  let continuingLead;
+  if (event.continuation) {
+    const prior = copy.reservations.find(row => row.assignment.id === event.continuation);
+    const bound = copy.bindings.find(row => row.assignment === event.continuation);
+    const prepared = copy.preparations.find(row => row.id === event.preparation);
+    if (!prior || !bound || !completed.has(event.continuation)
+      || ["project", "session", "epoch", "issuer", "task"].some(key => prior.assignment[key] !== value[key])
+      || json(prior.rolePlan) !== json(event.rolePlan)) refuse("continuation requires the same completed task and role owner");
+    if (!prepared.runTarget || !event.dispatch.taskHash) refuse("continuation requires a saved run target and task hash");
+    if (copy.reservations.some(row => row.continuation === event.continuation)) refuse("continuation predecessor already has later work");
+    if (copy.bindings.some(row => row.session === bound.session && row.child === bound.child && !completed.has(row.assignment)))
+      refuse("continuation child is still active");
+    if (event.rolePlan.role === "lead") continuingLead = bound.child;
+  }
   if (copy.reservations.some(({ assignment: a }) => a.id === value.id)) refuse("assignment ID already exists");
   if (event.rolePlan && event.uniqueName && copy.reservations.some(row => row.assignment.project === value.project && row.assignment.session === value.session
     && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
@@ -275,11 +299,11 @@ function apply(state, event) {
   // failure before child creation may retry; completion does not create a new run.
   if (copy.reservations.some(row => row.assignment.project === value.project && row.assignment.run === value.run
     && !failed.has(row.assignment.id))) refuse("run already has a dispatch; record a new run");
-  if (event.rolePlan) checkRoleReservation(active, value, event.rolePlan);
+  if (event.rolePlan) checkRoleReservation(active, value, event.rolePlan, continuingLead);
   if (active.length >= copy.config.total) refuse("total capacity is occupied");
   const projectLimit = copy.config.projects.find((p) => p.project === value.project).limit;
   if (active.filter(({ assignment: a }) => a.project === value.project).length >= projectLimit) refuse("project capacity is occupied");
-  copy.reservations.push({ assignment: value, dispatch: event.dispatch, ...(event.rolePlan ? { rolePlan: event.rolePlan } : {}), ...(event.brief ? { brief: event.brief } : {}), ...(event.preparation ? { preparation: event.preparation } : {}) });
+  copy.reservations.push({ assignment: value, dispatch: event.dispatch, ...(event.rolePlan ? { rolePlan: event.rolePlan } : {}), ...(event.brief ? { brief: event.brief } : {}), ...(event.preparation ? { preparation: event.preparation } : {}), ...(event.continuation ? { continuation: event.continuation } : {}) });
   return { state: copy, result: { decision: "permit-once", assignment: value }, changed: true };
 }
 function syncDirectory(path) {
@@ -403,15 +427,28 @@ export function prepareAdmission(dir, scope, request, rolePlan, brief, review, r
 /** The adapter verifies the current issuer and role, then supplies the actual native call and dispatch. */
 export function reservePreparedAdmission(dir, scope, request, dispatch, issuerRole) {
   fields(request, ["preparation", "issuer", "call"]);
+  return reservePrepared(dir, scope, request, dispatch, issuerRole);
+}
+/** Reuse only a completed child from the same task, role, and owner. The adapter verifies native evidence. */
+export function reservePreparedContinuation(dir, scope, request, dispatch, issuerRole) {
+  fields(request, ["preparation", "issuer", "call", "previous"]);
+  const { previous, ...work } = request;
+  word(previous, "prior assignment", UUID);
+  return reservePrepared(dir, scope, work, dispatch, issuerRole, previous);
+}
+function reservePrepared(dir, scope, request, dispatch, issuerRole, continuation) {
   word(request.preparation, "preparation", UUID);
   const prepared = readAdmission(dir).preparations.find(row => row.id === request.preparation);
   if (!prepared) refuse("preparation is unavailable");
   return commit(dir, { kind: "reserve", assignment: createAssignment(scope,
     { task: prepared.task, run: prepared.run, issuer: request.issuer, call: request.call }), dispatch,
-    rolePlan: { issuerRole, role: prepared.rolePlan.role }, uniqueName: true, brief: prepared.brief, preparation: prepared.id });
+    rolePlan: { issuerRole, role: prepared.rolePlan.role }, uniqueName: true, brief: prepared.brief, preparation: prepared.id,
+    ...(continuation ? { continuation } : {}) });
 }
 /** Record a verified initial child identity. This neither permits dispatch nor releases capacity. */
 export const bindAdmission = (dir, binding) => commit(dir, { kind: "bind-child", binding });
+/** Bind a separately admitted later turn; an initial binding can never substitute for it. */
+export const bindContinuationAdmission = (dir, binding) => commit(dir, { kind: "bind-continuation", binding });
 /** The trusted adapter proves dispatch failed before a child existed. Late bindings cannot revive it. */
 export const failAdmission = (dir, failure) => commit(dir, { kind: "fail-dispatch", failure });
 /** Only a trusted adapter may submit authoritative terminal evidence for this exact binding.

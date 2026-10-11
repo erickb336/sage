@@ -10,7 +10,7 @@ export function parseRolePlan(value) {
 }
 
 /** Evaluate inside the same transaction that consumes project and total capacity. */
-export function checkRoleReservation(reservations, assignment, input) {
+export function checkRoleReservation(reservations, assignment, input, continuingLead) {
   const plan = parseRolePlan(input);
   if (plan.role === "chief-of-staff") throw Error("The chief is the owner session, not a child role");
   if (plan.issuerRole !== "chief-of-staff" && plan.issuerRole !== "lead") {
@@ -18,8 +18,11 @@ export function checkRoleReservation(reservations, assignment, input) {
   }
   if (plan.issuerRole === "lead" && !TEAM.has(plan.role)) throw Error("A lead can start only its permitted team");
   const project = reservations.filter(row => row.assignment.project === assignment.project);
+  // Admission supplies this identity only after checking a completed predecessor.
+  const ownTeam = row => continuingLead && row.assignment.issuer === continuingLead
+    && row.assignment.session === assignment.session && row.assignment.epoch === assignment.epoch;
   if (plan.role === "lead" && project.some(row => row.assignment.task === assignment.task
-    && (!row.rolePlan || row.rolePlan.role === "lead" || row.rolePlan.issuerRole === "lead"))) {
+    && (!row.rolePlan || row.rolePlan.role === "lead" || (row.rolePlan.issuerRole === "lead" && !ownTeam(row))))) {
     throw Error("The task already has an active lead or team");
   }
   if (plan.role === "lead" && project.filter(row => !row.rolePlan || row.rolePlan.role === "lead").length >= 3) {

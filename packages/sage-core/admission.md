@@ -164,7 +164,7 @@ Concurrent completion and admission use the same atomic journal protocol as rese
 This record is not task success, report acceptance, or a review verdict.
 The core does not authenticate evidence: direct calls with arbitrary JSON are not proof of native completion.
 The provider must verify immutable dispatch evidence and the exact terminal child turn before calling this API.
-Initial child bindings remain unique; later-assignment binding and recovery are separate work.
+Initial child bindings remain unique. The continuation API handles later assignments separately; native recovery remains unfinished.
 
 A dispatch can include `taskHash`, the SHA-256 hash of its exact task text.
 The journal stores it with the reservation and refuses changed dispatch evidence on a retry.
@@ -179,3 +179,44 @@ A matching receipt frees capacity once. A repeated receipt preserves history; ch
 A bound assignment cannot fail dispatch, and a failed assignment cannot later bind a child.
 The old dispatch call never receives another permission. A retry needs a new preparation and call.
 Failures do not complete a task or accept a report. Mode off does not discard valid failure evidence.
+
+
+## Prepared continuations
+
+`reservePreparedContinuation(directory, scope, request, dispatch, issuerRole)`
+reserves a new run on a completed child. Its request has `preparation`, `issuer`,
+`call`, and `previous`, the prior assignment ID. Preparation still uses the
+normal API with a fresh logical name, saved brief, and run target. The dispatch
+must carry the task-message hash. The adapter must verify the actual task,
+current run, native recipient, and exact outgoing message before calling it.
+
+The predecessor must have an exact completed binding. Project, session, epoch,
+issuer, task, and role plan must stay the same. A changed task, role, or owner
+uses a new child; this API does not transfer ownership. The run must be new.
+Each predecessor has at most one continuation, including while the new child
+turn remains unbound. Concurrent requests cannot fork that history. An exact
+retry returns the old reservation and never grants another dispatch permit.
+
+The new reservation takes normal project, total, and role capacity in the same
+journal transaction. A resumed lead keeps its existing team: its running children
+still consume their own slots and count toward its child limit. Those children
+do not count as a competing lead, but another team still blocks admission.
+Neither an idle native child nor its earlier completion
+is permission to bypass those limits. Mode off refuses new reservations while
+retaining exact retry receipts. Unknown or failed continuation dispatches stay
+held: the initial-spawn failure API cannot release them.
+
+`bindContinuationAdmission(directory, binding)` binds the new assignment to
+the same native child and a new turn. The initial binding API refuses this
+assignment kind. The continuation API refuses an initial assignment, a different
+child, a reused turn, or a child with active work. The adapter must prove exact
+sender dispatch and recipient delivery before binding; this API does not read
+native transcripts. Completion and report operations retain each assignment's
+own binding. An old stop cannot complete the new assignment. A reused lead
+regains admission authority only after its new turn binds.
+
+These records add an explicit continuation reference and binding action. Older
+readers refuse them; update every participant before sharing this journal.
+Existing records retain their bytes and initial-binding rules. The Codex native
+adapter does not yet call these APIs. Recipient resolution, follow-up dispatch,
+later-turn tool binding, report intake, and recovery remain integration work.
