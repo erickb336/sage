@@ -1,4 +1,4 @@
-// Provider-neutral, read-only board transport. The caller owns configuration and secret generation.
+// Provider-neutral, read-only board transport. The caller owns configuration and the owner's password record.
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { lstatSync, watch } from "node:fs";
 import { createServer } from "node:http";
@@ -73,19 +73,21 @@ export async function checkPassword(password, record) {
 
 // After a wrong password the next check waits this long; with one check at a time, a guesser gets about one try a second.
 const WRONG_PASSWORD_DELAY = 1000;
-// Headers that a proxy adds. tailscale serve connects from 127.0.0.1, keeps the client's Host and always adds
-// X-Forwarded-For, so a request that has any of them came through a proxy, not from the Mac itself.
-const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-") || name.startsWith("tailscale-");
+// Headers that a proxy adds. A private HTTPS tunnel connects from 127.0.0.1, may keep a loopback
+// Host and adds X-Forwarded-For, so a request that has any of them came through a proxy, not from the Mac itself.
+const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-");
 
 /**
- * The caller supplies a secret made from at least 32 random bytes (length cannot establish entropy), or a password record
- * from hashPassword. With an id (a non-secret name of the caller's config), a response on the Mac carries the
- * X-Sage-Board header: the id, this process's pid and the time the listener started, so the board command can tell
- * which board answers on the port.
+ * The board needs no sign-in on the Mac. Every other request signs in with the owner's password, a record from
+ * hashPassword. Until the caller gives one, every other request gets 403 and the text "set a password", which names
+ * passwordCommand: the command that the owner runs in a terminal. With an id (a non-secret name of the caller's config),
+ * a response on the Mac carries the X-Sage-Board header: the id, this process's pid and the time the listener started,
+ * so the board command can tell which board answers on the port.
  */
-export function createBoardServer({ sources, secret, password, port = 43123, allowedHosts = [], id } = {}) {
+export function createBoardServer({ sources, password, passwordCommand = "board --set-password", port = 43123, allowedHosts = [], id } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
-  if (password !== undefined ? !validPasswordRecord(password) || secret !== undefined : typeof secret !== "string" || !/^[!-~]{32,1024}$/.test(secret)) throw new TypeError("board needs a secret of 32 to 1024 printable ASCII bytes, or a valid password record instead");
+  if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
+  if (typeof passwordCommand !== "string" || passwordCommand.length > 8192 || /[\p{Cc}\p{Cf}]/u.test(passwordCommand)) throw new TypeError("the set-password command must be one line of text");
   if (!Array.isArray(sources) || !sources.length || sources.length > 32) throw new TypeError("board needs 1 to 32 explicit sources");
   const ids = new Set();
   const configured = Array.from(sources, source => {
@@ -99,7 +101,6 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
   const local = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
   const hosts = new Set([...local, ...Array.from(allowedHosts, authority)]);
   const origins = new Map([...hosts].map(host => [host, new URL(`${local.has(host) ? "http" : "https"}://${host}`).origin]));
-  const expected = digest(`sage:${secret ?? randomBytes(32).toString("base64url")}`);
   let remembered = null; // the digest of the last sign-in that passed the scrypt check, so a page's next requests cost no scrypt
   let checking = false; // one password check at a time: scrypt is slow on purpose, and the delay after a wrong one counts too
   let boardHeader = null;
@@ -114,7 +115,6 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
     if (!match) return false;
     const decoded = Buffer.from(match[1], "base64");
     if (decoded.toString("base64") !== match[1]) return false;
-    if (!password) return timingSafeEqual(digest(decoded), expected);
     const seen = digest(decoded);
     if (remembered && timingSafeEqual(seen, remembered)) return true;
     const text = decoded.toString("utf8"), colon = text.indexOf(":");
@@ -265,9 +265,11 @@ export function createBoardServer({ sources, secret, password, port = 43123, all
     securityHeaders(response);
     const fail = (status, text) => { response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" }); response.end(request.method === "HEAD" ? undefined : `${text}\n`); };
     if (!browserBoundary(request)) return fail(403, "This request is not permitted.");
-    // The owner's decision (T216): on the Mac itself the board needs no sign-in. Every other request signs in: also one
-    // that tailscale serve forwards, which reaches the loopback listener from 127.0.0.1, maybe with a loopback Host.
+    // The owner's decisions (T216, T229): on the Mac itself the board needs no sign-in. Every other request signs in
+    // with the owner's password: also one that a tunnel forwards to the loopback listener, maybe with a loopback Host.
+    // Until the owner sets a password, there is no sign-in, so such a request gets 403 (no sign-in can change it).
     if (onMac(request)) { if (boardHeader) response.setHeader("X-Sage-Board", boardHeader); }
+    else if (!password) return fail(403, `Access from outside this Mac is off: no board password is set. Set a password on the Mac: run in a terminal ${passwordCommand}`);
     else {
       const signedIn = await authenticated(request);
       if (signedIn === "busy") { response.setHeader("Retry-After", "1"); return fail(429, "Another sign-in is being checked. Try again in a second."); }

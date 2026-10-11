@@ -58,16 +58,16 @@ export function validateBoardConfig(config, configPath = null) {
   });
   const port = config.port ?? 43123;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be from 1024 to 65535");
-  // The owner's password replaces the random secret: a config holds one of them.
-  if (config.password !== undefined ? !validPasswordRecord(config.password) || config.secret !== undefined : typeof config.secret !== "string" || !/^[a-zA-Z0-9_-]{43,128}$/.test(config.secret)) throw new TypeError("board config needs a secret of at least 32 random bytes as base64url, or a valid password record instead");
+  // T229: the board has no random secret. A "secret" of an older config still loads, but nothing reads it, so it signs no one in.
+  if (config.password !== undefined && !validPasswordRecord(config.password)) throw new TypeError("the board password in the config is not a valid record: set it again with board --set-password");
   if (!Array.isArray(config.allowedHosts ?? []) || (config.allowedHosts ?? []).some(host => typeof host !== "string" || host.length > 255)) throw new TypeError("allowedHosts must be a bounded list of exact host names");
   const pagesDir = config.pagesDir ? boundedPath(config.pagesDir) : null;
   if (configPath && !outsideRoots(resolve(configPath), sources) || pagesDir && !outsideRoots(pagesDir, sources)) throw new TypeError("board config and exported pages must stay outside logbook roots");
-  return { version: 1, sources, port, allowedHosts: config.allowedHosts ?? [], ...(config.password ? { password: config.password } : { secret: config.secret }), ...(pagesDir ? { pagesDir } : {}) };
+  return { version: 1, sources, port, allowedHosts: config.allowedHosts ?? [], ...(config.password ? { password: config.password } : {}), ...(pagesDir ? { pagesDir } : {}) };
 }
 export function createBoardConfig(path, { sources, port = 43123, allowedHosts = [], pagesDir } = {}) {
   path = boundedPath(path);
-  const config = validateBoardConfig({ version: 1, sources, port, allowedHosts, secret: randomBytes(32).toString("base64url"), ...(pagesDir ? { pagesDir } : {}) }, path);
+  const config = validateBoardConfig({ version: 1, sources, port, allowedHosts, ...(pagesDir ? { pagesDir } : {}) }, path);
   noLinkedParents(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx", mode: 0o600 });
@@ -85,10 +85,12 @@ export const standardSources = (env = process.env) => env.SAGE_HOME ? [{ id: "sa
 export const defaultConfigPath = (env = process.env) => join(env.HOME ?? homedir(), ".config", "sage-board", "board.json");
 
 /**
- * Ask for the owner's board password twice, with the echo off on a terminal. It comes only from the input stream, never
- * from an argument, so it is in no shell history or process list. The file keeps only its salted hash, at mode 0600.
+ * Ask for the owner's board password twice, with the echo off. It comes only from a terminal, never from an argument
+ * or a pipe, so it is in no shell history or process list, and an agent (which has no terminal) cannot set it (T229).
+ * The file keeps only its salted hash, at mode 0600.
  */
-async function setPassword(configPath, input, prompt) {
+async function setPassword(configPath, input, prompt, terminal) {
+  if (!terminal) throw new TypeError("board --set-password needs a terminal: open Terminal on this Mac and run the command there yourself. It does not read a password from a pipe, a file or an agent.");
   const config = readBoardConfig(configPath);
   let muted = false;
   const echo = new Writable({ write(chunk, _encoding, done) { if (!muted) prompt.write(chunk); done(); } });
@@ -107,8 +109,7 @@ async function setPassword(configPath, input, prompt) {
   if ([...first].length < 12) throw new TypeError("the password needs 12 characters or more; the board password did not change");
   if (Buffer.byteLength(first) > 1024) throw new TypeError("the password is longer than 1024 bytes; the board password did not change");
   if (first !== second) throw new TypeError("the two entries differ; the board password did not change");
-  const { secret: _plain, ...kept } = config;
-  const next = validateBoardConfig({ ...kept, password: await hashPassword(first) }, configPath);
+  const next = validateBoardConfig({ ...config, password: await hashPassword(first) }, configPath);
   const temporary = join(dirname(configPath), `.board-${randomBytes(6).toString("hex")}.json`);
   writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: "wx", mode: 0o600 });
   try { renameSync(temporary, configPath); } catch (error) { rmSync(temporary, { force: true }); throw error; }
@@ -156,8 +157,10 @@ function notOurs(found, configPath, config, env) {
 /** Start the server as a detached process when nothing answers. Its output goes to board.log next to the config; the server writes board.pid itself. */
 async function ensureBoard(configPath, config, env) {
   const url = `http://127.0.0.1:${config.port}/`;
+  const set = boardCommand("--set-password", configPath, env);
   const phone = !config.allowedHosts.length ? `Phone access is off: no allowedHosts in ${configPath}.`
-    : `On the phone, open https://${config.allowedHosts[0]}/ and sign in as sage with ${config.password ? "your board password" : `the "secret" value in ${configPath}`}. To set ${config.password ? "a new" : "your own"} password, run in a terminal: ${boardCommand("--set-password", configPath, env)}`;
+    : !config.password ? `Phone access is off until you set a board password: run in a terminal on this Mac: ${set}`
+    : `On the phone, open https://${config.allowedHosts[0]}/ and sign in as sage with your board password. To set a new password, run in a terminal: ${set}`;
   const ready = how => `Sage board ${how}: ${url} · no sign-in needed on this Mac. ${phone}`;
   const found = await probe(config), refused = notOurs(found, configPath, config, env);
   if (refused) throw new Error(refused);
@@ -232,7 +235,7 @@ function parse(argv) {
   if (values.length > 1 || [options.serve, options.html, options.status, options.setup, options.ensure, options.stop, options["set-password"], options.install].filter(Boolean).length > 1) throw new TypeError("board needs one scope and one format");
   return { options, value: values[0] ?? "all" };
 }
-export async function runBoardCli(argv, { output = line => process.stdout.write(`${line}\n`), env = process.env, input = process.stdin, prompt = process.stderr, kill = (pid, signal) => process.kill(pid, signal) } = {}) {
+export async function runBoardCli(argv, { output = line => process.stdout.write(`${line}\n`), env = process.env, input = process.stdin, terminal = Boolean(input.isTTY), prompt = process.stderr, kill = (pid, signal) => process.kill(pid, signal) } = {}) {
   const { options, value } = parse(argv);
   options.config ??= defaultConfigPath(env);
   if (options.scope && (options.serve || options.setup || options.ensure || options.stop || options["set-password"] || options.install)) throw new TypeError("--scope is only for a task lookup");
@@ -242,7 +245,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
     if (value !== "all" || options.sources?.length > 65536 || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("setup takes --config, with optional sources, port, pages and allowed-hosts");
     if (options.port && !/^[1-9]\d*$/.test(options.port)) throw new TypeError("port must be a positive integer");
     createBoardConfig(options.config, { sources: options.sources ? parseJson(options.sources) : standardSources(env), port: options.port ? Number(options.port) : 43123, pagesDir: options.pages, allowedHosts: options["allowed-hosts"] ? parseJson(options["allowed-hosts"]) : [] });
-    if (options.setup) { output(`Board config created: ${boundedPath(options.config)}. The phone sign-in password stays in this private file; set your own with board --set-password.`); return null; }
+    if (options.setup) { output(`Board config created: ${boundedPath(options.config)}. Access from outside this Mac stays off until you set a board password: run in a terminal ${boardCommand("--set-password", boundedPath(options.config), env)}`); return null; }
   } else if (options.sources || options.pages || options.port || options["allowed-hosts"]) throw new TypeError(options.ensure ? "the board config exists: change its settings in the file" : "source and service settings require --setup");
   if (options.ensure) {
     if (value !== "all" || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("ensure takes --config, and the setup settings for a new config");
@@ -254,7 +257,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   }
   if (options["set-password"]) {
     if (value !== "all" || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("set-password takes only --config; it asks for the password");
-    output(await setPassword(boundedPath(options.config), input, prompt)); return null;
+    output(await setPassword(boundedPath(options.config), input, prompt, terminal)); return null;
   }
   const config = readBoardConfig(options.config);
   if (options.install) {
@@ -276,7 +279,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options.serve) {
     if (value !== "all" || options.out || options.project) throw new TypeError("server uses all configured sources; no output or project option");
     // The server writes board.pid only once it listens, and removes it when it stops, so a pid there is a running board.
-    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, id: configId(configPath) });
+    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, id: configId(configPath), passwordCommand: boardCommand("--set-password", configPath, env) });
     await server.start();
     // No listener stays without board.pid: then no command could tell its process (F-T216-12).
     try { writePid(configPath, process.pid); } catch (error) { await server.close(); throw error; }
