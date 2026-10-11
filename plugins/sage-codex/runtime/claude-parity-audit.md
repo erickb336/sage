@@ -77,7 +77,10 @@ The protected transcript reader now checks these identities and message hashes a
 It refuses linked files, incomplete snapshots, conflicting messages, and oversized transcripts.
 Its bounds are 16 MiB and 65,536 records; exceeding either bound requires reconciliation.
 It does not authenticate the hook caller or allow a journal update.
-Immutable dispatch evidence and lifecycle integration remain required before capacity release.
+The follow-up probe now also checks an exact accepted sender call with
+`readNativeFollowup`, including target text and the saved task hash.
+This receipt does not resolve the target or grant permission. Atomic admission
+and later-assignment lifecycle integration remain required before capacity release.
 
 ## MCP lifecycle readiness
 

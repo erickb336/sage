@@ -35,6 +35,13 @@ if(record.fixedCommandMatched&&input.hook_event_name==='PreToolUse'){
    fixedShell:args.shell==='/bin/sh',fixedDirectory:args.workdir===join(root,'workspace/command-workdir'),ttyFalse:args.tty===false};
  }catch(error){record.commandTranscript={error:error.message};}
 }
+if(input.hook_event_name==='PreToolUse'&&input.tool_name==='collaborationfollowup_task'){
+ const base=realpathSync(join(root,'codex/sessions')),transcript=realpathSync(input.transcript_path);
+ const rel=relative(base,transcript);
+ if(!rel||rel.startsWith('..')||isAbsolute(rel))throw Error('outside_fresh_session_tree');
+ writeFileSync(join(root,'followup-dispatch.json'),JSON.stringify({transcript,session:input.session_id,
+  turn:input.turn_id,call:input.tool_use_id}),{flag:'wx'});
+}
 if(typeof input.tool_input?.task_name==='string')record.inputTaskName=input.tool_input.task_name;
 if(input.hook_event_name==='PostToolUse'){
  const value=input.tool_response;

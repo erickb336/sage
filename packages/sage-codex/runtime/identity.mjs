@@ -312,3 +312,62 @@ export function readChildTurn(transcriptPath, options, expected) {
     return { metadata, initialTurn, turn };
   } catch { unavailable(); }
 }
+
+/** Verify one accepted follow-up call. This proves dispatch, not recipient delivery or admission. */
+export function readNativeFollowup(transcriptPath, options, expected) {
+  const unavailable = () => { throw Error("Codex follow-up evidence is unavailable"); };
+  try {
+    const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+    const keys = ["session", "actor", "parent", "path", "turn", "call", "target", "taskHash"];
+    if (!record(expected) || Object.keys(expected).length !== keys.length || keys.some(key => !Object.hasOwn(expected, key))
+      || !["session", "actor", "turn"].every(key => typeof expected[key] === "string" && uuid.test(expected[key]))
+      || typeof expected.call !== "string" || !/^[A-Za-z0-9_.:-]{1,256}$/.test(expected.call)
+      || typeof expected.target !== "string" || !/^[A-Za-z0-9_./:-]{1,4096}$/.test(expected.target)
+      || typeof expected.taskHash !== "string" || !/^[0-9a-f]{64}$/.test(expected.taskHash)) unavailable();
+    const rows = readSessionRecords(transcriptPath, options, Infinity), meta = rows[0].payload;
+    if (meta.id !== expected.actor || meta.session_id !== expected.session || meta.cli_version !== "0.160.0") unavailable();
+    if (expected.actor === expected.session) {
+      if (expected.parent !== null || expected.path !== "/root" || Object.hasOwn(meta, "parent_thread_id") || Object.hasOwn(meta, "agent_path")) unavailable();
+    } else if (typeof expected.parent !== "string" || !uuid.test(expected.parent) || expected.parent === expected.actor
+      || typeof expected.path !== "string" || !/^\/root(?:\/(?!root(?:\/|$))[a-z0-9_]+)+$/.test(expected.path)
+      || meta.parent_thread_id !== expected.parent || meta.agent_path !== expected.path) unavailable();
+    let turn, context, request = false, result;
+    const turns = new Set(), completed = new Set();
+    for (const row of rows.slice(1)) {
+      if (!record(row) || !record(row.payload) || row.type === "session_meta") unavailable();
+      const p = row.payload;
+      if (row.type === "event_msg" && p.type === "task_started") {
+        if (typeof p.turn_id !== "string" || !uuid.test(p.turn_id) || turns.has(p.turn_id)) unavailable();
+        turns.add(p.turn_id); turn = p.turn_id; context = undefined;
+      }
+      if (row.type === "event_msg" && p.type === "task_complete") {
+        if (!turn || p.turn_id !== turn || completed.has(turn)) unavailable();
+        completed.add(turn);
+      }
+      if (row.type === "turn_context") {
+        if (!turn || p.turn_id !== turn || completed.has(turn)) unavailable();
+        context = turn;
+      }
+      if (row.type !== "response_item" || p.call_id !== expected.call) continue;
+      if (turn !== expected.turn || context !== turn || completed.has(turn)
+        || p.internal_chat_message_metadata_passthrough?.turn_id !== turn || row.metadata?.client_authored !== false) unavailable();
+      if (p.type === "function_call") {
+        if (request || result || p.name !== "followup_task" || p.namespace !== "collaboration" || typeof p.arguments !== "string") unavailable();
+        const args = JSON.parse(p.arguments);
+        if (!record(args) || Object.keys(args).length !== 2 || !Object.hasOwn(args, "message") || !Object.hasOwn(args, "target")
+          || args.target !== expected.target || typeof args.message !== "string" || !args.message
+          || Buffer.byteLength(args.message) > 1024 * 1024 || args.message.includes("\0")
+          || Buffer.from(args.message, "utf8").toString("utf8") !== args.message
+          || createHash("sha256").update(args.message).digest("hex") !== expected.taskHash) unavailable();
+        request = true;
+      } else if (p.type === "function_call_output") {
+        if (!request || result || p.output !== "" || typeof p.id !== "string" || !/^fco_[A-Za-z0-9_-]{1,256}$/.test(p.id)) unavailable();
+        result = p.id;
+      } else unavailable();
+    }
+    if (!request) unavailable();
+    if (!result) return null; // Retain pending work; silence is not successful dispatch.
+    return { call: expected.call, turn: expected.turn, target: expected.target, taskHash: expected.taskHash,
+      resultMessage: result, evidenceHash: createHash("sha256").update(JSON.stringify([...keys.map(key => expected[key]), result])).digest("hex") };
+  } catch { unavailable(); }
+}

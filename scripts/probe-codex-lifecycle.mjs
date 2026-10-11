@@ -6,7 +6,7 @@ import {createHash} from "node:crypto";
 import assert from "node:assert/strict";
 import {existsSync,readdirSync,readFileSync} from "node:fs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
-import {readAssignmentTurn} from "../packages/sage-codex/runtime/identity.mjs";
+import {readAssignmentTurn,readNativeFollowup} from "../packages/sage-codex/runtime/identity.mjs";
 import {setupCapture} from "./fixtures/codex-native/setup-capture.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -856,6 +856,15 @@ data: ${JSON.stringify(event)}
       assert(stop.some(row => row.lastMessageHash === createHash("sha256").update("STATUS done").digest("hex")));
     }
     if (followUp) {
+      const captured = JSON.parse(readFileSync(join(root, 'followup-dispatch.json'), 'utf8'));
+      assert.equal(captured.session, rootThread); assert.equal(captured.call, calls.followup);
+      const receipt = readNativeFollowup(captured.transcript, { sessionsDir: join(codexHome, 'sessions') }, {
+        session: rootThread, actor: rootThread, parent: null, path: '/root', turn: captured.turn,
+        call: calls.followup, target: taskName, taskHash: createHash('sha256').update(FOLLOWUP_PROMPT).digest('hex'),
+      });
+      assert(receipt); assert.equal(receipt.call, calls.followup);
+      print({ type: 'followup_dispatch_evidence', exactNativeCall: true, exactTaskHash: true,
+        acceptedResult: true, recipientDeliveryCheckedSeparately: true, simulatedModel: true });
       assert.equal(new Set(stop.map(row => row.turn_id)).size, 2);
       assert(stop.every(row => row.agent_id === start[0].agent_id && row.session_id === start[0].session_id));
       assert(stop.some(row => row.turn_id === start[0].turn_id));
