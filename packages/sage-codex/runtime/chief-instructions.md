@@ -1,9 +1,9 @@
 # Prepared chief instructions
 
-These instructions are a build artifact for the future owner-session adapter.
-They are not loaded by the installed manual preview or the current mode hook.
-Full workflow policy, state access, lifecycle acceptance, and missing routes
-must be verified before an adapter can activate them. Text alone grants no authority.
+The prepared native owner adapter renders these shared rules when Sage turns on.
+The installed manual preview does not load them. Full workflow policy, state
+access, lifecycle acceptance, and missing routes still need verification before
+installed automatic activation. Text alone grants no authority.
 
 ---
 

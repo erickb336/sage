@@ -30,8 +30,8 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
   const hs=r.data[0].hooks;
   const failures=hs.filter(h=>h.eventName==='postToolUseFailure');
   assert(failures.length<=1&&(!failures.length||captureFailure));failureHookAvailable=failures.length===1;
-  assert.equal(hs.length,(sage?8:4)+(blockStop?1:0)+failures.length);
-  assert.deepEqual(hs.map(h=>h.eventName).sort(),['preToolUse','postToolUse','subagentStart','subagentStop',...(sage?['preToolUse','postToolUse','subagentStop','userPromptSubmit']:[]),...(blockStop?['subagentStop']:[]),...(failureHookAvailable?['postToolUseFailure']:[])].sort());
+  assert.equal(hs.length,(sage?9:4)+(blockStop?1:0)+failures.length);
+  assert.deepEqual(hs.map(h=>h.eventName).sort(),['preToolUse','postToolUse','subagentStart','subagentStop',...(sage?['preToolUse','postToolUse','subagentStop','userPromptSubmit','userPromptSubmit']:[]),...(blockStop?['subagentStop']:[]),...(failureHookAvailable?['postToolUseFailure']:[])].sort());
 
   assert(hs.every(h=>(sage||h.command===command)&&h.enabled&&h.sourcePath===join(codexHome,'hooks.json')));
   return hs;

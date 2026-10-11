@@ -105,6 +105,11 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   if (nestedReport) GRAND_MARKER = ["STATUS done", "RESULT CLEAN",
     `EVIDENCE ${JSON.stringify({ commit: integrated.reviewTarget.sha, round: 0, cycle: 1, summary: "Fixed nested review; simulated evidence only." })}`,
     "FINDINGS []", "QUESTIONS none", "NOT VERIFIED real model or real review", "BRANCH codex/t1-review"].join("\n");
+  const chiefText = (sage || sageOff) ? readFileSync(join(root, "plugin/runtime/chief-instructions.md"), "utf8").split("\n---\n\n")[1].slice(0, -1) : null;
+  const chiefParts = chiefText ? (await import(`file://${join(root, "plugin/runtime/chief-output.mjs")}`)).chiefInstructionParts() : [];
+  let chiefContextVerified = false;
+  const textValues = value => typeof value === "string" ? [value] : Array.isArray(value)
+    ? value.flatMap(textValues) : value && typeof value === "object" ? Object.values(value).flatMap(textValues) : [];
   let finishedRun, acceptedReview, prematureCompletions;
   let responseRequests = 0;
   let rejectedRequests = 0;
@@ -180,6 +185,8 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({ namespace: tool.name, name: member.name }))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{ name: tool.name }] : []);
     return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen,
+      chiefCopies: chiefParts.map(part => textValues(input).reduce((count, text) => count + text.split(part).length - 1, 0)),
+      chiefOrder: chiefParts.map(part => textValues(input).join("\n").indexOf(part)),
       prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review"), inspectTools: mcpTools("sage_read_recorded_report") };
   };
   let responseId = 0;
@@ -304,6 +311,14 @@ data: ${JSON.stringify(event)}
         return;
       }
       check(!subagent, "unexpected_non_spawn_agent_request");
+      if (!rootThread && chiefText) {
+        const count = info.chiefCopies;
+        check(count.every(copies => copies === (sage ? 1 : 0)), "chief_context_delivery_mismatch");
+        if (sage) check(info.chiefOrder.every((position, index) => index === 0 || position > info.chiefOrder[index - 1]), "chief_context_order_mismatch");
+        chiefContextVerified = true;
+        print({ type: "chief_context_evidence", sageMode: sage, exactSharedRulesDelivered: sage,
+          copiesPerPart: count, ordered: sage, simulatedModel: true, realModelConsumptionVerified: false });
+      }
       rootThread ??= thread;
       check(thread === rootThread, "unexpected_root_thread_identity");
       const preparationCall = failedDispatchRecovered ? calls.prepareRetry : calls.prepare;
@@ -597,6 +612,7 @@ data: ${JSON.stringify(event)}
       unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
     if (!verified) process.exitCode = 1;
+    if (sage || sageOff) assert(chiefContextVerified, "chief_context_not_observed");
     if (sageOff) {
       const saved = integrated.readJournal();
       assert.equal(saved.modes.at(-1)?.sage, false);
