@@ -19,8 +19,9 @@ export function waitNative(child, { deadlineMs = 120_000, onTimeout = () => {} }
       child.stdout.destroy();
       child.stderr.destroy();
       child.unref();
-      onTimeout();
-      finish({ timedOut: true, reason: "native_deadline" });
+      let timeoutCallbackFailed = false;
+      try { onTimeout(); } catch { timeoutCallbackFailed = true; }
+      finish({ timedOut: true, reason: "native_deadline", ...(timeoutCallbackFailed ? { timeoutCallbackFailed } : {}) });
     }, deadlineMs);
     child.once("close", closed);
     child.once("error", failed);

@@ -1698,9 +1698,9 @@ test("native probe removes its profile after version failure and a stalled versi
   for (const stalled of [false, true]) {
     const temporary = join(dir, stalled ? "stalled" : "failed"); mkdirSync(temporary);
     const fake = join(dir, stalled ? "stalled-codex" : "failed-codex");
-    // The timeout fixture exits on its own after EOF. No signal or process-list query is needed.
+    // The fixture stays alive until its output transport closes, then exits without a signal.
     writeFileSync(fake, stalled
-      ? "#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on('end', () => setTimeout(() => process.exit(0), 100));\n"
+      ? "#!/usr/bin/env node\nprocess.stdin.resume(); const timer = setInterval(() => process.stdout.write('fixture\\n'), 25); process.stdout.on('error', () => { clearInterval(timer); process.exit(0); });\n"
       : "#!/usr/bin/env node\nprocess.exit(0);\n", { mode: 0o700 });
     const result = spawnSync(process.execPath, [join(ROOT, "scripts/probe-codex-lifecycle.mjs")], {
       env: { ...process.env, TMPDIR: temporary, SAGE_CODEX_BIN: fake, ...(stalled ? { SAGE_PROBE_TEST_DEADLINE_MS: "1" } : {}) },
@@ -1712,4 +1712,25 @@ test("native probe removes its profile after version failure and a stalled versi
     assert.equal(rows.at(-1).temporaryRootRemoved, true);
     assert.deepEqual(readdirSync(temporary), [], "the actual temporary profile is gone");
   }
+});
+
+
+test("native deadline releases its transport when the timeout callback throws", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  let detached = false;
+  child.unref = () => { detached = true; };
+  child.kill = () => assert.fail("a deadline must never signal the child");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child, { onTimeout: () => { throw new Error("simulated callback failure"); } });
+  t.mock.timers.tick(120_000);
+  assert.deepEqual(await result, { timedOut: true, reason: "native_deadline", timeoutCallbackFailed: true });
+  assert.equal(child.stdin.writableEnded, true);
+  for (const stream of [child.stdin, child.stdout, child.stderr]) assert.equal(stream.destroyed, true);
+  assert.equal(detached, true);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
 });
