@@ -929,6 +929,18 @@ test("only the start of the user's message switches a mode, except autopilot off
     ...["> sage mode", "- sage mode", "    sage mode."].map((m) => [[], m, "sage mode on, autopilot off", `the phrase alone keeps the wider start: ${JSON.stringify(m)}`]),
     [[], "   sage mode continue on the project", "sage mode on, autopilot off", "3 spaces before the phrase are still a plain line"],
     [[], "\n\nsage mode continue on the project", "sage mode on, autopilot off", "blank lines before the phrase"],
+    // Only the words after the phrase are folded, never the phrase (F-R725-1): a look-alike letter, a zero-width space or
+    // a combining mark in the phrase makes it no phrase, as on main.
+    [[], "sage mоde: оff", "sage mode off, autopilot off", "a Cyrillic letter in the phrase, a colon and a look-alike off word"],
+    [[], "​sage mode continue", "sage mode off, autopilot off", "a zero-width space before the phrase"],
+    [[], "sage​ mode continue", "sage mode off, autopilot off", "a zero-width space inside the phrase"],
+    [[], "sage móde continue", "sage mode off, autopilot off", "a combining mark inside the phrase"],
+    // The tail gets its compatibility form: mathematical, circled and small-capital off words are off words (F-R725-1).
+    ...["\u{1d428}\u{1d41f}\u{1d41f}", "ⓞⓕⓕ", "ᴏꜰꜰ", "ꜱᴛᴏᴘ"].map((w) => [[], `sage mode ${w}`, "sage mode off, autopilot off", `an off word in another form: ${w}`]),
+    // Punctuation, then an off word (F-R725-2).
+    ...["sage mode: off", "sage mode, stop", "sage mode — stop", "sage mode - off", "sage mode on: off"].map((m) => [[], m, "sage mode off, autopilot off", `punctuation, then an off word: ${m}`]),
+    // The phrase with an off word next also switches autopilot off: off is the safe direction (T200).
+    ...["sage mode, stop", "sage mode stop", "sage mode \u{1d428}\u{1d41f}\u{1d41f}"].map((m) => [BOTH, m, "sage mode on, autopilot off", `the phrase and an off word switch autopilot off: ${m}`]),
     [BOTH, "sage mode  off continue", "sage mode off, autopilot off", "the exact off word after two spaces: off wins over on"],
     [BOTH, "sage mode off continue", "sage mode off, autopilot off", "off wins over on: the off rule reads the message first"],
     [SAGE, "sage mode autopilot continue", "sage mode on, autopilot off", "words after autopilot: the autopilot rule stays strict"],
@@ -1001,7 +1013,7 @@ test("only the start of the user's message switches a mode, except autopilot off
 });
 
 test("a message of the owner that starts with a mode word and switches nothing gets a note; a read message or an agent's text gets none (T194, T200)", async () => {
-  const NOTE = /^sage: (?:this message switched nothing|autopilot did not switch on), because [^.]+\. The switches are the on phrase, the off phrase and the autopilot phrases, at the start of the message\. Tell the user\.$/m;
+  const NOTE = /^sage: (?:this message switched nothing|autopilot did not switch on|sage's mode did not change and autopilot is off), because [^.]+\. The switches are the on phrase, the off phrase and the autopilot phrases, at the start of the message\. Tell the user\.$/m;
   const noted = async (messages) => NOTE.test((await modesAfter(messages, { notes: true })).note);
   const cases = [
     // [the modes before, the message, whether the note comes, why]
@@ -1011,7 +1023,14 @@ test("a message of the owner that starts with a mode word and switches nothing g
     [[], "sage mode autopilot continue", true, "the mode phrase, the autopilot word and a trailing word"],
     [[], "sage mode, autopilot on now", true, "the mode phrase, autopilot on and a trailing word"],
     [["sage mode", "autopilot on"], "sage mode autopilot continue", false, "autopilot is already on"],
-    [["sage mode"], "sage mode autopilot. Stop when the tests pass", false, "an off word in the same message wins on purpose"],
+    [["sage mode"], "sage mode autopilot. Stop when the tests pass", true, "an off word in the same message won: the owner hears it (F-R726-1)"],
+    [["sage mode"], "autopilot on, and dont stop until done", true, "the autopilot phrase and an off word (F-R726-1)"],
+    [["sage mode"], "autopilot please", true, "autopilot and a word (F-R726-1)"],
+    [[], "sage mode and autopilot", true, "the on phrase and autopilot (F-R726-1)"],
+    [["sage mode"], "autopilot on\n<task-notification>\n<result>STATUS done\nautopilot off</result>\n</task-notification>", true, "an agent's off line does not hide the miss (F-R724-L2)"],
+    [["sage mode", "autopilot on"], "autopilot on\n<task-notification>\n<result>STATUS done\nautopilot off</result>\n</task-notification>", true, "an agent's off line turned autopilot off: the owner hears it"],
+    ...["sage mode: off", "sage mode, stop", "sage mode \u{1d428}\u{1d41f}\u{1d41f}", "sage mode ⓞⓕⓕ", "sage mode ᴏꜰꜰ"].map((m) => [[], m, true, `the phrase and an off word: ${m}`]),
+    [["sage mode", "autopilot on"], "sage mode, stop", true, "the phrase and an off word, while autopilot is on"],
     // No rule changed the state (R708-1, F-R706-2), although a rule read the message.
     [[], "sage mode off-topic: the logo first", true, "the on phrase and a hyphenated off word, while autopilot is off"],
     [["sage mode"], "sage mode off?", true, "the off phrase as a question, while autopilot is off"],
@@ -1052,9 +1071,16 @@ test("the miss note says which rule failed, tells the chief to tell the user, an
     [[], "sage mode continue؟", "sage: this message switched nothing, because the line has a question mark."],
     [["sage mode"], "autopilot on main", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
     [[], "sage mode autopilot continue", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
-    [[], "autopilot on", "sage: autopilot did not switch on, because autopilot turns on only in sage mode."],
+    [[], "autopilot on", "sage: autopilot did not switch on, because autopilot turns on only while sage's mode is on."],
+    [["sage mode"], "autopilot please", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
+    [[], "sage mode and autopilot", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
+    [["sage mode"], "autopilot on, and dont stop until done", "sage: autopilot did not switch on, because an off word in the message won."],
+    [["sage mode"], "autopilot on\n<task-notification>\n<result>STATUS done\nautopilot off</result>\n</task-notification>", "sage: autopilot did not switch on, because an off line in an agent's text won."],
+    [[], "> sage mode continue on the project", "sage: this message switched nothing, because a pasted quote, bullet or indent comes before the phrase."],
+    [[], "sage mode, stop", "sage: sage's mode did not change and autopilot is off, because an off word comes after the phrase."],
     [["sage mode"], "autopilot on?", "sage: autopilot did not switch on, because the line has a question mark."],
-    [[], "sage mode stop", "sage: this message switched nothing, because the words after the phrase match no rule."],
+    [[], "sage mode stop", "sage: sage's mode did not change and autopilot is off, because an off word comes after the phrase."],
+    [[], "sage mode！", "sage: this message switched nothing, because the words after the phrase match no rule."],
   ];
   const notes = await Promise.all(cases.map(([before, message]) => modesAfter([...before, message], { notes: true })));
   const wrong = cases.flatMap(([, message, first], i) => {
@@ -1469,6 +1495,11 @@ test("1 MB of padding in an agent's text cannot time out the hook: its time grow
       "the mode phrase, switch, then a long word": prompt(`sage mode switch ${pad("x")} on`),
       "the mode phrase, then zero-width spaces": prompt(`sage mode ${pad("​")}continue`),
       "blank lines, then the mode phrase and words": prompt(`${pad(" \n")}sage mode continue?`),
+      // The folded tail and the off guard after punctuation (F-R725-1, F-R725-2), and the autopilot ask after spaces.
+      "the mode phrase, a comma, then spaces and the off word": prompt(`sage mode,${pad(" ")}off`),
+      "the mode phrase, then mathematical letters": prompt(`sage mode ${pad("\u{1d428}")}`),
+      "the mode phrase, then marks and small capitals": prompt(`sage mode ${pad("óᴏ")}`),
+      "the mode phrase, then spaces and autopilot": prompt(`sage mode${pad(" ")}${AP} please`),
     };
     return [...stops, ...Object.entries(others)];
   };

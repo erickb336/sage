@@ -162,17 +162,24 @@ function switchModes({ owner, text, outside, all }, state) {
   // failed. A silent miss left a session's hook off for two days (T194): the owner's first message had words after the
   // on phrase, and nothing told the chief. Only the owner's text gets the note, never an agent's. A message that changed
   // nothing gets it, unless a rule read it and kept the state on purpose (the on phrase while sage mode is on, or an
-  // autopilot off while autopilot is off). Autopilot named with its on word gets it when autopilot stays off, also when
-  // sage mode went on (T200), unless an off word in the same message won. The note describes the phrases and never
-  // quotes them, so that a report that quotes the note is no switch text (T201).
+  // autopilot off while autopilot is off). The phrase with an off word next always gets it: sage's mode stays as it
+  // was, and autopilot goes off (T200). Autopilot asked for gets it whenever autopilot stays off, also when sage mode
+  // went on or an off word won (T200, F-R726-1). The note describes the phrases and never quotes them, so that a report
+  // that quotes the note is no switch text (T201).
   const read = signals.sageOn || signals.sageOff || (state.sage && signals.autopilotOn) || (signals.autopilotOff && signals.autopilotWord);
-  const autopilotMissed = signals.autopilotAsked && !state.autopilot && !signals.autopilotOff;
-  if (owner && signals.modeWord && (autopilotMissed || (!read && before === modes()))) {
-    const why = signals.autopilotOn ? "autopilot turns on only in sage mode"
+  const autopilotMissed = signals.autopilotAsked && !state.autopilot;
+  if (owner && signals.modeWord && (signals.offAfter || autopilotMissed || (!read && before === modes()))) {
+    const why = signals.offAfter ? "an off word comes after the phrase"
+      : autopilotMissed && signals.ownOff ? "an off word in the message won"
+      : autopilotMissed && signals.autopilotOn && !state.sage ? "autopilot turns on only while sage's mode is on"
+      : autopilotMissed && signals.autopilotOff ? "an off line in an agent's text won"
+      : signals.pasted ? "a pasted quote, bullet or indent comes before the phrase"
       : signals.question ? "the line has a question mark"
       : autopilotMissed ? "the autopilot phrase needs a full stop, a comma or a line break after it"
       : "the words after the phrase match no rule";
-    notes.push(`sage: ${autopilotMissed ? "autopilot did not switch on" : "this message switched nothing"}, because ${why}. The switches are the on phrase, the off phrase and the autopilot phrases, at the start of the message. Tell the user.`);
+    const what = signals.offAfter ? "sage's mode did not change and autopilot is off"
+      : autopilotMissed ? "autopilot did not switch on" : "this message switched nothing";
+    notes.push(`sage: ${what}, because ${why}. The switches are the on phrase, the off phrase and the autopilot phrases, at the start of the message. Tell the user.`);
   }
   return notes;
 }
