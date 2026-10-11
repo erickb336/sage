@@ -16,12 +16,12 @@ test("HTML renders escaped initial cards and complete offline task sections befo
   assert.ok(html.includes("prefers-reduced-motion"));
   assert.ok(html.includes("max-width:700px"));
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks[0].key });
-  assert.ok(page.includes('<section class="page open"'));
+  assert.ok(page.includes('<main class="page open"'));
   assert.throws(() => renderBoardHtml(data, { taskKey: "missing" }), RangeError);
 });
 test("phone text and status preserve task counts and escape agent markup", () => {
   const data = model(), board = renderBoardText(data), task = renderTaskText(data.tasks[0]);
-  assert.ok(board.includes("1 need you"));
+  assert.ok(board.includes("1 needs you"));
   assert.ok(board.includes("**1 · T1"));
   assert.ok(board.includes("Needs you"));
   assert.ok(!board.includes("<script>"));
@@ -83,7 +83,10 @@ function fakeDocument(html) {
     if (!VOID.has(tag) && !(rawAttrs ?? "").endsWith("/")) current = node;
   }
   const listeners = [];
+  const rootElement = makeNode("html", {}, null);
+  rootElement.classList.add = name => rootElement.classList.toggle(name, true);
   const document = {
+    documentElement: rootElement,
     querySelectorAll: selector => root.querySelectorAll(selector),
     getElementById: id => root.descendants().find(n => n.attrs.id === id) ?? null,
     addEventListener: (type, fn) => listeners.push([type, fn]),
@@ -110,8 +113,10 @@ test("T217: the page script makes the summary, the Needs-you count and the colum
   const data = twoProjectModel();
   assert.deepEqual(data.counts, { tasks: 5, needsOwner: 3, recordedAgents: 1, inferredWork: 1, inReview: 2 });
   const { document, click } = fakeDocument(renderBoardHtml(data, { snapshot: false }));
+  assert.equal(document.documentElement.classList.contains("scripted"), false);
   new Function("document", BOARD_ENHANCEMENT)(document);
-  const summary = () => ["s-needs", "s-agents", "s-inferred", "s-review", "s-tasks"].map(id => document.getElementById(id).textContent).join(" ");
+  assert.equal(document.documentElement.classList.contains("scripted"), true, "the script shows the filter chips");
+  const summary =() => ["s-needs", "s-agents", "s-inferred", "s-review", "s-tasks"].map(id => document.getElementById(id).textContent).join(" ");
   const buttons = () => document.querySelectorAll("[data-filter]");
   const needsButton = () => buttons().find(b => b.dataset.filter === "needs");
   const needsCount = () => document.getElementById("needs-count").textContent;
@@ -189,8 +194,12 @@ test("T218: a task page opens by its anchor offline and at its route on the serv
   assert.ok(served.includes(`href="/task/${Buffer.from(task.key).toString("base64url")}"`));
   assert.ok(!served.includes('class="page'));
   const page = renderBoardHtml(data, { snapshot: false, live: true, taskKey: task.key });
-  assert.ok(page.includes(`<section class="page open" id="${id}" aria-label="T2"><div class="pagebar"><a class="back" href="/">← Board</a><span class="livepill" id="live-state" role="status">`));
-  assert.ok(page.includes('<h2 class="ptitle">Sample T2</h2>'));
+  // F-T218-14: one h1 (the task title) inside main, and the way back before the theme switch.
+  assert.ok(page.includes(`<main class="page open" id="${id}" aria-label="T2"><div class="pagebar"><a class="back" href="/">← Board</a><span class="livepill" id="live-state" role="status">`));
+  assert.deepEqual(page.match(/<h1\b[^>]*>[^<]*<\/h1>/g), ['<h1 class="ptitle">Sample T2</h1>']);
+  assert.ok(page.indexOf('<h1 class="ptitle">') > page.indexOf("<main ") && page.indexOf('<h1 class="ptitle">') < page.indexOf("</main>"));
+  assert.ok(page.indexOf('class="back"') < page.indexOf('id="light"'));
+  assert.ok(offline.includes('<h2 class="ptitle">Sample T2</h2>'));
   assert.ok(page.includes('<div class="flag" role="note">'));
   assert.ok(!page.includes('class="board"'));
 });
@@ -218,24 +227,62 @@ test("T218: cycle steps show the ledger's verdicts on the newest reviewed head, 
   assert.ok(page.includes('<span class="prov"><span class="standin" title="Stand-in: the logbook&#39;s source. The run does not record its provider.">Sample</span> ·</span> code-reviewer'));
 });
 
-test("T218: the PR links to the project's GitHub remote only through safeUrl, and stays text without one", () => {
-  const make = repository => sample([row("T1", "reviewing", { pr: "7" })], {}, { repository });
-  const linked = renderBoardHtml(make("https://github.com/acme/sage"), { snapshot: false, taskKey: "sample/project-abcdef/T1" });
-  assert.ok(linked.includes('<a href="https://github.com/acme/sage/pull/7" rel="noopener noreferrer">PR 7</a>'));
-  for (const repository of [null, "javascript:alert(1)", "http://github.com/acme/sage", "https://user:pw@github.com/acme/sage"]) {
-    const page = renderBoardHtml(make(repository), { snapshot: false, taskKey: "sample/project-abcdef/T1" });
-    assert.ok(!page.includes("/pull/7"), String(repository));
+test("T218: the PR links only to https://github.com/<owner>/<repo>, from the remote or the PR observation, and stays text otherwise", () => {
+  const observed = repository => ({ observations: { records: [{ id: "O1", task: "T1", kind: "pr", source: "Sample", observedAt: at, data: { number: 7, state: "open", repository } }] } });
+  const make = (repository, extra = { repository }) => sample([row("T1", "reviewing", { pr: "7" })], {}, extra);
+  for (const data of [make("https://github.com/acme/sage"), make(null, observed("https://github.com/acme/sage"))]) {
+    const linked = renderBoardHtml(data, { snapshot: false, taskKey: "sample/project-abcdef/T1" });
+    assert.ok(linked.includes('<a href="https://github.com/acme/sage/pull/7" rel="noopener noreferrer">PR 7</a>'));
+    assert.ok(renderTaskText(data.tasks[0]).includes("· PR [7](https://github.com/acme/sage/pull/7)"));
+  }
+  const hostile = [null, "javascript:alert(1)", "http://github.com/acme/sage", "https://user:pw@github.com/acme/sage", "https://example.test/acme/sage", "https://github.com/acme/sage/pull/1#x", "https://github.com/acme/sage)[x](https://evil.test", "https://github.com/acme/sage?x=1"];
+  for (const data of [...hostile.map(value => make(value)), ...hostile.map(value => make(null, observed(value)))]) {
+    const page = renderBoardHtml(data, { snapshot: false, taskKey: "sample/project-abcdef/T1" }), text = renderTaskText(data.tasks[0]);
+    assert.equal(data.tasks[0].repository, null);
+    assert.ok(!page.includes("/pull/7") && !text.includes("/pull/7"));
     assert.ok(page.includes('title="No link: the project&#39;s GitHub remote is not known.">PR 7</span>'));
   }
 });
 
-test("T218: the chat board keeps the backlog to its count and the next 3 framed tasks by id, with the card's cycle", () => {
-  const tasks = [...Array.from({ length: 40 }, (_, i) => row(`T${40 - i}`, "framed", { title: `Sample backlog ${40 - i} ${"long title ".repeat(10)}` })), row("T41", "reviewing", { pr: "3" })];
-  const text = renderBoardText(sample(tasks));
+test("T218: a severity or run status outside the closed list gets the neutral class, never a class from the logbook", () => {
+  const data = sample([row("T1", "reviewing")], {
+    findings: [{ task: "T1", key: "F-T1-1", severity: "high", summary: "Sample high", status: "open" }, { task: "T1", key: "F-T1-2", severity: "x needs", summary: "Sample odd", status: "open" }],
+    runs: [{ id: "R1", task: "T1", role: "qa", status: "done" }, { id: "R2", task: "T1", role: "qa", status: "card needs" }],
+  });
+  const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks[0].key });
+  assert.deepEqual(page.match(/class="(?:sev|st-)[^"]*"/g), ['class="st-done"', 'class="st-other"', 'class="sev high"', 'class="sev other"']);
+  assert.ok(page.includes('<span class="sev other">x needs</span>'));
+});
+
+test("T218: the chat board shows 5 cards a column in the page's order, with the card's cycle, clamped titles and the page's words", () => {
+  const long = "Sample long title ".repeat(8);
+  const tasks = [
+    ...Array.from({ length: 40 }, (_, i) => row(`T${i + 1}`, "framed", { title: `Sample backlog ${i + 1} ${long}` })),
+    row("T41", "reviewing", { pr: "3" }),
+    ...Array.from({ length: 7 }, (_, i) => row(`T${50 + i}`, "building")), row("T60", "held"),
+  ];
+  const decisions = tasks.map((task, i) => ({ at: new Date(Date.parse(at) - (60 - i) * 60000).toISOString(), task: task.id, decision: "sample", why: "sample" }));
+  const runs = [{ id: "R1", task: "T50", role: "implementer", status: "running", started: at }];
+  const data = sample(tasks, { decisions, runs }), text = renderBoardText(data);
+  // The same order as the page: newest activity first (F-T218-2), 5 a column and the rest counted (F-T218-6).
   const backlog = /### 📋 Backlog \(40\)\n([\s\S]*?)\n\n###/.exec(text)[1];
-  assert.deepEqual([...backlog.matchAll(/\*\*(T\d+) /g)].map(m => m[1]), ["T1", "T2", "T3"]);
-  assert.ok(backlog.endsWith("Next up by id. 37 more in the backlog: open the board page for all."));
+  assert.deepEqual([...backlog.matchAll(/\*\*(T\d+) /g)].map(m => m[1]), ["T40", "T39", "T38", "T37", "T36"]);
+  assert.deepEqual(data.columns.find(c => c.key === "backlog").tasks.slice(0, 5).map(t => t.id), ["T40", "T39", "T38", "T37", "T36"]);
+  assert.ok(backlog.endsWith("35 more in Backlog: open the board page for all."));
+  const building = /### 🔨 Building \(8\)\n([\s\S]*?)\n\n###/.exec(text)[1];
+  assert.deepEqual([...building.matchAll(/\*\*(T\d+) /g)].map(m => m[1]), ["T60", "T50", "T56", "T55", "T54"], "needs you first, then the newest activity");
+  assert.ok(building.endsWith("3 more in Building: open the board page for all."));
+  // F-T218-11: titles stop at 80 characters with an ellipsis.
+  const title = /\*\*T40 ([^*]*)\*\*/.exec(text)[1];
+  assert.ok([...title].length <= 80 && [...title].length >= 75, title);
+  assert.ok(title.endsWith("…"));
+  // F-T218-12: the page's date, summary words and column names; one note for the provider stand-in.
+  assert.ok(text.startsWith("**sage board** · built 2026-10-08 20:00 UTC\n🔴 1 needs you · 1 agents at work · 🔁 1 in review · 49 tasks\n"));
+  assert.ok(text.includes("### 🏁 Done, last 7 days (0)"));
   assert.ok(text.includes("**T41 Sample T41** · sample · project · PR 3\nCycle 1 of 1: PR head not recorded"));
   assert.ok(!text.includes("? checks"));
+  assert.ok(!text.includes("logbook source)"));
+  assert.equal(text.split("A stand-in: the run does not record its provider").length, 2);
+  assert.ok(text.includes("**T50 Sample T50** · sample · project\nSample\\* · implementer at work"));
   assert.ok(text.length < 3000, `${text.length} characters`);
 });

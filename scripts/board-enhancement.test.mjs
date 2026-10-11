@@ -21,7 +21,7 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, ...(process.env.BOARD_BROWSER_PATH ? { executablePath: process.env.BOARD_BROWSER_PATH } : {}) }); });
 after(async () => { await browser?.close(); });
 
-function model({ gamma = null, delta = false, current = false } = {}) {
+function model({ gamma = null, delta = false, current = false, rich = false } = {}) {
   const task = (id, title, state) => ({ id, title, state, size: "small", risk: "", route: "build,code-review,qa", branch: "", pr: "", round: "0", keys: "" });
   const project = (name, tasks, gates = []) => ({ key: `sample/${name}-abcdef`, name: `${name}-abcdef`, diagnostics: [], tables: { tasks, gates } });
   const projects = [
@@ -36,6 +36,12 @@ function model({ gamma = null, delta = false, current = false } = {}) {
       { id: "O1", task: "T2", kind: "pr", source: "Sample recorder", observedAt: NOW, data: { number: 7, state: "open", head, repository: "https://example.test/sample/sage" } },
       { id: "O2", task: "T2", kind: "run", source: "Sample recorder", observedAt: NOW, data: { run: "R1", provider: "Codex", head, cycle: 1 } },
     ] };
+  }
+  if (rich) {
+    // A full backlog (its fold), a PR with no recorded head, and a decision: each shows faint text.
+    projects[0].tables.tasks.push(...Array.from({ length: 7 }, (_, i) => task(`T${10 + i}`, `Sample alpha queued ${10 + i}`, "framed")));
+    projects[1].tables.tasks[1].pr = "9";
+    projects[0].tables.decisions = [{ at: NOW, task: "T2", decision: "Sample decision", why: "sample" }];
   }
   if (gamma) projects.push(project("gamma", [task("T5", "Sample gamma work", gamma)]));
   if (delta) projects.push(project("delta", [task("T6", "Sample delta queued", "framed")]));
@@ -159,6 +165,86 @@ test("T218: offline task pages, the backlog fold and the theme work with scripts
   assert.equal(await plain.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#f7f7f5");
 });
 
+/** The contrast of every visible element of each [kind, selector] on the colour that the page paints behind it (opacity included). */
+async function contrast(page, list) {
+  return page.evaluate(list => {
+    const rgba = text => {
+      const values = text.match(/[\d.]+/g).map(Number);
+      return [...values.slice(0, 3), values[3] ?? 1];
+    };
+    const over = (front, back) => front.slice(0, 3).map((value, i) => value * front[3] + back[i] * (1 - front[3]));
+    const luminance = rgb => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i], 0);
+    return list.map(([kind, selector]) => {
+      const elements = [...document.querySelectorAll(selector)].filter(element => element.getClientRects().length);
+      if (!elements.length) throw new Error(`No sample ${kind} text`);
+      return elements.map(element => {
+        const backgrounds = [];
+        let opacity = 1;
+        for (let node = element; node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (style.backgroundImage !== "none") throw new Error(`An image needs a separate contrast check: ${kind}`);
+          backgrounds.push(rgba(style.backgroundColor));
+          opacity *= Number(style.opacity);
+        }
+        const background = backgrounds.reverse().reduce((color, layer) => over(layer, color), [255, 255, 255]);
+        const color = rgba(getComputedStyle(element).color);
+        const foreground = over([...color.slice(0, 3), color[3] * opacity], background);
+        const values = [luminance(foreground), luminance(background)].sort((a, b) => a - b);
+        return { kind, text: element.textContent, foreground, background, ratio: (values[1] + 0.05) / (values[0] + 0.05) };
+      });
+    });
+  }, list);
+}
+
+test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 contrast on the page, column and card in both themes", async t => {
+  const data = model({ current: true, rich: true }), task = data.tasks.find(item => item.id === "T2");
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  t.after(() => context.close());
+  await context.route("**/*", route => route.abort());
+  const results = [];
+  for (const [view, html, list] of [
+    ["board", renderBoardHtml(data, { snapshot: false }), [["faint on a card", ".card .faint"], ["faint in a column", ".rest .faint"]]],
+    ["task", renderBoardHtml(data, { snapshot: false, taskKey: task.key }), [["faint on the page", ".ptop .faint"], ["faint in a section", ".log .faint"], ["skipped step", ".ls.skip"]]],
+  ]) {
+    const page = await context.newPage();
+    await page.setContent(html);
+    for (const theme of ["dark", "light"]) {
+      if (theme === "light") await page.locator("label[for=light]").click();
+      for (const item of (await contrast(page, list)).flat()) {
+        results.push(`${view} ${theme} ${item.kind}`);
+        assert.ok(item.ratio >= 4.5, `${view} ${theme} ${item.kind} "${item.text}": ${item.ratio.toFixed(2)}`);
+      }
+    }
+    if (view === "task") assert.equal(await page.locator(".ls.skip").first().evaluate(element => getComputedStyle(element).textDecorationLine), "line-through");
+  }
+  assert.ok(results.includes("task light skipped step") && results.includes("board dark faint on a card") && results.includes("board light faint in a column"));
+});
+
+test("T218 F-T218-9, F-T218-7 and F-T218-13: chips only with scripts, the stand-in legend on both views, and a 24 px way back", async t => {
+  const data = model({ current: true, rich: true }), task = data.tasks.find(item => item.id === "T2");
+  for (const scripts of [false, true]) {
+    const context = await browser.newContext({ javaScriptEnabled: scripts, viewport: { width: 1280, height: 900 } });
+    t.after(() => context.close());
+    await context.route("**/*", route => route.abort());
+    const page = await context.newPage();
+    await page.setContent(renderBoardHtml(data, { snapshot: false }));
+    assert.equal(await needsButton(page).isVisible(), scripts, `Needs-you chip, scripts ${scripts ? "on" : "off"}`);
+    assert.equal(await page.getByRole("button", { name: "alpha", exact: true }).isVisible(), scripts);
+    assert.equal(await page.locator("label[for=light]").isVisible(), true, "the theme switch needs no script");
+    const sentence = "a stand-in value: the logbook does not record the real one.";
+    assert.equal(await page.locator(".legend").getByText(sentence, { exact: false }).isVisible(), true);
+    await page.setContent(renderBoardHtml(data, { snapshot: false, taskKey: task.key }));
+    assert.equal(await page.locator(".legend").getByText(sentence, { exact: false }).isVisible(), true);
+    assert.equal(await page.locator(".legend .step.failed").isVisible(), true, "the cycle-chip legend is on the task page too");
+    const box = await page.getByRole("link", { name: "← Board" }).boundingBox();
+    assert.ok(box.width >= 24 && box.height >= 24, JSON.stringify(box));
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), "← Board", "the way back is the first stop");
+    assert.equal(await page.locator("main h1").count(), 1);
+    assert.equal(await page.locator("h1").textContent(), "Sample alpha review");
+  }
+});
+
 test("T205: sample desktop and phone text meets 4.5 contrast in both themes", async t => {
   const artifactDir = process.env.BOARD_BROWSER_ARTIFACT_DIR;
   if (artifactDir) mkdirSync(artifactDir, { recursive: true });
@@ -174,34 +260,13 @@ test("T205: sample desktop and phone text meets 4.5 contrast in both themes", as
     });
     for (const theme of ["dark", "light"]) {
       if (theme === "light") await page.locator("label[for=light]").click();
-      const measurements = await page.evaluate(() => {
-        const rgba = text => {
-          const values = text.match(/[\d.]+/g).map(Number);
-          return [...values.slice(0, 3), values[3] ?? 1];
-        };
-        const over = (front, back) => front.slice(0, 3).map((value, i) => value * front[3] + back[i] * (1 - front[3]));
-        const luminance = rgb => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i], 0);
-        return [
-          ["normal", ".card .title"],
-          ["muted", ".card .top"],
-          ["link", ".chip[aria-pressed=true]"],
-          ["needs", ".flag"],
-          ["current", ".step.running"],
-        ].map(([kind, selector]) => {
-          const element = document.querySelector(selector);
-          if (!element) throw new Error(`No sample ${kind} text`);
-          const backgrounds = [];
-          for (let node = element; node; node = node.parentElement) {
-            const style = getComputedStyle(node);
-            if (style.backgroundImage !== "none") throw new Error(`An image needs a separate contrast check: ${kind}`);
-            backgrounds.push(rgba(style.backgroundColor));
-          }
-          const background = backgrounds.reverse().reduce((color, layer) => over(layer, color), [255, 255, 255]);
-          const foreground = over(rgba(getComputedStyle(element).color), background);
-          const values = [luminance(foreground), luminance(background)].sort((a, b) => a - b);
-          return { kind, text: element.textContent, foreground, background, ratio: (values[1] + 0.05) / (values[0] + 0.05) };
-        });
-      });
+      const measurements = (await contrast(page, [
+        ["normal", ".card .title"],
+        ["muted", ".card .top"],
+        ["link", ".chip[aria-pressed=true]"],
+        ["needs", ".flag"],
+        ["current", ".step.running"],
+      ])).map(list => list[0]);
       assert.deepEqual(measurements.map(item => item.kind), ["normal", "muted", "link", "needs", "current"]);
       for (const item of measurements) assert.ok(item.ratio >= 4.5, `${phone ? "phone" : "desktop"} ${theme} ${item.kind}: ${item.ratio}`);
       const viewport = phone ? "phone" : "desktop";
