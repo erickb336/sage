@@ -10,8 +10,8 @@
 // ("sage mode off? what does it do?"). Because a missed off is the unsafe one, any line of the owner's text that starts
 // with "sage mode off" or "autopilot off" switches autopilot off, even as a question. The owner's own text also switches
 // it off when it mentions autopilot and has an off word anywhere. Agent text (a frame) switches nothing, in either
-// direction (T215), and so does a prompt whose frames the hook cannot read. Off wins over on. Only OFF_LINE has the m
-// flag: with it, "^" also matches the start of each later line.
+// direction (T215), and so does a prompt whose frames the hook cannot read. Off wins over on. Only OFF_LINE and
+// OFF_AFTER_LINE have the m flag: with it, "^" also matches the start of each later line.
 const START = String.raw`^[\s"'“‘*_>-]*`;
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
 // A prefix that stays on its line. With the m flag, "^" matches after each line break, so a prefix that also matched
@@ -52,6 +52,8 @@ const SAGE_ON = new RegExp(`${START}${SAGE}${AND_AUTOPILOT}?${END}|${PLAIN}${SAG
 // words. After the phrase, it blocks the on rule and switches autopilot off, because off is the safe direction.
 const OFF_SOON = String.raw`${SP}*(?:[,:;–—-]${SP}*)?(?:${OFF_WORDS}|(?:switch|turn)${SP}+(?:\S+${SP}+)?off\b)`;
 const OFF_AFTER = new RegExp(`${START}${SAGE}${OFF_SOON}`, "i");
+// The same off at the start of any line: in a prompt whose frames the hook cannot read, any line can be the owner's (F-T215-6).
+const OFF_AFTER_LINE = new RegExp(`${LINE_START}${SAGE}${OFF_SOON}`, "im");
 const OFF_PHRASE = new RegExp(`${START}sage${SP}+mode${SP}+off`, "i"); // the off phrase has its own rules
 const OFF_LINE = new RegExp(`${LINE_START}(?:sage${SP}+mode|autopilot)${SP}+off\\b`, "im"); // in the owner's text, at the start of any line
 const SAGE_OFF = new RegExp(`${START}sage${SP}+mode${SP}+off(?![\\p{L}\\p{N}-])(?!.*\\?)`, "iu"); // "." stops at a line break
@@ -97,7 +99,7 @@ export function modeSignals({ owner, text, outside, all }) {
     // Only the owner's text switches autopilot off. When the hook cannot read the frames (owner is false), it cannot tell
     // the owner's text from an agent's, so nothing switches; the caller tells the chief when the prompt has an off (T215).
     autopilotOff: ownOff,
-    unreadOff: !owner && broadOff(all),
+    unreadOff: !owner && (broadOff(all) || OFF_AFTER_LINE.test(all)),
     autopilotOn: owner && AUTOPILOT_ON.test(text),
     modeWord,
     autopilotWord,
