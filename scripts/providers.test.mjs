@@ -349,7 +349,7 @@ test("shared file and mode extraction preserves classified mode phrases in both 
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const none = { autopilotWord: false, autopilotAsked: false, ownOff: false, offAfter: false, pasted: false, question: false };
+    const none = { autopilotWord: false, autopilotAsked: false, ownOff: false, offAfter: false, pasted: false, question: false, unreadOff: false };
     assert.deepEqual(api.modeSignals(prompt("sage mode")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true, ...none });
     assert.deepEqual(api.modeSignals(prompt("sage mode off")), { sageOff: true, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true });
     assert.deepEqual(api.modeSignals(prompt("sage mode, autopilot on")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: true, modeWord: true, ...none, autopilotAsked: true });
@@ -377,10 +377,12 @@ test("shared file and mode extraction preserves classified mode phrases in both 
       assert.equal(signals.sageOff, false, text);
       assert.equal(signals.autopilotOn, false, text);
     }
-    assert.equal(api.modeSignals(prompt("Please stop autopilot", false)).autopilotOff, true);
+    // Text that the hook cannot read switches nothing, in either direction; its off only asks for the note (F-T215-1).
+    assert.deepEqual([api.modeSignals(prompt("Please stop autopilot", false))].map(({ autopilotOff, unreadOff }) => ({ autopilotOff, unreadOff })), [{ autopilotOff: false, unreadOff: true }]);
     assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nautopilot off" }).autopilotOff, false);
     assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode\nautopilot off", all: "sage mode\nautopilot off" }).autopilotOff, true);
-    assert.equal(api.modeSignals({ owner: false, text: "", outside: "", all: "sage mode\nautopilot off" }).autopilotOff, true, "fail closed");
+    assert.equal(api.modeSignals({ owner: false, text: "", outside: "", all: "sage mode\nautopilot off" }).autopilotOff, false, "nothing switches");
+    assert.equal(api.modeSignals({ owner: false, text: "", outside: "", all: "sage mode\nautopilot on" }).unreadOff, false, "no off, no note");
     assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nReport: no autopilot changes" }).autopilotOff, false);
     for (const input of [{}, { owner: "user", text: "sage mode", outside: "", all: "" }, { owner: true, text: "sage mode", all: "" }]) assert.throws(() => api.modeSignals(input), /Invalid mode prompt/);
     // A mark or a format character on the last letter of the phrase makes it no phrase (R733): no on, and the note.

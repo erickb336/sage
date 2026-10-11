@@ -10,8 +10,8 @@
 // ("sage mode off? what does it do?"). Because a missed off is the unsafe one, any line of the owner's text that starts
 // with "sage mode off" or "autopilot off" switches autopilot off, even as a question. The owner's own text also switches
 // it off when it mentions autopilot and has an off word anywhere. Agent text (a frame) switches nothing, in either
-// direction (T215). Off wins over on. Only OFF_LINE has the m flag: with it, "^" also matches the start
-// of each later line.
+// direction (T215), and so does a prompt whose frames the hook cannot read. Off wins over on. Only OFF_LINE has the m
+// flag: with it, "^" also matches the start of each later line.
 const START = String.raw`^[\s"'“‘*_>-]*`;
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
 // A prefix that stays on its line. With the m flag, "^" matches after each line break, so a prefix that also matched
@@ -95,8 +95,9 @@ export function modeSignals({ owner, text, outside, all }) {
     sageOff: owner && SAGE_OFF.test(text),
     sageOn: owner && !offNext && SAGE_ON.test(folded),
     // Only the owner's text switches autopilot off. When the hook cannot read the frames (owner is false), it cannot tell
-    // the owner's text from an agent's, so it fails closed: the off rules read the whole prompt (T215).
-    autopilotOff: owner ? ownOff : broadOff(all),
+    // the owner's text from an agent's, so nothing switches; the caller tells the chief when the prompt has an off (T215).
+    autopilotOff: ownOff,
+    unreadOff: !owner && broadOff(all),
     autopilotOn: owner && AUTOPILOT_ON.test(text),
     modeWord,
     autopilotWord,

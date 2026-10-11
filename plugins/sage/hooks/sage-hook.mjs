@@ -5,7 +5,7 @@
 //     words switch sage mode or autopilot, in either direction: never an agent's report, a task notification, a
 //     hand-back or another session's message (promptOf, T215). A message the owner sends while Claude works is the
 //     owner's text, but it only switches autopilot off. When the hook cannot read the frames of a prompt, nothing in it
-//     switches a mode on, and the off rules read the whole prompt (fail closed).
+//     switches a mode, in either direction, and the chief gets a note when the prompt has an off.
 //   - In sage mode it holds the rules that prompts alone did not hold in Orchestrator (docs/design/sage-mode.html,
 //     "Rules"): the chief never edits files, every brief has all its fields, at most cap.<project> (default
 //     max_agents) sage agents run at once for a project and cap_total across all projects, nobody force-pushes or pushes to main, and a merge needs autopilot on, the checked head SHA and the clean
@@ -72,18 +72,19 @@ const missingFields = (fields, text) => fields.filter((f) => !new RegExp(`^(?:${
  * an agent's report, a task notification, another session's message and a system reminder in frames, and it can join
  * the owner's message to them. A frame closes only with a close of its own kind. Another session's message closes with
  * the note that Claude Code puts after it, so the note is part of the frame.
- * The hook counts the frames on the prompt as Claude Code sent it.
+ * The hook reads the frames on the prompt as Claude Code sent it, with a stack of kinds: each close closes the innermost
+ * open frame, and must be of its kind.
+ *   - text: the text before the first frame and after the last close. Text between two frames is agent text: an agent
+ *     can close its frames early, write a line, and open new frames before the real close (F-T215-3).
  *   - The owner's message that Claude Code queues while it works (queuedText) comes in a system reminder. It counts only
- *     as a whole system reminder, with Claude Code's note, outside every other frame and with no frame mark in it. The
- *     queued shape inside another frame is that frame's text. An agent can write a whole queued shape at the end of a
- *     bare system reminder, and the hook cannot tell it from a real one. So a queued message counts only for an
- *     autopilot off, never for an on: the owner sends an on again when Claude is idle.
- *   - text: the text before the first frame and after the last close. An agent cannot write there, also when it
- *     writes a close in its report, because the real close comes after it. It can switch a mode on.
- *   - outside: all the text outside the frames, also between two frames, with the queued messages. It counts only for
- *     an autopilot off (the broad off rule).
- *   - owner: false when the hook cannot read the frames (fail closed): a kind with more opens than closes or more
- *     closes than opens, or a frame's marker in the text. Then nothing in the prompt switches a mode on.
+ *     as a whole system reminder, with Claude Code's note and with no frame mark in it, after the last other frame. An
+ *     agent can write a whole queued shape at the end of a bare system reminder, and the hook cannot tell it from a real
+ *     one. So a queued message counts only for an autopilot off, never for an on: the owner sends an on again when
+ *     Claude is idle.
+ *   - outside: text with the queued messages. It counts only for an autopilot off (the broad off rule).
+ *   - owner: false when the hook cannot read the frames: a close with no open frame, a close of another kind than the
+ *     innermost open frame, a frame still open at the end, or a frame's marker in the text (F-T215-2, F-T215-4). Then
+ *     nothing in the prompt switches a mode, in either direction.
  */
 const FRAMES = [
   [/<task-notification>/g, /<\/task-notification>/g],
@@ -103,38 +104,38 @@ function queuedText(frame) {
 const MARKERS = /\[Subagent hand-back\]|\[SYSTEM NOTIFICATION/i;
 export function promptOf(input) {
   const all = input.prompt ?? "";
-  const marks = FRAMES.map(([open, close]) => [[...all.matchAll(open)], [...all.matchAll(close)]]);
-  // Each open is +1 and each close is -1; a frame is a span from depth 0 back to depth 0. A close sorts before an open.
-  const edges = marks.flatMap(([o, c]) => [...o.map((m) => [m.index, 1]), ...c.map((m) => [m.index + m[0].length, -1])]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const frames = [];
-  let depth = 0;
-  for (const [at, step] of edges) {
-    if (step > 0 && depth === 0) frames.push([at, all.length, 0]);
-    if (step > 0 || depth > 0) frames.at(-1)[2]++; // the frame's opens and closes
-    if (step > 0) depth++;
-    else if (depth > 0 && --depth === 0) frames.at(-1)[1] = at;
+  // Each open and close, by place: [at, kind, open]. A close sorts before an open at the same place.
+  const edges = FRAMES.flatMap(([open, close], kind) => [
+    ...[...all.matchAll(open)].map((m) => [m.index, kind, 1]),
+    ...[...all.matchAll(close)].map((m) => [m.index + m[0].length, kind, 0]),
+  ]).sort((a, b) => a[0] - b[0] || a[2] - b[2]);
+  const frames = []; // the top-level frames: [start, end, count of opens and closes]
+  const stack = [];
+  for (const [at, kind, open] of edges) {
+    if (open) {
+      if (!stack.length) frames.push([at, all.length, 0]);
+      stack.push(kind);
+    } else if (stack.pop() !== kind) return { owner: false, text: "", outside: "", all };
+    else if (!stack.length) frames.at(-1)[1] = at;
+    frames.at(-1)[2]++;
   }
-  // A queued message is a whole frame with only its own open and close.
-  const queued = frames.flatMap(([s, e, n]) => (n === 2 ? queuedText(all.slice(s, e)) : []));
-  // The text between the frames, in pieces.
-  const pieces = [];
-  let at = 0;
-  for (const [s, e] of frames) {
-    pieces.push(all.slice(at, s));
-    at = e;
+  if (stack.length) return { owner: false, text: "", outside: "", all };
+  const text = frames.length ? `${all.slice(0, frames[0][0])}\n${all.slice(frames.at(-1)[1])}` : all;
+  // The queued messages after the last other frame: whole frames with only their own open and close.
+  const queued = [];
+  for (const [s, e, n] of frames.toReversed()) {
+    const own = n === 2 ? queuedText(all.slice(s, e)) : [];
+    if (!own.length) break;
+    queued.push(...own);
   }
-  pieces.push(all.slice(at));
-  const text = pieces.length > 1 ? `${pieces[0]}\n${pieces.at(-1)}` : pieces[0];
-  const balanced = marks.every(([o, c]) => o.length === c.length);
-  return { owner: balanced && !MARKERS.test(text), text, outside: [...pieces, ...queued].join("\n"), all };
+  return { owner: !MARKERS.test(text), text, outside: [text, ...queued].join("\n"), all };
 }
 
 /**
  * Switches the modes, and returns the notes for the chief. Only the owner's own text switches sage mode or autopilot,
  * in either direction: text in an agent's frame switches nothing (T215). Off is the safe direction, so an autopilot off
- * reads all the text outside the frames, with the owner's queued messages; when the hook cannot read the frames, it
- * reads the whole prompt (fail closed). A sage mode off that is not the owner's switches only autopilot off, so that the
- * git rules stay.
+ * also reads the owner's queued messages. When the hook cannot read the frames, it cannot tell the owner's text from an
+ * agent's, so nothing switches; when the prompt has an off, a note asks the owner to send it again alone (F-T215-1).
  */
 function switchModes({ owner, text, outside, all }, state) {
   if (modePolicy.error) {
@@ -142,7 +143,8 @@ function switchModes({ owner, text, outside, all }, state) {
     return ["sage: the mode policy cannot load. Autopilot is off. Reinstall or update the sage plugin."];
   }
   const signals = modePolicy.modeSignals({ owner, text, outside, all });
-  const notes = [];
+  // The note describes the phrases and never quotes them (T201).
+  const notes = signals.unreadOff ? ["sage: the hook could not read the frames of this prompt, so it switched no mode. An off in this prompt was not applied: if the user sent one, ask the user to send it again as a message alone."] : [];
   const modes = () => `${Boolean(state.sage)} ${Boolean(state.autopilot)}`; // a new session's state has neither key
   const before = modes();
   if (signals.sageOff) {
