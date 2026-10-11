@@ -66,7 +66,7 @@ test("T205 acceptance: HTML state columns and phone text describe the same recor
   const recent = new Date(Date.now() - 86400000).toISOString();
   records(f.book, [{ task: "T6", kind: "completion", observedAt: recent, recordedAt: recent, data: { state: "merged", at: recent } }]);
   const before = snapshot(f.root), html = f.view("html"), text = f.view("chat");
-  for (const name of ["Backlog", "Design", "Building", "In review", "Ready to merge", "Done"]) assert.ok(cards(html).includes(`<h2>${name} (1)</h2>`), name);
+  for (const name of ["Backlog", "Design", "Building", "In review", "Ready to merge", "Done, last 7 days"]) assert.ok(cards(html).includes(`<h2>${name} <span class="n">1</span></h2>`), name);
   for (const id of ["T1", "T2", "T3", "T4", "T5", "T6"]) { assert.ok(cards(html).includes(`Sample ${id}`)); assert.ok(text.includes(`Sample ${id}`)); }
   assert.ok(!cards(html).includes("Sample T7"));
   assert.match(text, /### 🔴 Needs you/); assert.match(text, /### 🔁 In review/); assert.match(text, /### 🔨 Building/); assert.match(text, /### ✅ Ready to merge/);
@@ -155,7 +155,7 @@ test("T205 acceptance: Done uses completion evidence and status preserves actual
   records(f.book, [{ task: "T1", kind: "completion", observedAt: recent, recordedAt: recent, data: { state: "merged", at: recent } }, { task: "T2", kind: "completion", observedAt: old, recordedAt: old, data: { state: "merged", at: old } }]);
   table(f.book, "decisions", [{ task: "T2", at: recent, decision: "renamed title", why: "sample" }, { task: "T3", at: recent, decision: "added note", why: "sample" }]);
   const html = f.view("html"), status = f.view("status");
-  assert.ok(cards(html).includes("Done (1)")); assert.ok(cards(html).includes("Recent completion"));
+  assert.ok(cards(html).includes('Done, last 7 days <span class="n">1</span>')); assert.ok(cards(html).includes("Recent completion"));
   assert.ok(!cards(html).includes("Old completion")); assert.ok(!cards(html).includes("Unknown completion"));
   assert.equal(status.split("\n")[0], "Tasks: merged 2 · concluded 1");
   assert.equal(status.split("\n")[1], "Agents: 0 recorded running · 0 inferred PRs");
@@ -168,7 +168,7 @@ test("T205 acceptance: the task loop marks recorded PE work current without infe
   table(f.book, "runs", [{ id: "R1", task: "T1", role: "pe", status: "running", started: AT }]);
   const text = f.view("task", { id: "T1" }), html = f.view("html");
   assert.ok(text.includes("▶ PE check")); assert.ok(text.includes("The PE check is recorded running"));
-  assert.ok(html.includes('<span class="step current">PE check</span>'));
+  assert.ok(html.includes('<span class="ls now">PE check</span>'));
   table(f.book, "runs", []);
   const unknown = f.view("task", { id: "T1" });
   assert.ok(unknown.includes("▶ design")); assert.ok(!unknown.includes("▶ PE check")); assert.ok(!unknown.includes("PE check is recorded running"));
