@@ -8,7 +8,7 @@ The service runs independently of a chat session. On the Mac itself, browser pag
 
 Use Node.js 20 or later. In Claude, the board phrase does this for you: the chief runs `board --ensure`, which sets the board up when `~/.config/sage-board/board.json` is missing, starts the server in the background when nothing answers on its port, and prints the address or why the server is not running. The server log goes to `board.log` next to the config. The server writes its pid to `board.pid` there once it listens, and removes the file when it stops. Without `--config`, every board command uses that file; without `--sources`, setup uses the standard roots: `$SAGE_HOME` when it is set, or else `$CLAUDE_CONFIG_DIR/sage` or `~/.claude/sage`, and `$CODEX_HOME/sage` or `~/.codex/sage`. A root that does not exist shows as "not set up yet" until it appears.
 
-Each server sends a non-secret id of its config on the Mac, so `board --ensure` tells this config's board from an older board server or a board of another config on the same port, and says which. A server reads its config once, when it starts. After you change the config or the password, `board --ensure` says that a restart is needed. To restart, run:
+Each server sends a non-secret id of its config on the Mac, so `board --ensure` tells this config's board from an older board server or a board of another config on the same port, and says which. A server reads its config once, when it starts. After you change the config or the password, or update sage, `board --ensure` says that a restart is needed. To restart, run:
 
 ```sh
 node <path to board/cli.mjs> board --stop
@@ -40,7 +40,7 @@ node <path to board/cli.mjs> board --set-password
 
 The terminal check accepts any pseudo-terminal, so it alone does not stop an agent. The sage hook in Claude Code adds a second barrier: it refuses the ordinary command shapes by which a session or an agent runs `--set-password`, or reads, copies or replaces the configuration file. An agent runs as your own user, so a script that builds the command or the path while it runs can still pass the hook. Full protection needs the sandbox (tasks T97 to T99).
 
-Until you set a password, every request that is not from the Mac itself gets status 403 and the text "Access from outside this Mac is off until the owner sets a board password on the Mac." The text names no path; the exact command is only in the output of `board --ensure` on the Mac. A configuration from before this change can still have a random `secret`. It still loads, but the secret signs no one in; `--set-password` removes it from the file.
+Until you set a password, every request that is not from the Mac itself gets status 403 and the text "Access from outside this Mac is off until the owner sets a board password on the Mac." The text names no path; the exact command is only in the output of `board --ensure` on the Mac. A configuration from before this change can still have a random `secret`. It still loads, and a server of this version ignores it; `--set-password` removes it from the file. A server that started before the update can still take the secret, so `board --ensure` says that a restart is needed until you stop that server.
 
 The default port is 43123. Setup accepts `--port` from 1024 to 65535. A busy port causes an error; the service does not choose another port.
 

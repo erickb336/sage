@@ -105,7 +105,7 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
     const first = await board(CLI, ["--ensure", "--port", String(port)], env);
     assert.equal(first.status, 0, first.stderr);
     // F-T216-5: with no allowedHosts the line gives no phone steps.
-    assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}.\n`);
+    assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}. To turn it on, add the host name of your private HTTPS tunnel to allowedHosts in that file.\n`);
     const { secret, password, sources } = JSON.parse(readFileSync(config, "utf8"));
     assert.deepEqual([secret, password], [undefined, undefined], "T229: ensure writes no random secret");
     assert.deepEqual(sources.map((source) => source.id), ["claude", "codex"]);
@@ -119,7 +119,7 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
     assert.equal(statSync(log).mode & 0o777, 0o600);
     const second = await board(CLI, ["--ensure"], env);
     assert.equal(second.status, 0, second.stderr);
-    assert.equal(second.stdout, `Sage board is running: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}.\n`);
+    assert.equal(second.stdout, `Sage board is running: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}. To turn it on, add the host name of your private HTTPS tunnel to allowedHosts in that file.\n`);
     assert.equal(readFileSync(pidFile, "utf8"), pid, "no second server started");
     // The config exists, so a setup setting is refused rather than ignored.
     const settings = await board(CLI, ["--ensure", "--port", String(port)], env);
@@ -189,6 +189,31 @@ const shut = async (server) => { server.closeAllConnections?.(); await new Promi
 const olderBoard = () => createHttpServer((request, response) => {
   response.writeHead(401, { "Content-Security-Policy": "default-src 'none'", "Cross-Origin-Resource-Policy": "same-origin", "WWW-Authenticate": 'Basic realm="Sage board", charset="UTF-8"' });
   response.end("Sign in to the Sage board.\n");
+});
+
+test("F-T229-32: after an upgrade, ensure asks for a restart of a board that started before the new code, not that phone access is off", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const code = Math.max(...["cli.mjs", "server.mjs"].map((name) => statSync(join(dirname(CLI), name)).mtimeMs));
+  // A board server of the older code: it names this config and started after the config, but before the code that runs ensure.
+  let started = Math.floor(code - 10_000);
+  const older = createHttpServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "default-src 'none'", "Cross-Origin-Resource-Policy": "same-origin", "X-Sage-Board": `id=${configId(config)}; pid=424242; started=${started}` });
+    response.end();
+  });
+  const port = await listen(older);
+  try {
+    // An old-style config: a random secret and a phone host, as setup wrote it before T229. Sample values only.
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(config, JSON.stringify({ version: 1, sources: [{ id: "sample", path: join(dir, "logbooks") }], port, allowedHosts: ["sample.tailnet.ts.net"], secret: "sample-old-secret-sample-old-secret-sample-old" }));
+    const written = new Date(code - 20_000); utimesSync(config, written, written);
+    const found = await board(CLI, ["--ensure"], env);
+    assert.equal(found.status, 0, found.stderr);
+    assert.equal(found.stdout, `Sage board is running: http://127.0.0.1:${port}/, but the board command was updated after it started. Restart needed: run node ${CLI} board --stop then ask for the board again.\n`);
+    // After the restart, a server of this code ignores the old secret: the line says that phone access is off, and asks no restart again.
+    started = Date.now();
+    const restarted = await board(CLI, ["--ensure"], env);
+    assert.equal(restarted.stdout, `Sage board is running: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off until you set a board password: run in a terminal on this Mac: node ${CLI} board --set-password\n`);
+  } finally { await shut(older); }
 });
 
 const olderLine = (port) => `an older board server runs on 127.0.0.1:${port}. Stop it where it started: press Ctrl+C in its terminal, or for the login service run launchctl bootout gui/$(id -u)/dev.sage.board. Then ask for the board again.`;

@@ -158,14 +158,18 @@ function notOurs(found, configPath, config, env) {
 async function ensureBoard(configPath, config, env) {
   const url = `http://127.0.0.1:${config.port}/`;
   const set = boardCommand("--set-password", configPath, env);
-  const phone = !config.allowedHosts.length ? `Phone access is off: no allowedHosts in ${configPath}.`
+  const phone = !config.allowedHosts.length ? `Phone access is off: no allowedHosts in ${configPath}. To turn it on, add the host name of your private HTTPS tunnel to allowedHosts in that file.`
     : !config.password ? `Phone access is off until you set a board password: run in a terminal on this Mac: ${set}`
     : `On the phone, open https://${config.allowedHosts[0]}/ and sign in as sage with your board password. To set a new password, run in a terminal: ${set}`;
   const ready = how => `Sage board ${how}: ${url} · no sign-in needed on this Mac. ${phone}`;
   const found = await probe(config), refused = notOurs(found, configPath, config, env);
   if (refused) throw new Error(refused);
   if (found.kind === "board") {
-    return lstatSync(configPath).mtimeMs > found.started ? `Sage board is running: ${url}, but ${configPath} changed after it started. Restart needed: run ${boardCommand("--stop", configPath, env)} then ask for the board again.` : ready("is running");
+    // A server keeps the code and the config that it started with. A server from before an upgrade (F-T229-32) can
+    // still take the old random secret, so its phone line is not known: only a restart gives this code's behaviour.
+    const code = Math.max(...["cli.mjs", "server.mjs"].map(name => statSync(fileURLToPath(new URL(name, import.meta.url))).mtimeMs));
+    const changed = lstatSync(configPath).mtimeMs > found.started ? `${configPath} changed` : code > found.started ? "the board command was updated" : null;
+    return changed ? `Sage board is running: ${url}, but ${changed} after it started. Restart needed: run ${boardCommand("--stop", configPath, env)} then ask for the board again.` : ready("is running");
   }
   const log = join(dirname(configPath), "board.log");
   const out = openSync(log, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_APPEND, 0o600);

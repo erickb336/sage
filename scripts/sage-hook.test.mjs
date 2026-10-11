@@ -2586,6 +2586,7 @@ test("T216: the board note's two commands pass the hook for the chief, as the no
     assert.ok(denied(handle(bash("git push origin main"), { sage: true, given: true }, slots)), "the same check refuses a chief's command that the hook forbids");
     assert.match(note, /On this Mac the board needs no sign-in\. On the phone, the user is sage and the password is the owner's own board password\. Until the owner sets one, access from outside this Mac is off\./);
     assert.match(note, /When the line gives a set-password command, give the owner that command to run in Terminal on the Mac themselves: never run it, and never ask for the password in the chat\. Never read the board config file\./);
+    assert.match(note, /When the line says that a restart is needed, give the owner its stop command; run it only when the owner asks\./, "F-T229-32: no restart by itself");
     assert.doesNotMatch(note, /secret/, "T229: the board has no random secret");
   }
 });
