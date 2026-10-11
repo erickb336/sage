@@ -81,7 +81,7 @@ const missingFields = (fields, text) => fields.filter((f) => !new RegExp(`^(?:${
  *   - The owner's message that Claude Code queues while it works (queuedText) comes in a system reminder. It counts only
  *     as a whole system reminder, with Claude Code's note and with no frame mark in it, after the last other frame. An
  *     agent can write a whole queued shape at the end of a bare system reminder, and the hook cannot tell it from a real
- *     one. A switch needs the exact phrase as the whole message, so such a forgery can only send one phrase (T240).
+ *     one. So a queued message switches only off: the off phrase or the autopilot off phrase (T240).
  *   - queued: those messages, in the order the owner sent them. Each one counts as a message of its own.
  *   - stray: the queued messages before another frame. They switch nothing, because an agent can forge them; a phrase
  *     in them gets the unread note, so that the owner's switch is not lost without a word (F-T215-12).
@@ -152,10 +152,14 @@ function switchModes({ owner, text, queued = [], all, stray = "" }, state) {
   const notes = (!owner && modePolicy.hasPhrase(all)) || modePolicy.hasPhrase(stray) ? ["sage: the hook could not read the frames of this prompt, so it switched no mode. A switch phrase in this prompt was not applied: if the user sent one, ask the user to send it again as a message alone."] : [];
   const near = new Set();
   let help = false;
-  for (const message of owner ? [text, ...queued] : []) {
+  const idle = new Set();
+  for (const [i, message] of (owner ? [text, ...queued] : []).entries()) {
     const phrase = modePolicy.exactPhrase(message);
     for (const p of modePolicy.phrasesNear(message)) near.add(p);
-    const change = modePolicy.PHRASES[phrase] ?? {};
+    // A queued message switches only off: an agent can forge the queued shape at the end of a bare reminder (T240 Q1).
+    const on = phrase && (modePolicy.PHRASES[phrase].sage || modePolicy.PHRASES[phrase].autopilot);
+    if (i > 0 && on) idle.add(phrase);
+    const change = (i > 0 && on ? undefined : modePolicy.PHRASES[phrase]) ?? {};
     help ||= Boolean(change.help);
     if (change.sage === false) {
       Object.assign(state, { sage: false, given: false, autopilot: false });
@@ -178,6 +182,7 @@ function switchModes({ owner, text, queued = [], all, stray = "" }, state) {
   // A near miss is never silent: a session's hook stayed off for two days when nothing said that a message missed (T194).
   // The note names the exact phrases: it goes to the chief, and only a whole message of the owner switches (T240).
   if (near.size) notes.push(`sage: this message switched nothing, because a switch needs the exact phrase as the whole message. If the user wanted a switch, ask the user to send ${[...near].map((p) => `"${p}"`).join(" or ")} alone, as a message of its own. Tell the user.`);
+  if (idle.size) notes.push(`sage: this message switched nothing, because a message sent while Claude works switches only off. Ask the user to send ${[...idle].map((p) => `"${p}"`).join(" or ")} again, alone, when Claude is idle. Tell the user.`);
   if (help) notes.push(modePolicy.phraseHelp(state));
   return notes;
 }
