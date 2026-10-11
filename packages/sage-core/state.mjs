@@ -8,12 +8,13 @@
 // run two versions of this tool, so a command refuses to change a logbook that a newer version wrote (ready).
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, hostname, tmpdir, uptime } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { boardView } from "./board-view.mjs";
 import { createBoard } from "./board.mjs";
 import { PR } from "./pull-request.mjs";
+import { parseReport } from "./report.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -426,6 +427,75 @@ function ready(dir, skip = []) {
     const extra = cols.filter((c) => c && !TABLES[table].includes(c));
     if (extra.length) refuse(`${join(dir, `${table}.tsv`)} has columns that this version of sage does not know (${extra.join(", ")}): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
   }
+}
+
+/** Finish only a run from evidence already authenticated by the provider. This never records a verdict. */
+function finishReportedRun(input, env = process.env) {
+  const keys = ["project", "task", "run", "role", "assignment", "reportHash", "text"];
+  const deny = () => refuse("The saved report does not match an unfinished run or its recorded result.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
+    || keys.some(key => !Object.hasOwn(input, key) || typeof input[key] !== "string") || !input.project
+    || !/^T[1-9]\d*$/.test(input.task) || !/^R[1-9]\d*$/.test(input.run)
+    || !/^[a-z][a-z-]{0,63}$/.test(input.role) || !new RegExp(`^${UUID}$`).test(input.assignment)
+    || !/^[0-9a-f]{64}$/.test(input.reportHash)) deny();
+  const report = parseReport(input.text);
+  if (createHash("sha256").update(input.text).digest("hex") !== input.reportHash) deny();
+  const dir = storeDir(input.project, env);
+  // A report must stay in the selected logbook, with no redirected directory components.
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  return withLock(dir, () => {
+    ready(dir);
+    const tasks = read(dir, "tasks").filter(row => row.id === input.task);
+    const runs = read(dir, "runs");
+    const matches = runs.filter(row => row.id === input.run);
+    if (tasks.length !== 1 || matches.length !== 1) deny();
+    const run = matches[0];
+    if (run.task !== input.task || run.role !== input.role) deny();
+    const name = `reports/${input.run}-${input.assignment}-${input.reportHash}.md`;
+    const repeated = run.report === name && run.status === report.STATUS
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(run.ended);
+    if (!repeated && (run.status !== "running" || run.report || run.ended)) deny();
+    const folder = join(dir, "reports");
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    if (realpathSync(folder) !== folder) deny();
+    const file = join(dir, name);
+    const sameFile = () => {
+      const st = lstatSync(file, { throwIfNoEntry: false });
+      if (!st) return false;
+      // A crash can leave the publication temp file as a second hard link. Read exact bytes; never rewrite them.
+      if (!st.isFile() || readRegular(file, { link: false, max: 32 * 1024 }) !== input.text) deny();
+      return true;
+    };
+    if (!sameFile()) {
+      // A missing file on a completed run is damage, not permission to rewrite its history.
+      if (repeated) deny();
+      const temporary = join(folder, `.report-${randomUUID()}`);
+      let fd, created = false;
+      try {
+        fd = openSync(temporary, "wx", 0o600);
+        created = true;
+        writeFileSync(fd, input.text);
+        fsyncSync(fd);
+        closeSync(fd); fd = undefined;
+        try { linkSync(temporary, file); }
+        catch (error) { if (error.code !== "EEXIST") throw error; }
+      } finally {
+        if (fd !== undefined) closeSync(fd);
+        if (created) unlinkSync(temporary);
+      }
+      if (!sameFile()) deny();
+    }
+    // The evidence reaches disk before the run points at it. A retry can use an orphaned identical file.
+    const folderFd = openSync(folder, "r");
+    try { fsyncSync(folderFd); } finally { closeSync(folderFd); }
+    if (!repeated) {
+      Object.assign(run, { status: report.STATUS, report: name, ended: now() });
+      write(dir, "runs", runs);
+    }
+    status(dir, true);
+    return { decision: repeated ? "already-finished" : "run-finished", task: input.task,
+      run: run.id, status: run.status, report: name, ended: run.ended };
+  });
 }
 
 function write(dir, table, rows) {
@@ -1292,5 +1362,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, finishReportedRun, withLock, board, answerPaths, runCli };
 }
