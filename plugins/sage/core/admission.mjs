@@ -6,6 +6,7 @@ import { createAssignment, parseAssignment } from "./assignments.mjs";
 import { parseRolePlan, checkRoleReservation } from "./role-policy.mjs";
 import { parseBrief } from "./brief.mjs";
 import { parseReport } from "./report.mjs";
+import { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
 
 const KEY = /^[A-Za-z0-9_.:-]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -55,10 +56,13 @@ function childBinding(input) {
     child: word(input.child, "child"), turn: word(input.turn, "turn") };
 }
 function preparation(input) {
-  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief"]);
-  const { name, rolePlan, brief, ...identity } = input;
+  const hasReview = Object.hasOwn(input ?? {}, "review");
+  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief", ...(hasReview ? ["review"] : [])]);
+  const { name, rolePlan, brief, review, ...identity } = input;
+  if (hasReview && !REVIEW_ROLES.includes(rolePlan?.role)) refuse("only a review role can carry a review target");
   const { call, ...parsed } = parseAssignment({ ...identity, call: name });
-  return { ...parsed, name: call, rolePlan: parseRolePlan(rolePlan), brief: parseBrief(brief) };
+  return { ...parsed, name: call, rolePlan: parseRolePlan(rolePlan), brief: parseBrief(brief),
+    ...(hasReview ? { review: parseReviewTarget(review) } : {}) };
 }
 function reportRecord(input) {
   fields(input, ["binding", "task", "run", "reportMessage", "reportHash", "text"]);
@@ -360,10 +364,10 @@ export const reserveRoleAdmission = (dir, scope, request, dispatch, rolePlan) =>
 export const reserveBriefAdmission = (dir, scope, request, dispatch, rolePlan, brief) => commit(dir,
   { kind: "reserve", assignment: createAssignment(scope, request), dispatch, rolePlan: parseRolePlan(rolePlan), uniqueName: true, brief: parseBrief(brief) });
 /** Save instructions before the native dispatch call exists. No capacity or permission is granted. */
-export function prepareAdmission(dir, scope, request, rolePlan, brief) {
+export function prepareAdmission(dir, scope, request, rolePlan, brief, review) {
   fields(request, ["task", "run", "issuer", "name"]);
   const { call, ...identity } = createAssignment(scope, { task: request.task, run: request.run, issuer: request.issuer, call: request.name });
-  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief } });
+  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief, ...(review === undefined ? {} : { review }) } });
 }
 /** The adapter verifies the current issuer and role, then supplies the actual native call and dispatch. */
 export function reservePreparedAdmission(dir, scope, request, dispatch, issuerRole) {

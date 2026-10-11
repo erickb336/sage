@@ -72,3 +72,22 @@ This does not enable Sage, grant capacity, or dispatch new work.
 The native `--sage-report` probe includes actual chief tool calls to finish and retry the run.
 It checks the logbook and saved report directly, with simulated model responses in a temporary profile.
 Review-claim verification, verdict gates, broader recovery, and a real-project pilot remain unfinished.
+
+
+## Review targets
+
+With a configured logbook, code, security, UX, and QA reviewers must supply `reviewCycle` from 1 through 10.
+The caller cannot supply a commit ID. The state tool reads the task branch's current commit from Git.
+It checks the actual task, active run, assigned role, and matching task round.
+Git repository-selection variables cannot redirect the commit read. The checkout's HEAD can differ from the task branch.
+
+The immutable preparation saves the branch, full commit ID, task round, and review cycle.
+Both the dispatched message and bound child instructions include this target.
+Dispatch rechecks the current task, run, and branch before reserving capacity.
+A changed head or round, completed run, or missing target refuses dispatch under the configured logbook workflow.
+A new target needs a new assignment; a retry cannot replace the old preparation.
+
+The report probe now uses a code reviewer and an actual commit in a temporary Git repository.
+It compares the preparation to a direct Git read and verifies native delivery, report storage, and run completion.
+Responses remain simulated. The target records intended review scope; it does not prove a review occurred or accept a verdict.
+Exact-commit verdict acceptance and independent review cycles remain unfinished.

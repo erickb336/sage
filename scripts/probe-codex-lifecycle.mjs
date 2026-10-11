@@ -27,7 +27,7 @@ let denied = false;
 const MARKER = "sage-native-parent-ok";
 const GRAND_MARKER = "sage-native-grandchild-ok";
 const GRAND_PROMPT = `Return exactly ${GRAND_MARKER}. Do not call any tool.`;
-const CHILD_MARKER = reportProbe ? ["STATUS done", "RESULT PASS", "EVIDENCE fixed native fixture completed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n") : "sage-native-child-ok";
+const CHILD_MARKER = reportProbe ? ["STATUS done", "RESULT CLEAN", "EVIDENCE fixed native fixture completed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH codex/t1-review"].join("\n") : "sage-native-child-ok";
 let CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const FOLLOWUP_MARKER = "sage-native-followup-ok";
 const FOLLOWUP_PROMPT = `Return exactly ${FOLLOWUP_MARKER}. Do not call any tool.`;
@@ -86,7 +86,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,disconnectOnSpawn:outage,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,disconnectOnSpawn:outage,review:reportProbe,deadlineMs});
   const initialLogbook = sage ? integrated.readLogbook() : null;
   let finishedRun;
   let responseRequests = 0;
@@ -274,10 +274,15 @@ data: ${JSON.stringify(event)}
           check(info.prepareTools.length === 1, "preparation_tool_missing");
           const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
           respond(res, { type: "function_call", ...info.prepareTools[0], call_id: calls.prepare,
-            arguments: JSON.stringify({ task: "T1", run: "R1", name: "probe_child", role: "lead", brief }) }); return;
+            arguments: JSON.stringify({ task: "T1", run: "R1", name: "probe_child", role: reportProbe ? "code-reviewer" : "lead", ...(reportProbe ? { reviewCycle: 1 } : {}), brief }) }); return;
         }
         const receipt = info.outputs[calls.prepare];
         check(receipt?.decision === "prepared" && typeof receipt.message === "string" && receipt.fork_turns === "none", "invalid_preparation_receipt");
+        if (reportProbe) {
+          check(JSON.stringify(receipt.review) === JSON.stringify(integrated.reviewTarget)
+            && receipt.message.includes(`Commit: ${integrated.reviewTarget.sha}`), "review_target_not_delivered");
+          print({type:"review_target_evidence",actualBranchHead:true,round:receipt.review.round,cycle:receipt.review.cycle,deliveredInTask:true,simulatedModel:true});
+        }
         CHILD_PROMPT = receipt.message; prepared = true;
       }
       rootRequests++;
@@ -331,7 +336,7 @@ data: ${JSON.stringify(event)}
       } else if (rootRequests === 6 && reportProbe) {
         const receipt = info.outputs[calls.report];
         check(receipt?.decision === "report-ready" && receipt.task === "T1" && receipt.run === "R1"
-          && receipt.child === childThread && receipt.report?.STATUS === "done" && receipt.report?.RESULT === "PASS"
+          && receipt.child === childThread && receipt.report?.STATUS === "done" && receipt.report?.RESULT === "CLEAN"
           && receipt.reportHash === createHash("sha256").update(CHILD_MARKER).digest("hex"), "invalid_report_receipt");
         const saved = integrated.readJournal();
         check(receipt.assignment === saved.bindings[0]?.assignment && receipt.turn === saved.bindings[0]?.turn, "report_assignment_mismatch");

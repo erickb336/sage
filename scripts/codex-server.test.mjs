@@ -1,6 +1,6 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1109,4 +1109,105 @@ test("packaged chief run tool uses fixed configuration rejects children and surv
   const unavailable = await connect(t, f, "0.160.0", "", "sage_finish_run");
   assert.match((await unavailable.call(f.finishInput)).error, /could not finish/);
   await unavailable.close();
+});
+
+
+async function reviewPreparationFixture(t) {
+  const f = await composedPolicyFixture(t);
+  const projectDirectory = join(f.dir, "project"); mkdirSync(projectDirectory);
+  const env = { ...process.env, SAGE_HOME: join(f.dir, "logbook") };
+  const git = (...args) => execFileSync("git", ["-C", projectDirectory, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+    "-c", "user.name=Fixture", "-c", "user.email=fixture@users.noreply.github.com", ...args], { env, encoding: "utf8" }).trim();
+  git("init", "--quiet", "-b", "codex/t1-review");
+  git("commit", "--quiet", "--allow-empty", "-m", "fixture");
+  const tool = f.core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+  const cli = (...args) => tool.sage([...args, "--project", projectDirectory], env);
+  cli("init"); cli("task", "add", "--title", "Pinned review", "--size", "small");
+  cli("task", "T1", "set", "branch=codex/t1-review");
+  cli("run", "add", "T1", "--role", "code-reviewer");
+  mkdirSync(f.options.observationsRoot);
+  const options = { ...f.options, projectDirectory, logbookRoot: env.SAGE_HOME };
+  const input = { ...f.input, role: "code-reviewer", reviewCycle: 1 };
+  const prepare = (request = input) => f.api.prepareNativeTask(request, f.native(session), options);
+  const logbook = tool.storeDir(projectDirectory, env);
+  return { ...f, options, input, prepare, git, cli, tool, env, logbook };
+}
+
+test("native review target captures the actual head round and cycle in immutable child instructions", async t => {
+  const f = await reviewPreparationFixture(t);
+  const receipt = f.prepare();
+  const expected = { branch: "codex/t1-review", sha: f.git("rev-parse", "HEAD"), round: 0, cycle: 1 };
+  assert.deepEqual(receipt.review, expected);
+  assert.match(receipt.message, new RegExp(`Commit: ${expected.sha}`));
+  assert.match(receipt.message, /Task round: 0\nReview cycle: 1/);
+  assert.deepEqual(f.prepare().review, expected);
+  assert.throws(() => f.prepare({ ...f.input, reviewCycle: 2 }));
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  assert.deepEqual(await f.evaluate(policy), { decision: "pass" });
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const delivered = policy.startChild(f.identity);
+  assert.match(delivered.brief, new RegExp(`Commit: ${expected.sha}`));
+  assert.match(delivered.brief, /Review cycle: 1/);
+  const journal = f.core.readAdmission(f.options.directory);
+  assert.deepEqual(journal.preparations[0].review, expected);
+  assert.equal(journal.reservations[0].preparation, journal.preparations[0].id);
+});
+
+test("native review target refuses stale heads before reservation and preserves the saved review", async t => {
+  const f = await reviewPreparationFixture(t);
+  const receipt = f.prepare();
+  f.git("commit", "--quiet", "--allow-empty", "-m", "changed head");
+  assert.notEqual(f.git("rev-parse", "HEAD"), receipt.review.sha);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(policy));
+  const journal = f.core.readAdmission(f.options.directory);
+  assert.equal(journal.reservations.length, 0);
+  assert.deepEqual(journal.preparations[0].review, receipt.review);
+  assert.throws(() => f.prepare());
+});
+
+test("native review target rejects missing cycles foreign roles and changed run state", async t => {
+  const f = await reviewPreparationFixture(t);
+  const receipt = f.prepare();
+  assert.ok(receipt.review);
+  const { reviewCycle, ...missing } = f.input;
+  for (const request of [missing, { ...f.input, reviewCycle: 0 }, { ...f.input, reviewCycle: 11 },
+    { ...f.input, reviewCycle: "1" }, { ...f.input, role: "lead" }, { ...f.input, role: "qa" },
+    { ...f.input, task: "T2" }, { ...f.input, sha: receipt.review.sha }]) assert.throws(() => f.prepare(request));
+  f.cli("run", "done", "R1", "--status", "done");
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(policy));
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});
+
+test("native review target ignores injected git selection and refuses a stale task round", async t => {
+  const f = await reviewPreparationFixture(t);
+  const receipt = f.prepare();
+  f.git("checkout", "--quiet", "-b", "other-branch");
+  f.git("commit", "--quiet", "--allow-empty", "-m", "other branch");
+  assert.notEqual(f.git("rev-parse", "HEAD"), receipt.review.sha);
+  const request = { project: f.options.projectDirectory, task: "T1", run: "R1", role: "code-reviewer", cycle: 1 };
+  assert.deepEqual(f.tool.captureReviewTarget(request, { ...f.env, GIT_DIR: join(f.dir, "missing-repository"),
+    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "false" }), receipt.review);
+  const table = join(f.logbook, "tasks.tsv");
+  const lines = readFileSync(table, "utf8").trimEnd().split("\n");
+  const columns = lines[0].split("\t"), row = lines[1].split("\t");
+  row[columns.indexOf("round")] = "1";
+  writeFileSync(table, lines[0] + "\n" + row.join("\t") + "\n");
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(policy));
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});
+
+test("native review target refuses redirected project logbooks and missing fixed options", async t => {
+  const { renameSync } = await import("node:fs");
+  const f = await reviewPreparationFixture(t);
+  assert.ok(f.prepare().review);
+  const incomplete = f.createNativePolicy({ ...f.options, logbookRoot: undefined }, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(incomplete));
+  renameSync(f.logbook, `${f.logbook}-saved`);
+  symlinkSync(`${f.logbook}-saved`, f.logbook);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(policy));
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
 });

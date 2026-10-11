@@ -15,6 +15,8 @@ import { boardView } from "./board-view.mjs";
 import { createBoard } from "./board.mjs";
 import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
+import { BRANCH } from "./branch.mjs";
+import { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -178,14 +180,6 @@ const pagesDir = (project, task, env) => join(worktreeRoot(env), basename(storeD
 /** The largest page that pages record reads: 16 MiB, the size limit of a published page. */
 const PAGE_MAX = 16 * 1024 * 1024;
 
-/**
- * A branch that a task or a writer run may name: letters, digits and . _ / -, as today's branches (sage/t94,
- * tool/t83-agent-state-writes). Not main, master or HEAD in any case (a Mac's file names ignore case), not under refs/,
- * heads/, remotes/ or origin/ (git reads those as other refs), not starting with - or a /, and none of the
- * forms that git refuses or reads otherwise: .., //, /., a final / or ., or .lock. @{, ~, ^, :, spaces and control
- * characters are outside the letters. The one pattern for every branch check in this tool: task set and run add.
- */
-const BRANCH = /^(?![-./])(?!(?:refs|heads|remotes|origin)\/)(?!(?:main|master|HEAD)$)(?!.*(?:\.\.|\/\/|\/\.|\.lock(?:\/|$)|[/.]$))[A-Za-z0-9._/-]+$/i;
 /** Does a branch belong to a task: a BRANCH of the form [<prefix>/]<task>[-<words>]? task set and the PR script check this one rule. */
 const ofTask = (task, name) => BRANCH.test(name) && new RegExp(`^(?:[A-Za-z0-9_-]+/)?${task}(?:-[A-Za-z0-9._-]+)?$`, "i").test(name);
 const branchOf = (name) => (BRANCH.test(name) ? name : refuse(`${JSON.stringify(name)} is not a task branch: use letters, digits and . _ / - (for example sage/t12 or tool/t12-short-name), not main, master or HEAD in any case, not under refs/, heads/, remotes/ or origin/, and not a name that starts with - or holds .., @{ or a space.`));
@@ -427,6 +421,34 @@ function ready(dir, skip = []) {
     const extra = cols.filter((c) => c && !TABLES[table].includes(c));
     if (extra.length) refuse(`${join(dir, `${table}.tsv`)} has columns that this version of sage does not know (${extra.join(", ")}): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
   }
+}
+
+/** Capture a review subject from the actual logbook and local branch, never from a reported SHA. */
+function captureReviewTarget(input, env = process.env) {
+  const keys = ["project", "task", "run", "role", "cycle"];
+  const deny = () => refuse("The review needs an active run on its task's current branch and round.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
+    || keys.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
+    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
+    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run) || !REVIEW_ROLES.includes(input.role)
+    || !Number.isInteger(input.cycle) || input.cycle < 1 || input.cycle > 10) deny();
+  const dir = storeDir(input.project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  return withLock(dir, () => {
+    ready(dir);
+    const tasks = read(dir, "tasks").filter(row => row.id === input.task);
+    const runs = read(dir, "runs").filter(row => row.id === input.run);
+    if (tasks.length !== 1 || runs.length !== 1) deny();
+    const task = tasks[0], run = runs[0];
+    if (run.task !== task.id || run.role !== input.role || run.round !== task.round || run.status !== "running"
+      || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
+      || !Number.isSafeInteger(Number(task.round)) || (run.branch && run.branch !== task.branch)) deny();
+    const branch = branchOf(task.branch);
+    // Repository-selection and injected-config environment variables cannot redirect this read.
+    const clean = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
+    const sha = git(["-C", input.project, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], clean).trim();
+    return parseReviewTarget({ branch, sha, round: Number(task.round), cycle: input.cycle });
+  });
 }
 
 /** Finish only a run from evidence already authenticated by the provider. This never records a verdict. */
@@ -1362,5 +1384,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, finishReportedRun, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, finishReportedRun, captureReviewTarget, withLock, board, answerPaths, runCli };
 }

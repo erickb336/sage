@@ -2060,3 +2060,22 @@ test("reported run recovers evidence linked before an interrupted temporary-file
   assert.equal(readFileSync(published, "utf8"), f.input.text);
   assert.equal(f.finish().decision, "already-finished");
 });
+
+test("shared review targets persist once and reject malformed scopes or non-review roles", async t => {
+  const f = await preparationFixture(t);
+  const review = { branch: "codex/t1-review", sha: "a".repeat(40), round: 0, cycle: 1 };
+  const plan = { issuerRole: "chief-of-staff", role: "code-reviewer" };
+  const brief = completeBrief("Review the fixed commit.");
+  const save = (target = review, role = plan, request = f.request) => f.api.prepareAdmission(f.journal, f.scope, request, role, brief, target);
+  const first = save();
+  assert.deepEqual(first.preparation.review, review);
+  assert.equal(save().decision, "already-prepared");
+  for (const target of [{ ...review, sha: "b".repeat(40) }, { ...review, branch: "main" }, { ...review, round: -1 },
+    { ...review, cycle: 0 }, { ...review, cycle: "1" }, { ...review, injected: true }]) assert.throws(() => save(target));
+  assert.throws(() => save(review, f.role, { ...f.request, name: "lead" }));
+  const reserved = f.reserve(first.preparation.id);
+  const saved = f.api.readAdmission(f.journal);
+  assert.equal(saved.reservations[0].preparation, first.preparation.id);
+  assert.deepEqual(saved.preparations[0].review, review);
+  assert.equal(reserved.decision, "permit-once");
+});

@@ -212,3 +212,16 @@ It directly checks the saved report, terminal run, unchanged task and gate table
 The probe uses simulated responses. It does not prove report claims, a real-project workflow, or installed automatic operation.
 Review verdicts, broader recovery, full policy assembly, and activation remain incomplete.
 The required-hook disconnection gap still blocks activation on the tested transport.
+
+
+## Exact-commit review preparation
+
+The configured Codex workflow now saves the review branch, full commit ID, task round, and cycle before dispatch.
+Shared state reads the actual task branch from Git and checks the active task/run/role relationship.
+The native child receives the immutable target with its role and brief.
+A changed head, changed round, or completed run blocks dispatch before capacity is reserved.
+A preparation retry cannot silently select another commit or review cycle.
+
+The isolated native report route uses a real temporary Git commit and simulated reviewer responses.
+It checks the saved target against a separate Git read, then verifies delivery, receipt persistence, and run completion.
+This establishes intended review scope, not accepted review claims. Exact-commit verdict gates remain unfinished.
