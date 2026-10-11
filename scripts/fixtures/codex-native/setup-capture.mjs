@@ -9,6 +9,7 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
  assert(/^[A-Za-z0-9/._-]+$/.test(realpathSync(root)), "unsafe_probe_root");
  assert.equal(realpathSync(codexHome),join(realpathSync(root),'codex'));
  mkdirSync(join(root,'events'));
+ writeFileSync(join(root,'native-identity.mjs'),readFileSync(new URL('../../../packages/sage-codex/runtime/identity.mjs',import.meta.url)));
  const script=join(root,'capture.mjs');
  writeFileSync(script,readFileSync(new URL('./capture-native-hook.mjs',import.meta.url)));
  const command=`node ${JSON.stringify(script)}${denySpawn ? " --deny-spawn" : ""}`;

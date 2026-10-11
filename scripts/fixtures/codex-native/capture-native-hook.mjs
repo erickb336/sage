@@ -2,6 +2,7 @@
 import {readFileSync,writeFileSync,realpathSync,openSync,readSync,closeSync,constants,fstatSync} from 'node:fs';
 import {dirname,join,relative,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {readNativeCommand} from './native-identity.mjs';
 import {randomUUID,createHash} from 'node:crypto';
 const root=dirname(fileURLToPath(import.meta.url));
 const input=JSON.parse(readFileSync(0,'utf8'));
@@ -9,6 +10,14 @@ const record=Object.fromEntries(['hook_event_name','session_id','agent_id','turn
 // Record field types only; command content stays private.
 record.toolInputShape=Object.fromEntries(Object.entries(input.tool_input??{}).map(([k,v])=>[k,typeof v]));
 record.fixedCommandMatched=input.tool_input?.command==='printf sage-native-command-ok';
+if(record.fixedCommandMatched&&input.hook_event_name==='PreToolUse'){
+ try{
+  const args=readNativeCommand(input.transcript_path,{sessionsDir:realpathSync(join(root,'codex/sessions'))},
+   {session:input.session_id,actor:input.session_id,parent:null,path:'/root',turn:input.turn_id,call:input.tool_use_id,command:input.tool_input.command});
+  record.commandTranscript={fields:Object.keys(args).sort(),fixedCommand:args.cmd==='printf sage-native-command-ok',
+   fixedShell:args.shell==='/bin/sh',fixedDirectory:args.workdir===join(root,'workspace'),ttyFalse:args.tty===false};
+ }catch(error){record.commandTranscript={error:error.message};}
+}
 if(typeof input.tool_input?.task_name==='string')record.inputTaskName=input.tool_input.task_name;
 if(input.hook_event_name==='PostToolUse'){
  const value=input.tool_response;

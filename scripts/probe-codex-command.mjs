@@ -61,11 +61,13 @@ try {
  const result=await waitNative(child,{onTimeout:()=>{server.closeAllConnections();}});
  server.closeAllConnections();await new Promise(resolve=>server.close(resolve));server=null;
  const events=readdirSync(join(root,'events')).map(n=>JSON.parse(readFileSync(join(root,'events',n),'utf8')));
- console.log(JSON.stringify({type:'command_boundary',version:versionText.trim(),toolSchema,callbacks:events.map(({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape})=>({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape})),result,requests,fixtureError,stderrBytes,simulatedModel:true,fullPolicyVerified:false}));
+ console.log(JSON.stringify({type:'command_boundary',version:versionText.trim(),toolSchema,callbacks:events.map(({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape,commandTranscript})=>({hook_event_name,tool_name,toolInputShape,fixedCommandMatched,responseShape,commandTranscript})),result,requests,fixtureError,stderrBytes,simulatedModel:true,fullPolicyVerified:false}));
  assert.equal(result.code,0);assert.equal(fixtureError,undefined);assert.equal(requests,2);
  assert.equal(events.filter(e=>e.hook_event_name==='PreToolUse'&&e.fixedCommandMatched).length,1);
  assert.equal(events.filter(e=>e.hook_event_name==='PostToolUse'&&e.fixedCommandMatched).length,1);
  for(const event of events){assert.equal(event.tool_name,'Bash');assert.deepEqual(event.toolInputShape,{command:'string'});}
+ const before=events.find(event=>event.hook_event_name==='PreToolUse');
+ assert.deepEqual(before.commandTranscript,{fields:['cmd','max_output_tokens','shell','tty','workdir'],fixedCommand:true,fixedShell:true,fixedDirectory:true,ttyFalse:true});
  const completed=stdout.trim().split('\n').map(line=>JSON.parse(line)).filter(event=>event.type==='item.completed'&&event.item?.type==='command_execution');
  assert.equal(completed.length,1,'one_native_command_execution');
  assert.equal(completed[0].item.exit_code,0,'native_command_failed');
