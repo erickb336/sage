@@ -22,6 +22,18 @@ These checks read current records at each boundary. They do not pin every task
 field at preparation, answer gates, or enforce every workflow route. Review
 preparation also pins its current commit, round, and cycle.
 
+One run can receive one dispatch across owners in the same admission journal.
+Another name, task label, or owner cannot reuse it. Concurrent requests choose
+one winner. An exact dispatch retry returns the original receipt without a new
+permission. Completion releases capacity but does not reopen the run. Record a
+new run for another execution.
+
+A verified failure before child creation permits a new dispatch attempt for the
+same run. A late receipt from the failed attempt cannot release or bind the new
+attempt. Unknown outcomes retain their reservation. Separate admission journals
+are not coordinated by this rule. Earlier journal history that dispatches one
+run twice without a verified failure is refused; the tool does not rewrite it.
+
 Reuse the same request UUID and fields after a lost response. A retry returns
 the original creation record. It does not reopen a completed run or reset its
 report. Use a fresh request UUID for a new run. The shared `running` status

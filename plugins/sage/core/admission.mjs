@@ -270,6 +270,10 @@ function apply(state, event) {
       && row.dispatch.name === event.dispatch.name)) refuse("child dispatch name is already reserved");
     checkRoleReservation(active, value, event.rolePlan);
   }
+  // A run is one execution, across all owners in this participating store. A proven
+  // failure before child creation may retry; completion does not create a new run.
+  if (copy.reservations.some(row => row.assignment.project === value.project && row.assignment.run === value.run
+    && !failed.has(row.assignment.id))) refuse("run already has a dispatch; record a new run");
   if (active.length >= copy.config.total) refuse("total capacity is occupied");
   const projectLimit = copy.config.projects.find((p) => p.project === value.project).limit;
   if (active.filter(({ assignment: a }) => a.project === value.project).length >= projectLimit) refuse("project capacity is occupied");

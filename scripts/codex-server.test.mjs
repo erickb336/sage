@@ -2606,3 +2606,15 @@ test('native assignment server refuses invented work with a redacted error and n
   assert.equal((await client.call(f.input)).decision, 'prepared');
   await client.close();
 });
+
+test('native run claims refuse a second prepared agent while preserving the first dispatch retry', async t => {
+  const f = await preparationServerFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.prepareNativeTask({ ...f.input, name: 'duplicate_lead' }, f.native(session), f.options);
+  const first = f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput('duplicate_lead', 'spawn-duplicate'), f.native(session), f.options), /run already has a dispatch/);
+  assert.deepEqual(f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options), { decision: 'already-reserved', assignment: first.assignment });
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
+  f.api.prepareNativeTask({ ...f.input, task: 'T2', run: 'R3', name: 'other_task' }, f.native(session), f.options);
+  assert.equal(f.api.reservePreparedSpawn(f.spawnInput('other_task', 'spawn-other'), f.native(session), f.options).decision, 'permit-once');
+});
