@@ -1,9 +1,18 @@
 // Test only: the real runtime with a fixed harmless tool route, not the complete product policy.
 import { serveHooks } from "./plugin/runtime/mcp-server.mjs";
 import { createNativePolicy } from "./plugin/runtime/policy.mjs";
-import { options } from "./sage-options.mjs";
+import { options, disconnectOnSpawn, recordOutage, outageRecorded } from "./sage-options.mjs";
 const allowed = new Set(["collaborationspawn_agent", "collaborationlist_agents", "collaborationwait_agent",
   "list_mcp_resources", "mcp__sage_preparation__sage_prepare_task"]);
-serveHooks({ mode: options, loadPolicy: async () => createNativePolicy(options, input =>
-  allowed.has(input.tool_name) ? { decision: "pass" }
-    : { decision: "deny", reason: "Outside the fixed native fixture route." }) });
+serveHooks({ mode: options, loadPolicy: async () => {
+  // Keep the injected outage active on every connection after the root spawn attempt.
+  if (disconnectOnSpawn && outageRecorded()) process.exit(0);
+  return createNativePolicy(options, input => {
+  if (disconnectOnSpawn && input.tool_name === "collaborationspawn_agent") {
+    recordOutage(input);
+    process.exit(0); // Exit this test server only; never signal another process.
+  }
+  return allowed.has(input.tool_name) ? { decision: "pass" }
+    : { decision: "deny", reason: "Outside the fixed native fixture route." };
+});
+} });

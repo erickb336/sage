@@ -134,3 +134,29 @@ The final journal contains one owner, preparation, reservation, binding, and exa
 The local 0.160.0 run passed and removed its temporary profile.
 This fixture uses a fixed harmless tool policy and simulated responses.
 It does not verify the complete product policy, installed operation, report acceptance, or real-model consumption.
+
+
+## Required hook outage blocks activation
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-hook-outage` with the test process fixtures first on PATH.
+This readiness check uses the same temporary profile and preparation path as `--sage`.
+After native identity validation, the test hook server records the spawn attempt and exits before admission.
+The outage remains active on later connections. The fixture never signals another process.
+The server remains configured with `required=true`.
+
+On local Codex 0.160.0, the native child started and completed without a Sage reservation.
+The check returned exit code 1 and `failClosed: false`, then removed its temporary profile.
+The successful `--sage` control still records one preparation, reservation, binding, and completion.
+These are simulated-model checks of the actual native transport. They do not establish a live project workflow.
+
+This failure blocks automatic activation on the tested transport.
+A successful startup requirement does not establish required evaluation before every tool dispatch.
+The native [PreToolUse implementation](https://github.com/openai/codex/blob/main/codex-rs/hooks/src/events/pre_tool_use.rs) leaves a failed hook non-blocking.
+The open [upstream issue](https://github.com/openai/codex/issues/41979) tracks a mandatory failure policy.
+No proposed configuration key is treated as supported by this fixture.
+A second advisory hook or a later interrupt cannot prove that the original tool never ran.
+
+Activation requires a supported boundary that denies before dispatch when required policy evidence is missing.
+Verify disconnected, absent, untrusted, timed-out, malformed, and unmatched validators, plus permission-request failure and configuration reload.
+This fixture proves only the persistent disconnection case. The other failure cases remain unverified.
+Report acceptance, recovery, and the complete policy can proceed while this activation dependency remains open.
