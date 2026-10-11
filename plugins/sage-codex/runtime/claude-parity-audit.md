@@ -73,4 +73,8 @@ The observer instead reads the child transcript saved at its verified start.
 Each task message follows a matching `task_started` and `turn_context` record.
 The probe checks the message's author, recipient, and content hash against the expected task for each stopped turn.
 These checks pass for the initial task and its follow-up. They establish fixture delivery, not real-model consumption.
-Production binding still needs a protected transcript reader, immutable dispatch evidence, and conflict checks before journal updates.
+The protected transcript reader now checks these identities and message hashes against an exact expected turn.
+It refuses linked files, incomplete snapshots, conflicting messages, and oversized transcripts.
+Its bounds are 16 MiB and 65,536 records; exceeding either bound requires reconciliation.
+It does not authenticate the hook caller or allow a journal update.
+Immutable dispatch evidence and lifecycle integration remain required before capacity release.

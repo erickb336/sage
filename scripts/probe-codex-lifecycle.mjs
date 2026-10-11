@@ -5,6 +5,7 @@ import {createHash} from "node:crypto";
 import assert from "node:assert/strict";
 import {existsSync,readdirSync,readFileSync} from "node:fs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
+import {readAssignmentTurn} from "../packages/sage-codex/runtime/identity.mjs";
 import {setupCapture} from "./fixtures/codex-native/setup-capture.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -408,7 +409,13 @@ data: ${JSON.stringify(event)}
       assert.equal(matched[0].author, "/root");
       assert.equal(matched[0].recipient, taskName);
       assert(expectedTasks.has(matched[0].taskHash));
-      matchedTasks.add(matched[0].taskHash);
+      const transcript = JSON.parse(readFileSync(join(root, `child-path-${stopped.agent_id}.json`), "utf8"));
+      const bound = readAssignmentTurn(transcript, { sessionsDir: join(codexHome, "sessions") }, {
+        session: stopped.session_id, child: stopped.agent_id, parent: start[0].metadata.parent_thread_id,
+        path: taskName, author: "/root", turn: stopped.turn_id, taskHash: matched[0].taskHash,
+      });
+      assert.equal(bound.message, matched[0].message);
+      matchedTasks.add(bound.taskHash);
     }
     if (!denySpawn) assert.equal(matchedTasks.size, expectedTasks.size);
     if (!denySpawn) {
