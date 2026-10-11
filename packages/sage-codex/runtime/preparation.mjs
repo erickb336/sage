@@ -44,7 +44,7 @@ export function prepareNativeTask(input, context, options) {
     { task: input.task, run: input.run, issuer: native.actor, name: input.name },
     { issuerRole: role, role: input.role }, input.brief);
   const saved = result.preparation;
-  return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role, message: preparedTaskMessage(saved) };
+  return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role, message: preparedTaskMessage(saved), fork_turns: "none" };
 }
 
 /** Input is the raw native PreToolUse payload, before any derived agent_id is added. */
@@ -55,6 +55,7 @@ export function reservePreparedSpawn(input, context, options) {
   if (observed?.kind !== "spawn-request") refuse();
   // Keep rejected and inactive attempts too. They can make later path reuse ambiguous.
   publish(join(options.observationsRoot, observed.session), observed);
+  if (input.tool_input.fork_turns !== "none") refuse();
   const message = input.tool_input.message;
   if (typeof message !== "string" || !message || Buffer.byteLength(message, "utf8") > 1024 * 1024
     || Buffer.from(message, "utf8").toString("utf8") !== message) refuse();

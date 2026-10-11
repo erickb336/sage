@@ -114,6 +114,8 @@ export function readAssignmentTurn(transcriptPath, options, expected) {
       if (row.type !== "response_item" || payload.type !== "agent_message") continue;
       if (!turn || context !== turn || !Array.isArray(payload.content)) unavailable();
       const parts = payload.content.filter(part => record(part) && part.type === "encrypted_content");
+      // Native result notifications contain plain text, not an assigned task.
+      if (parts.length === 0) continue;
       if (parts.length !== 1 || typeof parts[0].encrypted_content !== "string") unavailable();
       const taskHash = createHash("sha256").update(parts[0].encrypted_content).digest("hex");
       if (taskHash !== expected.taskHash) continue;

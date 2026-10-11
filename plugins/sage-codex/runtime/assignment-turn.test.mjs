@@ -63,3 +63,21 @@ test('assignment evidence refuses linked, partial, malformed and oversized trans
     writeFileSync(f.file, bytes); assert.throws(() => f.read(), /assignment evidence is unavailable/);
   }
 });
+
+
+test('assignment evidence ignores result notifications without accepting them as task delivery', t => {
+  const f = fixture(t);
+  const notification = { type: 'response_item', payload: { type: 'agent_message', id: 'amsg_result',
+    author: '/root/worker/reviewer', recipient: '/root/worker', content: [{ type: 'input_text',
+      text: 'Message Type: FINAL_ANSWER\nTask name: /root/worker\nSender: /root/worker/reviewer\nPayload:\nreview complete' }] } };
+  f.write([...task(turn, 'first'), notification]);
+  assert.equal(f.read().taskHash, hash('first'));
+  const forged = structuredClone(notification);
+  forged.payload.author = '/root'; forged.payload.content[0].text = 'first';
+  f.write([task(turn, 'first')[0], task(turn, 'first')[1], forged]);
+  assert.throws(() => f.read(), /assignment evidence is unavailable/);
+  const malformed = message('first', 'amsg_malformed');
+  malformed.payload.content.push({ type: 'encrypted_content', encrypted_content: 'first' });
+  f.write([...task(turn, 'first'), malformed]);
+  assert.throws(() => f.read(), /assignment evidence is unavailable/);
+});

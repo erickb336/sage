@@ -3,6 +3,7 @@ import { decodeEvent, observation, publish, RUNTIME_VERSION } from "./events.mjs
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn } from "./preparation.mjs";
+import { bindNativeChildTool } from "./child-tool.mjs";
 import { boundChildInstructions } from "./instructions.mjs";
 
 const refuse = () => { throw Error("Sage could not evaluate this native operation."); };
@@ -22,7 +23,7 @@ const modeStamp = value => JSON.stringify([value.owner?.epoch, value.modes.at(-1
 export function createNativePolicy(options, evaluateTool) {
   if (!options || typeof evaluateTool !== "function"
     || !["directory", "project", "observationsRoot"].every(key => typeof options[key] === "string" && options[key])) refuse();
-  const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot });
+  const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot, sessionsDir: options.sessionsDir });
   const mode = session => readMode(fixed.directory, fixed.project, session);
   const record = value => {
     const event = observation(value);
@@ -40,6 +41,7 @@ export function createNativePolicy(options, evaluateTool) {
       const observed = decodeEvent(event, native);
       if (observed) record(observed); // Keep inactive and denied attempts; name reuse must stay visible.
       const before = mode(event.session_id);
+      if (before.sage && child) bindNativeChildTool(raw, native, fixed);
       const checked = decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage })));
       // A concurrent mode change cannot turn an earlier decision into current permission.
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();

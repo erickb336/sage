@@ -42,6 +42,7 @@ if(['SubagentStart','SubagentStop'].includes(input.hook_event_name)){
      if(row.type==='response_item'&&p?.type==='agent_message'){
       if(!turn||context!==turn||!Array.isArray(p.content))throw Error('task_without_turn_context');
       const parts=p.content.filter(part=>part.type==='encrypted_content');
+      if(parts.length===0)continue;
       if(parts.length!==1||typeof parts[0].encrypted_content!=='string')throw Error('unsupported_task_content');
       record.assignments.push({turn,message:p.id,author:p.author,recipient:p.recipient,
        taskHash:createHash('sha256').update(parts[0].encrypted_content).digest('hex')});

@@ -12,14 +12,17 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
 const followUp = process.argv.includes("--follow-up");
-assert(!(denySpawn && followUp), "incompatible_probe_routes");
+const nested = process.argv.includes("--nested");
+assert([denySpawn, followUp, nested].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
 const MARKER = "sage-native-parent-ok";
+const GRAND_MARKER = "sage-native-grandchild-ok";
+const GRAND_PROMPT = `Return exactly ${GRAND_MARKER}. Do not call any tool.`;
 const CHILD_MARKER = "sage-native-child-ok";
 const CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const FOLLOWUP_MARKER = "sage-native-followup-ok";
@@ -37,7 +40,7 @@ const catalogPath = join(root, "model-catalog.json");
 writeFileSync(catalogPath, JSON.stringify({ models: [{
   slug: "sage-native-parent", display_name: "Sage native lifecycle fixture",
   supported_reasoning_levels: [], shell_type: "disabled", visibility: "list",
-  supported_in_api: true, priority: 1, support_verbosity: false,
+  supported_in_api: true, priority: 1, support_verbosity: false, multi_agent_version: "v2",
   truncation_policy: { mode: "bytes", limit: 10000 }, experimental_supported_tools: [], tool_mode: "direct",
   model_messages: { instructions_template: "Follow the fixed native-agent probe task. Do not use shell or external tools." },
 }] }));
@@ -84,6 +87,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let rejectedRequests = 0;
   let rootRequests = 0;
   let childRequests = 0;
+  let grandchildRequests = 0, grandchildThread;
   let rootThread;
   let childThread;
   let taskName;
@@ -99,7 +103,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  const calls = { childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -145,7 +149,9 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const followupTask = tasks.at(-1);
     const followupPromptSeen = followupTask?.author === "/root" && followupTask?.recipient === "/root/probe_child"
       && followupTask.content?.some(part => part.type === "encrypted_content" && part.encrypted_content === FOLLOWUP_PROMPT);
-    return { outputs, agentTools, childPromptSeen, followupPromptSeen };
+    const grandchildPromptSeen = task?.author === "/root/probe_child" && task?.recipient === "/root/probe_child/probe_grandchild"
+      && task.content?.some(part => part.type === "encrypted_content" && part.encrypted_content === GRAND_PROMPT);
+    return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -204,6 +210,25 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if (nested && info.grandchildPromptSeen) {
+          check(thread !== rootThread && thread !== childThread && grandchildRequests === 0, "grandchild_identity_invalid");
+          grandchildThread = thread; grandchildRequests++;
+          respond(res, message(GRAND_MARKER)); return;
+        }
+        if (nested && Object.hasOwn(info.outputs, calls.childList)) {
+          check(thread === childThread, "child_list_changed_identity");
+          const grand = info.outputs[calls.childList]?.agents?.find(row => row.agent_name === "/root/probe_child/probe_grandchild");
+          check(grand?.agent_status?.completed === GRAND_MARKER, "grandchild_completion_missing");
+          childRequests++; respond(res, message(CHILD_MARKER)); return;
+        }
+        if (nested && Object.hasOwn(info.outputs, calls.childWait)) {
+          check(thread === childThread, "child_wait_changed_identity"); childRequests++;
+          respond(res, call(calls.childList, "list_agents", {})); return;
+        }
+        if (nested && Object.hasOwn(info.outputs, calls.childSpawn)) {
+          check(thread === childThread && info.outputs[calls.childSpawn].task_name === "/root/probe_child/probe_grandchild", "nested_spawn_missing"); childRequests++;
+          respond(res, call(calls.childWait, "wait_agent", {})); return;
+        }
         if (followUp && childRequests === 1) {
           check(thread === childThread, "followup_changed_child_identity");
           check(info.followupPromptSeen, "followup_task_not_received");
@@ -215,6 +240,7 @@ data: ${JSON.stringify(event)}
         }
         check(rootThread && thread !== rootThread && childRequests === 0, "unexpected_child_request_identity");
         check(info.childPromptSeen, "child_did_not_receive_fixed_task");
+        if (nested) check(["spawn_agent", "list_agents", "wait_agent"].every(name => info.agentTools.includes(name)), "nested_tools_missing");
         childThread = thread;
         childRequests++;
         childTaskSeen = true;
@@ -250,7 +276,7 @@ data: ${JSON.stringify(event)}
         nativeRunning = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
         respond(res, call(calls.wait, "wait_agent", {}));
-        respond(childResponse, message(CHILD_MARKER));
+        respond(childResponse, nested ? call(calls.childSpawn, "spawn_agent", {task_name: "probe_grandchild", message: GRAND_PROMPT, fork_turns: "none"}) : message(CHILD_MARKER));
         childResponseSent = true;
       } else if (rootRequests === 4) {
         const result = info.outputs[calls.wait];
@@ -376,7 +402,7 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followUp ? 8 : 5) && childRequests === (followUp ? 2 : 1) && rootThread !== childThread
+      : rootRequests === (followUp ? 8 : 5) && childRequests === (nested ? 4 : followUp ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
@@ -391,42 +417,48 @@ data: ${JSON.stringify(event)}
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");
     const before=rows.filter(row=>row.hook_event_name==="PreToolUse"&&row.tool_name==="collaborationspawn_agent");
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
-    assert.equal(before.length,1);
-    assert.equal(start.length, denySpawn ? 0 : 1);
-    assert.equal(stop.length, denySpawn ? 0 : followUp ? 2 : 1);
+    assert.equal(before.length,nested ? 2 : 1);
+    assert.equal(start.length, denySpawn ? 0 : nested ? 2 : 1);
+    assert.equal(stop.length, denySpawn ? 0 : followUp || nested ? 2 : 1);
     if (followUp) {
       assert.equal(new Set(stop.map(row => row.turn_id)).size, 2);
       assert(stop.every(row => row.agent_id === start[0].agent_id && row.session_id === start[0].session_id));
       assert(stop.some(row => row.turn_id === start[0].turn_id));
     }
-    assert.equal(after.length,denySpawn ? 0 : 1);
-    const expectedTasks = new Set([CHILD_PROMPT, ...(followUp ? [FOLLOWUP_PROMPT] : [])].map(text => createHash("sha256").update(text).digest("hex")));
+    assert.equal(after.length,denySpawn ? 0 : nested ? 2 : 1);
+    const expectedTasks = new Set([CHILD_PROMPT, ...(followUp ? [FOLLOWUP_PROMPT] : []), ...(nested ? [GRAND_PROMPT] : [])].map(text => createHash("sha256").update(text).digest("hex")));
     const matchedTasks = new Set();
     for (const stopped of stop) {
       assert.equal(stopped.captureError, undefined);
       const matched = stopped.assignments.filter(row => row.turn === stopped.turn_id);
       assert.equal(matched.length, 1, "each stopped turn must contain one fixture assignment");
-      assert.equal(matched[0].author, "/root");
-      assert.equal(matched[0].recipient, taskName);
+      const started = start.find(row => row.agent_id === stopped.agent_id);
+      assert(started); assert.equal(started.captureError, undefined);
+      const grand = nested && stopped.agent_id === grandchildThread;
+      const author = grand ? taskName : "/root";
+      const path = grand ? `${taskName}/probe_grandchild` : taskName;
+      assert.equal(started.metadata.parent_thread_id, grand ? childThread : rootThread);
+      assert.equal(matched[0].author, author);
+      assert.equal(matched[0].recipient, path);
       assert(expectedTasks.has(matched[0].taskHash));
       const transcript = JSON.parse(readFileSync(join(root, `child-path-${stopped.agent_id}.json`), "utf8"));
       const bound = readAssignmentTurn(transcript, { sessionsDir: join(codexHome, "sessions") }, {
-        session: stopped.session_id, child: stopped.agent_id, parent: start[0].metadata.parent_thread_id,
-        path: taskName, author: "/root", turn: stopped.turn_id, taskHash: matched[0].taskHash,
+        session: stopped.session_id, child: stopped.agent_id, parent: started.metadata.parent_thread_id,
+        path, author, turn: stopped.turn_id, taskHash: matched[0].taskHash,
       });
       assert.equal(bound.message, matched[0].message);
       matchedTasks.add(bound.taskHash);
     }
     if (!denySpawn) assert.equal(matchedTasks.size, expectedTasks.size);
-    if (!denySpawn) {
-    assert.equal(start[0].captureError,undefined);
-    assert.equal(start[0].agent_id,stop[0].agent_id);
-    assert.equal(start[0].metadata.id,start[0].agent_id);
-    assert.equal(start[0].metadata.session_id,before[0].session_id);
-    assert.equal(before[0].tool_use_id,after[0].tool_use_id);
-    assert.equal(after[0].resultTaskName,start[0].metadata.agent_path);
+    for (const started of start) {
+      const result = after.find(row => row.resultTaskName === started.metadata.agent_path);
+      const request = result && before.find(row => row.tool_use_id === result.tool_use_id);
+      assert(result); assert(request);
+      assert.equal(started.metadata.id, started.agent_id);
+      assert.equal(started.metadata.session_id, request.session_id);
+      assert(stop.some(row => row.agent_id === started.agent_id));
     }
-    print({type:"hook_evidence",spawnRequest:before.length,spawnResult:after.length,childStart:start.length,childStop:stop.length,exactIdentityJoin:!denySpawn,followupTurnVerified:followUp,noChildStarted:denySpawn,simulatedModel:true,automaticSage:false,realModelConsumptionVerified:false});
+    print({type:"hook_evidence",spawnRequest:before.length,spawnResult:after.length,childStart:start.length,childStop:stop.length,exactIdentityJoin:!denySpawn,followupTurnVerified:followUp,nestedTurnsVerified:nested,noChildStarted:denySpawn,simulatedModel:true,automaticSage:false,realModelConsumptionVerified:false});
   }
 }
 

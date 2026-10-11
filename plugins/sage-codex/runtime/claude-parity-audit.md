@@ -95,7 +95,22 @@ Native spawn admission requires that exact message before it reserves a slot.
 The caller copies the returned name and message unchanged; Sage does not override native approval.
 Local server tests verify delivery, unchanged retries, and refusal of altered or swapped instructions.
 Both new tests fail on main: it returns no message and admits arbitrary task content.
-At the child's first tool call, bind its verified transcript identity to the admitted dispatch and saved task hash.
-A missing parent result or conflicting identity must deny the tool and retain the reservation.
+The composed policy now binds the child at its first tool call using the verified transcript, admitted dispatch, and saved task hash.
+A missing parent result or conflicting identity denies the tool and retains the reservation.
+The preparation receipt requires `fork_turns: "none"`; admission rejects inherited histories.
+The verified child transcript path is saved for later stop processing.
 Stop processing must use that saved child transcript, not the parent path in the stop callback.
 These integration steps remain unfinished; the existing MCP start adapter alone cannot establish installed instruction delivery.
+
+
+## Nested native lifecycle evidence
+
+The repeatable probe now accepts `--nested` for chief, child, and grandchild execution.
+Run `node scripts/probe-codex-lifecycle.mjs --nested` with the test process fixtures first on PATH.
+The local 0.160.0 run returned both exact completion markers and matched both assignments to their child identities and turns.
+The synthetic model catalog must declare `multi_agent_version: "v2"` so the child receives collaboration tools.
+Both spawns use `fork_turns: "none"`. Inherited history adds parent metadata and is not supported by the current identity reader.
+The reader now ignores plain result notifications when it checks encrypted task delivery.
+A plain notification cannot establish task delivery, and duplicate encrypted task payloads still fail.
+Baseline, denied-spawn, follow-up, and nested routes passed against the local CLI.
+These checks use simulated model responses and temporary profiles. They do not prove installed Sage or a real-model pilot.
