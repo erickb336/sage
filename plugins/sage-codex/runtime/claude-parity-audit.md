@@ -55,3 +55,15 @@ Run the same probe with `--deny-spawn` to check a fixed pre-tool denial. The nat
 Both saved variants passed locally on Codex 0.160.0. This proves the denial boundary for this native spawn path. It does not prove complete Sage command policy or coverage of other tools.
 
 Event ordering under races, compaction, subsequent child tasks and real-model consumption remain separate checks. These results do not activate Sage.
+
+## Subsequent assignment evidence
+
+Run `node scripts/probe-codex-lifecycle.mjs --follow-up` with fake process tools first on PATH.
+The isolated fixture gives the completed child a second task, then checks its native completion marker.
+It requires the same child identity, one start event, and two stop events with distinct turn IDs.
+The follow-up tool returns an empty string. That result does not identify the child's new turn.
+A wait can time out when completion already reached the parent. The fixture checks native status after the wait.
+
+The probe uses simulated model responses. It does not establish real-model report acceptance or authorize capacity release.
+The runtime must bind each accepted assignment to its own child turn before a stop can release that assignment.
+A child's earlier stop must never release its later assignment. This binding remains unfinished.
