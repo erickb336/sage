@@ -1,5 +1,6 @@
 // Standalone browser check. Provide Playwright through NODE_PATH; do not add it to the default test command.
-// Example: NODE_PATH="$PLAYWRIGHT_MODULES" BOARD_BROWSER_CHANNEL=chrome node --test scripts/board-enhancement.test.mjs
+// It runs Playwright's bundled Chromium (PLAYWRIGHT_BROWSERS_PATH), or the headless shell at BOARD_BROWSER_PATH; never an installed Chrome.
+// Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$SCRATCH/browsers" node --test scripts/board-enhancement.test.mjs
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -9,18 +10,18 @@ import { createServer as createPortServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { buildBoardModel } from "../plugins/sage/core/board-model.mjs";
-import { renderBoardHtml } from "../plugins/sage/core/board-render.mjs";
+import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
+import { renderBoardHtml } from "../packages/sage-core/board-render.mjs";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 const NOW = "2026-10-08T20:00:00Z";
 let browser;
-before(async () => { browser = await chromium.launch({ channel: process.env.BOARD_BROWSER_CHANNEL ?? "chrome", headless: true }); });
+before(async () => { browser = await chromium.launch({ headless: true, ...(process.env.BOARD_BROWSER_PATH ? { executablePath: process.env.BOARD_BROWSER_PATH } : {}) }); });
 after(async () => { await browser?.close(); });
 
-function model({ gamma = null, delta = false, current = false } = {}) {
+function model({ gamma = null, delta = false, current = false, rich = false } = {}) {
   const task = (id, title, state) => ({ id, title, state, size: "small", risk: "", route: "build,code-review,qa", branch: "", pr: "", round: "0", keys: "" });
   const project = (name, tasks, gates = []) => ({ key: `sample/${name}-abcdef`, name: `${name}-abcdef`, diagnostics: [], tables: { tasks, gates } });
   const projects = [
@@ -36,9 +37,20 @@ function model({ gamma = null, delta = false, current = false } = {}) {
       { id: "O2", task: "T2", kind: "run", source: "Sample recorder", observedAt: NOW, data: { run: "R1", provider: "Codex", head, cycle: 1 } },
     ] };
   }
+  if (rich) {
+    // A full backlog (its fold), a PR with no recorded head, and a decision: each shows faint text.
+    projects[0].tables.tasks.push(...Array.from({ length: 7 }, (_, i) => task(`T${10 + i}`, `Sample alpha queued ${10 + i}`, "framed")));
+    projects[1].tables.tasks[1].pr = "9";
+    projects[0].tables.decisions = [{ at: NOW, task: "T2", decision: "Sample decision", why: "sample" }];
+    // An earlier head in the evidence, and a second source, whose agents get the alternate pill colour.
+    projects[0].tables.ledger = [{ task: "T2", pr: "7", sha: "b".repeat(40), kind: "checks-fail", cycle: "1", at: NOW }, { task: "T2", pr: "7", sha: "a".repeat(40), kind: "checks-pass", cycle: "1", at: NOW }];
+  }
   if (gamma) projects.push(project("gamma", [task("T5", "Sample gamma work", gamma)]));
   if (delta) projects.push(project("delta", [task("T6", "Sample delta queued", "framed")]));
-  return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects }], { now: NOW });
+  const epsilon = project("epsilon", [task("T7", "Sample second-source work", "building")]);
+  epsilon.tables.runs = [{ id: "R2", task: "T7", role: "implementer", status: "running", started: NOW }];
+  const second = rich ? [{ id: "codex", label: "codex", diagnostics: [], projects: [epsilon] }] : [];
+  return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects }, ...second], { now: NOW });
 }
 
 async function pageFor(t, { live = false, snapshot = !live, scripts = true, phone = false, current = false } = {}) {
@@ -59,18 +71,20 @@ async function pageFor(t, { live = false, snapshot = !live, scripts = true, phon
   return page;
 }
 
-const visibleCards = async page => (await page.locator(".card:not([hidden]) h3").allTextContents()).sort();
+const visibleCards = async page => (await page.locator(".card:not([hidden])").evaluateAll(cards => cards.map(card => `${card.querySelector(".id").textContent} · ${card.querySelector(".title").textContent}`))).sort();
+const card = (page, text) => page.locator("a.card", { hasText: text });
+const summary = page => page.locator("#board-summary").evaluate(element => element.innerText.replace(/\s+/g, " ").replace(/ built .*$/, ""));
 const needsButton = page => page.getByRole("button", { name: /^Needs you / });
 async function update(page, data) {
   await page.evaluate(html => window.sampleBoardStream.dispatchEvent(new MessageEvent("board", { data: JSON.stringify({ html, stale: false }) })), renderBoardHtml(data, { snapshot: false, live: true }));
-  assert.equal(await page.locator("#live-state").textContent(), "Live updates connected.");
+  assert.equal(await page.locator("#live-state").textContent(), "Live · updated 20:00");
 }
 
 test("T205: real DOM keeps selection and theme across live project and count changes", async t => {
   const page = await pageFor(t, { live: true });
   assert.deepEqual(await visibleCards(page), ["T1 · Sample alpha queued", "T2 · Sample alpha review", "T3 · Sample beta held", "T4 · Sample beta work"]);
   assert.equal(await page.locator("#light").isChecked(), false);
-  await page.locator("#light").check();
+  await page.locator("label[for=light]").click();
   await page.getByRole("button", { name: "alpha", exact: true }).click();
   await needsButton(page).click();
   assert.deepEqual(await visibleCards(page), ["T2 · Sample alpha review"]);
@@ -78,17 +92,17 @@ test("T205: real DOM keeps selection and theme across live project and count cha
   await update(page, model({ gamma: "held" }));
   assert.equal(await page.getByRole("button", { name: "alpha", exact: true }).getAttribute("aria-pressed"), "true");
   assert.equal(await needsButton(page).getAttribute("aria-pressed"), "true");
-  assert.equal(await needsButton(page).textContent(), "Needs you (3)");
-  assert.equal(await page.locator("#board-summary").textContent(), "3 need you · 0 recorded agents · 0 inferred PRs · 1 in review");
+  assert.equal(await needsButton(page).textContent(), "Needs you 1"); // T217: the count follows the chosen project (alpha)
+  assert.equal(await summary(page), "1 needs you 0 agents at work 1 in review 1 tasks");
   assert.deepEqual(await visibleCards(page), ["T2 · Sample alpha review"]);
   assert.equal(await page.locator("#light").isChecked(), true);
-  assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#fafafa");
+  assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#f7f7f5");
 
   // This button did not exist when the script first ran; a direct listener on the old buttons cannot handle it.
   await page.getByRole("button", { name: "gamma", exact: true }).click();
   assert.deepEqual(await visibleCards(page), ["T5 · Sample gamma work"]);
   await update(page, model({ gamma: "building" }));
-  assert.equal(await needsButton(page).textContent(), "Needs you (2)");
+  assert.equal(await needsButton(page).textContent(), "Needs you 0"); // gamma has no task that needs you now
   assert.deepEqual(await visibleCards(page), []);
   await needsButton(page).click();
   assert.deepEqual(await visibleCards(page), ["T5 · Sample gamma work"]);
@@ -106,10 +120,10 @@ test("T205: real DOM keeps selection and theme across live project and count cha
 test("T205: phone filtering puts visible owner work first and removes empty columns", async t => {
   const page = await pageFor(t, { live: true, phone: true });
   await page.getByRole("button", { name: "alpha", exact: true }).click();
-  const columnOrder = () => page.locator(".column").evaluateAll(columns => columns
+  const columnOrder = () => page.locator("[data-col]").evaluateAll(columns => columns
     .filter(column => getComputedStyle(column).display !== "none")
     .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
-    .map(column => column.querySelector("h2").textContent.replace(/ \(\d+\)$/, "")));
+    .map(column => column.getAttribute("aria-label")));
   assert.deepEqual(await columnOrder(), ["In review", "Backlog"]);
   assert.deepEqual(await visibleCards(page), ["T1 · Sample alpha queued", "T2 · Sample alpha review"]);
   await needsButton(page).click();
@@ -124,28 +138,120 @@ test("T205: phone filtering puts visible owner work first and removes empty colu
   assert.deepEqual(await columnOrder(), []);
   await needsButton(page).click();
   assert.deepEqual(await columnOrder(), ["Building"]);
-  assert.equal(await page.locator(".column.attention:not(.empty)").count(), 0);
+  assert.equal(await page.locator(".col.needs-col:not(.empty-col)").count(), 0);
 });
 
-test("T205: offline task anchors open details and initial cards remain usable with scripts off", async t => {
-  const page = await pageFor(t);
-  const title = page.getByRole("link", { name: "T2 · Sample alpha review", exact: true });
-  const href = await title.getAttribute("href");
-  assert.match(href, /^#detail-/);
-  const detail = page.locator(href);
-  assert.equal(await detail.evaluate(element => element.open), false);
-  await title.click();
-  assert.equal(await detail.evaluate(element => element.open), true);
-  assert.equal(await detail.getByRole("heading", { name: "Brief", exact: true }).isVisible(), true);
-
+test("T218: offline task pages, the backlog fold and the theme work with scripts off", async t => {
+  for (const scripts of [true, false]) {
+    const page = await pageFor(t, { scripts });
+    const link = card(page, "Sample alpha review");
+    const href = await link.getAttribute("href");
+    assert.match(href, /^#task-/);
+    const detail = page.locator(href);
+    assert.equal(await detail.isVisible(), false);
+    await link.click();
+    assert.equal(await detail.isVisible(), true);
+    assert.equal(await page.locator(".boardview").isVisible(), false);
+    assert.equal(await detail.getByRole("heading", { name: /^Agent runs \d+$/ }).isVisible(), true);
+    assert.equal(await detail.getByText("No runs recorded.", { exact: true }).isVisible(), true);
+    await detail.getByRole("link", { name: "← Board" }).click();
+    assert.equal(await page.locator(".boardview").isVisible(), true);
+  }
   const plain = await pageFor(t, { scripts: false });
   assert.deepEqual(await visibleCards(plain), ["T1 · Sample alpha queued", "T2 · Sample alpha review", "T3 · Sample beta held", "T4 · Sample beta work"]);
-  const plainDetail = plain.locator(href);
-  await plainDetail.locator("summary").click();
-  assert.equal(await plainDetail.getByRole("heading", { name: "Agent runs", exact: true }).isVisible(), true);
-  assert.equal(await plainDetail.getByText("No runs recorded.", { exact: true }).isVisible(), true);
-  await plain.locator("#light").check();
-  assert.equal(await plain.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#fafafa");
+  const many = await browser.newContext({ javaScriptEnabled: false });
+  t.after(() => many.close());
+  const folded = await many.newPage();
+  await folded.setContent(renderBoardHtml(buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [{ key: "sample/many-abcdef", name: "many-abcdef", diagnostics: [], tables: { tasks: Array.from({ length: 9 }, (_, i) => ({ id: `T${i + 1}`, title: `Sample queued ${i + 1}`, state: "framed", size: "small", risk: "", route: "build", branch: "", pr: "", round: "0", keys: "" })) } }] }], { now: NOW })));
+  assert.equal(await folded.locator("a.card:visible").count(), 6);
+  await folded.getByText("Show all 9").click();
+  assert.equal(await folded.locator("a.card:visible").count(), 9);
+  await plain.locator("label[for=light]").click();
+  assert.equal(await plain.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#f7f7f5");
+});
+
+/** The contrast of every visible element of each [kind, selector] on the colour that the page paints behind it (opacity included). */
+async function contrast(page, list) {
+  return page.evaluate(list => {
+    const rgba = text => {
+      const values = text.match(/[\d.]+/g).map(Number);
+      return [...values.slice(0, 3), values[3] ?? 1];
+    };
+    const over = (front, back) => front.slice(0, 3).map((value, i) => value * front[3] + back[i] * (1 - front[3]));
+    const luminance = rgb => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i], 0);
+    return list.map(([kind, selector]) => {
+      const elements = [...document.querySelectorAll(selector)].filter(element => element.getClientRects().length);
+      if (!elements.length) throw new Error(`No sample ${kind} text`);
+      return elements.map(element => {
+        const backgrounds = [];
+        let opacity = 1;
+        for (let node = element; node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (style.backgroundImage !== "none") throw new Error(`An image needs a separate contrast check: ${kind}`);
+          backgrounds.push(rgba(style.backgroundColor));
+          opacity *= Number(style.opacity);
+        }
+        const background = backgrounds.reverse().reduce((color, layer) => over(layer, color), [255, 255, 255]);
+        const color = rgba(getComputedStyle(element).color);
+        const foreground = over([...color.slice(0, 3), color[3] * opacity], background);
+        const values = [luminance(foreground), luminance(background)].sort((a, b) => a - b);
+        return { kind, text: element.textContent, foreground, background, ratio: (values[1] + 0.05) / (values[0] + 0.05) };
+      });
+    });
+  }, list);
+}
+
+test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 contrast on the page, column and card in both themes", async t => {
+  const data = model({ current: true, rich: true }), task = data.tasks.find(item => item.id === "T2");
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  t.after(() => context.close());
+  await context.route("**/*", route => route.abort());
+  const results = [];
+  for (const [view, html, list] of [
+    ["board", renderBoardHtml(data, { snapshot: false }), [["faint on a card", ".card .faint"], ["faint in a column", ".rest .faint"], ["provider on a pill", ".card .agent:not(.alt) .prov"], ["alternate pill", ".card .agent.alt"], ["provider on an alternate pill", ".card .agent.alt .prov"], ["legend pill", ".legend .agent:not(.alt) .prov"], ["legend alternate pill", ".legend .agent.alt .prov"]]],
+    ["task", renderBoardHtml(data, { snapshot: false, taskKey: task.key }), [["faint on the page", ".ptop .faint"], ["faint in a section", ".log .faint"], ["skipped step", ".ls.skip"], ["earlier head", ".head .faint"], ["head", ".head"]]],
+  ]) {
+    const page = await context.newPage();
+    await page.setContent(html);
+    for (const theme of ["dark", "light"]) {
+      if (theme === "light") await page.locator("label[for=light]").click();
+      for (const item of (await contrast(page, list)).flat()) {
+        results.push(`${view} ${theme} ${item.kind}`);
+        assert.ok(item.ratio >= 4.5, `${view} ${theme} ${item.kind} "${item.text}": ${item.ratio.toFixed(2)}`);
+      }
+    }
+    if (view === "task") assert.equal(await page.locator(".ls.skip").first().evaluate(element => getComputedStyle(element).textDecorationLine), "line-through");
+  }
+  assert.ok(results.includes("task light skipped step") && results.includes("board dark faint on a card") && results.includes("board light faint in a column"));
+  assert.ok(["board light provider on a pill", "board light provider on an alternate pill", "board dark legend alternate pill", "task light earlier head", "task dark earlier head"].every(kind => results.includes(kind)));
+});
+
+test("T218 F-T218-9, F-T218-7 and F-T218-13: chips only with scripts, the stand-in legend on both views, and a 24 px way back", async t => {
+  const data = model({ current: true, rich: true }), task = data.tasks.find(item => item.id === "T2");
+  for (const scripts of [false, true]) {
+    const context = await browser.newContext({ javaScriptEnabled: scripts, viewport: { width: 1280, height: 900 } });
+    t.after(() => context.close());
+    await context.route("**/*", route => route.abort());
+    const page = await context.newPage();
+    await page.setContent(renderBoardHtml(data, { snapshot: false }));
+    assert.equal(await needsButton(page).isVisible(), scripts, `Needs-you chip, scripts ${scripts ? "on" : "off"}`);
+    assert.equal(await page.getByRole("button", { name: "alpha", exact: true }).isVisible(), scripts);
+    assert.equal(await page.locator("label[for=light]").isVisible(), true, "the theme switch needs no script");
+    const sentence = "a stand-in value: the logbook does not record the real one.";
+    assert.equal(await page.locator(".legend").getByText(sentence, { exact: false }).isVisible(), true);
+    // F-T218-16: one legend pill for each pill colour, named by its source.
+    assert.deepEqual(await page.locator(".legend .agent").evaluateAll(pills => pills.map(pill => `${pill.className}: ${pill.parentElement.textContent}`)), ["agent: Sample source · role an agent at work now", "agent alt: Codex · role the same for Codex"]);
+    assert.equal(await page.locator(".card .agent.alt").textContent(), "Codex · implementer");
+    await page.setContent(renderBoardHtml(data, { snapshot: false, taskKey: task.key }));
+    assert.equal(await page.locator(".legend").getByText(sentence, { exact: false }).isVisible(), true);
+    assert.equal(await page.locator(".legend .step.failed").isVisible(), true, "the cycle-chip legend is on the task page too");
+    const box = await page.getByRole("link", { name: "← Board" }).boundingBox();
+    assert.ok(box.width >= 24 && box.height >= 24, JSON.stringify(box));
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), "← Board", "the way back is the first stop");
+    assert.equal(await page.locator("main h1").count(), 1);
+    assert.equal(await page.locator("h1").textContent(), "Sample alpha review");
+  }
 });
 
 test("T205: sample desktop and phone text meets 4.5 contrast in both themes", async t => {
@@ -162,35 +268,14 @@ test("T205: sample desktop and phone text meets 4.5 contrast in both themes", as
       document.body.prepend(label);
     });
     for (const theme of ["dark", "light"]) {
-      if (theme === "light") await page.locator("#light").check();
-      const measurements = await page.evaluate(() => {
-        const rgba = text => {
-          const values = text.match(/[\d.]+/g).map(Number);
-          return [...values.slice(0, 3), values[3] ?? 1];
-        };
-        const over = (front, back) => front.slice(0, 3).map((value, i) => value * front[3] + back[i] * (1 - front[3]));
-        const luminance = rgb => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i], 0);
-        return [
-          ["normal", ".card p:not([class])"],
-          ["muted", ".card .muted"],
-          ["link", ".card h3 a"],
-          ["needs", ".needs-reason"],
-          ["current", ".step.running"],
-        ].map(([kind, selector]) => {
-          const element = document.querySelector(selector);
-          if (!element) throw new Error(`No sample ${kind} text`);
-          const backgrounds = [];
-          for (let node = element; node; node = node.parentElement) {
-            const style = getComputedStyle(node);
-            if (style.backgroundImage !== "none") throw new Error(`An image needs a separate contrast check: ${kind}`);
-            backgrounds.push(rgba(style.backgroundColor));
-          }
-          const background = backgrounds.reverse().reduce((color, layer) => over(layer, color), [255, 255, 255]);
-          const foreground = over(rgba(getComputedStyle(element).color), background);
-          const values = [luminance(foreground), luminance(background)].sort((a, b) => a - b);
-          return { kind, text: element.textContent, foreground, background, ratio: (values[1] + 0.05) / (values[0] + 0.05) };
-        });
-      });
+      if (theme === "light") await page.locator("label[for=light]").click();
+      const measurements = (await contrast(page, [
+        ["normal", ".card .title"],
+        ["muted", ".card .top"],
+        ["link", ".chip[aria-pressed=true]"],
+        ["needs", ".flag"],
+        ["current", ".step.running"],
+      ])).map(list => list[0]);
       assert.deepEqual(measurements.map(item => item.kind), ["normal", "muted", "link", "needs", "current"]);
       for (const item of measurements) assert.ok(item.ratio >= 4.5, `${phone ? "phone" : "desktop"} ${theme} ${item.kind}: ${item.ratio}`);
       const viewport = phone ? "phone" : "desktop";
@@ -250,7 +335,7 @@ test("T205: real browser authenticates pages and live streams, watches files, an
   assert.equal(initial.status(), 200);
   assert.match(initial.headers()["content-security-policy"], /script-src 'sha256-/);
   assert.doesNotMatch(initial.headers()["content-security-policy"], /unsafe-inline/);
-  await page.getByText("Live updates connected.", { exact: true }).waitFor();
+  await page.getByText("Live · updated", { exact: false }).waitFor();
   assert.deepEqual(await visibleCards(page), ["T1 · Sample served task", "T2 · Sample held task"]);
   assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).backgroundColor), "rgb(18, 18, 18)");
   assert.deepEqual(await page.evaluate(() => window.samplePolicyViolations), []);
@@ -259,7 +344,7 @@ test("T205: real browser authenticates pages and live streams, watches files, an
 
   await page.evaluate(() => { window.sampleDocumentMarker = "sample-board-document"; });
   replaceTasks("Sample watched replacement");
-  await page.getByRole("link", { name: "T1 · Sample watched replacement", exact: true }).waitFor();
+  await card(page, "Sample watched replacement").waitFor();
   assert.equal(await page.evaluate(() => window.sampleDocumentMarker), "sample-board-document");
   assert.deepEqual(await visibleCards(page), ["T1 · Sample watched replacement", "T2 · Sample held task"]);
   await needsButton(page).click();
@@ -267,34 +352,34 @@ test("T205: real browser authenticates pages and live streams, watches files, an
   await needsButton(page).click();
 
   writeFileSync(taskFile, "Sample invalid table header\nSample incomplete write\n");
-  await page.getByText("Update failed; showing the last valid snapshot.", { exact: true }).waitFor();
+  await page.getByText("Update failed · board from", { exact: false }).waitFor();
   assert.deepEqual(await visibleCards(page), ["T1 · Sample watched replacement", "T2 · Sample held task"]);
   assert.doesNotMatch(await page.locator("#board-content").textContent(), /Sample incomplete write/);
   replaceTasks("Sample restored task");
-  await page.getByRole("link", { name: "T1 · Sample restored task", exact: true }).waitFor();
-  await page.getByText("Live updates connected.", { exact: true }).waitFor();
+  await card(page, "Sample restored task").waitFor();
+  await page.getByText("Live · updated", { exact: false }).waitFor();
 
   const taskPath = `/task/${Buffer.from("sample/project-abcdef/T1").toString("base64url")}`;
-  await Promise.all([page.waitForURL(origin + taskPath), page.getByRole("link", { name: "T1 · Sample restored task", exact: true }).click()]);
-  await page.getByRole("heading", { name: "T1 · Sample restored task", exact: true }).waitFor();
-  await page.getByText("Live updates connected.", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("heading", { name: "Agent runs", exact: true }).isVisible(), true);
+  await Promise.all([page.waitForURL(origin + taskPath), card(page, "Sample restored task").click()]);
+  await page.getByRole("heading", { name: "Sample restored task", exact: true }).waitFor();
+  await page.getByText("Live · updated", { exact: false }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: /^Agent runs \d+$/ }).isVisible(), true);
   assert.ok(responses.some(response => response.path === taskPath && response.status === 200));
   assert.ok(responses.some(response => response.path === `/?events=1&task=${taskPath.slice(6)}` && response.status === 200));
   assert.deepEqual(await page.evaluate(() => window.samplePolicyViolations), []);
   await page.evaluate(() => { window.sampleDocumentMarker = "sample-task-document"; });
   replaceTasks("Sample task live change");
-  await page.getByRole("heading", { name: "T1 · Sample task live change", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Sample task live change", exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.sampleDocumentMarker), "sample-task-document");
 
   await server.close();
-  await page.getByText("Connection lost; showing the last snapshot. Reconnecting.", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("heading", { name: "T1 · Sample task live change", exact: true }).isVisible(), true);
+  await page.getByText("Reconnecting · board from", { exact: false }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Sample task live change", exact: true }).isVisible(), true);
   replaceTasks("Sample reconnected task");
   server = createBoardServer(options);
   await server.start();
-  await page.getByRole("heading", { name: "T1 · Sample reconnected task", exact: true }).waitFor();
-  await page.getByText("Live updates connected.", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Sample reconnected task", exact: true }).waitFor();
+  await page.getByText("Live · updated", { exact: false }).waitFor();
   assert.equal(page.url(), origin + taskPath);
   assert.equal(await page.evaluate(() => window.sampleDocumentMarker), "sample-task-document");
   assert.deepEqual(await page.evaluate(() => window.samplePolicyViolations), []);
