@@ -4289,6 +4289,8 @@ const LEAD = { agent_id: "lead-a", agent_type: "sage:lead" };
 const nested = (role = "sage:qa", id = "child-call", extra = {}) => spawnAgent(role, BRIEF, id, { ...LEAD, ...extra });
 const resultOf = (id, agentId, extra = {}, status = "async_launched") => ({ hook_event_name: "PostToolUse", tool_name: "Agent", tool_use_id: id, tool_response: { status, agentId }, ...extra });
 const ended = (agent_id, agent_type = "sage:qa", extra = {}) => ({ hook_event_name: "SubagentStop", agent_id, agent_type, stop_hook_active: true, ...extra });
+/** The main session's spawn of a lead, with the name lead-T<n> in the description (T255 L1). */
+const leadSpawn = (id, n = 1, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: `lead-T${n}` }, { tool_use_id: id, ...extra });
 function nestedSession() {
   const s = session();
   s.sage("config", "max_agents=20", "cap_total=30");
@@ -4308,7 +4310,7 @@ test("T181: only the chief starts leads, and only leads start the permitted chil
     assert.equal(s.send(nested(role, `ok-${n}`)), undefined, role);
     s.send(resultOf(`ok-${n}`, `child-${n}`, LEAD, "completed"));
   }
-  assert.equal(s.send(spawnAgent("sage:lead", BRIEF, "main-lead")), undefined);
+  assert.equal(s.send(leadSpawn("main-lead")), undefined);
   assert.equal(s.send(spawnAgent("sage:designer", BRIEF, "main-design")), undefined, "the chief still starts specialists");
   assert.equal(s.send(spawnAgent("Explore", "short", "main-explore")), undefined);
 });
@@ -4325,7 +4327,7 @@ test("T181: nested briefs and shared caps keep the chief's existing refusals", (
 
 test("T181: parallel admission holds three leads per project and three children per caller across folders", async () => {
   const s = nestedSession();
-  const leads = await Promise.all([1, 2, 3, 4].map(n => s.sendAsync(spawnAgent("sage:lead", BRIEF, `lead-${n}`))));
+  const leads = await Promise.all([1, 2, 3, 4].map(n => s.sendAsync(leadSpawn(`lead-${n}`, n))));
   assert.equal(leads.filter(x => !denied(x)).length, 3);
   assert.match(leads.map(denied).find(Boolean), /3 leads/);
   const a = join(s.dir, "a"), b = join(s.dir, "b");
@@ -4370,7 +4372,7 @@ test("T181: stop-before-result, malformed results and failed launches preserve e
   assert.equal(s.send(nested("sage:qa", "failed-replacement")), undefined, "a failure before launch frees its own reservation");
   s.send(start("possibly-running"));
   s.send({ hook_event_name: "PostToolUseFailure", tool_name: "Agent", tool_use_id: "failed-replacement", ...LEAD });
-  assert.ok(denied(s.send(nested("sage:qa", "possible-held"))), "failure after a possible start retains capacity");
+  assert.equal(s.send(nested("sage:qa", "possible-held")), undefined, "a failed exact call frees its slot, also after a possible start (T255 L2)");
 });
 
 test("T181: exact calls reject missing IDs and keep distinct IDs that legacy safe mapping aliases", () => {
@@ -4397,7 +4399,9 @@ test("T181: report gates and attempted TaskStop keep nested capacity; late async
   s.send(tool("TaskStop", { task_id: "child" }));
   assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "held"))));
   s.send(ended("lead-a", "sage:lead"));
-  assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "one-free")), undefined, "the confirmed child follows its parent's end");
+  assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "child-held"))), "a child keeps its slot after its parent's end (T255 M1)");
+  s.send(ended("child"));
+  assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "one-free")), undefined, "the child's own stop frees it");
   assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "pending-held"))), "already permitted calls still hold capacity");
   s.send(resultOf("r-2", "late-child", LEAD));
   assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "late-held"))), "a launch after parent cleanup may still be running");
@@ -4407,13 +4411,13 @@ test("T181: report gates and attempted TaskStop keep nested capacity; late async
 
 test("T181: exact identity includes the raw session and refuses malformed nonmain lifecycle callers", () => {
   const s = nestedSession();
-  assert.equal(s.send(spawnAgent("sage:lead", BRIEF, "main-call")), undefined);
+  assert.equal(s.send(leadSpawn("main-call")), undefined);
   const noCaller = { agent_type: "sage:lead" };
   s.send(resultOf("main-call", "wrong", noCaller, "completed"));
   s.send({ hook_event_name: "PostToolUseFailure", tool_name: "Agent", tool_use_id: "main-call", ...noCaller });
-  assert.equal(s.send(spawnAgent("sage:lead", BRIEF, "main-2")), undefined);
-  assert.equal(s.send(spawnAgent("sage:lead", BRIEF, "main-3")), undefined);
-  assert.ok(denied(s.send(spawnAgent("sage:lead", BRIEF, "main-4"))));
+  assert.equal(s.send(leadSpawn("main-2", 2)), undefined);
+  assert.equal(s.send(leadSpawn("main-3", 3)), undefined);
+  assert.ok(denied(s.send(leadSpawn("main-4", 4))));
   assert.ok(denied(s.send({ ...nested(), agent_id: undefined })));
   const native = session();
   assert.equal(native.send(nested("Explore", "native", { agent_type: "Explore" })), undefined, "ordinary non-Sage nesting stays unchanged");
@@ -4451,7 +4455,7 @@ test("T181: unbound child reservations keep a one-hour lease and duplicate Pre d
   assert.ok(denied(s.send({ ...nested("sage:qa", "lease-1"), tool_input: { subagent_type: "sage:qa", prompt: BRIEF, description: "changed" } })));
   const dir = join(s.vars.SAGE_HOOKS_STATE, "slots");
   for (const slot of readdirSync(dir)) utimesSync(join(dir, slot), new Date(Date.now() - 20 * 60_000), new Date(Date.now() - 20 * 60_000));
-  assert.ok(denied(s.send(nested("sage:qa", "twenty-minutes"))), "not the old ten-minute pending lease");
+  assert.equal(s.send(nested("sage:qa", "twenty-minutes")), undefined, "a reservation with no start sign frees after the 10-minute grace (T255 L2)");
   for (const slot of readdirSync(dir)) utimesSync(join(dir, slot), new Date(Date.now() - 2 * 3600_000), new Date(Date.now() - 2 * 3600_000));
   assert.equal(s.send(nested("sage:qa", "expired")), undefined);
   const { slotsFor } = await import(HOOK);
@@ -4555,8 +4559,11 @@ test("T181: terminal child events cannot consume and release a fresh legacy rese
     if (kind === "unbound-lease") s.send(start("old-child"));
     else s.send(resultOf("finished", "old-child", LEAD));
     if (kind === "own-stop") s.send(ended("old-child"));
-    else if (kind === "parent-stop") s.send(ended("lead-a", "sage:lead"));
-    else {
+    if (kind === "parent-stop") {
+      s.send(ended("lead-a", "sage:lead"));
+      assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "child-held"))), "the child keeps its slot after its parent's end (T255 M1)");
+    }
+    if (kind !== "own-stop") {
       const dir = join(s.vars.SAGE_HOOKS_STATE, "slots");
       if (existsSync(dir)) for (const slot of readdirSync(dir)) utimesSync(join(dir, slot), new Date(Date.now() - 2 * 3600_000), new Date(Date.now() - 2 * 3600_000));
     }
@@ -4584,4 +4591,117 @@ test("T181: terminal child events cannot consume and release a fresh legacy rese
     if (later.take("p", 1, 10, "excess", options).refused !== "project") failures.push(`${event}: new result claimed an earlier child observation`);
   }
   assert.deepEqual(failures, [], "recorded child provenance cannot move to a later call");
+});
+
+// T255: the follow-ups of issue 102 to the lead build's step 1. Each test sends hook events only; no real agent starts.
+const ageSlots = (s, minutes, names) => {
+  const dir = join(s.vars.SAGE_HOOKS_STATE, "slots"), old = new Date(Date.now() - minutes * 60_000);
+  for (const slot of names ?? readdirSync(dir)) utimesSync(join(dir, slot), old, old);
+};
+const threeLeads = (s) => {
+  for (const [n, a] of ["a", "b", "c"].entries()) {
+    assert.equal(s.send(leadSpawn(`lead-${a}-call`, n + 1)), undefined);
+    s.send(resultOf(`lead-${a}-call`, `lead-${a}`));
+  }
+};
+
+test("T255 H1: a child's events renew its lead's slot, and a lead with a running child keeps its slot", () => {
+  const renewed = nestedSession();
+  threeLeads(renewed);
+  assert.equal(renewed.send(nested("sage:implementer", "impl-call")), undefined);
+  renewed.send(resultOf("impl-call", "impl", LEAD));
+  ageSlots(renewed, 61);
+  renewed.send(tool("Read", { file_path: "/x/a.js" }, { agent_id: "impl", agent_type: "sage:implementer" }));
+  renewed.send(ended("impl", "sage:implementer"));
+  assert.equal(renewed.send(leadSpawn("lead-4", 4)), undefined, "an idle lead's lease ends");
+  assert.equal(renewed.send(leadSpawn("lead-5", 5)), undefined);
+  assert.match(denied(renewed.send(leadSpawn("lead-6", 6))) ?? "", /3 leads are running for other/, "the child's event renewed lead a");
+
+  const waiting = nestedSession();
+  threeLeads(waiting);
+  assert.equal(waiting.send(nested("sage:implementer", "impl-call")), undefined);
+  waiting.send(resultOf("impl-call", "impl", LEAD));
+  ageSlots(waiting, 61, ["slot-1", "slot-2", "slot-3"]);
+  assert.equal(waiting.send(leadSpawn("lead-4", 4)), undefined);
+  assert.equal(waiting.send(leadSpawn("lead-5", 5)), undefined);
+  assert.match(denied(waiting.send(leadSpawn("lead-6", 6))) ?? "", /3 leads are running for other/, "lead a has a running child");
+});
+
+test("T255 H2: outside sage mode, an agent that is not a lead starts no sage agent; a lead keeps the brief check", () => {
+  const s = session();
+  s.sage("config", "max_agents=20", "cap_total=30");
+  assert.match(denied(s.send(spawnAgent("sage:lead", "go", "h2-lead", { agent_id: "gp", agent_type: "general-purpose" }))) ?? "", /only a lead may start an agent/);
+  assert.match(denied(s.send(spawnAgent("sage:implementer", BRIEF, "h2-impl", { agent_id: "ex", agent_type: "Explore" }))) ?? "", /only a lead may start an agent/);
+  assert.match(denied(s.send(spawnAgent("sage:qa", "GOAL short", "h2-brief", LEAD))) ?? "", /the brief has no SCOPE/);
+  assert.match(denied(s.send(nested("sage:lead", "h2-third"))) ?? "", /a lead starts only/);
+  assert.equal(s.send(nested("sage:qa", "h2-ok")), undefined, "a lead's full brief passes");
+  assert.equal(s.send(spawnAgent("Explore", "short", "h2-native", { agent_id: "gp", agent_type: "general-purpose" })), undefined, "ordinary nesting outside sage mode is unchanged");
+  assert.equal(s.send(spawnAgent("sage:implementer", "fix it", "h2-main")), undefined, "the main session outside sage mode is unchanged");
+});
+
+test("T255 M1: a lead's stop does not free its running children's slots", () => {
+  const s = nestedSession();
+  s.sage("config", "max_agents=4");
+  assert.equal(s.send(leadSpawn("lead-a-call", 1)), undefined);
+  s.send(resultOf("lead-a-call", "lead-a"));
+  assert.equal(s.send(nested("sage:implementer", "a-1")), undefined);
+  s.send(resultOf("a-1", "kid-1", LEAD));
+  assert.equal(s.send(nested("sage:qa", "a-2")), undefined);
+  s.send(resultOf("a-2", "kid-2", LEAD));
+  s.send(ended("lead-a", "sage:lead"));
+  const b = { ...LEAD, agent_id: "lead-b" };
+  assert.equal(s.send(leadSpawn("lead-b-call", 2)), undefined);
+  s.send(resultOf("lead-b-call", "lead-b"));
+  assert.equal(s.send(nested("sage:qa", "b-1", b)), undefined);
+  assert.match(denied(s.send(nested("sage:qa", "b-2", b))) ?? "", /4 sage agents are running for other, and its cap is 4/, "lead a's two children still run");
+  s.send(ended("kid-1", "sage:implementer"));
+  assert.equal(s.send(nested("sage:qa", "b-2", b)), undefined, "a child's own stop frees its slot");
+});
+
+test("T255 M2: an agent's SendMessage is a spawn: only a lead, with a full brief and a slot; a message to main passes", () => {
+  const s = nestedSession();
+  const send = (id, message, caller, to = "kid") => tool("SendMessage", { to, message, summary: "s" }, { tool_use_id: id, ...caller });
+  assert.match(denied(s.send(send("m-qa", BRIEF, { agent_id: "q", agent_type: "sage:qa" }))) ?? "", /only a lead may start an agent/);
+  assert.match(denied(s.send(send("m-short", "go on", LEAD))) ?? "", /the brief has no GOAL, SCOPE/);
+  for (const n of [1, 2, 3]) assert.equal(s.send(send(`m-${n}`, BRIEF, LEAD)), undefined);
+  assert.match(denied(s.send(send("m-4", BRIEF, LEAD))) ?? "", /this lead already has 3 children/);
+  assert.equal(s.send(send("m-main", "a question", { agent_id: "q", agent_type: "sage:qa" }, "main")), undefined, "a message to the main session wakes no agent");
+  s.send({ hook_event_name: "PostToolUseFailure", tool_name: "SendMessage", tool_use_id: "m-1", ...LEAD });
+  assert.equal(s.send(send("m-4", BRIEF, LEAD)), undefined, "a failed message frees its slot");
+});
+
+test("T255 M3: only the main session's TaskStop frees a slot", () => {
+  const s = nestedSession();
+  s.sage("config", "max_agents=1");
+  assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "m3-1")), undefined);
+  s.send(start("ag1"));
+  s.send(tool("TaskStop", { task_id: "ag1" }, LEAD));
+  assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "m3-2"))), "a lead's TaskStop keeps the main session's agent's slot");
+  s.send(tool("TaskStop", { task_id: "ag1" }));
+  assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "m3-3")), undefined, "the main session's TaskStop frees it");
+});
+
+test("T255 L1: the main session starts a lead only with the name lead-T<n>", () => {
+  const s = nestedSession();
+  const lead = (id, names) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, ...names }, { tool_use_id: id });
+  for (const [n, names] of [{ description: "d" }, { description: "lead" }, { description: "lead-T" }, { description: "lead-t1" }, { description: "lead-T1 x" }, {}, { name: "worker", description: "lead-T7" }].entries()) {
+    assert.match(denied(s.send(lead(`bad-${n}`, names))) ?? "", /only with the name lead-T<n>/, JSON.stringify(names));
+  }
+  assert.equal(s.send(lead("ok-1", { description: "lead-T181" })), undefined);
+  assert.equal(s.send(lead("ok-2", { name: "lead-T7", description: "a lead" })), undefined, "the name wins over the description");
+});
+
+test("T255 L2: a spawn that never starts frees after 10 minutes, and a failed spawn frees at once", () => {
+  const s = nestedSession();
+  assert.equal(s.send(nested("sage:implementer", "l2-1")), undefined);
+  assert.equal(s.send(nested("sage:qa", "l2-2")), undefined);
+  assert.equal(s.send(nested("sage:code-reviewer", "l2-3")), undefined);
+  s.send(start("impl", { agent_type: "sage:implementer" }));
+  ageSlots(s, 11);
+  assert.equal(s.send(nested("sage:qa", "l2-4")), undefined, "the two spawns that never started are free");
+  assert.equal(s.send(nested("sage:code-reviewer", "l2-5")), undefined);
+  assert.match(denied(s.send(nested("sage:qa", "l2-6"))) ?? "", /this lead already has 3 children/, "the started spawn keeps its slot");
+  s.send(start("qa-kid"));
+  s.send({ hook_event_name: "PostToolUseFailure", tool_name: "Agent", tool_use_id: "l2-4", ...LEAD });
+  assert.equal(s.send(nested("sage:qa", "l2-6")), undefined, "a failed spawn frees its slot, also after a start of its role");
 });

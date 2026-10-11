@@ -15,7 +15,9 @@
 //     Monitor, PowerShell, mcp__terminal__*), not only Bash. One case asks the user instead of a refusal: the chief's
 //     first creation of main or master on GitHub, in one literal gh api form (FIRST_FORM), checked on GitHub only
 //     (firstUpload, firstCreation).
-//   - Only main starts leads (3 per project); only leads start their permitted children (3 each), inside the project cap.
+//   - Only main starts leads (3 per project), each named lead-T<n>; only leads start their permitted children (3 each),
+//     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode, and so does an agent's
+//     SendMessage (it can wake a stopped agent). Only the main session's TaskStop frees a slot.
 //   - A sage agent may finish only with the full report of the sage:report skill.
 //   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs the state tool only as one plain
 //     read command, never the PR script, never a command outside the sandbox, never writes under the sage root with a
@@ -55,6 +57,8 @@ const commandPolicy = await import("./command-policy.mjs")
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
 const FILE_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/;
 const AGENT_TOOLS = /^(Agent|Task)$/;
+/** The tools that can start an agent: an agent's SendMessage can wake a stopped one (T255 M2). */
+const SPAWN_TOOLS = /^(Agent|Task|SendMessage)$/;
 const LEAD_CHILDREN = new Set(["sage:implementer", "sage:code-reviewer", "sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]);
 /** The tools that run a command. The PreToolUse matcher in claude.json names each of them. */
 const SHELL_TOOLS = /^(?:Bash|Monitor|PowerShell|mcp__terminal__.+)$/;
@@ -283,10 +287,12 @@ export function handle(input, state, slots) {
   // Only then: at a SubagentStop, a foreground agent of the session may be running and not listed.
   if (event === "Stop" && main && Array.isArray(input.background_tasks)) slots.reconcile(input.background_tasks.map((t) => t?.id));
   if (event === "SubagentStop") return void slots.release(input.agent_id);
-  if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
+  if (["PostToolUse", "PostToolUseFailure"].includes(event) && SPAWN_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
   if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response);
-  if (event === "PostToolUseFailure" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
-  if (event === "PreToolUse" && input.tool_name === "TaskStop") return void slots.release(input.tool_input?.task_id, true); // legacy direct agents only: requesting a stop is not terminal evidence for nested work
+  if (event === "PostToolUseFailure" && SPAWN_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
+  // Legacy direct agents only: requesting a stop is not terminal evidence for nested work. An agent's TaskStop frees no
+  // slot: a lead could free a main-session agent's slot while that agent still runs (T255 M3).
+  if (event === "PreToolUse" && input.tool_name === "TaskStop") return void (main && slots.release(input.tool_input?.task_id, true));
   const why = event === "PreToolUse" ? (main ? chiefProblem(input, state.sage) : agentWriteProblem(input)) : undefined;
   if (why && main) return deny(event, `${why} Only sage.mjs changes the logbook: run the state tool's command for this change (node <path to skills/sage/sage.mjs> ...), as a command of its own. If no command does it, ask the user.`);
   if (why) return deny(event, `${why} Only the chief writes the logbook. An agent may run only ${READ_FORM}. Report what the logbook needs, and the chief records it.`);
@@ -309,21 +315,29 @@ export function handle(input, state, slots) {
     const problem = views.map(command => agentProblem(command, cwd)).find(Boolean);
     if (problem) return deny(event, problem);
   }
-  if (event === "PreToolUse" && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (state.sage || ours)) {
-    if (input.agent_type !== "sage:lead") return deny(event, "only a lead may start an agent. Report to the sage.");
-    if (typeof input.agent_id !== "string" || !input.agent_id) return deny(event, "the spawn has no valid caller identity, so its slot cannot be checked. Report to the sage.");
-    if (!LEAD_CHILDREN.has(input.tool_input?.subagent_type)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
-  }
-  if (event !== "PreToolUse" || (!state.sage && !(AGENT_TOOLS.test(input.tool_name ?? "") && !main && ours))) return undefined;
-
   const tool = input.tool_name ?? "";
   const ti = input.tool_input ?? {};
+  // An agent's SendMessage can wake a stopped agent, and the event cannot tell a stopped target from a live one, so each
+  // one is a spawn (T255 M2). A message to the main session wakes no agent.
+  const message = tool === "SendMessage" && !main && ti.to !== "main";
+  // The nested rules check the spawned type too, not only the caller: in any mode (T255 H2).
+  const nestedSpawn = event === "PreToolUse" && !main && (AGENT_TOOLS.test(tool) || message) && (state.sage || ours || OURS.test(ti.subagent_type ?? ""));
+  if (nestedSpawn) {
+    if (input.agent_type !== "sage:lead") return deny(event, "only a lead may start an agent. Report to the sage.");
+    if (typeof input.agent_id !== "string" || !input.agent_id) return deny(event, "the spawn has no valid caller identity, so its slot cannot be checked. Report to the sage.");
+    if (!message && !LEAD_CHILDREN.has(ti.subagent_type)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
+  }
+  if (event !== "PreToolUse" || (!state.sage && !nestedSpawn)) return undefined;
+
   if (FILE_TOOLS.test(tool)) {
     if (filePolicy.error) return deny(event, "the file policy cannot load, so this file change is refused. Reinstall or update the sage plugin.");
     if (filePolicy.chiefEditDenied({ sage: Boolean(state.sage), chief: main })) return deny(event, 'sage mode is on, so you do not change files yourself. Give this change to a sage:implementer. The user ends sage mode with the message "sage mode off", alone.');
   }
-  if (AGENT_TOOLS.test(tool) && OURS.test(ti.subagent_type ?? "")) {
-    const missing = missingFields(BRIEF_FIELDS, ti.prompt);
+  if (main && AGENT_TOOLS.test(tool) && ti.subagent_type === "sage:lead" && !/^lead-T\d+$/.test(ti.name ?? ti.description ?? "")) {
+    return deny(event, "the sage starts a lead only with the name lead-T<n> of its task (the Agent tool's name, or its description when it has no name).");
+  }
+  if ((AGENT_TOOLS.test(tool) && OURS.test(ti.subagent_type ?? "")) || message) {
+    const missing = missingFields(BRIEF_FIELDS, message ? ti.message : ti.prompt);
     if (missing.length) return deny(event, `the brief has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line. A tiny task may keep each field to one line.`);
     let caps, project;
     try {
@@ -334,7 +348,7 @@ export function handle(input, state, slots) {
       return deny(event, `the state tool cannot load (${e?.message ?? e}), so sage starts no new agent: reinstall or update the sage plugin, and tell the user.`);
     }
     const cap = caps[`cap.${project}`] ?? caps.max_agents;
-    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && ti.subagent_type !== "sage:lead" ? String(Date.now()) : undefined), { role: ti.subagent_type, caller: main ? undefined : input.agent_id, input: ti });
+    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && ti.subagent_type !== "sage:lead" ? String(Date.now()) : undefined), { role: message ? "SendMessage" : ti.subagent_type, caller: main ? undefined : input.agent_id, input: ti });
     if (r.refused) {
       slots.log(`${project} ${r.project}/${cap} total ${r.total}/${caps.cap_total}`);
       const raise = (key, n) => `${SPACE_NOTE}Wait for one to finish, or raise the cap: ${stateCommand(`config ${key}=${n + 1}`)}`;
@@ -1620,10 +1634,14 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     finally { rmdirSync(lock); }
   };
   const expire = () => {
-    for (const slot of list()) {
-      const age = has(slot, "exact") || has(slot, "possible-launch") || mark(slot, "agent-") !== undefined ? STALE.agent : STALE.pending;
-      if (now - statSync(join(dir, slot)).mtimeMs > age) free(slot);
-    }
+    // A launched agent fires SubagentStart, or its first tool event, within seconds, and that marks its slot (possible-launch).
+    // A pending slot with no such sign after the 10-minute grace never launched, so it frees (T255 L2). A bound or
+    // possibly launched slot keeps the one-hour lease, which its agent's events renew.
+    const age = slot => has(slot, "possible-launch") || mark(slot, "agent-") !== undefined || mark(slot, "bound-") !== undefined ? STALE.agent : STALE.pending;
+    const stale = list().filter(slot => now - statSync(join(dir, slot)).mtimeMs > age(slot));
+    // A lead's slot never expires while it has a running child (T255 H1).
+    const parents = new Set(list().filter(slot => !stale.includes(slot)).map(slot => mark(slot, "parent-")).filter(Boolean));
+    for (const slot of stale) if (!parents.has(mark(slot, "bound-"))) free(slot);
   };
   const counts = project => ({ total: list().length, project: list().filter(slot => (mark(slot, "project-") ?? project) === project).length });
   const matching = (slot, role) => !role || !mark(slot, "role-") || mark(slot, "role-") === safe(role);
@@ -1660,26 +1678,26 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     if (!attempted) note(`ended-${hash(agent)}`); // publish terminal evidence before searching or freeing
     for (const slot of ofSession()) {
       if (attempted && has(slot, "exact")) continue; // requesting TaskStop is not a completed stop
-      // A permitted call may launch after its parent ends. Keep unconfirmed calls charged until their result or lease.
-      if (ownsAgent(slot, agent) || (!attempted && mark(slot, "parent-") === hash(agent) && mark(slot, "bound-") !== undefined)) free(slot);
+      // A lead's end frees no child's slot: a child may still run, and keeps its slot until its own stop or its lease (T255 M1).
+      if (ownsAgent(slot, agent)) free(slot);
     }
+  };
+  // A child's activity renews its lead's slot too, so a lead that waits for its children keeps its slot (T255 H1).
+  const renew = (slots) => {
+    const parents = new Set(slots.map(slot => mark(slot, "parent-")).filter(Boolean));
+    for (const slot of [...slots, ...ofSession().filter(slot => parents.has(mark(slot, "bound-")))]) utimesSync(join(dir, slot), new Date(now), new Date(now));
   };
   const touch = (agent, role) => {
     if (!valid(agent) || stopped(agent)) return;
     const own = ofSession().filter(slot => ownsAgent(slot, agent));
-    if (own.length) {
-      for (const slot of own) utimesSync(join(dir, slot), new Date(now), new Date(now));
-      return;
-    }
+    if (own.length) return renew(own);
     // Until the result supplies the join, activity can renew possible reservations but cannot assign their parents.
     if (noted(`binding-${hash(agent)}`)) return;
     const observation = observe(agent, role);
     const candidates = pendingFor(role).filter(slot => observation.calls.includes(mark(slot, "call-")));
     if (observation.legacyOnly && !candidates.some(slot => has(slot, "possible-launch"))) return;
-    for (const slot of candidates) {
-      add(slot, "possible-launch");
-      utimesSync(join(dir, slot), new Date(now), new Date(now));
-    }
+    for (const slot of candidates) add(slot, "possible-launch");
+    renew(candidates);
   };
   return {
     take: transaction((project, cap, capTotal, toolUseId, { role, caller, input } = {}) => {
@@ -1713,6 +1731,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
         else if (caller !== undefined && others.filter(slot => (mark(slot, "scope-") ?? scope) === scope && (mark(slot, "caller-") ?? owner) === owner).length >= 3) refused = "children";
         if (refused) { free(mine); return { refused, ...counts(project) }; }
         add(mine, "ok");
+        utimesSync(join(dir, mine), new Date(now), new Date(now)); // after the last mark: a slot's age counts from the clock that judges it
         return { ok: true };
       } catch (error) {
         free(mine);
@@ -1761,7 +1780,9 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     drop: transaction((tool, caller) => {
       const slot = ofSession().find(slot => mark(slot, "call-") === callKey(tool, caller))
         ?? (caller === undefined ? ofSession().find(slot => !has(slot, "exact") && mark(slot, "pending-") === id(tool)) : undefined);
-      if (slot && mark(slot, "pending-") !== undefined && !has(slot, "possible-launch")) free(slot);
+      // A failed exact call launched no agent that still runs, so its slot frees even when another start marked it (T255 L2).
+      // An old-format call keeps the slot after a possible start: its agent cannot be told from another spawn's.
+      if (slot && mark(slot, "pending-") !== undefined && (has(slot, "exact") || !has(slot, "possible-launch"))) free(slot);
     }),
     touch: transaction(touch),
     reconcile: transaction((liveIds) => {
@@ -1818,7 +1839,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     } catch {
       chiefWrite = tools(SHELL_TOOLS);
     }
-    if (input?.hook_event_name === "PreToolUse" && ((!commands && tools(SHELL_TOOLS)) || commands?.some(command => mentionsMerge(command) || pushText(command) || (input.tool_name === "PowerShell" && powerShellProblem(command))) || agentWrite || chiefWrite || tools(AGENT_TOOLS))) {
+    if (input?.hook_event_name === "PreToolUse" && ((!commands && tools(SHELL_TOOLS)) || commands?.some(command => mentionsMerge(command) || pushText(command) || (input.tool_name === "PowerShell" && powerShellProblem(command))) || agentWrite || chiefWrite || tools(AGENT_TOOLS) || (agentEvent(input) && tools(SPAWN_TOOLS)))) {
       process.stdout.write(JSON.stringify(deny("PreToolUse", `the hook could not check this command (${e?.message ?? e}), so it refuses it. Tell the user.`)));
     } else if (input && ["SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure", "Stop"].includes(input.hook_event_name)) {
       process.stderr.write(`sage: agent slots could not be updated (${e?.message ?? e}); reserved capacity stays charged.\n`);
