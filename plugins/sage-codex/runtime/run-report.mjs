@@ -22,7 +22,7 @@ export function validateLogbookLocation(options) {
 }
 
 /** Only the current root chief can finish a run from a receipt already saved by its verified parent. */
-export function finishRecordedRun(input, context, options) {
+function recordedRun(input, context, options) {
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 2
     || !Object.hasOwn(input, "assignment") || !Object.hasOwn(input, "reportHash")
     || typeof input.assignment !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.assignment)
@@ -39,7 +39,21 @@ export function finishRecordedRun(input, context, options) {
   const assigned = state.reservations.find(row => row.assignment.id === input.assignment);
   if (!assigned?.rolePlan?.role) refuse();
   const tool = createStateTool({ defaultRoot: () => { refuse(); } });
-  return tool.finishReportedRun({ project: options.projectDirectory, task: saved.task, run: saved.run,
+  return { tool, state, assigned, work: { project: options.projectDirectory, task: saved.task, run: saved.run,
     role: assigned.rolePlan.role, assignment: input.assignment, reportHash: saved.reportHash, text: saved.text },
-  { ...process.env, SAGE_HOME: options.logbookRoot });
+    env: { ...process.env, SAGE_HOME: options.logbookRoot } };
+}
+
+
+export function finishRecordedRun(input, context, options) {
+  const { tool, work, env } = recordedRun(input, context, options);
+  return tool.finishReportedRun(work, env);
+}
+
+/** Only the chief accepts a completed review; the saved preparation supplies its immutable target. */
+export function acceptRecordedReview(input, context, options) {
+  const { tool, state, assigned, work, env } = recordedRun(input, context, options);
+  const review = state.preparations.find(row => row.id === assigned.preparation)?.review;
+  if (!review) refuse();
+  return tool.acceptReportedReview({ ...work, review }, env);
 }

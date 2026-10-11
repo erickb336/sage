@@ -16,7 +16,8 @@ import { createBoard } from "./board.mjs";
 import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { BRANCH } from "./branch.mjs";
-import { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
+import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
+import { assertNoPendingReview, reviewReadVersion, readReviewReceipt, recoverReviewWrite, commitReviewWrite } from "./review-write.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -412,6 +413,7 @@ const check = (dir, skip = []) => Object.fromEntries(Object.keys(TABLES).filter(
  * new logbook (init writes tasks.tsv last), and it may have only tables without rows: rows without their tasks are a loss.
  */
 function ready(dir, skip = []) {
+  assertNoPendingReview(dir);
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
   if (!skip.includes("tasks") && !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false })) {
     if (skip.length || Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`)) ?? "").trim().split(/\r?\n/).length > 1)) throw lost(dir, "tasks", "is missing", skip);
@@ -421,6 +423,11 @@ function ready(dir, skip = []) {
     const extra = cols.filter((c) => c && !TABLES[table].includes(c));
     if (extra.length) refuse(`${join(dir, `${table}.tsv`)} has columns that this version of sage does not know (${extra.join(", ")}): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
   }
+}
+
+function reviewHead(project, branch, env) {
+  const clean = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
+  return git(["-C", project, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], clean).trim();
 }
 
 /** Capture a review subject from the actual logbook and local branch, never from a reported SHA. */
@@ -445,9 +452,68 @@ function captureReviewTarget(input, env = process.env) {
       || !Number.isSafeInteger(Number(task.round)) || (run.branch && run.branch !== task.branch)) deny();
     const branch = branchOf(task.branch);
     // Repository-selection and injected-config environment variables cannot redirect this read.
-    const clean = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
-    const sha = git(["-C", input.project, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], clean).trim();
+    const sha = reviewHead(input.project, branch, env);
     return parseReviewTarget({ branch, sha, round: Number(task.round), cycle: input.cycle });
+  });
+}
+
+/** Accept one completed review. Pending writes block all further edits and merge checks until recovery. */
+function acceptReportedReview(input, env = process.env) {
+  const fields = ["project", "task", "run", "role", "assignment", "reportHash", "text", "review"];
+  const deny = () => refuse("The review does not match its completed run, report, or current commit.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
+    || fields.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
+    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
+    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run)
+    || typeof input.assignment !== "string" || !new RegExp(`^${UUID}$`).test(input.assignment)
+    || typeof input.reportHash !== "string" || !/^[0-9a-f]{64}$/.test(input.reportHash)) deny();
+  const review = parseReviewTarget(input.review);
+  const report = parseReport(input.text);
+  const claims = parseReviewReport(report, input.role, review);
+  if (createHash("sha256").update(input.text).digest("hex") !== input.reportHash) deny();
+  const reference = { task: input.task, run: input.run, role: input.role, assignment: input.assignment, reportHash: input.reportHash, review };
+  const findingKeys = claims.findings.map((_, index) => `F-${input.task}-${input.run}-${index + 1}`);
+  const resultAt = at => ({ task: input.task, run: input.run, sha: review.sha, cycle: review.cycle,
+    kind: claims.kind, findings: findingKeys, at });
+  const checked = receipt => {
+    if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(receipt.result?.at)
+      || JSON.stringify(receipt.result) !== JSON.stringify(resultAt(receipt.result.at))) deny();
+    return receipt.result;
+  };
+  const dir = storeDir(input.project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  return withLock(dir, () => {
+    const recovered = recoverReviewWrite(dir, reference);
+    if (recovered) { const result = checked(recovered); status(dir, true); return { decision: "review-accepted", ...result }; }
+    const prior = readReviewReceipt(dir, reference);
+    if (prior) return { decision: "already-accepted", ...checked(prior) };
+    ready(dir);
+    const tasks = read(dir, "tasks"), runs = read(dir, "runs");
+    const matches = tasks.filter(row => row.id === input.task), assigned = runs.filter(row => row.id === input.run);
+    if (matches.length !== 1 || assigned.length !== 1) deny();
+    const task = matches[0], run = assigned[0];
+    const path = `reports/${input.run}-${input.assignment}-${input.reportHash}.md`;
+    if (run.task !== task.id || run.role !== input.role || run.round !== String(review.round) || task.round !== run.round
+      || run.status !== "done" || !run.ended || run.report !== path || task.branch !== review.branch
+      || (run.branch && run.branch !== review.branch) || realpathSync(join(dir, "reports")) !== join(dir, "reports")
+      || readRegular(join(dir, path), { link: false, max: 32 * 1024 }) !== input.text
+      || reviewHead(input.project, branchOf(task.branch), env) !== review.sha) deny();
+    const findings = read(dir, "findings"), ledger = read(dir, "ledger"), decisions = read(dir, "decisions");
+    if (ledger.some(row => row.run === input.run) || findings.some(row => findingKeys.includes(row.key))) deny();
+    const at = now();
+    claims.findings.forEach((finding, index) => findings.push({ task: task.id, key: findingKeys[index], round: task.round,
+      source: input.role, severity: finding.severity, summary: cell(finding.summary), triage: "", reason: "", status: "open" }));
+    ledger.push({ task: task.id, pr: task.pr, sha: review.sha, kind: claims.kind, cycle: String(review.cycle), run: run.id, at });
+    if (["verified", "pr-ready"].includes(task.state) && NOT_CLEAN.includes(claims.kind)) {
+      const before = task.state;
+      move(task, "reviewing");
+      decisions.push({ at, task: task.id, decision: `${before} → reviewing`, why: `${claims.kind} verdict on ${review.sha}` });
+    }
+    const receipt = { reference, result: resultAt(at) };
+    commitReviewWrite(dir, receipt, Object.fromEntries(Object.entries({ tasks, findings, ledger, decisions })
+      .map(([table, rows]) => [table, tableText(table, rows)])));
+    status(dir, true);
+    return { decision: "review-accepted", ...receipt.result };
   });
 }
 
@@ -520,9 +586,12 @@ function finishReportedRun(input, env = process.env) {
   });
 }
 
-function write(dir, table, rows) {
+function tableText(table, rows) {
   const cols = TABLES[table];
-  put(join(dir, `${table}.tsv`), [cols.join("\t"), ...rows.map((r) => cols.map((c) => cell(r[c])).join("\t"))].join("\n") + "\n");
+  return [cols.join("\t"), ...rows.map((r) => cols.map((c) => cell(r[c])).join("\t"))].join("\n") + "\n";
+}
+function write(dir, table, rows) {
+  put(join(dir, `${table}.tsv`), tableText(table, rows));
 }
 
 const now = () => new Date().toISOString().slice(0, 19) + "Z";
@@ -769,9 +838,11 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly } = {}) {
     const [listed, strangers] = [known(root, undefined, undefined, readOnly), []];
     if (!listed) return { ok: false, reason: `the known project list is missing. This read-only check does not make it: sage merge-check --sha <sha> makes ${join(root, "projects.tsv")} or says how to get it back.` };
     const each = folders(root).flatMap((dir) => {
+      const reviewVersion = reviewReadVersion(dir);
       // A folder with tasks.tsv, also a link, is a logbook, and it must pass the integrity check. A folder without it is
       // none: init has not finished it, or it lost its tasks. Its verdicts name tasks that it does not have, so they refuse.
       const book = lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && check(dir);
+      if (reviewReadVersion(dir) !== reviewVersion) throw Error("A review changed during the merge check. Retry the check.");
       if (!book && !readRegular(join(dir, "ledger.tsv"))?.trim()) return [];
       const ledger = rowsOf(book ? book.ledger : sheet(dir, "ledger"));
       const rows = ledger.filter((r) => r.sha === sha);
@@ -1384,5 +1455,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, finishReportedRun, captureReviewTarget, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, finishReportedRun, captureReviewTarget, acceptReportedReview, withLock, board, answerPaths, runCli };
 }

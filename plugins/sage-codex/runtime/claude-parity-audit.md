@@ -210,7 +210,7 @@ Task state and review gates remain unchanged. A child cannot record its own verd
 The isolated 0.160.0 native report probe passes through run completion and an identical retry.
 It directly checks the saved report, terminal run, unchanged task and gate tables, and original completion time.
 The probe uses simulated responses. It does not prove report claims, a real-project workflow, or installed automatic operation.
-Review verdicts, broader recovery, full policy assembly, and activation remain incomplete.
+Full review cycles, broader recovery, full policy assembly, and activation remain incomplete.
 The required-hook disconnection gap still blocks activation on the tested transport.
 
 
@@ -224,4 +224,19 @@ A preparation retry cannot silently select another commit or review cycle.
 
 The isolated native report route uses a real temporary Git commit and simulated reviewer responses.
 It checks the saved target against a separate Git read, then verifies delivery, receipt persistence, and run completion.
-This establishes intended review scope, not accepted review claims. Exact-commit verdict gates remain unfinished.
+This establishes intended review scope. The next unit checks explicit chief acceptance of those reports.
+
+
+## Chief review acceptance
+
+The chief can now accept a recorded review against its prepared commit, round, cycle, and role.
+Shared state checks the completed run, exact saved report, and current task branch before it adds findings and a verdict.
+A blocking verdict returns verified or PR-ready work to reviewing, with a decision row.
+Retries preserve the first result. Interrupted writes block changes and merge checks until the same acceptance recovers them.
+Merge checks also refuse a table snapshot that overlaps a completed acceptance.
+
+The isolated native probe checks the actual acceptance tool, saved verdict, and duplicate request with simulated reviewer output.
+One clean review does not approve a task or PR. Required project checks and other review cycles still apply.
+This unit does not prove review quality or full automatic coordination.
+Broader recovery, full command policy, installation, and a real-project pilot remain unfinished.
+The required-hook disconnection gap still blocks activation.

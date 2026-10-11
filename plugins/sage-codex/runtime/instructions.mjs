@@ -7,7 +7,14 @@ function taskInstructions(roleName, brief, heading, review) {
   const role = renderRoleInstructions(roleName, { ...bindings.common, ...bindings[roleName] });
   const report = renderReportInstructions(bindings.report);
   const target = review ? `# Review target\n\nBranch: ${review.branch}\nCommit: ${review.sha}\nTask round: ${review.round}\nReview cycle: ${review.cycle}\n\nReview this exact commit. Name it in the report. A changed branch needs a new review assignment.` : "";
-  return [heading, role, report, ...(target ? [target] : []), "# Task brief\n\n" + renderBrief(brief)].join("\n\n");
+  const reviewReport = review ? ["# Review report values",
+    `Use STATUS done only for a finished review. RESULT is ${roleName === "qa" ? "PASS or FAIL" : "CLEAN or FINDINGS"}.`,
+    `Set BRANCH to ${review.branch} and QUESTIONS to none. If a question blocks the review, use STATUS question.`,
+    `EVIDENCE must be a JSON object with exactly these fields: ${JSON.stringify({ commit: review.sha, round: review.round, cycle: review.cycle, summary: "Describe what you checked, with evidence references." })}`,
+    'FINDINGS must be a JSON array. Each finding has exactly "severity" (low, medium, or high) and "summary" (the input, problem, and evidence). Use [] when there are no findings.',
+    `A medium or high finding requires RESULT ${roleName === "qa" ? "FAIL" : "FINDINGS"}. Low findings alone allow a clean result, but each still needs triage.`,
+    "Keep the other required report fields. These values state your findings; only the chief can accept the review."].join("\n\n") : "";
+  return [heading, role, report, ...(target ? [target, reviewReport] : []), "# Task brief\n\n" + renderBrief(brief)].join("\n\n");
 }
 
 /** Render the saved preparation before dispatch; admission requires these exact bytes. */

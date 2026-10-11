@@ -66,7 +66,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_finish_run", "sage_prepare_task", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_accept_review", "sage_finish_run", "sage_prepare_task", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -1112,7 +1112,7 @@ test("packaged chief run tool uses fixed configuration rejects children and surv
 });
 
 
-async function reviewPreparationFixture(t) {
+async function reviewPreparationFixture(t, role = "code-reviewer") {
   const f = await composedPolicyFixture(t);
   const projectDirectory = join(f.dir, "project"); mkdirSync(projectDirectory);
   const env = { ...process.env, SAGE_HOME: join(f.dir, "logbook") };
@@ -1124,10 +1124,10 @@ async function reviewPreparationFixture(t) {
   const cli = (...args) => tool.sage([...args, "--project", projectDirectory], env);
   cli("init"); cli("task", "add", "--title", "Pinned review", "--size", "small");
   cli("task", "T1", "set", "branch=codex/t1-review");
-  cli("run", "add", "T1", "--role", "code-reviewer");
+  cli("run", "add", "T1", "--role", role);
   mkdirSync(f.options.observationsRoot);
   const options = { ...f.options, projectDirectory, logbookRoot: env.SAGE_HOME };
-  const input = { ...f.input, role: "code-reviewer", reviewCycle: 1 };
+  const input = { ...f.input, role, reviewCycle: 1 };
   const prepare = (request = input) => f.api.prepareNativeTask(request, f.native(session), options);
   const logbook = tool.storeDir(projectDirectory, env);
   return { ...f, options, input, prepare, git, cli, tool, env, logbook };
@@ -1210,4 +1210,185 @@ test("native review target refuses redirected project logbooks and missing fixed
   const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
   await assert.rejects(f.evaluate(policy));
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});
+
+
+async function reviewAcceptanceFixture(t, { role = "code-reviewer", findings = [], overrides = {}, finish = true } = {}) {
+  const f = await reviewPreparationFixture(t, role);
+  const preparation = f.prepare();
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const transcript = f.childTranscript();
+  await f.evaluate(policy, { ...patch(turns[1]), transcript_path: transcript }, childActor);
+  const blocking = findings.some(row => row.severity !== "low");
+  const fields = { STATUS: "done", RESULT: role === "qa" ? blocking ? "FAIL" : "PASS" : blocking ? "FINDINGS" : "CLEAN",
+    EVIDENCE: JSON.stringify({ commit: preparation.review.sha, round: preparation.review.round, cycle: 1, summary: "Synthetic review evidence" }),
+    FINDINGS: JSON.stringify(findings), QUESTIONS: "none", "NOT VERIFIED": "A real review", BRANCH: preparation.review.branch, ...overrides };
+  const text = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n");
+  appendReport(f, text);
+  policy.completeChild({ hook_event_name: "SubagentStop", session_id: session, agent_id: childActor,
+    turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, "root.jsonl") }, f.native(childActor));
+  const reportApi = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  const runApi = await import(pathToFileURL(join(f.plugin, "runtime/run-report.mjs")));
+  assert.equal(typeof runApi.acceptRecordedReview, "function");
+  const receipt = reportApi.readChildReport({ name: f.input.name }, f.native(session), f.options);
+  reportApi.recordChildReport({ name: f.input.name, reportHash: receipt.reportHash }, f.native(session), f.options);
+  const input = { assignment: receipt.assignment, reportHash: receipt.reportHash };
+  if (finish) runApi.finishRecordedRun(input, f.native(session), f.options);
+  const accept = (request = input, actor = session) => runApi.acceptRecordedReview(request, f.native(actor), f.options);
+  return { ...f, preparation, receipt, accept, acceptInput: input, runApi, text };
+}
+const fixtureTaskField = (f, key, value) => {
+  const file = join(f.logbook, "tasks.tsv"), lines = readFileSync(file, "utf8").trimEnd().split("\n");
+  const columns = lines[0].split("\t"), row = lines[1].split("\t"); row[columns.indexOf(key)] = value;
+  writeFileSync(file, lines[0] + "\n" + row.join("\t") + "\n");
+};
+
+for (const [role, kind] of [["code-reviewer", "review-clean"], ["security-reviewer", "security-clean"], ["ux-reviewer", "ux-clean"], ["qa", "qa-pass"]]) {
+  test(`review acceptance records ${role} evidence once without approving a task or merge`, async t => {
+    const f = await reviewAcceptanceFixture(t, { role });
+    const before = readFileSync(join(f.logbook, "tasks.tsv"), "utf8");
+    const first = f.accept();
+    assert.equal(first.decision, "review-accepted"); assert.equal(first.kind, kind);
+    const ledger = f.tool.read(f.logbook, "ledger");
+    assert.equal(ledger.length, 1); assert.equal(ledger[0].run, "R1"); assert.equal(ledger[0].sha, f.preparation.review.sha);
+    assert.deepEqual(f.accept(), { ...first, decision: "already-accepted" });
+    assert.equal(f.tool.read(f.logbook, "ledger").length, 1);
+    assert.equal(readFileSync(join(f.logbook, "tasks.tsv"), "utf8"), before);
+    assert.equal(f.tool.mergeCheck(first.sha, f.env).ok, false);
+    f.git("commit", "--quiet", "--allow-empty", "-m", "later head");
+    assert.deepEqual(f.accept(), { ...first, decision: "already-accepted" });
+    assert.equal(f.tool.read(f.logbook, "ledger")[0].sha, first.sha);
+  });
+}
+
+test("review acceptance keeps low findings open and blocking findings return verified work to reviewing", async t => {
+  for (const state of ["verified", "pr-ready"]) {
+    const f = await reviewAcceptanceFixture(t, { findings: [{ severity: "low", summary: "A small issue" }, { severity: "high", summary: "An unsafe result" }] });
+    fixtureTaskField(f, "state", state);
+    const result = f.accept();
+    assert.equal(result.kind, "findings");
+    assert.equal(f.tool.read(f.logbook, "tasks")[0].state, "reviewing");
+    assert.equal(f.tool.read(f.logbook, "decisions").filter(row => row.decision === `${state} → reviewing`).length, 1);
+    const findings = f.tool.read(f.logbook, "findings");
+    assert.equal(findings.length, 2); assert(findings.every(row => row.status === "open" && row.source === "code-reviewer"));
+    assert.equal(f.tool.mergeCheck(result.sha, f.env).ok, false);
+    f.accept(); assert.equal(f.tool.read(f.logbook, "findings").length, 2);
+  }
+  const low = await reviewAcceptanceFixture(t, { findings: [{ severity: "low", summary: "Only a small issue" }] });
+  assert.equal(low.accept().kind, "review-clean");
+  assert.equal(low.tool.read(low.logbook, "findings")[0].status, "open");
+});
+
+test("review acceptance rejects stale commits rounds unfinished runs foreign actors and conflicting report claims", async t => {
+  const f = await reviewAcceptanceFixture(t, { finish: false });
+  assert.throws(() => f.accept());
+  f.runApi.finishRecordedRun(f.acceptInput, f.native(session), f.options);
+  assert.throws(() => f.accept(f.acceptInput, childActor));
+  assert.throws(() => f.accept({ ...f.acceptInput, reportHash: "a".repeat(64) }));
+  assert.throws(() => f.accept({ ...f.acceptInput, kind: "review-clean" }));
+  fixtureTaskField(f, "round", "1"); assert.throws(() => f.accept());
+  fixtureTaskField(f, "round", "0");
+  f.git("commit", "--quiet", "--allow-empty", "-m", "changed head"); assert.throws(() => f.accept());
+  assert.equal(f.tool.read(f.logbook, "ledger").length, 0);
+  for (const overrides of [{ EVIDENCE: "unstructured" }, { FINDINGS: "none" }, { RESULT: "PASS" },
+    { RESULT: "FINDINGS" }, { QUESTIONS: "An unanswered product choice" }, { BRANCH: "another-branch" },
+    { FINDINGS: JSON.stringify([{ severity: "high", summary: "Contradicts a clean result" }]) }]) {
+    const bad = await reviewAcceptanceFixture(t, { overrides });
+    assert.throws(() => bad.accept());
+    assert.equal(bad.tool.read(bad.logbook, "ledger").length, 0);
+    assert.equal(existsSync(join(bad.logbook, "review-pending.json")), false);
+  }
+});
+
+async function stopReviewWrite(t, f, table) {
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = fs.renameSync;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === join(f.logbook, `${table}.tsv`)) throw Object.assign(Error("Injected review write failure"), { code: "EIO" });
+    return original(from, to);
+  });
+  syncBuiltinESMExports();
+  const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); };
+  t.after(restore);
+  return restore;
+}
+for (const table of ["tasks", "ledger"]) test(`review acceptance recovers a failed ${table} write and blocks merging while incomplete`, async t => {
+  const f = await reviewAcceptanceFixture(t, { findings: [{ severity: "high", summary: "Preserve this finding" }] });
+  fixtureTaskField(f, "state", "verified");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) f.cli("verdict", "T1", "--sha", f.preparation.review.sha, "--kind", kind);
+  assert.equal(f.tool.mergeCheck(f.preparation.review.sha, f.env).ok, true);
+  const restore = await stopReviewWrite(t, f, table);
+  assert.throws(() => f.accept(), /Injected review write failure/);
+  assert(existsSync(join(f.logbook, "review-pending.json")));
+  assert.match(f.tool.mergeCheck(f.preparation.review.sha, f.env).reason, /review update is incomplete/);
+  assert.throws(() => f.cli("log", "T1", "unrelated change", "--why", "must wait"), /review update is incomplete/);
+  restore();
+  // A changed Git head does not erase a write intent already validated for the older commit.
+  f.git("commit", "--quiet", "--allow-empty", "-m", "later head");
+  const result = f.accept();
+  assert.equal(result.decision, "review-accepted"); assert.equal(result.sha, f.preparation.review.sha);
+  assert.equal(existsSync(join(f.logbook, "review-pending.json")), false);
+  assert.equal(f.tool.read(f.logbook, "findings").length, 1);
+  assert.equal(f.tool.read(f.logbook, "ledger").filter(row => row.run === "R1").length, 1);
+  assert.equal(f.tool.read(f.logbook, "tasks")[0].state, "reviewing");
+  assert.deepEqual(f.accept(), { ...result, decision: "already-accepted" });
+});
+
+test("review acceptance recovery preserves unexpected table changes and refuses damaged pending evidence", async t => {
+  const f = await reviewAcceptanceFixture(t, { findings: [{ severity: "medium", summary: "Retained issue" }] });
+  fixtureTaskField(f, "state", "verified");
+  const original = readFileSync(join(f.logbook, "tasks.tsv"), "utf8");
+  const restore = await stopReviewWrite(t, f, "tasks");
+  assert.throws(() => f.accept(), /Injected/); restore();
+  fixtureTaskField(f, "title", "Unexpected edit");
+  const edited = readFileSync(join(f.logbook, "tasks.tsv"), "utf8");
+  assert.throws(() => f.accept());
+  assert.equal(readFileSync(join(f.logbook, "tasks.tsv"), "utf8"), edited);
+  writeFileSync(join(f.logbook, "tasks.tsv"), original);
+  const file = join(f.logbook, "review-pending.json"), saved = readFileSync(file, "utf8");
+  writeFileSync(file, saved.replace("Retained issue", "Altered issue"));
+  assert.throws(() => f.accept());
+  assert.equal(f.tool.mergeCheck(f.preparation.review.sha, f.env).ok, false);
+  writeFileSync(file, saved);
+  assert.equal(f.accept().decision, "review-accepted");
+});
+
+test("packaged review acceptance requires the chief and preserves one verdict after reconnect", async t => {
+  const f = await reviewAcceptanceFixture(t);
+  writeFileSync(f.entry, `import { servePreparations } from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
+  const client = await connect(t, f, "0.160.0", "", "sage_accept_review");
+  assert.match((await client.call(f.acceptInput, childActor)).error, /could not accept/);
+  assert.equal(f.tool.read(f.logbook, "ledger").length, 0);
+  const first = await client.call(f.acceptInput);
+  assert.equal(first.decision, "review-accepted"); await client.close();
+  const retry = await connect(t, f, "0.160.0", "", "sage_accept_review");
+  assert.deepEqual(await retry.call(f.acceptInput), { ...first, decision: "already-accepted" }); await retry.close();
+  assert.equal(f.tool.read(f.logbook, "ledger").length, 1);
+});
+
+
+test("review acceptance during a merge read cannot hide a new open finding", async t => {
+  const f = await reviewAcceptanceFixture(t, { findings: [{ severity: "low", summary: "Needs explicit triage" }] });
+  fixtureTaskField(f, "state", "verified");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) f.cli("verdict", "T1", "--sha", f.preparation.review.sha, "--kind", kind);
+  assert.equal(f.tool.mergeCheck(f.preparation.review.sha, f.env).ok, true);
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = fs.openSync;
+  let accepted = false;
+  t.mock.method(fs, "openSync", (file, ...args) => {
+    if (!accepted && file === join(f.logbook, "ledger.tsv")) {
+      accepted = true;
+      assert.equal(f.accept().decision, "review-accepted");
+    }
+    return original(file, ...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = f.tool.mergeCheck(f.preparation.review.sha, f.env);
+  assert.equal(accepted, true);
+  assert.equal(result.ok, false);
 });

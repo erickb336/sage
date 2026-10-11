@@ -27,7 +27,7 @@ let denied = false;
 const MARKER = "sage-native-parent-ok";
 const GRAND_MARKER = "sage-native-grandchild-ok";
 const GRAND_PROMPT = `Return exactly ${GRAND_MARKER}. Do not call any tool.`;
-const CHILD_MARKER = reportProbe ? ["STATUS done", "RESULT CLEAN", "EVIDENCE fixed native fixture completed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH codex/t1-review"].join("\n") : "sage-native-child-ok";
+let CHILD_MARKER = reportProbe ? ["STATUS done", "RESULT CLEAN", "EVIDENCE fixed native fixture completed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH codex/t1-review"].join("\n") : "sage-native-child-ok";
 let CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const FOLLOWUP_MARKER = "sage-native-followup-ok";
 const FOLLOWUP_PROMPT = `Return exactly ${FOLLOWUP_MARKER}. Do not call any tool.`;
@@ -88,7 +88,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   print({ type: "version", version });
   const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage,disconnectOnSpawn:outage,review:reportProbe,deadlineMs});
   const initialLogbook = sage ? integrated.readLogbook() : null;
-  let finishedRun;
+  if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
+    `EVIDENCE ${JSON.stringify({ commit: integrated.reviewTarget.sha, round: 0, cycle: 1, summary: "Fixed native fixture completed; simulated review only." })}`,
+    "FINDINGS []", "QUESTIONS none", "NOT VERIFIED real model or real review", "BRANCH codex/t1-review"].join("\n");
+  let finishedRun, acceptedReview;
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -110,7 +113,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
   let prepared = false, reportReceipt;
-  const calls = { finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  const calls = { accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -132,7 +135,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry].includes(item.call_id) ? 2 : 1)
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.recordRetry, calls.reread, calls.finish, calls.finishRetry, calls.accept, calls.acceptRetry].includes(item.call_id) ? 2 : 1)
           && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
@@ -163,7 +166,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({ namespace: tool.name, name: member.name }))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{ name: tool.name }] : []);
     return { outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen,
-      prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run") };
+      prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review") };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -381,6 +384,26 @@ data: ${JSON.stringify(event)}
         check(JSON.stringify(info.outputs[calls.finishRetry]) === JSON.stringify({ ...finishedRun, decision: "already-finished" })
           && integrated.readLogbook().runs[0].ended === finishedRun.ended, "run_retry_changed_result");
         print({type:"run_report_evidence",savedRunFinished:true,reportMatches:true,retryPreservesResult:true,taskAndGatesUnchanged:true,claimsVerified:false,simulatedModel:true});
+        check(info.acceptTools.length === 1, "review_accept_tool_missing");
+        respond(res, { type: "function_call", ...info.acceptTools[0], call_id: calls.accept,
+          arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
+      } else if (rootRequests === 12 && reportProbe) {
+        acceptedReview = info.outputs[calls.accept];
+        const logbook = integrated.readLogbook(), row = logbook.ledger[0];
+        check(acceptedReview?.decision === "review-accepted" && acceptedReview.kind === "review-clean"
+          && acceptedReview.sha === integrated.reviewTarget.sha && acceptedReview.task === "T1" && acceptedReview.run === "R1"
+          && acceptedReview.cycle === 1 && logbook.ledger.length === 1 && row.run === "R1" && row.cycle === "1"
+          && row.sha === integrated.reviewTarget.sha && row.kind === "review-clean", "review_acceptance_mismatch");
+        check(["tasks", "findings", "gates", "decisions"].every(key =>
+          JSON.stringify(logbook[key]) === JSON.stringify(initialLogbook[key])) && !integrated.mergeReady(), "review_approved_task_or_merge");
+        check(info.acceptTools.length === 1, "review_accept_tool_missing");
+        respond(res, { type: "function_call", ...info.acceptTools[0], call_id: calls.acceptRetry,
+          arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
+      } else if (rootRequests === 13 && reportProbe) {
+        check(JSON.stringify(info.outputs[calls.acceptRetry]) === JSON.stringify({ ...acceptedReview, decision: "already-accepted" })
+          && integrated.readLogbook().ledger.length === 1 && !integrated.mergeReady(), "review_retry_changed_result");
+        print({type:"review_acceptance_evidence",recordedVerdicts:1,actualBranchHead:true,retryCreatedDuplicate:false,
+          taskAndGatesUnchanged:true,mergeReady:false,realReviewVerified:false,simulatedModel:true});
         respond(res, message(MARKER));
       } else if (rootRequests === 6) {
         check(info.outputs[calls.followup] !== undefined, "followup_result_missing");
@@ -496,7 +519,7 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followUp ? 8 : reportProbe ? 11 : 5) && childRequests === (nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
+      : rootRequests === (followUp ? 8 : reportProbe ? 13 : 5) && childRequests === (nested ? 4 : followUp || sage ? 2 : 1) && grandchildRequests === (nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0

@@ -1,7 +1,7 @@
 # Native task preparation
 
 `servePreparations(options)` exposes task preparation, report reading, report recording,
-and chief run completion in a separate MCP server. Keep the hidden hook server required, with connection
+chief run completion, and review acceptance in a separate MCP server. Keep the hidden hook server required, with connection
 startup readiness. A visible tool on that server can delay a child's hooks.
 
 The launcher fixes `directory`, `project`, and `observationsRoot`. The last path
@@ -71,7 +71,7 @@ This does not enable Sage, grant capacity, or dispatch new work.
 
 The native `--sage-report` probe includes actual chief tool calls to finish and retry the run.
 It checks the logbook and saved report directly, with simulated model responses in a temporary profile.
-Review-claim verification, verdict gates, broader recovery, and a real-project pilot remain unfinished.
+Independent review cycles, broader recovery, and a real-project pilot remain unfinished.
 
 
 ## Review targets
@@ -89,5 +89,42 @@ A new target needs a new assignment; a retry cannot replace the old preparation.
 
 The report probe now uses a code reviewer and an actual commit in a temporary Git repository.
 It compares the preparation to a direct Git read and verifies native delivery, report storage, and run completion.
-Responses remain simulated. The target records intended review scope; it does not prove a review occurred or accept a verdict.
-Exact-commit verdict acceptance and independent review cycles remain unfinished.
+Responses remain simulated. The target records intended review scope; it does not prove a review occurred.
+The next section describes acceptance. Independent review cycles remain unfinished.
+
+
+## Chief review acceptance
+
+`sage_accept_review` accepts only a recorded assignment ID and its exact report hash.
+The current root chief must own the recorded receipt. The run must already be done.
+The immutable preparation supplies the review role, branch, commit, round, and cycle.
+The tool checks the saved report against that target and the current task branch.
+A changed commit or round refuses a new acceptance. A child cannot accept its own review.
+
+Reviewers retain the seven report fields. A completed review uses these values:
+
+| Field | Required value |
+| --- | --- |
+| STATUS | `done` |
+| RESULT | `CLEAN` or `FINDINGS`; QA uses `PASS` or `FAIL` |
+| EVIDENCE | JSON with `commit`, `round`, `cycle`, and a nonempty `summary` |
+| FINDINGS | JSON array of objects with `severity` and `summary`; `[]` when empty |
+| QUESTIONS | `none`; use a question report for an unresolved choice |
+| BRANCH | The prepared task branch |
+| NOT VERIFIED | What the reviewer did not check |
+
+Each finding uses severity `low`, `medium`, or `high` and a nonempty summary.
+Medium or high findings require a blocking result. Low findings can accompany a clean result but remain open for triage.
+A blocking result returns a verified or PR-ready task to reviewing and saves the reason.
+A clean result does not approve the task, record project checks, or grant merge permission.
+
+Acceptance saves a durable intent before it changes tasks, findings, verdicts, or decisions.
+An interrupted update blocks logbook changes and merge checks. Retry the same acceptance to finish it.
+Recovery checks each table against the saved before and after values. It refuses unrelated changes or damaged intent.
+A concurrent acceptance also invalidates a merge check that read tables from different versions.
+An immutable receipt makes later identical requests return the original result without duplicate findings or verdicts.
+If the branch changes after a saved intent, recovery retains evidence for the original commit only.
+
+The native report probe checks acceptance and a retry through actual Codex tools, then reads the saved verdict.
+Its model responses are simulated. Acceptance validates provenance and report structure, not the truth of review claims.
+Full review cycles, repair scheduling, project checks, and a real-project pilot still need integration.

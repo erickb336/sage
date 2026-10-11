@@ -57,6 +57,18 @@ export function createPreparationServer(options = {}) {
       return { isError: true, content: [{ type: "text", text: "Sage could not finish this run. Check the chief identity, saved report, assigned run, and configured logbook." }] };
     }
   });
+  server.registerTool("sage_accept_review", {
+    description: "Chief only: accept a finished review's recorded report and exact hash against its saved commit, round, and cycle. Record its findings and verdict. Failed partial writes block logbook changes and merges until this request recovers them. This does not merge or mark a task verified.",
+    inputSchema: z.object({ assignment: z.string(), reportHash: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { acceptRecordedReview } = await import("./run-report.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(acceptRecordedReview(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not accept this review. Check the chief identity, completed run, report fields, and current commit. Retry the same request if a saved update is incomplete." }] };
+    }
+  });
   return server;
 }
 

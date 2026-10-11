@@ -17,4 +17,4 @@ export { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } f
 export { boardView } from "./board-view.mjs";
 export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
 export { REPORT_FIELDS, parseReport } from "./report.mjs";
-export { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
+export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
