@@ -943,6 +943,26 @@ test("only the start of the user's message switches a mode, except autopilot off
     ...["sage mode: off", "sage mode, stop", "sage mode — stop", "sage mode - off", "sage mode on: off"].map((m) => [[], m, "sage mode off, autopilot off", `punctuation, then an off word: ${m}`]),
     // The phrase with an off word next also switches autopilot off: off is the safe direction (T200).
     ...["sage mode, stop", "sage mode stop", "sage mode \u{1d428}\u{1d41f}\u{1d41f}"].map((m) => [BOTH, m, "sage mode on, autopilot off", `the phrase and an off word switch autopilot off: ${m}`]),
+    // T210: an off word after a few small words (please, turn it all, can go) blocks the on and switches autopilot off; an
+    // off word after a real request, or a word that only starts like one, does not.
+    ...["sage mode please stop", "sage mode turn it all off", "sage mode can go off now", "sage mode, ok so just stop now"].flatMap((m) => [[[], m, "sage mode off, autopilot off", `an off request a few words after the phrase (T210): ${m}`], [BOTH, m, "sage mode on, autopilot off", `an off request a few words after the phrase switches autopilot off (T210): ${m}`]]),
+    ...["sage mode fix the login bug, then stop the old server", "sage mode offer a plan", "sage mode office hours first"].map((m) => [[], m, "sage mode on, autopilot off", `a request that mentions an off word later, or a longer word (T210): ${m}`]),
+    // T213: any punctuation run or a line break between the phrase and the off word.
+    ...[".", "!", "…", "/", " (", "\u2010", "\n", "?! ", " -> "].flatMap((p) => [[[], `sage mode${p}stop`, "sage mode off, autopilot off", `punctuation ${JSON.stringify(p)}, then an off word (T213)`], [BOTH, `sage mode${p}off`, "sage mode on, autopilot off", `punctuation ${JSON.stringify(p)}, then the off word, switches autopilot off (T213)`]]),
+    // T214: a mark or a format character joined to the phrase's last letter does not hide the off word after it.
+    ...["\u0301", "\u200b", "\u00ad", "\u2060", "\ufe0f", "\u0345", "\ufeff"].flatMap((c) => ["off", ", stop", " no more"].map((w) => [BOTH, `sage mode${c} ${w}`, "sage mode on, autopilot off", `${JSON.stringify(c)} joined to the phrase, then an off word (T214): ${w}`])),
+    [BOTH, "sage modeｏｆｆ", "sage mode on, autopilot off", "the off word in full-width letters, joined to the phrase (R736)"],
+    [BOTH, "sage modeоff", "sage mode on, autopilot off", "the off word with a Cyrillic o, joined to the phrase (R736)"],
+    [BOTH, "\u017fage mode stop", "sage mode on, autopilot off", "the phrase with the long s, then an off word (R737)"],
+    // Invisible letters and the look-alikes of every letter of the off words (R733).
+    ...["sto\u3164p", "\u115foff", "o\u2800ff", "sto\uffa0p", "ѕtop", "раuse", "ԁisable", "һalt", "ⅽancel", "kіll", "ехit", "аbоrt"].map((w) => [BOTH, `sage mode ${w}`, "sage mode on, autopilot off", `an off word with an invisible or look-alike letter (R733): ${JSON.stringify(w)}`]),
+    // Whole words only after the phrase (R733): these turn sage mode on. "no" and "without" count only alone or before
+    // "more" or "longer".
+    ...["stopwatch app", "end-to-end tests", "cancellation flow", "killer feature", "no rush, fix the crash", "without asking, fix the crash"].map((w) => [[], `sage mode ${w}`, "sage mode on, autopilot off", `a longer word or a request, not an off word (R733): ${w}`]),
+    ...["sage mode, no.", "sage mode no more", "sage mode no longer"].map((m) => [[], m, "sage mode off, autopilot off", `no alone or before more or longer is an off (R733): ${m}`]),
+    // A BOM before or after the phrase makes it no phrase (R737).
+    ...["\ufeffsage mode", "\ufeffsage mode continue", "sage mode\ufeff continue", "sage\ufeffmode continue"].map((m) => [[], m, "sage mode off, autopilot off", `a BOM at the phrase (R737): ${JSON.stringify(m)}`]),
+    [SAGE, "sage mode\ufeff, autopilot on", "sage mode on, autopilot off", "a BOM after the phrase, then the autopilot on phrase (R737)"],
     [BOTH, "sage mode  off continue", "sage mode off, autopilot off", "the exact off word after two spaces: off wins over on"],
     [BOTH, "sage mode off continue", "sage mode off, autopilot off", "off wins over on: the off rule reads the message first"],
     [SAGE, "sage mode autopilot continue", "sage mode on, autopilot off", "words after autopilot: the autopilot rule stays strict"],
@@ -1043,6 +1063,9 @@ test("a message of the owner that starts with a mode word and switches nothing g
     [[], "sage mode stop", true, "an off-meaning word after the phrase (F-R710-2)"],
     [[], "sage mode o­ff", true, "a soft hyphen inside the off word (F-R710-2)"],
     ...["sage mode\u0301", "sage mode\u0301 continue on the project", "enter sage mode\u0301 continue", "sage mode\u200b continue", "sage mode\u00ad continue", "sage mode\ufe0f continue", "sage mode\u2060 continue", "sage mode\u0301, autopilot on"].map((m) => [[], m, true, `a mark or a format character after the phrase (R733): ${JSON.stringify(m)}`]),
+    // Silent on main (R737): a character whose compatibility form starts with a space or a mark, and a BOM.
+    ...["sage mode\u0345", "sage mode\u037a continue", "sage mode\ufe70", "\ufeffsage mode", "sage mode\ufeff, autopilot on"].map((m) => [[], m, true, `a mark-like character or a BOM at the phrase (R737): ${JSON.stringify(m)}`]),
+    [[], "sage modes stop", false, "a longer word, then an off word: no mode word"],
     [[], "> sage mode continue on the project", true, "a pasted quote (F-R710-1)"],
     // The owner guard (F-R709-1): the hand-back marker makes the text an agent's, so no note, though it has a mode word.
     [["sage mode"], "sage mode?\n[Subagent hand-back] STATUS done", false, "an agent's hand-back gets no note"],
@@ -1075,15 +1098,34 @@ test("the miss note says which rule failed, tells the chief to tell the user, an
     [["sage mode"], "autopilot on main", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
     [[], "sage mode autopilot continue", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
     [[], "autopilot on", "sage: autopilot did not switch on, because autopilot turns on only while sage's mode is on."],
-    [["sage mode"], "autopilot please", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
-    [[], "sage mode and autopilot", "sage: autopilot did not switch on, because the autopilot phrase needs a full stop, a comma or a line break after it."],
-    [["sage mode"], "autopilot on, and dont stop until done", "sage: autopilot did not switch on, because an off word in the message won."],
+    // The real reason for "and" before autopilot and for a word other than on after it (R732).
+    [["sage mode"], "autopilot please", "sage: autopilot did not switch on, because autopilot needs the word on right after it."],
+    [["sage mode"], "autopilot", "sage: autopilot did not switch on, because autopilot needs the word on right after it."],
+    [["sage mode"], "sage mode, autopilot please", "sage: autopilot did not switch on, because autopilot needs the word on right after it."],
+    [[], "sage mode and autopilot", "sage: autopilot did not switch on, because the word and comes before autopilot."],
+    [[], "sage mode, and autopilot on", "sage: autopilot did not switch on, because the word and comes before autopilot."],
+    // The note names the off word that won (R738).
+    [["sage mode"], "autopilot on, and dont stop until done", "sage: autopilot did not switch on, because an off word (dont) in the message won."],
+    // T212: the table form with the autopilot word, a comma and an off word asks for autopilot, and the off word wins.
+    [["sage mode"], "sage mode autopilot, dont stop until done", "sage: autopilot did not switch on, because an off word (dont) in the message won."],
+    [[], "sage mode autopilot, stop when done", "sage: autopilot did not switch on, because an off word (stop) in the message won."],
     [["sage mode"], "autopilot on\n<task-notification>\n<result>STATUS done\nautopilot off</result>\n</task-notification>", "sage: autopilot did not switch on, because an off line in an agent's text won."],
     [[], "> sage mode continue on the project", "sage: this message switched nothing, because a pasted quote, bullet or indent comes before the phrase."],
-    [[], "sage mode, stop", "sage: sage's mode did not change and autopilot is off, because an off word comes after the phrase."],
+    [[], "sage mode, stop", "sage: sage's mode did not change and autopilot is off, because an off word (stop) comes after the phrase."],
     [["sage mode"], "autopilot on?", "sage: autopilot did not switch on, because the line has a question mark."],
-    [[], "sage mode stop", "sage: sage's mode did not change and autopilot is off, because an off word comes after the phrase."],
+    [[], "sage mode stop", "sage: sage's mode did not change and autopilot is off, because an off word (stop) comes after the phrase."],
     [[], "sage mode！", "sage: this message switched nothing, because the words after the phrase match no rule."],
+    // T210 and T213: an off request a few words after the phrase, or after any punctuation, gets the note.
+    [[], "sage mode please stop", "sage: sage's mode did not change and autopilot is off, because an off word (stop) comes after the phrase."],
+    [[], "sage mode turn it all off", "sage: sage's mode did not change and autopilot is off, because an off word (off) comes after the phrase."],
+    [["sage mode"], "sage mode can go off now", "sage: sage's mode did not change and autopilot is off, because an off word (off) comes after the phrase."],
+    [[], "sage mode. stop", "sage: sage's mode did not change and autopilot is off, because an off word (stop) comes after the phrase."],
+    [[], "sage mode\nno more", "sage: sage's mode did not change and autopilot is off, because an off word (no more) comes after the phrase."],
+    [[], "sage modeｏｆｆ", "sage: sage's mode did not change and autopilot is off, because an off word (off) comes after the phrase."],
+    // A hidden character, an accent or a look-alike letter in or joined to the phrase (R737, R738), also with an off word.
+    ...["sage mode\u0301", "sage mode\u200b continue", "sage mode\u00ad continue", "\ufeffsage mode", "sage mode\ufeff continue", "\u017fage mode", "\u017fage mode continue", "sage mode\u0345", "sage mode\u037a", "sage mode\ufe70", "sage mode\ufc5e continue"].map((m) => [[], m, "sage: this message switched nothing, because a hidden character, an accent or a look-alike letter is in the phrase or joined to it (retype it)."]),
+    [["sage mode", "autopilot on"], "sage mode\u200b stop", "sage: sage's mode did not change and autopilot is off, because a hidden character, an accent or a look-alike letter is in the phrase or joined to it (retype it), and an off word (stop) comes after the phrase."],
+    [["sage mode", "autopilot on"], "\u017fage mode stop", "sage: sage's mode did not change and autopilot is off, because a hidden character, an accent or a look-alike letter is in the phrase or joined to it (retype it), and an off word (stop) comes after the phrase."],
   ];
   const notes = await Promise.all(cases.map(([before, message]) => modesAfter([...before, message], { notes: true })));
   const wrong = cases.flatMap(([, message, first], i) => {
@@ -1503,6 +1545,12 @@ test("1 MB of padding in an agent's text cannot time out the hook: its time grow
       "the mode phrase, then mathematical letters": prompt(`sage mode ${pad("\u{1d428}")}`),
       "the mode phrase, then marks and small capitals": prompt(`sage mode ${pad("óᴏ")}`),
       "the mode phrase, then spaces and autopilot": prompt(`sage mode${pad(" ")}${AP} please`),
+      // The off window (T210, T213, T214): punctuation, small words, invisible letters, and a joined mark before an off word.
+      "the mode phrase, then punctuation and the off word": prompt(`sage mode${pad(".!/(")}off`),
+      "the mode phrase, a small word, then spaces and a word": prompt(`sage mode please${pad(" ")}x`),
+      "the mode phrase, then small words and spaces": prompt(`sage mode${pad(" please ")}x`),
+      "the mode phrase, then invisible letters and the off word": prompt(`sage mode ${pad("\u3164\u2800")}off`),
+      "the mode phrase, a joined mark, then BOMs and the off word": prompt(`sage mode\u0301${pad("\ufeff")} off`),
     };
     return [...stops, ...Object.entries(others)];
   };

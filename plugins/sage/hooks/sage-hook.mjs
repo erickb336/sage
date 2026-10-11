@@ -169,14 +169,19 @@ function switchModes({ owner, text, outside, all }, state) {
   const read = signals.sageOn || signals.sageOff || (state.sage && signals.autopilotOn) || (signals.autopilotOff && signals.autopilotWord);
   const autopilotMissed = signals.autopilotAsked && !state.autopilot;
   if (owner && signals.modeWord && (signals.offAfter || autopilotMissed || (!read && before === modes()))) {
-    const why = signals.offAfter ? "an off word comes after the phrase"
-      : autopilotMissed && signals.ownOff ? "an off word in the message won"
-      : autopilotMissed && signals.autopilotOn && !state.sage ? "autopilot turns on only while sage's mode is on"
+    // The real cause, so that the owner does not retype the same text (R732, R738): a character that the owner cannot
+    // see, and the off word that won, by name.
+    const off = signals.offAfter ? `an off word (${signals.offWord}) comes after the phrase`
+      : autopilotMissed && signals.ownOff ? `an off word (${signals.offWord}) in the message won` : "";
+    const why = [signals.joined && "a hidden character, an accent or a look-alike letter is in the phrase or joined to it (retype it)", off].filter(Boolean).join(", and ")
+      || (autopilotMissed && signals.autopilotOn && !state.sage ? "autopilot turns on only while sage's mode is on"
       : autopilotMissed && signals.autopilotOff ? "an off line in an agent's text won"
       : signals.pasted ? "a pasted quote, bullet or indent comes before the phrase"
       : signals.question ? "the line has a question mark"
+      : autopilotMissed && signals.autopilotGap === "and" ? "the word and comes before autopilot"
+      : autopilotMissed && signals.autopilotGap === "on" ? "autopilot needs the word on right after it"
       : autopilotMissed ? "the autopilot phrase needs a full stop, a comma or a line break after it"
-      : "the words after the phrase match no rule";
+      : "the words after the phrase match no rule");
     const what = signals.offAfter ? "sage's mode did not change and autopilot is off"
       : autopilotMissed ? "autopilot did not switch on" : "this message switched nothing";
     notes.push(`sage: ${what}, because ${why}. The switches are the on phrase, the off phrase and the autopilot phrases, at the start of the message. Tell the user.`);

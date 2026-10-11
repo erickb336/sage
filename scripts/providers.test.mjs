@@ -349,13 +349,22 @@ test("shared file and mode extraction preserves classified mode phrases in both 
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const none = { autopilotWord: false, autopilotAsked: false, ownOff: false, offAfter: false, pasted: false, question: false };
+    const none = { autopilotWord: false, autopilotAsked: false, autopilotGap: "", ownOff: false, offAfter: false, offWord: "", joined: false, pasted: false, question: false };
     assert.deepEqual(api.modeSignals(prompt("sage mode")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true, ...none });
-    assert.deepEqual(api.modeSignals(prompt("sage mode off")), { sageOff: true, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true });
+    assert.deepEqual(api.modeSignals(prompt("sage mode off")), { sageOff: true, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offWord: "off" });
     assert.deepEqual(api.modeSignals(prompt("sage mode, autopilot on")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: true, modeWord: true, ...none, autopilotAsked: true });
     assert.deepEqual(api.modeSignals(prompt("autopilot on main?")), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: false, modeWord: true, ...none, autopilotWord: true, autopilotAsked: true, question: true });
-    // The phrase, a comma and an off word: no on, and autopilot off (F-R725-2, T200).
-    assert.deepEqual(api.modeSignals(prompt("sage mode, stop")), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offAfter: true });
+    // The phrase, a comma and an off word: no on, and autopilot off (F-R725-2, T200), with the off word named (R738).
+    assert.deepEqual(api.modeSignals(prompt("sage mode, stop")), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offAfter: true, offWord: "stop" });
+    // An off request a few words after the phrase (T210), after any punctuation (T213), and after a joined mark (T214).
+    assert.deepEqual(api.modeSignals(prompt("sage mode please turn it all off")), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offAfter: true, offWord: "off" });
+    assert.deepEqual(api.modeSignals(prompt("sage mode\u200b. stop")), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offAfter: true, offWord: "stop", joined: true });
+    // The table form with the autopilot word, a comma and an off word asks for autopilot (T212); "and" first (R732).
+    assert.deepEqual(api.modeSignals(prompt("sage mode autopilot, stop when done")), { sageOff: false, sageOn: true, autopilotOff: true, autopilotOn: true, modeWord: true, ...none, autopilotAsked: true, ownOff: true, offWord: "stop" });
+    assert.deepEqual(api.modeSignals(prompt("sage mode and autopilot")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true, ...none, autopilotAsked: true, autopilotGap: "and" });
+    // Whole words after the phrase (R733), and a BOM is no space (R737).
+    assert.equal(api.modeSignals(prompt("sage mode stopwatch app")).sageOn, true);
+    assert.deepEqual(api.modeSignals(prompt("\ufeffsage mode")), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: false, modeWord: true, ...none, joined: true, pasted: true });
     // Only the owner's own off is ownOff: an agent's off line turns autopilot off, but it is not the owner's (F-R724-L2).
     assert.deepEqual(api.modeSignals({ owner: true, text: "autopilot on", outside: "autopilot on", all: "autopilot on\nautopilot off" }), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: true, modeWord: true, ...none, autopilotWord: true, autopilotAsked: true });
     assert.equal(api.modeSignals(prompt("sage mode continue on the project")).sageOn, true);
