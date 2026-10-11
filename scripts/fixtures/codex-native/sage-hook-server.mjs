@@ -1,7 +1,7 @@
 // Test only: the real runtime with a fixed harmless tool route, not the complete product policy.
 import { serveHooks } from "./plugin/runtime/mcp-server.mjs";
 import { createNativePolicy } from "./plugin/runtime/policy.mjs";
-import { options, disconnectOnSpawn, recordOutage, outageRecorded, commandDecision } from "./sage-options.mjs";
+import { options, disconnectOnSpawn, recordOutage, outageRecorded, commandDecision, patchDecision } from "./sage-options.mjs";
 const allowed = new Set(["collaborationspawn_agent", "collaborationlist_agents", "collaborationwait_agent",
   "list_mcp_resources", "mcp__sage_preparation__sage_prepare_task", "mcp__sage_preparation__sage_read_report", "mcp__sage_preparation__sage_record_report", "mcp__sage_preparation__sage_finish_run", "mcp__sage_preparation__sage_accept_review", "mcp__sage_preparation__sage_read_recorded_report"]);
 serveHooks({ mode: options, loadPolicy: async () => {
@@ -17,6 +17,7 @@ serveHooks({ mode: options, loadPolicy: async () => {
     && ((context.command.shell === "/bin/sh" && context.command.workdir === options.projectDirectory + "/command-workdir"
       && context.command.tty === false && Object.keys(context.command).length === 5)
       || Object.keys(context.command).length === 2)) return commandDecision(input, context);
+  if (input.tool_name === "apply_patch") return patchDecision(input, context);
   return allowed.has(input.tool_name) ? { decision: "pass" }
     : { decision: "deny", reason: "Outside the fixed native fixture route." };
 });

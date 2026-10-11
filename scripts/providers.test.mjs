@@ -2,7 +2,7 @@ import * as reportApi from "../packages/sage-core/index.mjs";
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -2174,4 +2174,73 @@ test("Codex shell write classification refuses unreadable text and uses the publ
   assert.equal(adapter.commandWrites("rg --pre cat x", f.dir), true);
   assert.equal(adapter.commandWrites("rg --regexp=--pre x", f.dir), false);
   assert.equal(adapter.commandWrites("", f.dir), false);
+});
+
+test("shared protected paths check new files, ancestors, case folding and symlink parent traversal", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd); mkdirSync(join(root, "nested"));
+    symlinkSync(join(root, "nested"), join(cwd, "linked"));
+    symlinkSync(join(root, "missing"), join(cwd, "dangling"));
+    const check = paths => fileWriteOutsideRoots({ paths, cwd, roots: [root] });
+    for (const path of [root, f.dir, join(root, "new.tsv"), join(f.dir, "LOGBOOK/new.tsv"),
+      "../logbook/new.tsv", "linked/../new.tsv", "dangling/new.tsv"])
+      assert.equal(check([path]), false, path);
+    assert.equal(check(["ordinary.txt", "../logbook-other/new.tsv"]), true);
+    assert.equal(check(["ordinary.txt", "../logbook/new.tsv"]), false);
+    assert.equal(existsSync(join(root, "new.tsv")), false);
+  }
+});
+
+test("shared protected paths refuse hard links, loops and invalid path context", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd); writeFileSync(join(root, "ledger.tsv"), "fixed");
+    linkSync(join(root, "ledger.tsv"), join(cwd, "alias"));
+    symlinkSync("loop-b", join(cwd, "loop-a")); symlinkSync("loop-a", join(cwd, "loop-b"));
+    assert.equal(fileWriteOutsideRoots({ paths: ["alias"], cwd, roots: [root] }), false);
+    assert.throws(() => fileWriteOutsideRoots({ paths: ["loop-a"], cwd, roots: [root] }));
+    for (const input of [{ paths: ["x"], cwd, roots: [] }, { paths: ["x\0"], cwd, roots: [root] },
+      { paths: ["x"], cwd: "relative", roots: [root] }, { paths: [null], cwd, roots: [root] }])
+      assert.throws(() => fileWriteOutsideRoots(input));
+    assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
+  }
+});
+
+test("Codex patch policy protects both move targets and logbook paths in every mode", async t => {
+  const f = isolated(t, "codex");
+  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof patchEditDecision, "function");
+  const cwd = join(f.dir, "project"), root = join(f.dir, "logbook"); mkdirSync(cwd); mkdirSync(root);
+  symlinkSync(root, join(cwd, "linked"));
+  const input = text => ({ tool_name: "apply_patch", tool_input: { command: `*** Begin Patch\n${text}\n*** End Patch` } });
+  const options = { cwd, roots: [root] };
+  for (const context of [{ sage: true, chief: false }, { sage: false, chief: false }, { sage: false, chief: true }]) {
+    assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), context, options).decision, "pass");
+    for (const body of ["*** Add File: linked/new.tsv\n+fixed", "*** Delete File: ../logbook/ledger.tsv",
+      "*** Update File: ordinary\n*** Move to: ../logbook/new.tsv\n@@\n-old\n+new",
+      "*** Update File: ../logbook/ledger.tsv\n*** Move to: ordinary\n@@\n-old\n+new"])
+      assert.equal(patchEditDecision(input(body), context, options).decision, "deny");
+  }
+  assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), { sage: true, chief: true }, options).decision, "deny");
+});
+
+test("Codex patch target parsing distinguishes file headers from content and refuses unsupported shapes", async t => {
+  const f = isolated(t, "codex");
+  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof patchEditDecision, "function");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  assert.deepEqual(patchTargets("*** Begin Patch\n*** Add File: ordinary\n+*** Delete File: protected\n*** Update File: before\n*** Move to: after\n@@\n-old\n+new\n*** End Patch"), ["ordinary", "before", "after"]);
+  for (const patch of [null, "not a patch", "*** Begin Patch\n*** Unknown: x\n*** End Patch",
+    "*** Begin Patch\n*** Add File: x\n*** Move to: y\n*** End Patch",
+    "*** Begin Patch\n*** Update File: x\n@@\n+new\n*** Move to: y\n*** End Patch"])
+    assert.throws(() => patchTargets(patch));
+  assert.throws(() => patchEditDecision({ tool_name: "apply_patch", tool_input: { patch: "invented" } },
+    { sage: true, chief: false }, { cwd: f.dir, roots: [join(f.dir, "logbook")] }));
 });

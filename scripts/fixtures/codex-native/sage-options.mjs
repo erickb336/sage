@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 // Copied into a fresh native test profile, never loaded from an installed plugin.
+import { patchEditDecision } from "./plugin/runtime/file-policy.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url));
@@ -20,5 +21,13 @@ export function commandDecision(input, context) {
   const result = deny ? { decision: "deny", reason: "sage-fixed-command-denial" } : { decision: "pass" };
   writeFileSync(join(root, "command-policy-receipt.json"), JSON.stringify({ session: input.session_id,
     turn: input.turn_id, call: input.tool_use_id, command: context.command, result }), { flag: "wx" });
+  return result;
+}
+
+export function patchDecision(input, context) {
+  const result = patchEditDecision(input, { sage: context.sage, chief: context.actor === input.session_id },
+    { cwd: options.projectDirectory, roots: [options.logbookRoot] });
+  writeFileSync(join(root, "patch-policy-receipt.json"), JSON.stringify({ session: input.session_id,
+    turn: input.turn_id, call: input.tool_use_id, result }), { flag: "wx" });
   return result;
 }
