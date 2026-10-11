@@ -19,6 +19,19 @@ export function createPreparationServer(options = {}) {
       return { isError: true, content: [{ type: "text", text: "Sage could not create this task. Check the chief identity, configured logbook, request UUID, and route. Retry an incomplete request with the same fields." }] };
     }
   });
+  server.registerTool("sage_create_run", {
+    description: "Chief only: record one run on an existing task. Reuse the same request UUID and identical fields after a lost response. Writers need a branch and cannot share it with another running writer. Use empty strings for an unused branch or candidate. Returns a creation record, not proof of agent execution. Preparation and dispatch still require their own checks.",
+    inputSchema: z.object({ request: z.string(), task: z.string(), role: z.string(), branch: z.string(), candidate: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      if (Buffer.byteLength(JSON.stringify(input), "utf8") > 16 * 1024) throw Error("Invalid request size");
+      const { createNativeRun } = await import("./run-create.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(createNativeRun(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not create this run. Check the chief identity, request UUID, task, role, and branch writer. Retry an incomplete request with the same fields." }] };
+    }
+  });
   server.registerTool("sage_prepare_task", {
     description: "Save a complete Sage task brief before spawning a named agent. Configured review roles also require reviewCycle and receive a fixed commit target. Preparation does not start the agent or reserve capacity. Copy the returned name, message, and fork_turns unchanged into the later spawn.",
     inputSchema: z.object({ task: z.string(), run: z.string(), name: z.string(), role: z.string(), reviewCycle: z.number().int().min(1).max(10).optional(),

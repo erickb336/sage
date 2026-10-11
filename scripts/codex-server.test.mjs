@@ -67,7 +67,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -2276,6 +2276,110 @@ test('native task creation allows manual off-mode records without dispatch and s
   assert.deepEqual(outputs.map(out => out.decision).sort(), ['already-created', 'task-created']);
   assert.deepEqual(outputs[0].task, outputs[1].task);
   assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  await Promise.all(clients.map(client => client.close()));
+});
+
+async function runCreationFixture(t) {
+  const f = await taskCreationFixture(t); f.create();
+  const { createNativeRun } = await import(pathToFileURL(join(f.plugin, 'runtime/run-create.mjs')));
+  const input = { request: turns[1], task: 'T1', role: 'lead', branch: '', candidate: '' };
+  const createRun = (data = input, actor = session) => createNativeRun(data, f.native(actor), f.options);
+  const file = join(f.dir, 'run-create-config.json');
+  writeFileSync(file, JSON.stringify({ version: 3, mode: f.options }));
+  writeFileSync(f.entry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(file)});`);
+  return { ...f, input, createRun };
+}
+
+test('native run creation records one real task run and retries after reconnect without dispatch', async t => {
+  const f = await runCreationFixture(t), before = f.core.readAdmission(f.options.directory);
+  const client = await connect(t, f, '0.160.0', '', 'sage_create_run');
+  const first = await client.call(f.input);
+  assert.equal(first.decision, 'run-created'); assert.equal(first.run.id, 'R1');
+  assert.equal(first.run.task, 'T1'); assert.equal(first.run.role, 'lead');
+  assert.equal(first.run.round, '0'); assert.equal(first.run.status, 'running');
+  assert.equal(first.run.model, ''); assert.match(first.run.started, /^\d{4}-\d\d-\d\dT/);
+  await client.close();
+  const retry = await connect(t, f, '0.160.0', '', 'sage_create_run');
+  assert.deepEqual(await retry.call(f.input), { ...first, decision: 'already-created' });
+  assert.match((await retry.call({ ...f.input, role: 'qa' })).error, /could not create/);
+  assert.match((await retry.call(f.input, childActor)).error, /could not create/);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
+  assert.equal(f.tool.read(f.logbook, 'tasks')[0].state, 'framed');
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  await retry.close();
+});
+
+test('native run creation shares the CLI single-writer rule and never revives a completed run on retry', async t => {
+  const f = await runCreationFixture(t);
+  const input = { ...f.input, role: 'implementer', branch: 'codex/t1-build' };
+  f.cli('run', 'add', 'T1', '--role', 'designer', '--branch', input.branch);
+  assert.throws(() => f.createRun(input), /one writer/);
+  assert.throws(() => f.createRun({ ...input, branch: '' }), /needs --branch/);
+  f.cli('run', 'done', 'R1', '--status', 'done');
+  const first = f.createRun(input); assert.equal(first.run.id, 'R2');
+  assert.throws(() => f.cli('run', 'add', 'T1', '--role', 'implementer', '--branch', input.branch), /one writer/);
+  f.cli('run', 'done', 'R2', '--status', 'done');
+  assert.deepEqual(f.createRun(input), { ...first, decision: 'already-created' });
+  assert.equal(f.tool.read(f.logbook, 'runs')[1].status, 'done');
+  const next = f.createRun({ ...input, request: turns[2] }); assert.equal(next.run.id, 'R3');
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 3);
+});
+
+test('native run creation refuses missing tasks malformed fields and foreign owners without writes', async t => {
+  const f = await runCreationFixture(t);
+  for (const data of [{ ...f.input, task: 'T999' }, { ...f.input, task: '../other' }, { ...f.input, owner: session },
+    { ...f.input, project: f.options.projectDirectory }, { ...f.input, model: 'inherit' }, { ...f.input, request: 'invalid' },
+    { ...f.input, role: 'invalid role' }, { ...f.input, branch: 'invalid branch' }, { ...f.input, candidate: 'a\nb' },
+    { ...f.input, candidate: 1 }]) assert.throws(() => f.createRun(data));
+  assert.throws(() => f.createRun(f.input, childActor)); assert.throws(() => f.createRun(f.input, turns[2]));
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 0);
+  assert.equal(existsSync(join(f.logbook, 'run-requests')), false);
+});
+
+test('native run creation recovers a written run whose receipt publication failed', async t => {
+  const f = await runCreationFixture(t);
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = fs.linkSync;
+  t.mock.method(fs, 'linkSync', (from, to) => {
+    if (to.startsWith(join(f.logbook, 'run-requests') + '/')) throw Object.assign(Error('Injected run receipt failure'), { code: 'EIO' });
+    return original(from, to);
+  });
+  syncBuiltinESMExports();
+  const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); }; t.after(restore);
+  assert.throws(() => f.createRun(), /Injected/);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
+  assert.throws(() => f.cli('run', 'add', 'T1', '--role', 'qa'), /incomplete/);
+  assert.equal(f.tool.mergeCheck('1'.repeat(40), f.env).ok, false);
+  restore();
+  assert.throws(() => f.createRun({ ...f.input, request: turns[2] }));
+  assert.equal(f.createRun().decision, 'run-created'); assert.equal(f.createRun().decision, 'already-created');
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+});
+
+test('native run creation preserves unrelated table edits after an interrupted run write', async t => {
+  const f = await runCreationFixture(t);
+  const restore = await stopReviewWrite(t, f, 'runs');
+  assert.throws(() => f.createRun(), /Injected/); restore();
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 0);
+  appendFileSync(join(f.logbook, 'runs.tsv'), 'unrelated change\n');
+  assert.throws(() => f.createRun());
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
+  assert.equal(existsSync(join(f.logbook, 'run-requests')), false);
+});
+
+test('native run creation serializes competing writers while preserving manual off-mode records', async t => {
+  const f = await runCreationFixture(t);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const clients = await Promise.all([connect(t, f, '0.160.0', '', 'sage_create_run'), connect(t, f, '0.160.0', '', 'sage_create_run')]);
+  const input = { ...f.input, role: 'implementer', branch: 'codex/t1-build' };
+  const outputs = await Promise.all(clients.map((client, index) => client.call({ ...input, request: turns[index + 1] })));
+  assert.equal(outputs.filter(out => out.decision === 'run-created').length, 1);
+  assert.equal(outputs.filter(out => /could not create/.test(out.error)).length, 1);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
   await Promise.all(clients.map(client => client.close()));
 });

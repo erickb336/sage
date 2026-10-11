@@ -5,7 +5,7 @@ import {spawn} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
-export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,sage=false,disconnectOnSpawn=false,review=false,nestedReview=false,blockStop=false,captureFailure=false,denyCommand=false,deadlineMs=120_000}){
+export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,sage=false,disconnectOnSpawn=false,review=false,nestedReview=false,blockStop=false,captureFailure=false,denyCommand=false,emptyLogbook=false,deadlineMs=120_000}){
  assert(/^[A-Za-z0-9/._-]+$/.test(realpathSync(root)), "unsafe_probe_root");
  assert.equal(realpathSync(codexHome),join(realpathSync(root),'codex'));
  mkdirSync(join(root,'events'));
@@ -13,7 +13,7 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
  const script=join(root,'capture.mjs');
  writeFileSync(script,readFileSync(new URL('./capture-native-hook.mjs',import.meta.url)));
  const command=`node ${JSON.stringify(script)}${denySpawn ? " --deny-spawn" : ""}`;
- const integrated=sage?await setupSage(root,{disconnectOnSpawn,review,nestedReview,capacity:captureFailure?1:5,denyCommand}):null;
+ const integrated=sage?await setupSage(root,{disconnectOnSpawn,review,nestedReview,capacity:captureFailure?1:5,denyCommand,emptyLogbook}):null;
  const baseConfig=integrated?.config??'';
  const blocker=join(root,'block-first-stop.mjs');
  if(blockStop)writeFileSync(blocker,readFileSync(new URL('./block-first-stop.mjs',import.meta.url)));

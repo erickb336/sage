@@ -176,4 +176,5 @@ This does not add follow-up task binding or cross-session recovery.
 The prepared server also exposes `sage_create_task`; see `task-create.md`.
 It frames a task through the shared state tool with a durable request UUID.
 Preparation still requires task and run IDs; creating a task does not create
-its run or grant an agent slot.
+its run or grant an agent slot. `sage_create_run` records the run separately;
+see `run-create.md`.
