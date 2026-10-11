@@ -2,10 +2,10 @@
 // The sage hook. Claude Code sends one JSON event on stdin; the hook answers with one JSON object on stdout, or nothing.
 //   - "sage mode" makes the session the user's chief of staff (agents/chief-of-staff.md) until "sage mode off". A
 //     session that starts as the sage:chief-of-staff agent is in sage mode from its first event. Only the user's own
-//     words switch a mode on, or sage mode off: never an agent's report, a task notification or another session's
-//     message (promptOf). When the hook cannot read the frames of a prompt, nothing in it switches a mode on (fail
-//     closed). An autopilot off counts in more text: in the owner's text, in a message the owner sends while Claude
-//     works, and in a frame on a line that starts with the off-phrase. Such a message never switches a mode on.
+//     words switch sage mode or autopilot, in either direction: never an agent's report, a task notification, a
+//     hand-back or another session's message (promptOf, T215). A message the owner sends while Claude works is the
+//     owner's text, but it only switches autopilot off. When the hook cannot read the frames of a prompt, nothing in it
+//     switches a mode on, and the off rules read the whole prompt (fail closed).
 //   - In sage mode it holds the rules that prompts alone did not hold in Orchestrator (docs/design/sage-mode.html,
 //     "Rules"): the chief never edits files, every brief has all its fields, at most cap.<project> (default
 //     max_agents) sage agents run at once for a project and cap_total across all projects, nobody force-pushes or pushes to main, and a merge needs autopilot on, the checked head SHA and the clean
@@ -130,9 +130,11 @@ export function promptOf(input) {
 }
 
 /**
- * Switches the modes, and returns the notes for the chief. Only the owner's own text switches sage mode or autopilot
- * on, or sage mode off. Off is the safe direction, so an autopilot off counts in more text: the broad off rule in all
- * the text outside the frames (in the whole prompt when the hook cannot read the frames), and an off line anywhere. A sage mode off that is not the owner's switches only autopilot off, so that the git rules stay.
+ * Switches the modes, and returns the notes for the chief. Only the owner's own text switches sage mode or autopilot,
+ * in either direction: text in an agent's frame switches nothing (T215). Off is the safe direction, so an autopilot off
+ * reads all the text outside the frames, with the owner's queued messages; when the hook cannot read the frames, it
+ * reads the whole prompt (fail closed). A sage mode off that is not the owner's switches only autopilot off, so that the
+ * git rules stay.
  */
 function switchModes({ owner, text, outside, all }, state) {
   if (modePolicy.error) {
@@ -172,7 +174,6 @@ function switchModes({ owner, text, outside, all }, state) {
     const why = signals.offAfter ? "an off word comes after the phrase"
       : autopilotMissed && signals.ownOff ? "an off word in the message won"
       : autopilotMissed && signals.autopilotOn && !state.sage ? "autopilot turns on only while sage's mode is on"
-      : autopilotMissed && signals.autopilotOff ? "an off line in an agent's text won"
       : signals.pasted ? "a pasted quote, bullet or indent comes before the phrase"
       : signals.question ? "the line has a question mark"
       : autopilotMissed ? "the autopilot phrase needs a full stop, a comma or a line break after it"

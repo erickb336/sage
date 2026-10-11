@@ -7,10 +7,10 @@
 // T200). The words may go on only on a plain line: a Markdown quote, a list item or a code line that starts with the phrase and more words is a paste, not a request. "autopilot on" stays
 // strict: it must stand alone or end at that punctuation or its line, so "autopilot on?" and "autopilot on main" switch
 // nothing. "sage mode off" must not run on into a longer word ("sage mode off-topic"), and its line must have no "?"
-// ("sage mode off? what does it do?"). Because a missed off is the unsafe one, any line that starts with "sage mode off"
-// or "autopilot off" switches autopilot off, even as a question or in a frame. The owner's own text also switches it
-// off when it mentions autopilot and has an off word anywhere. A frame does not, because its boilerplate has off words
-// ("NOT a message from the user"). Off wins over on. Only OFF_LINE has the m flag: with it, "^" also matches the start
+// ("sage mode off? what does it do?"). Because a missed off is the unsafe one, any line of the owner's text that starts
+// with "sage mode off" or "autopilot off" switches autopilot off, even as a question. The owner's own text also switches
+// it off when it mentions autopilot and has an off word anywhere. Agent text (a frame) switches nothing, in either
+// direction (T215). Off wins over on. Only OFF_LINE has the m flag: with it, "^" also matches the start
 // of each later line.
 const START = String.raw`^[\s"'“‘*_>-]*`;
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
@@ -53,7 +53,7 @@ const SAGE_ON = new RegExp(`${START}${SAGE}${AND_AUTOPILOT}?${END}|${PLAIN}${SAG
 const OFF_SOON = String.raw`${SP}*(?:[,:;–—-]${SP}*)?(?:${OFF_WORDS}|(?:switch|turn)${SP}+(?:\S+${SP}+)?off\b)`;
 const OFF_AFTER = new RegExp(`${START}${SAGE}${OFF_SOON}`, "i");
 const OFF_PHRASE = new RegExp(`${START}sage${SP}+mode${SP}+off`, "i"); // the off phrase has its own rules
-const OFF_LINE = new RegExp(`${LINE_START}(?:sage${SP}+mode|autopilot)${SP}+off\\b`, "im"); // in any text, at the start of any line
+const OFF_LINE = new RegExp(`${LINE_START}(?:sage${SP}+mode|autopilot)${SP}+off\\b`, "im"); // in the owner's text, at the start of any line
 const SAGE_OFF = new RegExp(`${START}sage${SP}+mode${SP}+off(?![\\p{L}\\p{N}-])(?!.*\\?)`, "iu"); // "." stops at a line break
 const AUTOPILOT_ON = new RegExp(`${START}(?:autopilot${SP}+on|${SAGE}${AND_AUTOPILOT})${END}`, "i");
 // A message that starts with a mode word, but whose switch did not happen, gets a note (the caller), so that a miss is
@@ -87,15 +87,16 @@ export function modeSignals({ owner, text, outside, all }) {
   const offNext = OFF_AFTER.test(folded);
   // The phrase and an off word next, other than the off phrase, which has its own rules (T200).
   const offAfter = offNext && !OFF_PHRASE.test(text);
-  // An off in the owner's own text. Only this off may make an autopilot on a planned miss: an off line in an agent's
-  // frame turns autopilot off too, but the owner still gets the note (F-R724-L2).
+  // An off in the owner's own text: the only off when the hook can read the frames (T215).
   const ownOff = owner && (broadOff(outside) || offAfter);
   const autopilotWord = owner && AUTOPILOT_WORD.test(text);
   const modeWord = owner && MODE_WORD.test(text);
   return {
     sageOff: owner && SAGE_OFF.test(text),
     sageOn: owner && !offNext && SAGE_ON.test(folded),
-    autopilotOff: OFF_LINE.test(all) || ownOff || (!owner && broadOff(all)),
+    // Only the owner's text switches autopilot off. When the hook cannot read the frames (owner is false), it cannot tell
+    // the owner's text from an agent's, so it fails closed: the off rules read the whole prompt (T215).
+    autopilotOff: owner ? ownOff : broadOff(all),
     autopilotOn: owner && AUTOPILOT_ON.test(text),
     modeWord,
     autopilotWord,
