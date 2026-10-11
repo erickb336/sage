@@ -15,7 +15,9 @@ A result of false describes only this classification; it is not permission to ru
 The caller must supply the verified execution directory and apply the path,
 logbook, role, and command rules. The classifier does not prove that arbitrary
 scripts cannot write. It does not execute a command or inspect the process list.
-The complete Codex policy still needs to connect these checks before activation.
+The native role boundary uses a text-only call to deny known writes by read-only
+roles. It supplies no inferred execution directory and grants no command permission.
+The complete command policy still needs trusted execution context before activation.
 
 Tests run both isolated provider bundles. They cover redirections, wrappers,
 reader launch options, option values, function dispatch, and malformed inputs.

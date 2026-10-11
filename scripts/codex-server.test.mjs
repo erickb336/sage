@@ -2804,3 +2804,45 @@ test('native saved run target refuses a legacy unpinned preparation without repl
   assert.deepEqual(f.core.readAdmission(f.options.directory).preparations, [saved]);
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
 });
+
+
+test('native shell role enforcement refuses known writes from each read-only child before evaluation', async t => {
+  // These strings reach only the policy parser, never a real shell.
+  for (const role of ['lead', 'pe', 'code-reviewer', 'security-reviewer', 'ux-reviewer', 'qa']) {
+    const f = await roleEditFixture(t, role); let evaluated = 0;
+    const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: 'pass' }; });
+    for (const command of ['printf fixed > example.txt', 'touch example.txt', 'rg --pre helper fixed', 'echo "']) {
+      const { input } = commandPolicyInput(f, childActor, command);
+      assert.match((await f.evaluate(policy, input, childActor)).reason, /role cannot edit files/, role);
+      assert.equal(evaluated, 0, role);
+    }
+    const read = commandPolicyInput(f, childActor, 'cat example.txt');
+    assert.deepEqual(await f.evaluate(policy, read.input, childActor), { decision: 'pass' });
+    assert.equal(evaluated, 1);
+  }
+});
+
+test('native shell role enforcement blocks the chief and preserves off-mode and writer policy checks', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0, received;
+  const policy = f.createNativePolicy(f.options, (input, context) => {
+    evaluated++; received = context; return { decision: 'deny', reason: 'Further command check refused.' };
+  });
+  const root = commandPolicyInput(f, session, 'printf fixed > example.txt');
+  assert.match((await f.evaluate(policy, root.input)).reason, /role cannot edit files/);
+  assert.equal(evaluated, 0);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const off = commandPolicyInput(f, session, 'printf fixed > example.txt', turns[2]);
+  assert.deepEqual(await f.evaluate(policy, off.input), { decision: 'deny', reason: 'Further command check refused.' });
+  assert.equal(evaluated, 1); assert.equal(received.role, null);
+  for (const role of ['implementer', 'designer', 'arena-judge']) {
+    const writer = await roleEditFixture(t, role); let calls = 0;
+    const checked = writer.createNativePolicy(writer.options, (input, context) => {
+      calls++; assert.equal(context.role, role);
+      assert.equal(context.command.cmd, 'touch example.txt');
+      return { decision: 'deny', reason: 'Further command check refused.' };
+    });
+    const command = commandPolicyInput(writer, childActor, 'touch example.txt');
+    assert.deepEqual(await writer.evaluate(checked, command.input, childActor), { decision: 'deny', reason: 'Further command check refused.' });
+    assert.equal(calls, 1);
+  }
+});

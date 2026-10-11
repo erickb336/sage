@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { roleEditDenied } from "../core/index.mjs";
+import { commandWrites, roleEditDenied } from "../core/index.mjs";
 import { checkNativeRunAssignment } from "./run-assignment.mjs";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
@@ -81,7 +81,9 @@ export function createNativePolicy(options, evaluateTool) {
           call: event.tool_use_id, command: event.tool_input.command,
         }));
       }
-      const checked = event.tool_name === "apply_patch" && editDenied
+      // This text-only denial does not infer a trusted shell or execution directory.
+      const deniedEdit = editDenied && (event.tool_name === "apply_patch" || (command && commandWrites(command.cmd)));
+      const checked = deniedEdit
         ? { decision: "deny", reason: "This Sage role cannot edit files. Give the change to an implementer." }
         : decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage, role,
           ...(command ? { command } : {}) })));

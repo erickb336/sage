@@ -29,8 +29,12 @@ Direct `apply_patch` calls from an active chief, lead, PE, reviewer, or QA agent
 are denied before the supplied evaluator runs. The shared role rule permits
 implementers, designers, and arena judges to reach the evaluator. This is not
 permission to write: the evaluator must still check paths, workflow, and native
-permissions. A callback cannot override a read-only role. Shell writes and other
-write-capable tools require their own rules.
+permissions. A callback cannot override a read-only role. Known shell write forms also refuse read-only roles before the evaluator.
+This text-only check uses the shared classifier without assuming an execution
+directory. It denies redirections, writer commands, executable reader options,
+and text the parser cannot read. It does not establish a trusted shell or
+directory, or prove that arbitrary scripts cannot write. Other write-capable
+tools and the complete command policy remain separate requirements.
 For every `Bash` event, it first verifies the original native command.
 This also applies while Sage is off, because logbook protection is independent of mode.
 The hook input must contain only `command`. The callback receives the complete
