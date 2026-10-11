@@ -3,6 +3,15 @@ export const REPORT_FIELDS = Object.freeze(["STATUS", "RESULT", "EVIDENCE", "FIN
 const header = new RegExp(`^[ \t*_#|>-]*(${REPORT_FIELDS.join("|")})(?=$|[ \t:*_|])[ \t*_]*(?::|\\|)?[ \t]*(.*)$`);
 const refuse = () => { throw Error("A report needs every required field and a valid status"); };
 
+/** Presence check for one bounded stop correction, matching the Claude hook's field rule.
+ * This does not parse values or accept a report. */
+export function missingReportFields(text) {
+  if (typeof text !== "string") throw Error("Report text is required");
+  const space = String.raw`[^\S\r\n  ]`;
+  return REPORT_FIELDS.filter(field => !new RegExp(`^(?:${space}|[*_#|>-])*${field}\\b`, "m").test(text));
+}
+
+
 export function parseReport(text) {
   if (typeof text !== "string" || !text.trim() || Buffer.byteLength(text, "utf8") > 32 * 1024
     || text.includes("\0") || Buffer.from(text, "utf8").toString("utf8") !== text) refuse();

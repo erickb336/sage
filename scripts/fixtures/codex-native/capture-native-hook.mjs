@@ -34,6 +34,8 @@ if(['SubagentStart','SubagentStop'].includes(input.hook_event_name)){
    const header=JSON.parse(buf.subarray(0,end).toString('utf8'));
    if(header.type!=='session_meta'||header.payload.id!==input.agent_id)throw Error('wrong_child_header');
    if(input.hook_event_name==='SubagentStop'){
+    record.stopHookActive=input.stop_hook_active;
+    record.lastMessageHash=typeof input.last_assistant_message==='string'?createHash('sha256').update(input.last_assistant_message).digest('hex'):null;
     const rows=buf.subarray(0,size).toString('utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line));
     let turn,context;
     record.terminalAtCallback=rows.some(row=>row.type==='event_msg'&&row.payload?.type==='task_complete'&&row.payload.turn_id===input.turn_id);

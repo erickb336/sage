@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { readAdmission, completeAdmission } from "../core/index.mjs";
+import { readAdmission, completeAdmission, REPORT_FIELDS, missingReportFields } from "../core/index.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { readNativeCompletion } from "./identity.mjs";
 import { bindNativeChildTranscript } from "./child-tool.mjs";
@@ -88,11 +88,20 @@ export function reconcileNativeCompletions(context, session, options) {
 }
 
 export async function childStopOutput(input, context, loadPolicy) {
-  const native = nativeStopContext(input, context);
-  const snapshot = structuredClone(input);
+  if (!input || !Object.hasOwn(input, "stop_hook_active") || !Object.hasOwn(input, "last_assistant_message")
+    || typeof input.stop_hook_active !== "boolean" || typeof input.last_assistant_message !== "string"
+    || Buffer.byteLength(input.last_assistant_message, "utf8") > 1024 * 1024) refuse();
+  const { stop_hook_active, last_assistant_message, ...identity } = input;
+  const native = nativeStopContext(identity, context);
+  const snapshot = structuredClone(identity);
   const policy = await loadPolicy();
   const result = await policy.completeChild(snapshot, native);
   if (!result || typeof result !== "object" || Array.isArray(result) || Object.keys(result).length !== 1
     || !Object.hasOwn(result, "decision") || !["stop-observed", "completed", "already-completed"].includes(result.decision)) refuse();
+  // A native terminal record ends correction. Otherwise ask once, as Claude does.
+  if (result.decision === "stop-observed" && !stop_hook_active) {
+    const missing = missingReportFields(last_assistant_message);
+    if (missing.length) return { decision: "block", reason: `Sage: your report has no ${missing.join(", ")}. End with all required fields: ${REPORT_FIELDS.join(", ")}, each at the start of a line, with "none" where a field has nothing.` };
+  }
   return {};
 }

@@ -13,17 +13,20 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
 const followUp = process.argv.includes("--follow-up");
 const blockStop = process.argv.includes("--sage-stop-block");
-const noTool = process.argv.includes("--sage-no-tool") || blockStop;
+const correctReport = process.argv.includes("--sage-report-correction");
+const escapeReport = process.argv.includes("--sage-report-escape");
+assert([correctReport, escapeReport, blockStop].filter(Boolean).length <= 1, "incompatible_stop_routes");
+const noTool = process.argv.includes("--sage-no-tool") || blockStop || correctReport || escapeReport;
 const nestedReport = process.argv.includes("--sage-nested-report");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
-const reportProbe = process.argv.includes("--sage-report") || noTool;
+const reportProbe = process.argv.includes("--sage-report") || (noTool && !escapeReport);
 const sage = process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool;
 assert([outage, process.argv.includes("--sage-report"), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
 assert([denySpawn, followUp, process.argv.includes("--nested"), sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
@@ -32,6 +35,7 @@ const MARKER = "sage-native-parent-ok";
 let GRAND_MARKER = "sage-native-grandchild-ok";
 let GRAND_PROMPT = `Return exactly ${GRAND_MARKER}. Do not call any tool.`;
 let CHILD_MARKER = reportProbe ? ["STATUS done", "RESULT CLEAN", "EVIDENCE fixed native fixture completed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH codex/t1-review"].join("\n") : "sage-native-child-ok";
+if (sage && !reportProbe && !nestedReport && !outage && !escapeReport) CHILD_MARKER = ["STATUS done", "RESULT sage-native-child-ok", "EVIDENCE fixed simulated response", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n");
 let CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const FOLLOWUP_MARKER = "sage-native-followup-ok";
 const FOLLOWUP_PROMPT = `Return exactly ${FOLLOWUP_MARKER}. Do not call any tool.`;
@@ -236,7 +240,7 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
-        if (blockStop && thread === childThread && childRequests === 1) {
+        if ((blockStop || correctReport || escapeReport) && thread === childThread && childRequests === 1) {
           childRequests++;
           prematureCompletions = integrated.readJournal().completions?.length ?? 0;
           const transcript = JSON.parse(readFileSync(join(root, `child-path-${childThread}.json`), "utf8"));
@@ -346,7 +350,7 @@ data: ${JSON.stringify(event)}
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
         respond(res, call(calls.wait, "wait_agent", {}));
         if (sage) check(integrated.readJournal().bindings.length === 0, "binding_existed_before_first_tool");
-        respond(childResponse, sage && !noTool ? { type: "function_call", name: "list_mcp_resources", call_id: calls.childControl, arguments: "{}" } : nested ? call(calls.childSpawn, "spawn_agent", {task_name: "probe_grandchild", message: GRAND_PROMPT, fork_turns: "none"}) : message(CHILD_MARKER));
+        respond(childResponse, sage && !noTool ? { type: "function_call", name: "list_mcp_resources", call_id: calls.childControl, arguments: "{}" } : nested ? call(calls.childSpawn, "spawn_agent", {task_name: "probe_grandchild", message: GRAND_PROMPT, fork_turns: "none"}) : message(correctReport ? "STATUS done" : CHILD_MARKER));
         childResponseSent = true;
       } else if (rootRequests === 4) {
         const result = info.outputs[calls.wait];
@@ -560,7 +564,7 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : blockStop || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : rootRequests === (followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5) && childRequests === (nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
@@ -594,7 +598,28 @@ data: ${JSON.stringify(event)}
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
     assert.equal(before.length,nested ? 2 : 1);
     assert.equal(start.length, noChild ? 0 : nested ? 2 : 1);
-    assert.equal(stop.length, noChild ? 0 : blockStop || followUp || nested ? 2 : 1);
+    assert.equal(stop.length, noChild ? 0 : blockStop || correctReport || escapeReport || followUp || nested ? 2 : 1);
+    if (escapeReport) {
+      assert.equal(prematureCompletions, 0);
+      assert.deepEqual(stop.map(row => row.stopHookActive).sort(), [false, true]);
+      assert.equal(new Set(stop.map(row => row.turn_id)).size, 1);
+      assert(stop.every(row => row.lastMessageHash === createHash("sha256").update(CHILD_MARKER).digest("hex")));
+      const state = integrated.readJournal(), logbook = integrated.readLogbook();
+      assert.equal(state.reports?.length ?? 0, 0); assert.equal(logbook.ledger.length, 0);
+      assert.equal(logbook.runs[0].status, "running");
+      print({ type: "report_escape_evidence", correctionStops: 2, sameNativeTurn: true,
+        repeatedInvalidReport: true, completions: state.completions.length, savedReports: 0, verdicts: 0,
+        runUnchanged: true, simulatedModel: true });
+    }
+    if (correctReport) {
+      assert.equal(prematureCompletions, 0);
+      assert.deepEqual(stop.map(row => row.stopHookActive).sort(), [false, true]);
+      assert.equal(new Set(stop.map(row => row.turn_id)).size, 1);
+      print({ type: "report_correction_evidence", correctionStops: 2, sameNativeTurn: true,
+        firstReportIncomplete: stop.some(row => row.lastMessageHash === createHash("sha256").update("STATUS done").digest("hex")),
+        finalReportRecorded: integrated.readJournal().reports[0]?.text === CHILD_MARKER, simulatedModel: true });
+      assert(stop.some(row => row.lastMessageHash === createHash("sha256").update("STATUS done").digest("hex")));
+    }
     if (followUp) {
       assert.equal(new Set(stop.map(row => row.turn_id)).size, 2);
       assert(stop.every(row => row.agent_id === start[0].agent_id && row.session_id === start[0].session_id));

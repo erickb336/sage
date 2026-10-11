@@ -123,3 +123,16 @@ test("native report rejects incomplete mismatched forged and duplicate terminal 
   const linked = join(f.sessionsDir, "report-link.jsonl"); symlinkSync(f.file, linked);
   assert.throws(() => identity.readNativeReport(linked, { sessionsDir: f.sessionsDir }, expected()), /report evidence is unavailable/);
 });
+
+
+test("native terminal evidence releases an invalid report without making that report readable", t => {
+  const f = fixture(t);
+  for (const text of ["", "x".repeat(33 * 1024), "bad\0report"]) {
+    f.write([...task(turn, "first"), output(turn, text)]);
+    assert.equal(identity.readNativeCompletion(f.file, { sessionsDir: f.sessionsDir }, expected()), null);
+    f.write([...task(turn, "first"), output(turn, text), complete(turn, text)]);
+    const evidence = identity.readNativeCompletion(f.file, { sessionsDir: f.sessionsDir }, expected());
+    assert.equal(evidence.turn, turn); assert.equal(evidence.reportHash, hash(text));
+    assert.throws(() => identity.readNativeReport(f.file, { sessionsDir: f.sessionsDir }, expected()), /report evidence is unavailable/);
+  }
+});

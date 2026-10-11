@@ -139,7 +139,7 @@ export function readAssignmentTurn(transcriptPath, options, expected) {
 
 /** Read one completed turn from the same protected snapshot as its assigned task.
  * This verifies report provenance, not its claims or a review verdict. */
-function reportFromRecords(rows, expected, pending = false) {
+function reportFromRecords(rows, expected, { pending = false, report = true } = {}) {
   const unavailable = () => { throw Error("Codex report evidence is unavailable"); };
   try {
     const { position, ...assigned } = assignmentFromRecords(rows, expected);
@@ -160,7 +160,7 @@ function reportFromRecords(rows, expected, pending = false) {
           || !Array.isArray(payload.content) || !payload.content.length
           || payload.content.some(part => !record(part) || part.type !== "output_text" || typeof part.text !== "string")) unavailable();
         const text = payload.content.map(part => part.text).join("");
-        if (!text.trim() || Buffer.byteLength(text, "utf8") > 32 * 1024 || text.includes("\0")
+        if ((report && (!text.trim() || Buffer.byteLength(text, "utf8") > 32 * 1024 || text.includes("\0")))
           || Buffer.from(text, "utf8").toString("utf8") !== text) unavailable();
         final = { reportMessage: payload.id, reportHash: createHash("sha256").update(text).digest("hex"), text };
       }
@@ -182,6 +182,6 @@ export function readNativeReport(transcriptPath, options, expected) {
 
 /** A stop callback can be blocked. Only the later native task_complete record confirms this turn. */
 export function readNativeCompletion(transcriptPath, options, expected) {
-  try { return reportFromRecords(readSessionRecords(transcriptPath, options, Infinity), expected, true); }
+  try { return reportFromRecords(readSessionRecords(transcriptPath, options, Infinity), expected, { pending: true, report: false }); }
   catch { throw Error("Codex report evidence is unavailable"); }
 }

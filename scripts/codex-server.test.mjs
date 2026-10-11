@@ -914,10 +914,10 @@ test("packaged MCP stop accepts exact completion and contains invalid stop reque
     const options = ${JSON.stringify(f.options)};
     serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(options, () => ({decision: 'pass'})) });`);
   const client = await connect(t, f);
-  assert.equal((await client.call({ ...f.stop, turn_id: turns[2] }, childActor)).decision, "block");
+  assert.equal((await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText, turn_id: turns[2] }, childActor)).decision, "block");
   assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
-  assert.deepEqual(await client.call(f.stop, childActor), {});
-  assert.deepEqual(await client.call(f.stop, childActor), {});
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText }, childActor), {});
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText }, childActor), {});
   assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
   await client.close();
 });
@@ -1593,9 +1593,9 @@ test("no-tool completion through the packaged stop tool refuses a conflicting pa
     const options = ${JSON.stringify(f.options)};
     serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(options, () => ({decision: 'pass'})) });`);
   const client = await connect(t, f);
-  assert.deepEqual(await client.call(f.stop, childActor), {});
-  assert.deepEqual(await client.call(f.stop, childActor), {});
-  assert.equal((await client.call({ ...f.stop, agent_transcript_path: f.stop.transcript_path }, childActor)).decision, "block");
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText }, childActor), {});
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText }, childActor), {});
+  assert.equal((await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText, agent_transcript_path: f.stop.transcript_path }, childActor)).decision, "block");
   assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
   await client.close();
 });
@@ -1622,4 +1622,70 @@ test("no-tool completion recovers a binding whose transcript publication failed"
   assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
   assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "already-completed" });
   assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
+
+async function stopReportClient(t, f) {
+  writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';
+    import { createNativePolicy } from './plugin/runtime/policy.mjs';
+    serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(${JSON.stringify(f.options)}, () => ({decision: 'pass'})) });`);
+  return connect(t, f);
+}
+
+test("native report correction asks once then permits an invalid report to finish without accepting it", async t => {
+  const f = await completionFixture(t), client = await stopReportClient(t, f);
+  const stop = { ...f.stop, stop_hook_active: false, last_assistant_message: "STATUS done" };
+  const first = await client.call(stop, childActor);
+  assert.equal(first.decision, "block"); assert.match(first.reason, /RESULT, EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH/);
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  assert.deepEqual(await client.call({ ...stop, stop_hook_active: true }, childActor), {});
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  appendReport(f, stop.last_assistant_message);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  assert.throws(() => readChildReport({ name: f.input.name }, f.native(session), f.options), /report needs every required field/);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 1); assert.equal(state.reports?.length ?? 0, 0);
+  assert.deepEqual(await client.call(stop, childActor), {}); // Terminal evidence prevents another correction.
+  await client.close();
+});
+
+test("native report correction accepts repaired fields while retaining capacity until the native turn ends", async t => {
+  const f = await completionFixture(t), client = await stopReportClient(t, f);
+  const stop = { ...f.stop, stop_hook_active: false, last_assistant_message: "unfinished" };
+  assert.equal((await client.call(stop, childActor)).decision, "block");
+  assert.deepEqual(await client.call({ ...stop, stop_hook_active: true, last_assistant_message: reportText }, childActor), {});
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  appendReport(f);
+  const { readChildReport, recordChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  const receipt = readChildReport({ name: f.input.name }, f.native(session), f.options);
+  assert.equal(receipt.report.STATUS, "done");
+  recordChildReport({ name: f.input.name, reportHash: receipt.reportHash }, f.native(session), f.options);
+  assert.equal(f.core.readAdmission(f.options.directory).reports.length, 1);
+  await client.close();
+});
+
+test("native report correction requires typed native fields and the admitted child identity", async t => {
+  const f = await completionFixture(t), client = await stopReportClient(t, f);
+  const stop = { ...f.stop, stop_hook_active: false, last_assistant_message: reportText };
+  for (const invalid of [f.stop, { ...stop, stop_hook_active: "true" }, { ...stop, last_assistant_message: {} },
+    { ...stop, turn_id: turns[2] }, { ...stop, agent_id: session }]) {
+    assert.deepEqual(await client.call(invalid, childActor), { decision: "block", reason: "Sage could not verify this hook request." });
+  }
+  assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === "child-stop").length, 0);
+  assert.deepEqual(await client.call(stop, childActor), {});
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  await client.close();
+});
+
+test("native report correction matches Claude field presence without accepting invalid field values", async t => {
+  const f = await completionFixture(t), client = await stopReportClient(t, f);
+  assert.equal(typeof f.core.missingReportFields, "function");
+  const headings = f.core.REPORT_FIELDS.map(field => `| **${field}** |`).join("\n");
+  assert.deepEqual(f.core.missingReportFields(headings), []);
+  assert.deepEqual(f.core.missingReportFields("prefix STATUS\nRESULTS"), f.core.REPORT_FIELDS);
+  assert.deepEqual(f.core.missingReportFields("\u00a0STATUS done"), f.core.REPORT_FIELDS.slice(1));
+  assert.throws(() => f.core.parseReport(headings));
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: headings }, childActor), {});
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  await client.close();
 });

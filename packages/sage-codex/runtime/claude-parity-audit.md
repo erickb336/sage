@@ -274,3 +274,13 @@ It uses simulated responses and an actual temporary Git commit. The temporary pr
 
 Packaged tests cover wrong identities and turns, changed task text, missing results, mode-off recovery, duplicate stops, and interrupted observation publication.
 Later assignments, other blocking stop hooks, interruption, broader recovery, and installed activation remain separate checks.
+
+## Bounded native report correction
+
+The prepared Codex stop boundary now matches Claude's field-presence correction: block the first incomplete report, then let the native retry finish.
+It requires authenticated child identity and the native boolean retry flag; malformed callbacks do not gain this escape.
+Report values still need strict parsing and separate acceptance. A terminal child with an invalid report releases capacity without a saved report or verdict.
+
+Run `--sage-report-correction` and `--sage-report-escape` with the native probe and fake process tools first on PATH.
+The first route repairs the report on the same turn and records it. The second ends with the same invalid report and leaves the task run and verdicts unchanged.
+These checks use simulated responses. Full policy, broader recovery, installation, and a real project pilot remain incomplete.

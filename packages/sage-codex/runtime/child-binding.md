@@ -63,3 +63,18 @@ A tool result that says “completed” cannot replace transcript evidence.
 The isolated `--sage-stop-block` probe adds a second hook that blocks the first stop.
 It checks that Sage keeps the slot while the child continues, then records one completion after the native turn ends.
 This uses a simulated model. It does not verify interruption, later assignments, or a real project pilot.
+
+## One report correction
+
+The native stop boundary requires a boolean `stop_hook_active` and text `last_assistant_message` from the authenticated callback.
+After binding the admitted child and recording its stop, Sage checks the report's seven field headings.
+Missing fields block the first stop with a correction request. A native retry with `stop_hook_active: true` passes this field check.
+This matches Claude's bounded correction rule. It does not accept the report or verify its values.
+A malformed callback or unverified assignment still refuses; the retry flag cannot bypass identity checks.
+
+Capacity stays reserved through correction. A native terminal record releases it even when the final report is empty, too long, or invalid.
+The report reader still refuses those reports. A saved terminal record also prevents a late callback from requesting another correction.
+
+The isolated `--sage-report-correction` probe returns missing fields, then a valid review on the same native turn.
+The isolated `--sage-report-escape` probe returns the same invalid report twice; it releases one slot without saving a report or verdict.
+Both use simulated responses in native Codex. They do not prove review quality or installed automatic Sage.
