@@ -78,3 +78,20 @@ It refuses linked files, incomplete snapshots, conflicting messages, and oversiz
 Its bounds are 16 MiB and 65,536 records; exceeding either bound requires reconciliation.
 It does not authenticate the hook caller or allow a journal update.
 Immutable dispatch evidence and lifecycle integration remain required before capacity release.
+
+## MCP lifecycle readiness
+
+The isolated 0.160.0 probe received child stop events through MCP with the child's thread ID on the connection.
+The callback's transcript path still named the parent transcript.
+The child's first supported tool call supplied both the child connection ID and its own transcript.
+
+The command observer received the initial child start. The MCP observer did not receive that start.
+Root tool templates must omit `agent_id`: that field is absent from root tool events.
+After correcting those templates, root tool callbacks and child stop callbacks arrived, but the MCP start callback remained absent.
+The [hook contract](https://learn.chatgpt.com/docs/hooks) requires an existing MCP connection; hooks do not start or reconnect servers.
+
+The next integration must deliver the saved role and brief through the validated spawn message.
+At the child's first tool call, bind its verified transcript identity to the admitted dispatch and saved task hash.
+A missing parent result or conflicting identity must deny the tool and retain the reservation.
+Stop processing must use that saved child transcript, not the parent path in the stop callback.
+These integration steps remain unfinished; the existing MCP start adapter alone cannot establish installed instruction delivery.
