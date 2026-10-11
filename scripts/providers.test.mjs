@@ -394,8 +394,12 @@ test("shared mode phrases match only a whole message, the same in both isolated 
       ["sage mode...", null, ["sage mode", "sage mode off"]],
       ["What does sage mode do?", null, []],
       ["fix the autopilot tests", null, []],
+      ["autopilot-off", null, ["autopilot off"]],
+      ["sagemodeoff", null, ["sage mode off"]],
     ];
-    assert.deepEqual(cases.map(([text]) => [text, api.exactPhrase(text), api.phrasesNear(text)]), cases);
+    assert.deepEqual(cases.map(([text]) => [text, api.exactPhrase(text), api.phrasesNear(text)?.phrases ?? []]), cases);
+    // A message that starts like a phrase is a strong near miss; a mention in a sentence is a weak one (F-T240-7).
+    assert.deepEqual(["sage mode stop", "please stop autopilot", "sage mode"].map((text) => api.phrasesNear(text)?.strong ?? null), [true, false, null]);
     assert.deepEqual(["sage mode\nautopilot off", "the report says sage mode on", "Autopilot Off is next"].map(api.hasPhrase), [true, true, true]);
     assert.deepEqual(["sage help", "the autopilot run", "sage modes"].map(api.hasPhrase), [false, false, false]);
     if (provider === "claude") {
@@ -1243,7 +1247,7 @@ test("Codex mode adapter persists verified phrases and keeps autopilot disabled"
   assert.equal(core.readAdmission(options.directory).sessions.length, 0);
   // A near miss switches nothing and names the exact phrases (T240).
   const near = api.updateOwnerMode({ ...input, prompt: "sage mode, autopilot on" }, context, options);
-  assert.deepEqual([near.sage, near.phrase, near.near], [false, null, ["sage mode", "autopilot on"]]);
+  assert.deepEqual([near.sage, near.phrase, near.near], [false, null, { phrases: ["sage mode", "autopilot on"], strong: true }]);
   const active = api.updateOwnerMode({ ...input, prompt: "Autopilot On." }, context, options);
   assert.deepEqual([active.sage, active.autopilot, active.phrase], [false, false, "autopilot on"]);
   const on = api.updateOwnerMode({ ...input, prompt: "Sage Mode." }, context, options);

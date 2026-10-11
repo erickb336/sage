@@ -81,7 +81,7 @@ const missingFields = (fields, text) => fields.filter((f) => !new RegExp(`^(?:${
  *   - The owner's message that Claude Code queues while it works (queuedText) comes in a system reminder. It counts only
  *     as a whole system reminder, with Claude Code's note and with no frame mark in it, after the last other frame. An
  *     agent can write a whole queued shape at the end of a bare system reminder, and the hook cannot tell it from a real
- *     one. So a queued message switches only off: the off phrase or the autopilot off phrase (T240).
+ *     one. So a queued message switches only autopilot off: sage mode off would drop the guards (T240, F-T240-10).
  *   - queued: those messages, in the order the owner sent them. Each one counts as a message of its own.
  *   - stray: the queued messages before another frame. They switch nothing, because an agent can forge them; a phrase
  *     in them gets the unread note, so that the owner's switch is not lost without a word (F-T215-12).
@@ -150,27 +150,41 @@ function switchModes({ owner, text, queued = [], all, stray = "" }, state) {
   }
   // A stray queued message is text the hook cannot attribute, as is an unreadable prompt (F-T215-12).
   const notes = (!owner && modePolicy.hasPhrase(all)) || modePolicy.hasPhrase(stray) ? ["sage: the hook could not read the frames of this prompt, so it switched no mode. A switch phrase in this prompt was not applied: if the user sent one, ask the user to send it again as a message alone."] : [];
-  const near = new Set();
+  const near = new Set(); // the phrases that a near miss of the owner's own text asks for
+  let strong = false;
+  const queuedOff = new Set(); // the off phrases to ask for after a queued message that did not switch
+  let queuedMiss = false;
   let help = false;
-  const idle = new Set();
+  const quote = (phrases) => [...phrases].map((p) => `"${p}"`).join(" or ");
   for (const [i, message] of (owner ? [text, ...queued] : []).entries()) {
     const phrase = modePolicy.exactPhrase(message);
-    for (const p of modePolicy.phrasesNear(message)) near.add(p);
-    // A queued message switches only off: an agent can forge the queued shape at the end of a bare reminder (T240 Q1).
-    const on = phrase && (modePolicy.PHRASES[phrase].sage || modePolicy.PHRASES[phrase].autopilot);
-    if (i > 0 && on) idle.add(phrase);
-    const change = (i > 0 && on ? undefined : modePolicy.PHRASES[phrase]) ?? {};
+    let change = modePolicy.PHRASES[phrase] ?? {};
+    const miss = modePolicy.phrasesNear(message);
+    if (i > 0) {
+      // A queued message switches only autopilot off: an agent can forge the queued shape at the end of a bare
+      // reminder, and sage mode off would drop every guard of this hook (T240 Q1, F-T240-10). Its notes never offer
+      // an on phrase (F-T240-3).
+      const off = (p) => modePolicy.PHRASES[p].sage !== true && modePolicy.PHRASES[p].autopilot !== true && !modePolicy.PHRASES[p].help;
+      if (change.sage === false && state.sage) queuedOff.add(phrase);
+      queuedMiss ||= Boolean(miss) || change.sage === true || change.autopilot === true || (change.sage === false && state.sage);
+      for (const p of miss?.phrases ?? []) if (off(p)) queuedOff.add(p);
+      change = { autopilot: change.autopilot === false ? false : undefined, help: change.help };
+    } else if (miss) {
+      for (const p of miss.phrases) near.add(p);
+      strong ||= miss.strong;
+    }
     help ||= Boolean(change.help);
+    // A switch that changes nothing gives no note (F-T240-9).
     if (change.sage === false) {
+      if (state.sage) notes.push("sage: sage mode is off. You may change files yourself again.");
       Object.assign(state, { sage: false, given: false, autopilot: false });
-      notes.push("sage: sage mode is off. You may change files yourself again.");
     } else if (change.sage) state.sage = true;
     if (change.autopilot === false) {
       if (state.autopilot) notes.push("sage: autopilot is off. Work stops at verified, and the user merges.");
       state.autopilot = false;
     } else if (change.autopilot && !state.sage) {
       notes.push('sage: autopilot did not switch on, because it turns on only while sage mode is on. Ask the user to send "sage mode" first, then "autopilot on", each as a message alone.');
-    } else if (change.autopilot) {
+    } else if (change.autopilot && !state.autopilot) {
       state.autopilot = true;
       const c = stateTool.config();
       const broken = Object.keys(c).find((k) => c[k] === "invalid");
@@ -180,9 +194,13 @@ function switchModes({ owner, text, queued = [], all, stray = "" }, state) {
     }
   }
   // A near miss is never silent: a session's hook stayed off for two days when nothing said that a message missed (T194).
-  // The note names the exact phrases: it goes to the chief, and only a whole message of the owner switches (T240).
-  if (near.size) notes.push(`sage: this message switched nothing, because a switch needs the exact phrase as the whole message. If the user wanted a switch, ask the user to send ${[...near].map((p) => `"${p}"`).join(" or ")} alone, as a message of its own. Tell the user.`);
-  if (idle.size) notes.push(`sage: this message switched nothing, because a message sent while Claude works switches only off. Ask the user to send ${[...idle].map((p) => `"${p}"`).join(" or ")} again, alone, when Claude is idle. Tell the user.`);
+  // The note names the exact phrases: it goes to the chief, and only a whole message of the owner switches (T240). Each
+  // note names only what did not switch, so it stays true when another message of the prompt switched (F-T240-11). A
+  // mention in a sentence gets the softer note (F-T240-7).
+  const ask = "Tell the user only if the message was not a question.";
+  if (near.size && strong) notes.push(`sage: the user's message did not switch, because a switch needs the exact phrase as the whole message. Ask the user to send ${quote(near)} alone, as a message of its own. ${ask}`);
+  else if (near.size) notes.push(`sage: the user's message names sage mode or autopilot with an on or off word, and did not switch. Only if the user meant a switch, ask the user to send ${quote(near)} alone, as a message of its own. ${ask}`);
+  if (queuedMiss || queuedOff.size) notes.push(`sage: a message sent while Claude works did not switch a mode. The hook cannot tell such a message from an agent's text, so it lets it switch autopilot off only.${queuedOff.size ? ` If the user sent it, ask the user to send ${quote(queuedOff)} alone when Claude is idle.` : ""} Tell the user only if the user sent it.`);
   if (help) notes.push(modePolicy.phraseHelp(state));
   return notes;
 }

@@ -25,19 +25,21 @@ export const hasPhrase = (text) => new RegExp(`\\b(?:${SWITCHES.join("|")})\\b`,
 
 /**
  * A near miss: a message that is no phrase, but names sage mode or autopilot with an on or off word, or starts with
- * one of them. Returns the phrases to ask the owner for, or [] for no near miss. The plain form (compatibility letters,
- * no marks, no hidden characters) and the words only find a near miss; they never switch anything.
+ * one of them. Returns the phrases to ask the owner for, and strong when the message starts like a phrase (a mention
+ * in a sentence is weak), or null for no near miss. The plain form (compatibility letters, no marks, no hidden
+ * characters, "_" and "-" as spaces, and joined words split: "autopilotoff") only finds a near miss; it never switches.
  */
 export function phrasesNear(message) {
-  if (exactPhrase(message)) return [];
-  const plain = message.normalize("NFKD").replace(/[\p{M}\p{Cf}]/gu, "").toLowerCase();
+  if (exactPhrase(message)) return null;
+  const plain = message.normalize("NFKD").replace(/[\p{M}\p{Cf}]/gu, "").toLowerCase().replace(/[_-]/g, " ").replace(/(sage|mode|autopilot)(?=[a-z])/g, "$1 ");
   const sage = /\bsage\s+mode\b/.test(plain);
-  const autopilot = /\bauto[-\s]?pilot\b/.test(plain);
+  const autopilot = /\bauto\s?pilot\b/.test(plain);
   const on = /\b(?:on|start|enable|resume)\b/.test(plain);
   const off = /\b(?:off|stop|pause|disable|end|exit|quit)\b/.test(plain);
-  if (!(sage || autopilot) || !(on || off || /^\s*(?:sage\s+mode|autopilot)\b/.test(plain))) return [];
+  const strong = /^\s*(?:sage\s+mode|auto\s?pilot)\b/.test(plain);
+  if (!(sage || autopilot) || !(on || off || strong)) return null;
   const pick = (onPhrase, offPhrase) => (on === off ? [onPhrase, offPhrase] : [on ? onPhrase : offPhrase]);
-  return [...(sage ? pick("sage mode", "sage mode off") : []), ...(autopilot ? pick("autopilot on", "autopilot off") : [])];
+  return { phrases: [...(sage ? pick("sage mode", "sage mode off") : []), ...(autopilot ? pick("autopilot on", "autopilot off") : [])], strong };
 }
 
 /** The answer to the help phrase: every phrase the owner can send, from the same lists that the hook matches. */
@@ -47,7 +49,8 @@ export function phraseHelp({ sage, autopilot }) {
   return [
     "sage: the user asked for help. Show the user this list as it is.",
     `Now: sage mode is ${sage ? "on" : "off"}, and autopilot is ${autopilot ? "on" : "off"}.`,
-    "Switches: send the phrase alone, as the whole message, in any letter case. Any other message switches nothing.",
+    "Switches: send the phrase alone, as the whole message, in any letter case. Spaces at the ends and one full stop are fine. Any other message switches nothing.",
+    "An on phrase works only as a message alone while Claude is idle. An off phrase also works in a message sent while Claude works, but there it turns only autopilot off.",
     ...lines(false),
     "Board: at the start of a message.",
     ...BOARD_PHRASES.map(([a, b, what]) => line([a, b], what)),

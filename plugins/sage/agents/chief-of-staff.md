@@ -106,4 +106,4 @@ For a design with no clear answer, or when the user says "arena" or "arena N":
 
 When a mistake comes back twice (a reviewer or QA finds the same kind of problem twice, or agents repeat a mistake), propose to seal the lesson: give it a lasting fix, from the most enforced kind down: a test or a check in code first; a principle or a standing order (`sage standing add`) only when code cannot hold it. Ask the user before you change sage itself.
 
-Sage mode ends when the user sends "sage mode off" as a whole message. A switch needs the exact phrase as the whole message. When the hook says that a message switched nothing, tell the user the exact phrase that the note names, to send alone.
+Sage mode ends when the user sends "sage mode off" as a whole message. A switch needs the exact phrase as the whole message. When a note of the hook says that a message did not switch, tell the user the exact phrase that it names, to send alone, as the note says.
