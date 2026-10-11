@@ -11,12 +11,12 @@ test("HTML renders escaped initial cards and complete offline task sections befo
   assert.ok(initial.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
   assert.ok(!initial.includes("<script>alert(1)</script>"));
   assert.ok(initial.includes("T1"));
-  for (const title of ["Loop", "Brief", "Agent runs", "Evidence", "Findings", "Artifacts", "Latest decisions"]) assert.ok(initial.includes(`<h3>${title}</h3>`));
+  for (const title of ["Where in the loop", "Brief", "Agent runs", "Evidence", "Findings", "Artifacts", "Latest decisions"]) assert.ok(initial.includes(`<h3>${title}`), title);
   assert.ok(!/src=|@import|url\(/.test(html));
   assert.ok(html.includes("prefers-reduced-motion"));
   assert.ok(html.includes("max-width:700px"));
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks[0].key });
-  assert.ok(page.includes("<main class=\"detail\">"));
+  assert.ok(page.includes('<section class="page open"'));
   assert.throws(() => renderBoardHtml(data, { taskKey: "missing" }), RangeError);
 });
 test("phone text and status preserve task counts and escape agent markup", () => {
@@ -80,7 +80,7 @@ function fakeDocument(html) {
     for (const [, name, quoted, bare] of (rawAttrs ?? "").matchAll(/([a-z-]+)(?:="([^"]*)"|=([^\s"]+))?/g)) attrs[name] = decode(quoted ?? bare ?? "");
     const node = makeNode(tag, attrs, current);
     current.children.push(node);
-    if (!VOID.has(tag)) current = node;
+    if (!VOID.has(tag) && !(rawAttrs ?? "").endsWith("/")) current = node;
   }
   const listeners = [];
   const document = {
@@ -111,27 +111,131 @@ test("T217: the page script makes the summary, the Needs-you count and the colum
   assert.deepEqual(data.counts, { tasks: 5, needsOwner: 3, recordedAgents: 1, inferredWork: 1, inReview: 2 });
   const { document, click } = fakeDocument(renderBoardHtml(data, { snapshot: false }));
   new Function("document", BOARD_ENHANCEMENT)(document);
-  const summary = () => document.getElementById("board-summary").textContent;
+  const summary = () => ["s-needs", "s-agents", "s-inferred", "s-review", "s-tasks"].map(id => document.getElementById(id).textContent).join(" ");
   const buttons = () => document.querySelectorAll("[data-filter]");
   const needsButton = () => buttons().find(b => b.dataset.filter === "needs");
+  const needsCount = () => document.getElementById("needs-count").textContent;
   const button = name => buttons().find(b => b.textContent === name);
-  const headings = () => document.querySelectorAll(".column").map(col => col.querySelector("h2").textContent).join(" | ");
-  const allSummary = "3 need you · 1 recorded agents · 1 inferred PRs · 2 in review";
-  assert.equal(summary(), allSummary);
+  const headings = () => document.querySelectorAll("[data-col]").map(col => col.querySelector(".n").textContent).join(" ");
+  assert.equal(summary(), "3 1 1 2 5");
   click(button("alpha"));
-  assert.equal(summary(), "1 need you · 1 recorded agents · 0 inferred PRs · 1 in review");
-  assert.equal(needsButton().textContent, "Needs you (1)");
-  assert.equal(headings(), "Backlog (1) | Design (0) | Building (0) | In review (1) | Ready to merge (0) | Done (0)");
+  assert.equal(summary(), "1 1 0 1 2");
+  assert.equal(needsCount(), "1");
+  assert.equal(headings(), "1 0 0 1 0 0");
   click(button("beta"));
-  assert.equal(summary(), "2 need you · 0 recorded agents · 1 inferred PRs · 1 in review");
-  assert.equal(needsButton().textContent, "Needs you (2)");
-  assert.equal(headings(), "Backlog (0) | Design (0) | Building (2) | In review (1) | Ready to merge (0) | Done (0)");
+  assert.equal(summary(), "2 0 1 1 3");
+  assert.equal(needsCount(), "2");
+  assert.equal(headings(), "0 0 2 1 0 0");
   click(needsButton());
-  assert.equal(summary(), "2 need you · 0 recorded agents · 1 inferred PRs · 1 in review");
-  assert.equal(headings(), "Backlog (0) | Design (0) | Building (1) | In review (1) | Ready to merge (0) | Done (0)");
+  assert.equal(summary(), "2 0 1 1 2");
+  assert.equal(headings(), "0 0 1 1 0 0");
   click(button("All projects"));
   click(needsButton());
-  assert.equal(summary(), allSummary);
-  assert.equal(needsButton().textContent, "Needs you (3)");
-  assert.equal(headings(), "Backlog (1) | Design (0) | Building (2) | In review (2) | Ready to merge (0) | Done (0)");
+  assert.equal(summary(), "3 1 1 2 5");
+  assert.equal(needsCount(), "3");
+  assert.equal(headings(), "1 0 2 2 0 0");
+  assert.equal(document.getElementById("nomatch").hidden, true);
+});
+
+// T218: the approved look. Each test reads the rendered page as the browser gets it.
+const at = "2026-10-08T20:00:00Z";
+const sample = (tasks, tables = {}, extra = {}) => buildBoardModel([{ id: "sample", label: "sample", diagnostics: [], projects: [{ key: "sample/project-abcdef", name: "project-abcdef", diagnostics: [], tables: { tasks, ...tables }, ...extra }] }], { now: at });
+const row = (id, state, extra = {}) => ({ id, title: `Sample ${id}`, size: "small", risk: "", route: "build,code-review,qa", state, branch: "", pr: "", round: "0", keys: "", ...extra });
+
+test("T218: a hostile title, gate, finding and decision stay text in the card, the title attribute and the task page", () => {
+  const hostile = `"><img src=x onerror=alert(1)><script>alert(2)</script>`;
+  const data = sample([row("T1", "held", { title: hostile, pr: "7" })], {
+    gates: [{ id: "G1", task: "T1", question: hostile, recommendation: hostile, answer: "" }],
+    findings: [{ task: "T1", key: "F-T1-1", severity: "high", summary: hostile, status: "open", reason: "" }],
+    decisions: [{ at, task: "T1", decision: hostile, why: hostile }],
+  });
+  for (const html of [renderBoardHtml(data), renderBoardHtml(data, { snapshot: false, live: true, taskKey: data.tasks[0].key })]) {
+    assert.equal(html.split("<script>").length, 2, "only the page's own script");
+    assert.ok(!html.includes("<img src=x"));
+    assert.ok(html.includes("&quot;&gt;&lt;img src=x onerror=alert(1)&gt;&lt;script&gt;alert(2)&lt;/script&gt;"));
+  }
+  assert.ok(renderBoardHtml(data).includes(`title="&quot;&gt;&lt;img src=x onerror=alert(1)&gt;`));
+});
+
+test("T218: the page keeps all its code in one <style> and one <script> with no attributes, so the server's CSP hashes cover it", () => {
+  const data = twoProjectModel();
+  for (const html of [renderBoardHtml(data, { snapshot: false, live: true }), renderBoardHtml(data, { snapshot: false, live: true, taskKey: data.tasks[0].key }), renderBoardHtml(data)]) {
+    assert.deepEqual(html.match(/<(script|style)\b[^>]*>/g), ["<style>", "<script>"]);
+    const markup = html.replace(/<script>[\s\S]*?<\/script>|<style>[\s\S]*?<\/style>/g, "");
+    assert.doesNotMatch(markup, /\sstyle=|\son[a-z]+=|javascript:/i, "an inline style or handler needs 'unsafe-inline'");
+    assert.doesNotMatch(html, /\ssrc=|@import|url\(|<link/, "no external script, style, font or image");
+  }
+});
+
+test("T218: the backlog shows the newest 6 tasks, then a Show all fold that needs no script", () => {
+  const tasks = Array.from({ length: 8 }, (_, i) => row(`T${i + 1}`, "framed"));
+  const decisions = tasks.map((task, i) => ({ at: `2026-10-0${i + 1}T10:00:00Z`, task: task.id, decision: "task framed", why: "sample" }));
+  const html = renderBoardHtml(sample(tasks, { decisions }));
+  const backlog = /<section class="col" aria-label="Backlog" data-col="backlog">([\s\S]*?)<\/section>/.exec(html)[1];
+  const [shown, folded] = backlog.split('<details class="rest">');
+  assert.deepEqual([...shown.matchAll(/<span class="id">(T\d+)<\/span>/g)].map(m => m[1]), ["T8", "T7", "T6", "T5", "T4", "T3"]);
+  assert.match(folded, /^<summary><span data-all>Show all 8<\/span><span class="faint" data-more> · 2 more, newest activity first<\/span><\/summary>/);
+  assert.deepEqual([...folded.matchAll(/<span class="id">(T\d+)<\/span>/g)].map(m => m[1]), ["T2", "T1"]);
+  assert.match(backlog, /<h2>Backlog <span class="n">8<\/span><\/h2>/);
+});
+
+test("T218: a task page opens by its anchor offline and at its route on the server, with a way back", () => {
+  const data = twoProjectModel(), task = data.tasks.find(t => t.id === "T2"), id = `task-${Buffer.from(task.key).toString("base64url")}`;
+  const offline = renderBoardHtml(data);
+  assert.ok(offline.includes(`href="#${id}"`));
+  assert.ok(offline.includes(`<section class="page" id="${id}" aria-label="T2"><div class="pagebar"><a class="back" href="#">← Board</a>`));
+  assert.ok(offline.includes("body:has(.page:target) .boardview{display:none}"));
+  const served = renderBoardHtml(data, { snapshot: false, live: true });
+  assert.ok(served.includes(`href="/task/${Buffer.from(task.key).toString("base64url")}"`));
+  assert.ok(!served.includes('class="page'));
+  const page = renderBoardHtml(data, { snapshot: false, live: true, taskKey: task.key });
+  assert.ok(page.includes(`<section class="page open" id="${id}" aria-label="T2"><div class="pagebar"><a class="back" href="/">← Board</a><span class="livepill" id="live-state" role="status">`));
+  assert.ok(page.includes('<h2 class="ptitle">Sample T2</h2>'));
+  assert.ok(page.includes('<div class="flag" role="note">'));
+  assert.ok(!page.includes('class="board"'));
+});
+
+test("T218: the phone layout puts needs-you columns first and hides empty ones", () => {
+  const data = twoProjectModel(), html = renderBoardHtml(data, { snapshot: false });
+  assert.match(html, /@media \(max-width:700px\)\{[^}]*\{[^}]*\}[\s\S]*?\.col\.needs-col\{order:-1\}\.col\.empty-col\{display:none\}/);
+  assert.ok(html.includes('<section class="col needs-col" aria-label="In review" data-col="review">'));
+  assert.ok(html.includes('<section class="col empty-col" aria-label="Design" data-col="design">'));
+  assert.ok(html.includes('<section class="col" aria-label="Backlog" data-col="backlog">'));
+});
+
+test("T218: cycle steps show the ledger's verdicts on the newest reviewed head, a run of the role runs, and a card shows no ? steps", () => {
+  const head = "c".repeat(40);
+  const data = sample([row("T1", "reviewing", { pr: "9" }), row("T2", "reviewing", { pr: "10" })], {
+    ledger: [{ task: "T1", pr: "9", sha: head, kind: "checks-pass", cycle: "1", run: "", at }, { task: "T1", pr: "9", sha: head, kind: "qa-fail", cycle: "1", run: "R2", at }],
+    runs: [{ id: "R1", task: "T1", role: "code-reviewer", status: "running", started: at }],
+  });
+  const html = renderBoardHtml(data, { snapshot: false });
+  assert.ok(html.includes('cycle 1 of 1<span class="steps"><span class="step done">checks ✓</span><span class="step running">code …</span><span class="step failed">qa ✗</span></span>'));
+  assert.ok(html.includes('cycle 1 of 1 <span class="faint">· PR head not recorded</span>'));
+  assert.ok(!html.includes('class="step unknown"'));
+  const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks.find(t => t.id === "T1").key });
+  assert.ok(page.includes(`head <span class="standin" title="The head of the newest verdict for this PR. The current PR head is not recorded.">ccccccc</span>`));
+  assert.ok(page.includes('<span class="prov"><span class="standin" title="Stand-in: the logbook&#39;s source. The run does not record its provider.">Sample</span> ·</span> code-reviewer'));
+});
+
+test("T218: the PR links to the project's GitHub remote only through safeUrl, and stays text without one", () => {
+  const make = repository => sample([row("T1", "reviewing", { pr: "7" })], {}, { repository });
+  const linked = renderBoardHtml(make("https://github.com/acme/sage"), { snapshot: false, taskKey: "sample/project-abcdef/T1" });
+  assert.ok(linked.includes('<a href="https://github.com/acme/sage/pull/7" rel="noopener noreferrer">PR 7</a>'));
+  for (const repository of [null, "javascript:alert(1)", "http://github.com/acme/sage", "https://user:pw@github.com/acme/sage"]) {
+    const page = renderBoardHtml(make(repository), { snapshot: false, taskKey: "sample/project-abcdef/T1" });
+    assert.ok(!page.includes("/pull/7"), String(repository));
+    assert.ok(page.includes('title="No link: the project&#39;s GitHub remote is not known.">PR 7</span>'));
+  }
+});
+
+test("T218: the chat board keeps the backlog to its count and the next 3 framed tasks by id, with the card's cycle", () => {
+  const tasks = [...Array.from({ length: 40 }, (_, i) => row(`T${40 - i}`, "framed", { title: `Sample backlog ${40 - i} ${"long title ".repeat(10)}` })), row("T41", "reviewing", { pr: "3" })];
+  const text = renderBoardText(sample(tasks));
+  const backlog = /### 📋 Backlog \(40\)\n([\s\S]*?)\n\n###/.exec(text)[1];
+  assert.deepEqual([...backlog.matchAll(/\*\*(T\d+) /g)].map(m => m[1]), ["T1", "T2", "T3"]);
+  assert.ok(backlog.endsWith("Next up by id. 37 more in the backlog: open the board page for all."));
+  assert.ok(text.includes("**T41 Sample T41** · sample · project · PR 3\nCycle 1 of 1: PR head not recorded"));
+  assert.ok(!text.includes("? checks"));
+  assert.ok(text.length < 3000, `${text.length} characters`);
 });
