@@ -8,10 +8,12 @@ import {join} from 'node:path';
 import {setupCapture} from './fixtures/codex-native/setup-capture.mjs';
 import {waitNative} from './fixtures/codex-native/wait-native.mjs';
 
-assert(process.argv.slice(2).every(arg=>['--deny-command','--default-command','--sage-off'].includes(arg))&&new Set(process.argv.slice(2)).size===process.argv.length-2,'unknown_probe_arguments');
+assert(process.argv.slice(2).every(arg=>['--deny-command','--default-command','--sage-off','--extended-command'].includes(arg))&&new Set(process.argv.slice(2)).size===process.argv.length-2,'unknown_probe_arguments');
+const extendedCommand=process.argv.includes('--extended-command');
 const sageOff=process.argv.includes('--sage-off');
 const defaultCommand=process.argv.includes('--default-command');
 const denyCommand=process.argv.includes('--deny-command');
+assert(!(extendedCommand&&defaultCommand),'extended_command_requires_explicit_context');
 const root=realpathSync(mkdtempSync(join(tmpdir(),'sage-command-boundary-')));
 const command='printf sage-native-command-ok; pwd', marker='sage-native-command-ok';
 let server;
@@ -20,6 +22,7 @@ try {
  for(const name of ['workspace','codex','home','tmp'])mkdirSync(join(root,name));
  const commandDirectory=join(workspace,'command-workdir');mkdirSync(commandDirectory);
  const commandArgs=defaultCommand?{cmd:command,max_output_tokens:1000}:{cmd:command,shell:'/bin/sh',workdir:commandDirectory,tty:false,max_output_tokens:1000};
+ if(extendedCommand)Object.assign(commandArgs,{login:false,timeout_ms:60000,sandbox_permissions:'use_default',additional_permissions:null,justification:null,prefix_rule:null,environment_id:null});
  const env={PATH:process.env.PATH??'/usr/bin:/bin',HOME:join(root,'home'),CODEX_HOME:codexHome,TMPDIR:join(root,'tmp'),LANG:'en_US.UTF-8',DO_NOT_TRACK:'1'};
  const binary=process.env.SAGE_CODEX_BIN??'codex';
  const telemetry=['-c','analytics.enabled=false','-c','otel.exporter="none"','-c','otel.metrics_exporter="none"','-c','otel.trace_exporter="none"'];
@@ -76,7 +79,7 @@ try {
  assert.equal(before.hookCwdIsWorkspace,true);assert.equal(before.hookCwdIsCommandDirectory,false);
  assert.equal(before.turnCwdIsWorkspace,true);assert.equal(before.turnContextFields.length,1);
  assert(!before.turnContextFields[0].some(key=>/shell|environment/i.test(key)),'new_native_execution_context_requires_review');
- assert.deepEqual(before.commandTranscript,defaultCommand?{fields:['cmd','max_output_tokens'],fixedCommand:true,fixedShell:false,fixedDirectory:false,ttyFalse:false}:{fields:['cmd','max_output_tokens','shell','tty','workdir'],fixedCommand:true,fixedShell:true,fixedDirectory:true,ttyFalse:true});
+ assert.deepEqual(before.commandTranscript,defaultCommand?{fields:['cmd','max_output_tokens'],fixedCommand:true,fixedShell:false,fixedDirectory:false,ttyFalse:false}:{fields:extendedCommand?['additional_permissions','cmd','environment_id','justification','login','max_output_tokens','prefix_rule','sandbox_permissions','shell','timeout_ms','tty','workdir']:['cmd','max_output_tokens','shell','tty','workdir'],fixedCommand:true,fixedShell:true,fixedDirectory:true,ttyFalse:true});
  const completed=stdout.trim().split('\n').map(line=>JSON.parse(line)).filter(event=>event.type==='item.completed'&&event.item?.type==='command_execution');
  if(denyCommand)assert.equal(completed.length,0,'denied_command_must_not_execute');
  else{
@@ -90,7 +93,7 @@ try {
  assert.equal(receipt.sage,!sageOff);
  assert.equal(receipt.result.decision,denyCommand?'deny':'pass');
  assert(stdout.includes('command boundary checked'));
- console.log(JSON.stringify({type:'result',verified:true,simulatedModel:true,policyReceivedOriginalFields:true,deniedCommand:denyCommand,defaultCommand,sageMode:!sageOff,executionShell:completed[0]?.item.command?.match(/^([^ ]+)/)?.[1],effectiveDirectoryVerified:!denyCommand,installedSageVerified:false}));
+ console.log(JSON.stringify({type:'result',verified:true,simulatedModel:true,policyReceivedOriginalFields:true,deniedCommand:denyCommand,defaultCommand,extendedCommand,sageMode:!sageOff,executionShell:completed[0]?.item.command?.match(/^([^ ]+)/)?.[1],effectiveDirectoryVerified:!denyCommand,installedSageVerified:false}));
 }finally{
  server?.closeAllConnections();server?.close();rmSync(root,{recursive:true,force:true});
 }

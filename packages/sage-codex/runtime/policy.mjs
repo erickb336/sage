@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readInitialSession, readNativeCommand } from "./identity.mjs";
+import { decodeNativeCommand } from "./command-input.mjs";
 import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn } from "./preparation.mjs";
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
@@ -69,10 +70,10 @@ export function createNativePolicy(options, evaluateTool) {
             if (parent === native.actor || starts.some(row => row.parent !== parent || row.path !== path)) refuse();
           }
         }
-        command = readNativeCommand(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
+        command = decodeNativeCommand(readNativeCommand(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
           session: event.session_id, actor: native.actor, parent, path, turn: event.turn_id,
           call: event.tool_use_id, command: event.tool_input.command,
-        });
+        }));
       }
       const checked = decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage,
         ...(command ? { command } : {}) })));

@@ -7,7 +7,9 @@ Run the native check with `node scripts/probe-codex-command.mjs`.
 Add `--deny-command` to verify denial of the same fixed harmless command.
 Add `--default-command` to omit the shell, working directory, and terminal fields.
 Add `--sage-off` to verify original command recovery with Sage mode off.
-These flags can be combined.
+Add `--extended-command` to send the supported fields omitted by the visible schema.
+It uses explicit shell and directory fields, so it cannot combine with `--default-command`.
+The other flags can be combined.
 Use fake `ps`, `pgrep`, and `kill` first on PATH, as for the other native checks.
 The check uses a fresh temporary profile and a local server with fixed simulated responses.
 It does not use model credentials or the owner's settings.

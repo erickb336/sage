@@ -1951,3 +1951,83 @@ test('native off-mode command follows the current child turn and rejects conflic
   assert.equal(evaluated, 1);
   assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
 });
+
+
+async function commandDecoder(t) {
+  const f = fixture(t);
+  const { decodeNativeCommand } = await import(pathToFileURL(join(f.plugin, 'runtime/command-input.mjs')));
+  return decodeNativeCommand;
+}
+
+test('native command decoder preserves all supported fields without approving or inventing defaults', async t => {
+  const decode = await commandDecoder(t);
+  assert.deepEqual(decode({ cmd: 'printf fixed' }), { cmd: 'printf fixed' });
+  const value = { cmd: 'printf fixed', shell: 'pwsh', login: false, tty: true, yield_time_ms: 0,
+    timeout_ms: 1000, max_output_tokens: 200, sandbox_permissions: 'with_additional_permissions',
+    additional_permissions: { network: { enabled: true }, file_system: { read: ['relative'], write: ['/fixture'] } },
+    justification: 'fixed reason', prefix_rule: ['printf'], environment_id: 'remote-fixture', workdir: '../relative' };
+  const saved = decode(value); assert.deepEqual(saved, value);
+  value.additional_permissions.file_system.write[0] = '/changed';
+  assert.deepEqual(saved.additional_permissions.file_system.write, ['/fixture']);
+  for (const mode of ['use_default', 'require_escalated', 'with_additional_permissions'])
+    assert.equal(decode({ cmd: 'fixed', sandbox_permissions: mode }).sandbox_permissions, mode);
+  const nullable = Object.fromEntries(['shell', 'login', 'timeout_ms', 'max_output_tokens', 'sandbox_permissions',
+    'additional_permissions', 'justification', 'prefix_rule', 'environment_id', 'workdir'].map(key => [key, null]));
+  assert.deepEqual(decode({ cmd: 'fixed', ...nullable }), { cmd: 'fixed', ...nullable });
+  assert.deepEqual(decode({ cmd: 'fixed', workdir: '' }), { cmd: 'fixed', workdir: '' });
+});
+
+test('native command decoder rejects malformed and unknown top-level fields with a fixed error', async t => {
+  const decode = await commandDecoder(t);
+  for (const fields of [{ cmd: '' }, { cmd: ['fixed'] }, { cmd: 'x'.repeat(1024 * 1024 + 1) }, { cmd: 'fixed\0private' },
+    { shell: 1 }, { shell: '' }, { shell: 'private\npath' }, { login: 'false' }, { tty: null }, { yield_time_ms: null },
+    { timeout_ms: -1 }, { max_output_tokens: 0.5 }, { yield_time_ms: Number.MAX_SAFE_INTEGER + 1 },
+    { sandbox_permissions: 'danger-full-access' }, { environment_id: {} }, { workdir: [] },
+    { justification: false }, { prefix_rule: ['fixed', 1] }, { prefix_rule: Array(2) },
+    { prefix_rule: Array(257).fill('fixed') }, { future_option: 'private' }])
+    assert.throws(() => decode({ cmd: 'fixed', ...fields }), { message: 'Codex command arguments are unavailable' });
+  for (const value of [null, [], Object.assign(Object.create({ shell: 'private' }), { cmd: 'fixed' })])
+    assert.throws(() => decode(value), { message: 'Codex command arguments are unavailable' });
+});
+
+test('native command decoder preserves permission variants and refuses mixed or malformed permission shapes', async t => {
+  const decode = await commandDecoder(t);
+  const paths = [{ type: 'path', path: '/fixture' }, { type: 'glob_pattern', pattern: '**/fixed' },
+    ...['root', 'minimal', 'tmpdir', 'slash_tmp'].map(kind => ({ type: 'special', value: { kind } })),
+    ...['project_roots', 'current_working_directory'].map(kind => ({ type: 'special', value: { kind, subpath: 'src' } })),
+    { type: 'special', value: { kind: 'unknown', path: ':future', subpath: null } }];
+  const permissions = { network: { enabled: false }, file_system: { entries: paths.map(path =>
+    ({ path, access: 'deny', missing_path_behavior: 'skip' })), glob_scan_max_depth: 3 } };
+  assert.deepEqual(decode({ cmd: 'fixed', additional_permissions: permissions }).additional_permissions, permissions);
+  for (const invalid of [[], { fileSystem: {} }, { network: { enabled: 'true' } }, { network: { other: true } },
+    { file_system: { read: ['/fixture'], entries: [] } }, { file_system: { entries: null } },
+    { file_system: { write: [false] } }, { file_system: { glob_scan_max_depth: 0 } },
+    { file_system: { entries: [{ path: paths[0], access: 'admin' }] } },
+    { file_system: { entries: [{ path: paths[0], access: 'write', missing_path_behavior: 'create' }] } },
+    { file_system: { entries: [{ path: { type: 'special', value: { kind: 'invented' } }, access: 'read' }] } },
+    { file_system: { entries: [{ path: { type: 'path', path: '/fixture', extra: true }, access: 'read' }] } }])
+    assert.throws(() => decode({ cmd: 'fixed', additional_permissions: invalid }), { message: 'Codex command arguments are unavailable' });
+});
+
+test('native command policy validates recovered argument shapes before its callback in both modes', async t => {
+  for (const sage of [true, false]) {
+    const f = await composedPolicyFixture(t); let evaluated = 0;
+    if (!sage) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    const policy = f.createNativePolicy(f.options, (input, context) => {
+      evaluated++; assert.equal(context.sage, sage); assert.equal(context.command.login, false);
+      assert.deepEqual(context.command.additional_permissions, { network: { enabled: false } });
+      return { decision: 'pass' };
+    });
+    for (const [fields, valid] of [[{ login: 'false' }, false], [{ future: true }, false],
+      [{ additional_permissions: { fileSystem: {} } }, false],
+      [{ login: false, additional_permissions: { network: { enabled: false } } }, true]]) {
+      const { input, envelope } = commandPolicyInput(f, session, 'printf fixed', sage ? turns[0] : turns[2]);
+      const rows = readFileSync(input.transcript_path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      rows.at(-1).payload.arguments = JSON.stringify({ ...envelope, ...fields });
+      writeFileSync(input.transcript_path, rows.map(row => JSON.stringify(row) + '\n').join(''));
+      if (valid) assert.equal((await f.evaluate(policy, input)).decision, 'pass');
+      else { await assert.rejects(f.evaluate(policy, input)); assert.equal(evaluated, 0); }
+    }
+    assert.equal(evaluated, 1);
+  }
+});

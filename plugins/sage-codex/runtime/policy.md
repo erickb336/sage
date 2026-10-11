@@ -13,6 +13,9 @@ For every `Bash` event, it first verifies the original native command.
 This also applies while Sage is off, because logbook protection is independent of mode.
 The hook input must contain only `command`. The callback receives the complete
 original arguments in `context.command`, including fields omitted by the hook.
+The command decoder validates their complete supported wire shape first, including
+nested permission requests. Unknown fields and malformed values refuse evaluation.
+Omitted fields remain omitted; the decoder does not infer execution defaults.
 While Sage is on, a child must bind to its admitted task before this read.
 An off-mode command needs no admission, but still needs authenticated identity.
 While on, the child's recorded start supplies the expected parent and task path.

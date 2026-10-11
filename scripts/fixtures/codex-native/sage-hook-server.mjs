@@ -15,7 +15,10 @@ serveHooks({ mode: options, loadPolicy: async () => {
   if (input.tool_name === "Bash" && context.actor === input.session_id
     && context.command?.cmd === "printf sage-native-command-ok; pwd" && context.command.max_output_tokens === 1000
     && ((context.command.shell === "/bin/sh" && context.command.workdir === options.projectDirectory + "/command-workdir"
-      && context.command.tty === false && Object.keys(context.command).length === 5)
+      && context.command.tty === false && (Object.keys(context.command).length === 5
+        || (Object.keys(context.command).length === 12 && context.command.login === false
+          && context.command.timeout_ms === 60000 && context.command.sandbox_permissions === "use_default"
+          && ["additional_permissions", "justification", "prefix_rule", "environment_id"].every(key => context.command[key] === null))))
       || Object.keys(context.command).length === 2)) return commandDecision(input, context);
   if (input.tool_name === "apply_patch") return patchDecision(input, context);
   return allowed.has(input.tool_name) ? { decision: "pass" }
