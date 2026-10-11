@@ -12,6 +12,16 @@ actor, version, current Sage mode, and verified role. The role comes from the
 current child binding, or from the authenticated chief. Off mode supplies null.
 Only an exact pass or denial is accepted.
 
+Every active child tool call also checks its bound task and run in the configured
+logbook. The run must remain running, unreported, and on the current task, role,
+branch, and round. An ended run or terminal task cannot keep using tools through
+an earlier binding. Before returning a pass, the policy repeats this check and
+compares the assignment fields. A change during an awaited evaluator refuses the
+call. This is a boundary check, not a lock held through native execution; it
+cannot revoke a permission after the hook returns. Off-mode operations keep
+ordinary evaluation. Report and completion handling remain separate so stopped
+work can still record evidence.
+
 Direct `apply_patch` calls from an active chief, lead, PE, reviewer, or QA agent
 are denied before the supplied evaluator runs. The shared role rule permits
 implementers, designers, and arena judges to reach the evaluator. This is not
@@ -74,3 +84,9 @@ process tools first on PATH. The real native lead receives a patch tool, attempt
 one fixed harmless patch, and receives the exact role denial. The evaluator
 never runs, the file does not exist, and the child completes its report. The
 responses are simulated; this is not an installed-session or real-model pilot.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-ended-run` with fake process
+tools first on PATH. The fixture ends its lead run after native dispatch but
+before the child requests a read-only tool. The real hook must deny that call;
+no successful tool event may follow. Completion still records the child's end,
+and the run remains done. The model responses are simulated.

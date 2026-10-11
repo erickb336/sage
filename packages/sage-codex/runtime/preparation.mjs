@@ -5,6 +5,7 @@ import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { bindings, decodeEvent, publish, readObservations } from "./events.mjs";
 import { preparedTaskMessage } from "./instructions.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
+import { captureNativeRunAssignment as checkRun } from "./run-assignment.mjs";
 
 const NAME = /^(?!root$)[a-z0-9_]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -35,12 +36,6 @@ function actorScope(options, native) {
   return { scope: { project: owner.project, session: owner.session, epoch: owner.epoch }, role: "lead", task: reservation.assignment.task };
 }
 
-function checkRun(options, input) {
-  validateLogbookLocation(options);
-  const tool = createStateTool({ defaultRoot: refuse });
-  return tool.captureRunAssignment({ project: options.projectDirectory, task: input.task, run: input.run,
-    role: input.role }, { ...process.env, SAGE_HOME: options.logbookRoot });
-}
 
 function captureReview(options, input, cycle) {
   validateLogbookLocation(options);

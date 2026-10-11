@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { roleEditDenied } from "../core/index.mjs";
+import { captureNativeRunAssignment } from "./run-assignment.mjs";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readInitialSession, readNativeCommand } from "./identity.mjs";
@@ -49,6 +50,8 @@ export function createNativePolicy(options, evaluateTool) {
       const before = mode(event.session_id);
       const bound = before.sage && child ? bindNativeChildTool(raw, native, fixed) : undefined;
       const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
+      const assignment = bound ? { ...bound.assignment, role } : undefined;
+      const activeRun = assignment ? captureNativeRunAssignment(fixed, assignment) : undefined;
       const editDenied = roleEditDenied({ sage: before.sage, role });
       let command;
       // Path and state-tool protection also need original inputs while Sage is off.
@@ -85,6 +88,8 @@ export function createNativePolicy(options, evaluateTool) {
       // A concurrent mode change cannot turn an earlier decision into current permission.
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
       if (checked.decision === "deny") return checked;
+      // An awaited policy callback cannot preserve permission after the run changes.
+      if (assignment && JSON.stringify(captureNativeRunAssignment(fixed, assignment)) !== JSON.stringify(activeRun)) refuse();
       if (before.sage && observed?.kind === "spawn-request") {
         reconcileNativeFailures(raw, native, fixed);
         const reserved = reservePreparedSpawn(raw, native, fixed);

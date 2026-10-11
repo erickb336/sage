@@ -2709,3 +2709,47 @@ test('native role edit enforcement blocks the chief and restores ordinary evalua
   assert.deepEqual(await f.evaluate(policy, patch(turns[2])), { decision: 'pass' });
   assert.equal(evaluated, 1); assert.equal(received.role, null); assert.equal(received.sage, false);
 });
+
+
+test('native current run refuses child tools after assignment or lifecycle changes', async t => {
+  const f = await roleEditFixture(t, 'implementer'); let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: 'pass' }; });
+  assert.deepEqual(await f.evaluate(policy, f.editInput, childActor), { decision: 'pass' });
+  for (const [table, field, value] of [
+    ['runs', 'status', 'done'], ['runs', 'ended', '2026-01-01T00:00:00Z'],
+    ['runs', 'report', 'reports/saved.md'], ['runs', 'role', 'lead'], ['runs', 'task', 'T2'],
+    ['runs', 'round', '1'], ['runs', 'branch', 'codex/t1-other'],
+    ['tasks', 'round', '1'], ['tasks', 'state', 'abandoned'], ['tasks', 'state', 'concluded'],
+  ]) {
+    const calls = evaluated;
+    const restore = editAssignmentRows(f, table, rows => rows.map(row => row.id === (table === 'runs' ? 'R4' : 'T1') ? { ...row, [field]: value } : row));
+    await assert.rejects(f.evaluate(policy, f.editInput, childActor), /active run/, `${table}.${field}`);
+    await assert.rejects(f.evaluate(policy, { ...f.editInput, tool_name: 'list_mcp_resources', tool_input: {} }, childActor), /active run/);
+    assert.equal(evaluated, calls, `${table}.${field} reached the evaluator`);
+    restore();
+  }
+  assert.deepEqual(await f.evaluate(policy, f.editInput, childActor), { decision: 'pass' });
+  editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, status: 'done' } : row));
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(await f.evaluate(policy, f.editInput, childActor), { decision: 'pass' });
+});
+
+test('native current run refuses permission when the assignment changes during evaluation', async t => {
+  for (const change of ['done', 'candidate', 'branch', 'round']) {
+    const f = await roleEditFixture(t, 'implementer'); let entered, release;
+    const pending = new Promise(resolve => { entered = resolve; });
+    const continueEvaluation = new Promise(resolve => { release = resolve; });
+    const policy = f.createNativePolicy(f.options, async () => { entered(); await continueEvaluation; return { decision: 'pass' }; });
+    const result = f.evaluate(policy, f.editInput, childActor);
+    await pending;
+    if (change === 'done') editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, status: 'done' } : row));
+    if (change === 'candidate') editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, candidate: 'changed' } : row));
+    if (change === 'branch' || change === 'round') {
+      const field = change, value = change === 'branch' ? 'codex/t1-other' : '1';
+      editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, [field]: value } : row));
+      editAssignmentRows(f, 'tasks', rows => rows.map(row => row.id === 'T1' ? { ...row, [field]: value } : row));
+    }
+    release();
+    await assert.rejects(result, /active run|could not evaluate/, change);
+  }
+});
