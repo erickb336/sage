@@ -349,10 +349,23 @@ test("shared file and mode extraction preserves classified mode phrases in both 
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.deepEqual(api.modeSignals(prompt("sage mode")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true });
-    assert.deepEqual(api.modeSignals(prompt("sage mode off")), { sageOff: true, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true });
-    assert.deepEqual(api.modeSignals(prompt("sage mode, autopilot on")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: true, modeWord: true });
+    const none = { autopilotWord: false, autopilotAsked: false, ownOff: false, offAfter: false, pasted: false, question: false };
+    assert.deepEqual(api.modeSignals(prompt("sage mode")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: false, modeWord: true, ...none });
+    assert.deepEqual(api.modeSignals(prompt("sage mode off")), { sageOff: true, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true });
+    assert.deepEqual(api.modeSignals(prompt("sage mode, autopilot on")), { sageOff: false, sageOn: true, autopilotOff: false, autopilotOn: true, modeWord: true, ...none, autopilotAsked: true });
+    assert.deepEqual(api.modeSignals(prompt("autopilot on main?")), { sageOff: false, sageOn: false, autopilotOff: false, autopilotOn: false, modeWord: true, ...none, autopilotWord: true, autopilotAsked: true, question: true });
+    // The phrase, a comma and an off word: no on, and autopilot off (F-R725-2, T200).
+    assert.deepEqual(api.modeSignals(prompt("sage mode, stop")), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: false, modeWord: true, ...none, ownOff: true, offAfter: true });
+    // Only the owner's own off is ownOff: an agent's off line turns autopilot off, but it is not the owner's (F-R724-L2).
+    assert.deepEqual(api.modeSignals({ owner: true, text: "autopilot on", outside: "autopilot on", all: "autopilot on\nautopilot off" }), { sageOff: false, sageOn: false, autopilotOff: true, autopilotOn: true, modeWord: true, ...none, autopilotWord: true, autopilotAsked: true });
     assert.equal(api.modeSignals(prompt("sage mode continue on the project")).sageOn, true);
+    // The on rule's tail is the same for both providers (T200): an off after "on", an off-meaning word, a hidden or
+    // look-alike off, any question mark, and a Markdown paste with more words switch nothing on.
+    for (const text of ["sage mode on off", "sage mode stop", "sage mode switch it off", "sage mode оff", "sage mode o­ff", "sage mode ​off", "sage mode continue;", "sage mode continue؟", "> sage mode continue", "    sage mode continue",
+      // Only the tail is folded, never the phrase (F-R725-1); punctuation, then an off word (F-R725-2).
+      "sage mоde: оff", "​sage mode continue", "sage mode: off", "sage mode \u{1d428}\u{1d41f}\u{1d41f}", "sage mode ᴏꜰꜰ"]) {
+      assert.equal(api.modeSignals(prompt(text)).sageOn, false, JSON.stringify(text));
+    }
     for (const text of ["What does sage mode do?", "sage mode?", "sage mode online: is it a thing?", "autopilot on main"]) {
       const signals = api.modeSignals(prompt(text));
       assert.equal(signals.sageOn, false, text);
@@ -368,6 +381,11 @@ test("shared file and mode extraction preserves classified mode phrases in both 
     assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nautopilot off" }).autopilotOff, true);
     assert.equal(api.modeSignals({ owner: true, text: "sage mode", outside: "sage mode", all: "sage mode\nReport: no autopilot changes" }).autopilotOff, false);
     for (const input of [{}, { owner: "user", text: "sage mode", outside: "", all: "" }, { owner: true, text: "sage mode", all: "" }]) assert.throws(() => api.modeSignals(input), /Invalid mode prompt/);
+    // A mark or a format character on the last letter of the phrase makes it no phrase (R733): no on, and the note.
+    for (const text of ["sage mode\u0301", "sage mode\u0301 continue on the project", "enter sage mode\u0301 continue", "sage mode\u200b continue", "sage mode\u00ad continue", "sage mode\ufe0f continue", "sage mode\u2060 continue", "sage mode\u0301, autopilot on"]) {
+      const signals = api.modeSignals(prompt(text));
+      assert.deepEqual([signals.sageOn, signals.modeWord], [false, true], JSON.stringify(text));
+    }
     if (provider === "claude") {
       const adapter = await import(pathToFileURL(join(f.plugin, "hooks/mode-policy.mjs")));
       assert.equal(adapter.modeSignals(prompt("sage mode")).sageOn, true);
