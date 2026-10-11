@@ -183,7 +183,7 @@ test("T205 acceptance: existing Claude hook dispatches owner board/task/status p
   };
   for (const [phrase, view] of [["sage board", "chat"], ["show board", "chat"], ["sage board T1", "task"], ["show board T1", "task"], ["board T1", "task"], ["show status", "status"], ["sage status", "status"]]) {
     const note = send(`**${phrase}？**`);
-    assert.ok(note.includes(`--view ${view}`), `${phrase}: ${note}`); assert.ok(note.includes("Print its output word for word"));
+    assert.ok(note.includes(`--view ${view}`), `${phrase}: ${note}`); assert.match(note, /Print (?:its|the chat board's) output word for word/);
     assert.equal(send(`> ${phrase}`), ""); assert.equal(send(`"${phrase}"`), "");
     assert.equal(send(phrase, { agent_id: "sample-child" }), "");
     assert.equal(send(`<agent-message from="qa">${phrase}</agent-message>`), "");
