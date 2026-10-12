@@ -214,8 +214,9 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       if (watchErrors.has(key)) continue;
       try {
         const item = { plan, watcher: null };
-        item.watcher = watch(plan.path, { recursive: plan.recursive }, (_event, filename) => {
-          if (!item.plan.recursive && filename && !item.plan.children.has(String(filename).split(sep)[0])) return;
+        item.watcher = watch(plan.path, { recursive: plan.recursive }, (event, filename) => {
+          // A rename can name only the destination. Recheck the source even when that name differs.
+          if (event !== "rename" && !item.plan.recursive && filename && !item.plan.children.has(String(filename).split(sep)[0])) return;
           watchErrors.clear(); schedule();
         });
         item.watcher.on("error", () => {

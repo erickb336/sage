@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { boardView } from "../sage-core/index.mjs";
-import { installBoard, writeLoginFile } from "./install.mjs";
+import { installBoard, stableNodePath, writeLoginFile } from "./install.mjs";
 import { createBoardServer, hashPassword, validPasswordRecord } from "./server.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new TypeError("board JSON is invalid"); } };
@@ -271,10 +271,11 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
     const plistPath = options["login-file"] ? boundedPath(options["login-file"]) : null;
     if (plistPath && !outsideRoots(plistPath, config.sources)) throw new TypeError("login file must stay outside logbook roots");
     if (plistPath) noLinkedParents(plistPath);
-    const installed = installBoard({ installDir, configPath: boundedPath(options.config), nodePath: process.execPath });
+    const nodePath = plistPath ? stableNodePath() : process.execPath;
+    const installed = installBoard({ installDir, configPath: boundedPath(options.config), nodePath, allowNodeAlias: Boolean(plistPath) });
     output(`Installed board command: ${installed.cliPath}`);
     if (plistPath) {
-      writeLoginFile({ plistPath, installDir, configPath: boundedPath(options.config), nodePath: process.execPath });
+      writeLoginFile({ plistPath, installDir, configPath: boundedPath(options.config), nodePath, allowNodeAlias: true });
       output(`Login file created: ${plistPath}. Start it with launchctl when ready.`);
     }
     return null;
