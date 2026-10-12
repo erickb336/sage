@@ -4785,3 +4785,173 @@ test("F-T255-13: a child whose type comes in another letter case keeps its slot 
   for (const n of [1, 2, 3]) s.send(tool("Read", { file_path: "/x/a.js" }, { agent_id: `kid-${n}`, agent_type: "Sage:QA" }));
   assert.match(denied(s.send(nested("sage:qa", "case-4"))) ?? "", /this lead already has 3 children/);
 });
+
+// T273: a lead writes the logbook only with the commands of #62 section 8, and only on its own task.
+/**
+ * A session in sage mode with a logbook: T1 is the lead's task and T2 another one. lead-a is the bound lead of T1. The
+ * logbook is the one of the folder's physical path, as the state tool finds it from process.cwd(); the lead's commands
+ * run in s.dir, which on macOS goes through the /var link.
+ */
+function leadSession(env = {}) {
+  const s = linkedSession(env);
+  s.sage("config", "max_agents=20", "cap_total=30");
+  s.send(prompt("sage mode"));
+  s.sage("init");
+  for (const title of ["mine", "theirs"]) s.sage("task", "add", "--title", title, "--size", "small");
+  s.sage("run", "add", "T1", "--role", "lead"); // R1, the lead's own run
+  s.sage("run", "add", "T1", "--role", "qa"); // R2
+  s.sage("run", "add", "T2", "--role", "qa"); // R3
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a"); // F-T1-1
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "b"); // F-T1-2
+  s.sage("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "c"); // F-T2-1
+  assert.equal(s.send(leadSpawn("lead-call", 1)), undefined);
+  s.send(resultOf("lead-call", "lead-a"));
+  return s;
+}
+function linkedSession(env) {
+  const s = session(env);
+  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", realpathSync(s.dir)], { encoding: "utf8", env: s.vars }).stdout.trim();
+  return { ...s, sage };
+}
+const stateRun = (s, args, actor = LEAD, extra = {}) => s.send(tool("Bash", { command: `node ${TOOL} ${args}` }, { cwd: s.dir, ...actor, ...extra }));
+const LEAD_TAIL = /A lead writes the logbook only with .* Report to the sage what else the logbook needs\.$/;
+const NOT_OWN = /on the lead's list, but not as it is written here, or not on its own task T1\./;
+const NOT_LISTED = /is not on the lead's list, or has other words\./;
+const LEAD_ALLOWED = [
+  ...["implementer --branch claude/t1", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "qa --branch=claude/t1"].map((role) => `run add T1 --role ${role}`),
+  "run done R2 --status done --tokens 10",
+  "finding add T1 --source qa --severity medium --summary=missing-test",
+  "finding close T1 F-T1-2",
+  "finding triage T1 F-T1-2 fix",
+  "finding triage T1 F-T1-1 fix",
+  "finding triage T1 F-T1-1 dismiss --reason=not-a-problem",
+  `verdict T1 --kind qa-pass --sha ${SHA} --cycle 1`,
+  `verdict T1 --kind qa-pass --sha ${SHA} --run R2 --pr 5`,
+  "round T1",
+  ...["building", "reviewing", "repairing", "verifying", "verified"].map((state) => `task T1 set state=${state}`),
+  "task T1 set branch=claude/t1 pr=5",
+  "status",
+  "standing",
+  `merge-check --sha ${SHA}`,
+];
+
+test("T273: each command on the lead's list passes for the lead's own task", () => {
+  const s = leadSession();
+  for (const args of LEAD_ALLOWED) assert.equal(denied(stateRun(s, args)), undefined, args);
+});
+
+test("T273: the same commands on another task are refused, also through a run id or a finding key of another task", () => {
+  const s = leadSession();
+  for (const args of [
+    "run add T2 --role qa",
+    "run done R3 --status done",
+    "finding add T2 --source qa --severity low --summary=x",
+    "finding close T2 F-T2-1",
+    "finding close T1 F-T2-1",
+    "finding triage T2 F-T2-1 fix",
+    "finding triage T1 F-T2-1 fix",
+    "finding triage T1 F-T2-1 dismiss --reason=x",
+    `verdict T2 --kind qa-pass --sha ${SHA}`,
+    `verdict T1 --kind qa-pass --sha ${SHA} --run R3`,
+    "round T2",
+    "round t1",
+    "task T2 set state=building",
+    "task T10 set state=building",
+  ]) assert.match(denied(stateRun(s, args)) ?? "", NOT_OWN, args);
+});
+
+test("T273: a made-up run id or finding key is refused", () => {
+  const s = leadSession();
+  for (const args of ["run done R99 --status done", "run done R0 --status done", "run done r2 --status done", "finding close T1 F-T1-9", "finding triage T1 F-T1-9 fix", "finding close T1 F-T1-02", `verdict T1 --kind qa-pass --sha ${SHA} --run R99`, `verdict T1 --kind qa-pass --sha ${SHA} --run=x`]) {
+    assert.match(denied(stateRun(s, args)) ?? "", NOT_OWN, args);
+  }
+});
+
+test("T273: a lead may not pass --key to finding add, in either form", () => {
+  const s = leadSession();
+  for (const key of ["--key F-T1-7", "--key=F-T1-7", "--key=F-T2-1"]) {
+    assert.match(denied(stateRun(s, `finding add T1 --source qa --severity low --summary=x ${key}`)) ?? "", NOT_OWN, key);
+  }
+});
+
+test("T273: each command that is not on the lead's list is refused, with the sentence to report to the sage", () => {
+  const s = leadSession();
+  const notOwn = ["run add T1 --role lead", "run add T1 --role designer", "run add T1 --role pe", "run add T1 --role QA", "run add T1", "run done R1 --status done",
+    "finding triage T1 F-T1-2 dismiss --reason=x", "finding triage T1 F-T1-1 dismiss", "finding triage T1 F-T1-1 ask", "task T1", "task add --title x --size small",
+    ...["merged", "pr-ready", "held", "abandoned", "briefed", "concluded", "replan"].map((state) => `task T1 set state=${state}`),
+    "task T1 set title=x", "task T1 set", "task T1 set state=building title=x", "task T1 set states=building", "task T1 frob state=building"];
+  const notListed = ["finding triage T1 F-T1-1 --reason=x", "finding move T1 F-T1-1 --to x", "gate add T1 --question q --options a,b --recommend a", "gate answer G1 --option 1",
+    "log T1 --why x", "config cycles.small=1", "init", "standing add never", "logbook repair --accept-loss tasks", "pages T1", "pages T1 record x", "observe T1 --kind x",
+    "newcommand T1", "run frob T1", "round T1 T2", `verdict T1 T2 --kind qa-pass --sha ${SHA}`, "run add T1 T2 --role qa", "finding close T1 F-T1-2 F-T1-1", "run done R2 R3 --status done"];
+  for (const args of notOwn) {
+    const why = denied(stateRun(s, args)) ?? "";
+    assert.match(why, NOT_OWN, args);
+    assert.match(why, LEAD_TAIL, args);
+  }
+  for (const args of notListed) {
+    const why = denied(stateRun(s, args)) ?? "";
+    assert.match(why, NOT_LISTED, args);
+    assert.match(why, LEAD_TAIL, args);
+  }
+});
+
+test("T273: a child of the lead and every other agent still cannot write the logbook; the lead's own write passes", () => {
+  const s = leadSession();
+  assert.equal(s.send(nested("sage:qa", "child-call")), undefined);
+  s.send(resultOf("child-call", "child-1", LEAD));
+  assert.equal(denied(stateRun(s, "round T1")), undefined, "the lead");
+  for (const actor of [{ agent_id: "child-1", agent_type: "sage:qa" }, { agent_id: "child-1", agent_type: "sage:lead" }, AGENT, { agent_id: "gp", agent_type: "general-purpose" }]) {
+    assert.match(denied(stateRun(s, "round T1", actor)) ?? "", actor.agent_type === "sage:lead" ? /this lead holds no bound lead slot/ : ONLY_CHIEF, JSON.stringify(actor));
+  }
+  for (const actor of [{ ...LEAD, agent_type: "Sage:Lead" }, { ...LEAD, agent_type: "sage:lead " }]) assert.match(denied(stateRun(s, "round T1", actor)) ?? "", ONLY_CHIEF, JSON.stringify(actor));
+  assert.match(denied(stateRun(s, "round T1", { ...LEAD, agent_id: "lead-z" })) ?? "", /this lead holds no bound lead slot/, "a lead type with no slot");
+  assert.match(denied(stateRun(s, "round T1", LEAD, { session_id: "s2" })) ?? "", /this lead holds no bound lead slot/, "the slot of another session");
+  for (const name of ["Monitor", "PowerShell", "mcp__terminal__run_in_terminal"]) {
+    assert.match(denied(s.send(tool(name, { command: `node ${TOOL} round T1` }, { cwd: s.dir, ...LEAD }))) ?? "", /a lead writes the logbook only from Bash/, name);
+  }
+  s.send(ended("lead-a", "sage:lead"));
+  assert.match(denied(stateRun(s, "round T1")) ?? "", /this lead holds no bound lead slot/, "after the lead's stop");
+});
+
+test("T273: a lead's slot is bound only by the spawn's result, and names the task of the spawn's name", () => {
+  const s = linkedSession();
+  s.sage("config", "max_agents=20", "cap_total=30");
+  s.send(prompt("sage mode"));
+  s.sage("init");
+  for (const title of ["a", "b"]) s.sage("task", "add", "--title", title, "--size", "small");
+  assert.equal(s.send(leadSpawn("lead-call", 2)), undefined);
+  assert.match(denied(stateRun(s, "round T2")) ?? "", /this lead holds no bound lead slot/, "before the result");
+  s.send(resultOf("lead-call", "lead-a"));
+  assert.equal(denied(stateRun(s, "round T2")), undefined, "lead-T2 writes T2");
+  assert.match(denied(stateRun(s, "round T1")) ?? "", /not on its own task T2/, "and not T1");
+});
+
+test("T273: a lead's write takes no --project and no SAGE_PROJECT (decision 4)", () => {
+  const s = leadSession();
+  for (const args of [`round T1 --project ${s.dir}`, `round T1 --project=${s.dir}`, "run add T1 --role qa --project /other"]) {
+    assert.match(denied(stateRun(s, args)) ?? "", /a lead's write takes no --project and no SAGE_PROJECT/, args);
+  }
+  assert.equal(denied(stateRun(s, `status --project ${s.dir}`)), undefined, "a read keeps --project, as for every agent");
+  // Without --project, the state tool writes the logbook of the command's folder: the one that the hook checked.
+  assert.equal(denied(stateRun(s, "run add T1 --role code-reviewer")), undefined);
+  const out = spawnSync("node", [TOOL, "run", "add", "T1", "--role", "code-reviewer"], { cwd: s.dir, encoding: "utf8", env: s.vars });
+  assert.match(out.stdout, /^R4 running · code-reviewer on T1/, out.stderr);
+  assert.match(readFileSync(join(s.sage("logbook"), "runs.tsv"), "utf8"), /^R4\tT1\tcode-reviewer\t/m);
+  const e = leadSession({ SAGE_PROJECT: FEATURE });
+  assert.match(denied(stateRun(e, "round T1")) ?? "", /a lead's write takes no --project and no SAGE_PROJECT/);
+  assert.equal(denied(stateRun(e, "status")), undefined, "a read with SAGE_PROJECT set");
+});
+
+test("T273: an oversized or damaged logbook table refuses a lead's write that reads it (fail closed)", () => {
+  const s = leadSession();
+  const runs = join(s.sage("logbook"), "runs.tsv");
+  const before = readFileSync(runs, "utf8");
+  writeFileSync(runs, before + "\t".repeat(4 * 1024 * 1024) + "\n");
+  assert.match(denied(stateRun(s, "run done R2 --status done")) ?? "", /runs\.tsv is over 4194304 bytes/);
+  assert.match(denied(stateRun(s, "finding close T1 F-T1-2")) ?? "", /runs\.tsv is over 4194304 bytes/, "every table counts");
+  assert.equal(denied(stateRun(s, "round T1")), undefined, "a write with no id reads no table");
+  writeFileSync(runs, before.replace(/^id\t/, "ID\t"));
+  assert.match(denied(stateRun(s, "run done R2 --status done")) ?? "", /the header of .*runs\.tsv is damaged/);
+  writeFileSync(runs, before);
+  assert.equal(denied(stateRun(s, "run done R2 --status done")), undefined);
+});
