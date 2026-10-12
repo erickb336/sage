@@ -2105,7 +2105,9 @@ test("F-T42-2: a config write never lands on a link's target, also when a link r
     while (swap.exitCode === null && !lstatSync(f, { throwIfNoEntry: false })?.isSymbolicLink()) await new Promise((r) => setImmediate(r));
     assert.equal(swap.exitCode, null, "the swaps run");
     let [writes, refused] = [0, 0];
-    while (writes < 300 && refused < 3_000) {
+    // The share of writes that find a regular file depends on how the two processes are scheduled: CI saw 130 writes
+    // in 3,130 tries (4%). The ceiling of refusals only stops a run where no write could ever pass, so it is far above that.
+    while (writes < 300 && refused < 200_000) {
       try {
         sage(["config", `max_rounds=${(writes % 5) + 1}`], env);
         writes++;
