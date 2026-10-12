@@ -17,7 +17,7 @@ const CLOSED = ["merged", "concluded", "abandoned"];
 const WAITS = ["verified", "pr-ready"];
 const CAP = { running: 8, merged: 8, next: 3, active: 8 };
 // The agent roles beside the step names. State operations come from this board's configured instance.
-const AGENTS = ["implementer", "designer", "code-reviewer", "security-reviewer", "ux-reviewer", "arena-judge", "researcher"];
+const AGENTS = ["lead", "implementer", "designer", "code-reviewer", "security-reviewer", "ux-reviewer", "arena-judge", "researcher"];
 /** The format of each id-like cell. A cell that does not match shows as "?"; an empty cell stays empty. */
 const FORMAT = {
   tasks: { id: /^T\d+$/, state: (v) => STATES.includes(v), pr: /^\d+$/, round: /^\d+$/, risk: (v) => v.split(",").every((r) => RISKS.includes(r)) },

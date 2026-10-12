@@ -89,18 +89,18 @@ test("a brief to a sage agent needs every field; other agents and other sessions
 test("at most max_agents sage agents run at once, also when the chief starts them in one message", async () => {
   const s = session();
   s.send(prompt("sage mode"));
-  const four = await Promise.all([1, 2, 3, 4].map((n) => s.sendAsync(spawnAgent("sage:qa", BRIEF, `tu${n}`))));
-  assert.equal(four.filter((out) => !denied(out)).length, 3, "exactly 3 of 4 simultaneous spawns pass");
-  assert.match(four.map(denied).find(Boolean), /^sage: 3 sage agents are running for other, and its cap is 3 \(3 of 12 across all projects\)\. Wait for one to finish, or raise the cap: node \S+\/skills\/sage\/sage\.mjs config cap\.other=4$/, "a spawn with no cwd counts under other");
+  const five = await Promise.all([1, 2, 3, 4, 5].map((n) => s.sendAsync(spawnAgent("sage:qa", BRIEF, `tu${n}`))));
+  assert.equal(five.filter((out) => !denied(out)).length, 4, "exactly 4 of 5 simultaneous spawns pass: the default cap is 4, one lead and its 3 children");
+  assert.match(five.map(denied).find(Boolean), /^sage: 4 sage agents are running for other, and its cap is 4 \(4 of 12 across all projects\)\. Wait for one to finish, or raise the cap: node \S+\/skills\/sage\/sage\.mjs config cap\.other=5$/, "a spawn with no cwd counts under other");
 
-  const allowed = [1, 2, 3, 4].filter((n, i) => !denied(four[i]));
+  const allowed = [1, 2, 3, 4, 5].filter((n, i) => !denied(five[i]));
   allowed.forEach((n, i) => s.send({ hook_event_name: "SubagentStart", agent_id: `ag${i}`, agent_type: "sage:qa" }));
-  assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "tu5"))), "still full after the agents start");
+  assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "tu6"))), "still full after the agents start");
   s.send({ hook_event_name: "SubagentStop", agent_id: "ag0", agent_type: "sage:qa" });
-  assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "tu6")), undefined, "a finished agent frees its slot");
-  assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "tu7"))));
-  s.send({ hook_event_name: "PostToolUseFailure", tool_name: "Agent", tool_use_id: "tu6" });
-  assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "tu8")), undefined, "a spawn that failed frees its slot");
+  assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "tu7")), undefined, "a finished agent frees its slot");
+  assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "tu8"))));
+  s.send({ hook_event_name: "PostToolUseFailure", tool_name: "Agent", tool_use_id: "tu7" });
+  assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "tu9")), undefined, "a spawn that failed frees its slot");
 });
 
 test("the cap comes from the sage config", () => {
@@ -209,9 +209,11 @@ test("the project cap counts every live agent of the project, also those in high
   startIn("sB", "by3");
   assert.equal(spawnIn("sA", x, "t4"), undefined, "x takes slot 4: its third agent");
   startIn("sA", "ax4");
-  assert.match(denied(spawnIn("sA", x, "t5")), /3 sage agents are running for x/);
+  assert.equal(spawnIn("sA", x, "t4b"), undefined, "x takes slot 5: its fourth agent, the default cap");
+  startIn("sA", "ax5");
+  assert.match(denied(spawnIn("sA", x, "t5")), /4 sage agents are running for x/);
   s.send({ hook_event_name: "SubagentStop", session_id: "sB", agent_id: "by3", agent_type: "sage:qa", last_assistant_message: "x", stop_hook_active: true });
-  assert.match(denied(spawnIn("sA", x, "t6")), /3 sage agents are running for x/, "slot 3 is free, but x still runs 3 agents in slots 1, 2 and 4");
+  assert.match(denied(spawnIn("sA", x, "t6")), /4 sage agents are running for x/, "slot 3 is free, but x still runs 4 agents in slots 1, 2, 4 and 5");
   s.send({ hook_event_name: "SubagentStop", session_id: "sA", agent_id: "ax4", agent_type: "sage:qa", last_assistant_message: "x", stop_hook_active: true });
   assert.equal(spawnIn("sA", x, "t7"), undefined, "an x agent ended, so x may start one");
 });
@@ -254,17 +256,17 @@ test("each project has its own cap, the total across all projects wins, and each
   const spawnIn = (session_id, cwd, n) => s.send(spawnAgent("sage:qa", BRIEF, `${session_id}-${n}`, { session_id, cwd }));
   for (let n = 1; n <= 5; n++) assert.equal(spawnIn("sA", alpha, n), undefined, `alpha starts agent ${n} of 5`);
   assert.match(denied(spawnIn("sA", alpha, 6)), /^sage: 5 sage agents are running for alpha, and its cap is 5 \(5 of 12 across all projects\)\. Wait for one to finish, or raise the cap: node \S+\/skills\/sage\/sage\.mjs config cap\.alpha=6$/);
-  for (let n = 1; n <= 3; n++) assert.equal(spawnIn("sB", beta, n), undefined, `beta starts agent ${n} of 3 while alpha is full`);
-  assert.match(denied(spawnIn("sB", beta, 4)), /3 sage agents are running for beta, and its cap is 3 \(8 of 12/);
+  for (let n = 1; n <= 4; n++) assert.equal(spawnIn("sB", beta, n), undefined, `beta starts agent ${n} of 4 while alpha is full`);
+  assert.match(denied(spawnIn("sB", beta, 5)), /4 sage agents are running for beta, and its cap is 4 \(9 of 12/);
   s.sage("config", "cap.beta=9");
-  for (let n = 4; n <= 7; n++) assert.equal(spawnIn("sB", beta, n), undefined, `beta starts agent ${n} of 9`);
+  for (let n = 5; n <= 7; n++) assert.equal(spawnIn("sB", beta, n), undefined, `beta starts agent ${n} of 9`);
   assert.match(denied(spawnIn("sB", beta, 8)), /^sage: 12 sage agents are running across all projects, and the total cap is 12 \(beta has 7\)\. Wait for one to finish, or raise the cap: node \S+\/skills\/sage\/sage\.mjs config cap_total=13$/);
   s.send({ ...tool("TaskStop", { task_id: "none" }), session_id: "sA" });
   assert.ok(denied(spawnIn("sA", alpha, 7)), "a TaskStop of an unknown task frees nothing");
   const lines = readFileSync(join(s.vars.SAGE_HOOKS_STATE, "refusals.log"), "utf8").trimEnd().split("\n");
   assert.equal(lines.length, 4);
   assert.match(lines[0], /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z alpha 5\/5 total 5\/12$/);
-  assert.equal(lines[1].slice(25), "beta 3/3 total 8/12");
+  assert.equal(lines[1].slice(25), "beta 4/4 total 9/12");
   assert.equal(lines[2].slice(25), "beta 7/9 total 12/12");
   assert.equal(lines[3].slice(25), "alpha 5/5 total 12/12");
 });
