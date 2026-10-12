@@ -272,11 +272,12 @@ STANDING    standing.md, word for word</pre>
 <pre>STATUS      done · blocked · question
 RESULT      what you can do now
 EVIDENCE    commands run + output · screenshots
-FINDINGS    key · severity · location · steps
+FINDINGS    none, or - &lt;key&gt; &lt;severity&gt; &lt;summary&gt; per line
+              detail on indented lines under it
 QUESTIONS   options · recommendation
 NOT VERIFIED
 BRANCH      branch · head SHA · PR</pre>
-<p>About 2,000 tokens or fewer, with long material in files. A hook stops an agent from finishing when its report has no EVIDENCE. That needs a check in the pilot (<a href="#plan">plan</a>, step 2).</p></div>
+<p>About 2,000 tokens or fewer, with long material in files. The hook reads a report with one reader, at the stop gate and for a lead's verdicts: each field once, at the start of a line; FINDINGS as <code>none</code> alone or one line per finding, with any detail on indented lines under it. It stops an agent once when a field is missing or the report cannot be read.</p></div>
 </div>
 
 <h2 id="rules">9. Rules and edge cases</h2>
@@ -289,7 +290,8 @@ BRANCH      branch · head SHA · PR</pre>
 <tr><td>At most N agents at once (default 4: one lead and its 3 children)</td><td><span class="code">Code</span> the hook counts running agents</td><td>Cost and focus. Orchestrator used 3</td></tr>
 <tr><td>Every finding is triaged before QA</td><td><span class="code">Code</span> the state tool refuses "verifying" with open findings</td><td>No dropped findings (ORC-028)</td></tr>
 <tr><td>At most 3 repair rounds (max_rounds), plus one more after each hold that round set. A round re-plans when the last round's fix findings are all still open, also when new ones joined them. Leaving replan clears the old round's keys, so its findings no longer re-plan the task; the round number goes on, so the total stays capped by max_rounds plus the extra rounds. A move from held or replan back to briefed ends the task's running lead run: a new lead starts with the new brief</td><td><span class="code">Code</span> the state tool counts rounds, keys and the extra rounds</td><td>Loops must converge. attack-the-premise</td></tr>
-<tr><td>A merge needs the route's verdicts on the current head SHA</td><td><span class="code">Code</span> hook on <code>gh pr merge</code></td><td>Merge only the checked commit (Orchestrator, pstack)</td></tr>
+<tr><td>A lead's review or QA verdict says what its child reported, on the commit that the child saw. Each medium or high finding of every child of a role in the round has its own recorded finding before the lead adds a run of that role, records a verdict of it or moves the task. A report that the hook cannot read, or no report, backs no lead verdict</td><td><span class="code">Code</span> the hook reads each child's report at its stop, with the stop gate's reader</td><td>A lead must not re-roll a review until it is clean, or hide a finding</td></tr>
+<tr><td>A merge needs the route's verdicts on the current head SHA, and no review or QA run of the task still runs</td><td><span class="code">Code</span> hook on <code>gh pr merge</code></td><td>Merge only the checked commit (Orchestrator, pstack)</td></tr>
 <tr><td>An agent never merges. The merge rule and the push rule hold for every command tool: Bash, Monitor, PowerShell and the terminal tool</td><td><span class="code">Code</span> the hook refuses a merge from any agent, whatever the tool</td><td>A second tool must not be a way around the rule</td></tr>
 <tr><td>Only a message of the owner that is exactly a switch phrase switches sage mode or autopilot: the whole message, in any letter case, with at most one full stop. A near miss switches nothing and gives the chief a note with the exact phrase to ask for</td><td><span class="code">Code</span> the hook and the shared mode policy</td><td>Your decision: a deterministic rule never guesses from free text, and an agent's text never switches a mode</td></tr>
 <tr><td>Autopilot merges only through a pull request, after the set number of clean cycles on the current head SHA</td><td><span class="code">Code</span> the same hook counts the cycles in the ledger</td><td>Your decision. Merge only the checked commit</td></tr>
