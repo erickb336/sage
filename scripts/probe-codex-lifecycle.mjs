@@ -298,6 +298,7 @@ data: ${JSON.stringify(event)}
       let request;
       try { request = JSON.parse(body); } catch { throw new Error("invalid_request_json"); }
       body = "";
+      responseRequests++;
       if (childCompaction && textValues(request.input).some(text => text.includes("SAGE_CHILD_COMPACT_REQUEST"))) {
         check(req.headers["thread-id"] === childThread, "compaction_wrong_child");
         check(++childCompactionRequests === 1, "repeated_child_compaction");
@@ -358,7 +359,6 @@ data: ${JSON.stringify(event)}
         return;
       }
       request = null; // Retain only tool results, advertised names, and a fixed-task boolean.
-      responseRequests++;
       const thread = req.headers["thread-id"];
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
