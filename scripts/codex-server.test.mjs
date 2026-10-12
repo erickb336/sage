@@ -3369,3 +3369,45 @@ test('native run creation retains merged role and lead task eligibility rules', 
   assert.equal(f.tool.read(f.logbook, 'runs').length, 0);
   assert.equal(f.createRun({...f.input, task: 'T2', role: 'investigate'}).run.role, 'investigate');
 });
+
+function commandPermissionInput(f, actor, permissions, turn) {
+  const command = commandPolicyInput(f, actor, 'cat example.txt', turn);
+  const rows = readFileSync(command.input.transcript_path, 'utf8').trim().split('\n').map(JSON.parse);
+  rows.at(-1).payload.arguments = JSON.stringify({...command.envelope, ...permissions});
+  writeFileSync(command.input.transcript_path, rows.map(row => JSON.stringify(row) + '\n').join(''));
+  return command.input;
+}
+
+test('native child sandbox escalation is refused before a permissive evaluator', async t => {
+  for (const role of ['lead', 'implementer']) {
+    const f = await roleEditFixture(t, role); let evaluated = 0;
+    const policy = f.createNativePolicy(f.options, () => { evaluated++; return {decision: 'pass'}; });
+    for (const permissions of [
+      {sandbox_permissions: 'require_escalated'},
+      {sandbox_permissions: 'with_additional_permissions'},
+      {sandbox_permissions: 'with_additional_permissions', additional_permissions: {network: {enabled: true}}},
+      {sandbox_permissions: 'use_default', additional_permissions: {file_system: {write: ['/outside']}}},
+    ]) {
+      const input = commandPermissionInput(f, childActor, permissions, turns[1]);
+      assert.equal((await f.evaluate(policy, input, childActor)).reason,
+        'A child cannot request broader sandbox permissions. Ask the chief to run this command.');
+      assert.equal(evaluated, 0);
+    }
+    const ordinary = commandPermissionInput(f, childActor, {sandbox_permissions: 'use_default', additional_permissions: null}, turns[1]);
+    assert.deepEqual(await f.evaluate(policy, ordinary, childActor), {decision: 'pass'});
+    assert.equal(evaluated, 1);
+  }
+});
+
+test('native child sandbox escalation stays refused when off while chief permission checks remain authoritative', async t => {
+  const f = await roleEditFixture(t, 'implementer'); let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return {decision: 'deny', reason: 'Native permission check refused.'}; });
+  f.core.changeAdmissionMode(f.options.directory, {...f.scope, after: turns[0], turn: turns[2], sage: false});
+  const child = commandPermissionInput(f, childActor, {sandbox_permissions: 'require_escalated'}, turns[1]);
+  assert.equal((await f.evaluate(policy, child, childActor)).reason,
+    'A child cannot request broader sandbox permissions. Ask the chief to run this command.');
+  assert.equal(evaluated, 0);
+  const chief = commandPermissionInput(f, session, {sandbox_permissions: 'require_escalated'}, turns[2]);
+  assert.deepEqual(await f.evaluate(policy, chief), {decision: 'deny', reason: 'Native permission check refused.'});
+  assert.equal(evaluated, 1);
+});

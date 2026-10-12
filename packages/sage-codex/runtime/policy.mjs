@@ -93,7 +93,13 @@ export function createNativePolicy(options, evaluateTool) {
       }
       // This text-only denial does not infer a trusted shell or execution directory.
       const deniedEdit = editDenied && (event.tool_name === "apply_patch" || (command && commandWrites(command.cmd)));
-      const checked = messageDenied
+      // The recovered envelope proves requested permission changes, not the effective sandbox.
+      // Like the Claude adapter, children cannot ask to leave or extend their sandbox, in either mode.
+      const sandboxDenied = child && command && (["require_escalated", "with_additional_permissions"].includes(command.sandbox_permissions)
+        || command.additional_permissions != null);
+      const checked = sandboxDenied
+        ? { decision: "deny", reason: "A child cannot request broader sandbox permissions. Ask the chief to run this command." }
+        : messageDenied
         ? { decision: "deny", reason: "A Sage child sends messages only to the chief. Report there or request a prepared task." }
         : deniedEdit
         ? { decision: "deny", reason: "This Sage role cannot edit files. Give the change to an implementer." }
