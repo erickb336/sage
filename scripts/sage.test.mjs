@@ -235,7 +235,7 @@ test("T266-LEAD-INVESTIGATE: an investigation takes no lead run, and the refusal
   assert.match(s.ok("run", "add", "T1", "--role", "investigate"), /^R1 running · investigate on T1/, "its own runs still start");
 });
 
-test("T266-LEAD-STATE: a merged, abandoned, verified or concluded task takes no lead run, and the refusal names its state; other roles still start", () => {
+test("T266-LEAD-STATE: a concluded, merged or abandoned task takes no lead run, and the refusal names its state; a verified task takes one; other roles still start", () => {
   const s = store();
   for (let i = 0; i < 3; i++) s.ok("task", "add", "--title", `t${i + 1}`, "--size", "tiny");
   s.ok("task", "add", "--title", "look", "--size", "investigate");
@@ -248,12 +248,13 @@ test("T266-LEAD-STATE: a merged, abandoned, verified or concluded task takes no 
   s.ok("task", "T4", "set", "state=briefed", "state=building", "state=reviewing", "state=verifying");
   s.ok("verdict", "T4", "--kind", "evidence-clean");
   s.ok("task", "T4", "set", "state=concluded");
-  for (const [t, state] of [["T1", "verified"], ["T2", "merged"], ["T3", "abandoned"], ["T4", "concluded"]]) {
-    assert.equal(s.no("run", "add", t, "--role", "lead"), `sage: ${t} is ${state}, so it takes no lead run: a lead carries a task to verified, and this task is past that.`);
+  for (const [t, state] of [["T2", "merged"], ["T3", "abandoned"], ["T4", "concluded"]]) {
+    assert.equal(s.no("run", "add", t, "--role", "lead"), `sage: ${t} is ${state}, so it takes no lead run: the task has ended.`);
   }
   assert.deepEqual(rows(s.dir, "runs"), [], "no refused lead run is recorded");
-  assert.match(s.ok("run", "add", "T1", "--role", "qa"), /^R1 running · qa on T1/, "other roles keep today's behaviour");
-  assert.match(s.ok("run", "add", "T2", "--role", "code-reviewer"), /^R2 running · code-reviewer on T2/);
+  assert.equal(s.ok("run", "add", "T1", "--role", "lead"), "R1 running · lead on T1", "a verified task takes a lead for its remaining cycles (#62, section 7)");
+  assert.match(s.ok("run", "add", "T2", "--role", "code-reviewer"), /^R2 running · code-reviewer on T2/, "other roles keep today's behaviour");
+  assert.match(s.ok("run", "add", "T3", "--role", "qa"), /^R3 running · qa on T3/);
 });
 
 test("T266-LEAD-SHOWN: status counts a lead run like any run, and the board shows it with its role", () => {
