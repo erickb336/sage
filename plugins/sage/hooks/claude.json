@@ -4,7 +4,7 @@
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs\" sage-hook.mjs", "timeout": 10 }] }],
     "PreToolUse": [{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|Agent|Task|TaskStop|SendMessage|Bash|Monitor|PowerShell|mcp__terminal__.*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs\" sage-hook.mjs", "timeout": 10 }] }],
     "PostToolUse": [{ "matcher": "Agent|Task", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs\" sage-hook.mjs", "timeout": 10 }] }],
-    "PostToolUseFailure": [{ "matcher": "Agent|Task|SendMessage", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs\" sage-hook.mjs", "timeout": 10 }] }],
+    "PostToolUseFailure": [{ "matcher": "Agent|Task", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs\" sage-hook.mjs", "timeout": 10 }] }],
     "SubagentStart": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs\" sage-hook.mjs", "timeout": 10 }] }],
     "Stop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs\" sage-hook.mjs", "timeout": 10 }] }],
     "SubagentStop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs\" sage-hook.mjs", "timeout": 10 }] }],

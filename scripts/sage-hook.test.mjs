@@ -4658,16 +4658,16 @@ test("T255 M1: a lead's stop does not free its running children's slots", () => 
   assert.equal(s.send(nested("sage:qa", "b-2", b)), undefined, "a child's own stop frees its slot");
 });
 
-test("T255 M2: an agent's SendMessage is a spawn: only a lead, with a full brief and a slot; a message to main passes", () => {
-  const s = nestedSession();
-  const send = (id, message, caller, to = "kid") => tool("SendMessage", { to, message, summary: "s" }, { tool_use_id: id, ...caller });
-  assert.match(denied(s.send(send("m-qa", BRIEF, { agent_id: "q", agent_type: "sage:qa" }))) ?? "", /only a lead may start an agent/);
-  assert.match(denied(s.send(send("m-short", "go on", LEAD))) ?? "", /the brief has no GOAL, SCOPE/);
-  for (const n of [1, 2, 3]) assert.equal(s.send(send(`m-${n}`, BRIEF, LEAD)), undefined);
-  assert.match(denied(s.send(send("m-4", BRIEF, LEAD))) ?? "", /this lead already has 3 children/);
-  assert.equal(s.send(send("m-main", "a question", { agent_id: "q", agent_type: "sage:qa" }, "main")), undefined, "a message to the main session wakes no agent");
-  s.send({ hook_event_name: "PostToolUseFailure", tool_name: "SendMessage", tool_use_id: "m-1", ...LEAD });
-  assert.equal(s.send(send("m-4", BRIEF, LEAD)), undefined, "a failed message frees its slot");
+test("T255 M2: an agent sends SendMessage only to main, in any mode; the main session is unchanged", () => {
+  const send = (to, caller) => tool("SendMessage", { to, message: BRIEF, summary: "s" }, { tool_use_id: `m-${to}`, ...caller });
+  const STOP = /an agent sends a message only to main, because a message can wake a stopped agent\. Start a fresh child/;
+  for (const s of [nestedSession(), session()]) {
+    assert.match(denied(s.send(send("kid", LEAD))) ?? "", STOP, "a lead's message to a child");
+    assert.match(denied(s.send(send("other", { agent_id: "q", agent_type: "sage:qa" }))) ?? "", STOP, "a child's message to another agent");
+    assert.match(denied(s.send(send("x", { agent_id: "gp", agent_type: "general-purpose" }))) ?? "", STOP, "any agent's message");
+    assert.equal(s.send(send("main", { agent_id: "q", agent_type: "sage:qa" })), undefined, "a message to the main session");
+  }
+  assert.equal(session().send(send("worker", {})), undefined, "the main session's own message outside sage mode");
 });
 
 test("T255 M3: only the main session's TaskStop frees a slot", () => {

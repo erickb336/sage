@@ -16,8 +16,8 @@
 //     first creation of main or master on GitHub, in one literal gh api form (FIRST_FORM), checked on GitHub only
 //     (firstUpload, firstCreation).
 //   - Only main starts leads (3 per project), each named lead-T<n>; only leads start their permitted children (3 each),
-//     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode, and so does an agent's
-//     SendMessage (it can wake a stopped agent). Only the main session's TaskStop frees a slot.
+//     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode. An agent sends no
+//     SendMessage except to main (it can wake a stopped agent). Only the main session's TaskStop frees a slot.
 //   - A sage agent may finish only with the full report of the sage:report skill.
 //   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs the state tool only as one plain
 //     read command, never the PR script, never a command outside the sandbox, never writes under the sage root with a
@@ -57,8 +57,6 @@ const commandPolicy = await import("./command-policy.mjs")
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
 const FILE_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/;
 const AGENT_TOOLS = /^(Agent|Task)$/;
-/** The tools that can start an agent: an agent's SendMessage can wake a stopped one (T255 M2). */
-const SPAWN_TOOLS = /^(Agent|Task|SendMessage)$/;
 const LEAD_CHILDREN = new Set(["sage:implementer", "sage:code-reviewer", "sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]);
 /** The tools that run a command. The PreToolUse matcher in claude.json names each of them. */
 const SHELL_TOOLS = /^(?:Bash|Monitor|PowerShell|mcp__terminal__.+)$/;
@@ -287,12 +285,17 @@ export function handle(input, state, slots) {
   // Only then: at a SubagentStop, a foreground agent of the session may be running and not listed.
   if (event === "Stop" && main && Array.isArray(input.background_tasks)) slots.reconcile(input.background_tasks.map((t) => t?.id));
   if (event === "SubagentStop") return void slots.release(input.agent_id);
-  if (["PostToolUse", "PostToolUseFailure"].includes(event) && SPAWN_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
+  if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
   if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response);
-  if (event === "PostToolUseFailure" && SPAWN_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
+  if (event === "PostToolUseFailure" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
   // Legacy direct agents only: requesting a stop is not terminal evidence for nested work. An agent's TaskStop frees no
   // slot: a lead could free a main-session agent's slot while that agent still runs (T255 M3).
   if (event === "PreToolUse" && input.tool_name === "TaskStop") return void (main && slots.release(input.tool_input?.task_id, true));
+  // An agent's SendMessage can wake a stopped agent outside every cap, and its event cannot tell a stopped target from a
+  // live one. So an agent sends a message only to the main session, in any mode (T255 M2).
+  if (event === "PreToolUse" && !main && input.tool_name === "SendMessage" && input.tool_input?.to !== "main") {
+    return deny(event, "an agent sends a message only to main, because a message can wake a stopped agent. Start a fresh child with a full brief, or report to the sage.");
+  }
   const why = event === "PreToolUse" ? (main ? chiefProblem(input, state.sage) : agentWriteProblem(input)) : undefined;
   if (why && main) return deny(event, `${why} Only sage.mjs changes the logbook: run the state tool's command for this change (node <path to skills/sage/sage.mjs> ...), as a command of its own. If no command does it, ask the user.`);
   if (why) return deny(event, `${why} Only the chief writes the logbook. An agent may run only ${READ_FORM}. Report what the logbook needs, and the chief records it.`);
@@ -317,15 +320,12 @@ export function handle(input, state, slots) {
   }
   const tool = input.tool_name ?? "";
   const ti = input.tool_input ?? {};
-  // An agent's SendMessage can wake a stopped agent, and the event cannot tell a stopped target from a live one, so each
-  // one is a spawn (T255 M2). A message to the main session wakes no agent.
-  const message = tool === "SendMessage" && !main && ti.to !== "main";
   // The nested rules check the spawned type too, not only the caller: in any mode (T255 H2).
-  const nestedSpawn = event === "PreToolUse" && !main && (AGENT_TOOLS.test(tool) || message) && (state.sage || ours || OURS.test(ti.subagent_type ?? ""));
+  const nestedSpawn = event === "PreToolUse" && !main && AGENT_TOOLS.test(tool) && (state.sage || ours || OURS.test(ti.subagent_type ?? ""));
   if (nestedSpawn) {
     if (input.agent_type !== "sage:lead") return deny(event, "only a lead may start an agent. Report to the sage.");
     if (typeof input.agent_id !== "string" || !input.agent_id) return deny(event, "the spawn has no valid caller identity, so its slot cannot be checked. Report to the sage.");
-    if (!message && !LEAD_CHILDREN.has(ti.subagent_type)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
+    if (!LEAD_CHILDREN.has(ti.subagent_type)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
   }
   if (event !== "PreToolUse" || (!state.sage && !nestedSpawn)) return undefined;
 
@@ -336,8 +336,8 @@ export function handle(input, state, slots) {
   if (main && AGENT_TOOLS.test(tool) && ti.subagent_type === "sage:lead" && !/^lead-T\d+$/.test(ti.name ?? ti.description ?? "")) {
     return deny(event, "the sage starts a lead only with the name lead-T<n> of its task (the Agent tool's name, or its description when it has no name).");
   }
-  if ((AGENT_TOOLS.test(tool) && OURS.test(ti.subagent_type ?? "")) || message) {
-    const missing = missingFields(BRIEF_FIELDS, message ? ti.message : ti.prompt);
+  if (AGENT_TOOLS.test(tool) && OURS.test(ti.subagent_type ?? "")) {
+    const missing = missingFields(BRIEF_FIELDS, ti.prompt);
     if (missing.length) return deny(event, `the brief has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line. A tiny task may keep each field to one line.`);
     let caps, project;
     try {
@@ -348,7 +348,7 @@ export function handle(input, state, slots) {
       return deny(event, `the state tool cannot load (${e?.message ?? e}), so sage starts no new agent: reinstall or update the sage plugin, and tell the user.`);
     }
     const cap = caps[`cap.${project}`] ?? caps.max_agents;
-    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && ti.subagent_type !== "sage:lead" ? String(Date.now()) : undefined), { role: message ? "SendMessage" : ti.subagent_type, caller: main ? undefined : input.agent_id, input: ti });
+    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && ti.subagent_type !== "sage:lead" ? String(Date.now()) : undefined), { role: ti.subagent_type, caller: main ? undefined : input.agent_id, input: ti });
     if (r.refused) {
       slots.log(`${project} ${r.project}/${cap} total ${r.total}/${caps.cap_total}`);
       const raise = (key, n) => `${SPACE_NOTE}Wait for one to finish, or raise the cap: ${stateCommand(`config ${key}=${n + 1}`)}`;
@@ -1839,7 +1839,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     } catch {
       chiefWrite = tools(SHELL_TOOLS);
     }
-    if (input?.hook_event_name === "PreToolUse" && ((!commands && tools(SHELL_TOOLS)) || commands?.some(command => mentionsMerge(command) || pushText(command) || (input.tool_name === "PowerShell" && powerShellProblem(command))) || agentWrite || chiefWrite || tools(AGENT_TOOLS) || (agentEvent(input) && tools(SPAWN_TOOLS)))) {
+    if (input?.hook_event_name === "PreToolUse" && ((!commands && tools(SHELL_TOOLS)) || commands?.some(command => mentionsMerge(command) || pushText(command) || (input.tool_name === "PowerShell" && powerShellProblem(command))) || agentWrite || chiefWrite || tools(AGENT_TOOLS) || (agentEvent(input) && tools(/^SendMessage$/)))) {
       process.stdout.write(JSON.stringify(deny("PreToolUse", `the hook could not check this command (${e?.message ?? e}), so it refuses it. Tell the user.`)));
     } else if (input && ["SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure", "Stop"].includes(input.hook_event_name)) {
       process.stderr.write(`sage: agent slots could not be updated (${e?.message ?? e}); reserved capacity stays charged.\n`);
