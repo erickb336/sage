@@ -2521,3 +2521,33 @@ test("stable machine identity is recorded while a command holds the lock", async
   });
   assert.equal(existsSync(join(dir, ".lock")), false);
 });
+
+test("unavailable machine identity never downgrades new owners to the legacy host rule", async t => {
+  const { withLock } = await import(LIB);
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-unknown-machine-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const previous = process.env.SAGE_TEST_MACHINE_ID;
+  let owner;
+  try {
+    process.env.SAGE_TEST_MACHINE_ID = "";
+    withLock(dir, () => {
+      const lock = join(dir, ".lock");
+      owner = JSON.parse(readFileSync(join(lock, readdirSync(lock)[0]), "utf8"));
+    });
+  } finally {
+    if (previous === undefined) delete process.env.SAGE_TEST_MACHINE_ID;
+    else process.env.SAGE_TEST_MACHINE_ID = previous;
+  }
+  const s = store();
+  s.ok("task", "add", "--title", "sample", "--size", "small");
+  owner.pid = 424292; owner.boot = 1; s.pids[owner.pid] = null;
+  const unknownOwnerFile = `${randomUUID()}.json`, lock = plant(s.dir, unknownOwnerFile, owner);
+  const before = readFileSync(join(lock, unknownOwnerFile), "utf8");
+  assert.match(s.no("task", "T1", "set", "branch=codex/t1-unknown"), /logbook is busy/);
+  assert.equal(readFileSync(join(lock, unknownOwnerFile), "utf8"), before);
+  assert.equal(owner.machineId, null, "new unavailable identities differ from legacy missing fields");
+  const pending = join(s.dir, `.lock.${randomUUID()}`);
+  renameSync(lock, pending);
+  s.ok("task", "T1", "set", "branch=codex/t1-free");
+  assert.equal(readFileSync(join(pending, unknownOwnerFile), "utf8"), before);
+});

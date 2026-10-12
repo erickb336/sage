@@ -1270,8 +1270,9 @@ function withLock(dir, fn) {
   const token = randomUUID();
   const tmp = `${lock}.${token}`;
   mkdirSync(tmp);
+  // A new unavailable identity is explicit; only old records use the hostname fallback.
   // An unknown boot time has no key: an older sage reads boot: null as 0, an earlier boot, and would clear a live lock.
-  writeFileSync(join(tmp, `${token}.json`), JSON.stringify({ pid: process.pid, host: hostname(), ...(machineId ? { machineId } : {}), ...(boot === null ? {} : { boot }), start: START, at: Date.now() }));
+  writeFileSync(join(tmp, `${token}.json`), JSON.stringify({ pid: process.pid, host: hostname(), machineId, ...(boot === null ? {} : { boot }), start: START, at: Date.now() }));
   const t0 = Date.now();
   for (let checked = ""; ; ) {
     try {
