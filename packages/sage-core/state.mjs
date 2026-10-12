@@ -991,6 +991,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         }
         if (role === "lead") {
           // A lead carries one task's pull request: one running lead per task, and at most LEADS per project.
+          if (["merged", "abandoned", "verified", "concluded"].includes(task.state)) refuse(`${task.id} is ${task.state}, so it takes no lead run: a lead carries a task to verified, and this task is past that.`);
           if (!builds(task)) refuse(`${task.id} is an investigation: it has no build and no pull request, so it takes no lead run. The chief runs its steps.`);
           const leads = runs.filter((r) => r.role === "lead" && r.status === "running");
           const same = leads.find((r) => r.task === task.id);

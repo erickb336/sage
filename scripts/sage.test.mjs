@@ -235,6 +235,27 @@ test("T266-LEAD-INVESTIGATE: an investigation takes no lead run, and the refusal
   assert.match(s.ok("run", "add", "T1", "--role", "investigate"), /^R1 running · investigate on T1/, "its own runs still start");
 });
 
+test("T266-LEAD-STATE: a merged, abandoned, verified or concluded task takes no lead run, and the refusal names its state; other roles still start", () => {
+  const s = store();
+  for (let i = 0; i < 3; i++) s.ok("task", "add", "--title", `t${i + 1}`, "--size", "tiny");
+  s.ok("task", "add", "--title", "look", "--size", "investigate");
+  for (const t of ["T1", "T2"]) for (const state of ["briefed", "building", "reviewing", "verifying"]) s.ok("task", t, "set", `state=${state}`);
+  for (const t of ["T1", "T2"]) s.ok("verdict", t, "--sha", SHA, "--kind", "checks-pass");
+  s.ok("task", "T1", "set", "state=verified");
+  s.ok("task", "T2", "set", "state=verified");
+  s.ok("task", "T2", "set", "state=merged");
+  s.ok("task", "T3", "set", "state=abandoned");
+  s.ok("task", "T4", "set", "state=briefed", "state=building", "state=reviewing", "state=verifying");
+  s.ok("verdict", "T4", "--kind", "evidence-clean");
+  s.ok("task", "T4", "set", "state=concluded");
+  for (const [t, state] of [["T1", "verified"], ["T2", "merged"], ["T3", "abandoned"], ["T4", "concluded"]]) {
+    assert.equal(s.no("run", "add", t, "--role", "lead"), `sage: ${t} is ${state}, so it takes no lead run: a lead carries a task to verified, and this task is past that.`);
+  }
+  assert.deepEqual(rows(s.dir, "runs"), [], "no refused lead run is recorded");
+  assert.match(s.ok("run", "add", "T1", "--role", "qa"), /^R1 running · qa on T1/, "other roles keep today's behaviour");
+  assert.match(s.ok("run", "add", "T2", "--role", "code-reviewer"), /^R2 running · code-reviewer on T2/);
+});
+
 test("T266-LEAD-SHOWN: status counts a lead run like any run, and the board shows it with its role", () => {
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "small");
