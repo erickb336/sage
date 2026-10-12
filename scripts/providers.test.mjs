@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1926,6 +1926,94 @@ test("shared push policy loading failures deny Claude command tools", async t =>
     }
   }
 });
+
+test("Codex advice refuses linked or public state directories and cannot overwrite a linked target", t => {
+  const { dir, plugin } = isolated(t, "codex");
+  const event = { session_id: "safe-state", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
+  const base = join(dir, "state"), outside = join(dir, "outside");
+  mkdirSync(outside, { mode: 0o700 });
+  const run = () => spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], {
+    env: { ...process.env, AGENT_KIT_HOOKS_STATE: base }, input: JSON.stringify(event), encoding: "utf8",
+  });
+  symlinkSync(outside, base, "dir");
+  assert.equal(run().stdout, "");
+  assert.equal(existsSync(join(outside, "codex")), false);
+  rmSync(base); mkdirSync(base, { mode: 0o700 });
+  symlinkSync(outside, join(base, "codex"), "dir");
+  assert.equal(run().stdout, "");
+  assert.equal(existsSync(join(outside, `${stateKey(event)}.json`)), false);
+  rmSync(join(base, "codex")); mkdirSync(join(base, "codex"), { mode: 0o700 });
+  chmodSync(base, 0o777);
+  assert.equal(run().stdout, "");
+  chmodSync(base, 0o700);
+  const shared = join(dir, "shared"); mkdirSync(shared); chmodSync(shared, 0o777);
+  const redirected = spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], {
+    env: { ...process.env, AGENT_KIT_HOOKS_STATE: join(shared, "state") }, input: JSON.stringify(event), encoding: "utf8",
+  });
+  assert.equal(redirected.stdout, "");
+  assert.equal(existsSync(join(shared, "state")), false, "a shared nonsticky parent can rename a private child");
+  const target = join(outside, "keep.json");
+  const original = JSON.stringify({ given: ["exhaust-the-design-space"], failures: {}, marker: "unchanged" });
+  writeFileSync(target, original);
+  const file = join(base, "codex", `${stateKey(event)}.json`);
+  symlinkSync(target, file);
+  const result = run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(context(JSON.parse(result.stdout)), /Exhaust the design space/);
+  assert.equal(readFileSync(target, "utf8"), original);
+  assert.equal(lstatSync(file).isSymbolicLink(), false);
+  assert.equal(lstatSync(file).mode & 0o777, 0o600);
+  assert.equal(run().stdout, "", "the private replacement preserves advice deduplication");
+});
+
+
+test("Codex advice defaults to a private Codex home instead of the shared temp folder", t => {
+  const { dir, plugin } = isolated(t, "codex");
+  const codexHome = join(dir, "codex-home"); mkdirSync(codexHome, { mode: 0o700 });
+  const event = { session_id: "private-default", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
+  const temporary = join(dir, "temporary"); mkdirSync(temporary, { mode: 0o700 });
+  const env = { ...process.env, HOME: dir, CODEX_HOME: codexHome, TMPDIR: temporary };
+  delete env.AGENT_KIT_HOOKS_STATE;
+  const result = spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], {
+    env, input: JSON.stringify(event), encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout);
+  const file = join(codexHome, "advice", "codex", `${stateKey(event)}.json`);
+  assert.equal(lstatSync(file).mode & 0o777, 0o600);
+  assert.equal(lstatSync(dirname(file)).mode & 0o777, 0o700);
+  assert.equal(lstatSync(dirname(dirname(file))).mode & 0o777, 0o700);
+});
+
+test("Codex advice refuses state below a foreign-owned ancestor even when its mode looks safe", t => {
+  const { dir, plugin } = isolated(t, "codex");
+  const event = { session_id: "foreign-parent", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
+  for (const mode of [0o755, 0o1777]) for (const nested of [false, true]) {
+    const foreign = join(dir, `foreign-${mode}-${nested}`); mkdirSync(foreign, { mode });
+    const parent = nested ? join(foreign, "owned-child") : foreign;
+    if (nested) mkdirSync(parent, { mode: 0o700 });
+    const base = join(parent, "state");
+    // Simulate only the UID that stat would return for another user's ancestor.
+    // The real hook and filesystem still perform every read, create, and write.
+    const preload = join(dir, `foreign-owner-${mode}-${nested}.mjs`);
+    writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const original = fs.lstatSync;
+fs.lstatSync = (path, ...args) => {
+  const info = original(path, ...args);
+  if (path === ${JSON.stringify(foreign)}) Object.defineProperty(info, 'uid', { value: process.getuid() + 1 });
+  return info;
+};
+syncBuiltinESMExports();\n`);
+    const result = spawnSync(process.execPath, ["--import", preload, join(plugin, "hooks/principles-hook.mjs")], {
+      env: { ...process.env, AGENT_KIT_HOOKS_STATE: base }, input: JSON.stringify(event), encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(base), false, "another directory owner can replace the path despite safe-looking permission bits");
+    assert.equal(result.stdout, "");
+  }
+});
+
 
 test("native probe removes its profile after version failure and a stalled version process", t => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-probe-cleanup-"));
