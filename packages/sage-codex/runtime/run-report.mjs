@@ -2,6 +2,7 @@ import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { createStateTool, readAdmission } from "sage-core";
 import { nativeToolContext } from "./native-tool.mjs";
+import { hasReportRecovery } from "./report-recovery.mjs";
 
 const refuse = () => { throw Error("Sage could not finish this recorded run"); };
 const contains = (parent, child) => {
@@ -37,7 +38,7 @@ function recordedRun(input, context, options) {
   if (saved.reportHash !== input.reportHash || saved.binding.project !== options.project || saved.binding.session !== session
     || !state.sessions.some(row => row.project === options.project && row.session === session && row.epoch === saved.binding.epoch)) refuse();
   const assigned = state.reservations.find(row => row.assignment.id === input.assignment);
-  if (!assigned?.rolePlan?.role) refuse();
+  if (!assigned?.rolePlan?.role || !hasReportRecovery(saved, options)) refuse();
   const tool = createStateTool({ defaultRoot: () => { refuse(); } });
   return { tool, state, assigned, work: { project: options.projectDirectory, task: saved.task, run: saved.run,
     role: assigned.rolePlan.role, assignment: input.assignment, reportHash: saved.reportHash, text: saved.text },

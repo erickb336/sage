@@ -3774,3 +3774,83 @@ test("child stop recovery completes the recovered assignment once and preserves 
     }
   }
 });
+
+
+function saveLegacyReport(f) {
+  const state = f.core.readAdmission(f.options.directory);
+  return f.core.recordReportAdmission(f.options.directory, { binding: state.bindings[0], task: "T1", run: "R1",
+    reportMessage: "fixture_report", reportHash: f.finishInput.reportHash, text: reportText });
+}
+function recoveryProofFiles(f) {
+  const directory = join(f.options.observationsRoot, session);
+  return readdirSync(directory).filter(name => name.endsWith(".json")).map(name => ({
+    path: join(directory, name), row: JSON.parse(readFileSync(join(directory, name), "utf8")),
+  })).filter(({ row }) => row.kind === "report-recovery-verified");
+}
+
+test("saved report recovery requires revalidation before a legacy receipt can finish a run", async t => {
+  const f = await runReportFixture(t); saveLegacyReport(f);
+  const before = readFileSync(join(f.logbook, "runs.tsv"), "utf8");
+  assert.throws(() => f.finish());
+  assert.equal(readFileSync(join(f.logbook, "runs.tsv"), "utf8"), before);
+  assert.equal(f.record().decision, "already-recorded");
+  const proofs = recoveryProofFiles(f); assert.equal(proofs.length, 1);
+  f.record(); assert.deepEqual(recoveryProofFiles(f), proofs);
+  rmSync(join(f.mode.sessionsDir, `${childActor}.jsonl`));
+  assert.equal(f.finish().decision, "run-finished");
+});
+
+test("saved report recovery refuses a legacy receipt from an unrecovered compacted child", async t => {
+  const f = await runReportFixture(t); saveLegacyReport(f);
+  appendRecoveryCheckpoint(f.childTranscript()); appendReport(f);
+  const before = f.core.readAdmission(f.options.directory);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  assert.throws(() => readChildReport({ name: f.input.name }, f.native(session), f.options));
+  assert.throws(() => f.record()); assert.throws(() => f.finish());
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  assert.equal(recoveryProofFiles(f).length, 0);
+});
+
+test("saved report recovery binds durable proof to the exact receipt and refuses conflicts", async t => {
+  const f = await runReportFixture(t); f.record();
+  const proofs = recoveryProofFiles(f); assert.equal(proofs.length, 1);
+  const saved = proofs[0];
+  rmSync(saved.path);
+  rmSync(join(f.mode.sessionsDir, `${childActor}.jsonl`));
+  assert.throws(() => f.finish()); assert.throws(() => f.record());
+  f.events.publish(join(f.options.observationsRoot, session), { ...saved.row, receiptHash: "f".repeat(64) });
+  assert.throws(() => f.finish()); assert.throws(() => f.record());
+  f.events.publish(join(f.options.observationsRoot, session), saved.row);
+  assert.throws(() => f.finish(), "conflicting proofs cannot select a convenient match");
+  assert.equal(f.tool.read(f.logbook, "runs")[0].status, "running");
+});
+
+test("saved report recovery is required before accepting a recorded review", async t => {
+  const f = await reviewAcceptanceFixture(t);
+  const proofs = recoveryProofFiles(f); assert.equal(proofs.length, 1);
+  rmSync(proofs[0].path);
+  assert.throws(() => f.accept());
+  assert.equal(f.tool.read(f.logbook, "ledger").length, 0);
+  f.events.publish(join(f.options.observationsRoot, session), proofs[0].row);
+  assert.equal(f.accept().decision, "review-accepted");
+});
+
+
+test("saved report recovery proof alone cannot finish a run before its receipt exists", async t => {
+  const f = await runReportFixture(t);
+  const state = f.core.readAdmission(f.options.directory);
+  const report = { binding: state.bindings[0], task: "T1", run: "R1", reportMessage: "fixture_report",
+    reportHash: f.finishInput.reportHash, text: reportText };
+  const file = join(f.plugin, "runtime/report-recovery.mjs");
+  assert.ok(existsSync(file), "the recovery proof verifier must ship");
+  const { recordReportRecovery } = await import(pathToFileURL(file));
+  assert.throws(() => recordReportRecovery({ ...report, reportMessage: "another_message" }, f.options));
+  assert.equal(recoveryProofFiles(f).length, 0);
+  recordReportRecovery(report, f.options);
+  assert.equal(recoveryProofFiles(f).length, 1);
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+  assert.throws(() => f.finish(), "a proof is not a recorded report");
+  assert.equal(f.record().decision, "report-recorded");
+  assert.equal(recoveryProofFiles(f).length, 1);
+  assert.equal(f.finish().decision, "run-finished");
+});

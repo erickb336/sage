@@ -1157,6 +1157,18 @@ data: ${JSON.stringify(event)}
           assert.equal(outcome, "interrupted"); assert.match(evidenceHash, /^[a-f0-9]{64}$/); assert.deepEqual(identity, bound);
         } else assert.deepEqual(terminal, bound);
       }
+      if (reportProbe || nestedReport) {
+        const proofs = readObservations(join(root, "observations", rootThread))
+          .filter(row => row.kind === "report-recovery-verified");
+        assert.equal(proofs.length, saved.reports.length);
+        for (const report of saved.reports) {
+          const own = proofs.filter(row => row.assignment === report.binding.assignment);
+          assert.equal(own.length, 1); assert.equal(own[0].child, report.binding.child);
+          assert.equal(own[0].turn, report.binding.turn); assert.match(own[0].receiptHash, /^[a-f0-9]{64}$/);
+        }
+        print({ type: "saved_report_recovery_evidence", receipts: saved.reports.length,
+          durableProofs: proofs.length, exactAssignmentIdentity: true, simulatedModel: true });
+      }
       print({ type: "integrated_sage_evidence", owners: 1, preparations: saved.preparations.length, reservations: saved.reservations.length, bindings: count, completions: count,
         firstToolBinding: !noTool, stopBinding: noTool, simulatedModel: true, fullPolicyVerified: false, realModelConsumptionVerified: false });
     }

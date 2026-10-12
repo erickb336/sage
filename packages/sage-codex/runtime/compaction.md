@@ -139,7 +139,19 @@ report to follow recovery in the same protected snapshot. The low-level report
 readers expose this acceptance check through `requireRecovery`; both production
 completion and report intake enable it.
 
-Cached receipts from an earlier runtime still need a recovery evidence policy.
-Current-run checks at the stop boundary, complete static role instructions,
-independent reviews, and a real-model pilot also remain. These changes do not
-enable installed automatic Sage.
+Before recording a report, the provider saves a recovery proof in its protected
+observation store. The proof binds the exact assignment, task, run, owner epoch,
+brief hash, report identity, and report hash. It contains no report text. The
+provider verifies the native transcript before it writes this proof.
+
+A cached receipt needs one matching proof before it can finish a run, supply a
+review verdict, or return through the chief's saved-report tool. Missing or
+conflicting evidence refuses the operation. An older receipt can acquire a proof
+when its parent records it again and the original transcript passes all checks.
+The provider never assumes that an older receipt proves recovery.
+
+The proof is saved before the receipt. A proof without a receipt cannot finish
+a run. Identical retries reuse both records. Once both exist, the receipt remains
+usable after transcript removal. Current-run checks at the stop boundary,
+complete static role instructions, independent reviews, and a real-model pilot
+remain. These changes do not enable installed automatic Sage.
