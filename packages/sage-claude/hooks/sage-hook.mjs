@@ -294,9 +294,12 @@ export function handle(input, state, slots) {
   // A helper's stop keeps its report and the commit that it saw, for its lead's verdict (F-T289-4, F-T289-5).
   if (event === "SubagentStop") {
     const helper = slots.helperFor(input.agent_id);
-    return void slots.release(input.agent_id, helper && { ...reportOf(input.last_assistant_message), sha: headOf(helper.folder, helper.task) });
+    // The reviewed commit only when the branch did not move during the run: the tip at its start (F-T289-14).
+    const sha = helper && helper.tip && headOf(helper.folder, helper.task) === helper.tip ? helper.tip : "";
+    return void slots.release(input.agent_id, helper && { ...reportOf(input.last_assistant_message), sha });
   }
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
+  if (event === "PostToolUse" && input.tool_name === "Bash" && input.agent_type === "sage:lead") return void leadRunAdded(input, slots);
   if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response);
   if (event === "PostToolUseFailure" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
   // The main session's TaskStop ends the named agent and frees its slot, a lead's or a child's too (T255 M3, F-T255-12,
@@ -356,7 +359,7 @@ export function handle(input, state, slots) {
     const lead = slots.leadOf(input.agent_id);
     if (!lead) return deny(event, "this lead holds no bound lead slot, so it starts no agent. Report to the sage.");
     if (!LEAD_CHILDREN.has(spawned)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
-    const why = leadSpawnProblem(lead, spawned, spawnName);
+    const why = leadSpawnProblem(lead, spawned, spawnName, slots);
     if (typeof why === "string") return deny(event, `${why} Report to the sage.`);
     helperKey = why?.helper;
   }
@@ -385,6 +388,8 @@ export function handle(input, state, slots) {
     if (!run) return deny(event, `${task} has no running lead run in the logbook of ${project}. Record it first, as a command of its own: ${stateCommand(`run add ${task} --role lead`)}. A lead starts only from a session opened in the project's folder or one of its worktrees, so that the lead's logbook is the one that the session uses (F-T284-7).`);
     // The slot keeps the task, its logbook and its lead run, for the lead's writes (F-T273-1, F-T273-4).
     leadMark = { task, logbook: digest(view.dir), run: run.id, folder: project };
+    // The helper notes of the logbook's ended lead runs are of no more use: no lead can use those runs (F-T289-13).
+    slots.prune(view.endedLeadRuns().map((r) => digest(`${leadMark.logbook}:${r.id}`)));
   }
   if (AGENT_TOOLS.test(tool) && OURS.test(spawned)) {
     const missing = missingFields(BRIEF_FIELDS, ti.prompt);
@@ -928,29 +933,40 @@ const roundFixOpen = (task, view) => view.findings(task.id).some((f) => f.status
  */
 const leadKey = (lead) => digest(`${lead.logbook}:${lead.run}`);
 const helperOf = (lead, run) => `${leadKey(lead)}.${run}`;
-/** A run that this lead's run added: run ids only grow, and a task has one running lead run, so it is newer than the lead run (F-T289-8). */
-const ownRun = (lead, id) => /^R[1-9]\d*$/.test(id) && BigInt(id.slice(1)) > BigInt(lead.run.slice(1));
-/** The states in which a lead writes nothing and starts no child: held, and the end states (F-T273-12, F-T289-7). */
-const LEAD_STOPS = ["held", "merged", "concluded", "abandoned"];
+/** A run that this lead added itself: the hook saw its own run add print the id (F-T289-8, F-T289-16). */
+const ownRun = (ctx, id) => /^R[1-9]\d*$/.test(id) && ctx.slots.helper(helperOf(ctx.lead, id)).owned;
+/** The states in which a lead writes nothing and starts no child: held, replan and the end states (F-T273-12, F-T289-7, F-T289-16). */
+const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
+/** The one form of a finding in a report's FINDINGS (the report skill gives it): the severity right after the key (F-T289-11). */
+export const FINDING_FORM = "- <key> <severity> <summary>";
+const FINDING_LINE = /^-[ \t]+\S+[ \t]+(high|medium|low)[ \t]+\S/;
 /**
  * A helper's report, read from its last message by the fixed report template (REPORT_FIELDS): the first word of RESULT,
- * in upper case, and the severity that each line of FINDINGS names first (F-T289-4). A missing field reads as nothing.
+ * in upper case, and the severity of each finding in FINDING_FORM under FINDINGS, up to the next field (F-T289-4,
+ * F-T289-11). FINDINGS is "none" (and any words after it) or findings in that form only. A missing FINDINGS, or any
+ * other line in it, makes the report unreadable, and an unreadable report is never clean.
  */
 function reportOf(text) {
   const lines = String(text ?? "").split(/\r?\n/), field = (f) => new RegExp(`^(?:${SP}|[*_#|>-])*${f}\\b`);
   const at = (f) => lines.findIndex((l) => field(f).test(l));
   const r = at("RESULT"), f = at("FINDINGS");
   const result = r < 0 ? "" : (/^[^A-Za-z]*([A-Za-z]+)/.exec(lines[r].replace(field("RESULT"), ""))?.[1] ?? "").toUpperCase();
-  const next = lines.findIndex((l, k) => k > f && REPORT_FIELDS.some((x) => field(x).test(l)));
-  const severities = f < 0 ? [] : lines.slice(f, next < 0 ? undefined : next).map((l, k) => /\b(high|medium|low)\b/i.exec(k ? l : l.replace(field("FINDINGS"), ""))?.[1].toLowerCase()).filter(Boolean);
-  return { result, severities };
+  const body = [];
+  for (let k = f; f >= 0 && k < lines.length; k++) {
+    const line = (k === f ? lines[k].replace(field("FINDINGS"), "") : lines[k]).trim();
+    if (k > f && !FINDING_LINE.test(line) && REPORT_FIELDS.some((x) => field(x).test(lines[k]))) break;
+    if (line) body.push(line);
+  }
+  if (body.length === 1 && /^none\b/i.test(body[0])) return { result, severities: [] };
+  const severities = body.map((l) => FINDING_LINE.exec(l)?.[1]);
+  return { result, severities: severities.filter(Boolean), unreadable: !body.length || severities.includes(undefined) };
 }
 /**
  * Is a helper's report clean? RESULT CLEAN or PASS with no medium or high finding, or FINDINGS or FAIL with only low
  * ones (the clean rule: a cycle is clean when no medium or high finding is open). Anything else is not clean, also an
  * unreadable report or a stop with no report.
  */
-const cleanReport = ({ result, severities } = {}) => Array.isArray(severities) && severities.every((v) => v === "low") &&
+const cleanReport = ({ result, severities, unreadable } = {}) => !unreadable && Array.isArray(severities) && severities.every((v) => v === "low") &&
   (["CLEAN", "PASS"].includes(result) || (["FINDINGS", "FAIL"].includes(result) && severities.length > 0));
 /** The commit at the head of a task's branch, in the repository of the lead's folder, or "" (fail closed) (F-T289-5). */
 function headOf(folder, task) {
@@ -968,11 +984,12 @@ function headOf(folder, task) {
 }
 /**
  * The checks of a lead's spawn of a child (F-T284-11, F-T284-9): its lead slot's logbook still runs its lead run, and its
- * task is not held or ended. A child whose name is a run id (R<n>) is that run's helper: a running run of the task in its
- * current round, of the child's role, that this lead's run added. The reason, or the helper to record ({ helper }), or
- * undefined. It throws when it cannot read the logbook, and the hook refuses the spawn then.
+ * task is not held, in replan or ended. A child whose name is a run id (R<n>) is that run's helper: a running run of the
+ * task in its current round, of the child's role, that this lead added. The helper keeps the branch's tip at its start
+ * (F-T289-14). The reason, or the helper to record ({ helper }), or undefined. It throws when it cannot read the
+ * logbook, and the hook refuses the spawn then.
  */
-function leadSpawnProblem(lead, spawned, name) {
+function leadSpawnProblem(lead, spawned, name, slots) {
   let view;
   try {
     view = logbookOf(lead.folder);
@@ -988,23 +1005,36 @@ function leadSpawnProblem(lead, spawned, name) {
   if (run?.task !== lead.task || run.status !== "running" || run.role !== role || String(run.round) !== String(task.round)) {
     return `${name} is not a running ${role} run of ${lead.task} in its current round, so a child of that name cannot help with it (F-T284-9).`;
   }
-  if (!ownRun(lead, name)) return `${name} was added before this lead's run ${lead.run}: a lead helps only with its own runs, and the sage ends the old ones (F-T289-8).`;
-  return { helper: { key: helperOf(lead, name), folder: lead.folder, task: lead.task, role } };
+  if (!ownRun({ lead, slots }, name)) return `${name} is not a run that this lead added: a lead helps only with its own runs, and the sage ends the others (F-T289-8, F-T289-16).`;
+  return { helper: { key: helperOf(lead, name), folder: lead.folder, task: lead.task, role, run: name, tip: headOf(lead.folder, lead.task) } };
 }
-/** Does the lead's open, current-round finding list from this role hold each medium and high finding of the helper's report, at its severity or above (F-T289-4)? */
-function recorded(report, findings) {
+/**
+ * Does the task hold the findings of this run's report (F-T289-4, F-T289-17)? Each medium and high finding of the report,
+ * and of every other run of the same role in the round that backs a findings or qa-fail verdict, needs its own open
+ * finding of the round from that role, at its severity or above.
+ */
+function covered(run, report, view, task, ctx) {
+  const others = view.verdicts(task.id).filter((v) => v.run && v.run !== run.id && ["findings", "qa-fail"].includes(v.kind) && view.row(v.run)?.role === run.role && String(view.row(v.run).round) === String(task.round));
+  const wanted = [...(report.severities ?? []), ...others.flatMap((v) => ctx.slots.helper(helperOf(ctx.lead, v.run)).stopped?.severities ?? [])];
+  const held = view.findings(task.id).filter((f) => f.status === "open" && f.source === run.role && String(f.round) === String(task.round)).map((f) => f.severity);
   const atLeast = (list, levels) => list.filter((v) => levels.includes(v)).length;
-  return [["high"], ["high", "medium"]].every((levels) => atLeast(findings.map((f) => f.severity), levels) >= atLeast(report.severities ?? [], levels));
+  return [["high"], ["high", "medium"]].every((levels) => atLeast(held, levels) >= atLeast(wanted, levels));
 }
 const LEAD_WRITES = {
   "run add": ([, t], opt, own) => t === own && TEAM.includes(opt.role) && (opt.branch === undefined || Boolean(stateTool.ofTask(own, opt.branch))),
-  // A run of the team ends only after its child, named by the run's id, stopped (F-T284-9); a run whose child never
-  // started ends as failed or blocked, and backs no verdict (F-T289-3). Only runs that this lead's run added (F-T289-8).
+  // A run of the team ends only after its child, named by the run's id, stopped (F-T284-9). A run whose child never
+  // started, or left with no stop (its slot freed), ends as failed or blocked and backs no verdict (F-T289-3, F-T289-13).
+  // A review or QA run whose report was not clean ends only after its findings are recorded, or after its findings or
+  // qa-fail verdict (F-T289-15). Only runs that this lead added (F-T289-8, F-T289-16).
   "run done": ([, id], opt, own, view, task, ctx) => {
-    if (view.row(id)?.task !== own || !TEAM.includes(view.row(id).role)) return false;
-    if (!ownRun(ctx.lead, id)) return `${id} was added before this lead's run ${ctx.lead.run}: the sage ends it (F-T289-8).`;
-    const helper = ctx.slots.helper(helperOf(ctx.lead, id));
-    return Boolean(helper.stopped) || (!helper.started && ["failed", "blocked"].includes(opt.status));
+    const run = view.row(id);
+    if (run?.task !== own || !TEAM.includes(run.role)) return false;
+    if (!ownRun(ctx, id)) return `${id} is not a run that this lead added: the sage ends it (F-T289-8, F-T289-16).`;
+    const key = helperOf(ctx.lead, id), helper = ctx.slots.helper(key);
+    if (!helper.stopped) return (!helper.started || !ctx.slots.live(key)) && ["failed", "blocked"].includes(opt.status);
+    if (run.role === "implementer" || cleanReport(helper.stopped) || view.verdicts(own).some((v) => v.run === id && ["findings", "qa-fail"].includes(v.kind))) return true;
+    if (!helper.stopped.unreadable && covered(run, helper.stopped, view, task, ctx)) return true;
+    return `${id}'s helper reported problems${helper.stopped.unreadable ? " in a report that the hook cannot read: the sage ends this run" : `: record each medium or high finding first, as an open finding with --source ${run.role} at its severity or above`} (F-T289-15).`;
   },
   "finding add": ([, t], opt, own) => t === own && opt.key === undefined,
   // Never a finding triaged ask (F-T284-10); while repairing, only a fix finding of the round: a new one waits for the
@@ -1012,9 +1042,10 @@ const LEAD_WRITES = {
   "finding close": ([, t, key], opt, own, view, task, ctx) => {
     if (!(t === own && view.row(key)?.task === own && view.row(key).triage === "fix" && (task.state !== "repairing" || roundKeys(task).includes(key)))) return false;
     if (task.state !== "repairing") return true;
-    // A round's finding closes only on a new commit: not on one where a review or QA helper of this lead found problems,
-    // so that a lead cannot close the round's keys unchanged and re-add the problem under a new key (F-T289-6).
-    const found = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => TEAM.slice(1).includes(r?.role) && !cleanReport(r)).map((r) => r.sha);
+    // A round's finding closes only on a new commit: not on one where a review or QA helper of this lead found the
+    // round's problems, in a run of an earlier round, so that a lead cannot close the round's keys unchanged and re-add
+    // the problem under a new key (F-T289-6). A re-review of this round that finds a new problem does not count (F-T289-12).
+    const found = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => TEAM.slice(1).includes(r?.role) && !cleanReport(r) && Number(view.row(r.run)?.round) < Number(task.round)).map((r) => r.sha);
     const head = found.length ? headOf(ctx.lead.folder, own) : undefined;
     return head === undefined || (head !== "" && !found.includes(head)) ||
       `${key} is a finding of the round, and the head of ${own}'s branch ${head ? `(${head.slice(0, 7)}) is a commit on which a helper found problems` : "cannot be read"}: commit the repair first (F-T289-6).`;
@@ -1033,15 +1064,15 @@ const LEAD_WRITES = {
     const roles = VERDICT_ROLES[opt.kind], run = opt.run === undefined ? undefined : view.row(opt.run);
     if (!(t === own && Boolean(task.pr) && opt.pr === task.pr)) return false;
     if (roles === null) return opt.run === undefined || run?.task === own;
-    if (!(Array.isArray(roles) && run?.task === own && run.status === "done" && roles.includes(run.role) && String(run.round) === String(task.round) && !view.verdictRuns(own).has(run.id))) return false;
-    if (!ownRun(ctx.lead, run.id)) return `${run.id} was added before this lead's run ${ctx.lead.run}, so it backs no verdict of this lead (F-T289-8).`;
+    if (!(Array.isArray(roles) && run?.task === own && run.status === "done" && roles.includes(run.role) && String(run.round) === String(task.round) && !view.verdicts(own).some((v) => v.run === run.id))) return false;
+    if (!ownRun(ctx, run.id)) return `${run.id} is not a run that this lead added, so it backs no verdict of this lead (F-T289-8, F-T289-16).`;
     const report = ctx.slots.helper(helperOf(ctx.lead, run.id)).stopped;
     if (!report) return false;
-    if (!report.sha || String(opt.sha ?? "").toLowerCase() !== report.sha) return `${run.id}'s helper reviewed ${report.sha ? report.sha.slice(0, 7) : "a commit that the hook could not read"}, not this --sha: a verdict names the commit that its helper saw (F-T289-5).`;
+    if (!report.sha || String(opt.sha ?? "").toLowerCase() !== report.sha) return `${run.id}'s helper reviewed ${report.sha ? report.sha.slice(0, 7) : "no one commit (the branch moved during its run, or the hook could not read it)"}, not this --sha: a verdict names the commit that its helper saw (F-T289-5, F-T289-14).`;
     const clean = cleanReport(report), wants = ["findings", "qa-fail"].includes(opt.kind) ? "not clean" : "clean";
-    if (clean !== (wants === "clean")) return `${run.id}'s helper reported ${report.result || "no readable RESULT"}${report.severities?.length ? ` with ${report.severities.join(", ")} findings` : ""}, so its verdict is ${clean ? "clean" : "findings or qa-fail"}, not ${opt.kind} (F-T289-4).`;
-    if (!clean && !recorded(report, view.findings(own).filter((f) => f.status === "open" && f.source === run.role && String(f.round) === String(task.round)))) {
-      return `${run.id}'s helper reported ${report.severities.join(", ")} findings: add each medium or high one first, as an open finding with --source ${run.role} at its severity or above (F-T289-4).`;
+    if (clean !== (wants === "clean")) return `${run.id}'s helper reported ${report.result || "no readable RESULT"}${report.severities?.length ? ` with ${report.severities.join(", ")} findings` : ""}${report.unreadable ? " in a FINDINGS field that the hook cannot read" : ""}, so its verdict is ${clean ? "clean" : "findings or qa-fail"}, not ${opt.kind} (F-T289-4).`;
+    if (!clean && !covered(run, report, view, task, ctx)) {
+      return `${run.id}'s helper reported ${report.severities.join(", ")} findings: add each medium or high one first, as an open finding with --source ${run.role} at its severity or above, one for each finding of each run (F-T289-4, F-T289-17).`;
     }
     return true;
   },
@@ -1058,6 +1089,22 @@ const VERDICT_ROLES = { "checks-pass": null, "checks-fail": null, "review-clean"
 const LEAD_WORDS = { "run add": 2, "run done": 2, "finding add": 2, "finding close": 3, "finding triage": 4, verdict: 1, round: 1 };
 /** The logbook of a folder, as the state tool finds it from process.cwd(): the physical path. realpath throws on a missing folder. */
 const logbookOf = (cwd) => stateTool.logbookView(realpathSync.native(cwd), process.env, { max: LEAD_READ_MAX });
+/**
+ * After a lead's Bash command: when it was the lead's own run add of the state tool, the run that it printed is the
+ * lead's (F-T289-16). A run that the sage added is never the lead's. Any doubt records nothing (fail closed).
+ */
+function leadRunAdded(input, slots) {
+  try {
+    const lead = slots.leadOf(input.agent_id), command = String(input.tool_input?.command ?? "").trim();
+    const [node, path, cmd, sub, task] = command.split(/[ \t]+/);
+    if (!lead || !PLAIN.test(command) || node !== "node" || cmd !== "run" || sub !== "add" || task !== lead.task || typeof input.cwd !== "string") return;
+    if (canonical(resolve(input.cwd, path)) !== canonical(TOOL)) return;
+    const out = typeof input.tool_response === "string" ? input.tool_response : input.tool_response?.stdout;
+    const [, id, role] = /^(R[1-9]\d*) running · (\S+) on (T[1-9]\d*)(?: |$)/.exec(String(out ?? "").trim()) ?? [];
+    const view = logbookOf(input.cwd), run = id && view.row(id);
+    if (digest(view.dir) === lead.logbook && run?.task === lead.task && run.role === role && TEAM.includes(role) && run.status === "running") slots.own(helperOf(lead, id));
+  } catch {}
+}
 function leadProblem(input, cmd, pos, opt, slots) {
   const lead = slots?.leadOf(input.agent_id);
   if (!lead) return "this lead holds no bound lead slot with a task (the sage starts a lead in the background with the name lead-T<n>), so it writes nothing.";
@@ -2037,7 +2084,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
         else if (caller !== undefined && others.filter(slot => (mark(slot, "scope-") ?? scope) === scope && (mark(slot, "caller-") ?? owner) === owner).length >= 3) refused = "children";
         if (refused) { free(mine); return { refused, ...counts(project) }; }
         add(mine, "ok");
-        if (helper) note(`started-${helper.key}`, JSON.stringify({ folder: helper.folder, task: helper.task, role: helper.role }), helpers);
+        if (helper) note(`started-${helper.key}`, JSON.stringify({ folder: helper.folder, task: helper.task, role: helper.role, run: helper.run, tip: helper.tip }), helpers);
         utimesSync(join(dir, mine), new Date(now), new Date(now)); // after the last mark: a slot's age counts from the clock that judges it
         return { ok: true };
       } catch (error) {
@@ -2100,7 +2147,17 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     touch: transaction(touch),
     /** The main session's TaskStop of lead-T<n>: it ends and frees this session's one lead slot of that name, bound or not (F-T273-13, F-T273-14, F-T273-16). */
     /** A run's helper, in any session: did it start, and its stop's record (folder, task, role, result, severities, sha), or undefined. */
-    helper: (key) => ({ started: helperNote(`started-${key}`) !== undefined, stopped: parsed(helperNote(`stopped-${key}`)) }),
+    helper: (key) => ({ owned: helperNote(`owned-${key}`) !== undefined, started: helperNote(`started-${key}`) !== undefined, stopped: parsed(helperNote(`stopped-${key}`)) }),
+    /** A run that its lead added: the hook saw the lead's run add print its id (F-T289-16). */
+    own: (key) => note(`owned-${key}`, "", helpers),
+    /** Does a slot of this helper still hold its lease? A helper whose slot was freed without a stop left (F-T289-13). */
+    live: (key) => list().some((slot) => mark(slot, "helper-") === key && now - statSync(join(dir, slot)).mtimeMs <= STALE.agent),
+    /** Removes the helper notes of the lead runs with these keys (F-T289-13). */
+    prune: (leads) => {
+      let names = [];
+      try { names = readdirSync(helpers); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      for (const name of names) if (leads.some((lead) => name.slice(name.indexOf("-") + 1).startsWith(`${lead}.`))) rmSync(join(helpers, name), { force: true });
+    },
     /** The stop records of the helpers whose keys start with prefix: a lead's helpers (F-T289-6). */
     stops: (prefix) => {
       let names = [];

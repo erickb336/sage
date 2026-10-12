@@ -4882,14 +4882,11 @@ function leadSession(env = {}) {
   s.sage("init");
   for (const title of ["mine", "theirs"]) s.sage("task", "add", "--title", title, "--size", "small");
   s.sage("run", "add", "T1", "--role", "lead"); // R1, the lead's own run
-  s.sage("run", "add", "T1", "--role", "qa"); // R2
-  s.sage("run", "add", "T2", "--role", "qa"); // R3
   s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a"); // F-T1-1
   s.sage("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "b"); // F-T1-2
   s.sage("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "c"); // F-T2-1
   s.sage("task", "T1", "set", "state=briefed", "pr=5");
   s.sage("finding", "triage", "T1", "F-T1-1", "fix"); // a low fix: it needs no round
-  s.sage("run", "add", "T1", "--role", "qa"); // R4, finished with its real child: the run of the lead's qa verdicts (F-T284-6, F-T284-9)
   s.sage("task", "T2", "set", "pr=6");
   // The project's folder is a git repository, and T1's branch has a commit: the head that a helper sees at its stop (F-T289-5).
   spawnSync("git", ["init", "-q", "-b", "main", s.dir]);
@@ -4899,6 +4896,9 @@ function leadSession(env = {}) {
   const head = () => spawnSync("git", ["-C", s.dir, "rev-parse", "claude/t1"], { encoding: "utf8" }).stdout.trim();
   assert.equal(s.send(leadSpawn("lead-call", 1, { cwd: s.dir })), undefined);
   s.send(resultOf("lead-call", "lead-a"));
+  leadAdd(s, "qa"); // R2, the lead's own run (F-T289-16)
+  s.sage("run", "add", "T2", "--role", "qa"); // R3
+  leadAdd(s, "qa"); // R4, finished with its real child: the run of the lead's qa verdicts (F-T284-6, F-T284-9)
   helpRun(s, "R2", "qa");
   helpRun(s, "R4", "qa");
   s.sage("run", "done", "R4", "--status", "done");
@@ -5088,6 +5088,15 @@ function setState(s, id, state, more = {}) {
   const [head, ...rows] = readFileSync(file, "utf8").trimEnd().split("\n");
   const cols = head.split("\t"), set = { state, ...more };
   writeFileSync(file, [head, ...rows.map((row) => { const v = row.split("\t"); if (v[0] === id) for (const [k, x] of Object.entries(set)) v[cols.indexOf(k)] = x; return v.join("\t"); })].join("\n") + "\n");
+}
+/** The lead's own run add of a run for T1, from its folder, with the hook's events around it, as Claude Code sends them (F-T289-16). The run's id. */
+function leadAdd(s, role, actor = LEAD, ...more) {
+  const args = ["run", "add", "T1", "--role", role, ...more], command = `node ${TOOL} ${args.join(" ")}`;
+  const env = { ...s.vars };
+  delete env.SAGE_PROJECT; // the hook refuses a lead's write with it: the run add of a fixture runs as the hook allows it
+  const stdout = spawnSync("node", [TOOL, ...args], { cwd: s.dir, encoding: "utf8", env }).stdout;
+  s.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: { stdout, stderr: "", interrupted: false }, cwd: s.dir, ...actor });
+  return stdout.split(" ")[0];
 }
 /** A helper's report: its RESULT and its FINDINGS lines (F-T289-4). */
 const report = (result, findings = "none") => ["STATUS done", `RESULT        ${result}`, "EVIDENCE x", `FINDINGS      ${findings}`, "QUESTIONS none", "NOT VERIFIED none", "BRANCH none"].join("\n");
@@ -5367,7 +5376,7 @@ test("F-T284-5: a lead repairs only through round: no finding close and no verdi
 
 test("F-T284-6: a lead's verdict names a finished run of its task whose role gives that kind; a check needs no run", () => {
   const s = leadSession(); // R2 qa running, R4 qa done
-  s.sage("run", "add", "T1", "--role", "code-reviewer"); // R5
+  leadAdd(s, "code-reviewer"); // R5
   helpRun(s, "R5", "code-reviewer");
   s.sage("run", "done", "R5", "--status", "done");
   const v = (kind, run) => denied(stateRun(s, `verdict T1 --kind ${kind} --sha ${s.head()} --pr 5${run ? ` --run ${run}` : ""}`));
@@ -5417,7 +5426,7 @@ test("F-T284-2: this file calls spawnSync and execFileSync only through bounded(
 // Repair round 1 of T284 (R921). Each test fails on f46692b and passes after.
 test("F-T284-9: a lead's run counts only with a real child of its role, named by the run, that started and stopped", () => {
   const s = leadSession();
-  s.sage("run", "add", "T1", "--role", "qa"); // R5, no child yet
+  leadAdd(s, "qa"); // R5, no child yet
   assert.match(denied(stateRun(s, "run done R5 --status done")) ?? "", NOT_OWN, "no child: run done refused");
   const child = (name, role = "qa", id = `c-${name}-${role}`) => denied(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name }, { tool_use_id: id, ...LEAD })));
   assert.match(child("R5", "code-reviewer") ?? "", /R5 is not a running code-reviewer run of T1 in its current round/, "the child's role must be the run's");
@@ -5439,7 +5448,7 @@ test("F-T284-9: a lead's run counts only with a real child of its role, named by
   setState(s, "T1", "reviewing", { round: "1" });
   assert.match(denied(stateRun(s, `verdict T1 --kind qa-pass --sha ${HEAD} --pr 5 --run R4`)) ?? "", NOT_OWN, "R4 is of round 0");
   // The implementer follows the same rule.
-  s.sage("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"); // R6, round 1
+  leadAdd(s, "implementer", LEAD, "--branch", "claude/t1"); // R6, round 1
   assert.match(denied(stateRun(s, "run done R6 --status done")) ?? "", NOT_OWN);
   helpRun(s, "R6", "implementer");
   assert.equal(denied(stateRun(s, "run done R6 --status done")), undefined);
@@ -5478,7 +5487,7 @@ test("F-T284-11: a bound lead starts no child after its task is held, or after i
 // T289: lead honesty before step 4. Each test fails on b4db88c and passes after.
 /** Adds a run of role for T1 (the chief's command), gives it a real helper that stops with message, and ends it. */
 function helpedRun(s, role, message) {
-  const id = s.sage("run", "add", "T1", "--role", role).split(" ")[0];
+  const id = leadAdd(s, role);
   helpRun(s, id, role, LEAD, message);
   s.sage("run", "done", id, "--status", "done");
   return id;
@@ -5487,7 +5496,7 @@ const leadVerdict = (s, kind, run, sha = s.head(), actor = LEAD) => denied(state
 
 test("F-T289-4: a lead's verdict says what its helper reported, and records each medium or high finding at its severity", () => {
   const s = leadSession();
-  const high = helpedRun(s, "code-reviewer", report("FINDINGS", "Y1 high packages/a.mjs:1 run x\n- Y2 low the copy")); // R5
+  const high = helpedRun(s, "code-reviewer", report("FINDINGS", "- Y1 high packages/a.mjs:1 run x\n- Y2 low the copy")); // R5
   assert.match(leadVerdict(s, "review-clean", high) ?? "", /R5's helper reported FINDINGS with high, low findings, so its verdict is findings or qa-fail, not review-clean \(F-T289-4\)/);
   const ADD = /R5's helper reported high, low findings: add each medium or high one first, as an open finding with --source code-reviewer at its severity or above/;
   assert.match(leadVerdict(s, "findings", high) ?? "", ADD, "nothing recorded yet");
@@ -5496,16 +5505,16 @@ test("F-T289-4: a lead's verdict says what its helper reported, and records each
   s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "high", "--summary", "y1 again"); // F-T1-4
   assert.equal(leadVerdict(s, "findings", high), undefined, "recorded at its severity");
   assert.match(denied(stateRun(s, "finding triage T1 F-T1-4 dismiss --reason=no")) ?? "", NOT_OWN, "a lead never dismisses a high finding");
-  const failed = helpedRun(s, "qa", report("FAIL", "F1 medium the form")); // R6
+  const failed = helpedRun(s, "qa", report("FAIL", "- F1 medium the form")); // R6
   assert.match(leadVerdict(s, "qa-pass", failed) ?? "", /not qa-pass/);
   const odd = helpedRun(s, "qa", report("looks good to me")); // R7: unreadable
   assert.match(leadVerdict(s, "qa-pass", odd) ?? "", /R7's helper reported LOOKS, so its verdict is findings or qa-fail, not qa-pass/);
-  const lows = helpedRun(s, "qa", report("FAIL", "F1 low a typo")); // R8: only a low finding is a clean cycle
+  const lows = helpedRun(s, "qa", report("FAIL", "- F1 low a typo")); // R8: only a low finding is a clean cycle
   assert.equal(leadVerdict(s, "qa-pass", lows), undefined);
   const clean = helpedRun(s, "security-reviewer", report("CLEAN")); // R9
   assert.match(leadVerdict(s, "findings", clean) ?? "", /reported CLEAN, so its verdict is clean, not findings/);
   assert.equal(leadVerdict(s, "security-clean", clean), undefined);
-  const stopped = s.sage("run", "add", "T1", "--role", "qa").split(" ")[0]; // R10: its helper stops with no report
+  const stopped = leadAdd(s, "qa"); // R10: its helper stops with no report
   helpRun(s, stopped, "qa", LEAD, "");
   s.sage("run", "done", stopped, "--status", "done");
   assert.match(leadVerdict(s, "qa-pass", stopped) ?? "", /not qa-pass/, "a stop with no report is not clean");
@@ -5521,13 +5530,13 @@ test("F-T289-5: a lead's verdict names the commit that its helper saw at its sto
   assert.equal(leadVerdict(s, "qa-pass", run, seen), undefined);
   s.sage("task", "T1", "set", "branch=claude/t1-gone"); // a branch that git does not have: fail closed
   const lost = helpedRun(s, "qa", report("PASS")); // R6
-  assert.match(leadVerdict(s, "qa-pass", lost, later) ?? "", /R6's helper reviewed a commit that the hook could not read/);
+  assert.match(leadVerdict(s, "qa-pass", lost, later) ?? "", /R6's helper reviewed no one commit \(the branch moved during its run, or the hook could not read it\)/);
 });
 
 test("F-T289-8: a new lead never uses or ends an old lead's runs; the sage ends them", () => {
   const s = leadSession(); // lead-a on lead run R1
-  const old = s.sage("run", "add", "T1", "--role", "qa").split(" ")[0]; // R5, its helper stops later
-  const idle = s.sage("run", "add", "T1", "--role", "qa").split(" ")[0]; // R6, no helper
+  const old = leadAdd(s, "qa"); // R5, its helper stops later
+  const idle = leadAdd(s, "qa"); // R6, no helper
   assert.equal(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: old }, { tool_use_id: "old-helper", ...LEAD })), undefined);
   s.send(resultOf("old-helper", "kid-old", LEAD));
   s.sage("run", "done", "R1", "--status", "failed");
@@ -5537,19 +5546,19 @@ test("F-T289-8: a new lead never uses or ends an old lead's runs; the sage ends 
   assert.equal(s.send(leadSpawn("lead-b-call", 1, { cwd: s.dir })), undefined);
   s.send(resultOf("lead-b-call", "lead-b"));
   const B = { agent_id: "lead-b", agent_type: "sage:lead" };
-  assert.match(denied(stateRun(s, `run done ${old} --status done`, B)) ?? "", /R5 was added before this lead's run R7: the sage ends it/);
-  assert.match(denied(stateRun(s, `run done ${idle} --status failed`, B)) ?? "", /R6 was added before this lead's run R7/);
-  assert.match(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: idle }, { tool_use_id: "adopt", ...B }))) ?? "", /R6 was added before this lead's run R7: a lead helps only with its own runs/);
+  assert.match(denied(stateRun(s, `run done ${old} --status done`, B)) ?? "", /R5 is not a run that this lead added: the sage ends it/);
+  assert.match(denied(stateRun(s, `run done ${idle} --status failed`, B)) ?? "", /R6 is not a run that this lead added/);
+  assert.match(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: idle }, { tool_use_id: "adopt", ...B }))) ?? "", /R6 is not a run that this lead added: a lead helps only with its own runs/);
   s.sage("run", "done", old, "--status", "done"); // the sage ends the old run
-  assert.match(leadVerdict(s, "qa-pass", old, s.head(), B) ?? "", /R5 was added before this lead's run R7, so it backs no verdict of this lead/);
-  const own = s.sage("run", "add", "T1", "--role", "qa").split(" ")[0]; // R8
+  assert.match(leadVerdict(s, "qa-pass", old, s.head(), B) ?? "", /R5 is not a run that this lead added, so it backs no verdict of this lead/);
+  const own = leadAdd(s, "qa", B); // R8
   helpRun(s, own, "qa", B);
   assert.equal(denied(stateRun(s, `run done ${own} --status done`, B)), undefined, "its own run");
 });
 
 test("F-T286-1: one child backs one run also after its slot's lease ends", () => {
   const s = leadSession();
-  const run = s.sage("run", "add", "T1", "--role", "qa").split(" ")[0]; // R5
+  const run = leadAdd(s, "qa"); // R5
   assert.equal(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: "first", ...LEAD })), undefined);
   s.send(resultOf("first", "kid-first", LEAD));
   const dir = join(s.vars.SAGE_HOOKS_STATE, "slots");
@@ -5570,19 +5579,19 @@ test("F-T289-1: a lead never re-triages a finding triaged ask", () => {
 
 test("F-T289-3: a lead ends a run whose helper never started as failed or blocked, and that run backs no verdict", () => {
   const s = leadSession();
-  const none = s.sage("run", "add", "T1", "--role", "qa").split(" ")[0]; // R5
+  const none = leadAdd(s, "qa"); // R5
   assert.match(denied(stateRun(s, `run done ${none} --status done`)) ?? "", NOT_OWN);
   for (const status of ["failed", "blocked"]) assert.equal(denied(stateRun(s, `run done ${none} --status ${status}`)), undefined, status);
   s.sage("run", "done", none, "--status", "failed");
   assert.match(leadVerdict(s, "qa-pass", none) ?? "", NOT_OWN, "no helper, no verdict");
-  const live = s.sage("run", "add", "T1", "--role", "qa").split(" ")[0]; // R6: its helper runs
+  const live = leadAdd(s, "qa"); // R6: its helper runs
   assert.equal(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: live }, { tool_use_id: "live", ...LEAD })), undefined);
   assert.match(denied(stateRun(s, `run done ${live} --status failed`)) ?? "", NOT_OWN, "a helper that started must stop first");
 });
 
 test("F-T289-6: a lead closes a round's finding only on a new commit, not on the one where its helper found the problem", () => {
   const s = leadSession();
-  helpedRun(s, "code-reviewer", report("FINDINGS", "Y1 medium a.mjs:1 run x")); // R5, at the head
+  helpedRun(s, "code-reviewer", report("FINDINGS", "- Y1 medium a.mjs:1 run x")); // R5, at the head
   s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "y1"); // F-T1-3
   s.sage("finding", "triage", "T1", "F-T1-3", "fix");
   setState(s, "T1", "repairing", { keys: "F-T1-3", round: "1" });
@@ -5608,4 +5617,100 @@ test("F-T289-9: after the sage moves the task back to briefed, the running lead 
   s.sage("task", "T1", "set", "state=briefed"); // the chief's re-plan
   assert.match(denied(stateRun(s, "task T1 set state=building")) ?? "", /T1's lead run R1 no longer runs, so this lead writes nothing/);
   assert.match(denied(s.send(nested("sage:qa", "after-replan"))) ?? "", /T1's lead run R1 no longer runs, so this lead starts no agent/);
+});
+
+// Repair round 1 of T289 (R947). Each test fails on e86f146 and passes after.
+test("F-T289-11: a report's findings count only in the form - <key> <severity> <summary>, under FINDINGS; any other line there is not clean", () => {
+  const s = leadSession();
+  const clean = (findings, evidence = "x") => {
+    const id = leadAdd(s, "code-reviewer");
+    helpRun(s, id, "code-reviewer", LEAD, report("CLEAN", findings).replace("EVIDENCE x", `EVIDENCE ${evidence}`));
+    s.sage("run", "done", id, "--status", "done");
+    return leadVerdict(s, "review-clean", id);
+  };
+  const NOT_CLEAN = /so its verdict is findings or qa-fail, not review-clean/;
+  assert.match(clean("Y1 the low-level parser has a high risk") ?? "", NOT_CLEAN, "a finding not in the form: the first word low is no severity");
+  assert.match(clean("none\n- STATUS high a finding whose key is a field name") ?? "", NOT_CLEAN, "a finding line after none");
+  assert.match(clean("- Y1 High the case") ?? "", NOT_CLEAN, "the severity in lower case only");
+  assert.match(clean("") ?? "", NOT_CLEAN, "an empty FINDINGS");
+  assert.equal(clean("none, the parser and the form were checked"), undefined, "none with words after it");
+  assert.equal(clean("none", "the run\n- E1 high a line in the form under EVIDENCE"), undefined, "the form counts only under FINDINGS");
+  assert.equal(clean("- Y1 low the copy"), undefined, "a low finding in the form");
+});
+
+test("F-T289-14: a helper reviewed a commit only when the branch did not move between its start and its stop", () => {
+  const s = leadSession();
+  const run = leadAdd(s, "qa");
+  assert.equal(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: "moving", ...LEAD })), undefined);
+  s.send(resultOf("moving", "kid-moving", LEAD));
+  const later = s.commit(); // the implementer commits while QA runs
+  s.send(ended("kid-moving", "sage:qa", { last_assistant_message: report("PASS") }));
+  s.sage("run", "done", run, "--status", "done");
+  assert.match(leadVerdict(s, "qa-pass", run, later) ?? "", /R5's helper reviewed no one commit \(the branch moved during its run/);
+});
+
+test("F-T289-15: a lead ends a review run whose report was not clean only after it records each medium or high finding", () => {
+  const s = leadSession();
+  const run = leadAdd(s, "code-reviewer");
+  helpRun(s, run, "code-reviewer", LEAD, report("FINDINGS", "- Y1 medium a.mjs:1 the bug"));
+  for (const status of ["done", "failed", "blocked"]) {
+    assert.match(denied(stateRun(s, `run done ${run} --status ${status}`)) ?? "", /R5's helper reported problems: record each medium or high finding first, as an open finding with --source code-reviewer/, status);
+  }
+  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "y1");
+  assert.equal(denied(stateRun(s, `run done ${run} --status done`)), undefined, "after the finding");
+  const odd = leadAdd(s, "code-reviewer");
+  helpRun(s, odd, "code-reviewer", LEAD, report("FINDINGS", "Y2 medium no dash"));
+  assert.match(denied(stateRun(s, `run done ${odd} --status failed`)) ?? "", /R6's helper reported problems in a report that the hook cannot read: the sage ends this run/);
+});
+
+test("F-T289-12: a lead closes a round's finding on the repair's commit, also when the re-review of that commit finds a new problem", () => {
+  const s = leadSession();
+  helpedRun(s, "code-reviewer", report("FINDINGS", "- Y1 medium a.mjs:1 the bug")); // R5, round 0, at the first commit
+  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "y1"); // F-T1-3
+  s.sage("finding", "triage", "T1", "F-T1-3", "fix");
+  setState(s, "T1", "repairing", { keys: "F-T1-3", round: "1" });
+  s.commit(); // the repair
+  helpedRun(s, "code-reviewer", report("FINDINGS", "- Z1 medium b.mjs:2 a new problem")); // R6, round 1: Y1 is fixed, Z1 is new
+  assert.equal(denied(stateRun(s, "finding close T1 F-T1-3")), undefined);
+});
+
+test("F-T289-13: a helper that left with no stop lets its lead end the run as failed or blocked; a new lead prunes the old notes", () => {
+  const s = leadSession();
+  const run = leadAdd(s, "qa");
+  assert.equal(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: "lost", ...LEAD })), undefined);
+  s.send(resultOf("lost", "kid-lost", LEAD));
+  assert.match(denied(stateRun(s, `run done ${run} --status failed`)) ?? "", NOT_OWN, "the helper still holds its slot");
+  const dir = join(s.vars.SAGE_HOOKS_STATE, "slots");
+  ageSlots(s, 61, readdirSync(dir).filter((slot) => readdirSync(join(dir, slot)).some((m) => m.startsWith("helper-")))); // it died: no stop, its lease ended
+  assert.match(denied(stateRun(s, `run done ${run} --status done`)) ?? "", NOT_OWN, "never done");
+  for (const status of ["failed", "blocked"]) assert.equal(denied(stateRun(s, `run done ${run} --status ${status}`)), undefined, status);
+  const helpers = join(s.vars.SAGE_HOOKS_STATE, "helpers");
+  assert.ok(readdirSync(helpers).length > 0);
+  s.sage("run", "done", "R1", "--status", "failed");
+  s.send(tool("TaskStop", { task_id: "lead-T1" }));
+  s.sage("run", "add", "T1", "--role", "lead");
+  assert.equal(s.send(leadSpawn("fresh", 1, { cwd: s.dir })), undefined);
+  assert.deepEqual(readdirSync(helpers), [], "the ended lead run's notes are gone");
+});
+
+test("F-T289-16: a lead uses only the runs that it added itself, and writes nothing in replan", () => {
+  const s = leadSession();
+  const chiefs = s.sage("run", "add", "T1", "--role", "qa").split(" ")[0]; // R5: the sage's run, after the lead started
+  assert.match(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: chiefs }, { tool_use_id: "adopt", ...LEAD }))) ?? "", /R5 is not a run that this lead added: a lead helps only with its own runs/);
+  assert.match(denied(stateRun(s, `run done ${chiefs} --status failed`)) ?? "", /R5 is not a run that this lead added: the sage ends it/);
+  setState(s, "T1", "replan");
+  assert.match(denied(stateRun(s, "finding add T1 --source qa --severity low --summary=x")) ?? "", /T1 is replan, so its lead writes nothing/);
+  assert.match(denied(s.send(nested("sage:qa", "in-replan"))) ?? "", /T1 is replan, so this lead starts no agent/);
+});
+
+test("F-T289-17: two runs' findings need two recorded findings", () => {
+  const s = leadSession();
+  const one = helpedRun(s, "code-reviewer", report("FINDINGS", "- Y1 medium a.mjs:1 one")); // R5
+  const two = helpedRun(s, "code-reviewer", report("FINDINGS", "- Z1 medium b.mjs:2 two")); // R6
+  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "one");
+  assert.equal(leadVerdict(s, "findings", one), undefined);
+  s.sage("verdict", "T1", "--kind", "findings", "--sha", s.head(), "--pr", "5", "--run", one);
+  assert.match(leadVerdict(s, "findings", two) ?? "", /one for each finding of each run/);
+  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "two");
+  assert.equal(leadVerdict(s, "findings", two), undefined);
 });

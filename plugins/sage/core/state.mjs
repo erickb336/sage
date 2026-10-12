@@ -787,7 +787,8 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
     findings: (task) => rows("findings").filter((f) => f.task === task),
     shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
-    verdictRuns: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.run).map((r) => r.run)),
+    verdicts: (task) => rows("ledger").filter((r) => r.task === task),
+    endedLeadRuns: () => rows("runs").filter((r) => r.role === "lead" && r.status !== "running"),
     prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),
   };
 }

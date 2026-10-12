@@ -5,7 +5,7 @@ import { GENERATED, ROOT, outputs, filesUnder, parseSource } from "./build.mjs";
 import { checkWords, flaggedWords, yamlText } from "./dictionary.mjs";
 import { MOMENTS } from "../plugins/sage/hooks/principles-hook.mjs";
 import { BRIEF_FIELDS as CORE_BRIEF_FIELDS } from "../packages/sage-core/index.mjs";
-import { BRIEF_FIELDS, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
+import { BRIEF_FIELDS, FINDING_FORM, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
 import { fingerprint, overrides } from "./sync-pstack.mjs";
 import { files as graphics } from "./graphics.mjs";
 import { packageBoundaryProblems } from "./package-boundaries.mjs";
@@ -77,6 +77,8 @@ if (briefFields.join(" ") !== BRIEF_FIELDS.join(" ")) problems.push(`agents/chie
 const report = /```\n([\s\S]*?)```/.exec(readFileSync(join(skillsDir, "report/SKILL.md"), "utf8"))?.[1] ?? "";
 const reportFields = report.split("\n").map((l) => l.split(/\s{2,}/)[0].trim()).filter(Boolean);
 if (reportFields.join("|") !== REPORT_FIELDS.join("|")) problems.push(`skills/report: the template has ${reportFields.join(", ")}, the hook checks ${REPORT_FIELDS.join(", ")}`);
+// The hook reads a helper's findings only in its one line form (F-T289-11): the template's FINDINGS line gives that form.
+if (!/^FINDINGS\s.*$/m.exec(report)?.[0].includes(FINDING_FORM)) problems.push(`skills/report: the FINDINGS line does not give the hook's finding form ${FINDING_FORM}`);
 // Every hook command runs a script that exists, in the shared hooks and in Claude's own.
 for (const cfg of ["hooks.json", "claude.json"]) {
   for (const [event, groups] of Object.entries(JSON.parse(readFileSync(join(PLUGIN, "hooks", cfg), "utf8")).hooks)) for (const g of groups) for (const h of g.hooks) {
