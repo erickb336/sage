@@ -40,3 +40,10 @@ route. The real CLI receives simulated responses. A chief creates a second run,
 prepares a follow-up, and reuses the same native child. The probe checks two
 turns and completions, records the second report, and reads the first report
 unchanged. This does not verify full policy, recovery, or a real-project pilot.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-followup-no-tool` to check a
+later assignment that returns its report without calling a tool. The first
+assignment binds through its first tool. The second stays unbound until its
+stop callback verifies delivery. The probe checks zero tool calls in that
+second turn, two exact bindings and completions, and both preserved reports.
+It uses the real CLI with simulated responses; it is not a real-project pilot.
