@@ -13,7 +13,7 @@ assert(process.argv.length === 2 || (process.argv.length === 3 && process.argv[2
 const sageOff = process.argv.includes("--sage-off");
 const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-compaction-")));
 const pending = new Set();
-let server, child, closure;
+let server, child, closure, failure;
 try {
   for (const name of ["workspace", "codex", "home", "tmp"]) mkdirSync(join(root, name));
   const workspace = join(root, "workspace"), codexHome = join(root, "codex");
@@ -75,7 +75,7 @@ try {
   args.push("-c", `model_providers.sage_compact_fixture={name="Sage compaction fixture",base_url="http://127.0.0.1:${server.address().port}/v1",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`);
   child = launch(args);
   const events = [], requestsById = new Map(), watchers = new Set();
-  let buffer = "", nextId = 0, failure, stderrBytes = 0;
+  let buffer = "", nextId = 0, stderrBytes = 0;
   const fail = error => {
     failure ??= error;
     for (const entry of requestsById.values()) entry.reject(failure);
@@ -170,12 +170,15 @@ try {
     compactHooks: compactHooks.map(row => ({ event: row.hook_event_name, trigger: row.trigger, fields: row.inputKeys })),
     sessionHooks: sessionHooks.map(row => ({ source: row.source, fields: row.inputKeys })),
     instructionCopiesByPhase: deliveries, chiefContextPresent, simulatedModel: true, installedSageVerified: false, stderrBytes }));
-  assert.equal(chiefContextPresent, !sageOff, "chief_context_after_compaction_does_not_match_mode");
+  assert.deepEqual(deliveries[2], sageOff ? [0, 0] : [1, 1], "chief_context_after_compaction_does_not_match_mode");
 } finally {
-  if (child) { child.stdin.end(); if (closure) await closure; }
+  let shutdown;
+  if (child) { child.stdin.end(); if (closure) shutdown = await closure; }
   for (const res of pending) res.destroy();
   if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
   rmSync(root, { recursive: true, force: true });
   assert.equal(existsSync(root), false);
   console.log(JSON.stringify({ type: "cleanup", temporaryRootRemoved: true }));
+  if (shutdown) { assert.equal(shutdown.code, 0, "native_shutdown_failed"); assert.equal(shutdown.signal, null, "native_shutdown_signal"); }
+  if (failure) throw failure;
 }

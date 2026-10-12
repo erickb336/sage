@@ -6,6 +6,7 @@ import {readFileSync,writeFileSync,mkdirSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
 export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,sage=false,disconnectOnSpawn=false,review=false,nestedReview=false,blockStop=false,captureFailure=false,denyCommand=false,emptyLogbook=false,taskLifecycle=false,omitStop=false,captureCompaction=false,restoreCompaction=false,deadlineMs=120_000}){
+ assert(!restoreCompaction||(captureCompaction&&sage), "compaction_restore_needs_sage_capture");
  assert(/^[A-Za-z0-9/._-]+$/.test(realpathSync(root)), "unsafe_probe_root");
  assert.equal(realpathSync(codexHome),join(realpathSync(root),'codex'));
  mkdirSync(join(root,'events'));
