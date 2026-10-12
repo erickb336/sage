@@ -579,8 +579,8 @@ test("G68: the hook's command holds only ASCII, and the CLI decodes the name to 
   const w = world();
   const ja = namedBook(w, "日本語");
   namedBook(w, "中文");
-  const run = note("show board for 日本語").split("\n")[0];
-  assert.match(run, /^sage: the owner asked for the board\. Run: node \S+ board --name-hex e697a5e69cace8aa9e --project '\/work\/sage' --view chat$/);
+  const run = note("show board for 日本語").split("\n")[1];
+  assert.match(run, /^It starts the local board server .* Then run: node \S+ board --name-hex e697a5e69cace8aa9e --project '\/work\/sage' --view chat$/);
   assert.match(run.slice(run.indexOf(" board ")), /^[ -~]+$/);
   const out = execFileSync("node", [TOOL, "board", "--name-hex", "e697a5e69cace8aa9e", "--project", w.sage, "--remember", "no"], { encoding: "utf8", env: { ...process.env, ...w.env } });
   assert.match(out, new RegExp(`^\\*\\*sage board · ${ja} \\(日本語\\)\\*\\*`));
@@ -820,9 +820,10 @@ test("T72-C5-EMPTYTASK: a gate with no task prints no ()", () => {
   assert.doesNotMatch(out, /\(\)/);
 });
 
-test("T72-C5-STATECMD: the board's command in the hook's note is the state tool's unquoted spelling", () => {
-  const run = note("show board").split("\n")[0];
-  assert.equal(run, `sage: the owner asked for the board. Run: node ${TOOL} board this --project '/work/sage' --view chat`);
+test("T72-C5-STATECMD, T216: the hook's board note starts the board server first, then runs the state tool's board, both unquoted", () => {
+  const [ensure, run] = note("show board").split("\n");
+  assert.equal(ensure, `sage: the owner asked for the board. First run, as a command of its own: node ${fileURLToPath(new URL("../plugins/sage/board/cli.mjs", import.meta.url))} board --ensure`);
+  assert.equal(run, `It starts the local board server on this Mac when it is not running, and prints one line: the board's address, or why the server is not running. Then run: node ${TOOL} board this --project '/work/sage' --view chat`);
 });
 
 // The board follow-ups (T137, T135, T139).
