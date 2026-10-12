@@ -1774,3 +1774,37 @@ test("native spawn error waits for closure before releasing its owner", async t 
   assert.equal(child.listenerCount("close"), 0);
   assert.equal(child.listenerCount("error"), 0);
 });
+
+// Signals are intercepted in the check process: even the old implementation cannot signal a test child.
+for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex package check: ${scenario} closes its child without signals`, async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'sage-package-check-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const signalLog = join(dir, 'signals'), closed = join(dir, 'closed');
+  const preload = join(dir, 'no-signals.mjs'), binary = join(dir, 'codex');
+  writeFileSync(preload, `import {ChildProcess} from 'node:child_process';\nimport {appendFileSync} from 'node:fs';\nChildProcess.prototype.kill = function(signal) { appendFileSync(${JSON.stringify(signalLog)}, String(signal)+'\\n'); this.stdin?.end(); return true; };\n`);
+  const plugin = {
+    skills: readdirSync(join(ROOT, 'plugins/sage-codex/skills')).map(name => ({name: `sage:${name}`})),
+    hooks: ['preToolUse', 'userPromptSubmit'].map(eventName => ({eventName})),
+    summary: {source: {path: join(ROOT, 'plugins/sage-codex')}},
+  };
+  if (scenario === 'bad-manifest') plugin.hooks = [];
+  writeFileSync(binary, `#!${process.execPath}\nimport {createInterface} from 'node:readline';\nimport {writeFileSync} from 'node:fs';\nif (process.argv.includes('--version')) { console.log('codex-cli 0.160.0'); } else {\nconst reader = createInterface({input: process.stdin});\nreader.on('line', line => { const request = JSON.parse(line); if (request.id) console.log(JSON.stringify({id:request.id,result:request.id===1?{}:{plugin:${JSON.stringify(plugin)}}})); });\nreader.on('close', () => { writeFileSync(${JSON.stringify(closed)}, 'stdin closed'); process.exitCode=${scenario === 'exit-error' ? 7 : 0}; });\n}\n`, {mode: 0o700});
+  const child = spawn(process.execPath, ['--import', preload, join(ROOT, 'scripts/check-codex.mjs')], {
+    env: {...process.env, SAGE_CODEX_BIN: binary}, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', data => { stdout += data; });
+  child.stderr.on('data', data => { stderr += data; });
+  const result = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({code, signal})); });
+  assert.equal(result.signal, null);
+  assert.equal(existsSync(signalLog), false, 'the check requested a process signal');
+  assert.equal(readFileSync(closed, 'utf8'), 'stdin closed', 'the child acknowledged transport closure');
+  if (scenario === 'success') {
+    assert.equal(result.code, 0, stderr);
+    assert.match(stdout, /discovered \d+ skills and 2 hooks/);
+  } else {
+    assert.equal(result.code, 1, stdout + stderr);
+    assert.doesNotMatch(stdout, /discovered \d+ skills/);
+    assert.match(stderr, /Codex package check failed:/);
+  }
+});
