@@ -14,6 +14,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { boardView } from "./board-view.mjs";
 import { createBoard } from "./board.mjs";
 import { PR } from "./pull-request.mjs";
+import { ROLES } from "./roles.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -37,6 +38,10 @@ const NOT_CLEAN = ["checks-fail", ...FOUND];
 const CLEAN = Object.values(VERDICT).filter((k) => k !== "checks-pass");
 const KINDS = [...Object.values(VERDICT), ...NOT_CLEAN];
 const WRITERS = ["implementer", "designer"];
+/** The most running lead runs in one logbook: the owner's limit of 3 leads per project (#62, section 6). The hook holds the same limit for the agents. */
+const LEADS = 3;
+/** The roles of a run: sage's child roles (roles.mjs), and the steps of an investigation, whose runs the board reads by the step's name. */
+const RUN_ROLES = [...ROLES, "investigate", "evidence-review"];
 /** A task's states and the moves between them (docs/design/sage-mode.html, "A task's life"). Any state may go to abandoned. */
 const NEXT = {
   framed: ["designing", "briefed"],
@@ -56,7 +61,7 @@ const NEXT = {
   abandoned: [],
 };
 const STATES = Object.keys(NEXT);
-const DEFAULTS = { max_agents: 3, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "inherit,inherit,inherit", cap_total: 12, ...modelDefaults };
+const DEFAULTS = { max_agents: 4, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "inherit,inherit,inherit", cap_total: 12, ...modelDefaults };
 /** The counts in the config, and what a 0 would do. Each count is a whole number of 1 or more. */
 /** The owner's floors (gate G18): a large or risk-flagged task needs at least 2 clean cycles. Only a code change lowers them; every other count is 1 or more. */
 const FLOOR = { "cycles.large": 2, "cycles.risk": 2 };
@@ -416,10 +421,13 @@ const check = (dir, skip = []) => Object.fromEntries(Object.keys(TABLES).filter(
  * chief session's values would be lost in silence. Reading a newer logbook is safe. A folder without tasks.tsv is init's
  * new logbook (init writes tasks.tsv last), and it may have only tables without rows: rows without their tasks are a loss.
  */
+/** Does any table of the logbook folder hold a row? A folder without tasks.tsv that has one lost its tasks. */
+const hasRows = (dir) => Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`)) ?? "").trim().split(/\r?\n/).length > 1);
+
 function ready(dir, skip = []) {
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
   if (!skip.includes("tasks") && !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false })) {
-    if (skip.length || Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`)) ?? "").trim().split(/\r?\n/).length > 1)) throw lost(dir, "tasks", "is missing", skip);
+    if (skip.length || hasRows(dir)) throw lost(dir, "tasks", "is missing", skip);
     return;
   }
   for (const [table, { cols }] of Object.entries(check(dir, skip))) {
@@ -732,6 +740,21 @@ function status(dir, save) {
   return lines.join("\n");
 }
 
+/**
+ * The task that a run id (R<n>) or a finding key (F-T<n>-<k>) belongs to in the project's logbook, so that the hook can
+ * keep a lead's writes on its own task. Undefined for an id of another form, an id that the logbook does not have, an
+ * id on two tasks, or a project without a logbook (no tables with rows, as before init). It takes no lock and writes
+ * nothing. A logbook that fails the integrity check, also one that lost tasks.tsv but has rows, throws its refusal,
+ * which names the file at fault, so a caller fails closed.
+ */
+function taskFor(id, project, env = process.env) {
+  const [table, col] = /^R[1-9]\d*$/.test(id) ? ["runs", "id"] : /^F-T[1-9]\d*-[1-9]\d*$/.test(id) ? ["findings", "key"] : [];
+  const dir = storeDir(project, env);
+  if (!table || (!lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && !hasRows(dir))) return undefined;
+  const owners = new Set(rowsOf(check(dir)[table]).filter((r) => r[col] === id).map((r) => r.task));
+  return owners.size === 1 ? [...owners][0] : undefined;
+}
+
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
 function sage(argv, env = process.env) {
   const [cmd, ...rest] = argv;
@@ -966,12 +989,23 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const runs = read(dir, "runs");
       if (sub === "add") {
         const { task } = taskOf(dir, need(id, "the task id"));
-        const role = need(opt.role, "--role");
+        // The role as the table stores it, in lower case, so that every check below sees the stored value ("Lead " is lead).
+        const role = cell(need(opt.role, "--role")).toLowerCase();
+        if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
         const branch = opt.branch === undefined ? "" : branchOf(opt.branch);
         if (WRITERS.includes(role)) {
           if (!branch) refuse(`a ${role} run needs --branch`);
           const other = runs.find((r) => r.branch === branch && r.status === "running" && WRITERS.includes(r.role));
           if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
+        }
+        if (role === "lead") {
+          // A lead carries one task's pull request: one running lead per task, and at most LEADS per project.
+          if (["merged", "abandoned", "concluded"].includes(task.state)) refuse(`${task.id} is ${task.state}, so it takes no lead run: the task has ended.`);
+          if (!builds(task)) refuse(`${task.id} is an investigation: it has no build and no pull request, so it takes no lead run. The chief runs its steps.`);
+          const leads = runs.filter((r) => r.role === "lead" && r.status === "running");
+          const same = leads.find((r) => r.task === task.id);
+          if (same) refuse(`${same.id} is the running lead run of ${task.id}, and a task has one running lead. Finish ${same.id} first (sage run done ${same.id} --status done, blocked, question or failed).`);
+          if (leads.length >= LEADS) refuse(`the project has ${leads.length} running lead runs, the most it holds: ${leads.map((r) => `${r.id} on ${r.task}`).join(", ")}. Finish one of them first (sage run done <R> --status done, blocked, question or failed).`);
         }
         const candidate = opt.candidate ?? "";
         const run = { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch, status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env)) };
@@ -1292,5 +1326,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, sage, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, taskFor, sage, withLock, board, answerPaths, runCli };
 }
