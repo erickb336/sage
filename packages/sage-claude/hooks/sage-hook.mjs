@@ -15,7 +15,8 @@
 //     Monitor, PowerShell, mcp__terminal__*), not only Bash. One case asks the user instead of a refusal: the chief's
 //     first creation of main or master on GitHub, in one literal gh api form (FIRST_FORM), checked on GitHub only
 //     (firstUpload, firstCreation).
-//   - Only main starts leads (3 per project), each named lead-T<n> and in the background; only leads start their permitted children (3 each),
+//   - Only main starts leads (3 per project), each named lead-T<n> of a task with a running lead run in the logbook of
+//     the session's folder (leadRunFor), and in the background; only leads start their permitted children (3 each),
 //     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode. In the same scope
 //     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent), and
 //     never names a spawn main or lead-T<n> (reservedName). Only the main session's TaskStop frees a slot.
@@ -355,6 +356,17 @@ export function handle(input, state, slots) {
     if (!/^lead-T\d+$/.test(spawnName)) return deny(event, "the sage starts a lead only with the name lead-T<n> of its task (the Agent tool's name, or its description when it has no name).");
     // A foreground lead's slot binds only when the lead ends, so its children's events could not renew it (F-T255-7).
     if (ti.run_in_background !== true) return deny(event, "a lead always starts in the background: set run_in_background to true.");
+    // A lead starts only for a task with a running lead run (#118 point 4), in the logbook that its writes use (leadProblem).
+    const task = spawnName.slice("lead-".length);
+    let project, lead;
+    try {
+      if (stateTool.error) throw stateTool.error;
+      project = realpathSync.native(input.cwd);
+      lead = stateTool.leadRunFor(task, project, process.env, { max: LEAD_READ_MAX });
+    } catch (e) {
+      return deny(event, `the hook could not read the logbook for ${task} (${e?.message ?? e}), so it starts no lead. Fix the logbook, or tell the user.`);
+    }
+    if (!lead) return deny(event, `${task} has no running lead run in the logbook of ${project}. Record it first, as a command of its own: ${stateCommand(`run add ${task} --role lead --project ${/^[\w./-]+$/.test(project) ? project : `'${project.replaceAll("'", `'\\''`)}'`}`)}`);
   }
   if (AGENT_TOOLS.test(tool) && OURS.test(spawned)) {
     const missing = missingFields(BRIEF_FIELDS, ti.prompt);

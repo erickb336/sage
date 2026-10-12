@@ -322,6 +322,24 @@ test("T266-MAX-AGENTS: the default max_agents is 4, one lead and its 3 children,
   assert.equal(config({ SAGE_HOME: s.home }).max_agents, 2);
 });
 
+test("#118 point 4: leadRunFor gives a task's one running lead run, nothing for none, and throws on an oversized table", async () => {
+  const s = store();
+  const { leadRunFor } = await import(LIB);
+  const env = { SAGE_HOME: s.home };
+  for (const t of ["a", "b"]) s.ok("task", "add", "--title", t, "--size", "small");
+  assert.equal(leadRunFor("T1", s.project, env), undefined, "no run");
+  s.ok("run", "add", "T1", "--role", "qa");
+  s.ok("run", "add", "T2", "--role", "lead");
+  assert.equal(leadRunFor("T1", s.project, env), undefined, "a qa run, and another task's lead run");
+  s.ok("run", "add", "T1", "--role", "lead");
+  assert.equal(leadRunFor("T1", s.project, env)?.id, "R3");
+  const size = readFileSync(join(s.dir, "runs.tsv")).length;
+  assert.throws(() => leadRunFor("T1", s.project, env, { max: size - 1 }), /\.tsv is over \d+ bytes/);
+  s.ok("run", "done", "R3", "--status", "failed");
+  assert.equal(leadRunFor("T1", s.project, env), undefined, "an ended lead run");
+  assert.equal(leadRunFor("T1", mkdtempSync(join(tmpdir(), "sage-none-")), env), undefined, "a project without a logbook");
+});
+
 test("T266-TASK-FOR: rowFor gives the row of a run id or a finding key, and nothing for an unknown id; a damaged or oversized logbook throws (T273)", async () => {
   const s = store();
   const { rowFor } = await import(LIB);

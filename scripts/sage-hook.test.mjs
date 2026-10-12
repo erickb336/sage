@@ -4291,10 +4291,20 @@ const LEAD = { agent_id: "lead-a", agent_type: "sage:lead" };
 const nested = (role = "sage:qa", id = "child-call", extra = {}) => spawnAgent(role, BRIEF, id, { ...LEAD, ...extra });
 const resultOf = (id, agentId, extra = {}, status = "async_launched") => ({ hook_event_name: "PostToolUse", tool_name: "Agent", tool_use_id: id, tool_response: { status, agentId }, ...extra });
 const ended = (agent_id, agent_type = "sage:qa", extra = {}) => ({ hook_event_name: "SubagentStop", agent_id, agent_type, stop_hook_active: true, ...extra });
+/** The folder of the main session's lead spawns: its logbook has a running lead run for each task that a test starts a lead for (#118 point 4). */
+const LEAD_DIR = realpathSync(mkdtempSync(join(tmpdir(), "sage-leads-")));
 /** The main session's spawn of a lead, with the name lead-T<n> in the description (T255 L1). */
-const leadSpawn = (id, n = 1, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: id, ...extra });
+const leadSpawn = (id, n = 1, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: id, cwd: LEAD_DIR, ...extra });
+/** A logbook for LEAD_DIR in the session's sage home, with a running lead run for T1 to T9 and T181. The rows go in directly: the state tool holds 3 running leads per project, and these tests check the hook's own limits. */
+function leadRuns(s) {
+  spawnSync("node", [TOOL, "init", "--project", LEAD_DIR], { encoding: "utf8", env: s.vars });
+  const dir = spawnSync("node", [TOOL, "logbook", "--project", LEAD_DIR], { encoding: "utf8", env: s.vars }).stdout.trim();
+  const rows = [1, 2, 3, 4, 5, 6, 7, 8, 9, 181].map((n, k) => [`R${k + 1}`, `T${n}`, "lead", "0", "", "", "running", "", "", "", "", ""].join("\t"));
+  writeFileSync(join(dir, "runs.tsv"), `${readFileSync(join(dir, "runs.tsv"), "utf8").trimEnd()}\n${rows.join("\n")}\n`);
+  return s;
+}
 function nestedSession() {
-  const s = session();
+  const s = leadRuns(session());
   s.sage("config", "max_agents=20", "cap_total=30");
   s.send(prompt("sage mode"));
   return s;
@@ -4617,7 +4627,7 @@ test("T255 H1: a child's events renew its lead's slot, and a lead with a running
   renewed.send(ended("impl", "sage:implementer"));
   assert.equal(renewed.send(leadSpawn("lead-4", 4)), undefined, "an idle lead's lease ends");
   assert.equal(renewed.send(leadSpawn("lead-5", 5)), undefined);
-  assert.match(denied(renewed.send(leadSpawn("lead-6", 6))) ?? "", /3 leads are running for other/, "the child's event renewed lead a");
+  assert.match(denied(renewed.send(leadSpawn("lead-6", 6))) ?? "", /3 leads are running for sage-leads-/, "the child's event renewed lead a");
 
   const waiting = nestedSession();
   threeLeads(waiting);
@@ -4626,7 +4636,7 @@ test("T255 H1: a child's events renew its lead's slot, and a lead with a running
   ageSlots(waiting, 61, ["slot-1", "slot-2", "slot-3"]);
   assert.equal(waiting.send(leadSpawn("lead-4", 4)), undefined);
   assert.equal(waiting.send(leadSpawn("lead-5", 5)), undefined);
-  assert.match(denied(waiting.send(leadSpawn("lead-6", 6))) ?? "", /3 leads are running for other/, "lead a has a running child");
+  assert.match(denied(waiting.send(leadSpawn("lead-6", 6))) ?? "", /3 leads are running for sage-leads-/, "lead a has a running child");
 });
 
 test("T255 H2: outside sage mode, an agent that is not a lead starts no sage agent; a lead keeps the brief check", () => {
@@ -4646,16 +4656,18 @@ test("T255 M1: a lead's stop does not free its running children's slots", () => 
   s.sage("config", "max_agents=4");
   assert.equal(s.send(leadSpawn("lead-a-call", 1)), undefined);
   s.send(resultOf("lead-a-call", "lead-a"));
-  assert.equal(s.send(nested("sage:implementer", "a-1")), undefined);
+  // The children run in the leads' folder, so that all count for one project.
+  const at = { cwd: LEAD_DIR };
+  assert.equal(s.send(nested("sage:implementer", "a-1", at)), undefined);
   s.send(resultOf("a-1", "kid-1", LEAD));
-  assert.equal(s.send(nested("sage:qa", "a-2")), undefined);
+  assert.equal(s.send(nested("sage:qa", "a-2", at)), undefined);
   s.send(resultOf("a-2", "kid-2", LEAD));
   s.send(ended("lead-a", "sage:lead"));
-  const b = { ...LEAD, agent_id: "lead-b" };
+  const b = { ...LEAD, agent_id: "lead-b", ...at };
   assert.equal(s.send(leadSpawn("lead-b-call", 2)), undefined);
   s.send(resultOf("lead-b-call", "lead-b"));
   assert.equal(s.send(nested("sage:qa", "b-1", b)), undefined);
-  assert.match(denied(s.send(nested("sage:qa", "b-2", b))) ?? "", /4 sage agents are running for other, and its cap is 4/, "lead a's two children still run");
+  assert.match(denied(s.send(nested("sage:qa", "b-2", b))) ?? "", /4 sage agents are running for sage-leads-\w+, and its cap is 4/, "lead a's two children still run");
   s.send(ended("kid-1", "sage:implementer"));
   assert.equal(s.send(nested("sage:qa", "b-2", b)), undefined, "a child's own stop frees its slot");
 });
@@ -4687,7 +4699,7 @@ test("T255 M3: only the main session's TaskStop frees a slot", () => {
 
 test("T255 L1: the main session starts a lead only with the name lead-T<n>", () => {
   const s = nestedSession();
-  const lead = (id, names) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, run_in_background: true, ...names }, { tool_use_id: id });
+  const lead = (id, names) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, run_in_background: true, ...names }, { tool_use_id: id, cwd: LEAD_DIR });
   for (const [n, names] of [{ description: "d" }, { description: "lead" }, { description: "lead-T" }, { description: "lead-t1" }, { description: "lead-T1 x" }, {}, { name: "worker", description: "lead-T7" }].entries()) {
     assert.match(denied(s.send(lead(`bad-${n}`, names))) ?? "", /only with the name lead-T<n>/, JSON.stringify(names));
   }
@@ -4712,7 +4724,7 @@ test("T255 L2: a spawn that never starts frees after 10 minutes, and a failed sp
 
 test("F-T255-7: the main session starts a lead only in the background", () => {
   const s = nestedSession();
-  const lead = (id, extra) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: "lead-T1", ...extra }, { tool_use_id: id });
+  const lead = (id, extra) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: "lead-T1", ...extra }, { tool_use_id: id, cwd: LEAD_DIR });
   for (const [n, extra] of [{}, { run_in_background: false }, { run_in_background: "true" }].entries()) {
     assert.match(denied(s.send(lead(`fg-${n}`, extra))) ?? "", /a lead always starts in the background: set run_in_background to true/, JSON.stringify(extra));
   }
@@ -4736,7 +4748,7 @@ test("F-T255-4: a sage agent, or any agent in sage mode, never names a spawn mai
 });
 
 test("F-T255-5: a sage type in another letter case meets the same spawn and message rules", () => {
-  const s = session();
+  const s = leadRuns(session());
   s.sage("config", "max_agents=20", "cap_total=30");
   const gp = { agent_id: "gp", agent_type: "general-purpose" };
   assert.match(denied(s.send(spawnAgent("Sage:lead", BRIEF, "case-1", gp))) ?? "", /only a lead may start an agent/, "a plain agent starts no Sage:lead outside sage mode");
@@ -4745,7 +4757,7 @@ test("F-T255-5: a sage type in another letter case meets the same spawn and mess
   assert.match(denied(s.send(tool("SendMessage", { to: "kid", message: "x" }, { agent_id: "q", agent_type: "Sage:QA" }))) ?? "", /only to main/, "the message rule reads the caller in any case");
   s.send(prompt("sage mode"));
   assert.match(denied(s.send(tool("Agent", { subagent_type: "Sage:Lead", prompt: BRIEF, description: "d", run_in_background: true }, { tool_use_id: "case-4" }))) ?? "", /only with the name lead-T<n>/, "the main session's lead rules read the type in any case");
-  for (const n of [1, 2, 3]) assert.equal(s.send(tool("Agent", { subagent_type: "SAGE:lead", prompt: BRIEF, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: `lead-${n}` })), undefined);
+  for (const n of [1, 2, 3]) assert.equal(s.send(tool("Agent", { subagent_type: "SAGE:lead", prompt: BRIEF, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: `lead-${n}`, cwd: LEAD_DIR })), undefined);
   assert.match(denied(s.send(leadSpawn("lead-4", 4))) ?? "", /3 leads are running/, "a lead in another case counts as a lead");
 });
 
@@ -4804,7 +4816,7 @@ function leadSession(env = {}) {
   s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a"); // F-T1-1
   s.sage("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "b"); // F-T1-2
   s.sage("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "c"); // F-T2-1
-  assert.equal(s.send(leadSpawn("lead-call", 1)), undefined);
+  assert.equal(s.send(leadSpawn("lead-call", 1, { cwd: s.dir })), undefined);
   s.send(resultOf("lead-call", "lead-a"));
   return s;
 }
@@ -4919,7 +4931,8 @@ test("T273: a lead's slot is bound only by the spawn's result, and names the tas
   s.send(prompt("sage mode"));
   s.sage("init");
   for (const title of ["a", "b"]) s.sage("task", "add", "--title", title, "--size", "small");
-  assert.equal(s.send(leadSpawn("lead-call", 2)), undefined);
+  s.sage("run", "add", "T2", "--role", "lead");
+  assert.equal(s.send(leadSpawn("lead-call", 2, { cwd: s.dir })), undefined);
   assert.match(denied(stateRun(s, "round T2")) ?? "", /this lead holds no bound lead slot/, "before the result");
   s.send(resultOf("lead-call", "lead-a"));
   assert.equal(denied(stateRun(s, "round T2")), undefined, "lead-T2 writes T2");
@@ -4954,4 +4967,30 @@ test("T273: an oversized or damaged logbook table refuses a lead's write that re
   assert.match(denied(stateRun(s, "run done R2 --status done")) ?? "", /the header of .*runs\.tsv is damaged/);
   writeFileSync(runs, before);
   assert.equal(denied(stateRun(s, "run done R2 --status done")), undefined);
+});
+
+test("#118 point 4: in sage mode the main session starts lead-T<n> only when T<n> has a running lead run in the logbook", () => {
+  const s = linkedSession();
+  s.sage("config", "max_agents=20", "cap_total=30");
+  s.send(prompt("sage mode"));
+  s.sage("init");
+  for (const title of ["a", "b"]) s.sage("task", "add", "--title", title, "--size", "small");
+  const real = realpathSync(s.dir);
+  const NONE = (t) => new RegExp(`^sage: ${t} has no running lead run in the logbook of ${real}\\. Record it first, as a command of its own: node \\S+ run add ${t} --role lead --project ${real}$`);
+  assert.match(denied(s.send(leadSpawn("before", 1, { cwd: s.dir }))) ?? "", NONE("T1"), "no lead run yet");
+  s.sage("run", "add", "T2", "--role", "lead"); // R1
+  assert.match(denied(s.send(leadSpawn("other-task", 1, { cwd: s.dir }))) ?? "", NONE("T1"), "a lead run of another task does not count");
+  s.sage("run", "add", "T1", "--role", "qa");
+  assert.match(denied(s.send(leadSpawn("qa-run", 1, { cwd: s.dir }))) ?? "", NONE("T1"), "a run of another role does not count");
+  s.sage("run", "add", "T1", "--role", "lead"); // R3
+  assert.equal(s.send(leadSpawn("after", 1, { cwd: s.dir })), undefined, "the running lead run of T1");
+  s.sage("run", "done", "R3", "--status", "failed");
+  assert.match(denied(s.send(leadSpawn("ended", 1, { cwd: s.dir }))) ?? "", NONE("T1"), "an ended lead run does not count");
+  assert.match(denied(s.send(leadSpawn("no-cwd", 2, { cwd: undefined }))) ?? "", /^sage: the hook could not read the logbook for T2 \(/, "an event with no folder");
+  assert.equal(s.send(leadSpawn("t2", 2, { cwd: s.dir })), undefined, "T2 keeps its running lead run");
+  const runs = join(s.sage("logbook"), "runs.tsv");
+  writeFileSync(runs, readFileSync(runs, "utf8") + "\t".repeat(4 * 1024 * 1024) + "\n");
+  assert.match(denied(s.send(leadSpawn("big", 2, { cwd: s.dir }))) ?? "", /^sage: the hook could not read the logbook for T2 \(.*runs\.tsv is over 4194304 bytes/, "an oversized table");
+  const off = linkedSession();
+  assert.equal(off.send(leadSpawn("off", 1, { cwd: off.dir })), undefined, "outside sage mode the rule does not apply, as the other lead spawn rules");
 });

@@ -750,10 +750,21 @@ function status(dir, save) {
  */
 function rowFor(id, project, env = process.env, { max = Infinity } = {}) {
   const [table, col] = /^R[1-9]\d*$/.test(id) ? ["runs", "id"] : /^F-T[1-9]\d*-[1-9]\d*$/.test(id) ? ["findings", "key"] : [];
-  const dir = storeDir(project, env);
-  if (!table || (!lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && !hasRows(dir, max))) return undefined;
-  const rows = rowsOf(check(dir, [], max)[table]).filter((r) => r[col] === id);
+  const rows = table ? rowsIn(table, project, env, max).filter((r) => r[col] === id) : [];
   return rows.length === 1 ? rows[0] : undefined;
+}
+
+/** The running lead run of a task (#118 point 4), or undefined: none, or more than one. It reads and throws as rowFor does. */
+function leadRunFor(task, project, env = process.env, { max = Infinity } = {}) {
+  const runs = rowsIn("runs", project, env, max).filter((r) => r.task === task && r.role === "lead" && r.status === "running");
+  return runs.length === 1 ? runs[0] : undefined;
+}
+
+/** A table's rows through the integrity check, each table at most max bytes; none for a project without a logbook. No lock, no write. */
+function rowsIn(table, project, env, max) {
+  const dir = storeDir(project, env);
+  if (!lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && !hasRows(dir, max)) return [];
+  return rowsOf(check(dir, [], max)[table]);
 }
 
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
@@ -1327,5 +1338,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, rowFor, sage, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, rowFor, leadRunFor, sage, withLock, board, answerPaths, runCli };
 }
