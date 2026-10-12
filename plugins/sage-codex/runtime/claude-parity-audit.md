@@ -10,7 +10,7 @@ The required-hook outage check still permits an untracked child. This blocks act
 | Area | Implemented evidence | Work left before full parity |
 | --- | --- | --- |
 | Owner activation and off | Verified initial and later owner mode requests, saved mode, chief instruction assembly; off restores direct chief edits without interrupting children | Supported installed entry point and trusted hook enforcement |
-| Compaction and restart | Durable records survive adapter reconstruction; native CLI resume preserves one owner; manual root compaction restores exact chief context without active children | Automatic or remote compaction, child context, restart with active children, and transfer to another session |
+| Compaction and restart | Durable records survive adapter reconstruction; native CLI resume preserves one owner; manual and automatic root compaction restore exact chief context without active children | Remote compaction, child context, restart with active children, and transfer to another session |
 | Command and write rules | Role edit refusal, original command recovery, chief-only child messages, child sandbox-request refusal | Complete command, path, file-write and workflow policy; trusted effective execution context |
 | Briefs and dispatch | Saved briefs, atomic admission, initial and prepared follow-up binding, exact native task delivery | Required-hook outage protection and all missing-initial-evidence cases |
 | Roles and limits | Shared limits, one active lead per task, run-target checks, lead-to-reviewer delegation | One lead per PR across distinct task records; complete installed workflow |
@@ -328,5 +328,6 @@ It changes no mode, owner, task, run, or admission record. Off mode restores no 
 
 The actual 0.160.0 app-server probe checks matched compaction events, a persisted record with its response and window identities,
 and the next model request containing the fixed summary plus both exact chief parts. The off control contains neither part.
-These checks use simulated responses and no active children. Automatic/remote compaction, child context, installed activation,
+The automatic route also verifies native trigger `auto`, using fixed simulated token usage and no manual compaction request.
+These checks use simulated responses and no active children. Remote compaction, child context, installed activation,
 and a real-project pilot remain separate work. See [the compaction contract](compaction.md).
