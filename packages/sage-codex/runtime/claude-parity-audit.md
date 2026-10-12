@@ -10,7 +10,7 @@ The required-hook outage check still permits an untracked child. This blocks act
 | Area | Implemented evidence | Work left before full parity |
 | --- | --- | --- |
 | Owner activation and off | Verified initial and later owner mode requests, saved mode, chief instruction assembly; off restores direct chief edits without interrupting children | Supported installed entry point and trusted hook enforcement |
-| Compaction and restart | Durable records survive adapter reconstruction; native CLI resume preserves one owner and accepts later mode requests without active children | Native compaction, restart with active children, and transfer to another session |
+| Compaction and restart | Durable records survive adapter reconstruction; native CLI resume preserves one owner; manual root compaction restores exact chief context without active children | Automatic or remote compaction, child context, restart with active children, and transfer to another session |
 | Command and write rules | Role edit refusal, original command recovery, chief-only child messages, child sandbox-request refusal | Complete command, path, file-write and workflow policy; trusted effective execution context |
 | Briefs and dispatch | Saved briefs, atomic admission, initial and prepared follow-up binding, exact native task delivery | Required-hook outage protection and all missing-initial-evidence cases |
 | Roles and limits | Shared limits, one active lead per task, run-target checks, lead-to-reviewer delegation | One lead per PR across distinct task records; complete installed workflow |
@@ -318,3 +318,15 @@ After your probe exits, inspect each matching folder in your file manager.
 Remove only old probe folders that contain the test profile, scripts, and captured
 events. Keep any folder used by a probe that is still running. Do not delete the
 whole temporary directory or unrelated Sage folders.
+
+
+## Chief context restoration after manual compaction
+
+The native compaction probe found that local history replacement removed both chief-instruction parts while owner and logbook state stayed unchanged.
+The prepared SessionStart handler now restores both parts for the authenticated active root owner after the verified compact event.
+It changes no mode, owner, task, run, or admission record. Off mode restores no instructions; failed rendering remains retryable.
+
+The actual 0.160.0 app-server probe checks matched compaction events, a persisted record with its response and window identities,
+and the next model request containing the fixed summary plus both exact chief parts. The off control contains neither part.
+These checks use simulated responses and no active children. Automatic/remote compaction, child context, installed activation,
+and a real-project pilot remain separate work. See [the compaction contract](compaction.md).

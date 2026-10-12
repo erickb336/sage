@@ -9,6 +9,13 @@ const input=JSON.parse(readFileSync(0,'utf8'));
 const record=Object.fromEntries(['hook_event_name','session_id','agent_id','turn_id','tool_name','tool_use_id'].filter(k=>typeof input[k]==='string').map(k=>[k,input[k]]));
 // Record field types only; command content stays private.
 record.toolInputShape=Object.fromEntries(Object.entries(input.tool_input??{}).map(([k,v])=>[k,typeof v]));
+if(['SessionStart','PreCompact','PostCompact'].includes(input.hook_event_name)){
+ record.source=input.source;record.trigger=input.trigger;record.inputKeys=Object.keys(input).sort();
+ const base=realpathSync(join(root,'codex/sessions')),transcript=realpathSync(input.transcript_path);
+ const rel=relative(base,transcript);
+ if(!rel||rel.startsWith('..')||isAbsolute(rel))throw Error('outside_fresh_session_tree');
+ writeFileSync(join(root,'compaction-transcript.json'),JSON.stringify({path:transcript,session:input.session_id}));
+}
 record.fixedCommandMatched=input.tool_input?.command==='printf sage-native-command-ok; pwd';
 record.fixedSandboxCommandMatched=input.tool_input?.command==='printf sage-child-sandbox-control';
 if(record.fixedCommandMatched&&input.hook_event_name==='PreToolUse'){

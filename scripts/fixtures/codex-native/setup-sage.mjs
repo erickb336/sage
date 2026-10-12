@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** All files and the scoped tool approvals belong only to setupCapture's validated temporary root. */
-export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, denyCommand = false, emptyLogbook = false, taskLifecycle = false, omitStop = false } = {}) {
+export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, denyCommand = false, emptyLogbook = false, taskLifecycle = false, omitStop = false, restoreCompaction = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   for (const file of ["sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
     writeFileSync(join(root, file), readFileSync(new URL(file, import.meta.url)));
@@ -39,11 +39,12 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   return { config, reviewTarget, readLogbook, endFixtureRun: () => command("run", "done", "R1", "--status", "done"), retargetFixtureRun: () => command("task", "T1", "set", "branch=codex/t1-retargeted"), mergeReady: () => tool.mergeCheck(reviewTarget.sha, env).ok, readRunReport: () => readFileSync(join(logbook, tool.read(logbook, "runs")[0].report), "utf8"), readFault: () => JSON.parse(readFileSync(join(root, "hook-outage.json"), "utf8")), readJournal: () => readAdmission(directory), hook: event => {
     // Deliberately omit MCP SubagentStart: the first tool must establish the child's binding.
     if (event === "SubagentStart" || (omitStop && event === "SubagentStop")) return [];
-    const fields = event === "UserPromptSubmit" ? ["cwd", "hook_event_name", "model", "permission_mode", "prompt", "session_id", "transcript_path", "turn_id"]
+    const fields = event === "SessionStart" && restoreCompaction ? ["cwd", "hook_event_name", "model", "permission_mode", "session_id", "source", "transcript_path"]
+      : event === "UserPromptSubmit" ? ["cwd", "hook_event_name", "model", "permission_mode", "prompt", "session_id", "transcript_path", "turn_id"]
       : event === "SubagentStop" ? ["hook_event_name", "session_id", "agent_id", "turn_id", "transcript_path", "agent_transcript_path", "stop_hook_active", "last_assistant_message"]
       : ["hook_event_name", "session_id", "turn_id", "tool_name", "tool_use_id", "tool_input", "transcript_path", ...(event === "PostToolUse" ? ["tool_response"] : [])];
     const handler = { type: "mcp_tool", server: "sage_fixture", tool: "sage_native_hook", timeout: 10,
       input: Object.fromEntries(fields.map(key => [key, "${" + key + "}"])) };
-    return event === "UserPromptSubmit" ? [handler, { ...handler, input: { ...handler.input, instruction_part: 1 } }] : [handler];
+    return (event === "UserPromptSubmit" || (event === "SessionStart" && restoreCompaction)) ? [handler, { ...handler, input: { ...handler.input, instruction_part: 1 } }] : [handler];
   } };
 }
