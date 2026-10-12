@@ -1,6 +1,6 @@
 // Optional local files only. The caller selects stable paths and starts launchd separately.
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { accessSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url)), packages = dirname(here);
@@ -56,11 +56,48 @@ function containsDirectory(parent, child) {
   }
 }
 
-function paths({ installDir, configPath, nodePath } = {}, installed = false) {
+function controlledAlias(path) {
+  const uid = process.getuid?.();
+  if (uid === undefined) refuse("nodePath alias ownership is unavailable");
+  for (let cursor = path;; cursor = dirname(cursor)) {
+    const info = lstatSync(cursor);
+    if (![0, uid].includes(info.uid) || (!info.isSymbolicLink() && (info.mode & 0o002) && !(info.mode & 0o1000))) refuse("nodePath alias must stay in owner-controlled directories");
+    if (dirname(cursor) === cursor) break;
+  }
+}
+
+/** Select the current Node through PATH without pinning a Homebrew Cellar version. */
+export function stableNodePath(path = process.env.PATH ?? "") {
+  const running = realpathSync(process.execPath);
+  let direct;
+  for (const folder of path.split(delimiter)) {
+    if (!isAbsolute(folder)) continue;
+    const candidate = join(folder, "node");
+    try {
+      absolute(candidate, "nodePath"); inspect(dirname(candidate), "nodePath parent", "directory");
+      accessSync(candidate, constants.X_OK);
+      if (realpathSync(candidate) !== running || /(?:^|\/)Cellar\//.test(candidate)) continue;
+      if (lstatSync(candidate).isSymbolicLink()) { controlledAlias(candidate); return candidate; }
+      if (lstatSync(candidate).isFile()) direct ??= candidate;
+    } catch { /* Another PATH entry may name the same running Node through a stable location. */ }
+  }
+  return direct ?? refuse("put an upgrade-stable Node command on PATH before creating the login file");
+}
+
+function inspectNode(path, allowAlias) {
+  if (!allowAlias || !lstatSync(path).isSymbolicLink()) return inspect(path, "nodePath", "file");
+  inspect(dirname(path), "nodePath parent", "directory");
+  controlledAlias(path);
+  const target = realpathSync(path);
+  if (target !== realpathSync(process.execPath)) refuse("nodePath alias must name the running Node");
+  return inspect(target, "nodePath target", "file");
+}
+
+function paths({ installDir, configPath, nodePath, allowNodeAlias = false } = {}, installed = false) {
   absolute(installDir, "installDir"); absolute(configPath, "configPath"); absolute(nodePath, "nodePath");
   inspect(installDir, "installDir", "directory", !installed);
   if ((!installed && (containsDirectory(packages, installDir) || containsDirectory(installDir, packages))) || /(?:^|\/)plugins\/(?:cache|marketplaces)(?:\/|$)/i.test(installDir)) refuse("installDir must be outside source packages and plugin caches");
-  inspect(configPath, "configPath", "file"); inspect(nodePath, "nodePath", "file");
+  inspect(configPath, "configPath", "file"); inspectNode(nodePath, allowNodeAlias);
   const cliPath = join(installDir, "packages", BOARD, "cli.mjs");
   if (installed) inspect(cliPath, "installed CLI", "file");
   return { installDir, configPath, nodePath, cliPath };

@@ -60,9 +60,18 @@ test("standalone setup and installation stay explicit, with no service operation
   const install = join(dir, "installed"), plist = join(dir, "login/board.plist");
   await assert.rejects(runBoardCli(["board", "--install", "--install-dir", install, "--login-file", join(root, "board.plist"), "--config", config]), /outside logbook roots/);
   assert.equal(existsSync(install), false);
-  await runBoardCli(["board", "--install", "--install-dir", install, "--login-file", plist, "--config", config], { output: line => lines.push(line) });
+  // The login file names Node through a stable PATH command, so a fixture PATH replaces the machine's PATH.
+  const bin = join(dir, "bin"), stableNode = join(bin, "node"), savedPath = process.env.PATH;
+  mkdirSync(bin); symlinkSync(process.execPath, stableNode);
+  process.env.PATH = join(dir, "empty-bin");
+  try {
+    await assert.rejects(runBoardCli(["board", "--install", "--install-dir", install, "--login-file", plist, "--config", config]), /upgrade-stable Node/);
+    process.env.PATH = bin;
+    await runBoardCli(["board", "--install", "--install-dir", install, "--login-file", plist, "--config", config], { output: line => lines.push(line) });
+  } finally { process.env.PATH = savedPath; }
   assert.ok(readFileSync(join(install, "packages/sage-board/cli.mjs"), "utf8").includes("runBoardCli"));
   assert.ok(readFileSync(plist, "utf8").includes("dev.sage.board"));
+  assert.ok(readFileSync(plist, "utf8").includes(`<string>${stableNode}</string>`));
   const installed = spawnSync(process.execPath, [join(install, "packages/sage-board/cli.mjs"), "board", "all", "--status", "--config", config], { cwd: dir, env: process.env, encoding: "utf8" });
   assert.equal(installed.status, 0, installed.stderr);
   assert.ok(installed.stdout.includes("framed 1"));

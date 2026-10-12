@@ -2,6 +2,7 @@ import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs, { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { request } from "node:http";
 import { createServer } from "node:net";
@@ -316,4 +317,30 @@ test("board watcher errors publish a stale diagnostic and recover on an observed
   await stream.next(p => p.html.includes("Not set up yet: Sample source"));
   populate(f.root, "Sample watcher restored");
   await stream.next(p => !p.stale && p.html.includes("Sample watcher restored"));
+});
+
+
+test("a parent rename that names only the destination refreshes the missing board root", async t => {
+  const original = fs.watch, captured = [];
+  // Simulate the allowed rename notification with no old-name event. No real watcher delivers extra events.
+  fs.watch = (path, options, callback) => {
+    const watcher = new EventEmitter(); watcher.close = () => { watcher.closed = true; };
+    captured.push({ path, options, callback, watcher });
+    return watcher;
+  };
+  syncBuiltinESMExports();
+  let f;
+  try { f = await fixture(t); } finally { fs.watch = original; syncBuiltinESMExports(); }
+  const stream = events(f); t.after(() => stream.close());
+  await stream.next(p => !p.stale);
+  renameSync(f.root, join(f.dir, "renamed-source"));
+  const parent = captured.find(entry => entry.path === f.dir && !entry.options.recursive);
+  assert.ok(parent);
+  parent.callback("rename", "renamed-source");
+  // T216: a missing root is a quiet note, not a stale board.
+  const missing = await stream.next(p => p.html.includes("Not set up yet: Sample source"));
+  assert.equal(missing.stale, false); assert.doesNotMatch(missing.html, /Sample first task/);
+  populate(f.root, "Sample recreated source");
+  parent.callback("rename", "source");
+  await stream.next(p => !p.stale && p.html.includes("Sample recreated source"));
 });
