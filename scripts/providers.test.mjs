@@ -1766,3 +1766,32 @@ test("Codex advice defaults to a private Codex home instead of the shared temp f
   assert.equal(lstatSync(dirname(file)).mode & 0o777, 0o700);
   assert.equal(lstatSync(dirname(dirname(file))).mode & 0o777, 0o700);
 });
+
+test("Codex advice refuses state below a foreign-owned ancestor even when its mode looks safe", t => {
+  const { dir, plugin } = isolated(t, "codex");
+  const event = { session_id: "foreign-parent", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
+  for (const mode of [0o755, 0o1777]) for (const nested of [false, true]) {
+    const foreign = join(dir, `foreign-${mode}-${nested}`); mkdirSync(foreign, { mode });
+    const parent = nested ? join(foreign, "owned-child") : foreign;
+    if (nested) mkdirSync(parent, { mode: 0o700 });
+    const base = join(parent, "state");
+    // Simulate only the UID that stat would return for another user's ancestor.
+    // The real hook and filesystem still perform every read, create, and write.
+    const preload = join(dir, `foreign-owner-${mode}-${nested}.mjs`);
+    writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const original = fs.lstatSync;
+fs.lstatSync = (path, ...args) => {
+  const info = original(path, ...args);
+  if (path === ${JSON.stringify(foreign)}) Object.defineProperty(info, 'uid', { value: process.getuid() + 1 });
+  return info;
+};
+syncBuiltinESMExports();\n`);
+    const result = spawnSync(process.execPath, ["--import", preload, join(plugin, "hooks/principles-hook.mjs")], {
+      env: { ...process.env, AGENT_KIT_HOOKS_STATE: base }, input: JSON.stringify(event), encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(base), false, "another directory owner can replace the path despite safe-looking permission bits");
+    assert.equal(result.stdout, "");
+  }
+});

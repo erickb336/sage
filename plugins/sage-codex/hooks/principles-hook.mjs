@@ -40,18 +40,19 @@ export function stateKey(input) {
   return createHash("sha256").update(JSON.stringify([input.session_id, input.agent_id ?? null])).digest("hex");
 }
 
-// Refuse links before creating directories. Existing state directories must be private.
+// Refuse links and ancestors controlled by another user. Root-owned system parents are trusted.
+// Existing state directories must be private and owned by this user.
 function privateDirectory(path) {
   const parent = dirname(path);
   if (parent !== path) {
     try {
       const info = lstatSync(parent);
-      if (!info.isDirectory() || info.isSymbolicLink() || ((info.mode & 0o022) && !(info.mode & 0o1000))) throw new Error("unsafe advice parent");
+      if (!info.isDirectory() || info.isSymbolicLink() || ![0, process.getuid()].includes(info.uid) || ((info.mode & 0o022) && !(info.mode & 0o1000))) throw new Error("unsafe advice parent");
       // Check existing ancestors too, without changing their permissions.
       let ancestor = dirname(parent);
       while (ancestor !== dirname(ancestor)) {
         const entry = lstatSync(ancestor);
-        if (!entry.isDirectory() || ((entry.mode & 0o022) && !(entry.mode & 0o1000))) throw new Error("unsafe advice ancestor");
+        if (!entry.isDirectory() || ![0, process.getuid()].includes(entry.uid) || ((entry.mode & 0o022) && !(entry.mode & 0o1000))) throw new Error("unsafe advice ancestor");
         ancestor = dirname(ancestor);
       }
     } catch (error) {
