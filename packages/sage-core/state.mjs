@@ -978,6 +978,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
               decided.push({ at: now(), task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
             }
             if (was === "held" || v === "held") task.hold = "";
+            // A new premise starts its own count: the round keys of the old plan go when the task leaves replan (F-T284-19).
+            if (was === "replan") task.keys = "";
             const build = builds(task);
             if ((v === "verified" && !build) || (v === "concluded" && build)) refuse(`${task.id} ${build ? "has a build block, so it ends at verified" : "has no build block, so it ends at concluded"}`);
             if (v === "verifying" || v === "concluded") {

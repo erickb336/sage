@@ -2773,3 +2773,21 @@ test("F-T284-17: a retry whose last round's findings are still open goes to repl
   s.ok("task", "T1", "set", "state=reviewing");
   assert.match(s.ok("round", "T1"), /^T1 replan: round 1 did not fix /, "the same open findings: replan, not a second try");
 });
+
+// Repair round 3 of T284 (R929). It fails on f6a88ec and passes after.
+test("F-T284-19: a task that leaves replan starts its own round count, so an old finding that is still open does not replan it again", () => {
+  const s = store();
+  s.ok("config", "max_rounds=3");
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  for (const state of ["briefed", "building", "reviewing"]) s.ok("task", "T1", "set", `state=${state}`);
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "one"); // F-T1-1
+  s.ok("finding", "triage", "T1", "F-T1-1", "fix");
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 1 of 3 /);
+  s.ok("task", "T1", "set", "state=reviewing");
+  assert.match(s.ok("round", "T1"), /^T1 replan: round 1 did not fix F-T1-1/);
+  for (const state of ["briefed", "building", "reviewing"]) s.ok("task", "T1", "set", `state=${state}`); // the chief's new brief
+  assert.equal(rows(s.dir, "tasks")[0].keys, "", "the old plan's round keys are gone");
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "two"); // F-T1-2, with F-T1-1 still open
+  s.ok("finding", "triage", "T1", "F-T1-2", "fix");
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 2 of 3 · fix F-T1-1,F-T1-2 /);
+});
