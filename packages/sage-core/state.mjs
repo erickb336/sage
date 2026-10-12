@@ -741,30 +741,30 @@ function status(dir, save) {
 }
 
 /**
- * The row of a run id (R<n>) or a finding key (F-T<n>-<k>) in the project's logbook: its task, and a run's role or a
- * finding's severity, so that the hook can keep a lead's writes on its own task. Undefined for an id of another form, an
- * id that the logbook does not have, an id on two rows, or a project without a logbook (no tables with rows, as before
- * init). It takes no lock and writes nothing. A logbook that fails the integrity check, also one that lost tasks.tsv but
- * has rows, throws its refusal, which names the file at fault, so a caller fails closed. With max, a table of more than
- * max bytes throws too.
+ * A read-only view of the project's logbook, so that the hook can keep a lead's writes on its own task: its folder
+ * (dir), a task's row, the row of a run id (R<n>) or a finding key (F-T<n>-<k>), a task's one running lead run, and the
+ * tasks that are or were on a PR. Each lookup gives undefined for an id of another form, an id that the logbook does not
+ * have, or an id on two rows; a project without a logbook (no tables with rows, as before init) has no rows. It reads
+ * every table once, takes no lock and writes nothing. A logbook that fails the integrity check, also one that lost
+ * tasks.tsv but has rows, throws its refusal, which names the file at fault, so a caller fails closed. With max, a table
+ * of more than max bytes throws too.
  */
-function rowFor(id, project, env = process.env, { max = Infinity } = {}) {
-  const [table, col] = /^R[1-9]\d*$/.test(id) ? ["runs", "id"] : /^F-T[1-9]\d*-[1-9]\d*$/.test(id) ? ["findings", "key"] : [];
-  const rows = table ? rowsIn(table, project, env, max).filter((r) => r[col] === id) : [];
-  return rows.length === 1 ? rows[0] : undefined;
-}
-
-/** The running lead run of a task (#118 point 4), or undefined: none, or more than one. It reads and throws as rowFor does. */
-function leadRunFor(task, project, env = process.env, { max = Infinity } = {}) {
-  const runs = rowsIn("runs", project, env, max).filter((r) => r.task === task && r.role === "lead" && r.status === "running");
-  return runs.length === 1 ? runs[0] : undefined;
-}
-
-/** A table's rows through the integrity check, each table at most max bytes; none for a project without a logbook. No lock, no write. */
-function rowsIn(table, project, env, max) {
+function logbookView(project, env = process.env, { max = Infinity } = {}) {
   const dir = storeDir(project, env);
-  if (!lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && !hasRows(dir, max)) return [];
-  return rowsOf(check(dir, [], max)[table]);
+  const none = !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && !hasRows(dir, max);
+  const tables = Object.fromEntries(Object.entries(none ? {} : check(dir, [], max)).map(([t, sheet]) => [t, rowsOf(sheet)]));
+  const rows = (table) => tables[table] ?? [];
+  const one = (found) => (found.length === 1 ? found[0] : undefined);
+  return {
+    dir,
+    task: (id) => one(rows("tasks").filter((t) => t.id === id)),
+    row(id) {
+      const [table, col] = /^R[1-9]\d*$/.test(id) ? ["runs", "id"] : /^F-T[1-9]\d*-[1-9]\d*$/.test(id) ? ["findings", "key"] : [];
+      return table ? one(rows(table).filter((r) => r[col] === id)) : undefined;
+    },
+    leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
+    prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),
+  };
 }
 
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
@@ -1338,5 +1338,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, rowFor, leadRunFor, sage, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, withLock, board, answerPaths, runCli };
 }

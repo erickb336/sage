@@ -273,9 +273,10 @@ test("F-T266-3: run add takes the role as the table stores it, in lower case, so
   assert.equal(rows(s.dir, "runs").length, 3, "no refused run is recorded");
 });
 
-test("F-T266-2: rowFor throws when tasks.tsv is lost but other tables have rows, so the hook fails closed", async () => {
+test("F-T266-2: logbookView throws when tasks.tsv is lost but other tables have rows, so the hook fails closed", async () => {
   const s = store();
-  const { rowFor } = await import(LIB);
+  const { logbookView } = await import(LIB);
+  const rowFor = (id, project, env) => logbookView(project, env).row(id);
   const env = { SAGE_HOME: s.home };
   s.ok("task", "add", "--title", "a", "--size", "small");
   s.ok("run", "add", "T1", "--role", "qa");
@@ -322,9 +323,10 @@ test("T266-MAX-AGENTS: the default max_agents is 4, one lead and its 3 children,
   assert.equal(config({ SAGE_HOME: s.home }).max_agents, 2);
 });
 
-test("#118 point 4: leadRunFor gives a task's one running lead run, nothing for none, and throws on an oversized table", async () => {
+test("#118 point 4: logbookView gives a task's one running lead run, nothing for none, and throws on an oversized table", async () => {
   const s = store();
-  const { leadRunFor } = await import(LIB);
+  const { logbookView } = await import(LIB);
+  const leadRunFor = (task, project, env, options) => logbookView(project, env, options).leadRun(task);
   const env = { SAGE_HOME: s.home };
   for (const t of ["a", "b"]) s.ok("task", "add", "--title", t, "--size", "small");
   assert.equal(leadRunFor("T1", s.project, env), undefined, "no run");
@@ -340,9 +342,10 @@ test("#118 point 4: leadRunFor gives a task's one running lead run, nothing for 
   assert.equal(leadRunFor("T1", mkdtempSync(join(tmpdir(), "sage-none-")), env), undefined, "a project without a logbook");
 });
 
-test("T266-TASK-FOR: rowFor gives the row of a run id or a finding key, and nothing for an unknown id; a damaged or oversized logbook throws (T273)", async () => {
+test("T266-TASK-FOR: logbookView gives the row of a run id or a finding key, and nothing for an unknown id; a damaged or oversized logbook throws (T273)", async () => {
   const s = store();
-  const { rowFor } = await import(LIB);
+  const { logbookView } = await import(LIB);
+  const rowFor = (id, project, env, options) => logbookView(project, env, options).row(id);
   const taskFor = (...args) => rowFor(...args)?.task;
   const env = { SAGE_HOME: s.home };
   for (const t of ["a", "b", "c"]) s.ok("task", "add", "--title", t, "--size", "small");
@@ -364,6 +367,14 @@ test("T266-TASK-FOR: rowFor gives the row of a run id or a finding key, and noth
   const runs = join(s.dir, "runs.tsv");
   assert.equal(rowFor("R1", s.project, env).role, "lead", "a run's row has its role");
   assert.equal(rowFor("F-T4-1", s.project, env).severity, "low", "a finding's row has its severity");
+  const view = logbookView(s.project, env);
+  assert.equal(view.task("T2").title, "b", "a task's row");
+  assert.equal(view.task("T9"), undefined);
+  s.ok("task", "T2", "set", "pr=7");
+  assert.deepEqual([...logbookView(s.project, env).prTasks("7")], ["T2"], "the tasks on a PR");
+  s.ok("task", "T2", "set", "pr=8");
+  assert.deepEqual([...logbookView(s.project, env).prTasks("7")], ["T2"], "a task that held the PR");
+  assert.equal(logbookView(s.project, env).dir, s.dir, "the logbook folder");
   writeFileSync(runs, readFileSync(runs, "utf8") + "\t".repeat(5000) + "\n"); // the largest table: a long blank line
   const size = readFileSync(runs).length;
   assert.equal(rowFor("R2", s.project, env, { max: size }).task, "T3", "a table of exactly max bytes reads");

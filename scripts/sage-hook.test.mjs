@@ -4816,6 +4816,8 @@ function leadSession(env = {}) {
   s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a"); // F-T1-1
   s.sage("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "b"); // F-T1-2
   s.sage("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "c"); // F-T2-1
+  s.sage("task", "T1", "set", "state=briefed", "pr=5");
+  s.sage("task", "T2", "set", "pr=6");
   assert.equal(s.send(leadSpawn("lead-call", 1, { cwd: s.dir })), undefined);
   s.send(resultOf("lead-call", "lead-a"));
   return s;
@@ -4837,11 +4839,12 @@ const LEAD_ALLOWED = [
   "finding triage T1 F-T1-2 fix",
   "finding triage T1 F-T1-1 fix",
   "finding triage T1 F-T1-1 dismiss --reason=not-a-problem",
-  `verdict T1 --kind qa-pass --sha ${SHA} --cycle 1`,
-  `verdict T1 --kind qa-pass --sha ${SHA} --run R2 --pr 5`,
+  `verdict T1 --kind qa-pass --sha ${SHA} --cycle 1 --pr 5`,
+  `verdict T1 --kind qa-pass --sha ${SHA} --run R2 --pr=5`,
   "round T1",
-  ...["building", "reviewing", "repairing", "verifying", "verified"].map((state) => `task T1 set state=${state}`),
-  "task T1 set branch=claude/t1 pr=5",
+  "task T1 set state=building",
+  "task T1 set branch=claude/t1",
+  "task T1 set state=building branch=claude/t1-x",
   "status",
   "standing",
   `merge-check --sha ${SHA}`,
@@ -4863,8 +4866,8 @@ test("T273: the same commands on another task are refused, also through a run id
     "finding triage T2 F-T2-1 fix",
     "finding triage T1 F-T2-1 fix",
     "finding triage T1 F-T2-1 dismiss --reason=x",
-    `verdict T2 --kind qa-pass --sha ${SHA}`,
-    `verdict T1 --kind qa-pass --sha ${SHA} --run R3`,
+    `verdict T2 --kind qa-pass --sha ${SHA} --pr 6`,
+    `verdict T1 --kind qa-pass --sha ${SHA} --pr 5 --run R3`,
     "round T2",
     "round t1",
     "task T2 set state=building",
@@ -4874,7 +4877,7 @@ test("T273: the same commands on another task are refused, also through a run id
 
 test("T273: a made-up run id or finding key is refused", () => {
   const s = leadSession();
-  for (const args of ["run done R99 --status done", "run done R0 --status done", "run done r2 --status done", "finding close T1 F-T1-9", "finding triage T1 F-T1-9 fix", "finding close T1 F-T1-02", `verdict T1 --kind qa-pass --sha ${SHA} --run R99`, `verdict T1 --kind qa-pass --sha ${SHA} --run=x`]) {
+  for (const args of ["run done R99 --status done", "run done R0 --status done", "run done r2 --status done", "finding close T1 F-T1-9", "finding triage T1 F-T1-9 fix", "finding close T1 F-T1-02", `verdict T1 --kind qa-pass --sha ${SHA} --pr 5 --run R99`, `verdict T1 --kind qa-pass --sha ${SHA} --pr 5 --run=x`]) {
     assert.match(denied(stateRun(s, args)) ?? "", NOT_OWN, args);
   }
 });
@@ -4890,7 +4893,7 @@ test("T273: each command that is not on the lead's list is refused, with the sen
   const s = leadSession();
   const notOwn = ["run add T1 --role lead", "run add T1 --role designer", "run add T1 --role pe", "run add T1 --role QA", "run add T1", "run done R1 --status done",
     "finding triage T1 F-T1-2 dismiss --reason=x", "finding triage T1 F-T1-1 dismiss", "finding triage T1 F-T1-1 ask", "task T1", "task add --title x --size small",
-    ...["merged", "pr-ready", "held", "abandoned", "briefed", "concluded", "replan"].map((state) => `task T1 set state=${state}`),
+    ...["merged", "pr-ready", "held", "abandoned", "briefed", "concluded", "replan", "repairing", "reviewing", "verified"].map((state) => `task T1 set state=${state}`),
     "task T1 set title=x", "task T1 set", "task T1 set state=building title=x", "task T1 set states=building", "task T1 frob state=building"];
   const notListed = ["finding triage T1 F-T1-1 --reason=x", "finding move T1 F-T1-1 --to x", "gate add T1 --question q --options a,b --recommend a", "gate answer G1 --option 1",
     "log T1 --why x", "config cycles.small=1", "init", "standing add never", "logbook repair --accept-loss tasks", "pages T1", "pages T1 record x", "observe T1 --kind x",
@@ -4962,7 +4965,7 @@ test("T273: an oversized or damaged logbook table refuses a lead's write that re
   writeFileSync(runs, before + "\t".repeat(4 * 1024 * 1024) + "\n");
   assert.match(denied(stateRun(s, "run done R2 --status done")) ?? "", /runs\.tsv is over 4194304 bytes/);
   assert.match(denied(stateRun(s, "finding close T1 F-T1-2")) ?? "", /runs\.tsv is over 4194304 bytes/, "every table counts");
-  assert.equal(denied(stateRun(s, "round T1")), undefined, "a write with no id reads no table");
+  assert.match(denied(stateRun(s, "round T1")) ?? "", /runs\.tsv is over 4194304 bytes/, "every lead write reads the logbook (F-T273-1, F-T273-4)");
   writeFileSync(runs, before.replace(/^id\t/, "ID\t"));
   assert.match(denied(stateRun(s, "run done R2 --status done")) ?? "", /the header of .*runs\.tsv is damaged/);
   writeFileSync(runs, before);
@@ -4993,4 +4996,89 @@ test("#118 point 4: in sage mode the main session starts lead-T<n> only when T<n
   assert.match(denied(s.send(leadSpawn("big", 2, { cwd: s.dir }))) ?? "", /^sage: the hook could not read the logbook for T2 \(.*runs\.tsv is over 4194304 bytes/, "an oversized table");
   const off = linkedSession();
   assert.equal(off.send(leadSpawn("off", 1, { cwd: off.dir })), undefined, "outside sage mode the rule does not apply, as the other lead spawn rules");
+});
+
+// Repair round 1 of T273 (R886). Each test fails on daac31f and passes after.
+/** A task's state, written into tasks.tsv: the cycle states need verdicts and findings that these hook tests do not need. */
+function setState(s, id, state) {
+  const file = join(s.sage("logbook"), "tasks.tsv");
+  const [head, ...rows] = readFileSync(file, "utf8").trimEnd().split("\n");
+  const col = head.split("\t").indexOf("state");
+  writeFileSync(file, [head, ...rows.map((row) => { const v = row.split("\t"); if (v[0] === id) v[col] = state; return v.join("\t"); })].join("\n") + "\n");
+}
+
+test("F-T273-1: a lead's write from a folder of another logbook is refused", () => {
+  const s = leadSession();
+  assert.equal(denied(stateRun(s, "round T1")), undefined, "the lead's own folder");
+  const other = linkedSession({ SAGE_HOME: s.vars.SAGE_HOME });
+  other.sage("init");
+  other.sage("task", "add", "--title", "x", "--size", "small");
+  other.sage("run", "add", "T1", "--role", "lead"); // the same task id and run id in another project's logbook
+  for (const cwd of [other.dir, FEATURE]) {
+    assert.match(denied(stateRun(s, "round T1", LEAD, { cwd })) ?? "", /this command's folder gives another logbook than the one of T1's lead/, cwd);
+  }
+});
+
+test("F-T273-2: a lead sets pr= only while its task has none, to a PR of no other task; each verdict names its task's PR", () => {
+  const s = leadSession();
+  for (const args of ["task T1 set pr=7", "task T1 set pr=", "task T1 set pr=6"]) assert.match(denied(stateRun(s, args)) ?? "", NOT_OWN, `T1 has PR 5: ${args}`);
+  for (const args of [`verdict T1 --kind qa-pass --sha ${SHA}`, `verdict T1 --kind qa-pass --sha ${SHA} --pr 6`, `verdict T1 --kind qa-pass --sha ${SHA} --pr 05`, `verdict T1 --kind qa-pass --sha ${SHA} --pr 99`]) {
+    assert.match(denied(stateRun(s, args)) ?? "", NOT_OWN, args);
+  }
+  assert.equal(denied(stateRun(s, `verdict T1 --kind qa-pass --sha ${SHA} --pr 5`)), undefined, "its own PR");
+  s.sage("task", "T1", "set", "pr=");
+  assert.match(denied(stateRun(s, `verdict T1 --kind qa-pass --sha ${SHA} --pr 5`)) ?? "", NOT_OWN, "a task with no PR takes no lead verdict");
+  for (const args of ["task T1 set pr=6", "task T1 set pr=", "task T1 set pr=07", "task T1 set pr=x", "task T1 set pr=8 pr=9"]) assert.match(denied(stateRun(s, args)) ?? "", NOT_OWN, args);
+  s.sage("task", "T2", "set", "pr=");
+  assert.match(denied(stateRun(s, "task T1 set pr=6")) ?? "", NOT_OWN, "a PR that another task held");
+  assert.equal(denied(stateRun(s, "task T1 set pr=5")), undefined, "the PR that its own task held");
+  assert.equal(denied(stateRun(s, "task T1 set pr=8")), undefined, "a new PR");
+});
+
+test("F-T273-7: a lead makes only the cycle's next state move, and never moves a held task", () => {
+  const s = leadSession();
+  const moves = { briefed: "building", building: "reviewing", reviewing: "verifying", repairing: "reviewing", verifying: "verified", verified: "reviewing" };
+  const states = ["framed", "designing", "awaiting-you", "briefed", "building", "held", "reviewing", "repairing", "replan", "verifying", "verified", "pr-ready", "merged", "concluded", "abandoned"];
+  for (const from of states) {
+    setState(s, "T1", from);
+    for (const to of ["building", "reviewing", "repairing", "verifying", "verified", "held", "merged"]) {
+      const why = denied(stateRun(s, `task T1 set state=${to}`));
+      if (moves[from] === to) assert.equal(why, undefined, `${from} -> ${to}`);
+      else assert.ok(why, `${from} -> ${to} is refused`);
+    }
+  }
+  setState(s, "T1", "held");
+  for (const args of ["task T1 set state=building", "task T1 set branch=claude/t1", "task T1 set state=reviewing state=verifying"]) {
+    assert.match(denied(stateRun(s, args)) ?? "", /T1 is held, and only the sage moves a held task/, args);
+  }
+  setState(s, "T1", "building");
+  assert.match(denied(stateRun(s, "task T1 set state=reviewing state=verifying")) ?? "", NOT_OWN, "one state= per command");
+});
+
+test("F-T273-3: a lead's run add --branch must be a branch of its own task", () => {
+  const s = leadSession();
+  for (const branch of ["claude/t1", "sage/t1-fix", "t1"]) assert.equal(denied(stateRun(s, `run add T1 --role implementer --branch ${branch}`)), undefined, branch);
+  for (const branch of ["claude/t2", "claude/t10", "main", "claude/t1/x", "claude/t11-x"]) assert.match(denied(stateRun(s, `run add T1 --role implementer --branch ${branch}`)) ?? "", NOT_OWN, branch);
+});
+
+test("F-T273-4: a lead writes only while the lead run that its slot started for still runs", () => {
+  const ended = leadSession();
+  ended.sage("run", "done", "R1", "--status", "failed");
+  assert.match(denied(stateRun(ended, "round T1")) ?? "", /T1's lead run R1 no longer runs/);
+  const replaced = leadSession();
+  replaced.sage("run", "done", "R1", "--status", "failed");
+  replaced.sage("run", "add", "T1", "--role", "lead"); // R4, for a fresh lead
+  assert.match(denied(stateRun(replaced, "round T1")) ?? "", /T1's lead run R1 no longer runs/, "a newer lead run belongs to the fresh lead");
+});
+
+test("F-T273-5: the chief starts no second lead-T<n> while a slot for that task lives, also from another session", () => {
+  const s = leadSession();
+  const TWICE = /a lead of T1 already holds a slot/;
+  assert.match(denied(s.send(leadSpawn("again", 1, { cwd: s.dir }))) ?? "", TWICE);
+  s.send({ ...prompt("sage mode"), session_id: "s2" });
+  assert.match(denied(s.send(leadSpawn("other-session", 1, { cwd: s.dir, session_id: "s2" }))) ?? "", TWICE);
+  s.sage("run", "add", "T2", "--role", "lead");
+  assert.equal(s.send(leadSpawn("t2", 2, { cwd: s.dir })), undefined, "another task");
+  s.send(ended("lead-a", "sage:lead"));
+  assert.equal(s.send(leadSpawn("fresh", 1, { cwd: s.dir })), undefined, "after the lead's stop");
 });
