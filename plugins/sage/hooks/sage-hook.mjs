@@ -16,8 +16,8 @@
 //     first creation of main or master on GitHub, in one literal gh api form (FIRST_FORM), checked on GitHub only
 //     (firstUpload, firstCreation).
 //   - Only main starts leads (3 per project), each named lead-T<n>; only leads start their permitted children (3 each),
-//     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode. An agent sends no
-//     SendMessage except to main (it can wake a stopped agent). Only the main session's TaskStop frees a slot.
+//     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode. In the same scope
+//     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent). Only the main session's TaskStop frees a slot.
 //   - A sage agent may finish only with the full report of the sage:report skill.
 //   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs the state tool only as one plain
 //     read command, never the PR script, never a command outside the sandbox, never writes under the sage root with a
@@ -292,8 +292,9 @@ export function handle(input, state, slots) {
   // slot: a lead could free a main-session agent's slot while that agent still runs (T255 M3).
   if (event === "PreToolUse" && input.tool_name === "TaskStop") return void (main && slots.release(input.tool_input?.task_id, true));
   // An agent's SendMessage can wake a stopped agent outside every cap, and its event cannot tell a stopped target from a
-  // live one. So an agent sends a message only to the main session, in any mode (T255 M2).
-  if (event === "PreToolUse" && !main && input.tool_name === "SendMessage" && input.tool_input?.to !== "main") {
+  // live one. So an agent sends a message only to the main session: in sage mode, and for a sage agent in any mode, the
+  // scope of the nested spawn rule. A plain agent outside sage mode is the owner's normal use (T255 M2).
+  if (event === "PreToolUse" && !main && (state.sage || ours) && input.tool_name === "SendMessage" && input.tool_input?.to !== "main") {
     return deny(event, "an agent sends a message only to main, because a message can wake a stopped agent. Start a fresh child with a full brief, or report to the sage.");
   }
   const why = event === "PreToolUse" ? (main ? chiefProblem(input, state.sage) : agentWriteProblem(input)) : undefined;

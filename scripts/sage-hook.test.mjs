@@ -4658,15 +4658,17 @@ test("T255 M1: a lead's stop does not free its running children's slots", () => 
   assert.equal(s.send(nested("sage:qa", "b-2", b)), undefined, "a child's own stop frees its slot");
 });
 
-test("T255 M2: an agent sends SendMessage only to main, in any mode; the main session is unchanged", () => {
+test("T255 M2: a sage agent, or any agent in sage mode, sends SendMessage only to main; plain use outside sage mode is unchanged", () => {
   const send = (to, caller) => tool("SendMessage", { to, message: BRIEF, summary: "s" }, { tool_use_id: `m-${to}`, ...caller });
   const STOP = /an agent sends a message only to main, because a message can wake a stopped agent\. Start a fresh child/;
+  const plain = { agent_id: "gp", agent_type: "general-purpose" };
   for (const s of [nestedSession(), session()]) {
-    assert.match(denied(s.send(send("kid", LEAD))) ?? "", STOP, "a lead's message to a child");
-    assert.match(denied(s.send(send("other", { agent_id: "q", agent_type: "sage:qa" }))) ?? "", STOP, "a child's message to another agent");
-    assert.match(denied(s.send(send("x", { agent_id: "gp", agent_type: "general-purpose" }))) ?? "", STOP, "any agent's message");
+    assert.match(denied(s.send(send("kid", LEAD))) ?? "", STOP, "a lead's message to a child, in any mode");
+    assert.match(denied(s.send(send("other", { agent_id: "q", agent_type: "sage:qa" }))) ?? "", STOP, "a child's message to another agent, in any mode");
     assert.equal(s.send(send("main", { agent_id: "q", agent_type: "sage:qa" })), undefined, "a message to the main session");
   }
+  assert.match(denied(nestedSession().send(send("x", plain))) ?? "", STOP, "a plain agent's message in sage mode");
+  assert.equal(session().send(send("x", plain)), undefined, "a plain agent's message outside sage mode");
   assert.equal(session().send(send("worker", {})), undefined, "the main session's own message outside sage mode");
 });
 
