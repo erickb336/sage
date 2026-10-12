@@ -202,6 +202,151 @@ test("one writer per branch", () => {
   assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), /R3 running/);
 });
 
+test("T266-LEAD-ONE: run add --role lead records a lead run, and a task has one running lead run; the refusal names it", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "t", "--size", "small");
+  assert.equal(s.ok("run", "add", "T1", "--role", "lead"), "R1 running · lead on T1");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => [r.id, r.task, r.role, r.status]), [["R1", "T1", "lead", "running"]]);
+  assert.equal(s.no("run", "add", "T1", "--role", "lead"), "sage: R1 is the running lead run of T1, and a task has one running lead. Finish R1 first (sage run done R1 --status done, blocked, question or failed).");
+  assert.equal(rows(s.dir, "runs").length, 1, "the refused run is not recorded");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), /^R2 running · implementer on T1/, "the lead's children still start");
+  s.ok("run", "done", "R1", "--status", "failed");
+  assert.equal(s.ok("run", "add", "T1", "--role", "lead"), "R3 running · lead on T1", "a fresh lead starts after the old one ends");
+});
+
+test("T266-LEAD-THREE: a project holds at most 3 running lead runs; the refusal names the 3", () => {
+  const s = store();
+  for (let i = 0; i < 4; i++) s.ok("task", "add", "--title", `t${i + 1}`, "--size", "small");
+  for (const t of ["T1", "T2", "T3"]) s.ok("run", "add", t, "--role", "lead");
+  assert.equal(s.no("run", "add", "T4", "--role", "lead"), "sage: the project has 3 running lead runs, the most it holds: R1 on T1, R2 on T2, R3 on T3. Finish one of them first (sage run done <R> --status done, blocked, question or failed).");
+  assert.equal(rows(s.dir, "runs").length, 3);
+  s.ok("run", "done", "R2", "--status", "done");
+  assert.equal(s.ok("run", "add", "T4", "--role", "lead"), "R4 running · lead on T4", "a finished lead frees its place");
+  const other = store(); // another project counts its own leads
+  other.ok("task", "add", "--title", "t", "--size", "small");
+  assert.equal(other.ok("run", "add", "T1", "--role", "lead"), "R1 running · lead on T1");
+});
+
+test("T266-LEAD-INVESTIGATE: an investigation takes no lead run, and the refusal says why", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "look", "--size", "investigate");
+  assert.equal(s.no("run", "add", "T1", "--role", "lead"), "sage: T1 is an investigation: it has no build and no pull request, so it takes no lead run. The chief runs its steps.");
+  assert.deepEqual(rows(s.dir, "runs"), []);
+  assert.match(s.ok("run", "add", "T1", "--role", "investigate"), /^R1 running · investigate on T1/, "its own runs still start");
+});
+
+test("T266-LEAD-STATE: a concluded, merged or abandoned task takes no lead run, and the refusal names its state; a verified task takes one; other roles still start", () => {
+  const s = store();
+  for (let i = 0; i < 3; i++) s.ok("task", "add", "--title", `t${i + 1}`, "--size", "tiny");
+  s.ok("task", "add", "--title", "look", "--size", "investigate");
+  for (const t of ["T1", "T2"]) for (const state of ["briefed", "building", "reviewing", "verifying"]) s.ok("task", t, "set", `state=${state}`);
+  for (const t of ["T1", "T2"]) s.ok("verdict", t, "--sha", SHA, "--kind", "checks-pass");
+  s.ok("task", "T1", "set", "state=verified");
+  s.ok("task", "T2", "set", "state=verified");
+  s.ok("task", "T2", "set", "state=merged");
+  s.ok("task", "T3", "set", "state=abandoned");
+  s.ok("task", "T4", "set", "state=briefed", "state=building", "state=reviewing", "state=verifying");
+  s.ok("verdict", "T4", "--kind", "evidence-clean");
+  s.ok("task", "T4", "set", "state=concluded");
+  for (const [t, state] of [["T2", "merged"], ["T3", "abandoned"], ["T4", "concluded"]]) {
+    assert.equal(s.no("run", "add", t, "--role", "lead"), `sage: ${t} is ${state}, so it takes no lead run: the task has ended.`);
+  }
+  assert.deepEqual(rows(s.dir, "runs"), [], "no refused lead run is recorded");
+  assert.equal(s.ok("run", "add", "T1", "--role", "lead"), "R1 running · lead on T1", "a verified task takes a lead for its remaining cycles (#62, section 7)");
+  assert.match(s.ok("run", "add", "T2", "--role", "code-reviewer"), /^R2 running · code-reviewer on T2/, "other roles keep today's behaviour");
+  assert.match(s.ok("run", "add", "T3", "--role", "qa"), /^R3 running · qa on T3/);
+});
+
+test("F-T266-3: run add takes the role as the table stores it, in lower case, so no spelling of lead skips a lead limit; an unknown role is refused", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("task", "add", "--title", "b", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "lead");
+  for (const role of ["lead ", "Lead", "lead​", "lead\t", " LEAD", "le​ad"]) {
+    assert.equal(s.no("run", "add", "T1", "--role", role), "sage: R1 is the running lead run of T1, and a task has one running lead. Finish R1 first (sage run done R1 --status done, blocked, question or failed).", `${JSON.stringify(role)} is lead`);
+  }
+  assert.equal(s.ok("run", "add", "T2", "--role", "Lead "), "R2 running · lead on T2");
+  assert.equal(s.ok("run", "add", "T2", "--role", "QA"), "R3 running · qa on T2 · model fable", "QA is qa, with qa's model for a small task");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => r.role), ["lead", "lead", "qa"]);
+  assert.equal(s.no("run", "add", "T2", "--role", "builder"), 'sage: "builder" is not a role of a run. Roles: lead, implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate, evidence-review.');
+  assert.match(s.no("run", "add", "T2", "--role", "ｌｅａｄ"), /^sage: "ｌｅａｄ" is not a role of a run\./, "a look-alike is no role");
+  assert.equal(rows(s.dir, "runs").length, 3, "no refused run is recorded");
+});
+
+test("F-T266-2: taskFor throws when tasks.tsv is lost but other tables have rows, so the hook fails closed", async () => {
+  const s = store();
+  const { taskFor } = await import(LIB);
+  const env = { SAGE_HOME: s.home };
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa");
+  assert.equal(taskFor("R1", s.project, env), "T1");
+  rmSync(join(s.dir, "tasks.tsv"));
+  assert.throws(() => taskFor("R1", s.project, env), /tasks\.tsv is missing or is a link to nothing, but every table of a logbook has at least its header line/);
+  assert.match(s.no("status"), /^sage: no logbook for the project /, "status refuses the same logbook");
+  const fresh = store(); // a logbook whose tables have no rows yet, as init leaves it before tasks.tsv
+  rmSync(join(fresh.dir, "tasks.tsv"));
+  assert.equal(taskFor("R1", fresh.project, { SAGE_HOME: fresh.home }), undefined);
+});
+
+test("T266-LEAD-RACE: lead runs started at once by separate processes keep the limits: 3 of 10 on 10 tasks, and 1 of 2 on one task", async () => {
+  const s = store();
+  for (let i = 1; i <= 11; i++) s.ok("task", "add", "--title", `t${i}`, "--size", "small");
+  const ten = await Promise.all(Array.from({ length: 10 }, (_, i) => s.go("run", "add", `T${i + 1}`, "--role", "lead")));
+  assert.equal(ten.filter((r) => r.status === 0).length, 3, ten.map((r) => r.stdout + r.stderr).join(""));
+  for (const r of ten.filter((r) => r.status !== 0)) assert.match(r.stderr, /^sage: the project has 3 running lead runs, the most it holds: /, "each other one is refused by the limit, not by a busy lock");
+  assert.equal(rows(s.dir, "runs").filter((r) => r.role === "lead" && r.status === "running").length, 3);
+  for (const r of rows(s.dir, "runs")) s.ok("run", "done", r.id, "--status", "done");
+  const two = await Promise.all([1, 2].map(() => s.go("run", "add", "T11", "--role", "lead")));
+  assert.equal(two.filter((r) => r.status === 0).length, 1, two.map((r) => r.stdout + r.stderr).join(""));
+  assert.match(two.find((r) => r.status !== 0).stderr, /^sage: R\d+ is the running lead run of T11, and a task has one running lead\./);
+  assert.equal(rows(s.dir, "runs").filter((r) => r.task === "T11").length, 1);
+});
+
+test("T266-LEAD-SHOWN: status counts a lead run like any run, and the board shows it with its role", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "t", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "lead");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1");
+  assert.match(s.ok("status"), /^agents {2}2 runs · 2 running · about 0k tokens$/m);
+  const board = s.ok("board", "this", "--remember", "no");
+  assert.match(board, /^- T1 lead · \d+ min$/m, board);
+  assert.match(board, /^- T1 implementer · \d+ min$/m, board);
+});
+
+test("T266-MAX-AGENTS: the default max_agents is 4, one lead and its 3 children, and a value in config.json still wins", async () => {
+  const s = store();
+  const { config } = await import(LIB);
+  assert.equal(config({ SAGE_HOME: s.home }).max_agents, 4);
+  assert.match(s.ok("config"), /^max_agents=4 /);
+  assert.match(s.ok("config", "max_agents=2"), /^max_agents=2 /);
+  assert.equal(config({ SAGE_HOME: s.home }).max_agents, 2);
+});
+
+test("T266-TASK-FOR: taskFor names the task of a run id or a finding key, and gives nothing for an unknown id; a damaged logbook throws", async () => {
+  const s = store();
+  const { taskFor } = await import(LIB);
+  const env = { SAGE_HOME: s.home };
+  for (const t of ["a", "b", "c"]) s.ok("task", "add", "--title", t, "--size", "small");
+  s.ok("run", "add", "T2", "--role", "lead");
+  s.ok("run", "add", "T3", "--role", "qa");
+  s.ok("finding", "add", "T3", "--source", "qa", "--severity", "medium", "--summary", "x");
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "y");
+  assert.equal(taskFor("R1", s.project, env), "T2");
+  assert.equal(taskFor("R2", s.project, env), "T3");
+  assert.equal(taskFor("F-T3-1", s.project, env), "T3");
+  assert.equal(taskFor("F-T1-1", s.project, env), "T1");
+  for (const id of ["R3", "F-T2-1", "F-T3-2", "T1", "r1", "R01", "R1 ", "F-T3-01", "", undefined]) assert.equal(taskFor(id, s.project, env), undefined, `${JSON.stringify(id)} names no task`);
+  s.ok("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "z", "--key", "F-T3-1");
+  assert.equal(taskFor("F-T3-1", s.project, env), undefined, "a key on two tasks names neither");
+  s.ok("finding", "move", "T1", "F-T1-1", "--to", "follow-up");
+  assert.equal(taskFor("F-T1-1", s.project, env), undefined, "a moved finding's old key names no task");
+  assert.equal(taskFor("F-T4-1", s.project, env), "T4", "its new key names the follow-up task");
+  assert.equal(taskFor("R1", mkdtempSync(join(tmpdir(), "sage-none-")), env), undefined, "a project without a logbook");
+  const runs = join(s.dir, "runs.tsv");
+  writeFileSync(runs, readFileSync(runs, "utf8").replace(/^id\t/, "ID\t"));
+  assert.throws(() => taskFor("R1", s.project, env), /the header of .*runs\.tsv is damaged/, "the logbook check applies");
+});
+
 test("the merge check needs no open findings, checks-pass, and the route's verdicts in the task's clean cycles: 1 for a small task, 2 for a large one or one with a risk flag", () => {
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "large");
@@ -269,7 +414,7 @@ test("T42-HUGE-COUNT and F-T47-QA-1: a count has a limit, and a file count never
   writeFileSync(f, '{"cycles.small": "3", "cycles.large": "5", "cycles.risk": "1", "max_agents": "1", "cap_total": "2", "cap.sage": "1", "cap.ramen": "07"}');
   assert.equal(s.ok("config"), "max_agents=1 cycles.small=3 cycles.large=5 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=2 cap.sage=1 cap.ramen=7" + " " + MODEL_DEFAULTS);
   writeFileSync(f, '{"cycles.large": "1", "max_agents": "2x", "cap_total": "1.5"}');
-  assert.equal(s.ok("config"), "max_agents=3 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=1" + " " + MODEL_DEFAULTS);
+  assert.equal(s.ok("config"), "max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=1" + " " + MODEL_DEFAULTS);
 });
 
 test("F-T52-1 and F-T47-CR-FRAC: a file count below its floor reads as the floor, and a cycles count as a fraction or a padded string reads rounded up", () => {
@@ -279,7 +424,7 @@ test("F-T52-1 and F-T47-CR-FRAC: a file count below its floor reads as the floor
     writeFileSync(f, text);
     return s.ok("config");
   };
-  const all = (o = {}) => Object.entries({ max_agents: 3, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "opus,sonnet,sonnet", cap_total: 12, ...o }).map(([k, v]) => `${k}=${v}`).join(" ") + " " + MODEL_DEFAULTS;
+  const all = (o = {}) => Object.entries({ max_agents: 4, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "opus,sonnet,sonnet", cap_total: 12, ...o }).map(([k, v]) => `${k}=${v}`).join(" ") + " " + MODEL_DEFAULTS;
   // Never more agents or rounds than the owner wrote: a count below 1 reads as 1, not as the higher default.
   assert.equal(read('{"max_agents": 0}'), all({ max_agents: 1 }));
   assert.equal(read('{"cap_total": 0}'), all({ cap_total: 1 }));
@@ -303,7 +448,7 @@ test("F-T52-1 and F-T47-CR-FRAC: a file count below its floor reads as the floor
 test("T54: one rule reads every count in config.json: cycles round up, other counts round down, and a cycles key with no number refuses every merge", () => {
   const s = store();
   const f = join(s.home, "config.json");
-  const all = (o = {}) => Object.entries({ max_agents: 3, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "opus,sonnet,sonnet", cap_total: 12, ...o }).map(([k, v]) => `${k}=${v}`).join(" ") + " " + MODEL_DEFAULTS;
+  const all = (o = {}) => Object.entries({ max_agents: 4, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "opus,sonnet,sonnet", cap_total: 12, ...o }).map(([k, v]) => `${k}=${v}`).join(" ") + " " + MODEL_DEFAULTS;
   s.ok("task", "add", "--title", "t", "--size", "small");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   const table = [
@@ -313,7 +458,7 @@ test("T54: one rule reads every count in config.json: cycles round up, other cou
     ['{"max_agents": 2.5}', { max_agents: 2 }],
     ['{"max_agents": " 2"}', { max_agents: 2 }],
     ['{"max_agents": "-1"}', { max_agents: 1 }],
-    ['{"max_agents": "abc"}', { max_agents: 3 }],
+    ['{"max_agents": "abc"}', { max_agents: 4 }],
     ['{"cap_total": "0"}', { cap_total: 1 }],
     ['{"arena": 1.5}', { arena: 1 }],
     ['{"max_rounds": "07"}', { max_rounds: 7 }],
@@ -377,7 +522,7 @@ test("a tiny task needs only its checks once", () => {
 
 test("config, gates, standing orders and status", () => {
   const s = store();
-  assert.equal(s.ok("config"), "max_agents=3 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12" + " " + MODEL_DEFAULTS);
+  assert.equal(s.ok("config"), "max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12" + " " + MODEL_DEFAULTS);
   assert.equal(s.ok("config", "max_agents=5", "arena_models=opus,opus,sonnet"), "max_agents=5 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,opus,sonnet cap_total=12" + " " + MODEL_DEFAULTS);
   assert.match(s.no("config", "arena_models=gpt-5"), /arena_models as a list of opus, sonnet, haiku, fable, inherit/);
   assert.match(s.no("config", "colour=5"), /config takes max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap\.<project>=number/);
@@ -759,7 +904,7 @@ test("config: every count is 1 or more, config.json is written whole, and a torn
   }
   assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "0"), /--cycles is a whole number from 1 to 10/);
   writeFileSync(f, '{"max_agents": "x", "max_rounds": 5, "arena_models": "gpt-5", "cap.sage": 0, "cap.ramen": 4}');
-  assert.equal(s.ok("config"), "max_agents=3 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=5 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 cap.sage=1 cap.ramen=4" + " " + MODEL_DEFAULTS, "each bad value gives its default, and a project cap below 1 reads as 1");
+  assert.equal(s.ok("config"), "max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=5 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 cap.sage=1 cap.ramen=4" + " " + MODEL_DEFAULTS, "each bad value gives its default, and a project cap below 1 reads as 1");
 
   // Two processes write config.json 200 times each, while this one reads it: every read sees a whole file.
   const writers = [1, 2].map(() => spawn("node", ["--input-type=module", "-e", `import { sage } from ${JSON.stringify(LIB)}; for (let i = 1; i <= 200; i++) sage(["config", "max_rounds=" + Math.ceil(i / 20)]);`], { env: testEnv({ SAGE_HOME: s.home }) }));
@@ -928,7 +1073,7 @@ test("S7: config and the merge check read only regular files and never throw, so
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
   execFileSync("mkfifo", [join(s.home, "config.json")]);
   const out = [s.ok("config"), s.ok("merge-check", "--sha", SHA)]; // a read that waited on the FIFO would hang until the timeout, and fail
-  assert.deepEqual(out, ["max_agents=3 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 " + MODEL_DEFAULTS, "T1 may merge: 1 clean cycle on this SHA"]);
+  assert.deepEqual(out, ["max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 " + MODEL_DEFAULTS, "T1 may merge: 1 clean cycle on this SHA"]);
   rmSync(join(s.dir, "ledger.tsv"));
   execFileSync("mkfifo", [join(s.dir, "ledger.tsv")]);
   assert.equal(s.no("merge-check", "--sha", SHA), `sage: the merge check refuses every merge, because ${join(s.dir, "ledger.tsv")} is not a regular file. Ask the user to fix or remove it.`, "F-R50-1: a table that is not a regular file refuses, and does not hang");
@@ -947,13 +1092,13 @@ test("F1: no config.json makes config() or the merge check throw: a count with n
   writeFileSync(f, `{"cycles.large": ${deep}, "max_agents": [5], "max_rounds": 4}`);
   const { config, mergeCheck } = await import(LIB);
   const env = { SAGE_HOME: s.home };
-  assert.deepEqual(config(env), { max_agents: 3, "cycles.small": 1, "cycles.large": "invalid", "cycles.risk": 2, max_rounds: 4, arena: 3, arena_models: "opus,sonnet,sonnet", cap_total: 12, ...Object.fromEntries(MODEL_DEFAULTS.split(" ").map((kv) => kv.split("="))) }, "T42-ALIAS-DEAD: no autopilot_cycles alias");
+  assert.deepEqual(config(env), { max_agents: 4, "cycles.small": 1, "cycles.large": "invalid", "cycles.risk": 2, max_rounds: 4, arena: 3, arena_models: "opus,sonnet,sonnet", cap_total: 12, ...Object.fromEntries(MODEL_DEFAULTS.split(" ").map((kv) => kv.split("="))) }, "T42-ALIAS-DEAD: no autopilot_cycles alias");
   const refused = { ok: false, reason: `the merge check refuses every merge, because cycles.large in ${f} is not a number. Set it with sage config cycles.large=<n> (a whole number from 2 to 10), or remove the key.` };
   assert.deepEqual(mergeCheck("9".repeat(40), env), refused, "the hook's call: no cycles given");
   assert.deepEqual(mergeCheck(SHA, env), refused);
-  assert.equal(s.ok("config"), "max_agents=3 cycles.small=1 cycles.large=invalid cycles.risk=2 max_rounds=4 arena=3 arena_models=opus,sonnet,sonnet cap_total=12" + " " + MODEL_DEFAULTS);
+  assert.equal(s.ok("config"), "max_agents=4 cycles.small=1 cycles.large=invalid cycles.risk=2 max_rounds=4 arena=3 arena_models=opus,sonnet,sonnet cap_total=12" + " " + MODEL_DEFAULTS);
   writeFileSync(f, `{"cycles.small": 1, "max_agents": ${deep}}`);
-  assert.equal(s.ok("config"), "max_agents=3 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12" + " " + MODEL_DEFAULTS);
+  assert.equal(s.ok("config"), "max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12" + " " + MODEL_DEFAULTS);
   assert.match(s.no("merge-check", "--sha", SHA), /^sage: T1: 0 of 2 clean cycles on this SHA; never recorded: review-clean, security-clean, ux-clean, qa-pass\./);
 });
 
@@ -1159,8 +1304,8 @@ test("config refuses a key=value with a second =, and sets nothing (F-T56-EQ)", 
   const s = store();
   assert.equal(s.no("config", "cycles.large=3=4"), 'sage: "cycles.large" has more than one "=": write key=value');
   assert.equal(s.no("config", "max_agents=5", "arena_models=opus=sonnet"), 'sage: "arena_models" has more than one "=": write key=value');
-  assert.match(s.ok("config"), /^max_agents=3 cycles\.small=1 cycles\.large=2 /, "a refused command sets none of its keys");
-  assert.match(s.ok("config", "cycles.large=3"), /^max_agents=3 cycles\.small=1 cycles\.large=3 /);
+  assert.match(s.ok("config"), /^max_agents=4 cycles\.small=1 cycles\.large=2 /, "a refused command sets none of its keys");
+  assert.match(s.ok("config", "cycles.large=3"), /^max_agents=4 cycles\.small=1 cycles\.large=3 /);
 });
 
 test("QA-4: an id never comes back while a row of the logbook still names it", () => {
@@ -1267,7 +1412,7 @@ test("unknown-columns: a logbook that a newer sage wrote refuses every write com
   assert.match(s.no("log", "-", "x", "--why", "y"), /runs\.tsv has columns that this version of sage does not know \(saved\)/);
 
   writeFileSync(join(s.home, "config.json"), JSON.stringify({ max_rounds: 4, max_programs: 2 })); // a newer version's setting stays too
-  assert.equal(s.ok("config", "arena=2"), "max_agents=3 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=4 arena=2 arena_models=opus,sonnet,sonnet cap_total=12" + " " + MODEL_DEFAULTS);
+  assert.equal(s.ok("config", "arena=2"), "max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=4 arena=2 arena_models=opus,sonnet,sonnet cap_total=12" + " " + MODEL_DEFAULTS);
   assert.deepEqual(JSON.parse(readFileSync(join(s.home, "config.json"), "utf8")), { max_rounds: 4, max_programs: 2, arena: 2 });
 });
 
@@ -1901,7 +2046,7 @@ test("T59: a broken legacy autopilot_cycles refuses merges like cycles.large, an
 test("T42: the owner's floors (gate G18): cycles.large and cycles.risk never go below 2, whoever writes config.json; a legacy autopilot_cycles reads as cycles.large", () => {
   const s = store();
   const f = join(s.home, "config.json");
-  const all = (large, risk) => `max_agents=3 cycles.small=1 cycles.large=${large} cycles.risk=${risk} max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 ${MODEL_DEFAULTS}`;
+  const all = (large, risk) => `max_agents=4 cycles.small=1 cycles.large=${large} cycles.risk=${risk} max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 ${MODEL_DEFAULTS}`;
   assert.equal(s.no("config", "cycles.large=1"), "sage: cycles.large must be a whole number of 2 or more: 1 is below the floor of 2, which only a code change lowers");
   assert.equal(s.no("config", "cycles.risk=1"), "sage: cycles.risk must be a whole number of 2 or more: 1 is below the floor of 2, which only a code change lowers");
   assert.equal(existsSync(f), false, "a refused change writes nothing");
@@ -1960,7 +2105,9 @@ test("F-T42-2: a config write never lands on a link's target, also when a link r
     while (swap.exitCode === null && !lstatSync(f, { throwIfNoEntry: false })?.isSymbolicLink()) await new Promise((r) => setImmediate(r));
     assert.equal(swap.exitCode, null, "the swaps run");
     let [writes, refused] = [0, 0];
-    while (writes < 300 && refused < 3_000) {
+    // The share of writes that find a regular file depends on how the two processes are scheduled: CI saw 130 writes
+    // in 3,130 tries (4%). The ceiling of refusals only stops a run where no write could ever pass, so it is far above that.
+    while (writes < 300 && refused < 200_000) {
       try {
         sage(["config", `max_rounds=${(writes % 5) + 1}`], env);
         writes++;
@@ -1980,7 +2127,7 @@ test("F-T42-2: a config write never lands on a link's target, also when a link r
 test("T40: each agent role gets its model by task size; run add prints it and records it; an old runs.tsv gets the column at its next write", () => {
   const s = store();
   const out = s.ok("config");
-  assert.ok(out.startsWith("max_agents=3 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 model."), out);
+  assert.ok(out.startsWith("max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 model."), out);
   assert.equal(out.slice(out.indexOf(" model.") + 1), MODEL_DEFAULTS, "the model keys print after the numbers");
   for (const size of ["tiny", "small", "large", "investigate"]) s.ok("task", "add", "--title", size, "--size", size);
   const fable = (t) => (["T1", "T2"].includes(t) ? " · model fable" : "");
