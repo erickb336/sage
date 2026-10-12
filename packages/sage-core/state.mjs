@@ -384,11 +384,11 @@ const lost = (dir, table, what, also = []) =>
  * header-only table is a table without rows: a cut that keeps only the header cannot be told from it. An editor's BOM
  * and CRLF line ends read as a plain file.
  */
-function sheet(dir, table, also = []) {
+function sheet(dir, table, also = [], max = Infinity) {
   const file = join(dir, `${table}.tsv`);
   let text;
   try {
-    text = readRegular(file);
+    text = readRegular(file, { max });
   } catch (e) {
     if (e instanceof Refusal || !e.code) throw e;
     refuse(`${file} cannot be read (${e.code}). ${fixIt(file, e.code)}`);
@@ -413,7 +413,7 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
  * file that it can read, is not empty, and has its header line. It refuses the first that fails and names its file. The
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
-const check = (dir, skip = []) => Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip)]));
+const check = (dir, skip = [], max = Infinity) => Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
 
 /**
  * Refuses, before any change, a logbook that a command could not change whole: one that fails the integrity check, or a
@@ -422,7 +422,7 @@ const check = (dir, skip = []) => Object.fromEntries(Object.keys(TABLES).filter(
  * new logbook (init writes tasks.tsv last), and it may have only tables without rows: rows without their tasks are a loss.
  */
 /** Does any table of the logbook folder hold a row? A folder without tasks.tsv that has one lost its tasks. */
-const hasRows = (dir) => Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`)) ?? "").trim().split(/\r?\n/).length > 1);
+const hasRows = (dir, max = Infinity) => Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`), { max }) ?? "").trim().split(/\r?\n/).length > 1);
 
 function ready(dir, skip = []) {
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
@@ -741,18 +741,19 @@ function status(dir, save) {
 }
 
 /**
- * The task that a run id (R<n>) or a finding key (F-T<n>-<k>) belongs to in the project's logbook, so that the hook can
- * keep a lead's writes on its own task. Undefined for an id of another form, an id that the logbook does not have, an
- * id on two tasks, or a project without a logbook (no tables with rows, as before init). It takes no lock and writes
- * nothing. A logbook that fails the integrity check, also one that lost tasks.tsv but has rows, throws its refusal,
- * which names the file at fault, so a caller fails closed.
+ * The row of a run id (R<n>) or a finding key (F-T<n>-<k>) in the project's logbook: its task, and a run's role or a
+ * finding's severity, so that the hook can keep a lead's writes on its own task. Undefined for an id of another form, an
+ * id that the logbook does not have, an id on two rows, or a project without a logbook (no tables with rows, as before
+ * init). It takes no lock and writes nothing. A logbook that fails the integrity check, also one that lost tasks.tsv but
+ * has rows, throws its refusal, which names the file at fault, so a caller fails closed. With max, a table of more than
+ * max bytes throws too.
  */
-function taskFor(id, project, env = process.env) {
+function rowFor(id, project, env = process.env, { max = Infinity } = {}) {
   const [table, col] = /^R[1-9]\d*$/.test(id) ? ["runs", "id"] : /^F-T[1-9]\d*-[1-9]\d*$/.test(id) ? ["findings", "key"] : [];
   const dir = storeDir(project, env);
-  if (!table || (!lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && !hasRows(dir))) return undefined;
-  const owners = new Set(rowsOf(check(dir)[table]).filter((r) => r[col] === id).map((r) => r.task));
-  return owners.size === 1 ? [...owners][0] : undefined;
+  if (!table || (!lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && !hasRows(dir, max))) return undefined;
+  const rows = rowsOf(check(dir, [], max)[table]).filter((r) => r[col] === id);
+  return rows.length === 1 ? rows[0] : undefined;
 }
 
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
@@ -1326,5 +1327,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, taskFor, sage, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, rowFor, sage, withLock, board, answerPaths, runCli };
 }

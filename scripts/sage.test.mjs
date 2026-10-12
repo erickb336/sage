@@ -273,19 +273,19 @@ test("F-T266-3: run add takes the role as the table stores it, in lower case, so
   assert.equal(rows(s.dir, "runs").length, 3, "no refused run is recorded");
 });
 
-test("F-T266-2: taskFor throws when tasks.tsv is lost but other tables have rows, so the hook fails closed", async () => {
+test("F-T266-2: rowFor throws when tasks.tsv is lost but other tables have rows, so the hook fails closed", async () => {
   const s = store();
-  const { taskFor } = await import(LIB);
+  const { rowFor } = await import(LIB);
   const env = { SAGE_HOME: s.home };
   s.ok("task", "add", "--title", "a", "--size", "small");
   s.ok("run", "add", "T1", "--role", "qa");
-  assert.equal(taskFor("R1", s.project, env), "T1");
+  assert.equal(rowFor("R1", s.project, env)?.task, "T1");
   rmSync(join(s.dir, "tasks.tsv"));
-  assert.throws(() => taskFor("R1", s.project, env), /tasks\.tsv is missing or is a link to nothing, but every table of a logbook has at least its header line/);
+  assert.throws(() => rowFor("R1", s.project, env), /tasks\.tsv is missing or is a link to nothing, but every table of a logbook has at least its header line/);
   assert.match(s.no("status"), /^sage: no logbook for the project /, "status refuses the same logbook");
   const fresh = store(); // a logbook whose tables have no rows yet, as init leaves it before tasks.tsv
   rmSync(join(fresh.dir, "tasks.tsv"));
-  assert.equal(taskFor("R1", fresh.project, { SAGE_HOME: fresh.home }), undefined);
+  assert.equal(rowFor("R1", fresh.project, { SAGE_HOME: fresh.home }), undefined);
 });
 
 test("T266-LEAD-RACE: lead runs started at once by separate processes keep the limits: 3 of 10 on 10 tasks, and 1 of 2 on one task", async () => {
@@ -322,9 +322,10 @@ test("T266-MAX-AGENTS: the default max_agents is 4, one lead and its 3 children,
   assert.equal(config({ SAGE_HOME: s.home }).max_agents, 2);
 });
 
-test("T266-TASK-FOR: taskFor names the task of a run id or a finding key, and gives nothing for an unknown id; a damaged logbook throws", async () => {
+test("T266-TASK-FOR: rowFor gives the row of a run id or a finding key, and nothing for an unknown id; a damaged or oversized logbook throws (T273)", async () => {
   const s = store();
-  const { taskFor } = await import(LIB);
+  const { rowFor } = await import(LIB);
+  const taskFor = (...args) => rowFor(...args)?.task;
   const env = { SAGE_HOME: s.home };
   for (const t of ["a", "b", "c"]) s.ok("task", "add", "--title", t, "--size", "small");
   s.ok("run", "add", "T2", "--role", "lead");
@@ -343,8 +344,14 @@ test("T266-TASK-FOR: taskFor names the task of a run id or a finding key, and gi
   assert.equal(taskFor("F-T4-1", s.project, env), "T4", "its new key names the follow-up task");
   assert.equal(taskFor("R1", mkdtempSync(join(tmpdir(), "sage-none-")), env), undefined, "a project without a logbook");
   const runs = join(s.dir, "runs.tsv");
+  assert.equal(rowFor("R1", s.project, env).role, "lead", "a run's row has its role");
+  assert.equal(rowFor("F-T4-1", s.project, env).severity, "low", "a finding's row has its severity");
+  writeFileSync(runs, readFileSync(runs, "utf8") + "\t".repeat(5000) + "\n"); // the largest table: a long blank line
+  const size = readFileSync(runs).length;
+  assert.equal(rowFor("R2", s.project, env, { max: size }).task, "T3", "a table of exactly max bytes reads");
+  assert.throws(() => rowFor("R2", s.project, env, { max: size - 1 }), /runs\.tsv is over \d+ bytes/, "a table over max bytes throws");
   writeFileSync(runs, readFileSync(runs, "utf8").replace(/^id\t/, "ID\t"));
-  assert.throws(() => taskFor("R1", s.project, env), /the header of .*runs\.tsv is damaged/, "the logbook check applies");
+  assert.throws(() => rowFor("R1", s.project, env), /the header of .*runs\.tsv is damaged/, "the logbook check applies");
 });
 
 test("the merge check needs no open findings, checks-pass, and the route's verdicts in the task's clean cycles: 1 for a small task, 2 for a large one or one with a risk flag", () => {
