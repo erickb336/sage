@@ -29,8 +29,10 @@ export function reconcileNativeFailures(input, context, options) {
     const bound = state.bindings.filter(row => row.project === options.project && row.session === session
       && row.epoch === owner.epoch && row.child === native.actor);
     const start = observations.filter(row => row.kind === "child-start" && row.child === native.actor);
-    if (bound.length !== 1 || start.length !== 1 || start[0].parent !== bound[0].issuer || start[0].turn !== bound[0].turn) refuse();
-    parent = bound[0].issuer; path = start[0].path;
+    // Later assignments reuse this native actor. Its original binding proves identity.
+    if (start.length !== 1 || bound.filter(row => row.turn === start[0].turn).length !== 1
+      || bound.some(row => row.issuer !== start[0].parent)) refuse();
+    parent = start[0].parent; path = start[0].path;
   }
   for (const row of candidates) {
     // Any result or child-start evidence keeps the slot; this path covers preflight rejection only.

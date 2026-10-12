@@ -12,6 +12,9 @@ Linked files, conflicting calls, changed arguments, and forged metadata refuse. 
 Any successful dispatch result, child-start evidence, or saved binding also retains capacity on this path.
 
 The adapter saves a failure receipt, not a child completion. The journal rejects a late binding and duplicate release.
+A reused lead keeps its original native identity across separate assignment bindings.
+Recovery verifies that original binding and each binding's parent, rather than requiring one historical assignment.
+It can record a failed child dispatch after the lead completes or Sage turns off, without reviving either assignment.
 The caller can then prepare a new named child. The failed call and preparation remain in history.
 This does not infer failure from elapsed time, absent hooks, a model's claim, or a list result alone.
 
