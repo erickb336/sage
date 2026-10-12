@@ -9,7 +9,7 @@ import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn, reservePreparedFollowup } from "./preparation.mjs";
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
 import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
-import { bindNativeChildTool } from "./child-tool.mjs";
+import { bindNativeChildTool, bindPendingNativeChildTool } from "./child-tool.mjs";
 import { checkChildToolRecovery } from "./child-assignment.mjs";
 import { boundChildInstructions } from "./instructions.mjs";
 
@@ -49,6 +49,7 @@ export function createNativePolicy(options, evaluateTool) {
       const observed = decodeEvent(event, native);
       if (observed) record(observed); // Keep inactive and denied attempts; name reuse must stay visible.
       const before = mode(event.session_id);
+      if (child && !before.sage) bindPendingNativeChildTool(raw, native, fixed);
       const bound = before.sage && child ? bindNativeChildTool(raw, native, fixed) : undefined;
       const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
       const assignment = bound ? { ...bound.assignment, role } : undefined;

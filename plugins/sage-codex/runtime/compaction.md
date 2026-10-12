@@ -132,7 +132,12 @@ then verifies the matching call and output after the reader returns.
 Child tool permission now requires this evidence before ordinary work continues.
 The assignment reader still passes through the normal tool policy. The gate
 checks again after an awaited policy evaluation. Existing children keep this
-requirement after Sage off.
+requirement after Sage off. A reserved task can reach its first tool before
+Sage records a child binding. The off-mode path now checks that pending claim
+against the native transcript and parent result before treating the child as
+unmanaged. This also covers a reserved follow-up. It creates no new reservation
+and does not turn Sage on. Changed delivery or missing parent evidence refuses
+the operation; a later valid parent result can retry the same binding.
 
 Child stop blocks until recovery, including repeated stop attempts. Parent
 reconciliation cannot release an unrecovered assignment as successful. Native

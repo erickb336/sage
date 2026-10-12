@@ -18,6 +18,28 @@ export function bindNativeChildTool(input, context, options) {
   return bindNativeChildTranscript({ session: event.session_id, turn: event.turn_id, transcript: event.transcript_path }, native, options);
 }
 
+/** Sage off does not turn an already reserved task into an unmanaged child. */
+export function bindPendingNativeChildTool(input, context, options) {
+  const native = nativeToolContext(context);
+  const event = nativeToolEvent(input, native, "PreToolUse");
+  const state = readAdmission(options.directory);
+  const pending = state.reservations.filter(row => row.assignment.project === options.project
+    && row.assignment.session === `codex:${event.session_id}`
+    && !state.bindings.some(bound => bound.assignment === row.assignment.id)
+    && !state.completions?.some(done => done.assignment === row.assignment.id)
+    && !state.failures?.some(failed => failed.assignment === row.assignment.id));
+  if (!pending.length) return;
+  const initial = readInitialSession(event.transcript_path, { sessionsDir: options.sessionsDir });
+  if (initial.metadata.cli_version !== RUNTIME_VERSION) refuse();
+  const started = decodeEvent({ hook_event_name: "SubagentStart", session_id: event.session_id,
+    agent_id: native.actor, turn_id: initial.turn }, { ...native, metadata: initial.metadata });
+  const name = started.path.slice(started.path.lastIndexOf("/") + 1);
+  const claimed = pending.some(row => row.continuation
+    ? state.bindings.some(bound => bound.assignment === row.continuation && bound.child === native.actor)
+    : row.assignment.issuer === started.parent && row.dispatch.name === name);
+  if (claimed) bindNativeChildTool(input, native, options);
+}
+
 /** A native callback can verify initial task delivery without inventing a tool call. */
 export function bindNativeChildTranscript(input, context, options) {
   return bindObservedTranscript(input, nativeToolContext(context), options);

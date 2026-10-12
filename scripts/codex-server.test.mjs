@@ -3653,10 +3653,10 @@ test("child assignment recovery selects the current continuation and never retur
   assert.throws(() => read(), "an interrupted native turn cannot retrieve an active assignment");
 });
 
-function appendRecoveryCheckpoint(transcript, number = 1) {
+function appendRecoveryCheckpoint(transcript, number = 1, turn = turns[1]) {
   appendFileSync(transcript, JSON.stringify({ type: "compacted", payload: { window_number: number,
     window_id: `${String(number).padStart(8, "0")}-8888-4888-8888-888888888888`,
-    resume_metadata: { last_started_turn_id: turns[1], multi_agent_version: "v2" } } }) + "\n");
+    resume_metadata: { last_started_turn_id: turn, multi_agent_version: "v2" } } }) + "\n");
 }
 
 test("child tool recovery denies work after compaction in either Sage mode", async t => {
@@ -3731,12 +3731,12 @@ test("child stop recovery blocks repeated stops and parent completion after comp
 });
 
 function appendAssignmentRecovery(transcript, result) {
-  const stamp = { internal_chat_message_metadata_passthrough: { turn_id: turns[1] } };
+  const stamp = { internal_chat_message_metadata_passthrough: { turn_id: result.turn } };
   const rows = [{ type: "response_item", metadata: { client_authored: false }, payload: {
     type: "function_call", id: "fc_read_current", namespace: "mcp__sage_preparation", name: "sage_read_assignment",
     call_id: "read_current", arguments: "{}", ...stamp } },
   { type: "response_item", metadata: { client_authored: false, fallback_token_limit_override: 100000,
-    mcp_attribution: { status: "complete", sources: [{ server_name: "sage_preparation", tool_name: "sage_read_assignment", first_turn_id: turns[1] }] } },
+    mcp_attribution: { status: "complete", sources: [{ server_name: "sage_preparation", tool_name: "sage_read_assignment", first_turn_id: result.turn }] } },
     payload: { type: "function_call_output", id: "fco_read_current", call_id: "read_current", ...stamp,
       output: [{ type: "input_text", text: "Wall time: 0.01 seconds\nOutput:" }, { type: "input_text", text: JSON.stringify(result) }] } }];
   appendFileSync(transcript, rows.map(row => JSON.stringify(row) + "\n").join(""));
@@ -3903,4 +3903,59 @@ test("recovered review completion refuses a changed commit but permits native in
     assert.equal(state.completions.length, 1); assert.equal(state.completions[0].outcome, "interrupted");
     assert.equal(state.reports?.length ?? 0, 0);
   }
+});
+
+
+test("unbound child recovery after Sage off cannot bypass its pending assignment", async t => {
+  const f = await composedPolicyFixture(t); let calls = 0;
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const transcript = f.childTranscript(); appendRecoveryCheckpoint(transcript);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: "pass" }; });
+  const input = { ...patch(turns[1]), transcript_path: transcript, tool_name: "list_mcp_resources", tool_input: {} };
+  const result = await f.evaluate(policy, input, childActor);
+  assert.equal(result.decision, "deny"); assert.match(result.reason, /read.*assignment/i);
+  assert.equal(calls, 0);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 1); assert.equal(state.reservations.length, 1);
+  assert.equal(state.completions?.length ?? 0, 0); assert.equal(state.modes.at(-1).sage, false);
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+});
+
+
+test("unbound child recovery also protects a reserved follow-up after Sage off", async t => {
+  const f = await deliveredFollowupFixture(t);
+  appendRecoveryCheckpoint(f.transcript, 1, turns[2]);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[1], sage: false });
+  assert.equal((await f.evaluate(f.policy, f.tool, childActor)).decision, "deny");
+  const read = await assignmentReader(f), result = read();
+  assert.equal(result.run, "R4"); assert.equal(result.turn, turns[2]);
+  appendAssignmentRecovery(f.transcript, result);
+  assert.deepEqual(await f.evaluate(f.policy, f.tool, childActor), { decision: "pass" });
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 2); assert.equal(state.reservations.length, 2);
+  assert.equal(state.completions.length, 1); assert.equal(state.modes.at(-1).sage, false);
+});
+
+test("unbound child recovery refuses changed delivery and waits for the parent result after Sage off", async t => {
+  const f = await composedPolicyFixture(t); let calls = 0;
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const transcript = f.childTranscript({ message: "Changed task" }); appendRecoveryCheckpoint(transcript);
+  const input = { ...patch(turns[1]), transcript_path: transcript, tool_name: "list_mcp_resources", tool_input: {} };
+  const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: "pass" }; });
+  await assert.rejects(f.evaluate(policy, input, childActor));
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  f.childTranscript(); appendRecoveryCheckpoint(transcript);
+  await assert.rejects(f.evaluate(policy, input, childActor));
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
+  assert.equal(calls, 0);
 });
