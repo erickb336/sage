@@ -347,6 +347,8 @@ export function handle(input, state, slots) {
   if (nestedSpawn) {
     if (input.agent_type !== "sage:lead") return deny(event, "only a lead may start an agent. Report to the sage.");
     if (typeof input.agent_id !== "string" || !input.agent_id) return deny(event, "the spawn has no valid caller identity, so its slot cannot be checked. Report to the sage.");
+    // A lead starts children only from the lead slot that the chief's spawn bound to it (F-T284-4).
+    if (!slots.leadOf(input.agent_id)) return deny(event, "this lead holds no bound lead slot, so it starts no agent. Report to the sage.");
     if (!LEAD_CHILDREN.has(spawned)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
   }
   if (event !== "PreToolUse" || (!state.sage && !nestedSpawn)) return undefined;
@@ -371,7 +373,7 @@ export function handle(input, state, slots) {
       return deny(event, `the hook could not read the logbook for ${task} (${e?.message ?? e}), so it starts no lead. Fix the logbook, or tell the user.`);
     }
     const run = view.leadRun(task);
-    if (!run) return deny(event, `${task} has no running lead run in the logbook of ${project}. Record it first, as a command of its own: ${stateCommand(`run add ${task} --role lead --project ${/^[\w./-]+$/.test(project) ? project : `'${project.replaceAll("'", `'\\''`)}'`}`)}`);
+    if (!run) return deny(event, `${task} has no running lead run in the logbook of ${project}. Record it first, as a command of its own: ${stateCommand(`run add ${task} --role lead`)}. A lead starts only from a session opened in the project's folder or one of its worktrees, so that the lead's logbook is the one that the session uses (F-T284-7).`);
     // The slot keeps the task, its logbook and its lead run, for the lead's writes (F-T273-1, F-T273-4).
     leadMark = { task, logbook: digest(view.dir), run: run.id };
   }
@@ -911,8 +913,13 @@ const LEAD_WRITES = {
   "finding add": ([, t], opt, own) => t === own && opt.key === undefined,
   "finding close": ([, t, key], opt, own, view) => t === own && view.row(key)?.task === own,
   "finding triage": ([, t, key, how], opt, own, view) => t === own && view.row(key)?.task === own && (how === "fix" || (how === "dismiss" && view.row(key).severity === "low" && Boolean(opt.reason))),
-  // A verdict names its task's own PR, so a lead's verdicts never count for another PR's merge check (F-T273-2, F-T273-6).
-  verdict: ([t], opt, own, view, task) => t === own && Boolean(task.pr) && opt.pr === task.pr && (opt.run === undefined || view.row(opt.run)?.task === own),
+  // A verdict names its task's own PR, so a lead's verdicts never count for another PR's merge check (F-T273-2, F-T273-6),
+  // and the finished run of its task whose role gives that kind (F-T284-6). A check verdict needs no run.
+  verdict: ([t], opt, own, view, task) => {
+    const roles = VERDICT_ROLES[opt.kind], run = opt.run === undefined ? undefined : view.row(opt.run);
+    const fits = roles === null ? opt.run === undefined || run?.task === own : Array.isArray(roles) && run?.task === own && run.status === "done" && roles.includes(run.role);
+    return t === own && Boolean(task.pr) && opt.pr === task.pr && fits;
+  },
   round: ([t], opt, own) => t === own,
   task: ([t, set, ...pairs], opt, own, view, task) => {
     const keys = pairs.map((kv) => kv.slice(0, kv.indexOf("=")));
@@ -920,6 +927,8 @@ const LEAD_WRITES = {
       pairs.every((kv, k) => Object.hasOwn(LEAD_PAIRS, keys[k]) && LEAD_PAIRS[keys[k]](kv.slice(kv.indexOf("=") + 1), task, view, own));
   },
 };
+/** The roles whose finished run gives each verdict kind that a lead records; null for a check, which needs no run (F-T284-6). */
+const VERDICT_ROLES = { "checks-pass": null, "checks-fail": null, "review-clean": ["code-reviewer"], "security-clean": ["security-reviewer"], "ux-clean": ["ux-reviewer"], "qa-pass": ["qa"], "qa-fail": ["qa"], findings: ["code-reviewer", "security-reviewer", "ux-reviewer"] };
 /** The number of words of each lead write, so that no word goes past the hook unread. */
 const LEAD_WORDS = { "run add": 2, "run done": 2, "finding add": 2, "finding close": 3, "finding triage": 4, verdict: 1, round: 1 };
 /** The logbook of a folder, as the state tool finds it from process.cwd(): the physical path. realpath throws on a missing folder. */
@@ -942,6 +951,12 @@ function leadProblem(input, cmd, pos, opt, slots) {
   if (!task) return `the logbook has no task ${own}.`;
   // A held task takes no lead write at all: no run, finding, verdict or move (F-T273-7, F-T273-12).
   if (task.state === "held") return `${own} is held, and only the sage moves a held task (F-T273-7, F-T273-12).`;
+  // A repair goes through round, so the rounds count and a task can reach held or replan (F-T284-5): while a medium or
+  // high finding is triaged fix and the task is not repairing, a lead closes no finding and records no verdict on a new SHA.
+  const repair = name === "finding close" || (name === "verdict" && !view.shas(own).has(String(opt.sha ?? "").toLowerCase()));
+  if (repair && task.state !== "repairing" && view.findings(own).some((f) => f.status === "open" && f.triage === "fix" && f.severity !== "low")) {
+    return `${own} has a medium or high finding triaged fix and is not repairing: run round ${own} first, then repair (F-T284-5).`;
+  }
   return LEAD_WRITES[name](pos, opt, own, view, task) ? undefined : `${shown} is on the lead's list, but not as it is written here, or not on its own task ${own}.`;
 }
 const READ_WAY = "To run a read command of the state tool, run node <path to skills/sage/sage.mjs> status (or merge-check, logbook, standing, config) alone; to read the file, use cat <path> or git show <sha>:<path>.";

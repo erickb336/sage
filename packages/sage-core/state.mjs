@@ -507,8 +507,8 @@ const shell = (word) => (/^[\w./-]+$/.test(word) ? word : `'${word.replaceAll("'
 
 /**
  * A held task takes no new run, finding change or verdict, from any caller, until the sage moves it out of held (F-T273-18):
- * a lead's command that the hook checked before the round set held still stops here. The chief's own moves stay: task
- * set state=, round, run done and finding move.
+ * a lead's command that the hook checked before the round set held still stops here. Nor does it take pr= or branch=
+ * (F-T284-3). The chief's own moves stay: task set state=, round, run done, finding move, and a triage ask or dismiss.
  */
 const notHeld = (task, what) => task.state === "held" && refuse(`${task.id} is held, so it takes no ${what}: only the sage moves a held task (sage task ${task.id} set state=building or briefed), then ${what} again.`);
 
@@ -782,6 +782,8 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
       return table ? one(rows(table).filter((r) => r[col] === id)) : undefined;
     },
     leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
+    findings: (task) => rows("findings").filter((f) => f.task === task),
+    shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
     prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),
   };
 }
@@ -983,8 +985,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
               if (!r.ok) refuse(`${task.id} is not verified on ${head.slice(0, 7)}: ${r.reason}`);
             }
             if (["merged", "concluded", "abandoned"].includes(v)) decided.push({ at: now(), task: task.id, decision: `state ${v}`, why: "task set" });
-          } else if (k === "pr") decided.push(...setPr(task, v, "task set"));
-          else if (k === "branch") task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
+          } else if (k === "pr") decided.push(...(notHeld(task, "pr="), setPr(task, v, "task set")));
+          else if (k === "branch") notHeld(task, "branch="), task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
           else if (k === "title") task.title = v;
           else refuse(`task set takes state=, branch=, pr= or title=`);
         }
@@ -1072,7 +1074,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         return `${key} open${again ? " again" : ""} · ${severity} · ${task.id}`;
       }
       const f = findings.find((x) => x.task === id && x.key === more[0]) ?? missing(`finding ${more[0]} on ${id}`, findings.filter((x) => x.task === id).map((x) => x.key));
-      if (sub === "triage" || sub === "close") notHeld(taskOf(dir, id).task, `finding ${sub}`);
+      // While held, the sage may still triage ask, or dismiss with a reason (F-T284-1); a fix or a close waits.
+      if (sub === "close" || (sub === "triage" && more[1] === "fix")) notHeld(taskOf(dir, id).task, sub === "close" ? "finding close" : "fix triage");
       if (sub === "triage") {
         const t = need(more[1], "fix, dismiss or ask");
         if (!["fix", "dismiss", "ask"].includes(t)) refuse("triage is fix, dismiss or ask");
