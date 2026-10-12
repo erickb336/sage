@@ -505,6 +505,13 @@ const need = (value, what) => value || refuse(`missing ${what}`);
 /** A word as a shell reads it: in single quotes when it holds anything but letters, digits and ._/-, so a pasted command does only what it says. */
 const shell = (word) => (/^[\w./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
 
+/**
+ * A held task takes no new run, finding change or verdict, from any caller, until the sage moves it out of held (F-T273-18):
+ * a lead's command that the hook checked before the round set held still stops here. The chief's own moves stay: task
+ * set state=, round, run done and finding move.
+ */
+const notHeld = (task, what) => task.state === "held" && refuse(`${task.id} is held, so it takes no ${what}: only the sage moves a held task (sage task ${task.id} set state=building or briefed), then ${what} again.`);
+
 /** Refuses an id that the logbook does not have, and names the latest ids that it has, to pick from. */
 const missing = (what, ids) => refuse(`no ${what}. ${ids.length ? `The latest: ${ids.slice(-10).join(", ")}.` : "There is none yet."}`);
 
@@ -1013,6 +1020,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const runs = read(dir, "runs");
       if (sub === "add") {
         const { task } = taskOf(dir, need(id, "the task id"));
+        notHeld(task, "run add");
         // The role as the table stores it, in lower case, so that every check below sees the stored value ("Lead " is lead).
         const role = cell(need(opt.role, "--role")).toLowerCase();
         if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
@@ -1050,6 +1058,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const findings = read(dir, "findings");
       if (sub === "add") {
         const { task } = taskOf(dir, need(id, "the task id"));
+        notHeld(task, "finding add");
         const severity = need(opt.severity, "--severity");
         if (!["high", "medium", "low"].includes(severity)) refuse("severity is high, medium or low");
         const key = cell(opt.key) || nextId(dir, `F-${task.id}-`); // as the table holds it, so the same --key finds its finding again
@@ -1063,6 +1072,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         return `${key} open${again ? " again" : ""} · ${severity} · ${task.id}`;
       }
       const f = findings.find((x) => x.task === id && x.key === more[0]) ?? missing(`finding ${more[0]} on ${id}`, findings.filter((x) => x.task === id).map((x) => x.key));
+      if (sub === "triage" || sub === "close") notHeld(taskOf(dir, id).task, `finding ${sub}`);
       if (sub === "triage") {
         const t = need(more[1], "fix, dismiss or ask");
         if (!["fix", "dismiss", "ask"].includes(t)) refuse("triage is fix, dismiss or ask");
@@ -1090,6 +1100,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     }
     case "verdict": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));
+      notHeld(task, "verdict");
       const kind = need(opt.kind, "--kind");
       if (!KINDS.includes(kind)) refuse(`kind is one of ${KINDS.join(", ")}`);
       // The clean rule: a cycle is clean when no medium or high finding is open. Low ones are fixed, moved or dismissed

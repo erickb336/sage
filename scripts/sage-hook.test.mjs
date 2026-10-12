@@ -1,12 +1,23 @@
 // Runs the sage hook as Claude Code does: one JSON event on stdin, one JSON answer (or nothing) on stdout.
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync as rawExecFileSync, spawn, spawnSync as rawSpawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
+
+/**
+ * Bounded waits (F-T273-15, F-T273-20, order 26). The file stalled twice under load with no failure, and node's per-test
+ * timeout cannot stop a blocked synchronous call. Each child call normally takes under 1 s (the slowest waits 5 s for a
+ * slow fake gh), so one that runs 60 s is stuck: it is killed and fails. Every spawnSync and execFileSync of this file
+ * goes through bounded(), and a call's own timeout wins. Each test fails after 5 minutes instead of stalling the run.
+ */
+const CALL_MS = 60_000;
+const bounded = (options = {}) => ({ timeout: CALL_MS, killSignal: "SIGKILL", ...options });
+const spawnSync = (command, args, options) => rawSpawnSync(command, args, bounded(options));
+const execFileSync = (command, args, options) => rawExecFileSync(command, args, bounded(options));
 
 // Through the launcher, as Claude Code runs it. HOME is a fake home without plugins, so the launcher runs this tree's hook.
 const HOOK = fileURLToPath(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
@@ -15,12 +26,6 @@ const TOOL = fileURLToPath(new URL("../plugins/sage/skills/sage/sage.mjs", impor
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const BRIEF = ["GOAL fix it", "SCOPE src/", "CONTEXT none", "DECISIONS none", "ACCEPTANCE it works", "VERIFY npm test", "BUDGET 20 turns", "FORBIDDEN no merge", "REPORT the usual", "STANDING 1. work in your worktree"].join("\n");
 
-/**
- * Bounded waits (F-T273-15, order 26). The file stalled twice under load with no failure. Each hook call normally takes
- * under 1 s (the slowest test waits 5 s for a slow fake gh), so a call that runs 60 s is stuck: it is killed and fails.
- * Each test fails after 5 minutes instead of stalling the run; the longest test takes about 20 s alone.
- */
-const CALL_MS = 60_000;
 const test = (name, fn) => nodeTest(name, { timeout: 300_000 }, fn);
 /** A session with its own hook state and sage home. send() returns the hook's answer, or undefined. */
 function session(env = {}) {
@@ -5098,7 +5103,7 @@ test("F-T273-4: a lead writes only while the lead run that its slot started for 
 
 test("F-T273-5: the chief starts no second lead-T<n> while a slot for that task lives, also from another session", () => {
   const s = leadSession();
-  const TWICE = /a lead of T1 already holds a slot/;
+  const TWICE = /a lead named lead-T1 already holds a slot/;
   assert.match(denied(s.send(leadSpawn("again", 1, { cwd: s.dir }))) ?? "", TWICE);
   s.send({ ...prompt("sage mode"), session_id: "s2" });
   assert.match(denied(s.send(leadSpawn("other-session", 1, { cwd: s.dir, session_id: "s2" }))) ?? "", TWICE);
@@ -5239,4 +5244,41 @@ test("F-T273-15: a hook call that never ends fails within its bound instead of s
   const s = session({ NODE_OPTIONS: `--require ${join(dir, "hang.cjs")}` });
   await assert.rejects(s.sendAsync(prompt("hello"), 3000), /the hook did not answer in 3000 ms/);
   assert.throws(() => s.send(prompt("hello"), 3000), /the hook did not answer/);
+});
+
+// Repair round 5 of T273 (R905). Each test fails on fee07bf and passes after.
+test("F-T273-16: a session holds one lead of a name lead-T<n> in any logbook, and TaskStop by that name stops only it", () => {
+  const s = leadSession(); // lead-a is lead-T1 of project A (s.dir)
+  const b = realpathSync(mkdtempSync(join(tmpdir(), "sage-project-b-")));
+  const inB = (...args) => spawnSync("node", [TOOL, ...args, "--project", b], { encoding: "utf8", env: s.vars });
+  inB("init");
+  inB("task", "add", "--title", "b", "--size", "small");
+  inB("run", "add", "T1", "--role", "lead");
+  assert.match(denied(s.send(leadSpawn("b-call", 1, { cwd: b }))) ?? "", /a lead named lead-T1 already holds a slot, in this session or for this logbook/, "project B's T1 in the same session");
+  s.send(tool("TaskStop", { task_id: "lead-T1" }));
+  assert.equal(s.send(leadSpawn("b-call-2", 1, { cwd: b })), undefined, "after the stop, B's lead-T1 starts");
+  s.send(resultOf("b-call-2", "lead-b"));
+  assert.match(denied(stateRun(s, "round T1")) ?? "", /this lead holds no bound lead slot/, "A's stopped lead writes nothing");
+  assert.match(denied(s.send(leadSpawn("a-again", 1, { cwd: s.dir }))) ?? "", /already holds a slot/, "the name is B's lead's now");
+});
+
+test("F-T273-17: a TaskStop of lead-T<n> before the spawn's result binds still ends the agent that binds later", () => {
+  const s = linkedSession();
+  s.sage("config", "max_agents=20", "cap_total=30");
+  s.send(prompt("sage mode"));
+  s.sage("init");
+  s.sage("task", "add", "--title", "a", "--size", "small");
+  s.sage("run", "add", "T1", "--role", "lead");
+  assert.equal(s.send(leadSpawn("call", 1, { cwd: s.dir })), undefined);
+  s.send(tool("TaskStop", { task_id: "lead-T1" }));
+  s.send(resultOf("call", "lead-late"));
+  assert.match(denied(s.send(nested("sage:qa", "late-child", { agent_id: "lead-late" }))) ?? "", /this lead or spawn already ended/);
+});
+
+test("F-T273-20: every synchronous child call of this file has a bound and is killed at it", () => {
+  assert.deepEqual(bounded(), { timeout: CALL_MS, killSignal: "SIGKILL" });
+  assert.deepEqual(bounded({ timeout: 10_000, encoding: "utf8" }), { timeout: 10_000, killSignal: "SIGKILL", encoding: "utf8" }, "a call's own timeout wins");
+  const r = spawnSync("node", ["-e", "setTimeout(() => {}, 60000)"], { timeout: 1000 });
+  assert.equal(r.error?.code, "ETIMEDOUT");
+  assert.equal(r.signal, "SIGKILL");
 });

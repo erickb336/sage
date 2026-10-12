@@ -2648,3 +2648,22 @@ test("T152: cleanup retains foreign waiters and removes only dead local waiters"
   assert.equal(existsSync(join(fakes, "calls")), false, "no command ran ps");
   assert.equal(existsSync(kills), false, "no command called process.kill");
 });
+
+test("F-T273-18: a held task takes no run add, finding change or verdict from any caller; the chief's moves stay", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa"); // R1
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x"); // F-T1-1
+  s.ok("finding", "triage", "T1", "F-T1-1", "fix");
+  const file = join(s.dir, "tasks.tsv");
+  const [head, ...lines] = readFileSync(file, "utf8").trimEnd().split("\n");
+  const col = head.split("\t").indexOf("state");
+  writeFileSync(file, [head, ...lines.map((line) => { const v = line.split("\t"); v[col] = "held"; return v.join("\t"); })].join("\n") + "\n");
+  for (const args of [["run", "add", "T1", "--role", "qa"], ["finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "y"], ["finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "r"],
+    ["finding", "close", "T1", "F-T1-1"], ["verdict", "T1", "--sha", SHA, "--kind", "qa-pass"]]) {
+    assert.match(s.no(...args), /^sage: T1 is held, so it takes no /, args.join(" "));
+  }
+  assert.match(s.ok("run", "done", "R1", "--status", "done"), /^R1 done/, "a run still ends");
+  assert.match(s.ok("task", "T1", "set", "state=building"), /^T1 building/, "the sage moves it out of held");
+  assert.match(s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass"), /^T1 checks-pass/, "then a verdict records");
+});
