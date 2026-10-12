@@ -17,7 +17,8 @@
 //     (firstUpload, firstCreation).
 //   - Only main starts leads (3 per project), each named lead-T<n> and in the background; only leads start their permitted children (3 each),
 //     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode. In the same scope
-//     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent). Only the main session's TaskStop frees a slot.
+//     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent), and
+//     never names a spawn main or lead-T<n> (reservedName). Only the main session's TaskStop frees a slot.
 //   - A sage agent may finish only with the full report of the sage:report skill.
 //   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs the state tool only as one plain
 //     read command, never the PR script, never a command outside the sandbox, never writes under the sage root with a
@@ -63,6 +64,8 @@ const SHELL_TOOLS = /^(?:Bash|Monitor|PowerShell|mcp__terminal__.+)$/;
 const CHIEF = /(^|:)chief-of-staff$/;
 /** A sage agent type, in any letter case, so that a type such as Sage:lead cannot skip the sage rules (F-T255-5). */
 const OURS = /^sage:/i;
+/** A name that SendMessage and TaskStop use for the main session or a lead: main, or lead-T<n>, in any case (F-T255-4, F-T255-10). */
+const reservedName = (name) => /^(?:main|lead-t\d+)$/i.test(String(name ?? "").trim());
 /** An agent's event: Claude Code sets agent_id only for a subagent's events. An empty agent_id, or a sage role other than the chief, counts too (fail closed). */
 const agentEvent = (input) => "agent_id" in (input ?? {}) || (OURS.test(input?.agent_type ?? "") && !CHIEF.test(input.agent_type));
 export const BRIEF_FIELDS = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"];
@@ -289,8 +292,9 @@ export function handle(input, state, slots) {
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
   if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response);
   if (event === "PostToolUseFailure" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
-  // Legacy direct agents only: requesting a stop is not terminal evidence for nested work. An agent's TaskStop frees no
-  // slot: a lead could free a main-session agent's slot while that agent still runs (T255 M3).
+  // The main session's TaskStop frees the named agent's slot, a lead's or a child's too (T255 M3, F-T255-12). It records
+  // no end, so the call stays open to its own result. An agent's TaskStop frees no slot: a lead could free a
+  // main-session agent's slot while that agent still runs (T255 M3).
   if (event === "PreToolUse" && input.tool_name === "TaskStop") return void (main && slots.release(input.tool_input?.task_id, true));
   // An agent's SendMessage can wake a stopped agent outside every cap, and its event cannot tell a stopped target from a
   // live one. So an agent sends a message only to the main session: in sage mode, and for a sage agent in any mode, the
@@ -326,10 +330,10 @@ export function handle(input, state, slots) {
   // stays exact: "sage:lead" is the one type that may start agents, and another case of it gets no such right.
   const spawned = String(ti.subagent_type ?? "").toLowerCase();
   const spawnName = ti.name ?? ti.description ?? ""; // the Agent tool's name, or its description when it has no name
-  // An agent never names a spawn "main": a later SendMessage to main could wake that agent with no slot (F-T255-4). The
-  // scope of the SendMessage rule: sage mode, or a sage agent in any mode.
-  if (event === "PreToolUse" && !main && (state.sage || ours) && AGENT_TOOLS.test(tool) && String(spawnName).trim().toLowerCase() === "main") {
-    return deny(event, 'an agent never names a spawn "main", because a message to main must reach only the main session. Give it another name.');
+  // An agent never gives a spawn a reserved name: the chief's SendMessage or TaskStop to main or to a lead would then reach
+  // that agent, which a message can wake with no slot (F-T255-4, F-T255-10). The scope of the SendMessage rule.
+  if (event === "PreToolUse" && !main && (state.sage || ours) && AGENT_TOOLS.test(tool) && reservedName(spawnName)) {
+    return deny(event, 'an agent never names a spawn "main" or "lead-T<n>", because those names must reach only the main session and its leads. Give it another name.');
   }
   // The nested rules check the spawned type too, not only the caller: in any mode (T255 H2).
   const nestedSpawn = event === "PreToolUse" && !main && AGENT_TOOLS.test(tool) && (state.sage || ours || OURS.test(spawned));
@@ -1657,7 +1661,8 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     for (const slot of stale) if (!parents.has(mark(slot, "bound-"))) free(slot);
   };
   const counts = project => ({ total: list().length, project: list().filter(slot => (mark(slot, "project-") ?? project) === project).length });
-  const matching = (slot, role) => !role || !mark(slot, "role-") || mark(slot, "role-") === safe(role);
+  // Roles compare in lower case: take() marks the spawned type in lower case, and an event reports its own case (F-T255-13).
+  const matching = (slot, role) => !role || !mark(slot, "role-") || mark(slot, "role-") === safe(String(role).toLowerCase());
   const pendingFor = role => ofSession().filter(slot => {
     if (!has(slot, "ok") || mark(slot, "pending-") === undefined || !matching(slot, role)) return false;
     const saved = marks(slot), prefixes = ["project-", "session-", "tool-", "pending-"];
@@ -1690,7 +1695,6 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     if (!valid(agent)) return;
     if (!attempted) note(`ended-${hash(agent)}`); // publish terminal evidence before searching or freeing
     for (const slot of ofSession()) {
-      if (attempted && has(slot, "exact")) continue; // requesting TaskStop is not a completed stop
       // A lead's end frees no child's slot: a child may still run, and keeps its slot until its own stop or its lease (T255 M1).
       if (ownsAgent(slot, agent)) free(slot);
     }
@@ -1713,7 +1717,8 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     renew(candidates);
   };
   return {
-    take: transaction((project, cap, capTotal, toolUseId, { role, caller, input } = {}) => {
+    take: transaction((project, cap, capTotal, toolUseId, { role: raw, caller, input } = {}) => {
+      const role = raw === undefined ? undefined : String(raw).toLowerCase();
       mkdirSync(dir, { recursive: true });
       expire();
       const exact = caller !== undefined || role === "sage:lead";

@@ -4396,7 +4396,7 @@ test("T181: report gates and attempted TaskStop keep nested capacity; late async
   for (let n = 1; n <= 3; n++) assert.equal(s.send(nested("sage:qa", `r-${n}`)), undefined);
   s.send(resultOf("r-1", "child", LEAD));
   assert.equal(s.send({ hook_event_name: "SubagentStop", agent_id: "child", agent_type: "sage:qa", last_assistant_message: "incomplete" }).decision, "block");
-  s.send(tool("TaskStop", { task_id: "child" }));
+  s.send(tool("TaskStop", { task_id: "child" }, LEAD)); // an agent's TaskStop frees nothing (T255 M3)
   assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "held"))));
   s.send(ended("lead-a", "sage:lead"));
   assert.ok(denied(s.send(spawnAgent("sage:qa", BRIEF, "child-held"))), "a child keeps its slot after its parent's end (T255 M1)");
@@ -4745,4 +4745,41 @@ test("F-T255-5: a sage type in another letter case meets the same spawn and mess
   assert.match(denied(s.send(tool("Agent", { subagent_type: "Sage:Lead", prompt: BRIEF, description: "d", run_in_background: true }, { tool_use_id: "case-4" }))) ?? "", /only with the name lead-T<n>/, "the main session's lead rules read the type in any case");
   for (const n of [1, 2, 3]) assert.equal(s.send(tool("Agent", { subagent_type: "SAGE:lead", prompt: BRIEF, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: `lead-${n}` })), undefined);
   assert.match(denied(s.send(leadSpawn("lead-4", 4))) ?? "", /3 leads are running/, "a lead in another case counts as a lead");
+});
+
+test("F-T255-10: a sage agent, or any agent in sage mode, never names a spawn lead-T<n>; plain use outside sage mode is unchanged", () => {
+  const RESERVED = /an agent never names a spawn "main" or "lead-T<n>"/;
+  const child = (id, names) => tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, ...names }, { tool_use_id: id, ...LEAD });
+  for (const s of [nestedSession(), session()]) {
+    for (const [n, names] of [{ name: "lead-T9" }, { name: "LEAD-T255" }, { name: " lead-t1 " }, { description: "lead-T9" }].entries()) {
+      assert.match(denied(s.send(child(`reserved-${n}`, names))) ?? "", RESERVED, JSON.stringify(names));
+    }
+    assert.equal(s.send(child("ok-1", { name: "lead-T" })), undefined);
+    assert.equal(s.send(child("ok-2", { name: "lead-T9x" })), undefined);
+  }
+  const plain = (id) => tool("Agent", { subagent_type: "Explore", prompt: "x", name: "lead-T9" }, { tool_use_id: id, agent_id: "gp", agent_type: "general-purpose" });
+  assert.equal(session().send(plain("plain-off")), undefined, "a plain agent outside sage mode may use the name");
+  assert.match(denied(nestedSession().send(plain("plain-sage"))) ?? "", RESERVED, "a plain agent in sage mode");
+  assert.equal(nestedSession().send(leadSpawn("chief-lead", 9)), undefined, "the main session's own lead-T<n> spawn");
+});
+
+test("F-T255-12: the main session's TaskStop frees a lead's slot; an agent's TaskStop frees none", () => {
+  const s = nestedSession();
+  for (const n of [1, 2, 3]) {
+    assert.equal(s.send(leadSpawn(`lead-${n}-call`, n)), undefined);
+    s.send(resultOf(`lead-${n}-call`, `lead-${n}`));
+  }
+  s.send(tool("TaskStop", { task_id: "lead-2" }, LEAD));
+  assert.match(denied(s.send(leadSpawn("lead-4-early", 4))) ?? "", /3 leads are running/, "an agent's TaskStop frees no slot");
+  s.send(tool("TaskStop", { task_id: "lead-1" }));
+  assert.equal(s.send(leadSpawn("lead-4-call", 4)), undefined, "the main session's TaskStop of lead-1 frees its slot");
+  assert.match(denied(s.send(leadSpawn("lead-5-call", 5))) ?? "", /3 leads are running/);
+});
+
+test("F-T255-13: a child whose type comes in another letter case keeps its slot through its events", () => {
+  const s = nestedSession();
+  for (const n of [1, 2, 3]) assert.equal(s.send(spawnAgent("Sage:QA", BRIEF, `case-${n}`, LEAD)), undefined);
+  ageSlots(s, 11);
+  for (const n of [1, 2, 3]) s.send(tool("Read", { file_path: "/x/a.js" }, { agent_id: `kid-${n}`, agent_type: "Sage:QA" }));
+  assert.match(denied(s.send(nested("sage:qa", "case-4"))) ?? "", /this lead already has 3 children/);
 });
