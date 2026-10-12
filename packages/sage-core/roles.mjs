@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
-const ROLES = new Set(["lead", "implementer", "pe", "designer", "arena-judge", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"]);
+/** The child roles of sage: each has its instructions in roles/. The state tool records runs of these roles. */
+export const ROLES = new Set(["lead", "implementer", "pe", "designer", "arena-judge", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"]);
 const render = (name, bindings) => {
   const text = readFileSync(new URL(`./roles/${name}.md`, import.meta.url), "utf8").trim();
   const keys = [...new Set([...text.matchAll(/\{\{([A-Z_]+)\}\}/g)].map(match => match[1]))];
