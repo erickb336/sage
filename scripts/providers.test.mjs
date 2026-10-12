@@ -1709,6 +1709,224 @@ test("package public imports package both quote styles and dynamic imports outsi
 });
 
 
+test("a missing shared file policy still refuses active chief edits without disabling the hook", async (t) => {
+  const { dir, plugin } = isolated(t, "claude");
+  rmSync(join(plugin, "hooks/file-policy.mjs"), { force: true });
+  const { handle: check } = await import(pathToFileURL(join(plugin, "hooks/sage-hook.mjs")).href);
+  const input = { hook_event_name: "PreToolUse", tool_name: "Edit", session_id: "fixture", cwd: dir, tool_input: { file_path: join(dir, "sample.txt") } };
+  const result = check(input, { sage: true }, {});
+  assert.equal(result.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(result.hookSpecificOutput.permissionDecisionReason, /file policy cannot load/);
+  assert.equal(check(input, { sage: false }, {}), undefined);
+});
+
+test("missing shared mode policy cannot enable mode or retain autopilot", async (t) => {
+  const { dir, plugin } = isolated(t, "claude");
+  rmSync(join(plugin, "hooks/mode-policy.mjs"), { force: true });
+  const { handle: check } = await import(pathToFileURL(join(plugin, "hooks/sage-hook.mjs")).href);
+  for (const sage of [false, true]) {
+    const state = { sage, autopilot: true };
+    const result = check({ hook_event_name: "UserPromptSubmit", session_id: "fixture", cwd: dir, prompt: "sage mode" }, state, {});
+    assert.equal(state.sage, sage); assert.equal(state.autopilot, false);
+    assert.match(JSON.stringify(result), /mode policy cannot load/);
+  }
+});
+
+test("shared command reader preserves substitutions pipelines and heredoc structure in both bundles", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof api.shellCommands, "function");
+    const text = 'printf "%s" "$(git status)" | cat >out\ncat <<\'END\'\n$(not-a-command)\nEND\n';
+    const rows = api.shellCommands(text);
+    assert.deepEqual(rows.map(row => row.words), [["git", "status"], ["printf", "%s", "$(…)"], ["cat"], ["cat"]]);
+    assert.equal(rows[0].host.cmd, rows[1]);
+    assert.equal(rows[0].host.index, 2);
+    assert.equal(rows[1].pipeTo, rows[2]);
+    assert.deepEqual(rows[2].redirects, [">out"]);
+    assert.deepEqual(rows[3].bodies, ["$(not-a-command)"]);
+    for (const broken of ["echo 'open", "cat <<END\nmissing", "echo $(git status", "case x in a) echo hi"]) {
+      assert.throws(() => api.shellCommands(broken));
+    }
+    if (provider === "claude") {
+      const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+      assert.deepEqual(hook.shellCommands(text), rows);
+    }
+  }
+});
+
+test("shared command reader resolves fake program paths without running them", async t => {
+  const { chmodSync } = await import("node:fs");
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof api.programsRun, "function");
+    const bin = join(f.dir, "bin"); mkdirSync(bin);
+    for (const name of ["ps", "kill"]) { writeFileSync(join(bin, name), "fixture data, never executed"); chmodSync(join(bin, name), 0o700); }
+    const text = "env ps -ax; kill 123; env kill 123; sh -c 'ps -ef'";
+    const rows = api.programsRun(text, f.dir, bin);
+    assert.deepEqual(rows.map(row => row.word), ["ps", "kill", "kill", "sh", "ps"]);
+    assert.deepEqual(rows.map(row => row.file), [join(bin, "ps"), undefined, join(bin, "kill"), undefined, join(bin, "ps")]);
+    assert.deepEqual(rows[0].args, ["-ax"]);
+    if (provider === "claude") {
+      const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+      assert.deepEqual(hook.programsRun(text, f.dir, bin), rows);
+    }
+  }
+});
+
+test("shared command policy classifies merge candidates and executable text in both isolated providers", async t => {
+  const sha = "a".repeat(40);
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof api.createCommandPolicy, "function");
+    const tool = join(f.plugin, "skills/sage/sage.mjs");
+    const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "runtime/command-policy.mjs")));
+    const policy = adapter.createCommandPolicy({ stateToolPath: tool });
+    const candidate = `gh pr merge 12 --squash --delete-branch --match-head-commit ${sha}`;
+    assert.deepEqual(policy.mergeIn(candidate), { pr: "12", sha });
+    for (const text of [candidate.replace(" 12 ", " 012 "), candidate.replace(sha, "abc"), `${candidate} --admin`,
+      `sh -c '${candidate}'`, `echo '${candidate}' | sh`, `echo '${candidate}' > run; sh run`,
+      "gh api repos/o/r/pulls/12/merge", "gh pr 'merge", "$(echo gh) pr merge 12"]) {
+      assert.equal(typeof policy.mergeIn(text)?.problem, "string", text);
+    }
+    for (const text of ["git status", "git merge topic", `echo '${candidate}'`, `echo '${candidate}' | head -1`,
+      `node '${tool}' log --why '${candidate}'`]) assert.equal(policy.mergeIn(text), undefined, text);
+    assert.ok(api.createCommandPolicy().mergeIn(`node '${tool}' log --why '${candidate}'`)?.problem);
+    assert.ok(policy.mergeIn(`node '/other/sage.mjs' log --why '${candidate}'`)?.problem);
+    const rows = policy.runnable(api.shellCommands(`echo 'git push origin main'; git push origin topic`));
+    assert.deepEqual(rows.map(row => row.words), [["echo"], ["git", "push", "origin", "topic"]]);
+    if (provider === "claude") {
+      const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+      assert.deepEqual(hook.mergeIn(candidate), policy.mergeIn(candidate));
+      assert.equal(hook.mergeIn(`node '${tool}' log --why '${candidate}'`), undefined);
+    }
+  }
+});
+
+test("shared command policy rejects invalid trusted paths and snapshots its binding", async t => {
+  const f = isolated(t, "codex");
+  const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+  assert.equal(typeof api.createCommandPolicy, "function");
+  for (const path of [null, 1, "", "relative/sage.mjs", "/tmp/bad\npath", "/tmp/bad\0path"]) {
+    assert.throws(() => api.createCommandPolicy({ stateToolPath: path }), /absolute path/);
+  }
+  const binding = { stateToolPath: join(f.dir, "sage.mjs") };
+  const original = binding.stateToolPath;
+  const policy = api.createCommandPolicy(binding);
+  binding.stateToolPath = "/other/sage.mjs";
+  assert.equal(policy.mergeIn(`node '${original}' log --why 'gh pr merge'`), undefined);
+  assert.ok(policy.mergeIn(`node '${binding.stateToolPath}' log --why 'gh pr merge'`)?.problem);
+});
+
+test("shared command policy failures deny recognized Claude command tools before native handling", async t => {
+  for (const missing of ["hooks/command-policy.mjs", "core/command-policy.mjs", "invalid-path"]) {
+    const f = isolated(t, "claude");
+    assert.ok(existsSync(join(f.plugin, "hooks/command-policy.mjs")));
+    if (missing === "invalid-path") {
+      const odd = join(f.dir, "plugin\tpath");
+      cpSync(f.plugin, odd, { recursive: true });
+      f.plugin = odd;
+    } else {
+      assert.ok(existsSync(join(f.plugin, missing)));
+      rmSync(join(f.plugin, missing));
+    }
+    const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+    for (const sage of [false, true]) for (const tool_name of ["Bash", "Monitor", "PowerShell", "mcp__terminal__run"]) {
+      for (const actor of [{}, { agent_id: "fixture-child" }]) {
+        const output = hook.handle({ hook_event_name: "PreToolUse", tool_name,
+          tool_input: { command: "echo fixture" }, ...actor }, { sage }, {});
+        assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
+      }
+    }
+    assert.ok(hook.mergeIn("gh pr merge 1")?.problem);
+  }
+});
+
+test("shared push policy applies the same branch and force rules in both isolated providers", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof api.createPushPolicy, "function");
+    const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "runtime/command-policy.mjs")));
+    const calls = [];
+    let branch = "topic";
+    const policy = adapter.createPushPolicy({ readBranch: dir => { calls.push(dir); return branch; } });
+    for (const text of ["git push origin topic", "git push -u --follow-tags origin topic", "git push --delete origin topic",
+      "echo 'git push origin main'", "git status"]) assert.equal(policy.pushProblem(text, f.dir), undefined, text);
+    for (const text of ["git push origin main", "git push origin refs/heads/master", "git push origin topic:main",
+      "git push -f origin topic", "git push --force-with-lease origin topic", "git push --forc origin topic",
+      "git push --mirror origin", "git push origin HEAD", "git push origin", "git push upstream topic",
+      "git push origin '$BRANCH'", "sudo git push origin topic", "sh -c 'git push origin topic'",
+      "echo 'git push origin main' | sh", "git push 'origin", "gh api repos/o/r/git/refs -f ref=refs/heads/main"]) {
+      const before = calls.length;
+      assert.equal(typeof policy.pushProblem(text, f.dir), "string", text);
+      assert.equal(calls.length, before, "invalid forms must not query a checkout");
+    }
+    branch = "main";
+    assert.match(policy.pushProblem("git push origin topic", f.dir), /checkout is on main/);
+    assert.equal(policy.pushProblem("git push --delete origin topic", f.dir), undefined);
+    assert.doesNotMatch(policy.pushProblem("git push origin main", f.dir), /first creation|asks the user/);
+    assert.equal(api.gitSubcommand(["-C", "folder", "-c", "x=y", "stash", "list"], 0), "stash");
+  }
+});
+
+test("shared push policy derives checkout paths and scopes the state-tool text exception", async t => {
+  const f = isolated(t, "codex");
+  const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+  assert.equal(typeof api.createPushPolicy, "function");
+  const tool = join(f.dir, "sage.mjs");
+  const calls = [];
+  const policy = api.createPushPolicy({ stateToolPath: tool, readBranch: dir => { calls.push(dir); return "topic"; } });
+  assert.equal(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), undefined);
+  assert.deepEqual(calls, [join(f.dir, "project/nested")]);
+  assert.equal(policy.pushProblem(`node '${tool}' log --why 'git push origin main'`, f.dir), undefined);
+  assert.ok(policy.pushProblem("node /other/sage.mjs log --why 'git push origin main'", f.dir));
+  assert.deepEqual(calls, [join(f.dir, "project/nested")]);
+});
+
+test("shared push policy validates and snapshots trusted branch readers and messages", async t => {
+  const f = isolated(t, "codex");
+  const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+  assert.equal(typeof api.createPushPolicy, "function");
+  assert.throws(() => api.createPushPolicy(), /readBranch/);
+  for (const mainReason of [null, "", " ", "bad\nmessage", "x".repeat(2049)]) {
+    assert.throws(() => api.createPushPolicy({ readBranch: () => "topic", mainReason }), /mainReason/);
+  }
+  const options = { readBranch: () => "main", mainReason: "Use a reviewed pull request." };
+  const policy = api.createPushPolicy(options);
+  options.readBranch = () => "topic"; options.mainReason = "changed";
+  assert.match(policy.pushProblem("git push origin topic", f.dir), /checkout is on main/);
+  assert.match(policy.pushProblem("git push origin main", f.dir), /Use a reviewed pull request/);
+  for (const value of [null, "", " ", "main\n", "master\r\n", "topic\tname", "topic\0name", true, Promise.resolve("topic")]) {
+    assert.throws(() => api.createPushPolicy({ readBranch: () => value }).pushProblem("git push origin topic", f.dir), /readBranch/);
+  }
+  // Git permits Unicode spaces inside branch names. These strings reach the parser, never a shell.
+  for (const value of ["topic\u00a0name", "topic\u2003name"]) {
+    assert.equal(execFileSync("git", ["check-ref-format", "--branch", value], { encoding: "utf8" }).trimEnd(), value);
+    assert.equal(api.createPushPolicy({ readBranch: () => value }).pushProblem(`git push origin '${value}'`, f.dir), undefined);
+  }
+  const broken = api.createPushPolicy({ readBranch: () => { throw new Error("fixture read failure"); } });
+  assert.throws(() => broken.pushProblem("git push origin topic", f.dir), /fixture read failure/);
+  // Preserve the existing Claude rule; Codex can require its reader to throw on missing evidence.
+  assert.equal(api.createPushPolicy({ readBranch: () => undefined }).pushProblem("git push origin topic", f.dir), undefined);
+});
+
+test("shared push policy loading failures deny Claude command tools", async t => {
+  const f = isolated(t, "claude");
+  const path = join(f.plugin, "core/push-policy.mjs");
+  assert.ok(existsSync(path)); rmSync(path);
+  const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+  for (const sage of [false, true]) for (const tool_name of ["Bash", "Monitor", "PowerShell", "mcp__terminal__run"]) {
+    for (const actor of [{}, { agent_id: "fixture-child" }]) {
+      const output = hook.handle({ hook_event_name: "PreToolUse", tool_name,
+        tool_input: { command: "git push origin topic" }, ...actor }, { sage }, {});
+      assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
+    }
+  }
+});
+
 test("native probe removes its profile after version failure and a stalled version process", t => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-probe-cleanup-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
