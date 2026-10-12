@@ -20,7 +20,11 @@ export function bindNativeChildTool(input, context, options) {
 
 /** A native callback can verify initial task delivery without inventing a tool call. */
 export function bindNativeChildTranscript(input, context, options) {
-  const native = nativeToolContext(context);
+  return bindObservedTranscript(input, nativeToolContext(context), options);
+}
+
+// Recovery uses the previously observed child identity, not a fabricated native callback.
+function bindObservedTranscript(input, native, options) {
   const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 3
     || !["session", "turn", "transcript"].every(key => Object.hasOwn(input, key))
@@ -52,6 +56,10 @@ export function bindNativeChildTranscript(input, context, options) {
   const prior = readObservations(directory).filter(row => row.kind === "child-transcript" && row.child === native.actor);
   if (prior.length > 1 || prior.some(row => row.turn !== initial.turn || row.transcript !== event.transcript_path)) refuse();
   publish(directory, started);
+  // Retain validated delivery even when its parent result has not arrived yet.
+  // This observation grants no binding, tool permission, or completed assignment.
+  publish(directory, { schema: 1, runtime: RUNTIME_VERSION, session: event.session_id, kind: "initial-child-transcript",
+    child: native.actor, turn: initial.turn, transcript: event.transcript_path });
   const { schema, runtime, kind, ...identity } = started;
   const result = bindNativeChild({ directory: options.directory, project: options.project, observationsDirectory: directory }, identity);
   publish(directory, { schema: 1, runtime: RUNTIME_VERSION, session: event.session_id, kind: "child-transcript",
@@ -116,12 +124,28 @@ export function recoverNativeChildDeliveries(context, session, options) {
   if (!owner) refuse();
   const scope = row => row.project === options.project && row.session === owner.session && row.epoch === owner.epoch;
   const candidates = state.reservations.filter(row => scope(row.assignment) && row.assignment.issuer === native.actor
-    && row.continuation && !state.completions?.some(done => done.assignment === row.assignment.id));
+    && !state.completions?.some(done => done.assignment === row.assignment.id));
   if (!candidates.length) return;
   const observations = readObservations(join(options.observationsRoot, session));
   for (const assigned of candidates) {
     const existing = state.bindings.find(row => row.assignment === assigned.assignment.id);
     if (existing && observations.some(row => row.kind === "child-transcript" && row.child === existing.child && row.turn === existing.turn)) continue;
+    if (!assigned.continuation) {
+      const starts = observations.filter(row => row.kind === "child-start" && row.parent === native.actor
+        && row.path.slice(row.path.lastIndexOf("/") + 1) === assigned.dispatch.name);
+      if (!starts.length) continue;
+      if (starts.length !== 1) refuse();
+      const started = starts[0];
+      const paths = observations.filter(row => row.kind === "initial-child-transcript"
+        && row.child === started.child && row.turn === started.turn);
+      if (!paths.length) continue;
+      if (paths.length !== 1) refuse();
+      if (!observations.some(row => row.kind === "spawn-result" && row.actor === native.actor
+        && row.call === assigned.assignment.call)) continue;
+      bindObservedTranscript({ session, turn: started.turn, transcript: paths[0].transcript },
+        { version: native.version, actor: started.child }, options);
+      continue;
+    }
     // Retry the same binding if its transcript-reference publication was interrupted.
     const prior = state.bindings.filter(row => scope(row) && row.assignment === assigned.continuation && row.issuer === native.actor);
     if (prior.length !== 1) refuse();

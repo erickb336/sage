@@ -1608,6 +1608,56 @@ test("no-tool completion retains missing-result work then completes it after the
   assert.equal(f.core.readAdmission(f.options.directory).modes.at(-1).sage, false);
 });
 
+test("initial delivery recovery binds a late result without another child callback", async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy);
+  const transcript = f.childTranscript(); appendReport(f);
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, "root.jsonl"), agent_transcript_path: transcript };
+  assert.throws(() => policy.completeChild(stop, f.native(childActor)));
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+  const reconcile = actor => reconcileNativeCompletions(f.native(actor), session, f.options);
+  reconcile(session);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  reconcile(childActor);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  reconcile(session);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 1);
+  assert.equal(state.completions.length, 1);
+  assert.equal(state.modes.at(-1).sage, false);
+  reconcile(session);
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+});
+
+test("initial delivery recovery refuses changed or missing transcript evidence", async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy);
+  const transcript = f.childTranscript(); appendReport(f);
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, "root.jsonl"), agent_transcript_path: transcript };
+  assert.throws(() => policy.completeChild(stop, f.native(childActor)));
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+  const reconcile = () => reconcileNativeCompletions(f.native(session), session, f.options);
+  const original = readFileSync(transcript, "utf8");
+  f.childTranscript({ message: "Changed task" });
+  assert.throws(reconcile);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  rmSync(transcript);
+  assert.throws(reconcile);
+  assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  writeFileSync(transcript, original);
+  reconcile();
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
 test("no-tool completion through the packaged stop tool refuses a conflicting path after completion", async t => {
   const f = await noToolCompletionFixture(t);
   writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';

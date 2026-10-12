@@ -96,3 +96,18 @@ The probe checks that no Sage stop callback was stored. It uses real CLI 0.160.0
 with simulated responses. This proves recovery for already-bound children only.
 Initial unbound delivery, failed starts, interrupted turns, compaction, and cross-session
 recovery remain separate work. The required-validation activation blocker remains.
+
+## Initial delivery before the parent result
+
+An initial child callback can arrive before the parent spawn result. The adapter
+saves the validated transcript path as an initial-delivery observation before it
+tries to bind the child. This observation grants no tool permission or capacity
+release.
+
+The parent can recover the binding through its normal completion reconciliation.
+Recovery requires the matching spawn result and rechecks the recorded transcript,
+child identity, initial turn, task bytes, and reservation. Missing result evidence
+keeps the reservation. Changed or missing transcripts refuse recovery. Recovery
+also works after Sage off and records completion only from native terminal evidence.
+These cases have packaged regression checks; a live callback-order probe remains
+unverified.
