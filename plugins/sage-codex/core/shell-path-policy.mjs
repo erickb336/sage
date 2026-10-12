@@ -23,6 +23,10 @@ function simpleGlob(pattern, name) {
 export function shellWriteOutsideRoots({ command, cwd, roots }) {
   // Validate the trusted context even when this command has no known write form.
   fileWriteOutsideRoots({ paths: [], cwd, roots });
+  // Validation requires own data entries. Do not reuse caller-supplied methods.
+  const fixedRoots = [];
+  for (let index = 0; index < roots.length; index++) fixedRoots.push(roots[index]);
+  roots = fixedRoots;
   if (typeof command !== "string" || command.length > 1024 * 1024) return false;
   if (!commandWrites(command, cwd)) return true;
   try {
@@ -31,13 +35,15 @@ export function shellWriteOutsideRoots({ command, cwd, roots }) {
       if (typeof word !== "string" || word.length > 4096 || typeof dir !== "string" || !isAbsolute(dir)) return false;
       // This check does not expand runtime values, complex globs, or home-directory syntax.
       if (/[$`[{}~]|\p{Cc}/u.test(word)) return false;
-      // A command option or environment assignment can carry a path after '='.
+      // Preserve literal '=' in file names. An option or assignment also carries a value.
       const equals = word.indexOf("=");
-      const value = equals >= 0 ? word.slice(equals + 1) : word;
+      if (equals >= 0 && /^(?:[A-Za-z_][A-Za-z0-9_]*|--?[A-Za-z][A-Za-z0-9-]*)$/.test(word.slice(0, equals))
+        && !check(word.slice(equals + 1), dir)) return false;
+      const value = word;
       if (!value) return true;
       // A short option can carry a path without '='. Consider every letter prefix;
       // this intentionally refuses ambiguous options that could name a protected alias.
-      if (equals < 0 && /^-[A-Za-z]/.test(value)) {
+      if (/^-[A-Za-z]/.test(value)) {
         const letters = /^-([A-Za-z]+)/.exec(value)[1];
         if (letters.length > 64) return false;
         for (let cut = 2; cut <= letters.length + 1 && cut < value.length; cut++)

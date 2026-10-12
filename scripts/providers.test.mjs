@@ -3137,3 +3137,55 @@ test("shared protected paths use validated values despite custom array methods",
     assert.equal(customMethodCalled, false);
   }
 });
+
+test("shared shell paths validate context before read-only or malformed commands", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    for (const command of [null, {}, "echo 'unfinished"])
+      assert.equal(shellWriteOutsideRoots({ command, cwd, roots: [root] }), false);
+    assert.throws(() => shellWriteOutsideRoots({ command: "cat ordinary", cwd: "relative", roots: [root] }));
+    assert.throws(() => shellWriteOutsideRoots({ command: "cat ordinary", cwd, roots: Array(1) }));
+  }
+});
+
+test("shared shell paths retain protected roots despite custom array methods", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    let customMethodCalled = false;
+    const roots = [root];
+    roots.some = () => { customMethodCalled = true; return false; };
+    roots[Symbol.iterator] = function* () { customMethodCalled = true; };
+    // This string is parser input only. It never reaches an interpreter.
+    const command = `node -e 'writeFileSync("${root}/ledger.tsv", "fixed")'`;
+    assert.equal(shellWriteOutsideRoots({ command, cwd, roots }), false);
+    assert.equal(customMethodCalled, false);
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+  }
+});
+
+test("shared shell paths keep literal equals signs in operands and redirections", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    symlinkSync(root, join(cwd, "linked"));
+    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
+    // Parser inputs only. '=' is part of these file names, not an assignment delimiter.
+    for (const command of [`touch ${root}/a=b`, `printf fixed > ${root}/a=b`,
+      "touch linked/a=b", "printf fixed > linked/a=b", "sort -olinked/a=b input",
+      "sort --output=linked/a=b input", `env OUT=${root}/a=b touch target`])
+      assert.equal(check(command), false, command);
+    for (const command of ["touch ordinary=a", "printf fixed > ordinary=a",
+      "sort -oordinary=a input", "sort --output=ordinary=a input", "env OUT=ordinary=a touch target"])
+      assert.equal(check(command), true, command);
+    assert.equal(existsSync(join(root, "a=b")), false);
+    assert.equal(existsSync(join(cwd, "ordinary=a")), false);
+  }
+});
