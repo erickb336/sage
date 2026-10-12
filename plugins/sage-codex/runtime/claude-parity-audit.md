@@ -300,10 +300,11 @@ This uses simulated responses in the actual native CLI. Other failed starts, int
 
 ## Probe cleanup
 
-The probe removes its temporary profile after success, failure, or timeout.
-Its two-minute timeout ends the transport and releases its handles. It does not
-inspect or signal processes, and it does not prove that a stalled native process
-exited. The final cleanup record confirms that the temporary folder is absent.
+The probe removes its temporary profile after the native process closes.
+Its two-minute timeout ends the transport, then waits for native process closure.
+If the process does not close, the probe remains pending and must not report cleanup.
+It does not inspect or signal processes. A spawn error also waits for closure.
+The final cleanup record confirms that the temporary folder is absent.
 
 Older probes can leave folders named `sage-codex-one-child-` followed by random
 characters. To find the temporary directory, run `node -p 'require("node:os").tmpdir()'`.
