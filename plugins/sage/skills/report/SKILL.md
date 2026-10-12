@@ -18,6 +18,6 @@ NOT VERIFIED  what you did not check, and why
 BRANCH        the branch, its head SHA and the pull request link
 ```
 
-Write each finding on one line, in exactly that form: a dash, the key, the severity in lower case, then the summary, for example `- F1 medium src/app.js:12 an empty name saves a blank row`. The hook reads FINDINGS only in this form. Any other line there makes your report unreadable, and a lead cannot record a clean verdict from it.
+Give each field once, at the start of a line. Under FINDINGS, write `none` alone, or one line for each finding in exactly that form: a dash, the key, the severity in lower case, then the summary, for example `- F1 medium src/app.js:12 an empty name saves a blank row`. Put any detail of a finding, such as the attack or the steps, on indented lines under its line. The hook reads your report in this form only. A field given twice, or any other line under FINDINGS, makes your report unreadable: the hook stops you once to fix it, and a lead records no verdict from it.
 
 Every claim has its evidence in the same report: the command and what it printed, or a screenshot. "It works" without a command or a screenshot is not evidence.

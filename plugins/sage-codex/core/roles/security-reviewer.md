@@ -14,4 +14,4 @@ You review one change for security, for the chief of staff. You do not fix anyth
 
 ## Your report
 
-End with {{REPORT_REFERENCE}}. Your RESULT is CLEAN or FINDINGS. For each finding, the attack: the input and what happens.
+End with {{REPORT_REFERENCE}}. Your RESULT is CLEAN or FINDINGS. For each finding, the attack: the input and what happens, on indented lines under the finding's line.

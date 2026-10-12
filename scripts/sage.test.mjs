@@ -2212,6 +2212,8 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   assert.match(lines[1], /^R2\tT1\tqa\t0\t\t\trunning\t\t\t\S+\t\tfable$/);
   assert.equal(o.ok("run", "done", "R1", "--status", "done"), "R1 done");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) o.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
+  assert.match(o.no("merge-check", "--sha", SHA), /T1 has a review or QA run that still runs: R2 \(qa\)/, "R2's QA still runs (F-T289-18)");
+  o.ok("run", "done", "R2", "--status", "done");
   assert.match(o.ok("merge-check", "--sha", SHA), /may merge/);
 });
 

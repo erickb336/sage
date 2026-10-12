@@ -79,6 +79,11 @@ const reportFields = report.split("\n").map((l) => l.split(/\s{2,}/)[0].trim()).
 if (reportFields.join("|") !== REPORT_FIELDS.join("|")) problems.push(`skills/report: the template has ${reportFields.join(", ")}, the hook checks ${REPORT_FIELDS.join(", ")}`);
 // The hook reads a helper's findings only in its one line form (F-T289-11): the template's FINDINGS line gives that form.
 if (!/^FINDINGS\s.*$/m.exec(report)?.[0].includes(FINDING_FORM)) problems.push(`skills/report: the FINDINGS line does not give the hook's finding form ${FINDING_FORM}`);
+// The hook's reader takes a finding's detail only on indented lines under its line (F-T289-29): the report skill, and each
+// agent that asks for detail for each finding, say where it goes.
+for (const [name, text] of [["skills/report", readFileSync(join(skillsDir, "report/SKILL.md"), "utf8")], ...agents.map((f) => [`agents/${f}`, readFileSync(join(PLUGIN, "agents", f), "utf8")])]) {
+  if ((name === "skills/report" || /For each finding, the/.test(text)) && !text.includes("on indented lines under")) problems.push(`${name}: a finding's detail must go on indented lines under the finding's line, the one form that the hook reads`);
+}
 // Every hook command runs a script that exists, in the shared hooks and in Claude's own.
 for (const cfg of ["hooks.json", "claude.json"]) {
   for (const [event, groups] of Object.entries(JSON.parse(readFileSync(join(PLUGIN, "hooks", cfg), "utf8")).hooks)) for (const g of groups) for (const h of g.hooks) {
