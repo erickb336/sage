@@ -39,3 +39,26 @@ This verifies manual and automatic local-provider compaction without active chil
 Remote compaction, child context restoration, active-child
 restart, cross-session transfer, real-model behavior, and installed automatic
 Sage remain unverified. The required-hook outage still blocks activation.
+
+
+## Child compaction readiness
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-child-compaction` with fake
+process tools first on PATH. This is a readiness check, not a passing feature
+check. The actual 0.160.0 CLI compacts a running child after a fixed simulated
+response reports 200,000 tokens against a 100,000-token threshold.
+
+The probe requires a saved child compaction record and matching automatic
+PreCompact and PostCompact events. It checks the child's next model request
+for the exact prepared assignment. The current runtime loses that assignment;
+Codex sends no child SessionStart event with source compact. The saved
+reservation and binding remain intact. A fixed valid report then causes another
+model request while Sage has no accepted completion. The probe reports these
+observations and exits 1 after the owned native process closes. It removes its
+temporary profile. It does not claim successful child recovery.
+
+The root restoration handler cannot cover this native event gap. Child role
+instructions, the current saved brief, and report completion need a separate
+supported restoration path. Static native agent instructions are a candidate;
+their persistence and the dynamic task binding still require native checks.
+No installed automatic activation or real model participates in this probe.

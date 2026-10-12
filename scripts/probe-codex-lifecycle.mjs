@@ -4,7 +4,7 @@ import http from "node:http";
 import { NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
 import {createHash} from "node:crypto";
 import assert from "node:assert/strict";
-import {existsSync,readdirSync,readFileSync} from "node:fs";
+import {existsSync,readdirSync,readFileSync,lstatSync} from "node:fs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
 import {readNativeInterruption,readAssignmentTurn,readNativeFollowup} from "../packages/sage-codex/runtime/identity.mjs";
 import {readObservations} from "../packages/sage-codex/runtime/events.mjs";
@@ -14,9 +14,12 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-child-sandbox", "--sage-child-message", "--sage-interruption", "--sage-followup-missed-callbacks", "--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-child-compaction", "--sage-child-sandbox", "--sage-child-message", "--sage-interruption", "--sage-followup-missed-callbacks", "--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const childCompaction = process.argv.includes("--sage-child-compaction");
+assert(!childCompaction || process.argv.slice(2).length === 1, "child_compaction_is_a_separate_route");
+let childCompactionObserved = false, childCompactionReady = false, childCompactionRequests = 0;
 const childSandbox = process.argv.includes("--sage-child-sandbox");
 assert(!childSandbox || process.argv.slice(2).length === 1, "child_sandbox_is_a_separate_route");
 let childSandboxVerified = false;
@@ -61,7 +64,7 @@ const nestedReport = process.argv.includes("--sage-nested-report");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
 const reportProbe = process.argv.includes("--sage-report") || (noTool && !escapeReport);
-const sage = childSandbox || childMessage || interruption || sageFollowup || unpreparedFollowup || retargetedRun || endedRun || readonlyPatch || createTask || process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
+const sage = childCompaction || childSandbox || childMessage || interruption || sageFollowup || unpreparedFollowup || retargetedRun || endedRun || readonlyPatch || createTask || process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
 assert([failedSpawn, outage, process.argv.includes("--sage-report"), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
 assert([denySpawn, followUp, process.argv.includes("--nested"), sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
@@ -128,7 +131,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport || resumedFailure,nestedReview:nestedReport || resumedFailure,blockStop,captureFailure:failedSpawn,emptyLogbook:createRun,taskLifecycle,omitStop:missedStop,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport || resumedFailure,nestedReview:nestedReport || resumedFailure,blockStop,captureFailure:failedSpawn,emptyLogbook:createRun,taskLifecycle,omitStop:missedStop,captureCompaction:childCompaction,restoreCompaction:childCompaction,deadlineMs});
   const initialLogbook = sage || sageOff ? integrated.readLogbook() : null;
   if (createRun) { assert.equal(initialLogbook.tasks.length, 0); assert.equal(initialLogbook.runs.length, 0); }
   if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
@@ -256,7 +259,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     }
     events.push(
       { type: "response.output_item.done", output_index: 0, item },
-      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: 0 } } },
+      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: childCompaction && item.call_id === calls.childControl ? 200000 : 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: childCompaction && item.call_id === calls.childControl ? 200000 : 0 } } },
     );
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "close" });
     for (const event of events) res.write(`event: ${event.type}
@@ -293,7 +296,46 @@ data: ${JSON.stringify(event)}
       let request;
       try { request = JSON.parse(body); } catch { throw new Error("invalid_request_json"); }
       body = "";
+      if (childCompaction && textValues(request.input).some(text => text.includes("SAGE_CHILD_COMPACT_REQUEST"))) {
+        check(req.headers["thread-id"] === childThread, "compaction_wrong_child");
+        check(++childCompactionRequests === 1, "repeated_child_compaction");
+        respond(res, message("SAGE_CHILD_COMPACT_SUMMARY: Continue the fixed child probe.")); return;
+      }
       const info = inspectRequest(request);
+      if (childCompaction && childCompactionRequests && req.headers["thread-id"] === childThread) {
+        if (childCompactionObserved) {
+          print({ type: "child_compaction_stop_evidence", modelContinuedAfterReport: true,
+            nativeCompletionAccepted: (integrated.readJournal().completions?.length ?? 0) !== 0,
+            hookRefusalPresent: textValues(request.input).some(text => text.includes("Sage could not verify this hook request")) });
+          check(false, "child_compaction_stop_not_accepted");
+        }
+        check(childRequests === 1, "unexpected_post_compaction_request");
+        const values = textValues(request.input);
+        check(values.some(text => text.includes("SAGE_CHILD_COMPACT_SUMMARY")), "missing_child_compaction_summary");
+        const transcript = JSON.parse(readFileSync(join(root, `child-path-${childThread}.json`), "utf8"));
+        const stat = lstatSync(transcript);
+        check(stat.isFile() && stat.size <= 16 * 1024 * 1024, "invalid_child_compaction_transcript");
+        const lines = readFileSync(transcript, "utf8").trim().split("\n");
+        check(lines.length <= 65536, "child_compaction_transcript_too_many_rows");
+        const history = lines.map(line => JSON.parse(line));
+        check(history.filter(row => row.type === "compacted").length === 1, "missing_saved_child_compaction");
+        const captured = readdirSync(join(root, "events")).map(name => JSON.parse(readFileSync(join(root, "events", name), "utf8")));
+        const hooks = captured.filter(row => ["PreCompact", "PostCompact"].includes(row.hook_event_name));
+        const journal = integrated.readJournal(), bound = journal.bindings[0];
+        check(journal.reservations.length === 1 && journal.bindings.length === 1
+          && bound.child === childThread && (journal.completions?.length ?? 0) === 0, "child_compaction_changed_admission");
+        check(hooks.length === 2 && new Set(hooks.map(row => row.hook_event_name)).size === 2
+          && hooks.every(row => row.trigger === "auto" && row.agent_id === childThread
+            && row.session_id === rootThread && row.turn_id === bound.turn), "child_compaction_hook_identity_mismatch");
+        childCompactionReady = values.some(text => text.includes(CHILD_PROMPT));
+        childCompactionObserved = true; childRequests++;
+        print({ type: "child_compaction_evidence", exactAssignmentPresent: childCompactionReady,
+          persistedCompactions: 1, sameChildAndTurn: true, reservations: 1, bindings: 1,
+          childSessionStartCompact: captured.some(row => row.hook_event_name === "SessionStart" && row.source === "compact"
+            && (row.agent_id === childThread || row.session_id === childThread)),
+          simulatedModel: true, readyForChildCompaction: childCompactionReady });
+        respond(res, message(CHILD_MARKER)); return;
+      }
       request = null; // Retain only tool results, advertised names, and a fixed-task boolean.
       responseRequests++;
       const thread = req.headers["thread-id"];
@@ -923,6 +965,7 @@ data: ${JSON.stringify(event)}
       model_provider: "sage_native_lifecycle",
       model: "sage-native-parent",
       model_catalog_json: catalogPath,
+      ...(childCompaction ? { model_auto_compact_token_limit: 100000, compact_prompt: "SAGE_CHILD_COMPACT_REQUEST" } : {}),
       cli_auth_credentials_store: "ephemeral",
       "features.hooks": true,
       "features.plugins": false,
@@ -1006,7 +1049,7 @@ data: ${JSON.stringify(event)}
       ? rootRequests === 2 && childRequests === 0 && denied
       : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
-    const verified = result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
+    const verified = (!childCompaction || (childCompactionObserved && childCompactionReady)) && result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
       && (!childSandbox || childSandboxVerified) && (!childMessage || childMessageVerified) && (!resumedFailure || resumedFailureVerified) && (!unpreparedFollowup || unpreparedFollowupVerified) && (!sageFollowup || sageFollowupVerified)
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && refusedTaskUpdates === (taskLifecycle ? 1 : 0) && malformedEvents === 0 && rejectedRequests === 0;
@@ -1015,6 +1058,7 @@ data: ${JSON.stringify(event)}
       unexpectedItems, refusedTaskUpdates, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
     if (!verified) process.exitCode = 1;
+    if (childCompaction && childCompactionObserved && !childCompactionReady) throw Error("child_compaction_not_ready");
     if (sage || sageOff) assert(chiefContextVerified, "chief_context_not_observed");
     if (createTask) assert(createdTaskVerified, "task_creation_not_observed");
     if (createRun) assert(createdRunVerified && finishedCreatedRun, "run_creation_not_observed");
