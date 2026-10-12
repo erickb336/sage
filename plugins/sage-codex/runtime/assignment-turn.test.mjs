@@ -229,7 +229,7 @@ test('recovery evidence refuses forged calls and retries failed or truncated rea
     rows => { rows[0].payload.namespace = 'other'; },
     rows => { rows[1].metadata.fallback_token_limit_override = 1; },
     rows => { rows[1].payload.output[1].text = '{"isError":true}'; },
-    rows => { rows[1].metadata.mcp_attribution.sources[0].first_turn_id = later; }]) {
+    rows => { rows[0].metadata.retained_source = null; }]) {
     const rows = recoveryRows(); change(rows);
     f.write([...task(turn, 'first'), checkpoint(), ...rows]); assert.equal(read().required, true);
     f.write([...task(turn, 'first'), checkpoint(), ...rows, ...recoveryRows(turn, 'retry')]);
@@ -283,4 +283,15 @@ test("report acceptance requires recovery before the final report after compacti
   assert.equal(identity.readNativeCompletion(f.file, options, expected()).reportHash, hash("done"));
   f.write([...task(turn, "first"), checkpoint(), ...recoveryRows(), checkpoint(2), output(turn, "done"), complete(turn, "done")]);
   assert.throws(read, /report evidence is unavailable/);
+});
+
+test('recovery evidence supports repeated and later reads without a new cumulative MCP checkpoint', t => {
+  const f = fixture(t), read = (wanted = expected()) => identity.readNativeRecovery(f.file, { sessionsDir: f.sessionsDir }, wanted);
+  const second = recoveryRows(turn, 'read_twice'); delete second[1].metadata.mcp_attribution;
+  f.write([...task(turn, 'first'), checkpoint(), ...recoveryRows(), checkpoint(2), ...second]);
+  assert.equal(read().required, false); assert.equal(read().call, 'read_twice');
+  const next = recoveryRows(later, 'read_later', 'second'); delete next[1].metadata.mcp_attribution;
+  f.write([...task(turn, 'first'), checkpoint(), ...recoveryRows(), ...task(later, 'second'), checkpoint(2, later), ...next]);
+  assert.equal(read(expected(later, 'second')).required, false);
+  assert.equal(read(expected(later, 'second')).call, 'read_later');
 });

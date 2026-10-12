@@ -19,7 +19,15 @@ function fixture(message = text) {
       internal_chat_message_metadata_passthrough: { turn_id: turn } } };
   return { row, value, budget };
 }
-const load = async () => (await import('./recovery-output.mjs')).readRecoveryOutput;
+function nativeCall() {
+  return { type: 'response_item', metadata: { client_authored: false }, payload: {
+    type: 'function_call', namespace: 'mcp__sage_preparation', name: 'sage_read_assignment',
+    call_id: 'recovery', arguments: '{}', internal_chat_message_metadata_passthrough: { turn_id: turn } } };
+}
+const load = async () => {
+  const { readRecoveryOutput } = await import('./recovery-output.mjs');
+  return (row, target, call = nativeCall()) => readRecoveryOutput(row, target, call);
+};
 
 test('recovery output accepts an exact native assignment only when every text item fits replay', async () => {
   const read = await load(), { row, budget } = fixture();
@@ -58,10 +66,6 @@ test('recovery output refuses missing budgets, foreign provenance, unsupported s
     r => { r.metadata.fallback_token_limit_override = 1.5; },
     r => { r.metadata.fallback_token_limit_override = Number.MAX_SAFE_INTEGER + 1; },
     r => { r.metadata.client_authored = true; },
-    r => { r.metadata.mcp_attribution.status = 'pending'; },
-    r => { r.metadata.mcp_attribution.sources[0].server_name = 'other'; },
-    r => { r.metadata.mcp_attribution.sources[0].first_turn_id = child; },
-    r => { r.metadata.mcp_attribution.sources.push(r.metadata.mcp_attribution.sources[0]); },
     r => { r.payload.internal_chat_message_metadata_passthrough.turn_id = child; },
     r => { r.payload.output = JSON.stringify(fixture().value); },
     r => { r.payload.output[0] = { type: 'input_image', image: 'private' }; },
@@ -90,4 +94,25 @@ test('recovery output refuses changed or shortened assignments even when the res
   row.metadata.fallback_token_limit_override = 3000;
   assert.throws(() => read(row, expected));
   assert.equal(read(fixture().row, expected), text);
+});
+
+
+test('recovery output requires the exact native reader call, not cumulative MCP attribution', async () => {
+  const read = await load(), { row } = fixture();
+  delete row.metadata.mcp_attribution;
+  assert.equal(read(row, expected), text);
+  row.metadata.mcp_attribution = { status: 'complete', sources: [
+    { server_name: 'another_server', tool_name: 'another_tool', first_turn_id: child },
+    { server_name: 'sage_preparation', tool_name: 'sage_read_assignment', first_turn_id: child }] };
+  assert.equal(read(row, expected), text, 'cumulative sources do not identify this call');
+  for (const change of [c => { c.metadata.client_authored = true; },
+    c => { c.metadata.retained_source = null; }, c => { c.type = 'event_msg'; },
+    c => { c.payload.namespace = 'other'; }, c => { c.payload.name = 'other'; },
+    c => { c.payload.call_id = 'other'; }, c => { c.payload.type = 'function_call_output'; },
+    c => { c.payload.arguments = '{"task":"T2"}'; }, c => { c.payload.arguments = 'null'; },
+    c => { c.payload.internal_chat_message_metadata_passthrough.turn_id = child; }]) {
+    const call = nativeCall(); change(call);
+    assert.throws(() => read(row, expected, call), { message: 'Codex recovery output is unavailable' });
+  }
+  assert.throws(() => read(row, expected, null));
 });

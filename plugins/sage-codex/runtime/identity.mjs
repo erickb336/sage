@@ -188,14 +188,14 @@ function recoveryFromRecords(rows, expected) {
         if (calls.has(p.call_id)) unavailable();
         let empty = false;
         try { const args = JSON.parse(p.arguments); empty = record(args) && Object.keys(args).length === 0; } catch {}
-        calls.set(p.call_id, !!compaction && !pendingCompaction && empty
-          && p.namespace === "mcp__sage_preparation" && p.name === "sage_read_assignment");
+        calls.set(p.call_id, compaction && !pendingCompaction && empty
+          && p.namespace === "mcp__sage_preparation" && p.name === "sage_read_assignment" ? row : false);
       } else {
         if (outputs.has(p.call_id)) unavailable();
         outputs.add(p.call_id);
         if (!calls.get(p.call_id) || pendingCompaction) continue;
         try {
-          readRecoveryOutput(row, { child: expected.child, turn: expected.turn, taskHash: expected.taskHash });
+          readRecoveryOutput(row, { child: expected.child, turn: expected.turn, taskHash: expected.taskHash }, calls.get(p.call_id));
           call = p.call_id; recoveredPosition = index;
         } catch {
           // Failed or shortened results do not recover context. A fresh read can retry.

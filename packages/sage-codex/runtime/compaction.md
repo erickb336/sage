@@ -171,3 +171,25 @@ in one transaction.
 
 Independent reviews and a real-model pilot remain. These changes do not enable
 installed automatic Sage.
+
+
+## Repeated reader calls
+
+Codex MCP attribution records cumulative source checkpoints. It does not repeat
+an unchanged checkpoint for each tool result. Its first-turn field identifies
+the source's first use, not the current reader call. See the
+[pinned native recorder](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/executed_tool_calls/mcp_attribution.rs).
+
+Recovery now joins the saved result to its exact native reader call. Both records
+must belong to the assignment turn and come from native history. The call must
+use the fixed reader namespace and name with empty arguments. The result must
+still pass the child, task hash, complete-message, and replay-budget checks.
+Cumulative source metadata cannot replace this call evidence.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-child-repeat-recovery` with
+fake process tools first on PATH. The isolated probe compacts one child twice
+in the same turn. It verifies that the second checkpoint invalidates the first
+recovery, denies an ordinary tool and early report again, and accepts a fresh
+read. A changed target still blocks completion. After target restoration, the
+same assignment completes once, with no duplicate reservation or binding.
+The native run uses simulated model responses and removes its temporary profile.

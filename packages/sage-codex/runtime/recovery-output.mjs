@@ -11,17 +11,23 @@ const hash = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
  * The caller must still prove the matching call and ordering after the latest compaction.
  * Codex rust-v0.160.0 budgets each text item at ceil(UTF-8 bytes / 4), in order.
  * Saved budgets already include serialization allowance; do not add it again. */
-export function readRecoveryOutput(row, expected) {
+export function readRecoveryOutput(row, expected, call) {
   try {
     if (!keys(expected, ['child', 'turn', 'taskHash']) || !uuid(expected.child) || !uuid(expected.turn) || !hash(expected.taskHash)
       || !record(row) || row.type !== 'response_item' || !record(row.payload) || !record(row.metadata)) unavailable();
     const { payload: p, metadata: meta } = row;
-    const source = meta.mcp_attribution?.sources;
+    // MCP attribution is a cumulative checkpoint, not provenance for an individual result.
+    // The protected transcript must supply the exact native call that produced this output.
+    const c = call?.payload;
+    if (!record(call) || call.type !== 'response_item' || call.metadata?.client_authored !== false
+      || Object.hasOwn(call.metadata, 'retained_source') || !record(c) || c.type !== 'function_call'
+      || c.namespace !== 'mcp__sage_preparation' || c.name !== 'sage_read_assignment'
+      || c.call_id !== p.call_id || typeof c.arguments !== 'string'
+      || c.internal_chat_message_metadata_passthrough?.turn_id !== expected.turn) unavailable();
+    const args = JSON.parse(c.arguments);
+    if (!record(args) || Object.keys(args).length !== 0) unavailable();
     if (meta.client_authored !== false || Object.hasOwn(meta, 'retained_source')
-      || meta.mcp_attribution?.status !== 'complete' || !Array.isArray(source) || source.length !== 1
-      || !keys(source[0], ['server_name', 'tool_name', 'first_turn_id'])
-      || source[0].server_name !== 'sage_preparation' || source[0].tool_name !== 'sage_read_assignment'
-      || source[0].first_turn_id !== expected.turn || p.type !== 'function_call_output'
+      || p.type !== 'function_call_output'
       || typeof p.id !== 'string' || !/^fco_[A-Za-z0-9_-]{1,256}$/.test(p.id)
       || typeof p.call_id !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(p.call_id)
       || p.internal_chat_message_metadata_passthrough?.turn_id !== expected.turn) unavailable();
