@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { readAdmission, completeAdmission, interruptAdmission, REPORT_FIELDS, missingReportFields } from "../core/index.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
-import { readChildTurn, readNativeCompletion, readNativeInterruption } from "./identity.mjs";
+import { readChildTurn, readNativeCompletion, readNativeInterruption, readNativeRecovery } from "./identity.mjs";
 import { bindNativeChildTranscript, recoverNativeChildDeliveries } from "./child-tool.mjs";
 import { RUNTIME_VERSION, decodeEvent, publish, readObservations } from "./events.mjs";
 
@@ -69,6 +69,7 @@ export function completeNativeChild(input, context, options) {
   if (bindings.length !== 1) refuse();
   const bound = bindings[0];
   const evidence = completionEvidence(state, bound, input.session_id, options, input.agent_transcript_path);
+  if (evidence.recoveryRequired) return { decision: "recovery-required" };
   publish(evidence.directory, { schema: 1, runtime: RUNTIME_VERSION, kind: "child-stop", session: input.session_id,
     child: native.actor, turn: input.turn_id });
   if (!evidence.completed) return { decision: "stop-observed" };
@@ -90,7 +91,12 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
     session, child: bound.child, parent: bound.issuer, path,
     author: path.slice(0, path.lastIndexOf("/")), turn: bound.turn, taskHash: assigned.dispatch.taskHash,
   };
-  const completed = readNativeCompletion(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
+  const recovery = readNativeRecovery(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
+  if (recovery.required) {
+    const interrupted = readNativeInterruption(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
+    return { directory, observations, completed: null, interrupted, recoveryRequired: true };
+  }
+  const completed = readNativeCompletion(transcripts[0].transcript, { sessionsDir: options.sessionsDir, requireRecovery: true }, expected);
   const interrupted = completed ? null : readNativeInterruption(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
   return { directory, observations, completed, interrupted };
 }
@@ -128,7 +134,9 @@ export async function childStopOutput(input, context, loadPolicy) {
   const policy = await loadPolicy();
   const result = await policy.completeChild(snapshot, native);
   if (!result || typeof result !== "object" || Array.isArray(result) || Object.keys(result).length !== 1
-    || !Object.hasOwn(result, "decision") || !["stop-observed", "completed", "already-completed", "unmanaged"].includes(result.decision)) refuse();
+    || !Object.hasOwn(result, "decision") || !["stop-observed", "completed", "already-completed", "unmanaged", "recovery-required"].includes(result.decision)) refuse();
+  if (result.decision === "recovery-required") return { decision: "block",
+    reason: "Read your current assignment with sage_read_assignment before reporting completion." };
   // A native terminal record ends correction. Otherwise ask once, as Claude does.
   if (result.decision === "stop-observed" && !stop_hook_active) {
     const missing = missingReportFields(last_assistant_message);

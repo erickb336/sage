@@ -58,10 +58,9 @@ summary as an unverified report. The reader now excludes authenticated native
 compaction output and requires a later retained final message. A summary cannot
 complete a task or preserve an earlier final message as the report.
 
-The child now completes through the normal native lifecycle with one recorded
-completion. The exact assignment remains absent from its model input, so the
-readiness probe still exits 1 after the owned native process closes. It removes its
-temporary profile. It does not claim successful child recovery.
+Without an assignment read, the stop gate refuses the report and retains the
+reservation. This readiness route supplies no recovery read. It remains a
+negative control; use the recovery route below for the repaired path.
 
 The root restoration handler cannot cover this native event gap. Child role
 instructions, the current saved brief, and report completion need a separate
@@ -84,11 +83,11 @@ It refuses a concurrent lifecycle change observed during the read. Existing
 native permission and workflow checks still apply to later actions.
 
 Run `node scripts/probe-codex-lifecycle.mjs --sage-child-recovery` to compact
-a native child, call this tool, and verify the exact saved instructions in the
-next model request. The child then completes with one recorded completion.
-This route uses simulated responses that explicitly request the tool. It does
-not yet enforce automatic recovery or prove that a real model requests it.
-The original `--sage-child-compaction` readiness route therefore still fails.
+a native child and attempt a tool call and a report before recovery. The
+production gates deny both. The same child then reads its assignment, receives
+the exact saved instructions, and completes once. The probe checks two stops
+in the same turn and no completion before recovery. Responses are simulated;
+this does not prove that a real model follows the recovery instruction.
 
 
 ## Verify complete reader output
@@ -108,9 +107,9 @@ are refused. This follows Codex `rust-v0.160.0`:
 
 The native recovery probe checks this output evidence before declaring recovery.
 The function does not authenticate a transcript path, find the matching call,
-or prove ordering after the latest compaction. The production gate must add
-those checks before it can permit another action or accept a report. This step
-does not enable automatic recovery or installed Sage.
+or prove ordering after the latest compaction. The production gates use the
+protected transcript reader below to establish those facts. Installed Sage
+remains disabled.
 
 
 ## Bind the recovery to compaction
@@ -128,6 +127,19 @@ recovery output's position so report acceptance can require a later report.
 The native recovery probe verifies that compaction first requires recovery,
 then verifies the matching call and output after the reader returns.
 
-This is evidence inspection. Child tool and stop handlers, parent reconciliation,
-and report acceptance still need to require this evidence. A ready result alone
-grants no action permission and does not check the order of a final report.
+Child tool permission now requires this evidence before ordinary work continues.
+The assignment reader still passes through the normal tool policy. The gate
+checks again after an awaited policy evaluation. Existing children keep this
+requirement after Sage off.
+
+Child stop blocks until recovery, including repeated stop attempts. Parent
+reconciliation cannot release an unrecovered assignment as successful. Native
+interruption can still end it without a report. Report intake requires the final
+report to follow recovery in the same protected snapshot. The low-level report
+readers expose this acceptance check through `requireRecovery`; both production
+completion and report intake enable it.
+
+Cached receipts from an earlier runtime still need a recovery evidence policy.
+Current-run checks at the stop boundary, complete static role instructions,
+independent reviews, and a real-model pilot also remain. These changes do not
+enable installed automatic Sage.

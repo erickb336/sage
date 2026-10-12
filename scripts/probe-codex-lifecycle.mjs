@@ -20,7 +20,7 @@ const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAG
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const childRecovery = process.argv.includes("--sage-child-recovery");
 const childCompaction = childRecovery || process.argv.includes("--sage-child-compaction");
-let childRecoveryPending = false;
+let childRecoveryPending = false, childRecoveryGatePhase = 0;
 assert(!childCompaction || process.argv.slice(2).length === 1, "child_compaction_is_a_separate_route");
 let childCompactionObserved = false, childCompactionReady = false, childCompactionRequests = 0;
 const childSandbox = process.argv.includes("--sage-child-sandbox");
@@ -177,7 +177,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   const runRequest = { request: "b1111111-2222-4333-8444-555555555555", task: "T1", role: "lead", branch: "", candidate: "" };
   const taskRequest = { request: "a1111111-2222-4333-8444-555555555555", title: "Native task creation", size: "small", risk: ["input"], add: ["ux-review"], why: "Check the fixed experience" };
   let prepared = false, reportReceipt, failedDispatchRecovered = false, childPatchTool, readonlyPatchVerified = false, endedRunVerified = false, retargetedRunVerified = false;
-  const calls = { childRecovery: "probe_child_recovery", childSandbox: "probe_child_sandbox", childPeerMessage: "probe_child_peer_message", childChiefMessage: "probe_child_chief_message", resumedPrepare: "resumed_prepare", resumedSpawn: "resumed_spawn", resumedList: "resumed_list", followupCreate: "probe_followup_create", followupPrepare: "probe_followup_prepare", followupControl: "probe_followup_control", followupReport: "probe_followup_report", followupRecord: "probe_followup_record", followupOld: "probe_followup_old", readTask: "probe_read_task", brief: "probe_brief", briefRetry: "probe_brief_retry", build: "probe_build", review: "probe_review", verify: "probe_verify", verifyWithoutReviews: "probe_verify_without_reviews", createRun: "probe_create_run", createRunRetry: "probe_create_run_retry", createdRunAfterFinish: "probe_created_run_after_finish", create: "probe_create", createRetry: "probe_create_retry", failureList: "probe_failure_list", prepareRetry: "probe_prepare_retry", spawnRetry: "probe_spawn_retry", inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  const calls = { childUnrecovered: "probe_child_unrecovered", childRecovery: "probe_child_recovery", childSandbox: "probe_child_sandbox", childPeerMessage: "probe_child_peer_message", childChiefMessage: "probe_child_chief_message", resumedPrepare: "resumed_prepare", resumedSpawn: "resumed_spawn", resumedList: "resumed_list", followupCreate: "probe_followup_create", followupPrepare: "probe_followup_prepare", followupControl: "probe_followup_control", followupReport: "probe_followup_report", followupRecord: "probe_followup_record", followupOld: "probe_followup_old", readTask: "probe_read_task", brief: "probe_brief", briefRetry: "probe_brief_retry", build: "probe_build", review: "probe_review", verify: "probe_verify", verifyWithoutReviews: "probe_verify_without_reviews", createRun: "probe_create_run", createRunRetry: "probe_create_run_retry", createdRunAfterFinish: "probe_created_run_after_finish", create: "probe_create", createRetry: "probe_create_retry", failureList: "probe_failure_list", prepareRetry: "probe_prepare_retry", spawnRetry: "probe_spawn_retry", inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set([...Object.values(calls), ...Object.values(NESTED_CALLS)]);
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -206,7 +206,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       try { outputs[item.call_id] = JSON.parse(output); } catch {
         if (resumedFailure && item.call_id === calls.resumedSpawn) outputs[item.call_id] = output;
         else if ((denySpawn || outage || failedSpawn) && [calls.spawn, calls.spawnRetry].includes(item.call_id)) outputs[item.call_id] = output;
-        else if ([calls.childSandbox, calls.childPeerMessage, calls.childChiefMessage, calls.verifyWithoutReviews, calls.followup, calls.followupControl, calls.childControl, NESTED_CALLS.control].includes(item.call_id)) outputs[item.call_id] = output;
+        else if ([calls.childUnrecovered, calls.childSandbox, calls.childPeerMessage, calls.childChiefMessage, calls.verifyWithoutReviews, calls.followup, calls.followupControl, calls.childControl, NESTED_CALLS.control].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -307,6 +307,27 @@ data: ${JSON.stringify(event)}
       }
       const info = inspectRequest(request);
       if (childCompaction && childCompactionRequests && req.headers["thread-id"] === childThread) {
+        if (childRecoveryGatePhase === 1) {
+          check(typeof info.outputs[calls.childUnrecovered] === "string"
+            && info.outputs[calls.childUnrecovered].includes("Read your current assignment with sage_read_assignment"),
+            "unrecovered_tool_was_not_denied");
+          const events = readdirSync(join(root, "events")).map(name => JSON.parse(readFileSync(join(root, "events", name), "utf8")));
+          check(!events.some(row => row.hook_event_name === "PostToolUse" && row.tool_use_id === calls.childUnrecovered),
+            "unrecovered_tool_ran");
+          check((integrated.readJournal().completions?.length ?? 0) === 0, "premature_recovery_completion");
+          childRecoveryGatePhase = 2; childRequests++;
+          respond(res, message(CHILD_MARKER)); return;
+        }
+        if (childRecoveryGatePhase === 2) {
+          check(textValues(request.input).some(text => text.includes("Read your current assignment with sage_read_assignment before reporting completion.")),
+            "unrecovered_stop_was_not_blocked");
+          const state = integrated.readJournal();
+          check(state.reservations.length === 1 && state.bindings.length === 1
+            && (state.completions?.length ?? 0) === 0, "unrecovered_stop_changed_admission");
+          check(info.assignmentTools.length === 1, "child_assignment_reader_missing");
+          childRecoveryGatePhase = 3; childRecoveryPending = true; childRequests++;
+          respond(res, { type: "function_call", ...info.assignmentTools[0], call_id: calls.childRecovery, arguments: "{}" }); return;
+        }
         if (childRecoveryPending) {
           const recovered = info.outputs.probe_child_recovery;
           const state = integrated.readJournal(), binding = state.bindings[0];
@@ -330,7 +351,7 @@ data: ${JSON.stringify(event)}
             "recovery_not_bound_to_current_compaction");
           childRecoveryPending = false; childCompactionReady = true; childRequests++;
           print({ type: "child_assignment_recovery_evidence", exactPreparedMessage: true, sameChildAndTurn: true,
-            unchangedAdmission: true, replayTextStable: true, recoveryAfterLatestCompaction: true, simulatedModel: true, automaticRecoveryEnforced: false });
+            unchangedAdmission: true, replayTextStable: true, recoveryAfterLatestCompaction: true, toolAndStopRecoveryEnforced: true, simulatedModel: true, automaticRecoveryEnforced: false });
           respond(res, message(CHILD_MARKER)); return;
         }
         if (childCompactionObserved) {
@@ -370,8 +391,8 @@ data: ${JSON.stringify(event)}
           simulatedModel: true, readyForChildCompaction: childCompactionReady });
         if (childRecovery) {
           check(info.assignmentTools.length === 1, "child_assignment_reader_missing");
-          childRecoveryPending = true;
-          respond(res, { type: "function_call", ...info.assignmentTools[0], call_id: "probe_child_recovery", arguments: "{}" });
+          childRecoveryGatePhase = 1;
+          respond(res, { type: "function_call", name: "list_mcp_resources", call_id: calls.childUnrecovered, arguments: "{}" });
         } else respond(res, message(CHILD_MARKER));
         return;
       }
@@ -1085,7 +1106,7 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (childRecovery ? 3 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (childRecovery ? 5 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
     const verified = (!childCompaction || (childCompactionObserved && childCompactionReady)) && result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
       && (!childSandbox || childSandboxVerified) && (!childMessage || childMessageVerified) && (!resumedFailure || resumedFailureVerified) && (!unpreparedFollowup || unpreparedFollowupVerified) && (!sageFollowup || sageFollowupVerified)
@@ -1146,7 +1167,12 @@ data: ${JSON.stringify(event)}
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
     assert.equal(before.length,nested || failedSpawn || resumedFailure ? 2 : 1);
     assert.equal(start.length, noChild ? 0 : nested ? 2 : 1);
-    assert.equal(stop.length, noChild || interruption ? 0 : blockStop || correctReport || escapeReport || followUp || sageFollowup || nested ? 2 : 1);
+    assert.equal(stop.length, noChild || interruption ? 0 : childRecovery || blockStop || correctReport || escapeReport || followUp || sageFollowup || nested ? 2 : 1);
+    if (childRecovery) {
+      assert.equal(childRecoveryGatePhase, 3);
+      assert.deepEqual(stop.map(row => row.stopHookActive).sort(), [false, true]);
+      assert.equal(new Set(stop.map(row => row.turn_id)).size, 1);
+    }
     if (escapeReport) {
       assert.equal(prematureCompletions, 0);
       assert.deepEqual(stop.map(row => row.stopHookActive).sort(), [false, true]);

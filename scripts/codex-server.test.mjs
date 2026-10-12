@@ -3702,6 +3702,35 @@ test("child tool recovery permits work only after an intact current read and res
   const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
   appendRecoveryCheckpoint(transcript);
   assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+  appendAssignmentRecovery(transcript, result);
+  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
+  appendRecoveryCheckpoint(transcript, 2);
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+});
+
+
+test("child stop recovery blocks repeated stops and parent completion after compaction", async t => {
+  for (const sage of [true, false]) {
+    const f = await completionFixture(t), client = await stopReportClient(t, f);
+    if (!sage) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    appendRecoveryCheckpoint(f.childTranscript());
+    const before = f.core.readAdmission(f.options.directory);
+    for (const stop_hook_active of [false, true]) {
+      const result = await client.call({ ...f.stop, stop_hook_active, last_assistant_message: reportText }, childActor);
+      assert.equal(result.decision, "block"); assert.match(result.reason, /read.*assignment/i);
+      assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    }
+    appendReport(f);
+    const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+    assert.throws(() => reconcileNativeCompletions(f.native(session), session, f.options));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before, "a terminal report cannot bypass missing recovery");
+    const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+    assert.throws(() => readChildReport({ name: f.input.name }, f.native(session), f.options));
+    await client.close();
+  }
+});
+
+function appendAssignmentRecovery(transcript, result) {
   const stamp = { internal_chat_message_metadata_passthrough: { turn_id: turns[1] } };
   const rows = [{ type: "response_item", metadata: { client_authored: false }, payload: {
     type: "function_call", id: "fc_read_current", namespace: "mcp__sage_preparation", name: "sage_read_assignment",
@@ -3711,7 +3740,37 @@ test("child tool recovery permits work only after an intact current read and res
     payload: { type: "function_call_output", id: "fco_read_current", call_id: "read_current", ...stamp,
       output: [{ type: "input_text", text: "Wall time: 0.01 seconds\nOutput:" }, { type: "input_text", text: JSON.stringify(result) }] } }];
   appendFileSync(transcript, rows.map(row => JSON.stringify(row) + "\n").join(""));
-  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
-  appendRecoveryCheckpoint(transcript, 2);
-  assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+}
+
+test("child stop recovery completes the recovered assignment once and preserves interruption", async t => {
+  for (const interrupted of [false, true]) {
+    const f = await completionFixture(t), read = await assignmentReader(f);
+    const result = read(), transcript = f.childTranscript();
+    f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    appendRecoveryCheckpoint(transcript);
+    assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "recovery-required" });
+    if (interrupted) {
+      appendFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "turn_aborted", turn_id: turns[1], reason: "interrupted" } }) + "\n");
+      const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+      reconcileNativeCompletions(f.native(session), session, f.options);
+      const state = f.core.readAdmission(f.options.directory);
+      assert.equal(state.completions.length, 1); assert.equal(state.completions[0].outcome, "interrupted");
+      assert.equal(state.reports?.length ?? 0, 0);
+    } else {
+      appendAssignmentRecovery(transcript, result);
+      const client = await stopReportClient(t, f);
+      assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: true, last_assistant_message: reportText }, childActor), {});
+      assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+      appendReport(f);
+      const { readChildReport, recordChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+      const report = readChildReport({ name: f.input.name }, f.native(session), f.options);
+      const input = { name: f.input.name, reportHash: report.reportHash };
+      recordChildReport(input, f.native(session), f.options);
+      recordChildReport(input, f.native(session), f.options);
+      const state = f.core.readAdmission(f.options.directory);
+      assert.equal(state.completions.length, 1); assert.equal(state.reports.length, 1);
+      assert.equal(state.bindings.length, 1); assert.equal(state.reservations.length, 1);
+      await client.close();
+    }
+  }
 });

@@ -267,3 +267,20 @@ test('recovery evidence holds incomplete compaction and verifies a committed che
     f.write([...task(turn, 'first'), summary, row]); assert.throws(read, /recovery evidence is unavailable/);
   }
 });
+
+
+test("report acceptance requires recovery before the final report after compaction", t => {
+  const f = fixture(t), options = { sessionsDir: f.sessionsDir, requireRecovery: true };
+  const read = () => identity.readNativeReport(f.file, options, expected());
+  for (const middle of [[], [output(turn, "done"), ...recoveryRows()]]) {
+    f.write([...task(turn, "first"), checkpoint(), ...middle,
+      ...(middle.length ? [] : [output(turn, "done")]), complete(turn, "done")]);
+    assert.throws(read, /report evidence is unavailable/);
+    assert.throws(() => identity.readNativeCompletion(f.file, options, expected()), /report evidence is unavailable/);
+  }
+  f.write([...task(turn, "first"), checkpoint(), ...recoveryRows(), output(turn, "done"), complete(turn, "done")]);
+  assert.equal(read().text, "done");
+  assert.equal(identity.readNativeCompletion(f.file, options, expected()).reportHash, hash("done"));
+  f.write([...task(turn, "first"), checkpoint(), ...recoveryRows(), checkpoint(2), output(turn, "done"), complete(turn, "done")]);
+  assert.throws(read, /report evidence is unavailable/);
+});

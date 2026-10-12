@@ -142,9 +142,13 @@ export function readAssignmentTurn(transcriptPath, options, expected) {
 /** Read recovery ordering from the same protected snapshot as assignment delivery.
  * A ready result does not grant permission or validate a final report's ordering. */
 export function readNativeRecovery(transcriptPath, options, expected) {
+  try { return recoveryFromRecords(readSessionRecords(transcriptPath, options, Infinity), expected); }
+  catch { throw Error("Codex recovery evidence is unavailable"); }
+}
+
+function recoveryFromRecords(rows, expected) {
   const unavailable = () => { throw Error("Codex recovery evidence is unavailable"); };
   try {
-    const rows = readSessionRecords(transcriptPath, options, Infinity);
     const { position } = assignmentFromRecords(rows, expected);
     const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
     let turn, context, terminal = false, pendingCompaction = false, windowNumber = 0;
@@ -241,11 +245,11 @@ export function readNativeInterruption(transcriptPath, options, expected) {
 
 /** Read one completed turn from the same protected snapshot as its assigned task.
  * This verifies report provenance, not its claims or a review verdict. */
-function reportFromRecords(rows, expected, { pending = false, report = true } = {}) {
+function reportFromRecords(rows, expected, { pending = false, report = true, recovery = false } = {}) {
   const unavailable = () => { throw Error("Codex report evidence is unavailable"); };
   try {
     const { position, ...assigned } = assignmentFromRecords(rows, expected);
-    let turn, final, completed, aborted;
+    let turn, final, completed, aborted, finalPosition;
     for (const [index, row] of rows.entries()) {
       if (index === 0) continue;
       const payload = row.payload;
@@ -274,6 +278,7 @@ function reportFromRecords(rows, expected, { pending = false, report = true } = 
         const text = payload.content.map(part => part.text).join("");
         if ((report && (!text.trim() || Buffer.byteLength(text, "utf8") > 32 * 1024 || text.includes("\0")))
           || Buffer.from(text, "utf8").toString("utf8") !== text) unavailable();
+        finalPosition = index;
         final = { reportMessage: payload.id, reportHash: createHash("sha256").update(text).digest("hex"), text };
       }
       if (row.type === "event_msg" && payload.type === "task_complete") {
@@ -283,19 +288,23 @@ function reportFromRecords(rows, expected, { pending = false, report = true } = 
     }
     if (aborted && completed) unavailable();
     if (!completed) { if (pending) return null; unavailable(); }
+    if (recovery) {
+      const restored = recoveryFromRecords(rows, expected);
+      if (restored.required || (restored.position !== null && finalPosition <= restored.position)) unavailable();
+    }
     return { ...assigned, ...completed };
   } catch { unavailable(); }
 }
 
 
 export function readNativeReport(transcriptPath, options, expected) {
-  try { return reportFromRecords(readSessionRecords(transcriptPath, options, Infinity), expected); }
+  try { return reportFromRecords(readSessionRecords(transcriptPath, options, Infinity), expected, { recovery: options.requireRecovery === true }); }
   catch { throw Error("Codex report evidence is unavailable"); }
 }
 
 /** A stop callback can be blocked. Only the later native task_complete record confirms this turn. */
 export function readNativeCompletion(transcriptPath, options, expected) {
-  try { return reportFromRecords(readSessionRecords(transcriptPath, options, Infinity), expected, { pending: true, report: false }); }
+  try { return reportFromRecords(readSessionRecords(transcriptPath, options, Infinity), expected, { pending: true, report: false, recovery: options.requireRecovery === true }); }
   catch { throw Error("Codex report evidence is unavailable"); }
 }
 

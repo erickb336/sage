@@ -39,7 +39,7 @@ function verifiedReport(name, context, options) {
   if (starts.length !== 1 || transcripts.length !== 1 || (!assigned.continuation && starts[0].turn !== bound.turn)
     || starts[0].parent !== native.actor || transcripts[0].turn !== bound.turn) refuse();
   const path = starts[0].path;
-  const evidence = readNativeReport(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, {
+  const evidence = readNativeReport(transcripts[0].transcript, { sessionsDir: options.sessionsDir, requireRecovery: true }, {
     session, child: bound.child, parent: bound.issuer, path, author: path.slice(0, path.lastIndexOf("/")),
     turn: bound.turn, taskHash: assigned.dispatch.taskHash,
   });
