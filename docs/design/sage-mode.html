@@ -282,7 +282,7 @@ BRANCH      branch · head SHA · PR</pre>
 <tr><td>The chief never edits files</td><td><span class="code">Code</span> agent tools + hook</td><td>It keeps the big picture. Tested in the prototype.</td></tr>
 <tr><td>A brief has every field</td><td><span class="code">Code</span> hook on the agent spawn</td><td>A vague brief fails quietly (pstack)</td></tr>
 <tr><td>One writer per worktree or branch</td><td><span class="code">Code</span> the state tool refuses a second open writer on a branch</td><td>Parallel writers conflict (Cognition)</td></tr>
-<tr><td>At most N agents at once (default 3)</td><td><span class="code">Code</span> the hook counts running agents</td><td>Cost and focus. Orchestrator used 3</td></tr>
+<tr><td>At most N agents at once (default 4: one lead and its 3 children)</td><td><span class="code">Code</span> the hook counts running agents</td><td>Cost and focus. Orchestrator used 3</td></tr>
 <tr><td>Every finding is triaged before QA</td><td><span class="code">Code</span> the state tool refuses "verifying" with open findings</td><td>No dropped findings (ORC-028)</td></tr>
 <tr><td>At most 3 repair rounds. After 2 rounds with the same finding keys, re-plan</td><td><span class="code">Code</span> the state tool counts rounds and keys</td><td>Loops must converge. attack-the-premise</td></tr>
 <tr><td>A merge needs the route's verdicts on the current head SHA</td><td><span class="code">Code</span> hook on <code>gh pr merge</code></td><td>Merge only the checked commit (Orchestrator, pstack)</td></tr>

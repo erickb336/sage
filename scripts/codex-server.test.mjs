@@ -2664,6 +2664,7 @@ test('native lead ownership rechecks the parent run before preparing or dispatch
 
 async function roleEditFixture(t, role) {
   const f = await composedPolicyFixture(t);
+  if (role === 'lead') f.assignmentCli('run', 'done', 'R1', '--status', 'done');
   f.assignmentCli('run', 'add', 'T1', '--role', role,
     ...(['implementer', 'designer', 'arena-judge'].includes(role) ? ['--branch', 'codex/t1-fixture'] : []));
   Object.assign(f.input, { role, run: 'R4' });
@@ -2851,6 +2852,7 @@ async function preparedFollowupFixture(t) {
   const f = await composedPolicyFixture(t); f.bindLead();
   const prior = f.core.readAdmission(f.options.directory).bindings[0];
   f.core.completeAdmission(f.options.directory, prior);
+  f.assignmentCli('run', 'done', 'R1', '--status', 'done');
   f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
   const request = { ...f.input, run: 'R4', name: 'continued_lead', previous: prior.assignment };
   const prepared = f.api.prepareNativeTask(request, f.native(session), f.options);
@@ -3340,4 +3342,30 @@ test('native Sage child message permission cannot bypass malformed input or the 
   }
   const denied = f.createNativePolicy(f.options, () => ({ decision: 'deny', reason: 'Fixed native denial' }));
   assert.deepEqual(await f.evaluate(denied, event, childActor), { decision: 'deny', reason: 'Fixed native denial' });
+});
+
+test('native run creation retains merged lead uniqueness and project capacity', async t => {
+  const f = await runCreationFixture(t);
+  assert.equal(f.createRun().run.id, 'R1');
+  assert.throws(() => f.createRun({...f.input, request: turns[2]}), /one running lead/);
+  for (const task of ['T2', 'T3', 'T4']) f.cli('task', 'add', '--title', task, '--size', 'small');
+  f.cli('run', 'add', 'T2', '--role', 'lead');
+  f.cli('run', 'add', 'T3', '--role', 'lead');
+  const next = {...f.input, request: turns[2], task: 'T4'};
+  assert.throws(() => f.createRun(next), /3 running lead runs/);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 3);
+  f.cli('run', 'done', 'R1', '--status', 'done');
+  assert.equal(f.createRun(next).run.task, 'T4');
+  assert.equal(f.tool.read(f.logbook, 'runs').filter(run => run.status === 'running' && run.role === 'lead').length, 3);
+});
+
+test('native run creation retains merged role and lead task eligibility rules', async t => {
+  const f = await runCreationFixture(t);
+  assert.throws(() => f.createRun({...f.input, role: 'unknown-role'}), /not a role of a run/);
+  f.cli('task', 'add', '--title', 'investigation', '--size', 'investigate');
+  assert.throws(() => f.createRun({...f.input, task: 'T2'}), /investigation/);
+  f.cli('task', 'T1', 'set', 'state=abandoned');
+  assert.throws(() => f.createRun(), /task has ended/);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 0);
+  assert.equal(f.createRun({...f.input, task: 'T2', role: 'investigate'}).run.role, 'investigate');
 });

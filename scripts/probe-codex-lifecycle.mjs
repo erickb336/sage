@@ -589,17 +589,36 @@ data: ${JSON.stringify(event)}
         const mcp = (tools, id, input) => { check(tools.length === 1, "followup_visible_tool_missing");
           respond(res, { type: "function_call", ...tools[0], call_id: id, arguments: JSON.stringify(input) }); };
         if (rootRequests === 6) {
+          reportReceipt = info.outputs[calls.report];
+          check(reportReceipt?.decision === "report-ready" && reportReceipt.run === "R1"
+            && reportReceipt.reportHash === createHash("sha256").update(CHILD_MARKER).digest("hex"), "followup_first_report_missing");
+          mcp(info.recordTools, calls.record, { name: "probe_child", reportHash: reportReceipt.reportHash });
+          return;
+        }
+        if (rootRequests === 7) {
+          check(info.outputs[calls.record]?.decision === "report-recorded", "followup_first_report_not_recorded");
+          mcp(info.finishTools, calls.finish, { assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash });
+          return;
+        }
+        if (rootRequests === 8) {
+          check(info.outputs[calls.finish]?.decision === "run-finished"
+            && integrated.readLogbook().runs.find(run => run.id === "R1")?.status === "done", "followup_first_run_not_finished");
+          mcp(info.createRunTools, calls.followupCreate, runRequest);
+          return;
+        }
+        const step = rootRequests - 3;
+        if (step === 6) {
           followupRun = info.outputs[calls.followupCreate];
           check(followupRun?.decision === "run-created" && followupRun.run.id !== "R1", "followup_run_missing");
           const prior = integrated.readJournal().bindings[0];
           mcp(info.prepareTools, calls.followupPrepare, { task: "T1", run: followupRun.run.id, name: "probe_continued", role: "lead",
             previous: prior.assignment, brief: Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the second fixed native fixture task."])) });
-        } else if (rootRequests === 7) {
+        } else if (step === 7) {
           followupPrepared = info.outputs[calls.followupPrepare];
           check(followupPrepared?.target === childThread && typeof followupPrepared.message === "string", "followup_preparation_missing");
           FOLLOWUP_PROMPT = followupPrepared.message;
           respond(res, call(calls.followup, "followup_task", { target: childThread, message: FOLLOWUP_PROMPT }));
-        } else if (rootRequests === 8) {
+        } else if (step === 8) {
           check(info.outputs[calls.followup] === "", "followup_native_result_invalid");
           await followupReady;
           if (fixtureFailure) { reject(res); return; }
@@ -607,8 +626,8 @@ data: ${JSON.stringify(event)}
           check(integrated.readJournal().bindings.length === 1, "followup_bound_before_child_callback");
           respond(followupResponse, followupNoTool ? message(FOLLOWUP_MARKER)
             : { type: "function_call", name: "list_mcp_resources", call_id: calls.followupControl, arguments: "{}" });
-        } else if (rootRequests === 9) respond(res, call(calls.followupDone, "list_agents", { path_prefix: taskName }));
-        else if (rootRequests === 10) {
+        } else if (step === 9) respond(res, call(calls.followupDone, "list_agents", { path_prefix: taskName }));
+        else if (step === 10) {
           check(childEntry(info.outputs[calls.followupDone]).agent_status?.completed === FOLLOWUP_MARKER, "followup_native_completion_missing");
           if (unobservedFollowup) {
             const recovered = integrated.readJournal();
@@ -617,15 +636,15 @@ data: ${JSON.stringify(event)}
             check(recovered.bindings.length === 2 && recovered.completions?.length === 2, "unobserved_followup_not_recovered");
           }
           mcp(info.reportTools, calls.followupReport, { name: "probe_continued" });
-        } else if (rootRequests === 11) {
+        } else if (step === 11) {
           followupReport = info.outputs[calls.followupReport];
           check(followupReport?.run === followupRun.run.id && followupReport.child === childThread
             && followupReport.reportHash === createHash("sha256").update(FOLLOWUP_MARKER).digest("hex"), "followup_report_missing");
           mcp(info.recordTools, calls.followupRecord, { name: "probe_continued", reportHash: followupReport.reportHash });
-        } else if (rootRequests === 12) {
+        } else if (step === 12) {
           check(info.outputs[calls.followupRecord]?.decision === "report-recorded", "followup_report_not_recorded");
           mcp(info.reportTools, calls.followupOld, { name: "probe_child" });
-        } else if (rootRequests === 13) {
+        } else if (step === 13) {
           const old = info.outputs[calls.followupOld];
           check(old?.run === "R1" && old.turn !== followupReport.turn && old.child === childThread
             && old.reportHash === createHash("sha256").update(CHILD_MARKER).digest("hex"), "followup_changed_prior_report");
@@ -701,10 +720,10 @@ data: ${JSON.stringify(event)}
         }
         print({ type: "native_tool_result", tool: "list_agents", phase: "completed", agent_name: taskName, agent_status: { completed: CHILD_MARKER } });
         if (nestedReport) { nestedFlow.chief(0, info, res, CHILD_MARKER); return; }
-        if (reportProbe || createRun) {
+        if (reportProbe || createRun || sageFollowup) {
           check(info.reportTools.length === 1, "report_tool_missing");
           respond(res, { type: "function_call", ...info.reportTools[0], call_id: calls.report, arguments: JSON.stringify({ name: "probe_child" }) });
-        } else if (sageFollowup) respond(res, { type: "function_call", ...info.createRunTools[0], call_id: calls.followupCreate, arguments: JSON.stringify(runRequest) });
+        }
         else if (unpreparedFollowup) respond(res, call(calls.followup, "followup_task", { target: childThread, message: FOLLOWUP_PROMPT }));
         else if (followUp) respond(res, call(calls.followup, "followup_task", { target: taskName, message: FOLLOWUP_PROMPT }));
         else respond(res, message(MARKER));
@@ -967,7 +986,7 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 13 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
     const verified = result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
       && (!childMessage || childMessageVerified) && (!resumedFailure || resumedFailureVerified) && (!unpreparedFollowup || unpreparedFollowupVerified) && (!sageFollowup || sageFollowupVerified)
@@ -1131,7 +1150,9 @@ data: ${JSON.stringify(event)}
       assert.equal(new Set(saved.bindings.map(row => row.child)).size, 1);
       assert.equal(new Set(saved.bindings.map(row => row.turn)).size, 2);
       assert.equal(saved.reservations[1].continuation, saved.bindings[0].assignment);
-      assert.equal(saved.reports.length, 1); assert.equal(saved.reports[0].run, followupRun.run.id);
+      assert.equal(saved.reports.length, 2);
+      assert.deepEqual(saved.reports.map(report => report.run), ["R1", followupRun.run.id]);
+      assert.equal(integrated.readLogbook().runs.find(run => run.id === "R1").status, "done");
       if (followupNoTool) {
         const turn = saved.bindings[1].turn;
         assert.equal(rows.filter(row => row.hook_event_name === "PreToolUse" && row.turn_id === turn).length, 0);
@@ -1143,7 +1164,7 @@ data: ${JSON.stringify(event)}
           sameNativeChild: true, completedAssignments: 2, simulatedModel: true });
       }
       print({ type: "sage_followup_evidence", sameNativeChild: true, assignments: 2, turns: 2, completions: 2,
-        secondReportRecorded: true, firstReportPreserved: true, simulatedModel: true });
+        secondReportRecorded: true, firstReportPreserved: true, firstRunFinished: true, simulatedModel: true });
     }
     if (unpreparedFollowup) {
       assert.equal(unpreparedFollowupVerified, true);
