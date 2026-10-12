@@ -15,7 +15,7 @@
 //     Monitor, PowerShell, mcp__terminal__*), not only Bash. One case asks the user instead of a refusal: the chief's
 //     first creation of main or master on GitHub, in one literal gh api form (FIRST_FORM), checked on GitHub only
 //     (firstUpload, firstCreation).
-//   - Only main starts leads (3 per project), each named lead-T<n>; only leads start their permitted children (3 each),
+//   - Only main starts leads (3 per project), each named lead-T<n> and in the background; only leads start their permitted children (3 each),
 //     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode. In the same scope
 //     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent). Only the main session's TaskStop frees a slot.
 //   - A sage agent may finish only with the full report of the sage:report skill.
@@ -61,7 +61,8 @@ const LEAD_CHILDREN = new Set(["sage:implementer", "sage:code-reviewer", "sage:s
 /** The tools that run a command. The PreToolUse matcher in claude.json names each of them. */
 const SHELL_TOOLS = /^(?:Bash|Monitor|PowerShell|mcp__terminal__.+)$/;
 const CHIEF = /(^|:)chief-of-staff$/;
-const OURS = /^sage:/;
+/** A sage agent type, in any letter case, so that a type such as Sage:lead cannot skip the sage rules (F-T255-5). */
+const OURS = /^sage:/i;
 /** An agent's event: Claude Code sets agent_id only for a subagent's events. An empty agent_id, or a sage role other than the chief, counts too (fail closed). */
 const agentEvent = (input) => "agent_id" in (input ?? {}) || (OURS.test(input?.agent_type ?? "") && !CHIEF.test(input.agent_type));
 export const BRIEF_FIELDS = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"];
@@ -321,12 +322,20 @@ export function handle(input, state, slots) {
   }
   const tool = input.tool_name ?? "";
   const ti = input.tool_input ?? {};
+  // The spawned type in lower case: a sage type in another letter case meets the same rules (F-T255-5). The caller's type
+  // stays exact: "sage:lead" is the one type that may start agents, and another case of it gets no such right.
+  const spawned = String(ti.subagent_type ?? "").toLowerCase();
+  const spawnName = ti.name ?? ti.description ?? ""; // the Agent tool's name, or its description when it has no name
+  // An agent never names a spawn "main": a later SendMessage to main could wake that agent with no slot (F-T255-4).
+  if (event === "PreToolUse" && !main && AGENT_TOOLS.test(tool) && String(spawnName).trim().toLowerCase() === "main") {
+    return deny(event, 'an agent never names a spawn "main", because a message to main must reach only the main session. Give it another name.');
+  }
   // The nested rules check the spawned type too, not only the caller: in any mode (T255 H2).
-  const nestedSpawn = event === "PreToolUse" && !main && AGENT_TOOLS.test(tool) && (state.sage || ours || OURS.test(ti.subagent_type ?? ""));
+  const nestedSpawn = event === "PreToolUse" && !main && AGENT_TOOLS.test(tool) && (state.sage || ours || OURS.test(spawned));
   if (nestedSpawn) {
     if (input.agent_type !== "sage:lead") return deny(event, "only a lead may start an agent. Report to the sage.");
     if (typeof input.agent_id !== "string" || !input.agent_id) return deny(event, "the spawn has no valid caller identity, so its slot cannot be checked. Report to the sage.");
-    if (!LEAD_CHILDREN.has(ti.subagent_type)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
+    if (!LEAD_CHILDREN.has(spawned)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
   }
   if (event !== "PreToolUse" || (!state.sage && !nestedSpawn)) return undefined;
 
@@ -334,10 +343,12 @@ export function handle(input, state, slots) {
     if (filePolicy.error) return deny(event, "the file policy cannot load, so this file change is refused. Reinstall or update the sage plugin.");
     if (filePolicy.chiefEditDenied({ sage: Boolean(state.sage), chief: main })) return deny(event, 'sage mode is on, so you do not change files yourself. Give this change to a sage:implementer. The user ends sage mode with the message "sage mode off", alone.');
   }
-  if (main && AGENT_TOOLS.test(tool) && ti.subagent_type === "sage:lead" && !/^lead-T\d+$/.test(ti.name ?? ti.description ?? "")) {
-    return deny(event, "the sage starts a lead only with the name lead-T<n> of its task (the Agent tool's name, or its description when it has no name).");
+  if (main && AGENT_TOOLS.test(tool) && spawned === "sage:lead") {
+    if (!/^lead-T\d+$/.test(spawnName)) return deny(event, "the sage starts a lead only with the name lead-T<n> of its task (the Agent tool's name, or its description when it has no name).");
+    // A foreground lead's slot binds only when the lead ends, so its children's events could not renew it (F-T255-7).
+    if (ti.run_in_background !== true) return deny(event, "a lead always starts in the background: set run_in_background to true.");
   }
-  if (AGENT_TOOLS.test(tool) && OURS.test(ti.subagent_type ?? "")) {
+  if (AGENT_TOOLS.test(tool) && OURS.test(spawned)) {
     const missing = missingFields(BRIEF_FIELDS, ti.prompt);
     if (missing.length) return deny(event, `the brief has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line. A tiny task may keep each field to one line.`);
     let caps, project;
@@ -349,7 +360,7 @@ export function handle(input, state, slots) {
       return deny(event, `the state tool cannot load (${e?.message ?? e}), so sage starts no new agent: reinstall or update the sage plugin, and tell the user.`);
     }
     const cap = caps[`cap.${project}`] ?? caps.max_agents;
-    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && ti.subagent_type !== "sage:lead" ? String(Date.now()) : undefined), { role: ti.subagent_type, caller: main ? undefined : input.agent_id, input: ti });
+    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti });
     if (r.refused) {
       slots.log(`${project} ${r.project}/${cap} total ${r.total}/${caps.cap_total}`);
       const raise = (key, n) => `${SPACE_NOTE}Wait for one to finish, or raise the cap: ${stateCommand(`config ${key}=${n + 1}`)}`;

@@ -4290,7 +4290,7 @@ const nested = (role = "sage:qa", id = "child-call", extra = {}) => spawnAgent(r
 const resultOf = (id, agentId, extra = {}, status = "async_launched") => ({ hook_event_name: "PostToolUse", tool_name: "Agent", tool_use_id: id, tool_response: { status, agentId }, ...extra });
 const ended = (agent_id, agent_type = "sage:qa", extra = {}) => ({ hook_event_name: "SubagentStop", agent_id, agent_type, stop_hook_active: true, ...extra });
 /** The main session's spawn of a lead, with the name lead-T<n> in the description (T255 L1). */
-const leadSpawn = (id, n = 1, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: `lead-T${n}` }, { tool_use_id: id, ...extra });
+const leadSpawn = (id, n = 1, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: id, ...extra });
 function nestedSession() {
   const s = session();
   s.sage("config", "max_agents=20", "cap_total=30");
@@ -4685,7 +4685,7 @@ test("T255 M3: only the main session's TaskStop frees a slot", () => {
 
 test("T255 L1: the main session starts a lead only with the name lead-T<n>", () => {
   const s = nestedSession();
-  const lead = (id, names) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, ...names }, { tool_use_id: id });
+  const lead = (id, names) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, run_in_background: true, ...names }, { tool_use_id: id });
   for (const [n, names] of [{ description: "d" }, { description: "lead" }, { description: "lead-T" }, { description: "lead-t1" }, { description: "lead-T1 x" }, {}, { name: "worker", description: "lead-T7" }].entries()) {
     assert.match(denied(s.send(lead(`bad-${n}`, names))) ?? "", /only with the name lead-T<n>/, JSON.stringify(names));
   }
@@ -4706,4 +4706,41 @@ test("T255 L2: a spawn that never starts frees after 10 minutes, and a failed sp
   s.send(start("qa-kid"));
   s.send({ hook_event_name: "PostToolUseFailure", tool_name: "Agent", tool_use_id: "l2-4", ...LEAD });
   assert.equal(s.send(nested("sage:qa", "l2-6")), undefined, "a failed spawn frees its slot, also after a start of its role");
+});
+
+test("F-T255-7: the main session starts a lead only in the background", () => {
+  const s = nestedSession();
+  const lead = (id, extra) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: "lead-T1", ...extra }, { tool_use_id: id });
+  for (const [n, extra] of [{}, { run_in_background: false }, { run_in_background: "true" }].entries()) {
+    assert.match(denied(s.send(lead(`fg-${n}`, extra))) ?? "", /a lead always starts in the background: set run_in_background to true/, JSON.stringify(extra));
+  }
+  assert.equal(s.send(lead("bg", { run_in_background: true })), undefined);
+});
+
+test("F-T255-4: an agent never names a spawn main, in any letter case or mode", () => {
+  const MAIN = /an agent never names a spawn "main"/;
+  const child = (id, names, caller = LEAD) => tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, ...names }, { tool_use_id: id, ...caller });
+  for (const s of [nestedSession(), session()]) {
+    for (const [n, names] of [{ name: "main" }, { name: " MAIN " }, { name: "Main", description: "a reviewer" }, { description: "main" }, { description: "\tmain\n" }].entries()) {
+      assert.match(denied(s.send(child(`main-${n}`, names))) ?? "", MAIN, JSON.stringify(names));
+    }
+    assert.match(denied(s.send(tool("Agent", { subagent_type: "Explore", prompt: "x", name: "main" }, { tool_use_id: "plain", agent_id: "gp", agent_type: "general-purpose" }))) ?? "", MAIN, "any agent's spawn");
+    assert.equal(s.send(child("ok-1", { name: "reviewer", description: "main" })), undefined, "the name wins over the description");
+    assert.equal(s.send(child("ok-2", { name: "maintain" })), undefined);
+  }
+  assert.equal(nestedSession().send(tool("Agent", { subagent_type: "Explore", prompt: "x", name: "main" }, { tool_use_id: "chief" })), undefined, "the main session's own spawn");
+});
+
+test("F-T255-5: a sage type in another letter case meets the same spawn and message rules", () => {
+  const s = session();
+  s.sage("config", "max_agents=20", "cap_total=30");
+  const gp = { agent_id: "gp", agent_type: "general-purpose" };
+  assert.match(denied(s.send(spawnAgent("Sage:lead", BRIEF, "case-1", gp))) ?? "", /only a lead may start an agent/, "a plain agent starts no Sage:lead outside sage mode");
+  assert.match(denied(s.send(spawnAgent("SAGE:QA", "GOAL short", "case-2", LEAD))) ?? "", /the brief has no SCOPE/, "the brief check reads the type in any case");
+  assert.match(denied(s.send(spawnAgent("sage:qa", BRIEF, "case-3", { agent_id: "x", agent_type: "Sage:lead" }))) ?? "", /only a lead may start an agent/, "another case of the lead type gets no lead right");
+  assert.match(denied(s.send(tool("SendMessage", { to: "kid", message: "x" }, { agent_id: "q", agent_type: "Sage:QA" }))) ?? "", /only to main/, "the message rule reads the caller in any case");
+  s.send(prompt("sage mode"));
+  assert.match(denied(s.send(tool("Agent", { subagent_type: "Sage:Lead", prompt: BRIEF, description: "d", run_in_background: true }, { tool_use_id: "case-4" }))) ?? "", /only with the name lead-T<n>/, "the main session's lead rules read the type in any case");
+  for (const n of [1, 2, 3]) assert.equal(s.send(tool("Agent", { subagent_type: "SAGE:lead", prompt: BRIEF, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: `lead-${n}` })), undefined);
+  assert.match(denied(s.send(leadSpawn("lead-4", 4))) ?? "", /3 leads are running/, "a lead in another case counts as a lead");
 });
