@@ -2775,7 +2775,7 @@ test("F-T284-17: a retry whose last round's findings are still open goes to repl
 });
 
 // Repair round 3 of T284 (R929). It fails on f6a88ec and passes after.
-test("F-T284-19: a task that leaves replan starts its own round count, so an old finding that is still open does not replan it again", () => {
+test("F-T284-19: leaving replan clears the old round's findings, so one that is still open does not replan the task again; the round number goes on", () => {
   const s = store();
   s.ok("config", "max_rounds=3");
   s.ok("task", "add", "--title", "a", "--size", "small");
