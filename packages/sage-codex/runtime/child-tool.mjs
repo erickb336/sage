@@ -12,6 +12,9 @@ export function bindNativeChildTool(input, context, options) {
   const native = nativeToolContext(context);
   const event = nativeToolEvent(input, native, "PreToolUse");
   if (native.actor === event.session_id || typeof event.transcript_path !== "string") refuse();
+  readChildTurn(event.transcript_path, { sessionsDir: options.sessionsDir }, {
+    session: event.session_id, child: native.actor, turn: event.turn_id,
+  }, { active: true });
   return bindNativeChildTranscript({ session: event.session_id, turn: event.turn_id, transcript: event.transcript_path }, native, options);
 }
 

@@ -3411,3 +3411,35 @@ test('native child sandbox escalation stays refused when off while chief permiss
   assert.deepEqual(await f.evaluate(policy, chief), {decision: 'deny', reason: 'Native permission check refused.'});
   assert.equal(evaluated, 1);
 });
+
+
+test('native child tool permission refuses terminal turns before evaluation without releasing capacity', async t => {
+ for (const type of ['turn_aborted', 'task_complete']) {
+  const f = await roleEditFixture(t, 'implementer'); let calls = 0;
+  const policy = f.createNativePolicy(f.options, () => { calls++; return {decision:'pass'}; });
+  const input = {...f.editInput, tool_name:'list_mcp_resources', tool_input:{}};
+  assert.deepEqual(await f.evaluate(policy,input,childActor),{decision:'pass'});
+  const before = f.core.readAdmission(f.options.directory);
+  appendFileSync(input.transcript_path,JSON.stringify({type:'event_msg',payload:{type,turn_id:turns[1],reason:'interrupted'}})+'\n');
+  await assert.rejects(f.evaluate(policy,input,childActor), /child turn evidence is unavailable/);
+  assert.equal(calls,1);
+  assert.deepEqual(f.core.readAdmission(f.options.directory),before);
+ }
+});
+
+test('native child tool permission rechecks terminal evidence after an awaited evaluator', async t => {
+ for (const type of ['turn_aborted', 'task_complete']) {
+  const f = await roleEditFixture(t, 'implementer'); let entered, resume;
+  const waiting = new Promise(resolve => {entered=resolve;});
+  const release = new Promise(resolve => {resume=resolve;});
+  const policy = f.createNativePolicy(f.options, async () => {entered();await release;return {decision:'pass'};});
+  const input = {...f.editInput,tool_name:'list_mcp_resources',tool_input:{}};
+  const result = f.evaluate(policy,input,childActor);
+  await waiting;
+  const before = f.core.readAdmission(f.options.directory);
+  appendFileSync(input.transcript_path,JSON.stringify({type:'event_msg',payload:{type,turn_id:turns[1],reason:'interrupted'}})+'\n');
+  resume();
+  await assert.rejects(result,/child turn evidence is unavailable/);
+  assert.deepEqual(f.core.readAdmission(f.options.directory),before);
+ }
+});

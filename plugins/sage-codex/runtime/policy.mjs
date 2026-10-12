@@ -3,7 +3,7 @@ import { commandWrites, roleEditDenied, readAdmission } from "../core/index.mjs"
 import { checkNativeRunAssignment } from "./run-assignment.mjs";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
-import { readInitialSession, readNativeCommand } from "./identity.mjs";
+import { readInitialSession, readNativeCommand, readChildTurn } from "./identity.mjs";
 import { decodeNativeCommand } from "./command-input.mjs";
 import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn, reservePreparedFollowup } from "./preparation.mjs";
@@ -109,6 +109,9 @@ export function createNativePolicy(options, evaluateTool) {
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
       if (checked.decision === "deny") return checked;
       // An awaited policy callback cannot preserve permission after the run changes.
+      if (assignment) readChildTurn(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
+        session: event.session_id, child: native.actor, turn: event.turn_id,
+      }, { active: true });
       if (assignment && JSON.stringify(checkNativeRunAssignment(fixed, assignment, bound.runTarget)) !== JSON.stringify(activeRun)) refuse();
       if (before.sage && observed?.kind === "spawn-request") {
         reconcileNativeFailures(raw, native, fixed);

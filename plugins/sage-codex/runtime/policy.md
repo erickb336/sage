@@ -12,6 +12,11 @@ actor, version, current Sage mode, and verified role. The role comes from the
 current child binding, or from the authenticated chief. Off mode supplies null.
 Only an exact pass or denial is accepted.
 
+Every active child tool call requires its current native turn to remain unfinished.
+The policy checks before binding and again after an awaited evaluator, before returning permission.
+A completed or interrupted turn refuses new tools without releasing capacity or changing a run.
+Report and stop readers still accept ended turns for their separate evidence checks.
+
 Every active child tool call also checks its bound task and run in the configured
 logbook. Preparation saves the run target in the admission journal: task, run, role, round,
 task branch, run branch, and candidate. Dispatch, lead delegation, and child tool
