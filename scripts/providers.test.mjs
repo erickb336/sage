@@ -1612,7 +1612,7 @@ test("shared chief instructions preserve the packaged agent and every brief fiel
   assert.deepEqual(fields, api.BRIEF_FIELDS);
   assert.match(agent, /disallowedTools: Edit, Write, MultiEdit, NotebookEdit/);
   assert.match(text, /The hook refuses a brief without them/);
-  assert.match(text, /model fable/);
+  assert.match(text, /model sonnet/);
 });
 
 test("shared chief Codex instructions keep unsupported routes and automatic merges inactive", async t => {
