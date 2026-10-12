@@ -2,24 +2,30 @@
 
 This audit compares repository behavior with the prepared Codex runtime. It is a source audit, not a live Claude or installed Codex pilot.
 
-| Area | Claude baseline | Codex gap and required result |
+## Current readiness
+
+Automatic Sage remains inactive. The checks below use Codex 0.160.0 with simulated model responses, not a real-project pilot.
+The required-hook outage check still permits an untracked child. This blocks activation even when the healthy lifecycle checks pass.
+
+| Area | Implemented evidence | Work left before full parity |
 | --- | --- | --- |
-| Owner activation | Hook checks owner text, toggles Sage, delivers chief instructions once | Prepared owner identity/mode adapter is not installed; wire verified activation and instruction delivery |
-| Off | Mode hook clears Sage, instruction-given and autopilot flags; direct chief edits resume | Match this transition; do not add native interruption to mode-off |
-| Compaction | PostCompact clears instruction-given; next prompt restores chief instructions | Add native compaction restoration without a second owner activation |
-| Chief authority | Chief delegates file edits; only state tool writes logbook | Prepared patch check alone is incomplete; cover all supported write and command paths |
-| Routes | Shared chief names least routes by size and added risk reviews | Use the same shared routes, task states and product gates; complete installed chief workflow |
-| Brief | Ten fields required before spawn | Immutable prepared briefs exist; join every admitted native dispatch to its exact saved brief |
-| Roles and limits | Chief starts leads; leads start permitted children; project/total/lead/child caps | Shared admission exists but installed enforcement and complete lifecycle release are missing |
-| Native start/result | Hook binds slots and handles spawn results/failures | Prepared event joins require verified result and child identity; establish delivery order through actual transport |
-| Report stop | First incomplete report blocks; second stop proceeds to avoid an endless loop | Preserve bounded correction behavior; terminal completion is not acceptance of an incomplete report |
-| Slot release | Subagent stop, failed dispatch and registry reconciliation; lease expiry also exists | Native stop/result evidence must identify the exact assignment; no stale event can release a newer slot |
-| Reports/verdicts | Chief records run result, findings and exact-head verdicts using state commands | Add verified report intake and durable records; child claims do not directly write the logbook |
-| Reviews/repairs | Shared rounds, held/replan and clean cycles; a new head restarts cycles | Use shared state/merge-check behavior, including blocking verdict regression |
-| Manual merging | Autopilot starts off; verified work waits for owner merge | First delivery step matches this behavior |
-| Autopilot | Explicit owner on; chief merges only after checks for the exact commit; children never merge | Prepared Codex adapter always false; a separate step is required for full parity |
-| Board/status | Shared rich board and status dispatch, source-qualified questions | Model is shared; installed Codex phrase delivery remains unverified |
-| Arena/models | Shared chief describes candidate/judge workflow; provider binds model settings | Preserve arena workflow, use Codex model names and supported native configuration |
+| Owner activation and off | Verified initial owner input, saved mode, chief instruction assembly; off restores direct chief edits without interrupting children | Supported installed entry point, later owner turns, trusted hook enforcement |
+| Compaction and restart | Durable assignment and report records survive adapter reconstruction | Restore session ownership and instructions after native compaction, restart, and transfer to another session |
+| Command and write rules | Role edit refusal, original command recovery, chief-only child messages, child sandbox-request refusal | Complete command, path, file-write and workflow policy; trusted effective execution context |
+| Briefs and dispatch | Saved briefs, atomic admission, initial and prepared follow-up binding, exact native task delivery | Required-hook outage protection and all missing-initial-evidence cases |
+| Roles and limits | Shared limits, one active lead per task, run-target checks, lead-to-reviewer delegation | One lead per PR across distinct task records; complete installed workflow |
+| Stop and capacity | Exact completion, bounded report correction, known failed-spawn reconciliation, bound interruption, missed follow-up callback recovery | Other dispatch failures, missing initial references, interrupted logbook-run repair |
+| Reports and verdicts | Validated reports, durable receipts, exact-target review acceptance, chief inspection of a lead's saved child report | Independent review scheduling, repair rounds and a real task through all required review cycles |
+| Routes and product gates | Shared routes and state operations; typed run creation | Complete chief execution of design, investigation, arena, build, repair and owner gates |
+| Manual merging | Runtime never merges; reviewed work must stop for the owner | Real-project pilot ending in a reviewed PR with checks and accepted reports |
+| Autopilot | Off; no automatic merge permission | Separate owner opt-in, exact-commit merge checks and verification |
+| Setup, help and status | Installed advice hooks and manual logbook | Installed automatic capability reporting after enforcement passes; board work remains deferred |
+
+Implementation details and repeatable checks are in [policy.md](policy.md),
+[preparation.md](preparation.md), [native-followup.md](native-followup.md),
+[dispatch-failure.md](dispatch-failure.md), and [native-interruption.md](native-interruption.md).
+The source pointers below identify the Claude baseline. Later sections record each implementation step;
+an earlier section's remaining-work statement describes that step, not the current summary above.
 
 ## Interpretation boundaries
 

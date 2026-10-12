@@ -31,5 +31,5 @@ require connection readiness, as described in `mcp-sdk.md`.
 No installed manifest starts this server yet. Its caller must supply the full
 role policy before activation. The direct-edit policy alone is not enough.
 The server does not configure the admission journal, start agents, or change
-autopilot. Failed-start recovery and report acceptance remain unfinished. Those operations need their own verified
-lifecycle and role rules.
+autopilot. The composed adapter now reconciles a verified unknown-model spawn rejection and supports explicit report recording and review acceptance.
+See `dispatch-failure.md` and `preparation.md` for their evidence and limits. Other failure kinds, full role policy, and installed activation remain incomplete.

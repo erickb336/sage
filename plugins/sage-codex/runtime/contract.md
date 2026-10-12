@@ -28,4 +28,6 @@ Missing records remain pending. Conflicting records and ambiguous path reuse rem
 
 Every reservation remains held, including after a child stop. A stop records a child turn; it does not prove an accepted report or that later work is absent. This module grants no permission, starts no agent, and releases no capacity.
 
-The next adapter work must establish authoritative session initialization, atomic capacity reservations, later-task attribution, report acceptance, failure recovery, interruption, and restart. Integrate that policy before enabling automatic Sage hooks.
+The composed adapter now supplies atomic admission, exact assignment binding, report receipts, and bounded completion, failure, and interruption recovery.
+Those operations live outside this observation module; its snapshot still grants no permission and releases no capacity.
+Full policy, compaction, restart, and required-hook enforcement remain incomplete. See `claude-parity-audit.md` before enabling automatic Sage.

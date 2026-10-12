@@ -27,7 +27,8 @@ after Sage off, including when its first callback is a no-tool stop.
 
 A resumed lead uses its current assignment for delegation and its original spawn
 for identity. A completed or ended lead run cannot prepare more work. Recovery
-from failed dispatch, missing initial transcript references, or changed sessions remains unfinished.
+from a failed follow-up dispatch, missing initial transcript references, or changed sessions remains unfinished.
+A reused lead can reconcile its own rejected child spawn; see `dispatch-failure.md`.
 An already-bound child can recover after a missing stop callback; see `child-binding.md`.
 
 Run `node scripts/probe-codex-lifecycle.mjs --follow-up` with fake process tools
@@ -60,8 +61,8 @@ An interrupted transcript-reference publication retries the same binding without
 Missing delivery retains capacity. A delivered task binds once, but only its
 native terminal record releases capacity. Recovery also works after Sage off.
 Changed identity, duplicate delivery, stale turns, and an unaccepted sender
-receipt refuse recovery. First assignments without a saved transcript reference,
-interruption, compaction, and cross-session handoff remain separate work.
+receipt refuse recovery. Bound interruptions have a separate verified path in `native-interruption.md`.
+First assignments without a saved transcript reference, compaction, and cross-session handoff remain separate work.
 
 Run `node scripts/probe-codex-lifecycle.mjs --sage-followup-missed-callbacks`.
 The real CLI uses simulated responses. Sage's stop hook is absent, and the second
