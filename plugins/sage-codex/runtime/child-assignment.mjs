@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { readAdmission, createStateTool, REVIEW_ROLES } from "../core/index.mjs";
+import { readAdmission } from "../core/index.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { readObservations } from "./events.mjs";
 import { readChildTurn, readAssignmentTurn, readNativeRecovery } from "./identity.mjs";
 import { preparedTaskMessage } from "./instructions.mjs";
-import { checkNativeRunAssignment } from "./run-assignment.mjs";
+import { checkPreparedRunAssignment } from "./run-assignment.mjs";
 
 const refuse = () => { throw Error("Sage could not read this child's current assignment."); };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -39,16 +39,7 @@ export function readNativeChildAssignment(input, context, options) {
   readAssignmentTurn(transcript, { sessionsDir: options.sessionsDir }, {
     ...expected, parent: bound.issuer, path, author: path.slice(0, path.lastIndexOf("/")), taskHash,
   });
-  const checkTarget = () => {
-    checkNativeRunAssignment(options, { ...assigned.assignment, role: prepared.rolePlan.role }, prepared.runTarget);
-    if (REVIEW_ROLES.includes(prepared.rolePlan.role)) {
-      if (!prepared.review) refuse();
-      const tool = createStateTool({ defaultRoot: refuse });
-      const current = tool.captureReviewTarget({ project: options.projectDirectory, task: prepared.task, run: prepared.run,
-        role: prepared.rolePlan.role, cycle: prepared.review.cycle }, { ...process.env, SAGE_HOME: options.logbookRoot });
-      if (JSON.stringify(current) !== JSON.stringify(prepared.review)) refuse();
-    }
-  };
+  const checkTarget = () => checkPreparedRunAssignment(options, assigned, prepared);
   checkTarget();
   // A read grants no permission. Refuse an observed concurrent lifecycle change.
   readChildTurn(transcript, { sessionsDir: options.sessionsDir }, expected, { active: true });

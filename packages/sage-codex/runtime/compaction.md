@@ -62,11 +62,11 @@ Without an assignment read, the stop gate refuses the report and retains the
 reservation. This readiness route supplies no recovery read. It remains a
 negative control; use the recovery route below for the repaired path.
 
-The root restoration handler cannot cover this native event gap. Child role
-instructions, the current saved brief, and report completion need a separate
-supported restoration path. Static native agent instructions are a candidate;
-their persistence and the dynamic task binding still require native checks.
-No installed automatic activation or real model participates in this probe.
+The root restoration handler cannot cover this native event gap. The child
+reader below restores the complete prepared role instructions, report format,
+saved target, and brief. The native probe compares that exact message with the
+child's next model input. No installed automatic activation or real model
+participates in this probe.
 
 ## Read the current child assignment
 
@@ -85,9 +85,11 @@ native permission and workflow checks still apply to later actions.
 Run `node scripts/probe-codex-lifecycle.mjs --sage-child-recovery` to compact
 a native child and attempt a tool call and a report before recovery. The
 production gates deny both. The same child then reads its assignment, receives
-the exact saved instructions, and completes once. The probe checks two stops
-in the same turn and no completion before recovery. Responses are simulated;
-this does not prove that a real model follows the recovery instruction.
+the exact saved instructions, and attempts another report after the fixture
+changes its task branch. The gate refuses that stale target too. After the
+fixture restores the saved target, the child completes once. The probe checks
+three stops in the same turn and no premature completion. Responses are
+simulated; this does not prove that a real model follows the recovery instruction.
 
 
 ## Verify complete reader output
@@ -152,6 +154,15 @@ The provider never assumes that an older receipt proves recovery.
 
 The proof is saved before the receipt. A proof without a receipt cannot finish
 a run. Identical retries reuse both records. Once both exist, the receipt remains
-usable after transcript removal. Current-run checks at the stop boundary,
-complete static role instructions, independent reviews, and a real-model pilot
-remain. These changes do not enable installed automatic Sage.
+usable after transcript removal.
+
+Before new success after compaction, child stop and parent reconciliation check
+the current run against its saved preparation. Review roles also need the same
+commit, round, and cycle. A changed or ended run refuses completion in either
+Sage mode. Native interruption can still end the assignment without success.
+A completion already recorded under these checks remains historical evidence.
+These checks detect the observed target; they do not lock Git and both stores
+in one transaction.
+
+Independent reviews and a real-model pilot remain. These changes do not enable
+installed automatic Sage.

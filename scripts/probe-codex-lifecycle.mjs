@@ -20,7 +20,7 @@ const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAG
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const childRecovery = process.argv.includes("--sage-child-recovery");
 const childCompaction = childRecovery || process.argv.includes("--sage-child-compaction");
-let childRecoveryPending = false, childRecoveryGatePhase = 0;
+let childRecoveryPending = false, childRecoveryGatePhase = 0, restoreRecoveryTarget, recoveryTargetVerified = false;
 assert(!childCompaction || process.argv.slice(2).length === 1, "child_compaction_is_a_separate_route");
 let childCompactionObserved = false, childCompactionReady = false, childCompactionRequests = 0;
 const childSandbox = process.argv.includes("--sage-child-sandbox");
@@ -328,6 +328,19 @@ data: ${JSON.stringify(event)}
           childRecoveryGatePhase = 3; childRecoveryPending = true; childRequests++;
           respond(res, { type: "function_call", ...info.assignmentTools[0], call_id: calls.childRecovery, arguments: "{}" }); return;
         }
+        if (childRecoveryGatePhase === 4) {
+          check(textValues(request.input).some(text => text.includes("Sage could not verify this hook request")),
+            "changed_recovery_target_stop_not_blocked");
+          const state = integrated.readJournal();
+          check(state.reservations.length === 1 && state.bindings.length === 1
+            && (state.completions?.length ?? 0) === 0, "changed_recovery_target_released_capacity");
+          check(integrated.readLogbook().tasks[0].branch === "codex/t1-retargeted", "changed_recovery_target_missing");
+          restoreRecoveryTarget(); restoreRecoveryTarget = undefined;
+          recoveryTargetVerified = true; childRecoveryGatePhase = 5; childRequests++;
+          print({ type: "child_recovery_target_evidence", changedTargetRefused: true,
+            noPrematureCompletion: true, simulatedModel: true });
+          respond(res, message(CHILD_MARKER)); return;
+        }
         if (childRecoveryPending) {
           const recovered = info.outputs.probe_child_recovery;
           const state = integrated.readJournal(), binding = state.bindings[0];
@@ -352,6 +365,7 @@ data: ${JSON.stringify(event)}
           childRecoveryPending = false; childCompactionReady = true; childRequests++;
           print({ type: "child_assignment_recovery_evidence", exactPreparedMessage: true, sameChildAndTurn: true,
             unchangedAdmission: true, replayTextStable: true, recoveryAfterLatestCompaction: true, toolAndStopRecoveryEnforced: true, simulatedModel: true, automaticRecoveryEnforced: false });
+          restoreRecoveryTarget = integrated.retargetFixtureRun(); childRecoveryGatePhase = 4;
           respond(res, message(CHILD_MARKER)); return;
         }
         if (childCompactionObserved) {
@@ -1106,9 +1120,9 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (childRecovery ? 5 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (childRecovery ? 6 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
-    const verified = (!childCompaction || (childCompactionObserved && childCompactionReady)) && result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
+    const verified = (!childRecovery || recoveryTargetVerified) && (!childCompaction || (childCompactionObserved && childCompactionReady)) && result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
       && (!childSandbox || childSandboxVerified) && (!childMessage || childMessageVerified) && (!resumedFailure || resumedFailureVerified) && (!unpreparedFollowup || unpreparedFollowupVerified) && (!sageFollowup || sageFollowupVerified)
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && refusedTaskUpdates === (taskLifecycle ? 1 : 0) && malformedEvents === 0 && rejectedRequests === 0;
@@ -1179,10 +1193,11 @@ data: ${JSON.stringify(event)}
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
     assert.equal(before.length,nested || failedSpawn || resumedFailure ? 2 : 1);
     assert.equal(start.length, noChild ? 0 : nested ? 2 : 1);
-    assert.equal(stop.length, noChild || interruption ? 0 : childRecovery || blockStop || correctReport || escapeReport || followUp || sageFollowup || nested ? 2 : 1);
+    assert.equal(stop.length, noChild || interruption ? 0 : childRecovery ? 3 : blockStop || correctReport || escapeReport || followUp || sageFollowup || nested ? 2 : 1);
     if (childRecovery) {
-      assert.equal(childRecoveryGatePhase, 3);
-      assert.deepEqual(stop.map(row => row.stopHookActive).sort(), [false, true]);
+      assert.equal(childRecoveryGatePhase, 5);
+      assert.equal(recoveryTargetVerified, true);
+      assert.deepEqual(stop.map(row => row.stopHookActive).sort(), [false, true, true]);
       assert.equal(new Set(stop.map(row => row.turn_id)).size, 1);
     }
     if (escapeReport) {

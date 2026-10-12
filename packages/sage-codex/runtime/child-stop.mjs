@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { readAdmission, completeAdmission, interruptAdmission, REPORT_FIELDS, missingReportFields } from "sage-core";
 import { nativeToolContext } from "./native-tool.mjs";
+import { checkPreparedRunAssignment } from "./run-assignment.mjs";
 import { readChildTurn, readNativeCompletion, readNativeInterruption, readNativeRecovery } from "./identity.mjs";
 import { bindNativeChildTranscript, recoverNativeChildDeliveries } from "./child-tool.mjs";
 import { RUNTIME_VERSION, decodeEvent, publish, readObservations } from "./events.mjs";
@@ -98,6 +99,12 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
   }
   const completed = readNativeCompletion(transcripts[0].transcript, { sessionsDir: options.sessionsDir, requireRecovery: true }, expected);
   const interrupted = completed ? null : readNativeInterruption(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
+  // A recorded completion is historical evidence. New success after compaction
+  // still needs the current run and review target; interruption grants no success.
+  if (recovery.compaction !== null && !interrupted
+    && !state.completions?.some(row => row.assignment === bound.assignment)) {
+    checkPreparedRunAssignment(options, assigned, state.preparations.find(row => row.id === assigned.preparation));
+  }
   return { directory, observations, completed, interrupted };
 }
 

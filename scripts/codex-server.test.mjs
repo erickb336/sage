@@ -3854,3 +3854,53 @@ test("saved report recovery proof alone cannot finish a run before its receipt e
   assert.equal(recoveryProofFiles(f).length, 1);
   assert.equal(f.finish().decision, "run-finished");
 });
+
+
+test("recovered child completion refuses changed run targets in either Sage mode", async t => {
+  for (const sage of [true, false]) for (const change of ["status", "candidate", "round"]) {
+    const f = await completionFixture(t), read = await assignmentReader(f);
+    const result = read(), transcript = f.childTranscript();
+    appendRecoveryCheckpoint(transcript); appendAssignmentRecovery(transcript, result);
+    if (!sage) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    const restore = editAssignmentRows(f, "runs", rows => rows.map(row => row.id === "R1"
+      ? { ...row, [change]: change === "status" ? "done" : change === "round" ? "1" : "changed" } : row));
+    const before = f.core.readAdmission(f.options.directory);
+    assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)), /active run|saved run target/);
+    appendReport(f);
+    const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+    assert.throws(() => reconcileNativeCompletions(f.native(session), session, f.options), /active run|saved run target/);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    restore();
+    assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, "completed");
+    f.assignmentCli("run", "done", "R1", "--status", "done");
+    assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, "already-completed",
+      "a previously verified completion remains historical evidence");
+  }
+});
+
+test("recovered review completion refuses a changed commit but permits native interruption", async t => {
+  for (const role of ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"]) {
+    const f = await reviewPreparationFixture(t, role);
+    f.prepare(); const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+    await f.evaluate(policy); f.events.publish(join(f.options.observationsRoot, session), f.result);
+    const transcript = f.childTranscript();
+    await f.evaluate(policy, { ...patch(turns[1]), transcript_path: transcript }, childActor);
+    const read = await assignmentReader(f), result = read();
+    appendRecoveryCheckpoint(transcript); appendAssignmentRecovery(transcript, result);
+    f.git("commit", "--quiet", "--allow-empty", "-m", "Changed review target");
+    const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor,
+      turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, "root.jsonl") };
+    const before = f.core.readAdmission(f.options.directory);
+    assert.throws(() => policy.completeChild(stop, f.native(childActor)));
+    appendReport(f);
+    const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+    assert.throws(() => reconcileNativeCompletions(f.native(session), session, f.options));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    f.childTranscript(); appendRecoveryCheckpoint(transcript); appendAssignmentRecovery(transcript, result);
+    appendInterruption(f);
+    reconcileNativeCompletions(f.native(session), session, f.options);
+    const state = f.core.readAdmission(f.options.directory);
+    assert.equal(state.completions.length, 1); assert.equal(state.completions[0].outcome, "interrupted");
+    assert.equal(state.reports?.length ?? 0, 0);
+  }
+});
