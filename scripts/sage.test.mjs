@@ -2686,3 +2686,27 @@ test("F-T284-3 and F-T284-1: a held task takes no pr= or branch=; the sage may s
   assert.match(s.ok("task", "T1", "set", "state=building"), /^T1 building/);
   assert.match(s.ok("task", "T1", "set", "pr=5", "branch=sage/t1"), /PR 5/, "after the hold");
 });
+
+test("F-T284-14: a move out of held gives the task exactly one more repair round", () => {
+  const s = store();
+  s.ok("config", "max_rounds=1");
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  for (const state of ["briefed", "building", "reviewing"]) s.ok("task", "T1", "set", `state=${state}`);
+  const fix = (summary) => {
+    const key = s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", summary).split(" ")[0];
+    s.ok("finding", "triage", "T1", key, "fix");
+  };
+  fix("one");
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 1 of 1/);
+  s.ok("task", "T1", "set", "state=reviewing");
+  fix("two");
+  assert.match(s.ok("round", "T1"), /^T1 held: 1 repair rounds did not make it clean/);
+  s.ok("task", "T1", "set", "state=building");
+  assert.match(rows(s.dir, "decisions").at(-1).decision, /^held → building: one more repair round$/);
+  s.ok("task", "T1", "set", "state=reviewing");
+  fix("three");
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 2/, "one more round after the hold");
+  s.ok("task", "T1", "set", "state=reviewing");
+  fix("four");
+  assert.match(s.ok("round", "T1"), /^T1 held: 2 repair rounds did not make it clean/, "and then it holds again");
+});

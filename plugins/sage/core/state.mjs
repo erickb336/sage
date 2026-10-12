@@ -784,6 +784,7 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
     findings: (task) => rows("findings").filter((f) => f.task === task),
     shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
+    verdictRuns: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.run).map((r) => r.run)),
     prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),
   };
 }
@@ -968,6 +969,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
           if (k === "state") {
             if (v === "repairing") refuse("start a repair with: sage round <task>");
+            // A move out of held gives the task one more repair round (F-T284-14): round reads these decision rows.
+            if (task.state === "held") decided.push({ at: now(), task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
             move(task, v); // the design's states first; the table is written only if every check below passes
             const build = builds(task);
             if ((v === "verified" && !build) || (v === "concluded" && build)) refuse(`${task.id} ${build ? "has a build block, so it ends at verified" : "has no build block, so it ends at concluded"}`);
@@ -1003,7 +1006,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (!keys) refuse(`${task.id} has no open findings marked fix`);
       if (fix.every((f) => f.severity === "low")) refuse(`${task.id}: only low findings are marked fix (${keys}). A repair round needs a medium or high finding. Dismiss the low ones with a reason, or let them join the next round.`);
       const round = Number(task.round) + 1;
-      if (round > config(env).max_rounds) {
+      const more = read(dir, "decisions").filter((d) => d.task === task.id && /^held → \S+: one more repair round$/.test(d.decision)).length;
+      if (round > config(env).max_rounds + more) {
         task.state = "held";
         write(dir, "tasks", tasks);
         return `${task.id} held: ${round - 1} repair rounds did not make it clean. Stop and ask the user.`;

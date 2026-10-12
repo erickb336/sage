@@ -342,14 +342,19 @@ export function handle(input, state, slots) {
   if (event === "PreToolUse" && !main && (state.sage || ours) && AGENT_TOOLS.test(tool) && reservedName(spawnName)) {
     return deny(event, 'an agent never names a spawn "main" or "lead-T<n>", because those names must reach only the main session and its leads. Give it another name.');
   }
+  let helperKey; // the run that a lead's child helps with, when the child's name is its run id (F-T284-8, F-T284-9)
   // The nested rules check the spawned type too, not only the caller: in any mode (T255 H2).
   const nestedSpawn = event === "PreToolUse" && !main && AGENT_TOOLS.test(tool) && (state.sage || ours || OURS.test(spawned));
   if (nestedSpawn) {
     if (input.agent_type !== "sage:lead") return deny(event, "only a lead may start an agent. Report to the sage.");
     if (typeof input.agent_id !== "string" || !input.agent_id) return deny(event, "the spawn has no valid caller identity, so its slot cannot be checked. Report to the sage.");
     // A lead starts children only from the lead slot that the chief's spawn bound to it (F-T284-4).
-    if (!slots.leadOf(input.agent_id)) return deny(event, "this lead holds no bound lead slot, so it starts no agent. Report to the sage.");
+    const lead = slots.leadOf(input.agent_id);
+    if (!lead) return deny(event, "this lead holds no bound lead slot, so it starts no agent. Report to the sage.");
     if (!LEAD_CHILDREN.has(spawned)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
+    const why = leadSpawnProblem(lead, spawned, spawnName);
+    if (typeof why === "string") return deny(event, `${why} Report to the sage.`);
+    helperKey = why?.helper;
   }
   if (event !== "PreToolUse" || (!state.sage && !nestedSpawn)) return undefined;
 
@@ -375,7 +380,7 @@ export function handle(input, state, slots) {
     const run = view.leadRun(task);
     if (!run) return deny(event, `${task} has no running lead run in the logbook of ${project}. Record it first, as a command of its own: ${stateCommand(`run add ${task} --role lead`)}. A lead starts only from a session opened in the project's folder or one of its worktrees, so that the lead's logbook is the one that the session uses (F-T284-7).`);
     // The slot keeps the task, its logbook and its lead run, for the lead's writes (F-T273-1, F-T273-4).
-    leadMark = { task, logbook: digest(view.dir), run: run.id };
+    leadMark = { task, logbook: digest(view.dir), run: run.id, folder: project };
   }
   if (AGENT_TOOLS.test(tool) && OURS.test(spawned)) {
     const missing = missingFields(BRIEF_FIELDS, ti.prompt);
@@ -389,7 +394,7 @@ export function handle(input, state, slots) {
       return deny(event, `the state tool cannot load (${e?.message ?? e}), so sage starts no new agent: reinstall or update the sage plugin, and tell the user.`);
     }
     const cap = caps[`cap.${project}`] ?? caps.max_agents;
-    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti, lead: leadMark });
+    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti, lead: leadMark, helper: helperKey });
     if (r.refused) {
       slots.log(`${project} ${r.project}/${cap} total ${r.total}/${caps.cap_total}`);
       const raise = (key, n) => `${SPACE_NOTE}Wait for one to finish, or raise the cap: ${stateCommand(`config ${key}=${n + 1}`)}`;
@@ -397,6 +402,7 @@ export function handle(input, state, slots) {
       if (r.refused === "ended") return deny(event, "this lead or spawn already ended, so it cannot start another agent. Report to the sage.");
       if (r.refused === "leads") return deny(event, `3 leads are running for ${project}. Wait for one to finish. Report to the sage.`);
       if (r.refused === "children") return deny(event, "this lead already has 3 children. Wait for one to finish. Report to the sage.");
+      if (r.refused === "helper") return deny(event, `${spawnName} already has its helper: one run is backed by one child (F-T284-9). Report to the sage.`);
       if (r.refused === "task") return deny(event, `a lead named lead-${leadMark.task} already holds a slot, in this session or for this logbook (F-T273-5, F-T273-16). Wait for it to end, or stop it with TaskStop (by its agent id or by its name lead-${leadMark.task}), before you start a fresh lead.`);
       if (r.refused === "mark") return deny(event, `the agent cap could not mark its slot (${r.error}), so it refuses this spawn. Tell the user.`);
       if (r.refused === "total") return deny(event, `${running(r.total)} across all projects, and the total cap is ${caps.cap_total} (${project} has ${r.project}). ${raise("cap_total", caps.cap_total)}`);
@@ -905,26 +911,65 @@ const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its 
 const LEAD_PAIRS = {
   branch: (branch) => branch !== "", // the state tool takes only a branch of the task; a lead never clears it (T275)
   pr: (pr, task, view, own) => /^[1-9]\d*$/.test(pr) && !task.pr && [...view.prTasks(pr)].every((id) => id === own),
-  state: (state, task) => (LEAD_MOVES[task.state] ?? []).includes(state),
+  // Option A (F-T284-12): the lead closes the round's fix findings while repairing, and leaves repairing only after.
+  state: (state, task, view) => (LEAD_MOVES[task.state] ?? []).includes(state) && !(task.state === "repairing" && roundFixOpen(task, view)),
 };
+/** The keys of the task's current round: round sets them to its fix findings. */
+const roundKeys = (task) => String(task.keys ?? "").split(",").filter(Boolean);
+/** An open, fix-triaged medium or high finding of the task's current round. */
+const roundFixOpen = (task, view) => view.findings(task.id).some((f) => f.status === "open" && f.triage === "fix" && f.severity !== "low" && roundKeys(task).includes(f.key));
+/** The key of a run's helper: its logbook and its id, so that one child backs one run (F-T284-9). */
+const helperOf = (lead, run) => digest(`${lead.logbook}:${run}`);
+/**
+ * The checks of a lead's spawn of a child (F-T284-11, F-T284-9): its lead slot's logbook still runs its lead run, and its
+ * task is not held. A child whose name is a run id (R<n>) is that run's helper: a running run of the task in its current
+ * round, of the child's role. The reason, or the helper to record ({ helper }), or undefined. It throws when it cannot
+ * read the logbook, and the hook refuses the spawn then.
+ */
+function leadSpawnProblem(lead, spawned, name) {
+  let view;
+  try {
+    view = logbookOf(lead.folder);
+  } catch (e) {
+    return `the hook could not read the logbook of this lead (${e?.message ?? e}), so it starts no agent.`;
+  }
+  if (digest(view.dir) !== lead.logbook) return "this lead's folder no longer gives its logbook, so it starts no agent.";
+  if (view.leadRun(lead.task)?.id !== lead.run) return `${lead.task}'s lead run ${lead.run} no longer runs, so this lead starts no agent (F-T284-11).`;
+  const task = view.task(lead.task);
+  if (!task || task.state === "held") return `${lead.task} is held, or not in the logbook, so this lead starts no agent (F-T284-11).`;
+  if (!/^R[1-9]\d*$/.test(String(name ?? ""))) return undefined;
+  const run = view.row(name);
+  if (run?.task !== lead.task || run.status !== "running" || run.role !== spawned.slice("sage:".length) || String(run.round) !== String(task.round)) {
+    return `${name} is not a running ${spawned.slice("sage:".length)} run of ${lead.task} in its current round, so a child of that name cannot help with it (F-T284-9).`;
+  }
+  return { helper: helperOf(lead, name) };
+}
+/** Did a real child of the run's role start and stop for this lead's run (F-T284-9)? The hook saw it under the run's name. */
+const helped = (ctx, run) => ctx.slots.helped(helperOf(ctx.lead, run));
 const LEAD_WRITES = {
   "run add": ([, t], opt, own) => t === own && TEAM.includes(opt.role) && (opt.branch === undefined || Boolean(stateTool.ofTask(own, opt.branch))),
-  "run done": ([, id], opt, own, view) => view.row(id)?.task === own && TEAM.includes(view.row(id).role),
+  // A run of the team ends only after its child, named by the run's id, stopped (F-T284-9).
+  "run done": ([, id], opt, own, view, task, ctx) => view.row(id)?.task === own && TEAM.includes(view.row(id).role) && helped(ctx, id),
   "finding add": ([, t], opt, own) => t === own && opt.key === undefined,
-  "finding close": ([, t, key], opt, own, view) => t === own && view.row(key)?.task === own,
+  // Never a finding triaged ask (F-T284-10); while repairing, only a fix finding of the round: a new one waits for the
+  // next round (F-T284-8, F-T284-12).
+  "finding close": ([, t, key], opt, own, view, task) => t === own && view.row(key)?.task === own && view.row(key).triage === "fix" &&
+    (task.state !== "repairing" || roundKeys(task).includes(key)),
   "finding triage": ([, t, key, how], opt, own, view) => t === own && view.row(key)?.task === own && (how === "fix" || (how === "dismiss" && view.row(key).severity === "low" && Boolean(opt.reason))),
   // A verdict names its task's own PR, so a lead's verdicts never count for another PR's merge check (F-T273-2, F-T273-6),
   // and the finished run of its task whose role gives that kind (F-T284-6). A check verdict needs no run.
-  verdict: ([t], opt, own, view, task) => {
+  // The run backs one verdict: finished, with its real child, in the task's current round, and in no verdict yet (F-T284-9).
+  verdict: ([t], opt, own, view, task, ctx) => {
     const roles = VERDICT_ROLES[opt.kind], run = opt.run === undefined ? undefined : view.row(opt.run);
-    const fits = roles === null ? opt.run === undefined || run?.task === own : Array.isArray(roles) && run?.task === own && run.status === "done" && roles.includes(run.role);
+    const fits = roles === null ? opt.run === undefined || run?.task === own : Array.isArray(roles) && run?.task === own && run.status === "done" && roles.includes(run.role) &&
+      String(run.round) === String(task.round) && helped(ctx, run.id) && !view.verdictRuns(own).has(run.id);
     return t === own && Boolean(task.pr) && opt.pr === task.pr && fits;
   },
   round: ([t], opt, own) => t === own,
   task: ([t, set, ...pairs], opt, own, view, task) => {
     const keys = pairs.map((kv) => kv.slice(0, kv.indexOf("=")));
     return t === own && set === "set" && pairs.length > 0 && new Set(keys).size === keys.length &&
-      pairs.every((kv, k) => Object.hasOwn(LEAD_PAIRS, keys[k]) && LEAD_PAIRS[keys[k]](kv.slice(kv.indexOf("=") + 1), task, view, own));
+      pairs.every((kv, k) => Object.hasOwn(LEAD_PAIRS, keys[k]) && (keys[k] === "state" ? LEAD_PAIRS.state(kv.slice(kv.indexOf("=") + 1), task, view) : LEAD_PAIRS[keys[k]](kv.slice(kv.indexOf("=") + 1), task, view, own)));
   },
 };
 /** The roles whose finished run gives each verdict kind that a lead records; null for a check, which needs no run (F-T284-6). */
@@ -957,7 +1002,7 @@ function leadProblem(input, cmd, pos, opt, slots) {
   if (repair && task.state !== "repairing" && view.findings(own).some((f) => f.status === "open" && f.triage === "fix" && f.severity !== "low")) {
     return `${own} has a medium or high finding triaged fix and is not repairing: run round ${own} first, then repair (F-T284-5).`;
   }
-  return LEAD_WRITES[name](pos, opt, own, view, task) ? undefined : `${shown} is on the lead's list, but not as it is written here, or not on its own task ${own}.`;
+  return LEAD_WRITES[name](pos, opt, own, view, task, { lead, slots }) ? undefined : `${shown} is on the lead's list, but not as it is written here, or not on its own task ${own}.`;
 }
 const READ_WAY = "To run a read command of the state tool, run node <path to skills/sage/sage.mjs> status (or merge-check, logbook, standing, config) alone; to read the file, use cat <path> or git show <sha>:<path>.";
 /** An agent's check fails closed: when it throws, the agent's command or file change is refused. */
@@ -1835,7 +1880,11 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     note(`ended-${hash(agent)}`);
     for (const slot of ofSession()) {
       // A lead's end frees no child's slot: a child may still run, and keeps its slot until its own stop or its lease (T255 M1).
-      if (ownsAgent(slot, agent)) free(slot);
+      // A helper's stop is the end of its run's real work, which run done and the verdict ask for (F-T284-9).
+      if (ownsAgent(slot, agent)) {
+        if (mark(slot, "helper-")) note(`helped-${mark(slot, "helper-")}`);
+        free(slot);
+      }
     }
   };
   // A child's activity renews its lead's slot too, so a lead that waits for its children keeps its slot (T255 H1).
@@ -1856,7 +1905,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     renew(candidates);
   };
   return {
-    take: transaction((project, cap, capTotal, toolUseId, { role: raw, caller, input, lead } = {}) => {
+    take: transaction((project, cap, capTotal, toolUseId, { role: raw, caller, input, lead, helper } = {}) => {
       const role = raw === undefined ? undefined : String(raw).toLowerCase();
       mkdirSync(dir, { recursive: true });
       expire();
@@ -1872,6 +1921,8 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
       // logbook, so that a TaskStop by that name stops one lead (F-T273-16).
       const sameName = slot => mark(slot, "task-") === lead.task && mark(slot, "role-") === "sage_lead";
       if (role === "sage:lead" && lead && (list().some(slot => sameName(slot) && mark(slot, "logbook-") === lead.logbook) || ofSession().some(sameName))) return { refused: "task", ...counts(project) };
+      // One child backs one run: a live helper of the run, or one that stopped, refuses another (F-T284-9).
+      if (helper && (noted(`helped-${helper}`) || list().some(slot => mark(slot, "helper-") === helper))) return { refused: "helper", ...counts(project) };
       let mine;
       for (let k = 1; k <= capTotal && !mine; k++) {
         try { mkdirSync(join(dir, `slot-${k}`)); mine = `slot-${k}`; }
@@ -1882,9 +1933,11 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
         const initial = [`project-${project}`, `session-${session}`, `tool-${id(tu)}`, `pending-${id(tu)}`, `call-${call}`, `caller-${owner}`, `scope-${scope}`, `input-${hash(input)}`];
         if (role) initial.push(`role-${safe(role)}`);
         if (role === "sage:lead" && lead) initial.push(`task-${lead.task}`, `logbook-${lead.logbook}`, `run-${lead.run}`); // the lead's own task, logbook and lead run (T273)
+        if (helper) initial.push(`helper-${helper}`); // the run that this child helps with (F-T284-9)
         if (exact) initial.push("exact");
         if (caller !== undefined) initial.push(`parent-${hash(caller)}`);
         for (const m of initial) add(mine, m);
+        if (role === "sage:lead" && lead?.folder) writeFileSync(join(dir, mine, "folder"), lead.folder); // where the lead's logbook is (F-T284-11)
         const others = list().filter(slot => slot !== mine);
         const projectSlots = others.filter(slot => (mark(slot, "project-") ?? project) === project);
         let refused;
@@ -1950,6 +2003,8 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     }),
     touch: transaction(touch),
     /** The main session's TaskStop of lead-T<n>: it ends and frees this session's one lead slot of that name, bound or not (F-T273-13, F-T273-14, F-T273-16). */
+    /** Did a helper of this run key stop in this session (F-T284-9)? */
+    helped: (key) => noted(`helped-${key}`),
     stopLead: transaction((task) => {
       for (const slot of ofSession().filter(slot => mark(slot, "role-") === "sage_lead" && mark(slot, "task-") === task)) {
         const bound = mark(slot, "bound-");
@@ -1961,7 +2016,9 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     leadOf(agent) {
       if (!valid(agent) || stopped(agent)) return undefined;
       const slot = ofSession().find(slot => has(slot, "ok") && mark(slot, "role-") === "sage_lead" && mark(slot, "bound-") === hash(agent));
-      const lead = slot && { task: mark(slot, "task-"), logbook: mark(slot, "logbook-"), run: mark(slot, "run-") };
+      let folder;
+      try { folder = slot && readFileSync(join(dir, slot, "folder"), "utf8"); } catch {}
+      const lead = slot && { task: mark(slot, "task-"), logbook: mark(slot, "logbook-"), run: mark(slot, "run-"), folder };
       return lead && TASK.test(lead.task ?? "") && /^[0-9a-f]{64}$/.test(lead.logbook ?? "") && /^R[1-9]\d*$/.test(lead.run ?? "") ? lead : undefined;
     },
     reconcile: transaction((liveIds) => {
