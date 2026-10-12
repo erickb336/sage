@@ -22,3 +22,9 @@ Run `node scripts/probe-codex-lifecycle.mjs --sage-failed-spawn` with fake proce
 The isolated native check sets the total cap to one, rejects an unknown model, then completes a new child in the freed slot.
 The journal must contain two reservations, one failure, one binding, and one completion.
 Responses are simulated. Other failure kinds, interruption, cross-session recovery, and installed automatic operation remain unverified.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-followup-failed-child` for a reused lead.
+Its second assignment prepares a reviewer, receives the native unknown-model rejection, and reconciles through its own list call.
+The probe checks one failure receipt, no extra child, and two preserved lead bindings and completions.
+The chief reads both lead reports and records the second. Responses are simulated.
+This route verifies failed-dispatch recovery, not a successful retry or review quality.
