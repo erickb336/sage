@@ -148,6 +148,32 @@ export function readDeliveredAssignment(transcriptPath, options, expected) {
   } catch { throw Error("Codex assignment delivery evidence is unavailable"); }
 }
 
+/** Verify native interruption of an exact assignment. This does not accept a report or release a slot. */
+export function readNativeInterruption(transcriptPath, options, expected) {
+  const unavailable = () => { throw Error("Codex interruption evidence is unavailable"); };
+  try {
+    const rows = readSessionRecords(transcriptPath, options, Infinity);
+    const { position, ...assigned } = assignmentFromRecords(rows, expected);
+    let turn, aborted;
+    for (const [index, row] of rows.entries()) {
+      if (index === 0) continue;
+      const payload = row.payload;
+      if (row.type === "event_msg" && payload.type === "task_started") turn = payload.turn_id;
+      if (row.type === "event_msg" && payload.type === "turn_aborted"
+        && (turn === expected.turn || payload.turn_id === expected.turn)) {
+        if (turn !== expected.turn || payload.turn_id !== expected.turn || payload.reason !== "interrupted"
+          || aborted || index <= position) unavailable();
+        aborted = payload;
+      } else if ((row.type === "event_msg" && payload.type === "task_complete"
+        && (turn === expected.turn || payload.turn_id === expected.turn))
+        || (turn === expected.turn && aborted && row.type === "response_item")) unavailable();
+    }
+    if (!aborted) { if (turn === expected.turn) return null; unavailable(); }
+    return { ...assigned, reason: "interrupted",
+      evidenceHash: createHash("sha256").update(JSON.stringify({ ...assigned, abort: aborted })).digest("hex") };
+  } catch { unavailable(); }
+}
+
 /** Read one completed turn from the same protected snapshot as its assigned task.
  * This verifies report provenance, not its claims or a review verdict. */
 function reportFromRecords(rows, expected, { pending = false, report = true } = {}) {
