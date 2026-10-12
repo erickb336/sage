@@ -9,8 +9,6 @@ allowed-tools: Read, Bash(curl -fsS https://raw.githubusercontent.com/erickb336/
 
 Answer the user's question about sage. Give them at most one prompt that they can send, and link the file that the answer comes from. Then stop.
 
-**A question about autopilot and an off word turns autopilot off.** The hook reads the user's message before this skill loads. Any message of the user that mentions autopilot together with an off word (off, stop, pause, disable, cancel, in any form) turns autopilot off, a help question too. When the question has both, say this first, in one sentence, before anything else: "Your question mentions autopilot with an off word, so autopilot is now off." If the user wants it on, they send the on phrase again ([What to say](https://github.com/erickb336/sage/blob/main/README.md#what-to-say)).
-
 **A help question starts no work.** Do not start sage mode, an agent, a task or a command that changes anything. The user asked how, and each sage run spends real tokens, so the user sends the prompt.
 
 **A request for work is not a help question.** An example is "/sage:sage-help fix the failing test in foo". Do not do the work, and do not start an agent. Say in one line that sage mode does work, and give the prompt that starts it: the README's [Quick start](https://github.com/erickb336/sage/blob/main/README.md#quick-start) shows its form.
@@ -62,13 +60,13 @@ Install the plugin, then start a new session: a session that is already open doe
 
 **Read:** the README, section "What to say".
 
-sage mode makes the session the user's chief of staff. Autopilot lets verified pull requests merge without the user. Autopilot is off until the user turns it on. Each one switches on only at the start of the user's own message: "sage mode" (then a full stop, a comma, a colon, a line break or more words, but no "?" on its line) and "sage mode off" for the mode, and "autopilot on" (then a full stop, a comma, a colon or a line break) for autopilot, which needs sage mode on. An off word with autopilot works anywhere in the user's message. The other forms and the exact rules are in [What to say](https://github.com/erickb336/sage/blob/main/README.md#what-to-say): link that table, and do not copy it.
+sage mode makes the session the user's chief of staff. Autopilot lets verified pull requests merge without the user. Autopilot is off until the user turns it on. A switch needs the exact phrase as the user's whole message, in any letter case, with at most one full stop: "sage mode" or "sage mode on" turns the mode on, "sage mode off" turns it off, and "autopilot on" and "autopilot off" switch autopilot, which needs sage mode on. A message with more words switches nothing, so the request goes in the next message. The message "sage help" lists every phrase. The rules are in [What to say](https://github.com/erickb336/sage/blob/main/README.md#what-to-say): link that table, and do not copy it.
 
 ## Show the board
 
 **Read:** the README, section "The board".
 
-The board is a short view of every project's logbook: what needs the user, the agents running now, and each active task. A message that starts with "show board" prints it for this project, "show board for all" for every project, and "show board for <project>" for one project. [The board](https://github.com/erickb336/sage/blob/main/README.md#the-board) gives the other forms and what each part shows. "status" in sage mode gives only the status lines of this session's project.
+The board is a short view of every project's logbook: what needs the user, the agents running now, and each active task. A message that starts with "show board" prints it for this project, "show board for all" for every project, and "show board for <project>" for one project. [The board](https://github.com/erickb336/sage/blob/main/README.md#the-board) gives the other forms and what each part shows. “show board T197” and “sage board T197” show that task in this project. “show status” and “sage status” show short status lines. The phrases work at the start of the user's own message, outside quoted text. The board command reads recorded facts; it does not change a task.
 
 ## Answer the chief's questions
 
@@ -118,8 +116,8 @@ A hook gives each principle at the moment that it applies, so the user seldom lo
 
 | The user sees | What to do |
 | --- | --- |
-| A mode did not switch | The phrase must start the user's own message. A message sent while Claude works cannot start sage mode or autopilot, and cannot end sage mode; it can only stop autopilot. Send it again when Claude is idle. See the text under [What to say](https://github.com/erickb336/sage/blob/main/README.md#what-to-say). |
-| Merges must stop now | Send a message that mentions autopilot with an off word. Pull requests then wait for the user. |
+| A mode did not switch | The phrase must be the user's whole message, with no other words. A message sent while Claude works can switch only autopilot off; send any other phrase again when Claude is idle. The message "sage help" lists every phrase. See the text under [What to say](https://github.com/erickb336/sage/blob/main/README.md#what-to-say). |
+| Merges must stop now | Send the autopilot off phrase alone ([What to say](https://github.com/erickb336/sage/blob/main/README.md#what-to-say)). Pull requests then wait for the user. |
 | The user wants a normal session again | Send the off phrase of sage mode ([What to say](https://github.com/erickb336/sage/blob/main/README.md#what-to-say)). |
 | A task waits and nothing moves | Show the board: an open question under "Needs you" holds the task until the user answers. A task in the held state waits for the user: for an answer to a product question, or, after 3 repair rounds that did not make it clean, for the user to choose what comes next. The chief asks one question with options, a recommendation and a default; the user picks one or answers in their own words. A task in the replan state waits for a new plan. Link [the chief's instructions](https://github.com/erickb336/sage/blob/main/plugins/sage/agents/chief-of-staff.md), step 4 (an escalation when the tool says held or replan). |
 | A pull request does not merge | A merge needs its clean cycles on the exact head commit. A new commit starts again from cycle 1 ([A task's life](https://github.com/erickb336/sage/blob/main/README.md#a-tasks-life)). Tell the chief what to do with it in your own words. |
@@ -150,4 +148,4 @@ Link [How it works](https://github.com/erickb336/sage/blob/main/README.md#how-it
 
 ## Reply
 
-When the question mentions autopilot with an off word, the first sentence says that autopilot is now off. Then lead with the answer, in two to five sentences. Give at most one prompt that the user can send, in a code block, and none when the section says so. End with the public link of the file that the answer comes from. Write at 80% of Simplified Technical English, with sage's approved words. Keep it short unless the user asks for the whole map.
+Lead with the answer, in two to five sentences. Give at most one prompt that the user can send, in a code block, and none when the section says so. End with the public link of the file that the answer comes from. Write at 80% of Simplified Technical English, with sage's approved words. Keep it short unless the user asks for the whole map.

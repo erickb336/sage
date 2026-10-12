@@ -92,7 +92,7 @@ test("the real hook, run through the launcher from an old session, names the new
   mkdirSync(join(h.newer, "agents"));
   copyFileSync(join(HOOKS, "../agents/chief-of-staff.md"), join(h.newer, "agents", "chief-of-staff.md"));
   h.record(h.newer);
-  const out = JSON.parse(h.run(HOOK, { session_id: "s1", hook_event_name: "UserPromptSubmit", prompt: "sage mode. Ramen Finder: fix the crash" }));
+  const out = JSON.parse(h.run(HOOK, { session_id: "s1", hook_event_name: "UserPromptSubmit", prompt: "sage mode" }));
   assert.match(out.hookSpecificOutput.additionalContext, new RegExp(`The state tool: node ${join(h.newer, "skills/sage/sage.mjs")} <command>`));
 });
 
@@ -167,7 +167,7 @@ test("a hook that throws on import falls back to the own hook, and when both thr
   cpSync(join(HOOKS, "../core"), join(h.old, "core"), { recursive: true });
   mkdirSync(join(h.old, "agents"));
   copyFileSync(join(HOOKS, "../agents/chief-of-staff.md"), join(h.old, "agents", "chief-of-staff.md"));
-  h.run(HOOK, { session_id: "s1", hook_event_name: "UserPromptSubmit", prompt: "sage mode. Ramen Finder: fix the crash" });
+  h.run(HOOK, { session_id: "s1", hook_event_name: "UserPromptSubmit", prompt: "sage mode" });
   assert.match(JSON.parse(h.run(HOOK, merge)).hookSpecificOutput.permissionDecisionReason, /^sage: merge only the checked commit/, "the real own hook still checks the merge");
   writeFileSync(join(h.old, "hooks", HOOK), `throw new Error("broken old");\n`);
   const out = JSON.parse(h.run(HOOK, merge)).hookSpecificOutput;

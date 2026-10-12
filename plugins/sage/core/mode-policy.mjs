@@ -1,49 +1,62 @@
-// The mode phrases, in classified prompt text. "sage mode" (also "sage mode on"), "sage mode off" and
-// "autopilot on" count only at the start of the message, so that a mention or a quote switches nothing: "sage mode
-// off" also drops the git rules. "sage mode" may stand alone, end at ".", ",", ":", ";", "!" or the end of its line, or
-// go on with a space and more words ("sage mode continue on the sage project"), as long as its line has no "?" and the
-// next word is not "off": "sage mode?" and "sage mode online: is it a thing?" switch nothing (T194). "autopilot on" stays
-// strict: it must stand alone or end at that punctuation or its line, so "autopilot on?" and "autopilot on main" switch
-// nothing. "sage mode off" must not run on into a longer word ("sage mode off-topic"), and its line must have no "?"
-// ("sage mode off? what does it do?"). Because a missed off is the unsafe one, any line that starts with "sage mode off"
-// or "autopilot off" switches autopilot off, even as a question or in a frame. The owner's own text also switches it
-// off when it mentions autopilot and has an off word anywhere. A frame does not, because its boilerplate has off words
-// ("NOT a message from the user"). Off wins over on. Only OFF_LINE has the m flag: with it, "^" also matches the start
-// of each later line.
-const START = String.raw`^[\s"'“‘*_>-]*`;
-const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
-// A prefix that stays on its line. With the m flag, "^" matches after each line break, so a prefix that also matched
-// line breaks would read each run of blank lines again from each of its lines: quadratic time on a long report (T34).
-const LINE_START = String.raw`^(?:${SP}|["'“‘*_>-])*`;
-const END = String.raw`(?=${SP}*(?:[.,:;!\r\n  ]|$))`;
-const SAGE = String.raw`(?:enter${SP}+)?sage${SP}+mode(?:${SP}+on)?`;
-const AND_AUTOPILOT = String.raw`(?:${SP}+autopilot|(?:${SP}*[.,:;!]${SP}*|${SP}+)autopilot${SP}+on)`; // "sage mode autopilot", "sage mode, autopilot on"
-// The two lookaheads come before the space run, so that one space and two spaces give the same answer, and so that the
-// run never backtracks into a re-scan of the line: a lookahead after a greedy run reads the line again at each step of the
-// run, quadratic time on a long first line (T34, T194 cycle 1). The off guard blocks only the exact off word: "sage mode
-// offline" and "sage mode office hours" turn the mode on, as any other word after the phrase does; "sage mode off-topic"
-// is an off word with a hyphen, so OFF_LINE reads it as an autopilot off and SAGE_ON does not turn the mode on.
-const SAGE_ON = new RegExp(`${START}${SAGE}${AND_AUTOPILOT}?(?:${END}|(?!${SP}*off\\b)(?!.*[?？])${SP}+)`, "i"); // "." stops at a line break
-const OFF_LINE = new RegExp(`${LINE_START}(?:sage${SP}+mode|autopilot)${SP}+off\\b`, "im"); // in any text, at the start of any line
-const SAGE_OFF = new RegExp(`${START}sage${SP}+mode${SP}+off(?![\\p{L}\\p{N}-])(?!.*\\?)`, "iu"); // "." stops at a line break
-const AUTOPILOT_ON = new RegExp(`${START}(?:autopilot${SP}+on|${SAGE}${AND_AUTOPILOT})${END}`, "i");
-// A first line that starts with a mode word but matches no rule gets a note (the caller), so that a miss is never silent.
-const MODE_WORD = new RegExp(`${START}(?:sage${SP}+mode|autopilot)(?![\\p{L}\\p{N}])`, "iu");
-// The word autopilot, and the off words in any form ("no more", "turn off", "switch off" and "hold off" have one too).
-const AUTOPILOT = /\bauto[-\s]?pilots?\b/i;
-const OFF_WORD = /\b(?:off|no|without|don['’]?t|do\s+not|end(?:s|ed|ing)?|quit(?:s|ting)?|exit(?:s|ed|ing)?)\b|\b(?:stop|disabl|paus|cancel|kill|halt|deactivat|abort|suspend)|\bauto[-\s]?pilots?\s*=\s*false\b/i;
-const broadOff = (text) => OFF_LINE.test(text) || (AUTOPILOT.test(text) && OFF_WORD.test(text));
+import { BOARD_PHRASES } from "./board-intent.mjs";
 
-/** Origin is supplied by the provider; this function does not authenticate text. */
-export function modeSignals({ owner, text, outside, all }) {
-  if (typeof owner !== "boolean" || [text, outside, all].some(value => typeof value !== "string")) {
-    throw Error("Invalid mode prompt");
-  }
-  return {
-    sageOff: owner && SAGE_OFF.test(text),
-    sageOn: owner && SAGE_ON.test(text),
-    autopilotOff: OFF_LINE.test(all) || broadOff(owner ? outside : all),
-    autopilotOn: owner && AUTOPILOT_ON.test(text),
-    modeWord: owner && MODE_WORD.test(text),
-  };
+// The owner's phrases (owner decision 2026-10-11, T240). A message switches a mode only when it is exactly one phrase:
+// the whole message, after trimming the spaces at its ends, in any letter case, with at most one full stop at the end.
+// Nothing else switches: no more words, no look-alike letter, no hidden character, no other punctuation. So the rule
+// never guesses from free text. Each value is what the phrase does; the help phrase switches nothing.
+export const PHRASES = {
+  "sage mode": { sage: true, what: "turns sage mode on" },
+  "sage mode on": { sage: true, what: "turns sage mode on" },
+  "sage mode off": { sage: false, autopilot: false, what: "turns sage mode off, and autopilot with it" },
+  "autopilot on": { autopilot: true, what: "turns autopilot on, while sage mode is on" },
+  "autopilot off": { autopilot: false, what: "turns autopilot off" },
+  "sage help": { help: true, what: "shows this list" },
+};
+const SWITCHES = Object.keys(PHRASES).filter((phrase) => !PHRASES[phrase].help);
+
+/** The phrase that the message is exactly, or null. The i flag without u folds only ASCII letters. */
+export function exactPhrase(message) {
+  const text = message.trim().replace(/\.$/, "");
+  return Object.keys(PHRASES).find((phrase) => new RegExp(`^${phrase}$`, "i").test(text)) ?? null;
+}
+
+/** Whether a text has a switch phrase anywhere: for a prompt whose frames the hook cannot read. */
+export const hasPhrase = (text) => new RegExp(`\\b(?:${SWITCHES.join("|")})\\b`, "i").test(text);
+
+/**
+ * A near miss: a message that is no phrase, but names sage mode or autopilot with an on or off word, or starts with
+ * one of them. Returns the phrases to ask the owner for, and strong when the message starts like a phrase (a mention
+ * in a sentence is weak), or null for no near miss. The plain form (compatibility letters, no marks, no hidden
+ * characters, "_" and "-" as spaces, and joined words split: "autopilotoff") only finds a near miss; it never switches.
+ */
+export function phrasesNear(message) {
+  if (exactPhrase(message)) return null;
+  const plain = message.normalize("NFKD").replace(/[\p{M}\p{Cf}]/gu, "").toLowerCase().replace(/[_-]/g, " ").replace(/(sage|mode|autopilot)(?=[a-z])/g, "$1 ");
+  const sage = /\bsage\s+mode\b/.test(plain);
+  const autopilot = /\bauto\s?pilot\b/.test(plain);
+  const on = /\b(?:on|start|enable|resume)\b/.test(plain);
+  const off = /\b(?:off|stop|pause|disable|end|exit|quit)\b/.test(plain);
+  const strong = /^\s*(?:sage\s+mode|auto\s?pilot)\b/.test(plain);
+  if (!(sage || autopilot) || !(on || off || strong)) return null;
+  const pick = (onPhrase, offPhrase) => (on === off ? [onPhrase, offPhrase] : [on ? onPhrase : offPhrase]);
+  return { phrases: [...(sage ? pick("sage mode", "sage mode off") : []), ...(autopilot ? pick("autopilot on", "autopilot off") : [])], strong };
+}
+
+/** The answer to the help phrase: every phrase the owner can send, from the same lists that the hook matches. */
+export function phraseHelp({ sage, autopilot }) {
+  const line = (phrases, what) => `- ${phrases.map((p) => `"${p}"`).join(" or ")}: ${what}.`;
+  const lines = (help) => Object.entries(PHRASES).filter(([, p]) => Boolean(p.help) === help).map(([p, { what }]) => line([p], what));
+  return [
+    "sage: the user asked for help. Show the user this list as it is.",
+    `Now: sage mode is ${sage ? "on" : "off"}, and autopilot is ${autopilot ? "on" : "off"}.`,
+    "Switches: send the phrase alone, as the whole message, in any letter case. Spaces at the ends and one full stop are fine. Any other message switches nothing.",
+    "An on phrase works only as a message alone while Claude is idle. An off phrase also works in a message sent while Claude works, but there it turns only autopilot off.",
+    ...lines(false),
+    "Board: at the start of a message.",
+    ...BOARD_PHRASES.map(([a, b, what]) => line([a, b], what)),
+    "Maintenance: in a terminal, not in the chat.",
+    line(["claude plugin update sage@sage"], "updates sage; each session uses the new version at its next event"),
+    "Help:",
+    ...lines(true),
+  ].join("\n");
 }

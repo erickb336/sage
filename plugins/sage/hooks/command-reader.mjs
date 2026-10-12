@@ -1,1 +1,1 @@
-export { shellCommands, programsRun, commandText } from "../core/index.mjs";
+export { shellCommands, programsRun } from "../core/index.mjs";

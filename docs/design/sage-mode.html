@@ -117,7 +117,7 @@ flowchart TB
 <tr><td>A chief that owns the program, never the code</td><td>pstack orchestrate, Cursor projects</td><td>The chief of staff has no edit tools. In phrase mode, the hook blocks its edits.</td></tr>
 <tr><td>"The brief is the product." A missing field stops the spawn</td><td>pstack orchestrate</td><td>A brief template with required fields. The hook refuses an agent spawn when a field is missing.</td></tr>
 <tr><td>Verdicts recorded by head SHA. A new commit voids them</td><td>pstack ledger, Orchestrator "merge the exact checked commit"</td><td>A ledger in the logbook. A merge is blocked unless the current SHA has the verdicts its route needs.</td></tr>
-<tr><td>A mode switched on by name, with playbooks copied into the to-do list</td><td>poteto mode</td><td>"sage mode" at the start of a message. Each route's blocks go into the task list.</td></tr>
+<tr><td>A mode switched on by name, with playbooks copied into the to-do list</td><td>poteto mode</td><td>"sage mode" as the whole message. Each route's blocks go into the task list.</td></tr>
 <tr><td>Scale the ceremony to the unit</td><td>pstack, Anthropic research system</td><td>Routes come in sizes: tiny, small, large, program.</td></tr>
 <tr><td>A PE that separates "changes" from "questions for you"</td><td>Orchestrator, after the PE loop failed to converge</td><td>The same verdict shape. A later PE pass checks its earlier asks first.</td></tr>
 <tr><td>Code review and security review side by side. No dropped findings</td><td>Orchestrator ORC-021 and ORC-028</td><td>Each finding gets a triage: fix, dismiss with a reason, or ask you. A task can't finish with an open finding.</td></tr>
@@ -286,6 +286,8 @@ BRANCH      branch · head SHA · PR</pre>
 <tr><td>Every finding is triaged before QA</td><td><span class="code">Code</span> the state tool refuses "verifying" with open findings</td><td>No dropped findings (ORC-028)</td></tr>
 <tr><td>At most 3 repair rounds. After 2 rounds with the same finding keys, re-plan</td><td><span class="code">Code</span> the state tool counts rounds and keys</td><td>Loops must converge. attack-the-premise</td></tr>
 <tr><td>A merge needs the route's verdicts on the current head SHA</td><td><span class="code">Code</span> hook on <code>gh pr merge</code></td><td>Merge only the checked commit (Orchestrator, pstack)</td></tr>
+<tr><td>An agent never merges. The merge rule and the push rule hold for every command tool: Bash, Monitor, PowerShell and the terminal tool</td><td><span class="code">Code</span> the hook refuses a merge from any agent, whatever the tool</td><td>A second tool must not be a way around the rule</td></tr>
+<tr><td>Only a message of the owner that is exactly a switch phrase switches sage mode or autopilot: the whole message, in any letter case, with at most one full stop. A near miss switches nothing and gives the chief a note with the exact phrase to ask for</td><td><span class="code">Code</span> the hook and the shared mode policy</td><td>Your decision: a deterministic rule never guesses from free text, and an agent's text never switches a mode</td></tr>
 <tr><td>Autopilot merges only through a pull request, after the set number of clean cycles on the current head SHA</td><td><span class="code">Code</span> the same hook counts the cycles in the ledger</td><td>Your decision. Merge only the checked commit</td></tr>
 <tr><td>An arena candidate never merges, and its branch is deleted after the verdict</td><td><span class="code">Code</span> the state tool marks candidates; the merge check refuses them</td><td>Keep best-of simple (ORC-025)</td></tr>
 <tr><td>A fresh agent for each round, with the consolidated brief</td><td><span class="prompt">Prompt</span></td><td>Resumed agents drop directives (pstack)</td></tr>
@@ -321,7 +323,7 @@ flowchart TB
   R -->|"3 repair rounds and still findings"| S["Stop and ask you"]
 </pre><p class="cap">A cycle is a full set of fresh reviewers and QA on one head SHA. Each cycle uses new agents that didn't see the earlier verdicts.</p></div>
 <ul>
-  <li><strong>"autopilot on"</strong> at the start of your message switches it on, and <strong>"autopilot off"</strong> anywhere in your message switches it off. An agent's report or a task notification never switches it on. In one, only a line that starts with "autopilot off" or "sage mode off" switches it off. When Claude Code joins your message to one, only your part counts, also between two frames. A message that you send while Claude works counts as yours only as a whole system reminder outside every other frame. It can stop autopilot, but it cannot start autopilot or sage mode: send an on again when Claude is idle. When the hook cannot read a prompt's frames, nothing in that prompt switches it on. "autopilot off" is the kill switch, and work in flight stops at "verified".</li>
+  <li><strong>"autopilot on"</strong> as your whole message switches it on, while sage mode is on, and <strong>"autopilot off"</strong> or <strong>"sage mode off"</strong> as your whole message switches it off. Any letter case and one full stop at the end are fine; any other words switch nothing, and a message near a phrase gives the chief a note with the exact phrase to ask you for. An agent's report or a task notification never switches it, on or off. When Claude Code joins your message to one, only your text before the first frame and after the last frame counts: text between two frames is agent text. A message that you send while Claude works counts as a message of its own when it is a whole system reminder after the last other frame. It can switch only autopilot off: the sage mode off phrase there turns autopilot off and keeps sage mode on, because sage mode off drops the hook's guards, and an on phrase there switches nothing. The chief asks you to send either one again when Claude is idle. When the hook cannot read a prompt's frames, nothing in that prompt switches it, and when that prompt has a phrase, the chief asks you to send it again as a message alone. "autopilot off" is the kill switch, and work in flight stops at "verified". "sage help" lists every phrase.</li>
   <li><strong>Still always ask you</strong>, even on autopilot: deploys, deleting data, force-pushes, and closing pull requests that aren't sage mode's. These can't be undone. A merge can be reverted.</li>
   <li><strong>Risk flags</strong> (auth, personal data, schema, money, secrets) don't stop autopilot. They add the security review to every cycle.</li>
 </ul>
@@ -348,7 +350,8 @@ flowchart TB
 
 <h2 id="prototype">13. Prototype: a sample session</h2>
 <p><strong>Sample data. This is made up to show the experience, not a real run.</strong> You're on your phone, in a session in <code>~/workspace</code>.</p>
-<pre>You     sage mode. Ramen Finder: add a favourites list, and fix this week's crash.
+<pre>You     sage mode
+You     Ramen Finder: add a favourites list, and fix this week's crash.
 
 Chief   Sage mode on. Logbook: ~/.claude/sage/ramen-finder/ (new).
         2 tasks:
