@@ -3162,3 +3162,75 @@ test('resumed lead failure recovery keeps assignment history and verifies the or
     assert.deepEqual(f.core.readAdmission(f.options.directory), state);
   }
 });
+
+
+test('native unobserved follow-up recovery binds and completes exact work once even after Sage off', async t => {
+  for (const off of [false, true]) {
+    const f = await deliveredFollowupFixture(t);
+    if (off) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    appendReport(f, reportText, childActor, turns[2]);
+    const { readChildReport } = await import(pathToFileURL(join(f.plugin, 'runtime/report-intake.mjs')));
+    const report = readChildReport({ name: f.request.name }, f.native(session), f.options);
+    assert.equal(report.run, 'R4'); assert.equal(report.turn, turns[2]);
+    const state = f.core.readAdmission(f.options.directory);
+    assert.equal(state.bindings.length, 2); assert.equal(state.completions.length, 2);
+    assert.deepEqual(state.completions[1], state.bindings[1]); assert.deepEqual(state.bindings[0], f.prior);
+    assert.deepEqual(readChildReport({ name: f.request.name }, f.native(session), f.options), report);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+    assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === 'child-stop').length, 0);
+  }
+});
+
+test('native unobserved follow-up recovery waits for delivery and terminal evidence without trusting another actor', async t => {
+  const f = await deliveredFollowupFixture(t);
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const recover = actor => reconcileNativeCompletions(f.native(actor), session, f.options);
+  const before = f.core.readAdmission(f.options.directory);
+  f.deliver([]); recover(session); assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  f.deliver(f.later);
+  for (const actor of [childActor, 'a1111111-2222-4333-8444-555555555555']) {
+    recover(actor); assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+  recover(session);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 2);
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  appendReport(f, reportText, childActor, turns[2]); recover(session);
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 2);
+});
+
+test('native unobserved follow-up recovery refuses ambiguous stale forged and unaccepted delivery', async t => {
+  const f = await deliveredFollowupFixture(t);
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const recover = () => reconcileNativeCompletions(f.native(session), session, f.options);
+  const before = f.core.readAdmission(f.options.directory);
+  f.save(f.rows()); assert.throws(recover); assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  f.save(f.accepted);
+  for (const mutate of [rows => rows.push(structuredClone(rows[2])),
+    rows => rows[2].payload.author = '/root/other', rows => rows[2].payload.recipient = '/root/other',
+    rows => rows.push({ type: 'event_msg', payload: { type: 'task_started', turn_id: 'a1111111-2222-4333-8444-555555555555' } })]) {
+    const changed = structuredClone(f.later); mutate(changed); f.deliver(changed);
+    assert.throws(recover); assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+  f.deliver(f.later);
+  const original = readFileSync(f.transcript, 'utf8');
+  const rows = original.trimEnd().split('\n').map(JSON.parse); rows[0].payload.id = session;
+  writeFileSync(f.transcript, rows.map(row => JSON.stringify(row) + '\n').join(''));
+  assert.throws(recover); assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  writeFileSync(f.transcript, original); recover();
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 2);
+});
+
+test('native unobserved follow-up recovery repairs interrupted transcript publication', async t => {
+  const f = await deliveredFollowupFixture(t);
+  const assigned = f.core.readAdmission(f.options.directory).reservations[1].assignment;
+  f.core.bindContinuationAdmission(f.options.directory, { project: assigned.project, session: assigned.session,
+    epoch: assigned.epoch, assignment: assigned.id, issuer: session, call: assigned.call, child: childActor, turn: turns[2] });
+  appendReport(f, reportText, childActor, turns[2]);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, 'runtime/report-intake.mjs')));
+  const report = readChildReport({ name: f.request.name }, f.native(session), f.options);
+  assert.equal(report.run, 'R4'); assert.equal(report.turn, turns[2]);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 2); assert.equal(state.completions.length, 2);
+  assert.deepEqual(readChildReport({ name: f.request.name }, f.native(session), f.options), report);
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+});

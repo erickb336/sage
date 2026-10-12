@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { readAdmission, bindContinuationAdmission } from "../core/index.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
-import { readInitialSession, readAssignmentTurn, readNativeFollowup, readChildTurn } from "./identity.mjs";
+import { readInitialSession, readAssignmentTurn, readNativeFollowup, readChildTurn, readDeliveredAssignment } from "./identity.mjs";
 import { RUNTIME_VERSION, decodeEvent, publish, readObservations } from "./events.mjs";
 import { bindNativeChild } from "./child-binding.mjs";
 
@@ -34,7 +34,7 @@ export function bindNativeChildTranscript(input, context, options) {
   const session = `codex:${event.session_id}`;
   const owner = state.sessions.find(row => row.project === options.project && row.session === session);
   if (!owner) refuse();
-  if (initial.turn !== event.turn_id) return bindLaterTurn(event, native, options, state, owner, started);
+  if (initial.turn !== event.turn_id) return bindLaterTurn(event, native.actor, options, state, owner, started);
   const name = started.path.slice(started.path.lastIndexOf("/") + 1);
   const candidates = state.reservations.filter(row => row.assignment.project === options.project
     && row.assignment.session === session && row.assignment.epoch === owner.epoch
@@ -57,16 +57,16 @@ export function bindNativeChildTranscript(input, context, options) {
 }
 
 /** A later turn needs both successful parent dispatch and exact recipient delivery. */
-function bindLaterTurn(event, native, options, state, owner, started) {
+function bindLaterTurn(event, child, options, state, owner, started) {
   readChildTurn(event.transcript_path, { sessionsDir: options.sessionsDir }, {
-    session: event.session_id, child: native.actor, turn: event.turn_id,
+    session: event.session_id, child: child, turn: event.turn_id,
   });
   const scope = row => row.project === options.project && row.session === owner.session && row.epoch === owner.epoch;
-  const initial = state.bindings.filter(row => scope(row) && row.child === native.actor && row.turn === started.turn);
+  const initial = state.bindings.filter(row => scope(row) && row.child === child && row.turn === started.turn);
   if (initial.length !== 1 || initial[0].issuer !== started.parent) refuse();
   const candidates = state.reservations.filter(row => scope(row.assignment) && row.continuation
     && row.assignment.issuer === started.parent
-    && state.bindings.some(bound => bound.assignment === row.continuation && bound.child === native.actor)
+    && state.bindings.some(bound => bound.assignment === row.continuation && bound.child === child)
     && !state.completions?.some(done => done.assignment === row.assignment.id)
     && !state.bindings.some(bound => bound.assignment === row.assignment.id && bound.turn !== event.turn_id));
   if (candidates.length !== 1) refuse();
@@ -75,7 +75,7 @@ function bindLaterTurn(event, native, options, state, owner, started) {
   const observations = readObservations(directory);
   const receipts = observations.filter(row => row.kind === "followup-transcript"
     && row.actor === started.parent && row.call === assigned.assignment.call && row.turn === assigned.dispatch.turn);
-  if (receipts.length !== 1 || receipts[0].target !== native.actor) refuse();
+  if (receipts.length !== 1 || receipts[0].target !== child) refuse();
   let sender = { parent: null, path: "/root" };
   if (started.parent !== event.session_id) {
     const starts = observations.filter(row => row.kind === "child-start" && row.child === started.parent);
@@ -84,21 +84,55 @@ function bindLaterTurn(event, native, options, state, owner, started) {
   }
   if (!readNativeFollowup(receipts[0].transcript, { sessionsDir: options.sessionsDir }, {
     session: event.session_id, actor: started.parent, ...sender, turn: assigned.dispatch.turn,
-    call: assigned.assignment.call, target: native.actor, taskHash: assigned.dispatch.taskHash,
+    call: assigned.assignment.call, target: child, taskHash: assigned.dispatch.taskHash,
   })) refuse();
   readAssignmentTurn(event.transcript_path, { sessionsDir: options.sessionsDir }, {
-    session: event.session_id, child: native.actor, parent: started.parent, path: started.path,
+    session: event.session_id, child: child, parent: started.parent, path: started.path,
     author: started.path.slice(0, started.path.lastIndexOf("/")), turn: event.turn_id, taskHash: assigned.dispatch.taskHash,
   });
-  const prior = observations.filter(row => row.kind === "child-transcript" && row.child === native.actor);
+  const prior = observations.filter(row => row.kind === "child-transcript" && row.child === child);
   if (prior.some(row => row.transcript !== event.transcript_path)) refuse();
   publish(directory, started);
   const result = bindContinuationAdmission(options.directory, { project: options.project, session: owner.session,
     epoch: owner.epoch, assignment: assigned.assignment.id, issuer: started.parent,
-    call: assigned.assignment.call, child: native.actor, turn: event.turn_id });
+    call: assigned.assignment.call, child: child, turn: event.turn_id });
   publish(directory, { schema: 1, runtime: RUNTIME_VERSION, session: event.session_id, kind: "child-transcript",
-    child: native.actor, turn: event.turn_id, transcript: event.transcript_path });
+    child: child, turn: event.turn_id, transcript: event.transcript_path });
   const { review, runTarget } = state.preparations.find(row => row.id === assigned.preparation) ?? {};
   return { ...result, ...(review ? { review } : {}), ...(runTarget ? { runTarget } : {}),
     assignment: assigned.assignment, ...(assigned.brief ? { brief: assigned.brief } : {}) };
+}
+
+
+/** A native parent can recover delivery through a path already verified for this child. */
+export function recoverNativeChildDeliveries(context, session, options) {
+  const native = nativeToolContext(context);
+  if (typeof session !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(session)) refuse();
+  const state = readAdmission(options.directory);
+  const owner = state.sessions.find(row => row.project === options.project && row.session === `codex:${session}`);
+  if (!owner) refuse();
+  const scope = row => row.project === options.project && row.session === owner.session && row.epoch === owner.epoch;
+  const candidates = state.reservations.filter(row => scope(row.assignment) && row.assignment.issuer === native.actor
+    && row.continuation && !state.completions?.some(done => done.assignment === row.assignment.id));
+  if (!candidates.length) return;
+  const observations = readObservations(join(options.observationsRoot, session));
+  for (const assigned of candidates) {
+    const existing = state.bindings.find(row => row.assignment === assigned.assignment.id);
+    if (existing && observations.some(row => row.kind === "child-transcript" && row.child === existing.child && row.turn === existing.turn)) continue;
+    // Retry the same binding if its transcript-reference publication was interrupted.
+    const prior = state.bindings.filter(row => scope(row) && row.assignment === assigned.continuation && row.issuer === native.actor);
+    if (prior.length !== 1) refuse();
+    const child = prior[0].child;
+    const paths = observations.filter(row => row.kind === "child-transcript" && row.child === child && row.turn === prior[0].turn);
+    if (!paths.length) continue; // No verified path: retain the reservation without scanning for a transcript.
+    const starts = observations.filter(row => row.kind === "child-start" && row.child === child);
+    if (paths.length !== 1 || starts.length !== 1 || starts[0].parent !== native.actor) refuse();
+    const started = starts[0], transcript = paths[0].transcript;
+    const delivery = readDeliveredAssignment(transcript, { sessionsDir: options.sessionsDir }, {
+      session, child, parent: native.actor, path: started.path,
+      author: started.path.slice(0, started.path.lastIndexOf("/")), taskHash: assigned.dispatch.taskHash,
+    });
+    if (!delivery) continue;
+    bindLaterTurn({ session_id: session, turn_id: delivery.turn, transcript_path: transcript }, child, options, state, owner, started);
+  }
 }

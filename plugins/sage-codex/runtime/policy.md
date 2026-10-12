@@ -75,7 +75,8 @@ missing callbacks, restore compacted context,
 or provide lifecycle recovery. Those remain required before activation.
 
 Native stop observations retain capacity until the transcript confirms the assigned turn ended.
-Parent list, wait, and report-read operations reconcile that evidence for already-bound children, including when a stop callback was missed.
+Parent list, wait, and report-read operations reconcile that evidence, including when a stop callback was missed.
+They can also bind a prepared follow-up through its predecessor's verified transcript path and exact accepted delivery.
 Report recording and review acceptance use separate explicit operations.
 
 

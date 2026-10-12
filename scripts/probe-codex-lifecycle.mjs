@@ -14,11 +14,12 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-followup-missed-callbacks", "--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
-const missedStop = process.argv.includes("--sage-missed-stop");
-const followupNoTool = process.argv.includes("--sage-followup-no-tool");
+const unobservedFollowup = process.argv.includes("--sage-followup-missed-callbacks");
+const missedStop = unobservedFollowup || process.argv.includes("--sage-missed-stop");
+const followupNoTool = unobservedFollowup || process.argv.includes("--sage-followup-no-tool");
 const resumedFailure = process.argv.includes("--sage-followup-failed-child");
 const sageFollowup = resumedFailure || followupNoTool || missedStop || process.argv.includes("--sage-followup");
 assert(!sageFollowup || process.argv.slice(2).length === 1, "sage_followup_is_a_separate_route");
@@ -550,6 +551,12 @@ data: ${JSON.stringify(event)}
         } else if (rootRequests === 9) respond(res, call(calls.followupDone, "list_agents", { path_prefix: taskName }));
         else if (rootRequests === 10) {
           check(childEntry(info.outputs[calls.followupDone]).agent_status?.completed === FOLLOWUP_MARKER, "followup_native_completion_missing");
+          if (unobservedFollowup) {
+            const recovered = integrated.readJournal();
+            print({ type: "unobserved_followup_recovery", nativeCompleted: true,
+              bindings: recovered.bindings.length, completions: recovered.completions?.length ?? 0 });
+            check(recovered.bindings.length === 2 && recovered.completions?.length === 2, "unobserved_followup_not_recovered");
+          }
           mcp(info.reportTools, calls.followupReport, { name: "probe_continued" });
         } else if (rootRequests === 11) {
           followupReport = info.outputs[calls.followupReport];
@@ -1040,8 +1047,10 @@ data: ${JSON.stringify(event)}
         const turn = saved.bindings[1].turn;
         assert.equal(rows.filter(row => row.hook_event_name === "PreToolUse" && row.turn_id === turn).length, 0);
         const stops = readObservations(join(root, "observations", rootThread)).filter(row => row.kind === "child-stop" && row.turn === turn);
-        assert.equal(stops.length, 1); assert.equal(stops[0].child, childThread);
-        print({ type: "followup_no_tool_evidence", childToolCalls: 0, stopBoundSecondAssignment: true,
+        assert.equal(stops.length, unobservedFollowup ? 0 : 1);
+        if (!unobservedFollowup) assert.equal(stops[0].child, childThread);
+        print({ type: "followup_no_tool_evidence", childToolCalls: 0, stopBoundSecondAssignment: !unobservedFollowup,
+          parentRecoveredDelivery: unobservedFollowup,
           sameNativeChild: true, completedAssignments: 2, simulatedModel: true });
       }
       print({ type: "sage_followup_evidence", sameNativeChild: true, assignments: 2, turns: 2, completions: 2,

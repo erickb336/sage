@@ -81,14 +81,14 @@ export function readInitialSession(transcriptPath, options) {
 
 /** The caller supplies immutable assignment evidence and a verified child transcript path.
  * This checks delivery, not report acceptance or authority to modify the journal. */
-function assignmentFromRecords(records, expected) {
+function assignmentFromRecords(records, expected, discoverTurn = false) {
   const unavailable = () => { throw Error("Codex assignment evidence is unavailable"); };
   try {
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     const taskPath = /^\/root(?:\/(?!root(?:\/|$))[a-z0-9_]+)*$/;
-    const keys = ["session", "child", "parent", "path", "author", "turn", "taskHash"];
+    const keys = ["session", "child", "parent", "path", "author", ...(discoverTurn ? [] : ["turn"]), "taskHash"];
     if (!record(expected) || Object.keys(expected).length !== keys.length || keys.some(key => !Object.hasOwn(expected, key))
-      || !["session", "child", "parent", "turn"].every(key => typeof expected[key] === "string" && uuid.test(expected[key]))
+      || !["session", "child", "parent", ...(discoverTurn ? [] : ["turn"])].every(key => typeof expected[key] === "string" && uuid.test(expected[key]))
       || expected.child === expected.session || expected.child === expected.parent
       || !["path", "author"].every(key => typeof expected[key] === "string" && taskPath.test(expected[key]))
       || expected.path.slice(0, expected.path.lastIndexOf("/")) !== expected.author
@@ -123,7 +123,8 @@ function assignmentFromRecords(records, expected) {
         || typeof payload.id !== "string" || !/^amsg_[A-Za-z0-9_-]{1,256}$/.test(payload.id)) unavailable();
       matches.push({ session: expected.session, child: expected.child, turn, message: payload.id, taskHash, position: index + 1 });
     }
-    if (matches.length !== 1 || matches[0].turn !== expected.turn) unavailable();
+    if (discoverTurn && matches.length === 0) return null;
+    if (matches.length !== 1 || matches[0].turn !== (discoverTurn ? turn : expected.turn)) unavailable();
     return matches[0];
   } catch { unavailable(); }
 }
@@ -135,6 +136,16 @@ export function readAssignmentTurn(transcriptPath, options, expected) {
     return evidence;
   }
   catch { throw Error("Codex assignment evidence is unavailable"); }
+}
+
+/** Discover delivery only for an exact saved task hash in the current native child turn. */
+export function readDeliveredAssignment(transcriptPath, options, expected) {
+  try {
+    const found = assignmentFromRecords(readSessionRecords(transcriptPath, options, Infinity), expected, true);
+    if (!found) return null;
+    const { position, ...evidence } = found;
+    return evidence;
+  } catch { throw Error("Codex assignment delivery evidence is unavailable"); }
 }
 
 /** Read one completed turn from the same protected snapshot as its assigned task.

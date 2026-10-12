@@ -61,7 +61,8 @@ The parent's list, wait, or report-read operation checks that evidence and relea
 For an already-bound child, this check does not require a delivered stop callback.
 The saved child identity, assignment, turn, transcript reference, and native terminal record must all match.
 Recovery does not invent a stop event, accept a report, or apply a verdict.
-An unbound child, missing transcript, incomplete turn, or invalid evidence retains capacity.
+An initial unbound child, missing transcript, incomplete turn, or invalid evidence retains capacity.
+A prepared follow-up can recover its binding through the predecessor's saved transcript; see `native-followup.md`.
 A start binding waits when its first transcript reference has not arrived.
 A tool result that says “completed” cannot replace transcript evidence.
 
@@ -93,5 +94,5 @@ terminal records, reads both reports, and records the second report.
 
 The probe checks that no Sage stop callback was stored. It uses real CLI 0.160.0
 with simulated responses. This proves recovery for already-bound children only.
-Unbound delivery, failed starts, interrupted turns, compaction, and cross-session
+Initial unbound delivery, failed starts, interrupted turns, compaction, and cross-session
 recovery remain separate work. The required-validation activation blocker remains.

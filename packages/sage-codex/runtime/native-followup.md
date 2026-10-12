@@ -27,7 +27,7 @@ after Sage off, including when its first callback is a no-tool stop.
 
 A resumed lead uses its current assignment for delegation and its original spawn
 for identity. A completed or ended lead run cannot prepare more work. Recovery
-from interrupted dispatch, unbound delivery, or changed sessions remains unfinished.
+from failed dispatch, missing initial transcript references, or changed sessions remains unfinished.
 An already-bound child can recover after a missing stop callback; see `child-binding.md`.
 
 Run `node scripts/probe-codex-lifecycle.mjs --follow-up` with fake process tools
@@ -47,3 +47,24 @@ assignment binds through its first tool. The second stays unbound until its
 stop callback verifies delivery. The probe checks zero tool calls in that
 second turn, two exact bindings and completions, and both preserved reports.
 It uses the real CLI with simulated responses; it is not a real-project pilot.
+
+## Parent recovery without a child callback
+
+The native parent can recover its own pending follow-up through a transcript path
+already verified for the completed predecessor. `readDeliveredAssignment` finds
+one exact prepared message in the current native child turn. The parent then
+uses the same sender-receipt and child-delivery checks as a child callback.
+No path scan, guessed turn, invented stop event, or new dispatch permission is used.
+
+An interrupted transcript-reference publication retries the same binding without changing its child or turn.
+Missing delivery retains capacity. A delivered task binds once, but only its
+native terminal record releases capacity. Recovery also works after Sage off.
+Changed identity, duplicate delivery, stale turns, and an unaccepted sender
+receipt refuse recovery. First assignments without a saved transcript reference,
+interruption, compaction, and cross-session handoff remain separate work.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-followup-missed-callbacks`.
+The real CLI uses simulated responses. Sage's stop hook is absent, and the second
+assignment calls no tool. The parent recovers that assignment, reads both reports,
+and records the second. The probe checks zero saved Sage stop callbacks, two
+bindings, and two completions. It does not prove installed automatic operation.

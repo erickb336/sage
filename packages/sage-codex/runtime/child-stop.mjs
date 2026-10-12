@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { readAdmission, completeAdmission, REPORT_FIELDS, missingReportFields } from "sage-core";
 import { nativeToolContext } from "./native-tool.mjs";
 import { readChildTurn, readNativeCompletion } from "./identity.mjs";
-import { bindNativeChildTranscript } from "./child-tool.mjs";
+import { bindNativeChildTranscript, recoverNativeChildDeliveries } from "./child-tool.mjs";
 import { RUNTIME_VERSION, decodeEvent, publish, readObservations } from "./events.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -93,10 +93,11 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
   return { directory, observations, completed };
 }
 
-/** Only a native parent reconciles its own bound children; a stop callback is not terminal proof. */
+/** A native parent recovers its own delivered follow-ups and verifies terminal evidence. */
 export function reconcileNativeCompletions(context, session, options) {
   const native = nativeToolContext(context);
   if (typeof session !== "string" || !UUID.test(session)) refuse();
+  recoverNativeChildDeliveries(native, session, options);
   const state = readAdmission(options.directory);
   const key = `codex:${session}`;
   const owner = state.sessions.find(row => row.project === options.project && row.session === key);
