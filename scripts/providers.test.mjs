@@ -3095,3 +3095,45 @@ syncBuiltinESMExports();\n`);
     assert.equal(result.stdout, "");
   }
 });
+
+test("shared protected paths refuse missing entries in supplied path lists", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd);
+    let getterRead = false;
+    const accessor = [root];
+    Object.defineProperty(accessor, "0", { get() { getterRead = true; return root; } });
+    const inherited = Array(1);
+    Object.setPrototypeOf(inherited, Object.assign(Object.create(Array.prototype), { 0: root }));
+    for (const input of [
+      { paths: ["ordinary"], cwd, roots: accessor },
+      { paths: ["ordinary"], cwd, roots: inherited },
+      { paths: ["ordinary"], cwd, roots: Array(1) },
+      { paths: ["ordinary"], cwd, roots: [root, ,] },
+      { paths: Array(1), cwd, roots: [root] },
+    ]) assert.throws(() => fileWriteOutsideRoots(input));
+    assert.equal(getterRead, false);
+    assert.equal(fileWriteOutsideRoots({ paths: [], cwd, roots: [root] }), true);
+  }
+});
+
+test("shared protected paths use validated values despite custom array methods", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd);
+    let customMethodCalled = false;
+    const roots = [root];
+    roots.map = () => { customMethodCalled = true; return []; };
+    assert.equal(fileWriteOutsideRoots({ paths: [join(root, "ledger.tsv")], cwd, roots }), false);
+    const paths = [join(root, "ledger.tsv")];
+    paths[Symbol.iterator] = function* () { customMethodCalled = true; };
+    assert.equal(fileWriteOutsideRoots({ paths, cwd, roots: [root] }), false);
+    assert.equal(customMethodCalled, false);
+  }
+});

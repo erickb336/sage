@@ -3,6 +3,19 @@ import { lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 
 const refuse = () => { throw Error("File write paths are unavailable"); };
 const textPath = path => typeof path === "string" && path.length > 0 && path.length <= 4096 && !/\p{Cc}/u.test(path);
+// Array iteration skips holes. Require an own data value at every index.
+function pathList(value) {
+  if (!Array.isArray(value)) refuse();
+  const length = value.length;
+  if (!Number.isSafeInteger(length) || length < 0 || length > 4096) refuse();
+  const result = [];
+  for (let i = 0; i < length; i++) {
+    const entry = Object.getOwnPropertyDescriptor(value, String(i));
+    if (!entry || !Object.hasOwn(entry, "value") || !textPath(entry.value)) refuse();
+    result.push(entry.value);
+  }
+  return result;
+}
 const from = (cwd, path) => isAbsolute(path) ? path : `${cwd}/${path}`;
 const fold = text => text.normalize("NFKC").toLowerCase();
 
@@ -27,9 +40,9 @@ const contains = (root, path) => path === root || path.startsWith(root.endsWith(
 
 /** A path check only. The caller supplies trusted roots and execution cwd, then enforces the decision. */
 export function fileWriteOutsideRoots({ paths, cwd, roots }) {
-  if (!Array.isArray(paths) || paths.length > 4096 || !paths.every(textPath)
-    || !textPath(cwd) || !isAbsolute(cwd) || !Array.isArray(roots) || !roots.length
-    || !roots.every(root => textPath(root) && isAbsolute(root))) refuse();
+  paths = pathList(paths);
+  roots = pathList(roots);
+  if (!textPath(cwd) || !isAbsolute(cwd) || !roots.length || !roots.every(isAbsolute)) refuse();
   try {
     const protectedRoots = roots.map(canonical);
     for (const path of paths) {
