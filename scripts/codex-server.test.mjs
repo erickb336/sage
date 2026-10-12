@@ -67,7 +67,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_recorded_report", "sage_read_report", "sage_read_task", "sage_record_report", "sage_update_task"]);
+    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_read_task", "sage_record_report", "sage_update_task"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -3579,4 +3579,76 @@ test('chief compaction retries failed rendering and never activates an inactive 
   assert.equal(restored.hookSpecificOutput?.additionalContext, first.hookSpecificOutput.additionalContext);
   assert.deepEqual(readAdmission(f.mode.directory), before);
   await client.close();
+});
+
+async function assignmentReader(f) {
+  const file = join(f.plugin, "runtime/child-assignment.mjs");
+  assert.ok(existsSync(file), "the current child assignment reader must ship");
+  const { readNativeChildAssignment } = await import(pathToFileURL(file));
+  return (input = {}, actor = childActor, options = f.options) => readNativeChildAssignment(input, f.native(actor), options);
+}
+
+test("child assignment recovery returns exact saved instructions without changing state", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  const before = JSON.stringify(f.core.readAdmission(f.options.directory));
+  const prepared = f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const result = read();
+  assert.equal(result.decision, "current-assignment"); assert.equal(result.message, prepared.message);
+  assert.equal(result.task, "T1"); assert.equal(result.run, "R1"); assert.equal(result.child, childActor);
+  assert.equal(result.turn, turns[1]); assert.equal(result.role, "lead");
+  assert.equal(result.taskHash, createHash("sha256").update(prepared.message).digest("hex"));
+  assert.deepEqual(read(), result);
+  assert.equal(JSON.stringify(f.core.readAdmission(f.options.directory)), before);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(read(), result, "an existing child can finish after Sage off");
+});
+
+test("child assignment recovery refuses selectors foreign actors terminal turns and changed runs", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  assert.equal(read().task, "T1");
+  for (const input of [{ task: "T1" }, { actor: childActor }, { turn: turns[1] }, [], null]) assert.throws(() => read(input));
+  for (const actor of [session, turns[0]]) assert.throws(() => read({}, actor));
+  assert.throws(() => read({}, childActor, { ...f.options, project: "foreign" }));
+  const api = await import(pathToFileURL(join(f.plugin, "runtime/child-assignment.mjs")));
+  assert.throws(() => api.readNativeChildAssignment({}, { version: "unsupported", actor: childActor }, f.options));
+  appendReport(f); assert.throws(() => read(), "native terminal evidence is sufficient to refuse a stale read");
+  f.childTranscript(); assert.equal(read().task, "T1");
+  f.assignmentCli("run", "done", "R1", "--status", "done"); assert.throws(() => read());
+});
+
+test("child assignment recovery refuses changed delivery missing transcript and stale review targets", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  const expected = read();
+  f.childTranscript({ message: "A changed task" }); assert.throws(() => read());
+  const path = f.childTranscript(); const bytes = readFileSync(path); rmSync(path); assert.throws(() => read());
+  writeFileSync(path, bytes); assert.deepEqual(read(), expected);
+  const review = await reviewPreparationFixture(t);
+  review.prepare(); const policy = review.createNativePolicy(review.options, () => ({ decision: "pass" }));
+  await review.evaluate(policy); review.events.publish(join(review.options.observationsRoot, session), review.result);
+  await review.evaluate(policy, { ...patch(turns[1]), transcript_path: review.childTranscript() }, childActor);
+  const readReview = await assignmentReader(review); assert.equal(readReview().role, "code-reviewer");
+  review.git("commit", "--quiet", "--allow-empty", "-m", "changed head"); assert.throws(() => readReview());
+});
+
+test("child assignment recovery is available only to the bound child through the packaged tool", async t => {
+  const f = await completionFixture(t);
+  assert.ok(existsSync(join(f.plugin, "runtime/child-assignment.mjs")), "the child recovery reader must ship");
+  writeFileSync(f.entry, `import { servePreparations } from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
+  const client = await connect(t, f, "0.160.0", "", "sage_read_assignment");
+  const result = await client.call({}, childActor); assert.equal(result.decision, "current-assignment");
+  assert.equal(result.message, f.api.prepareNativeTask(f.input, f.native(session), f.options).message);
+  assert.match((await client.call({}, session)).error, /could not read/);
+  appendReport(f); assert.match((await client.call({}, childActor)).error, /could not read/);
+  await client.close();
+});
+
+test("child assignment recovery selects the current continuation and never returns the finished task", async t => {
+  const f = await deliveredFollowupFixture(t), read = await assignmentReader(f);
+  assert.throws(() => read(), "a delivered but unbound continuation cannot borrow its old assignment");
+  await f.evaluate(f.policy, f.tool, childActor);
+  const result = read(); assert.equal(result.message, f.prepared.message);
+  assert.equal(result.run, "R4"); assert.equal(result.turn, turns[2]);
+  assert.notEqual(result.assignment, f.prior.assignment);
+  appendFileSync(f.transcript, JSON.stringify({ type: "event_msg", payload: { type: "turn_aborted", turn_id: turns[2], reason: "interrupted" } }) + "\n");
+  assert.throws(() => read(), "an interrupted native turn cannot retrieve an active assignment");
 });

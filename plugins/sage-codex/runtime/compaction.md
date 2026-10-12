@@ -68,3 +68,24 @@ instructions, the current saved brief, and report completion need a separate
 supported restoration path. Static native agent instructions are a candidate;
 their persistence and the dynamic task binding still require native checks.
 No installed automatic activation or real model participates in this probe.
+
+## Read the current child assignment
+
+The visible `sage_read_assignment` tool takes no arguments. Its native caller
+must have one active, delivered assignment in the current owner epoch. The
+reader checks the saved child transcript, current turn, task hash, run target,
+and review commit when present. It returns the exact prepared role and brief.
+A completed or interrupted turn, changed target, missing evidence, or another
+actor cannot read an active assignment. An existing child can read its task
+after Sage off, so it can finish the work already assigned to it.
+
+The reader changes no admission or task state and grants no tool permission.
+It refuses a concurrent lifecycle change observed during the read. Existing
+native permission and workflow checks still apply to later actions.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-child-recovery` to compact
+a native child, call this tool, and verify the exact saved instructions in the
+next model request. The child then completes with one recorded completion.
+This route uses simulated responses that explicitly request the tool. It does
+not yet enforce automatic recovery or prove that a real model requests it.
+The original `--sage-child-compaction` readiness route therefore still fails.
