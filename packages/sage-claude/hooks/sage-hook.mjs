@@ -298,7 +298,11 @@ export function handle(input, state, slots) {
   // The main session's TaskStop frees the named agent's slot, a lead's or a child's too (T255 M3, F-T255-12). It records
   // no end, so the call stays open to its own result. An agent's TaskStop frees no slot: a lead could free a
   // main-session agent's slot while that agent still runs (T255 M3).
-  if (event === "PreToolUse" && input.tool_name === "TaskStop") return void (main && slots.release(input.tool_input?.task_id, true));
+  // A lead's name lead-T<n> stops it too: the hook frees that task's lead slot of this session (F-T273-13).
+  if (event === "PreToolUse" && input.tool_name === "TaskStop") {
+    const id = input.tool_input?.task_id;
+    return void (main && (/^lead-T[1-9]\d*$/.test(id ?? "") ? slots.stopLead(id.slice("lead-".length)) : slots.release(id, true)));
+  }
   // An agent's SendMessage can wake a stopped agent outside every cap, and its event cannot tell a stopped target from a
   // live one. So an agent sends a message only to the main session: in sage mode, and for a sage agent in any mode, the
   // scope of the nested spawn rule. A plain agent outside sage mode is the owner's normal use (T255 M2).
@@ -392,7 +396,7 @@ export function handle(input, state, slots) {
       if (r.refused === "ended") return deny(event, "this lead or spawn already ended, so it cannot start another agent. Report to the sage.");
       if (r.refused === "leads") return deny(event, `3 leads are running for ${project}. Wait for one to finish. Report to the sage.`);
       if (r.refused === "children") return deny(event, "this lead already has 3 children. Wait for one to finish. Report to the sage.");
-      if (r.refused === "task") return deny(event, `a lead of ${leadMark.task} already holds a slot (F-T273-5). Wait for it to end, or stop it with TaskStop, before you start a fresh lead.`);
+      if (r.refused === "task") return deny(event, `a lead of ${leadMark.task} already holds a slot (F-T273-5). Wait for it to end, or stop it with TaskStop (by its agent id or by its name lead-${leadMark.task}), before you start a fresh lead.`);
       if (r.refused === "mark") return deny(event, `the agent cap could not mark its slot (${r.error}), so it refuses this spawn. Tell the user.`);
       if (r.refused === "total") return deny(event, `${running(r.total)} across all projects, and the total cap is ${caps.cap_total} (${project} has ${r.project}). ${raise("cap_total", caps.cap_total)}`);
       return deny(event, `${running(r.project)} for ${project}, and its cap is ${cap} (${r.total} of ${caps.cap_total} across all projects). ${raise(`cap.${project}`, cap)}`);
@@ -937,7 +941,8 @@ function leadProblem(input, cmd, pos, opt, slots) {
   if (view.leadRun(own)?.id !== lead.run) return `${own}'s lead run ${lead.run} no longer runs, so this lead writes nothing (F-T273-4).`;
   const task = view.task(own);
   if (!task) return `the logbook has no task ${own}.`;
-  if (name === "task" && task.state === "held") return `${own} is held, and only the sage moves a held task (F-T273-7).`;
+  // A held task takes no lead write at all: no run, finding, verdict or move (F-T273-7, F-T273-12).
+  if (task.state === "held") return `${own} is held, and only the sage moves a held task (F-T273-7, F-T273-12).`;
   return LEAD_WRITES[name](pos, opt, own, view, task) ? undefined : `${shown} is on the lead's list, but not as it is written here, or not on its own task ${own}.`;
 }
 const READ_WAY = "To run a read command of the state tool, run node <path to skills/sage/sage.mjs> status (or merge-check, logbook, standing, config) alone; to read the file, use cat <path> or git show <sha>:<path>.";
@@ -1811,7 +1816,9 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
   const ownsAgent = (slot, agent) => has(slot, "exact") || mark(slot, "bound-") !== undefined ? mark(slot, "bound-") === hash(agent) : mark(slot, "agent-") === id(agent);
   const release = (agent, attempted = false) => {
     if (!valid(agent)) return;
-    if (!attempted) note(`ended-${hash(agent)}`); // publish terminal evidence before searching or freeing
+    // Terminal evidence before searching or freeing. The main session's TaskStop (attempted) is an end too, so a stopped
+    // lead starts no child after it (F-T273-14).
+    note(`ended-${hash(agent)}`);
     for (const slot of ofSession()) {
       // A lead's end frees no child's slot: a child may still run, and keeps its slot until its own stop or its lease (T255 M1).
       if (ownsAgent(slot, agent)) free(slot);
@@ -1924,6 +1931,14 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
       if (slot && mark(slot, "pending-") !== undefined && (has(slot, "exact") || !has(slot, "possible-launch"))) free(slot);
     }),
     touch: transaction(touch),
+    /** The main session's TaskStop of lead-T<n>: it ends and frees this session's lead slot of that task, bound or not (F-T273-13, F-T273-14). */
+    stopLead: transaction((task) => {
+      for (const slot of ofSession().filter(slot => mark(slot, "role-") === "sage_lead" && mark(slot, "task-") === task)) {
+        const bound = mark(slot, "bound-");
+        if (bound) note(`ended-${bound}`);
+        free(slot);
+      }
+    }),
     /** The task, logbook and lead run of the lead slot that this agent holds: bound to it by the spawn's result, in this session, not ended. Undefined otherwise. */
     leadOf(agent) {
       if (!valid(agent) || stopped(agent)) return undefined;

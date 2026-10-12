@@ -5,7 +5,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
 
 // Through the launcher, as Claude Code runs it. HOME is a fake home without plugins, so the launcher runs this tree's hook.
@@ -15,26 +15,40 @@ const TOOL = fileURLToPath(new URL("../plugins/sage/skills/sage/sage.mjs", impor
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const BRIEF = ["GOAL fix it", "SCOPE src/", "CONTEXT none", "DECISIONS none", "ACCEPTANCE it works", "VERIFY npm test", "BUDGET 20 turns", "FORBIDDEN no merge", "REPORT the usual", "STANDING 1. work in your worktree"].join("\n");
 
+/**
+ * Bounded waits (F-T273-15, order 26). The file stalled twice under load with no failure. Each hook call normally takes
+ * under 1 s (the slowest test waits 5 s for a slow fake gh), so a call that runs 60 s is stuck: it is killed and fails.
+ * Each test fails after 5 minutes instead of stalling the run; the longest test takes about 20 s alone.
+ */
+const CALL_MS = 60_000;
+const test = (name, fn) => nodeTest(name, { timeout: 300_000 }, fn);
 /** A session with its own hook state and sage home. send() returns the hook's answer, or undefined. */
 function session(env = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-hook-"));
   // gh is the fake: the hook reads a pull request's head branch for each merge (F-T273-8), and a test never reaches GitHub.
   const vars = { ...process.env, PATH: `${FAKE_GH}:${process.env.PATH}`, HOME: join(dir, "fake-home"), SAGE_HOOKS_STATE: join(dir, "state"), SAGE_HOME: join(dir, "home"), ...env };
-  const send = (event) => {
-    const r = spawnSync("node", LAUNCHER, { input: JSON.stringify({ session_id: "s1", ...event }), encoding: "utf8", env: vars });
+  const send = (event, ms = CALL_MS) => {
+    const r = spawnSync("node", LAUNCHER, { input: JSON.stringify({ session_id: "s1", ...event }), encoding: "utf8", env: vars, timeout: ms, killSignal: "SIGKILL" });
+    assert.equal(r.error, undefined, `the hook did not answer: ${r.error?.message}`);
     assert.equal(r.status, 0, r.stderr);
     return r.stdout ? JSON.parse(r.stdout) : undefined;
   };
-  const sendAsync = (event) =>
-    new Promise((done) => {
+  const sendAsync = (event, ms = CALL_MS) =>
+    new Promise((done, fail) => {
       const p = spawn("node", LAUNCHER, { env: vars });
       let out = "";
+      const timer = setTimeout(() => { p.kill("SIGKILL"); fail(new Error(`the hook did not answer in ${ms} ms`)); }, ms);
+      p.on("error", (error) => { clearTimeout(timer); fail(error); }); // a spawn that fails under load emits no close
+      p.stdin.on("error", () => {}); // a child that died early: its exit code tells
       p.stdout.on("data", (d) => (out += d));
-      p.on("close", () => done(out ? JSON.parse(out) : undefined));
+      p.on("close", (code) => {
+        clearTimeout(timer);
+        try { assert.equal(code, 0, "the hook's exit code"); done(out ? JSON.parse(out) : undefined); } catch (error) { fail(error); }
+      });
       p.stdin.end(JSON.stringify({ session_id: "s1", ...event }));
     });
   // The logbook is FEATURE's, where bash() runs commands: a merge counts only the tasks of its own project's logbook (F-T273-9).
-  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", FEATURE], { encoding: "utf8", env: vars }).stdout.trim();
+  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", FEATURE], { encoding: "utf8", env: vars, timeout: CALL_MS, killSignal: "SIGKILL" }).stdout.trim();
   return { dir, send, sendAsync, sage, vars };
 }
 
@@ -5182,4 +5196,47 @@ test("F-T273-11: the branch-rule refusal says to rename the branch to a task nam
   const why = denied(s.send(bash(MERGE))) ?? "";
   assert.match(why, /Rename the branch to a task name \(for example sage\/t1-<words>\), or the user lands this pull request\.$/);
   assert.doesNotMatch(why, /branch=/);
+});
+
+// Repair round 4 of T273 (R901). Each test fails on f16cea0 and passes after.
+test("F-T273-12: while its task is held, a lead writes nothing, and a held task never passes the merge check", () => {
+  const s = leadSession();
+  setState(s, "T1", "held");
+  for (const args of ["run add T1 --role qa", "run done R2 --status done", "finding add T1 --source qa --severity low --summary=x", "finding close T1 F-T1-2", "finding triage T1 F-T1-1 fix",
+    `verdict T1 --kind qa-pass --sha ${SHA} --pr 5`, "round T1", "task T1 set state=building"]) {
+    assert.match(denied(stateRun(s, args)) ?? "", /T1 is held, and only the sage moves a held task/, args);
+  }
+  assert.equal(denied(stateRun(s, "status")), undefined, "reads still pass");
+  const merged = autopilotSession(); // T1 has clean cycles on SHA under PR 41
+  assert.equal(denied(merged.send(bash(MERGE))), undefined, "before the hold");
+  setState(merged, "T1", "held");
+  assert.match(denied(merged.send(bash(MERGE))) ?? "", /^sage: the merge check refuses: T1 is held: only the sage moves a held task/);
+});
+
+test("F-T273-13: the main session's TaskStop of lead-T<n> frees that lead's slot, so a fresh lead can start", () => {
+  const s = leadSession();
+  const twice = denied(s.send(leadSpawn("again", 1, { cwd: s.dir }))) ?? "";
+  assert.match(twice, /stop it with TaskStop \(by its agent id or by its name lead-T1\)/);
+  s.send(tool("TaskStop", { task_id: "lead-T1" }, LEAD));
+  assert.ok(denied(s.send(leadSpawn("after-agent-stop", 1, { cwd: s.dir }))), "an agent's TaskStop frees nothing");
+  s.send(tool("TaskStop", { task_id: "lead-T1" }));
+  assert.equal(s.send(leadSpawn("fresh", 1, { cwd: s.dir })), undefined, "the slot is free");
+});
+
+test("F-T273-14: a lead that the main session stopped starts no child, by its agent id or by its name", () => {
+  for (const task_id of ["lead-a", "lead-T1"]) {
+    const s = leadSession();
+    assert.equal(s.send(nested("sage:qa", "before-stop")), undefined, task_id);
+    s.send(tool("TaskStop", { task_id }));
+    assert.match(denied(s.send(nested("sage:qa", "after-stop"))) ?? "", /this lead or spawn already ended/, task_id);
+  }
+});
+
+test("F-T273-15: a hook call that never ends fails within its bound instead of stalling the file", async () => {
+  // A preload that keeps the hook process alive after it answers: the call must fail at its bound, never hang.
+  const dir = mkdtempSync(join(tmpdir(), "sage-hang-"));
+  writeFileSync(join(dir, "hang.cjs"), "setInterval(() => {}, 1000);\n");
+  const s = session({ NODE_OPTIONS: `--require ${join(dir, "hang.cjs")}` });
+  await assert.rejects(s.sendAsync(prompt("hello"), 3000), /the hook did not answer in 3000 ms/);
+  assert.throws(() => s.send(prompt("hello"), 3000), /the hook did not answer/);
 });

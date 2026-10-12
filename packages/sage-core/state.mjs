@@ -707,7 +707,9 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       const [byId, ownOf, findingsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings)];
       return [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
-        return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...judge(dir, task, findingsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr) };
+        // A held task never merges until the sage moves it (F-T273-12).
+        const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
+        return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...judge(dir, task, findingsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr), ...held };
       });
     });
     const one = strangers.length === 1;
