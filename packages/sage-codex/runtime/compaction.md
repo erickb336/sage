@@ -111,3 +111,23 @@ The function does not authenticate a transcript path, find the matching call,
 or prove ordering after the latest compaction. The production gate must add
 those checks before it can permit another action or accept a report. This step
 does not enable automatic recovery or installed Sage.
+
+
+## Bind the recovery to compaction
+
+`readNativeRecovery` reads a bounded, protected transcript snapshot. It verifies
+the exact assignment delivery and native child identity before inspecting
+compaction. A matching reader call and complete output must follow the latest
+checkpoint in that assignment's turn. A later checkpoint invalidates the read.
+An earlier turn, an orphan result, a failed read, or a shortened result cannot
+restore the assignment. A new valid read can retry a failed result.
+
+The reader refuses conflicting checkpoints, duplicate calls or results, pending
+compaction, and recovery after a native terminal event. Its result includes the
+recovery output's position so report acceptance can require a later report.
+The native recovery probe verifies that compaction first requires recovery,
+then verifies the matching call and output after the reader returns.
+
+This is evidence inspection. Child tool and stop handlers, parent reconciliation,
+and report acceptance still need to require this evidence. A ready result alone
+grants no action permission and does not check the order of a final report.

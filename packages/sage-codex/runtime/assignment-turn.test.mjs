@@ -178,3 +178,92 @@ test("native compaction markers cannot disguise retained, foreign, or client-aut
   f.write([...task(turn, "first"), output(turn, "actual report"), complete(turn, "actual report"), compactOutput(turn)]);
   assert.throws(() => identity.readNativeCompletion(f.file, options, expected()), /report evidence is unavailable/);
 });
+
+function recoveryRows(id = turn, call = 'read_assignment', messageText = 'first') {
+  const value = { decision: 'current-assignment', assignment: '66666666-6666-4666-8666-666666666666',
+    preparation: '77777777-7777-4777-8777-777777777777', task: 'T1', run: 'R1', role: 'lead',
+    child, turn: id, taskHash: hash(messageText), message: messageText };
+  const stamp = { internal_chat_message_metadata_passthrough: { turn_id: id } };
+  return [{ type: 'response_item', metadata: { client_authored: false }, payload: {
+    type: 'function_call', id: 'fc_' + call, namespace: 'mcp__sage_preparation', name: 'sage_read_assignment',
+    call_id: call, arguments: '{}', ...stamp } },
+  { type: 'response_item', metadata: { client_authored: false, fallback_token_limit_override: 3000,
+    mcp_attribution: { status: 'complete', sources: [{ server_name: 'sage_preparation', tool_name: 'sage_read_assignment', first_turn_id: id }] } },
+    payload: { type: 'function_call_output', id: 'fco_' + call, call_id: call, ...stamp,
+      output: [{ type: 'input_text', text: 'Wall time: 0.01 seconds\nOutput:' }, { type: 'input_text', text: JSON.stringify(value) }] } }];
+}
+function checkpoint(number = 1, id = turn) {
+  return { type: 'compacted', payload: { window_number: number,
+    window_id: `${String(number).padStart(8, '0')}-8888-4888-8888-888888888888`,
+    resume_metadata: { last_started_turn_id: id, multi_agent_version: 'v2' } } };
+}
+
+test('recovery evidence requires a matching delivered read after the latest compaction', t => {
+  const f = fixture(t), read = () => identity.readNativeRecovery(f.file, { sessionsDir: f.sessionsDir }, expected());
+  f.write(task(turn, 'first')); assert.equal(read().required, false); assert.equal(read().compaction, null);
+  f.write([...task(turn, 'first'), checkpoint()]); assert.equal(read().required, true);
+  f.write([...task(turn, 'first'), checkpoint(), ...recoveryRows()]);
+  assert.equal(read().required, false); assert.equal(read().call, 'read_assignment');
+  f.write([...task(turn, 'first'), checkpoint(), ...recoveryRows(), checkpoint(2)]);
+  assert.equal(read().required, true); assert.equal(read().call, null);
+  f.write([...task(turn, 'first'), checkpoint(), ...recoveryRows(), checkpoint(2), ...recoveryRows(turn, 'read_again')]);
+  assert.equal(read().required, false); assert.equal(read().call, 'read_again');
+});
+
+test('recovery evidence cannot reuse earlier reads, orphan outputs or another assignment turn', t => {
+  const f = fixture(t), read = (wanted = expected()) => identity.readNativeRecovery(f.file, { sessionsDir: f.sessionsDir }, wanted);
+  const [call, output] = recoveryRows();
+  for (const rows of [[...task(turn, 'first'), ...recoveryRows(), checkpoint()],
+    [...task(turn, 'first'), call, checkpoint(), output],
+    [...task(turn, 'first'), checkpoint(), output]]) {
+    f.write(rows); assert.equal(read().required, true);
+  }
+  f.write([...task(turn, 'first'), checkpoint(), ...recoveryRows(), ...task(later, 'second'), checkpoint(2, later)]);
+  assert.equal(read(expected(later, 'second')).required, true);
+  assert.equal(read().required, false);
+});
+
+test('recovery evidence refuses forged calls and retries failed or truncated reads without accepting them', t => {
+  const f = fixture(t), read = () => identity.readNativeRecovery(f.file, { sessionsDir: f.sessionsDir }, expected());
+  for (const change of [rows => { rows[0].payload.arguments = '{"task":"T2"}'; },
+    rows => { rows[0].payload.namespace = 'other'; },
+    rows => { rows[1].metadata.fallback_token_limit_override = 1; },
+    rows => { rows[1].payload.output[1].text = '{"isError":true}'; },
+    rows => { rows[1].metadata.mcp_attribution.sources[0].first_turn_id = later; }]) {
+    const rows = recoveryRows(); change(rows);
+    f.write([...task(turn, 'first'), checkpoint(), ...rows]); assert.equal(read().required, true);
+    f.write([...task(turn, 'first'), checkpoint(), ...rows, ...recoveryRows(turn, 'retry')]);
+    assert.equal(read().required, false);
+  }
+  for (const change of [rows => { rows[0].metadata.client_authored = true; },
+    rows => { rows[0].payload.internal_chat_message_metadata_passthrough.turn_id = later; }]) {
+    const rows = recoveryRows(); change(rows);
+    f.write([...task(turn, 'first'), checkpoint(), ...rows]); assert.throws(read, /recovery evidence is unavailable/);
+  }
+});
+
+test('recovery evidence refuses ambiguous checkpoints, duplicate calls and recovery after native terminal events', t => {
+  const f = fixture(t), read = () => identity.readNativeRecovery(f.file, { sessionsDir: f.sessionsDir }, expected());
+  for (const suffix of [[checkpoint(1, later)], [checkpoint(), checkpoint()],
+    [checkpoint(), ...recoveryRows(), ...recoveryRows()],
+    [checkpoint(), { type: 'event_msg', payload: { type: 'task_complete', turn_id: turn } }, ...recoveryRows()],
+    [checkpoint(), { type: 'event_msg', payload: { type: 'turn_aborted', turn_id: turn, reason: 'interrupted' } }, ...recoveryRows()]]) {
+    f.write([...task(turn, 'first'), ...suffix]); assert.throws(read, /recovery evidence is unavailable/);
+  }
+  f.write([...task(turn, 'first'), checkpoint(), ...recoveryRows()]);
+  assert.equal(read().required, false);
+});
+
+test('recovery evidence holds incomplete compaction and verifies a committed checkpoint before retry', t => {
+  const f = fixture(t), read = () => identity.readNativeRecovery(f.file, { sessionsDir: f.sessionsDir }, expected());
+  const summary = { type: 'response_item', metadata: { client_authored: false, compaction_output: true },
+    payload: { type: 'message', role: 'assistant', internal_chat_message_metadata_passthrough: { turn_id: turn } } };
+  f.write([...task(turn, 'first'), summary]); assert.throws(read, /recovery evidence is unavailable/);
+  f.write([...task(turn, 'first'), summary, checkpoint(), ...recoveryRows()]); assert.equal(read().required, false);
+  for (const change of [row => { row.payload.resume_metadata.last_started_turn_id = later; },
+    row => { delete row.payload.resume_metadata; }, row => { row.payload.window_id = 'unknown'; },
+    row => { row.payload.window_number = 0; }]) {
+    const row = checkpoint(); change(row);
+    f.write([...task(turn, 'first'), summary, row]); assert.throws(read, /recovery evidence is unavailable/);
+  }
+});

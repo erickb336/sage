@@ -3,6 +3,7 @@ import { constants, openSync, closeSync, fstatSync, lstatSync, readSync } from "
 import { isAbsolute, normalize, parse, relative, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
 import { createHash } from "node:crypto";
+import { readRecoveryOutput } from "./recovery-output.mjs";
 
 const LIMIT = 256 * 1024;
 const FIELDS = ["id", "session_id", "parent_thread_id", "agent_path", "cli_version"];
@@ -136,6 +137,70 @@ export function readAssignmentTurn(transcriptPath, options, expected) {
     return evidence;
   }
   catch { throw Error("Codex assignment evidence is unavailable"); }
+}
+
+/** Read recovery ordering from the same protected snapshot as assignment delivery.
+ * A ready result does not grant permission or validate a final report's ordering. */
+export function readNativeRecovery(transcriptPath, options, expected) {
+  const unavailable = () => { throw Error("Codex recovery evidence is unavailable"); };
+  try {
+    const rows = readSessionRecords(transcriptPath, options, Infinity);
+    const { position } = assignmentFromRecords(rows, expected);
+    const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+    let turn, context, terminal = false, pendingCompaction = false, windowNumber = 0;
+    let compaction = null, call = null, recoveredPosition = null;
+    const windows = new Set(), calls = new Map(), outputs = new Set();
+    for (const [index, row] of rows.entries()) {
+      if (index === 0) continue;
+      const p = row.payload;
+      if (row.type === "event_msg" && p.type === "task_started") { turn = p.turn_id; context = undefined; }
+      if (row.type === "turn_context") context = p.turn_id;
+      if (turn !== expected.turn || index <= position) continue;
+      if (row.type === "event_msg" && ["task_complete", "turn_aborted"].includes(p.type)) {
+        if (terminal || p.turn_id !== turn || pendingCompaction) unavailable();
+        terminal = true; continue;
+      }
+      if (terminal && ["response_item", "compacted"].includes(row.type)) unavailable();
+      if (row.type === "response_item" && row.metadata?.compaction_output === true) {
+        if (row.metadata.client_authored !== false || p.type !== "message" || p.role !== "assistant"
+          || p.internal_chat_message_metadata_passthrough?.turn_id !== turn) unavailable();
+        pendingCompaction = true; call = null; recoveredPosition = null; continue;
+      }
+      if (row.type === "compacted") {
+        if (context !== turn || !Number.isSafeInteger(p.window_number) || p.window_number <= windowNumber
+          || typeof p.window_id !== "string" || !uuid.test(p.window_id) || windows.has(p.window_id)
+          || p.resume_metadata?.last_started_turn_id !== turn || p.resume_metadata?.multi_agent_version !== "v2") unavailable();
+        windows.add(p.window_id); windowNumber = p.window_number;
+        compaction = p.window_id; pendingCompaction = false; call = null; recoveredPosition = null;
+        // A call made before this checkpoint cannot establish a later read.
+        for (const id of calls.keys()) calls.set(id, false);
+        continue;
+      }
+      if (row.type !== "response_item" || !["function_call", "function_call_output"].includes(p.type)) continue;
+      if (context !== turn || row.metadata?.client_authored !== false
+        || p.internal_chat_message_metadata_passthrough?.turn_id !== turn
+        || typeof p.call_id !== "string" || !/^[A-Za-z0-9_.:-]{1,256}$/.test(p.call_id)) unavailable();
+      if (p.type === "function_call") {
+        if (calls.has(p.call_id)) unavailable();
+        let empty = false;
+        try { const args = JSON.parse(p.arguments); empty = record(args) && Object.keys(args).length === 0; } catch {}
+        calls.set(p.call_id, !!compaction && !pendingCompaction && empty
+          && p.namespace === "mcp__sage_preparation" && p.name === "sage_read_assignment");
+      } else {
+        if (outputs.has(p.call_id)) unavailable();
+        outputs.add(p.call_id);
+        if (!calls.get(p.call_id) || pendingCompaction) continue;
+        try {
+          readRecoveryOutput(row, { child: expected.child, turn: expected.turn, taskHash: expected.taskHash });
+          call = p.call_id; recoveredPosition = index;
+        } catch {
+          // Failed or shortened results do not recover context. A fresh read can retry.
+        }
+      }
+    }
+    if (pendingCompaction) unavailable();
+    return { required: compaction !== null && call === null, compaction, call, position: recoveredPosition };
+  } catch { unavailable(); }
 }
 
 /** Discover delivery only for an exact saved task hash in the current native child turn. */

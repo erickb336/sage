@@ -6,7 +6,7 @@ import {createHash} from "node:crypto";
 import assert from "node:assert/strict";
 import {existsSync,readdirSync,readFileSync,lstatSync} from "node:fs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
-import {readNativeInterruption,readAssignmentTurn,readNativeFollowup} from "../packages/sage-codex/runtime/identity.mjs";
+import {readNativeInterruption,readAssignmentTurn,readNativeFollowup,readNativeRecovery} from "../packages/sage-codex/runtime/identity.mjs";
 import {readObservations} from "../packages/sage-codex/runtime/events.mjs";
 import {readRecoveryOutput} from "../packages/sage-codex/runtime/recovery-output.mjs";
 import {setupCapture} from "./fixtures/codex-native/setup-capture.mjs";
@@ -323,9 +323,14 @@ data: ${JSON.stringify(event)}
               && row.payload.call_id === "probe_child_recovery");
           check(outputs.length === 1 && readRecoveryOutput(outputs[0], { child: childThread, turn: binding.turn,
             taskHash: recovered.taskHash }) === CHILD_PROMPT, "recovery_output_would_change_on_replay");
+          const recovery = readNativeRecovery(transcript, { sessionsDir: join(codexHome, "sessions") }, {
+            session: rootThread, child: childThread, parent: rootThread, path: taskName, author: "/root",
+            turn: binding.turn, taskHash: recovered.taskHash });
+          check(!recovery.required && recovery.compaction && recovery.call === "probe_child_recovery",
+            "recovery_not_bound_to_current_compaction");
           childRecoveryPending = false; childCompactionReady = true; childRequests++;
           print({ type: "child_assignment_recovery_evidence", exactPreparedMessage: true, sameChildAndTurn: true,
-            unchangedAdmission: true, replayTextStable: true, simulatedModel: true, automaticRecoveryEnforced: false });
+            unchangedAdmission: true, replayTextStable: true, recoveryAfterLatestCompaction: true, simulatedModel: true, automaticRecoveryEnforced: false });
           respond(res, message(CHILD_MARKER)); return;
         }
         if (childCompactionObserved) {
@@ -352,6 +357,10 @@ data: ${JSON.stringify(event)}
         check(hooks.length === 2 && new Set(hooks.map(row => row.hook_event_name)).size === 2
           && hooks.every(row => row.trigger === "auto" && row.agent_id === childThread
             && row.session_id === rootThread && row.turn_id === bound.turn), "child_compaction_hook_identity_mismatch");
+        const recovery = readNativeRecovery(transcript, { sessionsDir: join(codexHome, "sessions") }, {
+          session: rootThread, child: childThread, parent: rootThread, path: taskName, author: "/root",
+          turn: bound.turn, taskHash: createHash("sha256").update(CHILD_PROMPT).digest("hex") });
+        check(recovery.required && recovery.compaction && recovery.call === null, "compaction_did_not_require_recovery");
         childCompactionReady = values.some(text => text.includes(CHILD_PROMPT));
         childCompactionObserved = true; childRequests++;
         print({ type: "child_compaction_evidence", exactAssignmentPresent: childCompactionReady,
