@@ -89,3 +89,25 @@ next model request. The child then completes with one recorded completion.
 This route uses simulated responses that explicitly request the tool. It does
 not yet enforce automatic recovery or prove that a real model requests it.
 The original `--sage-child-compaction` readiness route therefore still fails.
+
+
+## Verify complete reader output
+
+`readRecoveryOutput` checks one saved native reader result against the child's
+turn and exact task hash. It requires native MCP attribution and the saved
+output budget. The complete two-part text output must survive native replay
+without a change. Each part costs the ceiling of its UTF-8 byte length divided
+by four. The saved budget already includes the native serialization allowance.
+Missing budgets, unknown shapes, changed assignments, and insufficient budgets
+are refused. This follows Codex `rust-v0.160.0`:
+
+- [MCP output and the first truncation pass](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/context.rs).
+- [History replay and the saved budget](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/context_manager/history.rs).
+- [Content-item truncation](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/utils/output-truncation/src/lib.rs).
+- [UTF-8 token estimate](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/utils/string/src/truncate.rs).
+
+The native recovery probe checks this output evidence before declaring recovery.
+The function does not authenticate a transcript path, find the matching call,
+or prove ordering after the latest compaction. The production gate must add
+those checks before it can permit another action or accept a report. This step
+does not enable automatic recovery or installed Sage.

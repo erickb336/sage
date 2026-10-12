@@ -8,6 +8,7 @@ import {existsSync,readdirSync,readFileSync,lstatSync} from "node:fs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
 import {readNativeInterruption,readAssignmentTurn,readNativeFollowup} from "../packages/sage-codex/runtime/identity.mjs";
 import {readObservations} from "../packages/sage-codex/runtime/events.mjs";
+import {readRecoveryOutput} from "../packages/sage-codex/runtime/recovery-output.mjs";
 import {setupCapture} from "./fixtures/codex-native/setup-capture.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -315,9 +316,16 @@ data: ${JSON.stringify(event)}
             && recovered.assignment === binding.assignment && recovered.task === "T1" && recovered.run === "R1"
             && state.reservations.length === 1 && state.bindings.length === 1
             && (state.completions?.length ?? 0) === 0, "child_assignment_recovery_mismatch");
+          const transcript = JSON.parse(readFileSync(join(root, `child-path-${childThread}.json`), "utf8"));
+          check(lstatSync(transcript).size <= 16 * 1024 * 1024, "recovery_transcript_too_large");
+          const outputs = readFileSync(transcript, "utf8").trim().split("\n").map(line => JSON.parse(line))
+            .filter(row => row.type === "response_item" && row.payload?.type === "function_call_output"
+              && row.payload.call_id === "probe_child_recovery");
+          check(outputs.length === 1 && readRecoveryOutput(outputs[0], { child: childThread, turn: binding.turn,
+            taskHash: recovered.taskHash }) === CHILD_PROMPT, "recovery_output_would_change_on_replay");
           childRecoveryPending = false; childCompactionReady = true; childRequests++;
           print({ type: "child_assignment_recovery_evidence", exactPreparedMessage: true, sameChildAndTurn: true,
-            unchangedAdmission: true, simulatedModel: true, automaticRecoveryEnforced: false });
+            unchangedAdmission: true, replayTextStable: true, simulatedModel: true, automaticRecoveryEnforced: false });
           respond(res, message(CHILD_MARKER)); return;
         }
         if (childCompactionObserved) {
