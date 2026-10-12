@@ -46,7 +46,7 @@ This uses the same binding checks as the first-tool path; it does not invent a t
 
 A missing or conflicting result retains the reservation. A retry can complete after the matching result arrives, including after Sage off.
 A failed transcript-observation write can retry an already saved binding. Identical completion retries preserve one record.
-Later tasks on the same child remain a separate case; an initial-task binding cannot authorize a different turn.
+An initial-task binding cannot authorize a different turn. Prepared later tasks use the separate checks in `native-followup.md`.
 
 The isolated `--sage-no-tool` native probe returns a structured review without any child tool call.
 The chief then reads, records, inspects, finishes, and accepts it on the actual temporary branch commit.
@@ -58,6 +58,11 @@ A stop callback records an observation. It does not prove that the child finishe
 Another hook can block that stop and let the same child continue.
 Sage retains capacity until the protected native transcript contains `task_complete` for the admitted turn and its retained final message.
 The parent's list, wait, or report-read operation checks that evidence and releases the slot once.
+For an already-bound child, this check does not require a delivered stop callback.
+The saved child identity, assignment, turn, transcript reference, and native terminal record must all match.
+Recovery does not invent a stop event, accept a report, or apply a verdict.
+An unbound child, missing transcript, incomplete turn, or invalid evidence retains capacity.
+A start binding waits when its first transcript reference has not arrived.
 A tool result that says “completed” cannot replace transcript evidence.
 
 The isolated `--sage-stop-block` probe adds a second hook that blocks the first stop.
@@ -78,3 +83,15 @@ The report reader still refuses those reports. A saved terminal record also prev
 The isolated `--sage-report-correction` probe returns missing fields, then a valid review on the same native turn.
 The isolated `--sage-report-escape` probe returns the same invalid report twice; it releases one slot without saving a report or verdict.
 Both use simulated responses in native Codex. They do not prove review quality or installed automatic Sage.
+
+## Missing stop callback
+
+The isolated `--sage-missed-stop` probe omits Sage's stop hook from its temporary
+configuration. It keeps the observer and the first-tool binding checks. The same
+native child completes two prepared assignments. The parent reconciles both
+terminal records, reads both reports, and records the second report.
+
+The probe checks that no Sage stop callback was stored. It uses real CLI 0.160.0
+with simulated responses. This proves recovery for already-bound children only.
+Unbound delivery, failed starts, interrupted turns, compaction, and cross-session
+recovery remain separate work. The required-validation activation blocker remains.

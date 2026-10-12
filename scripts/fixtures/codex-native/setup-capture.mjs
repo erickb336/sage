@@ -5,7 +5,7 @@ import {spawn} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
-export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,sage=false,disconnectOnSpawn=false,review=false,nestedReview=false,blockStop=false,captureFailure=false,denyCommand=false,emptyLogbook=false,taskLifecycle=false,deadlineMs=120_000}){
+export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,sage=false,disconnectOnSpawn=false,review=false,nestedReview=false,blockStop=false,captureFailure=false,denyCommand=false,emptyLogbook=false,taskLifecycle=false,omitStop=false,deadlineMs=120_000}){
  assert(/^[A-Za-z0-9/._-]+$/.test(realpathSync(root)), "unsafe_probe_root");
  assert.equal(realpathSync(codexHome),join(realpathSync(root),'codex'));
  mkdirSync(join(root,'events'));
@@ -13,7 +13,7 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
  const script=join(root,'capture.mjs');
  writeFileSync(script,readFileSync(new URL('./capture-native-hook.mjs',import.meta.url)));
  const command=`node ${JSON.stringify(script)}${denySpawn ? " --deny-spawn" : ""}`;
- const integrated=sage?await setupSage(root,{disconnectOnSpawn,review,nestedReview,capacity:captureFailure?1:5,denyCommand,emptyLogbook,taskLifecycle}):null;
+ const integrated=sage?await setupSage(root,{disconnectOnSpawn,review,nestedReview,capacity:captureFailure?1:5,denyCommand,emptyLogbook,taskLifecycle,omitStop}):null;
  const baseConfig=integrated?.config??'';
  const blocker=join(root,'block-first-stop.mjs');
  if(blockStop)writeFileSync(blocker,readFileSync(new URL('./block-first-stop.mjs',import.meta.url)));
@@ -30,8 +30,8 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
   const hs=r.data[0].hooks;
   const failures=hs.filter(h=>h.eventName==='postToolUseFailure');
   assert(failures.length<=1&&(!failures.length||captureFailure));failureHookAvailable=failures.length===1;
-  assert.equal(hs.length,(sage?9:4)+(blockStop?1:0)+failures.length);
-  assert.deepEqual(hs.map(h=>h.eventName).sort(),['preToolUse','postToolUse','subagentStart','subagentStop',...(sage?['preToolUse','postToolUse','subagentStop','userPromptSubmit','userPromptSubmit']:[]),...(blockStop?['subagentStop']:[]),...(failureHookAvailable?['postToolUseFailure']:[])].sort());
+  assert.equal(hs.length,(sage?9-(omitStop?1:0):4)+(blockStop?1:0)+failures.length);
+  assert.deepEqual(hs.map(h=>h.eventName).sort(),['preToolUse','postToolUse','subagentStart','subagentStop',...(sage?['preToolUse','postToolUse',...(omitStop?[]:['subagentStop']),'userPromptSubmit','userPromptSubmit']:[]),...(blockStop?['subagentStop']:[]),...(failureHookAvailable?['postToolUseFailure']:[])].sort());
 
   assert(hs.every(h=>(sage||h.command===command)&&h.enabled&&h.sourcePath===join(codexHome,'hooks.json')));
   return hs;

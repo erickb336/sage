@@ -7,16 +7,18 @@ import assert from "node:assert/strict";
 import {existsSync,readdirSync,readFileSync} from "node:fs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
 import {readAssignmentTurn,readNativeFollowup} from "../packages/sage-codex/runtime/identity.mjs";
+import {readObservations} from "../packages/sage-codex/runtime/events.mjs";
 import {setupCapture} from "./fixtures/codex-native/setup-capture.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
-const sageFollowup = process.argv.includes("--sage-followup");
+const missedStop = process.argv.includes("--sage-missed-stop");
+const sageFollowup = missedStop || process.argv.includes("--sage-followup");
 assert(!sageFollowup || process.argv.slice(2).length === 1, "sage_followup_is_a_separate_route");
 let sageFollowupVerified = false;
 const unpreparedFollowup = process.argv.includes("--sage-unprepared-followup");
@@ -113,7 +115,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,blockStop,captureFailure:failedSpawn,emptyLogbook:createRun,taskLifecycle,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport,nestedReview:nestedReport,blockStop,captureFailure:failedSpawn,emptyLogbook:createRun,taskLifecycle,omitStop:missedStop,deadlineMs});
   const initialLogbook = sage || sageOff ? integrated.readLogbook() : null;
   if (createRun) { assert.equal(initialLogbook.tasks.length, 0); assert.equal(initialLogbook.runs.length, 0); }
   if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
@@ -577,6 +579,11 @@ data: ${JSON.stringify(event)}
         const agent = childEntry(info.outputs[calls.completed]);
         check(agent.agent_status?.completed === CHILD_MARKER, "native_child_completion_marker_mismatch");
         nativeCompleted = true;
+        if (missedStop) {
+          const recovered = integrated.readJournal().completions?.length ?? 0;
+          print({ type: "missed_stop_first_completion", nativeCompleted: true, recoveredAssignments: recovered });
+          check(recovered === 1, "missed_stop_first_assignment_not_recovered");
+        }
         print({ type: "native_tool_result", tool: "list_agents", phase: "completed", agent_name: taskName, agent_status: { completed: CHILD_MARKER } });
         if (nestedReport) { nestedFlow.chief(0, info, res, CHILD_MARKER); return; }
         if (reportProbe || createRun) {
@@ -967,6 +974,15 @@ data: ${JSON.stringify(event)}
       assert.equal(started.metadata.id, started.agent_id);
       assert.equal(started.metadata.session_id, request.session_id);
       assert(stop.some(row => row.agent_id === started.agent_id));
+    }
+    if (missedStop) {
+      const hooks = JSON.parse(readFileSync(join(codexHome, "hooks.json"), "utf8")).hooks.SubagentStop;
+      assert(hooks.length > 0 && hooks.every(group => group.hooks.every(hook => hook.type !== "mcp_tool")));
+      const observations = readObservations(join(root, "observations", rootThread));
+      assert.equal(observations.filter(row => row.kind === "child-stop").length, 0);
+      assert.equal(integrated.readJournal().completions.length, 2);
+      print({ type: "missed_stop_evidence", sageStopHooks: 0, storedStopCallbacks: 0,
+        nativeCompletions: 2, recoveredAssignments: 2, simulatedModel: true });
     }
     if (sageFollowup) {
       const saved = integrated.readJournal();

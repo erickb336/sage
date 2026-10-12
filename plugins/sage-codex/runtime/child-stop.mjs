@@ -93,7 +93,7 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
   return { directory, observations, completed };
 }
 
-/** Only a native parent reconciles its own stopped children; the transcript is the terminal evidence. */
+/** Only a native parent reconciles its own bound children; a stop callback is not terminal proof. */
 export function reconcileNativeCompletions(context, session, options) {
   const native = nativeToolContext(context);
   if (typeof session !== "string" || !UUID.test(session)) refuse();
@@ -104,8 +104,10 @@ export function reconcileNativeCompletions(context, session, options) {
   for (const bound of state.bindings.filter(row => row.project === options.project && row.session === key
     && row.epoch === owner.epoch && row.issuer === native.actor)) {
     if (state.completions?.some(row => row.assignment === bound.assignment)) continue;
+    // The start callback can bind a child before its first transcript reference arrives.
+    // Keep that assignment pending; existing references still require full validation.
     const observations = readObservations(join(options.observationsRoot, session));
-    if (!observations.some(row => row.kind === "child-stop" && row.child === bound.child && row.turn === bound.turn)) continue;
+    if (!observations.some(row => row.kind === "child-transcript" && row.child === bound.child && row.turn === bound.turn)) continue;
     const evidence = completionEvidence(state, bound, session, options);
     if (evidence.completed) completeAdmission(options.directory, bound);
   }

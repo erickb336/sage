@@ -1008,8 +1008,8 @@ test("native parent reads its completed child's validated report without changin
   const f = await completionFixture(t);
   const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
   assert.equal(typeof readChildReport, "function");
-  appendReport(f);
   assert.throws(() => readChildReport({ name: f.input.name }, f.native(session), f.options));
+  appendReport(f);
   f.policy.completeChild(f.stop, f.native(childActor));
   const before = f.core.readAdmission(f.options.directory);
   const read = readChildReport({ name: f.input.name }, f.native(session), f.options);
@@ -3054,4 +3054,73 @@ test('native later turn refuses a superseded recipient turn before binding', asy
   assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
   f.deliver(f.later);
   assert.deepEqual(await f.evaluate(f.policy, f.tool, childActor), { decision: 'pass' });
+});
+
+test('native missed-stop recovery completes a bound child once from its parent even after Sage off', async t => {
+  for (const off of [false, true]) {
+    const f = await completionFixture(t);
+    if (off) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    appendReport(f);
+    const { readChildReport } = await import(pathToFileURL(join(f.plugin, 'runtime/report-intake.mjs')));
+    const report = readChildReport({ name: f.input.name }, f.native(session), f.options);
+    assert.equal(report.decision, 'report-ready'); assert.equal(report.run, 'R1');
+    const state = f.core.readAdmission(f.options.directory);
+    assert.equal(state.completions.length, 1); assert.deepEqual(state.completions[0], state.bindings[0]);
+    assert.deepEqual(readChildReport({ name: f.input.name }, f.native(session), f.options), report);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+    assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === 'child-stop').length, 0);
+  }
+});
+
+test('native missed-stop recovery keeps later work until its own terminal record and preserves parent ownership', async t => {
+  const f = await deliveredFollowupFixture(t);
+  await f.evaluate(f.policy, f.tool, childActor);
+  f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: '0.160.0', session,
+    kind: 'child-stop', child: childActor, turn: turns[1] });
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const reconcile = actor => reconcileNativeCompletions(f.native(actor), session, f.options);
+  reconcile(session); assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  appendReport(f, reportText, childActor, turns[2]);
+  for (const actor of [childActor, 'a1111111-2222-4333-8444-555555555555']) {
+    reconcile(actor); assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  }
+  reconcile(session);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 2); assert.deepEqual(state.completions[1], state.bindings[1]);
+  reconcile(session); assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+  const stops = f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === 'child-stop');
+  assert.deepEqual(stops.map(row => row.turn), [turns[1]]);
+});
+
+test('native missed-stop recovery refuses altered completion evidence without releasing capacity', async t => {
+  const f = await completionFixture(t);
+  appendReport(f);
+  const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+  const original = readFileSync(transcript, 'utf8');
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const reconcile = () => reconcileNativeCompletions(f.native(session), session, f.options);
+  const save = rows => writeFileSync(transcript, rows.map(row => JSON.stringify(row) + '\n').join(''));
+  for (const change of [rows => rows[0].payload.id = session,
+    rows => rows.at(-2).metadata.client_authored = true,
+    rows => rows.at(-1).payload.last_agent_message = 'changed terminal result',
+    rows => rows.at(-1).payload.turn_id = turns[2]]) {
+    const rows = original.trimEnd().split('\n').map(JSON.parse); change(rows); save(rows);
+    assert.throws(reconcile); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  }
+  const rows = original.trimEnd().split('\n').map(JSON.parse); rows.pop(); save(rows);
+  reconcile(); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  writeFileSync(transcript, original); reconcile();
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
+test('native missed-stop recovery waits for initial binding evidence before requiring a transcript', async t => {
+  const f = await composedPolicyFixture(t); f.bindLead();
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const reconcile = () => reconcileNativeCompletions(f.native(session), session, f.options);
+  assert.deepEqual(reconcile(), { decision: 'reconciled' });
+  assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  await f.evaluate(policy, { ...patch(turns[1]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path: f.childTranscript() }, childActor);
+  appendReport(f); reconcile();
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
 });

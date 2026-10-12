@@ -27,7 +27,8 @@ after Sage off, including when its first callback is a no-tool stop.
 
 A resumed lead uses its current assignment for delegation and its original spawn
 for identity. A completed or ended lead run cannot prepare more work. Recovery
-from interrupted dispatch, missing callbacks, or changed sessions remains unfinished.
+from interrupted dispatch, unbound delivery, or changed sessions remains unfinished.
+An already-bound child can recover after a missing stop callback; see `child-binding.md`.
 
 Run `node scripts/probe-codex-lifecycle.mjs --follow-up` with fake process tools
 first on PATH. The isolated native probe verifies the sender receipt and each
