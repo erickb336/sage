@@ -58,8 +58,11 @@ function bindObservedTranscript(input, native, options) {
   publish(directory, started);
   // Retain validated delivery even when its parent result has not arrived yet.
   // This observation grants no binding, tool permission, or completed assignment.
-  publish(directory, { schema: 1, runtime: RUNTIME_VERSION, session: event.session_id, kind: "initial-child-transcript",
-    child: native.actor, turn: initial.turn, transcript: event.transcript_path });
+  if (!readObservations(directory).some(row => row.kind === "spawn-result" && row.actor === started.parent
+    && row.call === assigned.assignment.call)) {
+    publish(directory, { schema: 1, runtime: RUNTIME_VERSION, session: event.session_id, kind: "initial-child-transcript",
+      child: native.actor, turn: initial.turn, transcript: event.transcript_path });
+  }
   const { schema, runtime, kind, ...identity } = started;
   const result = bindNativeChild({ directory: options.directory, project: options.project, observationsDirectory: directory }, identity);
   publish(directory, { schema: 1, runtime: RUNTIME_VERSION, session: event.session_id, kind: "child-transcript",

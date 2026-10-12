@@ -100,8 +100,8 @@ recovery remain separate work. The required-validation activation blocker remain
 ## Initial delivery before the parent result
 
 An initial child callback can arrive before the parent spawn result. The adapter
-saves the validated transcript path as an initial-delivery observation before it
-tries to bind the child. This observation grants no tool permission or capacity
+saves the validated transcript path as an initial-delivery observation when the
+parent result is missing. This observation grants no tool permission or capacity
 release.
 
 The parent can recover the binding through its normal completion reconciliation.
