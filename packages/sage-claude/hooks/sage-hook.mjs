@@ -1321,7 +1321,8 @@ function gitGate(event, command, state, cwd, main, tool) {
   let verdict;
   try {
     if (stateTool.error) throw stateTool.error;
-    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head });
+    // Only a task of the merged project's logbook approves: its folder, resolved as for a lead (F-T273-9).
+    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head, project: realpathSync.native(cwd) });
   } catch (e) {
     verdict = { reason: `it could not run (${e?.message ?? e}), so it refuses every merge. Tell the user.` };
   }

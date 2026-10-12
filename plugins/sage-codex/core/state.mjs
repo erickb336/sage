@@ -674,12 +674,16 @@ function rebuild(root) {
  * it refuses when the known project list is missing instead of making it. With head (it needs pr), the name of the pull
  * request's head branch on GitHub: each task of that pull request, now or in its PR history, must own it, by its branch=
  * or as a branch of the task (ofTask), so a task cannot lend its verdicts to another task's pull request (F-T273-8).
+ * With project, the folder of the project being merged: only a task of its logbook counts as a task of the pull request
+ * that may approve the merge. A task of another logbook with verdicts on the SHA must still pass (F-T273-9).
  */
-function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head } = {}) {
+function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, project } = {}) {
   const root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
     if (head !== undefined && !pr) return { ok: false, reason: "--head needs --pr: the head branch is the pull request's." };
+    if (head === "") return { ok: false, reason: "--head is empty: give the pull request's head branch (F-T273-10)." };
+    const mine = project === undefined ? undefined : basename(storeDir(project, env)); // the merged project's logbook
     sha = String(sha).toLowerCase(); // the ledger holds SHAs as git prints them
     pr &&= prNumber(String(pr)); // the tasks table holds it as text; "040" is PR 40
     const cfg = config(env); // once: the merge check may judge thousands of tasks
@@ -698,7 +702,7 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head } = {})
       if (!listed.has(basename(dir))) return strangers.push(dir), [];
       const [tasks, findings, decisions] = book ? [rowsOf(book.tasks), rowsOf(book.findings), rowsOf(book.decisions)] : [[], [], []];
       const repaired = decisions.some((d) => d.decision.startsWith("tasks.tsv started again without rows"));
-      const ofPr = pr ? prHistory(pr, tasks, decisions, ledger) : new Set();
+      const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
       const [byId, ownOf, findingsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings)];
       return [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
@@ -709,10 +713,10 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head } = {})
     const one = strangers.length === 1;
     if (strangers.length) return { ok: false, reason: `${strangers.map(visible).join(" and ")} ${one ? "has" : "have"} verdicts on ${sha.slice(0, 7)} but ${one ? "is" : "are"} not in the known project list (${join(root, "projects.tsv")}), so the merge check refuses: a logbook that init did not make may be forged. init adds only a project's own logbook folder, so it does not help here. If ${one ? "it is" : "one is"} a project's logbook under another name (a renamed folder or a link), ask the user to give the folder back its own name, or to run ${REBUILD} and check each folder that it prints. If no project uses ${one ? "it" : "one"}, ask the user to remove it.` };
     if (!each.length) return { ok: false, reason: `no verdicts recorded for ${sha}. Record the reviews and QA with sage verdict first.` };
-    if (pr && !each.some((r) => r.ofPr)) return { ok: false, reason: `no task of PR ${pr} has verdicts on ${sha.slice(0, 7)}: only ${each.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")} ${each.length === 1 ? "has" : "have"}. Record PR ${pr}'s verdicts under its own task (sage verdict <T> --sha <sha> --pr ${pr}), or set its PR: sage task <T> set pr=${pr}.` };
+    if (pr && !each.some((r) => r.ofPr)) return { ok: false, reason: `no task of PR ${pr}${mine === undefined ? "" : ` in this project's logbook (${visible(mine)})`} has verdicts on ${sha.slice(0, 7)}: only ${each.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")} ${each.length === 1 ? "has" : "have"}. Record PR ${pr}'s verdicts under its own task (sage verdict <T> --sha <sha> --pr ${pr}), or set its PR: sage task <T> set pr=${pr}.` };
     // The head branch rule comes after each task's own judgment, so a refusal names a task's missing verdicts first.
     const strays = head === undefined ? [] : each.filter((r) => r.ofPr && !r.owns);
-    if (strays.length && each.every((r) => r.ok)) return { ok: false, reason: `PR ${pr}'s head branch ${JSON.stringify(head)} is not a branch of ${strays.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")}, so the merge check refuses: each task that is or was on a pull request must own its head branch (its branch=, or a name such as sage/${strays[0].id.toLowerCase()}). A task that holds this pull request by mistake keeps it in its PR history: ask the user.` };
+    if (strays.length && each.every((r) => r.ok)) return { ok: false, reason: `PR ${pr}'s head branch ${JSON.stringify(head)} is not a branch of ${strays.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")}, so the merge check refuses: each task that is or was on a pull request must own its head branch, a branch named for the task. Rename the branch to a task name (for example sage/${strays[0].id.toLowerCase()}-<words>), or the user lands this pull request.` };
     if (each.length === 1) return { ok: each[0].ok, reason: each[0].reason };
     const all = `${each.length} tasks have verdicts on ${sha.slice(0, 7)}${pr ? ` or belong to PR ${pr}` : ""}, and each must pass`;
     const bad = each.filter((r) => !r.ok);
@@ -794,7 +798,7 @@ function sage(argv, env = process.env) {
   if (cmd === "merge-check") {
     const cycles = opt.cycles === undefined ? undefined : (typed("cycles.small", opt.cycles) ?? refuse("--cycles is a whole number from 1 to 10")); // the chief's explicit count: it only raises a task's own count
     if (opt.pr !== undefined && !PR.test(opt.pr)) refuse("--pr is the pull request's number, with no leading zero, for example --pr 5");
-    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head });
+    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project: resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd()) });
     return r.ok ? r.reason : refuse(r.reason);
   }
   if (cmd === "config") {

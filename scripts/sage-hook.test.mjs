@@ -33,7 +33,8 @@ function session(env = {}) {
       p.on("close", () => done(out ? JSON.parse(out) : undefined));
       p.stdin.end(JSON.stringify({ session_id: "s1", ...event }));
     });
-  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", dir], { encoding: "utf8", env: vars }).stdout.trim();
+  // The logbook is FEATURE's, where bash() runs commands: a merge counts only the tasks of its own project's logbook (F-T273-9).
+  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", FEATURE], { encoding: "utf8", env: vars }).stdout.trim();
   return { dir, send, sendAsync, sage, vars };
 }
 
@@ -833,7 +834,7 @@ test("F-T47-1: the autopilot note gives the clean cycles that the merge check as
     s.sage("task", "add", "--title", "t", ...args);
     const sha = n.repeat(40);
     for (const kind of ["checks-pass", "review-clean", "security-clean", "qa-pass"]) s.sage("verdict", `T${n}`, "--sha", sha, "--kind", kind);
-    asks[args.join(" ")] = spawnSync("node", [TOOL, "merge-check", "--sha", sha, "--project", s.dir], { encoding: "utf8", env: s.vars }).stderr.match(/\d of (\d+) clean cycles/)?.[1];
+    asks[args.join(" ")] = spawnSync("node", [TOOL, "merge-check", "--sha", sha, "--project", FEATURE], { encoding: "utf8", env: s.vars }).stderr.match(/\d of (\d+) clean cycles/)?.[1];
   }
   assert.deepEqual(asks, { "--size small": "3", "--size large": "3", "--size small --risk auth": "4" }, "the merge check asks the counts that the note gives");
 });
@@ -1314,7 +1315,7 @@ test("the merge form: one --match-head-commit with the full SHA, the pull reques
 test("the merge check gets the pull request's number from the merge command", () => {
   const s = autopilotSession();
   s.sage("task", "T1", "set", "pr=40");
-  assert.match(denied(s.send(bash(`gh pr merge 42 --squash --delete-branch --match-head-commit ${SHA}`))) ?? "", /^sage: the merge check refuses: no task of PR 42 has verdicts on a1b2c3d/);
+  assert.match(denied(s.send(bash(`gh pr merge 42 --squash --delete-branch --match-head-commit ${SHA}`))) ?? "", /^sage: the merge check refuses: no task of PR 42 in this project's logbook \(\S+\) has verdicts on a1b2c3d/);
   assert.equal(s.send(bash(`gh pr merge 40 --squash --delete-branch --match-head-commit ${SHA}`)), undefined);
   assert.equal(s.send(bash(MERGE)), undefined, "T1 was on PR 41 too, and it passes on the SHA");
 });
@@ -1754,9 +1755,9 @@ test("S-PRZERO: a PR number with a leading zero is refused by the hook and the s
   const s = autopilotSession(); // T1 (small) has 2 clean cycles on SHA under PR 41
   s.sage("task", "add", "--title", "the large risky change", "--size", "large", "--risk", "auth");
   s.sage("task", "T2", "set", "pr=40");
-  const zero = spawnSync("node", [TOOL, "verdict", "T1", "--sha", SHA, "--kind", "qa-pass", "--pr", "040", "--project", s.dir], { encoding: "utf8", env: s.vars });
+  const zero = spawnSync("node", [TOOL, "verdict", "T1", "--sha", SHA, "--kind", "qa-pass", "--pr", "040", "--project", FEATURE], { encoding: "utf8", env: s.vars });
   assert.match(zero.stderr, /"040" is not a pull request number/);
-  const check = spawnSync("node", [TOOL, "merge-check", "--sha", SHA, "--pr", "040", "--project", s.dir], { encoding: "utf8", env: s.vars });
+  const check = spawnSync("node", [TOOL, "merge-check", "--sha", SHA, "--pr", "040", "--project", FEATURE], { encoding: "utf8", env: s.vars });
   assert.match(check.stderr, /--pr is the pull request's number, with no leading zero/);
   assert.match(denied(s.send(bash(`gh pr merge 040 --squash --delete-branch --match-head-commit ${SHA}`))) ?? "", /no leading zero/);
   // A row that an older state tool wrote as 040 is still PR 40, so the large task counts for PR 40.
@@ -5134,7 +5135,7 @@ test("F-T273-8: a failed, slow or fork read of the head branch refuses the merge
 
 test("F-T273-8: merge-check --head runs the same check by hand, and needs --pr", () => {
   const s = autopilotSession();
-  const check = (...args) => spawnSync("node", [TOOL, "merge-check", "--sha", SHA, ...args, "--project", s.dir], { encoding: "utf8", env: s.vars });
+  const check = (...args) => spawnSync("node", [TOOL, "merge-check", "--sha", SHA, ...args, "--project", FEATURE], { encoding: "utf8", env: s.vars });
   assert.equal(check("--pr", "41", "--head", "claude/t1").status, 0);
   const other = check("--pr", "41", "--head", "claude/t2");
   assert.equal(other.status, 1);
@@ -5149,4 +5150,36 @@ test("T275: a lead never clears its branch, and gives each option once", () => {
     assert.match(denied(stateRun(s, args)) ?? "", /is given twice/, args);
   }
   assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1")), undefined);
+});
+
+// Repair round 3 of T273 (R894). Each test fails on f569116 and passes after.
+test("F-T273-9: only a task of the merged project's logbook approves a merge; another logbook's task can still block (C3)", () => {
+  const PROJECT_B = checkout("claude/t1");
+  const a = autopilotSession(); // project A (FEATURE): T1 has clean cycles on SHA under PR 41
+  a.sage("task", "T1", "set", "pr=77"); // A's lead attaches T1 to PR 77
+  const merge77 = (cwd) => denied(a.send(bash(`gh pr merge 77 --squash --delete-branch --match-head-commit ${SHA}`, cwd)));
+  const inB = (...args) => spawnSync("node", [TOOL, ...args, "--project", PROJECT_B], { encoding: "utf8", env: a.vars });
+  inB("init");
+  inB("task", "add", "--title", "b", "--size", "small");
+  assert.match(merge77(PROJECT_B) ?? "", /^sage: the merge check refuses: no task of PR 77 in this project's logbook \(\S+\) has verdicts on a1b2c3d/, "C3: B's merge of PR 77 needs a task of B");
+  assert.equal(merge77(FEATURE), undefined, "A's own merge of PR 77 passes");
+  const byHand = (cwd) => spawnSync("node", [TOOL, "merge-check", "--sha", SHA, "--pr", "77"], { cwd, encoding: "utf8", env: a.vars });
+  assert.equal(byHand(PROJECT_B).status, 1, "the hand-run check in B's folder");
+  assert.equal(byHand(FEATURE).status, 0, "the hand-run check in A's folder");
+  inB("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr", "5"); // B's T1: one cycle on the same SHA, not clean enough
+  assert.match(merge77(FEATURE) ?? "", /2 tasks have verdicts on a1b2c3d or belong to PR 77, and each must pass; 1 fails/, "a task of another logbook with verdicts on the SHA still blocks");
+});
+
+test("F-T273-10: merge-check refuses an empty --head", () => {
+  const s = autopilotSession();
+  const r = spawnSync("node", [TOOL, "merge-check", "--sha", SHA, "--pr", "41", "--head=", "--project", FEATURE], { encoding: "utf8", env: s.vars });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--head is empty: give the pull request's head branch/);
+});
+
+test("F-T273-11: the branch-rule refusal says to rename the branch to a task name, or that the user lands it", () => {
+  const s = autopilotSession({ FAKE_PR_HEAD: "feature/x" });
+  const why = denied(s.send(bash(MERGE))) ?? "";
+  assert.match(why, /Rename the branch to a task name \(for example sage\/t1-<words>\), or the user lands this pull request\.$/);
+  assert.doesNotMatch(why, /branch=/);
 });
