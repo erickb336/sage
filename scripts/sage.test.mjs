@@ -273,19 +273,20 @@ test("F-T266-3: run add takes the role as the table stores it, in lower case, so
   assert.equal(rows(s.dir, "runs").length, 3, "no refused run is recorded");
 });
 
-test("F-T266-2: taskFor throws when tasks.tsv is lost but other tables have rows, so the hook fails closed", async () => {
+test("F-T266-2: logbookView throws when tasks.tsv is lost but other tables have rows, so the hook fails closed", async () => {
   const s = store();
-  const { taskFor } = await import(LIB);
+  const { logbookView } = await import(LIB);
+  const rowFor = (id, project, env) => logbookView(project, env).row(id);
   const env = { SAGE_HOME: s.home };
   s.ok("task", "add", "--title", "a", "--size", "small");
   s.ok("run", "add", "T1", "--role", "qa");
-  assert.equal(taskFor("R1", s.project, env), "T1");
+  assert.equal(rowFor("R1", s.project, env)?.task, "T1");
   rmSync(join(s.dir, "tasks.tsv"));
-  assert.throws(() => taskFor("R1", s.project, env), /tasks\.tsv is missing or is a link to nothing, but every table of a logbook has at least its header line/);
+  assert.throws(() => rowFor("R1", s.project, env), /tasks\.tsv is missing or is a link to nothing, but every table of a logbook has at least its header line/);
   assert.match(s.no("status"), /^sage: no logbook for the project /, "status refuses the same logbook");
   const fresh = store(); // a logbook whose tables have no rows yet, as init leaves it before tasks.tsv
   rmSync(join(fresh.dir, "tasks.tsv"));
-  assert.equal(taskFor("R1", fresh.project, { SAGE_HOME: fresh.home }), undefined);
+  assert.equal(rowFor("R1", fresh.project, { SAGE_HOME: fresh.home }), undefined);
 });
 
 test("T266-LEAD-RACE: lead runs started at once by separate processes keep the limits: 3 of 10 on 10 tasks, and 1 of 2 on one task", async () => {
@@ -322,9 +323,30 @@ test("T266-MAX-AGENTS: the default max_agents is 4, one lead and its 3 children,
   assert.equal(config({ SAGE_HOME: s.home }).max_agents, 2);
 });
 
-test("T266-TASK-FOR: taskFor names the task of a run id or a finding key, and gives nothing for an unknown id; a damaged logbook throws", async () => {
+test("#118 point 4: logbookView gives a task's one running lead run, nothing for none, and throws on an oversized table", async () => {
   const s = store();
-  const { taskFor } = await import(LIB);
+  const { logbookView } = await import(LIB);
+  const leadRunFor = (task, project, env, options) => logbookView(project, env, options).leadRun(task);
+  const env = { SAGE_HOME: s.home };
+  for (const t of ["a", "b"]) s.ok("task", "add", "--title", t, "--size", "small");
+  assert.equal(leadRunFor("T1", s.project, env), undefined, "no run");
+  s.ok("run", "add", "T1", "--role", "qa");
+  s.ok("run", "add", "T2", "--role", "lead");
+  assert.equal(leadRunFor("T1", s.project, env), undefined, "a qa run, and another task's lead run");
+  s.ok("run", "add", "T1", "--role", "lead");
+  assert.equal(leadRunFor("T1", s.project, env)?.id, "R3");
+  const size = readFileSync(join(s.dir, "runs.tsv")).length;
+  assert.throws(() => leadRunFor("T1", s.project, env, { max: size - 1 }), /\.tsv is over \d+ bytes/);
+  s.ok("run", "done", "R3", "--status", "failed");
+  assert.equal(leadRunFor("T1", s.project, env), undefined, "an ended lead run");
+  assert.equal(leadRunFor("T1", mkdtempSync(join(tmpdir(), "sage-none-")), env), undefined, "a project without a logbook");
+});
+
+test("T266-TASK-FOR: logbookView gives the row of a run id or a finding key, and nothing for an unknown id; a damaged or oversized logbook throws (T273)", async () => {
+  const s = store();
+  const { logbookView } = await import(LIB);
+  const rowFor = (id, project, env, options) => logbookView(project, env, options).row(id);
+  const taskFor = (...args) => rowFor(...args)?.task;
   const env = { SAGE_HOME: s.home };
   for (const t of ["a", "b", "c"]) s.ok("task", "add", "--title", t, "--size", "small");
   s.ok("run", "add", "T2", "--role", "lead");
@@ -343,8 +365,22 @@ test("T266-TASK-FOR: taskFor names the task of a run id or a finding key, and gi
   assert.equal(taskFor("F-T4-1", s.project, env), "T4", "its new key names the follow-up task");
   assert.equal(taskFor("R1", mkdtempSync(join(tmpdir(), "sage-none-")), env), undefined, "a project without a logbook");
   const runs = join(s.dir, "runs.tsv");
+  assert.equal(rowFor("R1", s.project, env).role, "lead", "a run's row has its role");
+  assert.equal(rowFor("F-T4-1", s.project, env).severity, "low", "a finding's row has its severity");
+  const view = logbookView(s.project, env);
+  assert.equal(view.task("T2").title, "b", "a task's row");
+  assert.equal(view.task("T9"), undefined);
+  s.ok("task", "T2", "set", "pr=7");
+  assert.deepEqual([...logbookView(s.project, env).prTasks("7")], ["T2"], "the tasks on a PR");
+  s.ok("task", "T2", "set", "pr=8");
+  assert.deepEqual([...logbookView(s.project, env).prTasks("7")], ["T2"], "a task that held the PR");
+  assert.equal(logbookView(s.project, env).dir, s.dir, "the logbook folder");
+  writeFileSync(runs, readFileSync(runs, "utf8") + "\t".repeat(5000) + "\n"); // the largest table: a long blank line
+  const size = readFileSync(runs).length;
+  assert.equal(rowFor("R2", s.project, env, { max: size }).task, "T3", "a table of exactly max bytes reads");
+  assert.throws(() => rowFor("R2", s.project, env, { max: size - 1 }), /runs\.tsv is over \d+ bytes/, "a table over max bytes throws");
   writeFileSync(runs, readFileSync(runs, "utf8").replace(/^id\t/, "ID\t"));
-  assert.throws(() => taskFor("R1", s.project, env), /the header of .*runs\.tsv is damaged/, "the logbook check applies");
+  assert.throws(() => rowFor("R1", s.project, env), /the header of .*runs\.tsv is damaged/, "the logbook check applies");
 });
 
 test("the merge check needs no open findings, checks-pass, and the route's verdicts in the task's clean cycles: 1 for a small task, 2 for a large one or one with a risk flag", () => {
@@ -1111,7 +1147,7 @@ test("F2: with --pr, every task of that pull request must pass on the SHA, so a 
   s.ok("verdict", "T2", "--sha", SHA, "--kind", "checks-pass"); // the head after a repair push, recorded under the tiny task
   assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T2 may merge: 1 clean cycle on this SHA", "without --pr, as the hook calls it until T4");
   assert.equal(s.no("merge-check", "--sha", SHA, "--cycles", "1", "--pr", "5"), `sage: 2 tasks have verdicts on a1b2c3d or belong to PR 5, and each must pass; 1 fails. ${s.dir} T1 is a task of PR 5 but has no verdicts on this SHA. Every task that was ever on PR 5 counts for its merge, also after its pr= changed (see decisions.tsv): record its verdicts on this SHA, or the user merges. To merge, make each one pass.`);
-  assert.equal(s.no("merge-check", "--sha", SHA, "--pr", "6"), `sage: no task of PR 6 has verdicts on a1b2c3d: only ${s.dir} T2 has. Record PR 6's verdicts under its own task (sage verdict <T> --sha <sha> --pr 6), or set its PR: sage task <T> set pr=6.`);
+  assert.equal(s.no("merge-check", "--sha", SHA, "--pr", "6"), `sage: no task of PR 6 in this project's logbook (${basename(s.dir)}) has verdicts on a1b2c3d: only ${s.dir} T2 has. Record PR 6's verdicts under its own task (sage verdict <T> --sha <sha> --pr 6), or set its PR: sage task <T> set pr=6.`);
   assert.equal(s.no("merge-check", "--sha", SHA, "--pr", "#5"), "sage: --pr is the pull request's number, with no leading zero, for example --pr 5");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1", "--pr", "5"), `2 tasks have verdicts on a1b2c3d or belong to PR 5, and each must pass: ${s.dir} T2 may merge: 1 clean cycle on this SHA; ${s.dir} T1 may merge: 1 clean cycle on this SHA`);
@@ -1422,7 +1458,7 @@ test("unknown-options: a command refuses an option that it does not take, and an
   assert.deepEqual(rows(s.dir, "tasks"), [], "a refused command writes nothing");
   s.ok("task", "add", "--title", "x", "--size", "small");
   assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--cycles", "2"), "sage: verdict takes no --cycles. Its options: --sha, --kind, --cycle, --pr, --run, --project.");
-  assert.equal(s.no("merge-check", "--sha", SHA, "--cycle", "1"), "sage: merge-check takes no --cycle. Its options: --sha, --pr, --cycles, --project.");
+  assert.equal(s.no("merge-check", "--sha", SHA, "--cycle", "1"), "sage: merge-check takes no --cycle. Its options: --sha, --pr, --cycles, --head, --project.");
   assert.equal(s.no("task", "T1", "set", "state=briefed", "--branch", "b"), "sage: task takes no --branch. Its options: --project.");
   assert.equal(s.no("run", "done", "R1", "--role", "qa"), "sage: run done takes no --role. Its options: --status, --tokens, --report, --project.");
   // F-R57-3: a missing value never takes the next option as its value. The harness adds --project <path> last.
@@ -2611,4 +2647,23 @@ test("T152: cleanup retains foreign waiters and removes only dead local waiters"
   assert.equal(readFileSync(alive.owner, "utf8"), alive.text, "a live local waiter remains");
   assert.equal(existsSync(join(fakes, "calls")), false, "no command ran ps");
   assert.equal(existsSync(kills), false, "no command called process.kill");
+});
+
+test("F-T273-18: a held task takes no run add, finding change or verdict from any caller; the chief's moves stay", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa"); // R1
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x"); // F-T1-1
+  s.ok("finding", "triage", "T1", "F-T1-1", "fix");
+  const file = join(s.dir, "tasks.tsv");
+  const [head, ...lines] = readFileSync(file, "utf8").trimEnd().split("\n");
+  const col = head.split("\t").indexOf("state");
+  writeFileSync(file, [head, ...lines.map((line) => { const v = line.split("\t"); v[col] = "held"; return v.join("\t"); })].join("\n") + "\n");
+  for (const args of [["run", "add", "T1", "--role", "qa"], ["finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "y"], ["finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "r"],
+    ["finding", "close", "T1", "F-T1-1"], ["verdict", "T1", "--sha", SHA, "--kind", "qa-pass"]]) {
+    assert.match(s.no(...args), /^sage: T1 is held, so it takes no /, args.join(" "));
+  }
+  assert.match(s.ok("run", "done", "R1", "--status", "done"), /^R1 done/, "a run still ends");
+  assert.match(s.ok("task", "T1", "set", "state=building"), /^T1 building/, "the sage moves it out of held");
+  assert.match(s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass"), /^T1 checks-pass/, "then a verdict records");
 });
