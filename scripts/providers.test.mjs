@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -2012,4 +2012,118 @@ syncBuiltinESMExports();\n`);
     assert.equal(existsSync(base), false, "another directory owner can replace the path despite safe-looking permission bits");
     assert.equal(result.stdout, "");
   }
+});
+
+test("shared protected paths check new files, ancestors, case folding and symlink parent traversal", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd); mkdirSync(join(root, "nested"));
+    symlinkSync(join(root, "nested"), join(cwd, "linked"));
+    symlinkSync(join(root, "missing"), join(cwd, "dangling"));
+    const check = paths => fileWriteOutsideRoots({ paths, cwd, roots: [root] });
+    for (const path of [root, f.dir, join(root, "new.tsv"), join(f.dir, "LOGBOOK/new.tsv"),
+      "../logbook/new.tsv", "linked/../new.tsv", "dangling/new.tsv"])
+      assert.equal(check([path]), false, path);
+    assert.equal(check(["ordinary.txt", "../logbook-other/new.tsv"]), true);
+    assert.equal(check(["ordinary.txt", "../logbook/new.tsv"]), false);
+    assert.equal(existsSync(join(root, "new.tsv")), false);
+  }
+});
+
+test("shared protected paths refuse hard links, loops and invalid path context", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd); writeFileSync(join(root, "ledger.tsv"), "fixed");
+    linkSync(join(root, "ledger.tsv"), join(cwd, "alias"));
+    symlinkSync("loop-b", join(cwd, "loop-a")); symlinkSync("loop-a", join(cwd, "loop-b"));
+    assert.equal(fileWriteOutsideRoots({ paths: ["alias"], cwd, roots: [root] }), false);
+    assert.throws(() => fileWriteOutsideRoots({ paths: ["loop-a"], cwd, roots: [root] }));
+    for (const input of [{ paths: ["x"], cwd, roots: [] }, { paths: ["x\0"], cwd, roots: [root] },
+      { paths: ["x"], cwd: "relative", roots: [root] }, { paths: [null], cwd, roots: [root] }])
+      assert.throws(() => fileWriteOutsideRoots(input));
+    assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
+  }
+});
+
+test("shared protected paths refuse missing entries in supplied path lists", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd);
+    let getterRead = false;
+    const accessor = [root];
+    Object.defineProperty(accessor, "0", { get() { getterRead = true; return root; } });
+    const inherited = Array(1);
+    Object.setPrototypeOf(inherited, Object.assign(Object.create(Array.prototype), { 0: root }));
+    for (const input of [
+      { paths: ["ordinary"], cwd, roots: accessor },
+      { paths: ["ordinary"], cwd, roots: inherited },
+      { paths: ["ordinary"], cwd, roots: Array(1) },
+      { paths: ["ordinary"], cwd, roots: [root, ,] },
+      { paths: Array(1), cwd, roots: [root] },
+    ]) assert.throws(() => fileWriteOutsideRoots(input));
+    assert.equal(getterRead, false);
+    assert.equal(fileWriteOutsideRoots({ paths: [], cwd, roots: [root] }), true);
+  }
+});
+
+test("shared protected paths use validated values despite custom array methods", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd);
+    let customMethodCalled = false;
+    const roots = [root];
+    roots.map = () => { customMethodCalled = true; return []; };
+    assert.equal(fileWriteOutsideRoots({ paths: [join(root, "ledger.tsv")], cwd, roots }), false);
+    const paths = [join(root, "ledger.tsv")];
+    paths[Symbol.iterator] = function* () { customMethodCalled = true; };
+    assert.equal(fileWriteOutsideRoots({ paths, cwd, roots: [root] }), false);
+    assert.equal(customMethodCalled, false);
+  }
+});
+
+test("Codex direct patch targets retain all operations and both names of a move", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const patch = ["*** Begin Patch", "*** Add File: added name.txt", "+fixed",
+    "*** Update File: before", "*** Move to: after", "@@", "-old", "+new",
+    "*** Delete File: removed", "*** End Patch"].join("\n");
+  for (const text of [patch, patch.replaceAll("\n", "\r\n")])
+    assert.deepEqual(patchTargets(text), ["added name.txt", "before", "after", "removed"]);
+  assert.deepEqual(patchTargets("*** Begin Patch\n*** End Patch"), []);
+  assert.equal(existsSync(join(f.dir, "added name.txt")), false);
+});
+
+test("Codex direct patch targets distinguish content from headers", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const patch = ["*** Begin Patch", "*** Add File: added", "+*** Delete File: content-only",
+    "+*** End Patch", "*** Update File: updated", "@@", " *** Move to: context-only",
+    "-*** Delete File: old-content", "+*** Add File: new-content", "*** End of File", "*** End Patch"].join("\n");
+  assert.deepEqual(patchTargets(patch), ["added", "updated"]);
+});
+
+test("Codex direct patch targets refuse unsupported records and invalid targets", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const wrap = body => `*** Begin Patch\n${body}\n*** End Patch`;
+  for (const patch of [null, {}, "not a patch", "*** Begin Patch\n*** Add File: missing-end",
+    wrap("*** Unknown: x"), wrap("*** Move to: x"), wrap("*** Add File: x\n*** Move to: y"),
+    wrap("*** Update File: x\n@@\n+new\n*** Move to: y"),
+    wrap("*** Update File: x\n*** Move to: y\n*** Move to: z"),
+    wrap("*** Delete File: x\n+unexpected"), wrap("*** Add File: "),
+    wrap("*** Add File: control\0name"), wrap("*** Add File: tab\tname"),
+    wrap("*** Add File: x\nnot-prefixed-content")])
+    assert.throws(() => patchTargets(patch), /Codex patch targets are unavailable/);
 });
