@@ -1,7 +1,7 @@
 import { join } from "node:path";
-import { readAdmission, completeAdmission, REPORT_FIELDS, missingReportFields } from "../core/index.mjs";
+import { readAdmission, completeAdmission, interruptAdmission, REPORT_FIELDS, missingReportFields } from "../core/index.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
-import { readChildTurn, readNativeCompletion } from "./identity.mjs";
+import { readChildTurn, readNativeCompletion, readNativeInterruption } from "./identity.mjs";
 import { bindNativeChildTranscript, recoverNativeChildDeliveries } from "./child-tool.mjs";
 import { RUNTIME_VERSION, decodeEvent, publish, readObservations } from "./events.mjs";
 
@@ -86,11 +86,13 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
     || (!assigned.continuation && starts[0].turn !== bound.turn) || starts[0].parent !== bound.issuer
     || (suppliedPath && suppliedPath !== transcripts[0].transcript)) refuse();
   const path = starts[0].path;
-  const completed = readNativeCompletion(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, {
+  const expected = {
     session, child: bound.child, parent: bound.issuer, path,
     author: path.slice(0, path.lastIndexOf("/")), turn: bound.turn, taskHash: assigned.dispatch.taskHash,
-  });
-  return { directory, observations, completed };
+  };
+  const completed = readNativeCompletion(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
+  const interrupted = completed ? null : readNativeInterruption(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
+  return { directory, observations, completed, interrupted };
 }
 
 /** A native parent recovers its own delivered follow-ups and verifies terminal evidence. */
@@ -111,6 +113,7 @@ export function reconcileNativeCompletions(context, session, options) {
     if (!observations.some(row => row.kind === "child-transcript" && row.child === bound.child && row.turn === bound.turn)) continue;
     const evidence = completionEvidence(state, bound, session, options);
     if (evidence.completed) completeAdmission(options.directory, bound);
+    else if (evidence.interrupted) interruptAdmission(options.directory, bound, evidence.interrupted.evidenceHash);
   }
   return { decision: "reconciled" };
 }

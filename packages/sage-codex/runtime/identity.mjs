@@ -180,11 +180,13 @@ function reportFromRecords(rows, expected, { pending = false, report = true } = 
   const unavailable = () => { throw Error("Codex report evidence is unavailable"); };
   try {
     const { position, ...assigned } = assignmentFromRecords(rows, expected);
-    let turn, final, completed;
+    let turn, final, completed, aborted;
     for (const [index, row] of rows.entries()) {
       if (index === 0) continue;
       const payload = row.payload;
       if (row.type === "event_msg" && payload.type === "task_started") turn = payload.turn_id;
+      if (row.type === "event_msg" && payload.type === "turn_aborted"
+        && (turn === expected.turn || payload.turn_id === expected.turn)) aborted = true;
       if (turn !== expected.turn) continue;
       if (row.type === "response_item" && payload.type === "message" && payload.role === "assistant") {
         if (completed || index <= position) unavailable();
@@ -206,6 +208,7 @@ function reportFromRecords(rows, expected, { pending = false, report = true } = 
         completed = final;
       }
     }
+    if (aborted && completed) unavailable();
     if (!completed) { if (pending) return null; unavailable(); }
     return { ...assigned, ...completed };
   } catch { unavailable(); }

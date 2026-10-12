@@ -19,4 +19,12 @@ Its transcript contained the exact turn ID and no successful completion.
 No SubagentStop callback arrived. The native process exited and the temporary profile was removed.
 
 Other abort reasons and Codex versions remain unverified.
-Interruption recovery in the task journal and installed automatic Sage remain separate work.
+The native parent can now reconcile a bound interruption into the admission journal.
+The saved terminal outcome is `interrupted`, with the evidence hash and exact child binding.
+This releases capacity once. It preserves the reservation and does not finish the logbook run.
+It cannot become an accepted report or a successful completion on retry.
+The interrupted child loses Sage delegation authority. Sage off still permits ordinary tool use.
+
+Recovery requires an existing verified binding and transcript reference.
+Missing initial binding evidence, logbook repair scheduling, and installed automatic Sage remain separate work.
+The journal recovery checks use fixtures; the native diagnostic verifies the interruption reader.

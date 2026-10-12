@@ -131,6 +131,11 @@ function action(input) {
     fields(input, ["kind", "failure"]);
     return { kind: "fail-dispatch", failure: dispatchFailure(input.failure) };
   }
+  if (input?.kind === "interrupt") {
+    fields(input, ["kind", "completion", "evidenceHash"]);
+    return { kind: "interrupt", completion: childBinding(input.completion),
+      evidenceHash: word(input.evidenceHash, "interruption evidence hash", /^[0-9a-f]{64}$/) };
+  }
   if (input?.kind === "complete") {
     fields(input, ["kind", "completion"]);
     return { kind: "complete", completion: childBinding(input.completion) };
@@ -152,7 +157,7 @@ function apply(state, event) {
     return { state: copy, result: event.config, changed: true };
   }
   if (!copy.config) refuse("store is not configured");
-  const value = event.kind === "fail-dispatch" ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : ["bind-child", "bind-continuation"].includes(event.kind) ? event.binding : event.kind === "complete" ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
+  const value = event.kind === "fail-dispatch" ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : ["bind-child", "bind-continuation"].includes(event.kind) ? event.binding : ["complete", "interrupt"].includes(event.kind) ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
   if (!copy.config.projects.some((p) => p.project === value.project)) refuse("project is not configured");
   const owner = copy.sessions.find((s) => s.project === value.project && s.session === value.session);
   if (event.kind === "activate") {
@@ -193,13 +198,17 @@ function apply(state, event) {
     copy.failures = [...(copy.failures ?? []), value];
     return { state: copy, result: { decision: "dispatch-failed", failure: value }, changed: true };
   }
-  if (event.kind === "complete") {
+  if (["complete", "interrupt"].includes(event.kind)) {
     const bound = copy.bindings.find(row => row.assignment === value.assignment);
     if (!bound || json(bound) !== json(value)) refuse("completion has no matching child binding");
+    const terminal = event.kind === "interrupt" ? { ...value, outcome: "interrupted", evidenceHash: event.evidenceHash } : value;
     const previous = (copy.completions ?? []).find(row => row.assignment === value.assignment);
-    if (previous) return { state, result: { decision: "already-completed", completion: previous }, changed: false };
-    copy.completions = [...(copy.completions ?? []), value];
-    return { state: copy, result: { decision: "completed", completion: value }, changed: true };
+    if (previous) {
+      if (json(previous) !== json(terminal)) refuse("assignment already has different terminal evidence");
+      return { state, result: { decision: "already-completed", completion: previous }, changed: false };
+    }
+    copy.completions = [...(copy.completions ?? []), terminal];
+    return { state: copy, result: { decision: "completed", completion: terminal }, changed: true };
   }
   if (event.kind === "record-report") {
     const bound = copy.bindings.find(row => row.assignment === value.assignment);
@@ -465,6 +474,8 @@ export const failAdmission = (dir, failure) => commit(dir, { kind: "fail-dispatc
 /** Only a trusted adapter may submit authoritative terminal evidence for this exact binding.
  * Completion releases capacity; task success and report acceptance remain separate. */
 export const completeAdmission = (dir, completion) => commit(dir, { kind: "complete", completion });
+/** Verified interruption ends capacity ownership, not the task or its report gates. */
+export const interruptAdmission = (dir, completion, evidenceHash) => commit(dir, { kind: "interrupt", completion, evidenceHash });
 /** The trusted adapter verifies report provenance and parent identity before recording it.
  * This stores evidence only; it does not accept claims, write verdicts, or change task state. */
 export const recordReportAdmission = (dir, report) => commit(dir, { kind: "record-report", report });

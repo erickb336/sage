@@ -3234,3 +3234,79 @@ test('native unobserved follow-up recovery repairs interrupted transcript public
   assert.deepEqual(readChildReport({ name: f.request.name }, f.native(session), f.options), report);
   assert.deepEqual(f.core.readAdmission(f.options.directory), state);
 });
+
+function appendInterruption(f, turn = turns[1], reason = 'interrupted') {
+  appendFileSync(join(f.mode.sessionsDir, `${childActor}.jsonl`), JSON.stringify({ type: 'event_msg',
+    payload: { type: 'turn_aborted', turn_id: turn, reason } }) + '\n');
+}
+test('native interruption recovery records one terminal outcome without a report or successful run', async t => {
+  const f = await completionFixture(t);
+  const before = f.core.readAdmission(f.options.directory);
+  appendInterruption(f);
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const reconcile = actor => reconcileNativeCompletions(f.native(actor), session, f.options);
+  reconcile(childActor); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  reconcile(session);
+  const state = f.core.readAdmission(f.options.directory), ended = state.completions[0];
+  assert.equal(state.completions.length, 1);
+  assert.deepEqual({ ...ended, outcome: undefined, evidenceHash: undefined }, { ...before.bindings[0], outcome: undefined, evidenceHash: undefined });
+  assert.equal(ended.outcome, 'interrupted'); assert.match(ended.evidenceHash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(state.reservations, before.reservations); assert.deepEqual(state.reports, before.reports);
+  reconcile(session); assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, 'runtime/report-intake.mjs')));
+  assert.throws(() => readChildReport({ name: f.input.name }, f.native(session), f.options));
+  assert.throws(() => f.core.completeAdmission(f.options.directory, before.bindings[0]));
+  assert.throws(() => f.core.interruptAdmission(f.options.directory, before.bindings[0], '0'.repeat(64)));
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+});
+test('native interruption recovery refuses wrong turns and conflicting terminal records', async t => {
+  const f = await completionFixture(t), file = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+  const before = readFileSync(file, 'utf8');
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const reconcile = () => reconcileNativeCompletions(f.native(session), session, f.options);
+  for (const [turn, reason] of [[turns[2], 'interrupted'], [turns[1], 'replaced']]) {
+    writeFileSync(file, before); appendInterruption(f, turn, reason);
+    assert.throws(reconcile); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  }
+  for (const abortFirst of [true, false]) {
+    writeFileSync(file, before);
+    if (abortFirst) appendInterruption(f);
+    appendReport(f);
+    if (!abortFirst) appendInterruption(f);
+    assert.throws(reconcile); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  }
+});
+test('native interruption recovery after off frees only its exact later assignment', async t => {
+  const f = await deliveredFollowupFixture(t);
+  await f.evaluate(f.policy, f.tool, childActor);
+  appendInterruption(f, turns[2]);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: 'a1111111-2222-4333-8444-555555555555', sage: false });
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  reconcileNativeCompletions(f.native(session), session, f.options);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 2);
+  assert.deepEqual(state.completions[0], state.bindings[0]);
+  assert.equal(state.completions[1].assignment, state.bindings[1].assignment);
+  assert.equal(state.completions[1].outcome, 'interrupted');
+  assert.throws(() => f.api.prepareNativeTask({ ...f.input, name: 'interrupted_lead_qa', role: 'qa', reviewCycle: 1 }, f.native(childActor), f.options));
+  assert.equal(state.modes.at(-1).sage, false);
+});
+test('native interruption recovery releases capacity once and stale evidence cannot release a new child', async t => {
+  const f = await completionFixture(t), directory = join(f.mode.sessionsDir, 'capacity-store');
+  f.core.configureAdmission(directory, { total: 1, projects: [{ project: 'fixture', limit: 1 }] });
+  const owner = f.core.activateAdmission(directory, { project: 'fixture', session: `codex:${session}`, activation: turns[0] });
+  const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
+  const reserve = call => f.core.reserveRoleAdmission(directory, scope, { task: `T${['first', 'second', 'third'].indexOf(call) + 1}`, run: `R${['first', 'second', 'third'].indexOf(call) + 1}`, issuer: session, call },
+    { tool: 'spawn_agent', turn: turns[0], name: call, argumentsHash: '0'.repeat(64) }, { issuerRole: 'chief-of-staff', role: 'lead' });
+  const first = reserve('first').assignment;
+  const bound = { ...scope, assignment: first.id, issuer: session, call: 'first', child: childActor, turn: turns[1] };
+  f.core.bindAdmission(directory, bound);
+  assert.throws(() => reserve('second'), /capacity/);
+  assert.throws(() => f.core.interruptAdmission(directory, { ...bound, turn: turns[2] }, '1'.repeat(64)));
+  assert.throws(() => reserve('second'), /capacity/);
+  f.core.interruptAdmission(directory, bound, '1'.repeat(64));
+  const second = reserve('second'); assert.equal(second.decision, 'permit-once');
+  assert.equal(f.core.interruptAdmission(directory, bound, '1'.repeat(64)).decision, 'already-completed');
+  assert.throws(() => reserve('third'), /capacity/);
+  assert.equal(f.core.readAdmission(directory).completions.length, 1);
+});
