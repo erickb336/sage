@@ -2,13 +2,14 @@ import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs, { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBoardServer } from "../packages/sage-board/server.mjs";
+import { createBoardServer, hashPassword } from "../packages/sage-board/server.mjs";
 
 const HEADERS = {
   tasks: "id title size risk route state branch pr round keys",
@@ -38,15 +39,18 @@ async function freePort() {
   return port;
 }
 
-async function fixture(t, { missing = false, allowedHosts = [] } = {}) {
+// A sample password only, hashed once for the file: no test uses a real password.
+const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
+
+/** A board server on a free port. password: null is a board with no password set yet (T229). */
+async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
-  const secret = randomBytes(32).toString("base64url");
   if (!missing) populate(root);
   const sources = [{ id: "sample", path: root, label: "Sample source" }];
-  const server = createBoardServer({ sources, secret, port, allowedHosts });
+  const server = createBoardServer({ sources, ...(password ? { password } : {}), port, allowedHosts, id });
   t.after(async () => { await server.close(); rmSync(dir, { recursive: true, force: true }); });
   await server.start();
-  return { dir, root, project: join(root, "project-abcdef"), port, secret, sources, server, authorization: `Basic ${Buffer.from(`sage:${secret}`).toString("base64")}` };
+  return { dir, root, project: join(root, "project-abcdef"), port, sources, server, authorization: `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}` };
 }
 
 function read(f, path = "/", { method = "GET", headers = {}, rawHeaders } = {}) {
@@ -119,18 +123,90 @@ test("board server serves authenticated pages and HEAD with exact CSP hashes and
   assert.deepEqual(readFileSync(file), before);
 });
 
-test("board server authenticates every page and event route, with no credential or source disclosure", async t => {
-  const f = await fixture(t);
+test("board server authenticates every page and event route through an allowed host, with no credential or source disclosure", async t => {
+  const tailnet = "sample.tailnet.ts.net", f = await fixture(t, { allowedHosts: [tailnet] });
   for (const path of ["/", `/task/${key}`, "/?events=1", `/?events=1&task=${key}`]) {
-    for (const authorization of ["", `Basic ${Buffer.from(`wrong:${f.secret}`).toString("base64")}`, `Basic ${Buffer.from("sage:wrong").toString("base64")}`]) {
-      const result = await read(f, path, { headers: { Authorization: authorization } });
+    for (const authorization of [undefined, `Basic ${Buffer.from(`wrong:${PASSWORD}`).toString("base64")}`, `Basic ${Buffer.from("sage:wrong").toString("base64")}`]) {
+      const result = await read(f, path, { rawHeaders: ["Host", tailnet, ...(authorization ? ["Authorization", authorization] : [])] });
       assert.equal(result.status, 401); assert.match(result.headers["www-authenticate"], /^Basic /);
-      assert.doesNotMatch(result.body, /Sample first task/); assert.ok(!result.body.includes(f.root)); assert.ok(!result.body.includes(f.secret));
+      assert.doesNotMatch(result.body, /Sample first task/); assert.ok(!result.body.includes(f.root)); assert.ok(!result.body.includes(PASSWORD));
     }
   }
-  const duplicate = await read(f, "/", { rawHeaders: ["Host", `127.0.0.1:${f.port}`, "Authorization", f.authorization, "Authorization", f.authorization] });
+  const duplicate = await read(f, "/", { rawHeaders: ["Host", tailnet, "Authorization", f.authorization, "Authorization", f.authorization] });
   assert.equal(duplicate.status, 401);
+  const signed = await read(f, "/", { rawHeaders: ["Host", tailnet, "Authorization", f.authorization] });
+  assert.equal(signed.status, 200); assert.match(signed.body, /Sample first task/);
   const eventHead = await read(f, "/?events=1", { method: "HEAD" }); assert.equal(eventHead.status, 200); assert.equal(eventHead.body, "");
+});
+
+test("T216: on the Mac itself (a loopback Host) the board needs no sign-in, and the browser checks still hold", async t => {
+  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] });
+  for (const host of [`127.0.0.1:${f.port}`, `localhost:${f.port}`, `LOCALHOST:${f.port}`, `[::1]:${f.port}`]) {
+    const page = await read(f, "/", { rawHeaders: ["Host", host] });
+    assert.equal(page.status, 200, host); assert.match(page.body, /Sample first task/); assert.equal(page.headers["www-authenticate"], undefined);
+  }
+  assert.equal((await read(f, `/task/${key}`, { rawHeaders: ["Host", `127.0.0.1:${f.port}`] })).status, 200);
+  assert.equal((await read(f, "/?events=1", { method: "HEAD", rawHeaders: ["Host", `127.0.0.1:${f.port}`] })).status, 200);
+  for (const extra of [["Origin", "https://attacker.test"], ["Origin", "https://sample.tailnet.ts.net"], ["Sec-Fetch-Site", "cross-site"]]) {
+    const refused = await read(f, "/", { rawHeaders: ["Host", `127.0.0.1:${f.port}`, ...extra] });
+    assert.equal(refused.status, 403, extra.join(": ")); assert.doesNotMatch(refused.body, /Sample first task/);
+  }
+  for (const host of ["attacker.test", `127.0.0.1:${f.port + 1}`, `localhost`]) assert.equal((await read(f, "/", { rawHeaders: ["Host", host] })).status, 403, host);
+  assert.equal((await read(f, "/", { method: "POST", rawHeaders: ["Host", `127.0.0.1:${f.port}`] })).status, 405);
+});
+
+test("T216, T229: a request that a private HTTPS tunnel forwards signs in, also with a loopback Host (probe 4)", async t => {
+  // A tunnel such as tailscale serve connects from 127.0.0.1, keeps the client's Host and adds X-Forwarded-For.
+  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"], id: "0123456789abcdef" });
+  const loopback = `127.0.0.1:${f.port}`;
+  for (const proxy of [["X-Forwarded-For", "100.64.0.7"], ["X-Forwarded-Host", loopback], ["X-Forwarded-Proto", "https"], ["Forwarded", "for=100.64.0.7"]]) {
+    const proxied = await read(f, "/", { rawHeaders: ["Host", loopback, ...proxy] });
+    assert.equal(proxied.status, 401, proxy[0]); assert.doesNotMatch(proxied.body, /Sample first task/);
+    assert.equal(proxied.headers["x-sage-board"], undefined, "a proxied request does not learn the board's pid");
+    const signed = await read(f, "/", { rawHeaders: ["Host", loopback, ...proxy, "Authorization", f.authorization] });
+    assert.equal(signed.status, 200, proxy[0]);
+  }
+  const mac = await read(f, "/", { rawHeaders: ["Host", loopback] });
+  assert.equal(mac.status, 200);
+  assert.match(mac.headers["x-sage-board"], new RegExp(`^id=0123456789abcdef; pid=${process.pid}; started=\\d+$`));
+});
+
+test("T229: a generic proxy that adds only X-Forwarded-For needs the password, and the board knows no vendor's headers", async t => {
+  const f = await fixture(t, { id: "0123456789abcdef" }), loopback = `127.0.0.1:${f.port}`;
+  // A proxy of any vendor: a loopback peer, a loopback Host and one X-Forwarded-For header, nothing else.
+  const proxied = await read(f, "/", { rawHeaders: ["Host", loopback, "X-Forwarded-For", "203.0.113.9"] });
+  assert.equal(proxied.status, 401); assert.match(proxied.headers["www-authenticate"], /^Basic realm="Sage board"/); assert.doesNotMatch(proxied.body, /Sample first task/);
+  assert.equal((await read(f, "/", { rawHeaders: ["Host", loopback, "X-Forwarded-For", "203.0.113.9", "Authorization", f.authorization] })).status, 200);
+  // A header name of one vendor is no proxy sign: the board does not depend on Tailscale (least coupling).
+  const vendor = await read(f, "/", { rawHeaders: ["Host", loopback, "Tailscale-User-Login", "sample@example.test"] });
+  assert.equal(vendor.status, 200); assert.match(vendor.headers["x-sage-board"], /^id=0123456789abcdef; /);
+});
+
+test("T229: with no password set, every request that is not the Mac path gets 403 with a fixed text that names no path", async t => {
+  const tailnet = "sample.tailnet.ts.net", f = await fixture(t, { allowedHosts: [tailnet], password: null }), loopback = `127.0.0.1:${f.port}`;
+  const text = "Access from outside this Mac is off until the owner sets a board password on the Mac.\n";
+  for (const rawHeaders of [["Host", tailnet], ["Host", tailnet, "Authorization", f.authorization], ["Host", loopback, "X-Forwarded-For", "203.0.113.9"], ["Host", loopback, "Forwarded", "for=203.0.113.9"], ["Host", loopback, "X-Forwarded-Proto", "https", "Authorization", f.authorization]]) {
+    for (const path of ["/", `/task/${key}`, "/?events=1"]) {
+      const refused = await read(f, path, { rawHeaders });
+      assert.equal(refused.status, 403, rawHeaders.join(" ")); assert.equal(refused.body, text);
+      assert.equal(refused.headers["www-authenticate"], undefined, "no sign-in dialog: no password can pass");
+    }
+  }
+  const mac = await read(f, "/", { rawHeaders: ["Host", loopback] });
+  assert.equal(mac.status, 200); assert.match(mac.body, /Sample first task/);
+});
+
+test("T216: the server checks one password at a time and waits after a wrong one", async t => {
+  const tailnet = "sample.tailnet.ts.net", f = await fixture(t, { allowedHosts: [tailnet], password: await hashPassword("sample board pass 01") });
+  const as = password => ["Host", tailnet, "Authorization", `Basic ${Buffer.from(`sage:${password}`).toString("base64")}`];
+  const began = Date.now();
+  const [first, second] = await Promise.all([read(f, "/", { rawHeaders: as("sample wrong pass 1") }), read(f, "/", { rawHeaders: as("sample wrong pass 2") })]);
+  assert.deepEqual([first.status, second.status].sort(), [401, 429]);
+  const busy = first.status === 429 ? first : second;
+  assert.equal(busy.headers["retry-after"], "1"); assert.doesNotMatch(busy.body, /Sample first task/);
+  // A lower bound only: the fixed one-second delay after a wrong password can make a reply later, never sooner.
+  assert.ok(Date.now() - began >= 900, "a wrong password waits");
+  assert.equal((await read(f, "/", { rawHeaders: as("sample board pass 01") })).status, 200, "the check is free again after the delay");
 });
 
 test("board server rejects foreign, duplicate and mismatched browser authority headers", async t => {
@@ -155,12 +231,12 @@ test("board server exposes only canonical read routes and refuses invalid config
     const result = await read(f, path); assert.equal(result.status, 404, path); assert.doesNotMatch(result.body, /Sample first task/);
   }
   assert.equal((await read(f, "/", { method: "POST" })).status, 405);
-  const options = { sources: f.sources, secret: f.secret, port: f.port };
-  for (const changed of [{ secret: "short" }, { secret: `bad\n${f.secret}` }, { port: 0 }, { sources: [] }, { sources: Array(1) }, { sources: [{ id: 2, path: f.root }] }, { sources: [{ id: "one", path: f.root, label: {} }] }, { allowedHosts: ["127.1"] }, { allowedHosts: ["name."] }, { allowedHosts: ["https://host"] }, { allowedHosts: Array(1) }]) assert.throws(() => createBoardServer({ ...options, ...changed }), TypeError);
+  const options = { sources: f.sources, password: RECORD, port: f.port };
+  for (const changed of [{ password: { ...RECORD, scheme: "plain" } }, { password: { ...RECORD, hash: "short" } }, { port: 0 }, { sources: [] }, { sources: Array(1) }, { sources: [{ id: 2, path: f.root }] }, { sources: [{ id: "one", path: f.root, label: {} }] }, { allowedHosts: ["127.1"] }, { allowedHosts: ["name."] }, { allowedHosts: ["https://host"] }, { allowedHosts: Array(1) }]) assert.throws(() => createBoardServer({ ...options, ...changed }), TypeError);
 });
 
 test("board server fails on an occupied fixed port and closes without changing another listener", async t => {
-  const f = await fixture(t), other = createBoardServer({ sources: f.sources, secret: f.secret, port: f.port });
+  const f = await fixture(t), other = createBoardServer({ sources: f.sources, password: RECORD, port: f.port });
   t.after(() => other.close());
   await assert.rejects(other.start(), { code: "EADDRINUSE" });
   assert.equal((await read(f)).status, 200);
@@ -196,13 +272,30 @@ test("board event streams keep the last valid content while an incomplete write 
   const repaired = await stream.next(p => !p.stale && p.html.includes("Sample repaired title")); assert.deepEqual(repaired.diagnostics, []);
 });
 
+test("F-T216-19: a root that appears while the board starts does not stop the start, and close ends", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const server = createBoardServer({ sources: [{ id: "sample", path: root, label: "Sample source" }], port });
+  // A generous deadlock guard, not a latency assertion: before the fix, start never settled.
+  const within = (promise, what) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`${what} did not finish`)), 10_000).unref())]);
+  const started = server.start();
+  await new Promise(wake => setTimeout(wake, 30));
+  populate(root);
+  try { assert.equal((await within(started, "start")).port, port); }
+  finally { await within(server.close(), "close"); }
+  assert.equal(server.address(), null);
+});
+
 test("board watches a missing root and reattaches after root replacement without polling", async t => {
   const f = await fixture(t, { missing: true }), stream = events(f); t.after(() => stream.close());
-  const missing = await stream.next(); assert.equal(missing.stale, true); assert.ok(missing.diagnostics.some(d => d.message === "ENOENT"));
+  // T216: a root that does not exist is not set up yet (an owner who uses one provider only): a quiet note, no failure.
+  const missing = await stream.next(); assert.equal(missing.stale, false); assert.deepEqual(missing.diagnostics, []);
+  assert.match(missing.html, /Not set up yet: Sample source\./); assert.doesNotMatch(missing.html, /Incomplete sources/);
+  const page = await read(f); assert.match(page.body, /Not set up yet: Sample source\./); assert.doesNotMatch(page.body, /Incomplete sources/);
   populate(f.root, "Sample created source");
-  await stream.next(p => !p.stale && p.html.includes("Sample created source"));
+  const created = await stream.next(p => !p.stale && p.html.includes("Sample created source")); assert.doesNotMatch(created.html, /Not set up yet/);
   const old = join(f.dir, "old-source"); renameSync(f.root, old);
-  const removed = await stream.next(p => p.stale && p.diagnostics.some(d => d.message === "ENOENT")); assert.match(removed.html, /Sample created source/);
+  const removed = await stream.next(p => p.html.includes("Not set up yet")); assert.equal(removed.stale, false); assert.deepEqual(removed.diagnostics, []);
   populate(f.root, "Sample replacement source");
   await stream.next(p => !p.stale && p.html.includes("Sample replacement source"));
   writeFileSync(join(f.project, "tasks.tsv"), tasks(row("Sample replacement changed")));
@@ -221,7 +314,33 @@ test("board watcher errors publish a stale diagnostic and recover on an observed
   const stale = await stream.next(p => p.stale && p.diagnostics.some(d => /File watching/.test(d.message)));
   assert.match(stale.html, /Sample first task/); assert.doesNotMatch(stale.html, /sample watcher failure/);
   renameSync(f.root, join(f.dir, "old-source"));
-  await stream.next(p => p.stale && p.diagnostics.some(d => d.message === "ENOENT"));
+  await stream.next(p => p.html.includes("Not set up yet: Sample source"));
   populate(f.root, "Sample watcher restored");
   await stream.next(p => !p.stale && p.html.includes("Sample watcher restored"));
+});
+
+
+test("a parent rename that names only the destination refreshes the missing board root", async t => {
+  const original = fs.watch, captured = [];
+  // Simulate the allowed rename notification with no old-name event. No real watcher delivers extra events.
+  fs.watch = (path, options, callback) => {
+    const watcher = new EventEmitter(); watcher.close = () => { watcher.closed = true; };
+    captured.push({ path, options, callback, watcher });
+    return watcher;
+  };
+  syncBuiltinESMExports();
+  let f;
+  try { f = await fixture(t); } finally { fs.watch = original; syncBuiltinESMExports(); }
+  const stream = events(f); t.after(() => stream.close());
+  await stream.next(p => !p.stale);
+  renameSync(f.root, join(f.dir, "renamed-source"));
+  const parent = captured.find(entry => entry.path === f.dir && !entry.options.recursive);
+  assert.ok(parent);
+  parent.callback("rename", "renamed-source");
+  // T216: a missing root is a quiet note, not a stale board.
+  const missing = await stream.next(p => p.html.includes("Not set up yet: Sample source"));
+  assert.equal(missing.stale, false); assert.doesNotMatch(missing.html, /Sample first task/);
+  populate(f.root, "Sample recreated source");
+  parent.callback("rename", "source");
+  await stream.next(p => !p.stale && p.html.includes("Sample recreated source"));
 });

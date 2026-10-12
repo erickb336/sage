@@ -3,7 +3,6 @@
 // Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$SCRATCH/browsers" node --test scripts/board-enhancement.test.mjs
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer as createPortServer } from "node:net";
@@ -312,7 +311,7 @@ test("T205: real browser authenticates pages and live streams, watches files, an
   const port = reservation.address().port;
   await new Promise((accept, reject) => reservation.close(error => error ? reject(error) : accept()));
   const origin = `http://127.0.0.1:${port}`;
-  const options = { sources: [{ id: "sample", path: root, label: "Sample source" }], secret: randomBytes(32).toString("base64url"), port };
+  const options = { sources: [{ id: "sample", path: root, label: "Sample source" }], port };
   let server = createBoardServer(options), context;
   t.after(async () => {
     try { await context?.close(); } finally {
@@ -320,8 +319,9 @@ test("T205: real browser authenticates pages and live streams, watches files, an
     }
   });
   await server.start();
-  context = await browser.newContext({ httpCredentials: { username: "sage", password: options.secret, origin } });
-  // Only this isolated server may receive requests. The browser supplies Basic credentials itself.
+  // On the Mac (a loopback Host) the board needs no sign-in, so the browser sends no credentials.
+  context = await browser.newContext();
+  // Only this isolated server may receive requests.
   await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
   const page = await context.newPage(), responses = [];
   page.on("response", response => {

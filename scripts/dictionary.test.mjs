@@ -94,8 +94,17 @@ test("npm run check refuses a wall-clock time under a fixed number of ms in a te
     assert.equal(r.status, 1, body);
     assert.match(r.stderr, refused(body.split("\n").length + 1), body);
   }
+  const bounds = () => {
+    const r = c.run("check");
+    assert.equal(r.status, 0, r.stderr);
+    const n = r.stdout.match(/✓ all checks pass \((\d+) timing bounds? carr(?:y|ies) "\/\/ timing-ok:"\)/)?.[1];
+    assert.ok(n, r.stdout);
+    return Number(n);
+  };
+  sample("const t0 = Date.now();");
+  const before = bounds(); // the bounds that the repository already has: a new justified bound must not break this test
   sample(`${forms[0]} // timing-ok: the hook's own 10 s budget`);
-  assert.match(c.run("check").stdout, /✓ all checks pass \(2 timing bounds carry "\/\/ timing-ok:"\)/, "an explicit escape passes, and the check counts it");
+  assert.equal(bounds(), before + 1, "an explicit escape passes, and the check counts it");
   for (const allowed of [
     "const t0 = Date.now();\nwork();\nassert.ok(Date.now() - t0 >= 3000, 'a lower bound: a busy machine only adds time');",
     "for (const end = Date.now() + 2500; Date.now() < end; ) work();\nassert.ok(count < 3, 'Date.now() < 3000 in a string');",
