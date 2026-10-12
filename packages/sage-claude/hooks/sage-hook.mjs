@@ -326,8 +326,9 @@ export function handle(input, state, slots) {
   // stays exact: "sage:lead" is the one type that may start agents, and another case of it gets no such right.
   const spawned = String(ti.subagent_type ?? "").toLowerCase();
   const spawnName = ti.name ?? ti.description ?? ""; // the Agent tool's name, or its description when it has no name
-  // An agent never names a spawn "main": a later SendMessage to main could wake that agent with no slot (F-T255-4).
-  if (event === "PreToolUse" && !main && AGENT_TOOLS.test(tool) && String(spawnName).trim().toLowerCase() === "main") {
+  // An agent never names a spawn "main": a later SendMessage to main could wake that agent with no slot (F-T255-4). The
+  // scope of the SendMessage rule: sage mode, or a sage agent in any mode.
+  if (event === "PreToolUse" && !main && (state.sage || ours) && AGENT_TOOLS.test(tool) && String(spawnName).trim().toLowerCase() === "main") {
     return deny(event, 'an agent never names a spawn "main", because a message to main must reach only the main session. Give it another name.');
   }
   // The nested rules check the spawned type too, not only the caller: in any mode (T255 H2).

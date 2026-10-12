@@ -4717,17 +4717,19 @@ test("F-T255-7: the main session starts a lead only in the background", () => {
   assert.equal(s.send(lead("bg", { run_in_background: true })), undefined);
 });
 
-test("F-T255-4: an agent never names a spawn main, in any letter case or mode", () => {
+test("F-T255-4: a sage agent, or any agent in sage mode, never names a spawn main; plain use outside sage mode is unchanged", () => {
   const MAIN = /an agent never names a spawn "main"/;
   const child = (id, names, caller = LEAD) => tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, ...names }, { tool_use_id: id, ...caller });
   for (const s of [nestedSession(), session()]) {
     for (const [n, names] of [{ name: "main" }, { name: " MAIN " }, { name: "Main", description: "a reviewer" }, { description: "main" }, { description: "\tmain\n" }].entries()) {
       assert.match(denied(s.send(child(`main-${n}`, names))) ?? "", MAIN, JSON.stringify(names));
     }
-    assert.match(denied(s.send(tool("Agent", { subagent_type: "Explore", prompt: "x", name: "main" }, { tool_use_id: "plain", agent_id: "gp", agent_type: "general-purpose" }))) ?? "", MAIN, "any agent's spawn");
     assert.equal(s.send(child("ok-1", { name: "reviewer", description: "main" })), undefined, "the name wins over the description");
     assert.equal(s.send(child("ok-2", { name: "maintain" })), undefined);
   }
+  const plain = (id) => tool("Agent", { subagent_type: "Explore", prompt: "x", name: "main" }, { tool_use_id: id, agent_id: "gp", agent_type: "general-purpose" });
+  assert.match(denied(nestedSession().send(plain("plain-sage"))) ?? "", MAIN, "a plain agent's spawn in sage mode");
+  assert.equal(session().send(plain("plain-off")), undefined, "a plain agent's spawn outside sage mode is its normal use");
   assert.equal(nestedSession().send(tool("Agent", { subagent_type: "Explore", prompt: "x", name: "main" }, { tool_use_id: "chief" })), undefined, "the main session's own spawn");
 });
 
