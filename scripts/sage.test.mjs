@@ -257,6 +257,51 @@ test("T266-LEAD-STATE: a concluded, merged or abandoned task takes no lead run, 
   assert.match(s.ok("run", "add", "T3", "--role", "qa"), /^R3 running · qa on T3/);
 });
 
+test("F-T266-3: run add takes the role as the table stores it, in lower case, so no spelling of lead skips a lead limit; an unknown role is refused", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("task", "add", "--title", "b", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "lead");
+  for (const role of ["lead ", "Lead", "lead​", "lead\t", " LEAD", "le​ad"]) {
+    assert.equal(s.no("run", "add", "T1", "--role", role), "sage: R1 is the running lead run of T1, and a task has one running lead. Finish R1 first (sage run done R1 --status done, blocked, question or failed).", `${JSON.stringify(role)} is lead`);
+  }
+  assert.equal(s.ok("run", "add", "T2", "--role", "Lead "), "R2 running · lead on T2");
+  assert.equal(s.ok("run", "add", "T2", "--role", "QA"), "R3 running · qa on T2 · model fable", "QA is qa, with qa's model for a small task");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => r.role), ["lead", "lead", "qa"]);
+  assert.equal(s.no("run", "add", "T2", "--role", "builder"), 'sage: "builder" is not a role of a run. Roles: lead, implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate, evidence-review.');
+  assert.match(s.no("run", "add", "T2", "--role", "ｌｅａｄ"), /^sage: "ｌｅａｄ" is not a role of a run\./, "a look-alike is no role");
+  assert.equal(rows(s.dir, "runs").length, 3, "no refused run is recorded");
+});
+
+test("F-T266-2: taskFor throws when tasks.tsv is lost but other tables have rows, so the hook fails closed", async () => {
+  const s = store();
+  const { taskFor } = await import(LIB);
+  const env = { SAGE_HOME: s.home };
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa");
+  assert.equal(taskFor("R1", s.project, env), "T1");
+  rmSync(join(s.dir, "tasks.tsv"));
+  assert.throws(() => taskFor("R1", s.project, env), /tasks\.tsv is missing or is a link to nothing, but every table of a logbook has at least its header line/);
+  assert.match(s.no("status"), /^sage: no logbook for the project /, "status refuses the same logbook");
+  const fresh = store(); // a logbook whose tables have no rows yet, as init leaves it before tasks.tsv
+  rmSync(join(fresh.dir, "tasks.tsv"));
+  assert.equal(taskFor("R1", fresh.project, { SAGE_HOME: fresh.home }), undefined);
+});
+
+test("T266-LEAD-RACE: lead runs started at once by separate processes keep the limits: 3 of 10 on 10 tasks, and 1 of 2 on one task", async () => {
+  const s = store();
+  for (let i = 1; i <= 11; i++) s.ok("task", "add", "--title", `t${i}`, "--size", "small");
+  const ten = await Promise.all(Array.from({ length: 10 }, (_, i) => s.go("run", "add", `T${i + 1}`, "--role", "lead")));
+  assert.equal(ten.filter((r) => r.status === 0).length, 3, ten.map((r) => r.stdout + r.stderr).join(""));
+  for (const r of ten.filter((r) => r.status !== 0)) assert.match(r.stderr, /^sage: the project has 3 running lead runs, the most it holds: /, "each other one is refused by the limit, not by a busy lock");
+  assert.equal(rows(s.dir, "runs").filter((r) => r.role === "lead" && r.status === "running").length, 3);
+  for (const r of rows(s.dir, "runs")) s.ok("run", "done", r.id, "--status", "done");
+  const two = await Promise.all([1, 2].map(() => s.go("run", "add", "T11", "--role", "lead")));
+  assert.equal(two.filter((r) => r.status === 0).length, 1, two.map((r) => r.stdout + r.stderr).join(""));
+  assert.match(two.find((r) => r.status !== 0).stderr, /^sage: R\d+ is the running lead run of T11, and a task has one running lead\./);
+  assert.equal(rows(s.dir, "runs").filter((r) => r.task === "T11").length, 1);
+});
+
 test("T266-LEAD-SHOWN: status counts a lead run like any run, and the board shows it with its role", () => {
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "small");
