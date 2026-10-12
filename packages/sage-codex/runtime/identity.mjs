@@ -302,7 +302,8 @@ export function readNativeCommand(transcriptPath, options, expected) {
         if (typeof p.turn_id !== "string" || !uuid.test(p.turn_id) || turns.has(p.turn_id)) unavailable();
         turns.add(p.turn_id); turn = p.turn_id; context = undefined;
       }
-      if (row.type === "event_msg" && p.type === "task_complete" && p.turn_id === expected.turn) unavailable();
+      if (row.type === "event_msg" && ["task_complete", "turn_aborted"].includes(p.type)
+        && (p.turn_id === expected.turn || turn === expected.turn)) unavailable();
       if (row.type === "turn_context") {
         if (!turn || p.turn_id !== turn) unavailable();
         context = turn;
@@ -380,7 +381,7 @@ export function readNativeFollowup(transcriptPath, options, expected) {
         if (typeof p.turn_id !== "string" || !uuid.test(p.turn_id) || turns.has(p.turn_id)) unavailable();
         turns.add(p.turn_id); turn = p.turn_id; context = undefined;
       }
-      if (row.type === "event_msg" && p.type === "task_complete") {
+      if (row.type === "event_msg" && ["task_complete", "turn_aborted"].includes(p.type)) {
         if (!turn || p.turn_id !== turn || completed.has(turn)) unavailable();
         completed.add(turn);
       }

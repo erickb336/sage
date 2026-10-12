@@ -46,7 +46,7 @@ This check does not prove that all command forms use this shape.
 Before activation, the adapter needs a trusted source for the original command envelope and its exact call identity.
 The native check confirms that the protected transcript contains the original call before the pre-tool callback.
 `readNativeCommand` checks the session, actor, turn, call ID, command text, and native record metadata.
-It rejects duplicate calls, completed calls, completed turns, linked paths, and unsupported native versions.
+It rejects duplicate calls, completed calls, completed or interrupted turns, linked paths, and unsupported native versions.
 It returns every original argument for the command adapter to validate.
 This reader does not authenticate the hook caller or grant command permission.
 Then apply the shared rules to the complete input, including shell, working directory, and permission changes.

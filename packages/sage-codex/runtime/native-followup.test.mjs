@@ -98,3 +98,19 @@ test('native follow-up pending evidence cannot revive an ended or superseded sen
     assert.throws(() => f.read(), /follow-up evidence is unavailable/);
   }
 });
+
+
+test('native follow-up interruption refuses pending and late calls but preserves accepted dispatch', t => {
+ const f=fixture(t), receipt=f.read();
+ const abort={type:'event_msg',payload:{type:'turn_aborted',turn_id:turn,reason:'interrupted'}};
+ f.save([...rows().slice(0,-1),abort]);
+ assert.throws(()=>f.read(),/follow-up evidence is unavailable/);
+ for(const position of [3,4]) {
+  const value=rows();value.splice(position,0,abort);f.save(value);
+  assert.throws(()=>f.read(),/follow-up evidence is unavailable/);
+ }
+ f.save([...rows(),abort]);assert.deepEqual(f.read(),receipt);
+ f.save([...rows(),abort,{type:'event_msg',payload:{type:'task_started',turn_id:other}},
+  {type:'turn_context',payload:{turn_id:other}}]);
+ assert.deepEqual(f.read(),receipt);
+});

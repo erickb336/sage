@@ -72,3 +72,22 @@ test('native command evidence refuses linked, incomplete and out-of-root transcr
  writeFileSync(f.path,JSON.stringify(rows()[0]));assert.throws(()=>f.read(),/command evidence is unavailable/);
  f.save(rows());assert.deepEqual(f.read(),envelope);
 });
+
+
+test('native command evidence refuses interrupted turns for root and child commands', t => {
+ const f=fixture(t);
+ for(const nested of [false,true]) for(const beforeCall of [false,true]) {
+  const value=rows();
+  const match=nested?{...expected,actor:child,parent:session,path:'/root/lead'}:expected;
+  if(nested)value[0].payload={...value[0].payload,id:child,parent_thread_id:session,agent_path:'/root/lead'};
+  f.save(value);assert.deepEqual(f.read(match),envelope);
+  value.splice(beforeCall?3:4,0,{type:'event_msg',payload:{type:'turn_aborted',turn_id:turn,reason:'interrupted'}});
+  f.save(value);assert.throws(()=>f.read(match),/command evidence is unavailable/);
+ }
+ // A historical interruption must not refuse a distinct current turn.
+ const current=rows();
+ current.splice(1,0,{type:'event_msg',payload:{type:'task_started',turn_id:other}},
+  {type:'turn_context',payload:{turn_id:other}},
+  {type:'event_msg',payload:{type:'turn_aborted',turn_id:other,reason:'interrupted'}});
+ f.save(current);assert.deepEqual(f.read(),envelope);
+});

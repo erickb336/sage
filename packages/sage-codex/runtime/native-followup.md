@@ -7,7 +7,7 @@ parent, session, path, turn, call ID, exact target text, and task-message hash.
 The reader checks native version 0.160.0, server-authored call and result records,
 the matching turn context, the exact two input fields, and the empty success
 result. An exact pending request in the current unfinished turn returns null. Invalid, failed,
-duplicate, altered, or late results throw a fixed error. No private input appears
+duplicate, altered, or late results throw a fixed error. An interrupted turn cannot retain a pending call or accept a later result. A receipt accepted before interruption remains readable. No private input appears
 in that error. Linked, incomplete, oversized, and out-of-profile files refuse.
 
 A receipt contains the call, turn, target text, task hash, native result ID, and
