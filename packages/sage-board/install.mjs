@@ -1,9 +1,12 @@
 // Optional local files only. The caller selects stable paths and starts launchd separately.
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { accessSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const packages = dirname(dirname(fileURLToPath(import.meta.url)));
+const here = dirname(fileURLToPath(import.meta.url)), packages = dirname(here);
+// The checkout has packages/sage-board and packages/sage-core; a provider plugin has board/ and core/. The copy keeps
+// the names, so the board's import of core works in the installation too.
+const [BOARD, CORE] = basename(here) === "sage-board" ? ["sage-board", "sage-core"] : [basename(here), "core"];
 const MAX_BYTES = 64 * 1024 * 1024;
 const refuse = reason => { throw new TypeError(`board install: ${reason}`); };
 
@@ -53,12 +56,49 @@ function containsDirectory(parent, child) {
   }
 }
 
-function paths({ installDir, configPath, nodePath } = {}, installed = false) {
+function controlledAlias(path) {
+  const uid = process.getuid?.();
+  if (uid === undefined) refuse("nodePath alias ownership is unavailable");
+  for (let cursor = path;; cursor = dirname(cursor)) {
+    const info = lstatSync(cursor);
+    if (![0, uid].includes(info.uid) || (!info.isSymbolicLink() && (info.mode & 0o002) && !(info.mode & 0o1000))) refuse("nodePath alias must stay in owner-controlled directories");
+    if (dirname(cursor) === cursor) break;
+  }
+}
+
+/** Select the current Node through PATH without pinning a Homebrew Cellar version. */
+export function stableNodePath(path = process.env.PATH ?? "") {
+  const running = realpathSync(process.execPath);
+  let direct;
+  for (const folder of path.split(delimiter)) {
+    if (!isAbsolute(folder)) continue;
+    const candidate = join(folder, "node");
+    try {
+      absolute(candidate, "nodePath"); inspect(dirname(candidate), "nodePath parent", "directory");
+      accessSync(candidate, constants.X_OK);
+      if (realpathSync(candidate) !== running || /(?:^|\/)Cellar\//.test(candidate)) continue;
+      if (lstatSync(candidate).isSymbolicLink()) { controlledAlias(candidate); return candidate; }
+      if (lstatSync(candidate).isFile()) direct ??= candidate;
+    } catch { /* Another PATH entry may name the same running Node through a stable location. */ }
+  }
+  return direct ?? refuse("put an upgrade-stable Node command on PATH before creating the login file");
+}
+
+function inspectNode(path, allowAlias) {
+  if (!allowAlias || !lstatSync(path).isSymbolicLink()) return inspect(path, "nodePath", "file");
+  inspect(dirname(path), "nodePath parent", "directory");
+  controlledAlias(path);
+  const target = realpathSync(path);
+  if (target !== realpathSync(process.execPath)) refuse("nodePath alias must name the running Node");
+  return inspect(target, "nodePath target", "file");
+}
+
+function paths({ installDir, configPath, nodePath, allowNodeAlias = false } = {}, installed = false) {
   absolute(installDir, "installDir"); absolute(configPath, "configPath"); absolute(nodePath, "nodePath");
   inspect(installDir, "installDir", "directory", !installed);
   if ((!installed && (containsDirectory(packages, installDir) || containsDirectory(installDir, packages))) || /(?:^|\/)plugins\/(?:cache|marketplaces)(?:\/|$)/i.test(installDir)) refuse("installDir must be outside source packages and plugin caches");
-  inspect(configPath, "configPath", "file"); inspect(nodePath, "nodePath", "file");
-  const cliPath = join(installDir, "packages", "sage-board", "cli.mjs");
+  inspect(configPath, "configPath", "file"); inspectNode(nodePath, allowNodeAlias);
+  const cliPath = join(installDir, "packages", BOARD, "cli.mjs");
   if (installed) inspect(cliPath, "installed CLI", "file");
   return { installDir, configPath, nodePath, cliPath };
 }
@@ -95,8 +135,8 @@ function packageFiles() {
       } finally { closeSync(fd); }
     }
   }
-  for (const name of ["sage-board", "sage-core"]) walk(join(packages, name));
-  if (!files.some(file => file.name === join("sage-board", "cli.mjs"))) refuse("source board CLI is missing");
+  for (const name of [BOARD, CORE]) walk(join(packages, name));
+  if (!files.some(file => file.name === join(BOARD, "cli.mjs"))) refuse("source board CLI is missing");
   return { files, folders };
 }
 

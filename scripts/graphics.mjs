@@ -495,7 +495,7 @@ function hero(t, id) {
     // The words.
     `<text x="64" y="176" font-family="${SANS}" font-size="152" font-weight="900" letter-spacing="-6" fill="url(#${id}-word)" filter="url(#${id}-wordglow)">sage</text>`,
     text(452, 90, ["Your chief of staff", "for Claude Code."], { size: 46, weight: 800, fill: EMBER.ink, lh: 1.12, ls: -0.5 }),
-    `<text x="454" y="190" font-family="${SANS}" font-size="28" fill="${EMBER.muted}"><tspan>Start a message with </tspan><tspan font-weight="800" fill="${EMBER.hot}">“sage mode”</tspan><tspan>.</tspan></text>`,
+    `<text x="454" y="190" font-family="${SANS}" font-size="28" fill="${EMBER.muted}"><tspan>Send </tspan><tspan font-weight="800" fill="${EMBER.hot}">“sage mode”</tspan><tspan> as a message.</tspan></text>`,
     ...meds.map(plaqueOf),
     `<rect x="${cx - 128}" y="990" width="256" height="48" rx="8" fill="url(#${id}-chief)" filter="url(#${id}-glow)"/>`,
     text(cx, 1023, "Chief of staff", { size: 28, weight: 800, fill: "#160902", anchor: "middle" }),
@@ -503,7 +503,7 @@ function hero(t, id) {
     text(245, 1099, "Claude Code plugin · MIT", { size: 28, weight: 700, fill: EMBER.hot, anchor: "middle" }),
     text(W - 40, 1099, "Built on pstack and poteto mode, by Lauren Tan", { size: 28, fill: EMBER.muted, anchor: "end" }),
   ].join("\n");
-  return worldSvg(W, H, id, worldDefs(id), body, "sage: your chief of staff for Claude Code. Start a message with sage mode. A hooded toad sage, the chief of staff, meditates on a rock in a misty mountain world, with glowing gold toad eyes. Around it, its team on a loop: designer, PE, implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA. Claude Code plugin, MIT. Built on pstack and poteto mode, by Lauren Tan.", { border: t.dark ? "#3A2414" : undefined });
+  return worldSvg(W, H, id, worldDefs(id), body, "sage: your chief of staff for Claude Code. Send sage mode as a message. A hooded toad sage, the chief of staff, meditates on a rock in a misty mountain world, with glowing gold toad eyes. Around it, its team on a loop: designer, PE, implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA. Claude Code plugin, MIT. Built on pstack and poteto mode, by Lauren Tan.", { border: t.dark ? "#3A2414" : undefined });
 }
 
 /** How it works: you, the chief of staff (the toad sage), the team's flow to a pull request, the logbook, and the outer
@@ -571,7 +571,8 @@ function walkthrough(t, id) {
   const W = 1100, px = 36, py = 36, pw = 500, nx = 600, size = SMALL, lh = 1.4, LH = size * lh;
   let by = py + 84;
   const b = [
-    ["you", 1, ["sage mode. Ramen Finder: add a", "favourites list, and fix this", "week's crash."]],
+    ["you", 1, ["sage mode"]],
+    ["you", 0, ["Ramen Finder: add a", "favourites list, and fix this", "week's crash."]],
     ["chief", 2, ["T1 favourites: large · data", "T2 crash: small · input", "T2 starts now."]],
     ["chief", 3, ["One question for T1: sync favourites", "across devices? Recommended and", "default if no answer: not now."]],
     ["you", 0, ["not now"]],
@@ -585,7 +586,7 @@ function walkthrough(t, id) {
   });
   const ph = f1(by - py + 6), H = Math.round(py + ph + 36);
   const notes = [
-    [1, "Switch it on", ["Start a message with “sage mode”,", "then say what you want."]],
+    [1, "Switch it on", ["Send “sage mode” as a message", "of its own, then say what you want."]],
     [2, "The chief frames each task", ["A size, risk flags and a route.", "A flag such as input adds the", "security review to a code change."]],
     [3, "One batch of questions, at most", ["One interruption per task. Each", "product question has a", "recommendation and a default."]],
     [4, "The team works", ["Fresh agents build, review and test.", "Findings go back for a repair."]],
@@ -619,7 +620,7 @@ function walkthrough(t, id) {
       text(nx + 48, y + 32, lines, { size, fill: t.muted, lh }),
     ].join("")),
   ].join("\n");
-  return panel(t, id, W, H, body, "Learn sage in 5 minutes: an illustrative sage mode session about a made-up app, Ramen Finder, with numbered notes. You: sage mode. Ramen Finder: add a favourites list, and fix this week's crash. The chief frames T1, favourites, large, with the data flag, and T2, the crash, small, with the input flag, and starts T2. It asks one question for T1: sync favourites across devices? Recommended, and the default if you don't answer: not now. You answer: not now. T2 goes through build, code review, security review and QA; repair round 1 fixes an empty search that still crashed. T2 is verified: QA ran the app and passed. Not checked: the tablet layout. Pull request 41 is ready for you. The notes: 1, switch it on: start a message with sage mode. 2, the chief frames each task. 3, one batch of product questions at most, in one interruption per task. 4, the team works. 5, you get results, not code.");
+  return panel(t, id, W, H, body, "Learn sage in 5 minutes: an illustrative sage mode session about a made-up app, Ramen Finder, with numbered notes. You: sage mode. Then you: Ramen Finder: add a favourites list, and fix this week's crash. The chief frames T1, favourites, large, with the data flag, and T2, the crash, small, with the input flag, and starts T2. It asks one question for T1: sync favourites across devices? Recommended, and the default if you don't answer: not now. You answer: not now. T2 goes through build, code review, security review and QA; repair round 1 fixes an empty search that still crashed. T2 is verified: QA ran the app and passed. Not checked: the tablet layout. Pull request 41 is ready for you. The notes: 1, switch it on: start a message with sage mode. 2, the chief frames each task. 3, one batch of product questions at most, in one interruption per task. 4, the team works. 5, you get results, not code.");
 }
 
 /** Routes: the least route for each size of task. */
@@ -767,7 +768,7 @@ const tip = (lines, label) => (t, id) => {
 
 const GRAPHICS = {
   hero, loop, walkthrough, routes, lifecycle, arena, pstack,
-  "tip-start": tip(["Start a message with “sage mode” to switch it on,", "and with “sage mode off” to switch it off.", "In the middle of a sentence, it does nothing."], "The toad sage's tip: start a message with sage mode to switch it on, and with sage mode off to switch it off. In the middle of a sentence, it does nothing."),
+  "tip-start": tip(["Send “sage mode” alone to switch it on,", "and “sage mode off” alone to switch it off.", "With any other words, it does nothing."], "The toad sage's tip: send sage mode alone to switch it on, and sage mode off alone to switch it off. With any other words, it does nothing."),
   "tip-try": tip(["Try it on one small, real bug, from your phone.", "Then look at the result, not the code."], "The toad sage's tip: try it on one small, real bug from your phone, then look at the result, not the code."),
   "tip-seal": tip(["Seal the lesson: give a mistake that comes back twice", "a lasting fix. A test or a check in code first; a principle", "or a standing order only when code cannot hold it.", "That's how the dojo gets stronger."], "The toad sage's tip: seal the lesson. Give a mistake that comes back twice a lasting fix: a test or a check in code first; a principle or a standing order only when code cannot hold it. That is how the dojo gets stronger."),
 };
