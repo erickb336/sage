@@ -3493,3 +3493,30 @@ test('native child tool permission rechecks terminal evidence after an awaited e
   assert.deepEqual(f.core.readAdmission(f.options.directory),before);
  }
 });
+
+test('native command decoder refuses sparse arrays with extra or hidden keys', async t => {
+  const decode = await commandDecoder(t);
+  const hidden = Object.defineProperty(['fixed'], 'extra', { value: 'fixed' });
+  const symbolic = Object.assign(['fixed'], { [Symbol('extra')]: 'fixed' });
+  const hiddenIndex = Object.defineProperty(['fixed'], '0', { enumerable: false });
+  for (const values of [Object.assign(Array(1), { extra: 'fixed' }), hidden, symbolic, hiddenIndex]) {
+    for (const input of [{ cmd: 'fixed', prefix_rule: values },
+      { cmd: 'fixed', additional_permissions: { file_system: { read: values } } }])
+      assert.throws(() => decode(input), { message: 'Codex command arguments are unavailable' });
+  }
+});
+
+test('native command decoder refuses array getters and hides inspection failures', async t => {
+  const decode = await commandDecoder(t);
+  let called = false;
+  const values = [];
+  Object.defineProperty(values, '0', { enumerable: true,
+    get() { called = true; throw Error('private fixture text'); } });
+  assert.throws(() => decode({ cmd: 'fixed', prefix_rule: values }),
+    { message: 'Codex command arguments are unavailable' });
+  assert.equal(called, false);
+  const throwing = new Proxy({ cmd: 'fixed' }, { ownKeys() { throw Error('private fixture text'); } });
+  const unclonable = new Proxy({ cmd: 'fixed' }, {});
+  for (const input of [throwing, unclonable])
+    assert.throws(() => decode(input), { message: 'Codex command arguments are unavailable' });
+});

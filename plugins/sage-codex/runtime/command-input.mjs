@@ -10,7 +10,16 @@ const text = (value, limit = 4096) => typeof value === "string" && value.length 
 const path = value => text(value) && !/\p{Cc}/u.test(value);
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 const optional = (value, key, check) => !Object.hasOwn(value, key) || value[key] === null || check(value[key]);
-const list = (value, check) => Array.isArray(value) && value.length <= 256 && Object.keys(value).length === value.length && value.every(check);
+const list = (value, check) => {
+  if (!Array.isArray(value) || value.length > 256) return false;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).length !== value.length + 1) return false;
+  for (let index = 0; index < value.length; index++) {
+    const item = descriptors[index];
+    if (!item || !Object.hasOwn(item, "value") || !item.enumerable || !check(item.value)) return false;
+  }
+  return true;
+};
 
 function permissionPath(value) {
   if (!object(value)) return false;
@@ -48,7 +57,7 @@ function permissions(value) {
 
 /** Validate recovered arguments without normalizing omissions, paths, defaults, or permission intent.
  * The caller must still establish the effective shell/environment and apply every authorization rule. */
-export function decodeNativeCommand(value) {
+function decode(value) {
   if (!fields(value, ["cmd", "shell", "login", "tty", "yield_time_ms", "timeout_ms", "max_output_tokens",
     "sandbox_permissions", "additional_permissions", "justification", "prefix_rule", "environment_id", "workdir"], ["cmd"])
     || !text(value.cmd, 1024 * 1024) || !value.cmd.length
@@ -64,4 +73,9 @@ export function decodeNativeCommand(value) {
     || !optional(value, "justification", item => text(item, 16 * 1024))
     || !optional(value, "prefix_rule", item => list(item, entry => text(entry)))) unavailable();
   return structuredClone(value);
+}
+
+/** Inspection and cloning failures use the same public error as invalid wire data. */
+export function decodeNativeCommand(value) {
+  try { return decode(value); } catch { unavailable(); }
 }
