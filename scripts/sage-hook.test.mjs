@@ -18,7 +18,8 @@ const BRIEF = ["GOAL fix it", "SCOPE src/", "CONTEXT none", "DECISIONS none", "A
 /** A session with its own hook state and sage home. send() returns the hook's answer, or undefined. */
 function session(env = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-hook-"));
-  const vars = { ...process.env, HOME: join(dir, "fake-home"), SAGE_HOOKS_STATE: join(dir, "state"), SAGE_HOME: join(dir, "home"), ...env };
+  // gh is the fake: the hook reads a pull request's head branch for each merge (F-T273-8), and a test never reaches GitHub.
+  const vars = { ...process.env, PATH: `${FAKE_GH}:${process.env.PATH}`, HOME: join(dir, "fake-home"), SAGE_HOOKS_STATE: join(dir, "state"), SAGE_HOME: join(dir, "home"), ...env };
   const send = (event) => {
     const r = spawnSync("node", LAUNCHER, { input: JSON.stringify({ session_id: "s1", ...event }), encoding: "utf8", env: vars });
     assert.equal(r.status, 0, r.stderr);
@@ -509,6 +510,14 @@ const FAKE_GH = (() => {
     `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
+// gh pr view <n> --json ...: the head branch is FAKE_PR_HEAD (default claude/t1); "fail" exits 1, "slow" never answers.
+if (args[0] === "pr" && args[1] === "view") {
+  const head = process.env.FAKE_PR_HEAD ?? "claude/t1";
+  if (head === "fail") process.exit(1);
+  if (head === "slow") setTimeout(() => {}, 30000);
+  else process.stdout.write(JSON.stringify({ headRefName: head, isCrossRepository: process.env.FAKE_PR_FORK === "1" }));
+  return;
+}
 const answers = JSON.parse(fs.readFileSync(process.env.FAKE_GH_ANSWERS, "utf8"));
 const host = args[args.indexOf("--hostname") + 1];
 const a = host !== "github.com" || process.env.GH_HOST || process.env.GH_REPO ? { status: 500, body: { message: "wrong host" } } : answers[args.at(-1)] ?? { status: 404, body: { message: "Not Found" } };
@@ -5081,4 +5090,62 @@ test("F-T273-5: the chief starts no second lead-T<n> while a slot for that task 
   assert.equal(s.send(leadSpawn("t2", 2, { cwd: s.dir })), undefined, "another task");
   s.send(ended("lead-a", "sage:lead"));
   assert.equal(s.send(leadSpawn("fresh", 1, { cwd: s.dir })), undefined, "after the lead's stop");
+});
+
+// Repair round 2 of T273 (R890): the merge checks that each task of the pull request owns its head branch on GitHub.
+test("F-T273-8: a lead's verdicts on a PR whose head branch is another task's do not pass the merge (B1); the task's own branch does", () => {
+  const merge = (s) => denied(s.send(bash(`gh pr merge 77 --squash --delete-branch --match-head-commit ${SHA}`)));
+  const lead = (env) => {
+    const s = autopilotSession(env); // T1 has clean cycles on SHA under PR 41
+    s.sage("task", "add", "--title", "other", "--size", "small"); // T2, whose branch is claude/t2
+    s.sage("task", "T2", "set", "branch=claude/t2");
+    s.sage("task", "T1", "set", "pr=77"); // a PR that no task held, as a lead could claim it
+    return s;
+  };
+  assert.match(merge(lead({ FAKE_PR_HEAD: "claude/t2" })) ?? "", /^sage: the merge check refuses: PR 77's head branch "claude\/t2" is not a branch of \S+ T1/, "B1: PR 77 is T2's branch");
+  assert.match(merge(lead({ FAKE_PR_HEAD: "feature/x" })) ?? "", /PR 77's head branch "feature\/x" is not a branch of \S+ T1/, "a branch of no task");
+  assert.equal(merge(lead({ FAKE_PR_HEAD: "sage/t1-fix" })), undefined, "the task's own branch");
+  const named = lead({ FAKE_PR_HEAD: "work/odd-name" });
+  named.sage("task", "T1", "set", "branch=claude/t1");
+  assert.match(merge(named) ?? "", /is not a branch of/, "another name than the task's branch");
+});
+
+test("F-T273-8: a task in the PR's history with another branch refuses the merge", () => {
+  const s = autopilotSession({ FAKE_PR_HEAD: "claude/t1" });
+  const merge = () => denied(s.send(bash(`gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}`)));
+  assert.equal(merge(), undefined, "T1 owns claude/t1");
+  s.sage("task", "add", "--title", "other", "--size", "small");
+  s.sage("task", "T2", "set", "branch=claude/t2");
+  // T2's clean verdicts on the SHA under PR 41 put it in the PR's history, also after its pr= is cleared.
+  for (const cycle of ["1", "2"]) for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.sage("verdict", "T2", "--sha", SHA, "--kind", kind, "--cycle", cycle, "--pr", "41");
+  s.sage("task", "T2", "set", "pr=");
+  assert.match(merge() ?? "", /PR 41's head branch "claude\/t1" is not a branch of \S+ T2/);
+});
+
+test("F-T273-8: a failed, slow or fork read of the head branch refuses the merge (fail closed)", () => {
+  for (const [env, why] of [[{ FAKE_PR_HEAD: "fail" }, /gh pr view 41 failed/], [{ FAKE_PR_HEAD: "slow" }, /gh did not answer in 5 seconds/], [{ FAKE_PR_FORK: "1" }, /PR 41 is not a branch of this repository/]]) {
+    const s = autopilotSession(env);
+    const reason = denied(s.send(bash(`gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}`)));
+    assert.match(reason ?? "", /^sage: the hook could not read the head branch of PR 41 from GitHub \(/, JSON.stringify(env));
+    assert.match(reason ?? "", why, JSON.stringify(env));
+  }
+});
+
+test("F-T273-8: merge-check --head runs the same check by hand, and needs --pr", () => {
+  const s = autopilotSession();
+  const check = (...args) => spawnSync("node", [TOOL, "merge-check", "--sha", SHA, ...args, "--project", s.dir], { encoding: "utf8", env: s.vars });
+  assert.equal(check("--pr", "41", "--head", "claude/t1").status, 0);
+  const other = check("--pr", "41", "--head", "claude/t2");
+  assert.equal(other.status, 1);
+  assert.match(other.stderr, /PR 41's head branch "claude\/t2" is not a branch of \S+ T1/);
+  assert.match(check("--head", "claude/t1").stderr, /--head needs --pr/);
+});
+
+test("T275: a lead never clears its branch, and gives each option once", () => {
+  const s = leadSession();
+  assert.match(denied(stateRun(s, "task T1 set branch=")) ?? "", NOT_OWN);
+  for (const args of ["run add T1 --role qa --role lead", "run add T1 --role=qa --role=qa", `verdict T1 --kind qa-pass --sha ${SHA} --pr 5 --pr 6`]) {
+    assert.match(denied(stateRun(s, args)) ?? "", /is given twice/, args);
+  }
+  assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1")), undefined);
 });

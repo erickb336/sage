@@ -898,7 +898,7 @@ const digest = (text) => createHash("sha256").update(text).digest("hex");
 const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task); run done <a run of these roles on its task>; finding add <its task> (no --key); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch=, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, while its lead run runs";
 /** Each key=value of task set: a key at most once, and each value as the lead may set it on this task (F-T273-2, F-T273-7). */
 const LEAD_PAIRS = {
-  branch: () => true, // the state tool takes only a branch of the task, or an empty one
+  branch: (branch) => branch !== "", // the state tool takes only a branch of the task; a lead never clears it (T275)
   pr: (pr, task, view, own) => /^[1-9]\d*$/.test(pr) && !task.pr && [...view.prTasks(pr)].every((id) => id === own),
   state: (state, task) => (LEAD_MOVES[task.state] ?? []).includes(state),
 };
@@ -972,13 +972,14 @@ function agentCheck(input, file, slots) {
     }
     // The words and the options, read as the state tool reads them (sage.mjs parse): --name value or --name=value.
     const pos = [], opt = Object.create(null);
+    let twice;
     for (let k = 0; k < args.length; k++) {
       const [name, ...value] = args[k].slice(2).split("=");
       if (!args[k].startsWith("--")) pos.push(args[k]);
-      else opt[name] = value.length ? value.join("=") : args[++k];
+      else [twice, opt[name]] = [twice ?? (Object.hasOwn(opt, name) ? name : undefined), value.length ? value.join("=") : args[++k]];
     }
     if (Object.hasOwn(READS, cmd ?? "") && READS[cmd](pos)) return undefined;
-    if (input.agent_type === "sage:lead") return leadProblem(input, cmd, pos, opt, slots);
+    if (input.agent_type === "sage:lead") return twice ? `--${twice} is given twice (T275).` : leadProblem(input, cmd, pos, opt, slots);
     return `"${[cmd, ...pos.slice(0, 1)].join(" ")}" writes the logbook, or is not a read command of the state tool.`;
   }
   const text = commandFields(ti);
@@ -1308,14 +1309,41 @@ function gitGate(event, command, state, cwd, main, tool) {
   if (merge.problem) return deny(event, merge.problem);
   if (!main) return deny(event, "an agent never merges. Report the pull request as ready.");
   if (!state.autopilot) return deny(event, 'autopilot is off, so the user merges. Report the pull request as ready. The user turns it on with the message "autopilot on", alone.');
+  // A state tool that cannot load refuses first, before the hook asks GitHub for anything.
+  if (stateTool.error) return deny(event, `the merge check refuses: it could not run (${stateTool.error?.message ?? stateTool.error}), so it refuses every merge. Tell the user.`);
+  // The pull request's head branch, from GitHub: each task of the pull request must own it (F-T273-8).
+  let head;
+  try {
+    head = prHead(merge.pr, cwd);
+  } catch (e) {
+    return deny(event, `the hook could not read the head branch of PR ${merge.pr} from GitHub (${e?.message ?? e}), so it refuses the merge. Try again, or tell the user.`);
+  }
   let verdict;
   try {
     if (stateTool.error) throw stateTool.error;
-    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr });
+    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head });
   } catch (e) {
     verdict = { reason: `it could not run (${e?.message ?? e}), so it refuses every merge. Tell the user.` };
   }
   return verdict?.ok === true ? undefined : deny(event, `the merge check refuses: ${verdict?.reason}`);
+}
+
+/**
+ * The head branch of pull request pr, as gh in the merge's folder reads it: the repository that gh pr merge acts on. Read
+ * only, at most 5 seconds. It throws when gh fails or is slow, when it gives no branch, and for a pull request from a
+ * fork, whose branch name says nothing about a task here (F-T273-8).
+ */
+function prHead(pr, cwd) {
+  if (!/^\d+$/.test(String(pr ?? "")) || !BigInt(pr)) throw new Error("the merge names no pull request number");
+  pr = String(BigInt(pr)); // as gh reads it: 012 is PR 12
+  const env = { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" };
+  const r = spawnSync("gh", ["pr", "view", String(pr), "--json", "headRefName,isCrossRepository"], { cwd, encoding: "utf8", timeout: 5000, killSignal: "SIGKILL", maxBuffer: 2 ** 20, stdio: ["ignore", "pipe", "ignore"], env });
+  if (r.error) throw new Error(r.error.code === "ETIMEDOUT" ? "gh did not answer in 5 seconds" : r.error.message);
+  if (r.status !== 0) throw new Error(`gh pr view ${pr} failed`);
+  const view = JSON.parse(r.stdout);
+  if (view?.isCrossRepository !== false) throw new Error(`PR ${pr} is not a branch of this repository`);
+  if (typeof view.headRefName !== "string" || !view.headRefName) throw new Error("gh gave no head branch");
+  return view.headRefName;
 }
 
 /**
