@@ -10,6 +10,7 @@ import { reservePreparedSpawn, reservePreparedFollowup } from "./preparation.mjs
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
 import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
 import { bindNativeChildTool } from "./child-tool.mjs";
+import { checkChildToolRecovery } from "./child-assignment.mjs";
 import { boundChildInstructions } from "./instructions.mjs";
 
 const refuse = () => { throw Error("Sage could not evaluate this native operation."); };
@@ -97,6 +98,11 @@ export function createNativePolicy(options, evaluateTool) {
       // Like the Claude adapter, children cannot ask to leave or extend their sandbox, in either mode.
       const sandboxDenied = child && command && (["require_escalated", "with_additional_permissions"].includes(command.sandbox_permissions)
         || command.additional_permissions != null);
+      const recovery = child && !sandboxDenied && !messageDenied && !deniedEdit ? checkChildToolRecovery(event, native, fixed) : null;
+      const recoveryReader = event.tool_name === "mcp__sage_preparation__sage_read_assignment"
+        && Object.keys(event.tool_input).length === 0;
+      const recoveryDenied = { decision: "deny", reason: "Read your current assignment with sage_read_assignment before continuing." };
+      if (recovery?.required && !recoveryReader) return recoveryDenied;
       const checked = sandboxDenied
         ? { decision: "deny", reason: "A child cannot request broader sandbox permissions. Ask the chief to run this command." }
         : messageDenied
@@ -108,6 +114,8 @@ export function createNativePolicy(options, evaluateTool) {
       // A concurrent mode change cannot turn an earlier decision into current permission.
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
       if (checked.decision === "deny") return checked;
+      const recovered = child ? checkChildToolRecovery(event, native, fixed, recovery?.assignment) : null;
+      if (recovered?.required && !recoveryReader) return recoveryDenied;
       // An awaited policy callback cannot preserve permission after the run changes.
       if (assignment) readChildTurn(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
         session: event.session_id, child: native.actor, turn: event.turn_id,

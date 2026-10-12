@@ -3652,3 +3652,66 @@ test("child assignment recovery selects the current continuation and never retur
   appendFileSync(f.transcript, JSON.stringify({ type: "event_msg", payload: { type: "turn_aborted", turn_id: turns[2], reason: "interrupted" } }) + "\n");
   assert.throws(() => read(), "an interrupted native turn cannot retrieve an active assignment");
 });
+
+function appendRecoveryCheckpoint(transcript, number = 1) {
+  appendFileSync(transcript, JSON.stringify({ type: "compacted", payload: { window_number: number,
+    window_id: `${String(number).padStart(8, "0")}-8888-4888-8888-888888888888`,
+    resume_metadata: { last_started_turn_id: turns[1], multi_agent_version: "v2" } } }) + "\n");
+}
+
+test("child tool recovery denies work after compaction in either Sage mode", async t => {
+  for (const sage of [true, false]) {
+    const f = await completionFixture(t); let calls = 0;
+    const transcript = f.childTranscript();
+    const input = { ...patch(turns[1]), transcript_path: transcript, tool_name: "list_mcp_resources", tool_input: {} };
+    const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: "pass" }; });
+    if (!sage) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
+    const before = f.core.readAdmission(f.options.directory);
+    appendRecoveryCheckpoint(transcript);
+    const result = await f.evaluate(policy, input, childActor);
+    assert.equal(result.decision, "deny"); assert.match(result.reason, /read.*assignment/i);
+    assert.equal(calls, 1, "unrecovered work must not reach the evaluator");
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    const reader = { ...input, tool_name: "mcp__sage_preparation__sage_read_assignment" };
+    assert.deepEqual(await f.evaluate(policy, reader, childActor), { decision: "pass" });
+    assert.equal(calls, 2, "the reader still needs the normal evaluator");
+    assert.equal((await f.evaluate(policy, { ...reader, tool_input: { task: "T1" } }, childActor)).decision, "deny");
+  }
+});
+
+test("child tool recovery rechecks compaction after an awaited evaluator", async t => {
+  const f = await completionFixture(t); let entered, release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const resume = new Promise(resolve => { release = resolve; });
+  const transcript = f.childTranscript();
+  const input = { ...patch(turns[1]), transcript_path: transcript, tool_name: "list_mcp_resources", tool_input: {} };
+  const policy = f.createNativePolicy(f.options, async () => { entered(); await resume; return { decision: "pass" }; });
+  const result = f.evaluate(policy, input, childActor);
+  await waiting;
+  appendRecoveryCheckpoint(transcript);
+  release();
+  assert.equal((await result).decision, "deny");
+});
+
+
+test("child tool recovery permits work only after an intact current read and resets on compaction", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  const result = read(), transcript = f.childTranscript();
+  const input = { ...patch(turns[1]), transcript_path: transcript, tool_name: "list_mcp_resources", tool_input: {} };
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  appendRecoveryCheckpoint(transcript);
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+  const stamp = { internal_chat_message_metadata_passthrough: { turn_id: turns[1] } };
+  const rows = [{ type: "response_item", metadata: { client_authored: false }, payload: {
+    type: "function_call", id: "fc_read_current", namespace: "mcp__sage_preparation", name: "sage_read_assignment",
+    call_id: "read_current", arguments: "{}", ...stamp } },
+  { type: "response_item", metadata: { client_authored: false, fallback_token_limit_override: 100000,
+    mcp_attribution: { status: "complete", sources: [{ server_name: "sage_preparation", tool_name: "sage_read_assignment", first_turn_id: turns[1] }] } },
+    payload: { type: "function_call_output", id: "fco_read_current", call_id: "read_current", ...stamp,
+      output: [{ type: "input_text", text: "Wall time: 0.01 seconds\nOutput:" }, { type: "input_text", text: JSON.stringify(result) }] } }];
+  appendFileSync(transcript, rows.map(row => JSON.stringify(row) + "\n").join(""));
+  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
+  appendRecoveryCheckpoint(transcript, 2);
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+});

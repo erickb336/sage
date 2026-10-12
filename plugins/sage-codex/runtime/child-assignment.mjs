@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { readAdmission, createStateTool, REVIEW_ROLES } from "../core/index.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { readObservations } from "./events.mjs";
-import { readChildTurn, readAssignmentTurn } from "./identity.mjs";
+import { readChildTurn, readAssignmentTurn, readNativeRecovery } from "./identity.mjs";
 import { preparedTaskMessage } from "./instructions.mjs";
 import { checkNativeRunAssignment } from "./run-assignment.mjs";
 
@@ -57,4 +57,36 @@ export function readNativeChildAssignment(input, context, options) {
   return { decision: "current-assignment", assignment: bound.assignment, preparation: prepared.id,
     task: prepared.task, run: prepared.run, role: prepared.rolePlan.role, child: native.actor,
     turn: bound.turn, taskHash, message };
+}
+
+/** An existing child must recover after compaction, including after Sage off. */
+export function checkChildToolRecovery(event, native, options, prior) {
+  const state = readAdmission(options.directory);
+  const candidates = state.bindings.filter(row => row.project === options.project && row.child === native.actor
+    && !state.completions?.some(done => done.assignment === row.assignment));
+  if (!candidates.length) {
+    if (prior) refuse();
+    return null;
+  }
+  if (candidates.length !== 1) refuse();
+  const bound = candidates[0];
+  const owner = state.sessions.find(row => row.project === options.project && row.session === bound.session);
+  if (bound.session !== `codex:${event.session_id}` || bound.turn !== event.turn_id || owner?.epoch !== bound.epoch
+    || (prior && bound.assignment !== prior)) refuse();
+  const assigned = state.reservations.find(row => row.assignment.id === bound.assignment);
+  if (!assigned || state.failures?.some(row => row.assignment === bound.assignment)) refuse();
+  const observations = readObservations(join(options.observationsRoot, event.session_id));
+  const transcripts = observations.filter(row => row.kind === "child-transcript" && row.child === native.actor && row.turn === bound.turn);
+  const starts = observations.filter(row => row.kind === "child-start" && row.child === native.actor);
+  if (transcripts.length !== 1 || transcripts[0].transcript !== event.transcript_path
+    || starts.length !== 1 || starts[0].parent !== bound.issuer) refuse();
+  const path = starts[0].path;
+  const recovery = readNativeRecovery(event.transcript_path, { sessionsDir: options.sessionsDir }, {
+    session: event.session_id, child: native.actor, turn: bound.turn, parent: bound.issuer,
+    path, author: path.slice(0, path.lastIndexOf("/")), taskHash: assigned.dispatch.taskHash,
+  });
+  // Uncompacted off-mode work keeps its existing behavior. Recovery itself requires
+  // the current saved task, active native turn, run target, and review target.
+  if (recovery.compaction !== null) readNativeChildAssignment({}, native, options);
+  return { assignment: bound.assignment, required: recovery.required };
 }
