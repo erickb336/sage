@@ -20,6 +20,8 @@ serveHooks({ mode: options, loadPolicy: async () => {
           && context.command.timeout_ms === 60000 && context.command.sandbox_permissions === "use_default"
           && ["additional_permissions", "justification", "prefix_rule", "environment_id"].every(key => context.command[key] === null))))
       || Object.keys(context.command).length === 2)) return commandDecision(input, context);
+  if (input.tool_name === "collaborationinterrupt_agent" && context.actor === input.session_id
+    && input.tool_input?.target === "/root/probe_child" && Object.keys(input.tool_input).length === 1) return { decision: "pass" };
   if (input.tool_name === "apply_patch") return patchDecision(input, context);
   return allowed.has(input.tool_name) ? { decision: "pass" }
     : { decision: "deny", reason: "Outside the fixed native fixture route." };

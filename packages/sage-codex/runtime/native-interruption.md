@@ -27,4 +27,10 @@ The interrupted child loses Sage delegation authority. Sage off still permits or
 
 Recovery requires an existing verified binding and transcript reference.
 Missing initial binding evidence, logbook repair scheduling, and installed automatic Sage remain separate work.
-The journal recovery checks use fixtures; the native diagnostic verifies the interruption reader.
+Run `node scripts/probe-codex-lifecycle.mjs --sage-interruption` for the native recovery check.
+It prepares and binds a lead, holds its next model response, and calls the native interrupt tool.
+The parent's next tool call reconciles the exact interruption without a stop callback.
+The check compares the saved journal hash with the native transcript receipt.
+It also checks that no report or verdict exists and that the logbook run remains open.
+The model responses are simulated, and the fixture permits only its fixed interruption target.
+This does not prove the full product command policy or installed automatic operation.
