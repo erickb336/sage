@@ -145,8 +145,10 @@ const legend = ctx => {
 };
 
 function banners(model) {
-  if (!model.diagnostics.length) return "";
-  return `<div class="banner warn" role="status">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.<ul class="diag">${model.diagnostics.map(d => `<li>${esc(d.source)} · ${esc(d.project ?? "")} · ${esc(d.message)}</li>`).join("")}</ul></div></div>`;
+  // A configured root that does not exist yet is a quiet note, not an incomplete source (F-T216-8).
+  const notSetUp = model.notSetUp?.length ? `<div class="banner"><div>Not set up yet: ${model.notSetUp.map(esc).join(", ")}. The board adds a logbook when it appears.</div></div>` : "";
+  if (!model.diagnostics.length) return notSetUp;
+  return `${notSetUp}<div class="banner warn" role="status">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.<ul class="diag">${model.diagnostics.map(d => `<li>${esc(d.source)} · ${esc(d.project ?? "")} · ${esc(d.message)}</li>`).join("")}</ul></div></div>`;
 }
 
 const CSS = `body{--bg:#121212;--panel:#1b1b1a;--panel2:#222220;--text:#ecebe6;--muted:#a3a198;--faint:#8f8d85;--line:#2f2e2b;--accent:#9d9cff;--accent-soft:#25254a;--need:#ff7a4d;--need-soft:#3d2016;--ok:#5cc28e;--ok-soft:#163426;--run:#7aa7ff;--run-soft:#182540;--warn:#e6a94a;--warn-soft:#3a2b12;--p0:#9d9cff;--p1:#4cc7bd;--p2:#f0a35a;--p3:#ff8fb8;--p4:#7bd88f;--p5:#e6d26a;--p6:#6fb7ff;--p7:#d69bff;--shadow:0 1px 2px rgba(0,0,0,.3);color-scheme:dark}

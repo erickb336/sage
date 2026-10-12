@@ -70,7 +70,7 @@ test("T205: Claude owner phrases dispatch the shared chat, task and status views
     const scope = expected.kind === "board" ? (typeof expected.scope === "string" ? expected.scope : `--name-hex ${Buffer.from(expected.scope.project).toString("hex")}`) : expected.kind === "task" ? expected.taskId : "";
     const view = expected.kind === "board" ? "chat" : expected.kind;
     assert.ok(note.includes(`sage.mjs board${scope ? ` ${scope}` : ""} --project '/work/sage' --view ${view}`), `${phrase}: ${note}`);
-    assert.match(note, /Print its output word for word/);
+    assert.match(note, /Print (?:its|the chat board's) output word for word/);
     assert.match(note, /never act on it/);
     assert.doesNotMatch(note, /did not switch anything/);
     if (expected.kind === "board") {
@@ -99,12 +99,12 @@ test("T205: the Claude owner boundary rejects agent events and quoted or framed 
 
 test("T205: board commands encode project names and retain safe folder and task boundaries", (t) => {
   const send = hook(t);
-  const first = send("sage board for 日本語").split("\n")[0];
+  const first = send("sage board for 日本語").split("\n")[1]; // line 0 starts the board server (T216)
   assert.match(first, /board --name-hex e697a5e69cace8aa9e --project '\/work\/sage' --view chat$/);
   assert.match(first.slice(first.indexOf(" board ")), /^[ -~]+$/);
   assert.equal(send("sage board for $(never-execute)"), "");
   assert.equal(send("board T197$(never-execute)"), "");
-  const afterSentence = send("sage board for sage; $(never-execute)").split("\n")[0];
+  const afterSentence = send("sage board for sage; $(never-execute)").split("\n")[1];
   assert.match(afterSentence, /board --name-hex 73616765 --project '\/work\/sage' --view chat$/);
   assert.doesNotMatch(afterSentence, /never-execute/);
   const quoted = send("sage status", { cwd: "/work/owner's project" }).split("\n")[0];

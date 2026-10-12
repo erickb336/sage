@@ -10,6 +10,16 @@ const BOARD = new RegExp(`${START}(?:show|sage)${SP}+board(?:${SP}+for${SP}+(${W
 const STATUS = new RegExp(`${START}(?:show|sage)${SP}+status${END}`, "iu");
 const FRAME = /<\/?(?:task-notification|agent-message|system-reminder)(?:\s|>)|\[Subagent hand-back\]|\[SYSTEM NOTIFICATION|Another Claude session sent a message:/i;
 
+// The board phrases for the help list: each form that the patterns above match, with what it shows. A test parses each
+// form, so the list cannot drift from the patterns. <project> and <task id> stand for a name and an id such as T197.
+export const BOARD_PHRASES = [
+  ["show board", "sage board", "the board of this project, and the address of the local board server"],
+  ["show board for all", "sage board for all projects", "the board of every project"],
+  ["show board for <project>", "sage board for <project>", "the board of one project"],
+  ["show board <task id>", "board <task id>", "one task in full"],
+  ["show status", "sage status", "the task states, the agents and what needs you"],
+];
+
 /**
  * @typedef {{kind: "board", scope: "this" | "all" | {project: string}} |
  *   {kind: "task", taskId: string} | {kind: "status"}} BoardIntent
