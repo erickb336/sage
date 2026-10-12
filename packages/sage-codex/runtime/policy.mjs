@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { commandWrites, roleEditDenied } from "sage-core";
+import { commandWrites, roleEditDenied, readAdmission } from "sage-core";
 import { checkNativeRunAssignment } from "./run-assignment.mjs";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
@@ -52,6 +52,16 @@ export function createNativePolicy(options, evaluateTool) {
       const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
       const assignment = bound ? { ...bound.assignment, role } : undefined;
       const activeRun = assignment ? checkNativeRunAssignment(fixed, assignment, bound.runTarget) : undefined;
+      const trackedChild = child && event.tool_name === "collaborationsend_message" && (before.sage
+        || (before.owner && readAdmission(fixed.directory).bindings.some(row => row.project === fixed.project
+          && row.session === `codex:${event.session_id}` && row.epoch === before.owner.epoch && row.child === native.actor)));
+      let messageDenied = false;
+      if (trackedChild) {
+        const input = event.tool_input;
+        if (Object.keys(input).length !== 2 || !Object.hasOwn(input, "target") || !Object.hasOwn(input, "message")
+          || typeof input.message !== "string" || !input.message.trim()) refuse();
+        messageDenied = input.target !== "/root" && input.target !== event.session_id;
+      }
       const editDenied = roleEditDenied({ sage: before.sage, role });
       let command;
       // Path and state-tool protection also need original inputs while Sage is off.
@@ -83,7 +93,9 @@ export function createNativePolicy(options, evaluateTool) {
       }
       // This text-only denial does not infer a trusted shell or execution directory.
       const deniedEdit = editDenied && (event.tool_name === "apply_patch" || (command && commandWrites(command.cmd)));
-      const checked = deniedEdit
+      const checked = messageDenied
+        ? { decision: "deny", reason: "A Sage child sends messages only to the chief. Report there or request a prepared task." }
+        : deniedEdit
         ? { decision: "deny", reason: "This Sage role cannot edit files. Give the change to an implementer." }
         : decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage, role,
           ...(command ? { command } : {}) })));

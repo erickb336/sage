@@ -109,3 +109,17 @@ valid branch change after dispatch. The fixture keeps the run active but changes
 the task branch. The native child must receive a denial, with no successful tool
 event. The original saved target and changed logbook remain intact. Completion
 still records. This is isolated native transport with simulated model responses.
+
+
+A Sage child can send a native message only to `/root` or the authenticated session ID.
+This matches Claude's chief-only child messaging rule. The rule also applies after Sage off
+when the current session journal identifies that child as a Sage assignment.
+Ordinary off-mode children and the chief still use the supplied evaluator.
+A valid chief target is not permission by itself: the evaluator and native permissions must also pass.
+Unknown fields, empty messages, and malformed message values refuse evaluation for a Sage child.
+This rule does not grant follow-up or interruption permission.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-child-message` for the native check.
+It verifies a peer denial and exact progress-message delivery to the chief through real native agents.
+The chief waits for the child's terminal state after the progress message wakes its wait.
+The model responses are simulated. Off-mode coverage uses isolated adapter tests.
