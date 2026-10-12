@@ -1416,7 +1416,7 @@ test("unknown-columns: a logbook that a newer sage wrote refuses every write com
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
   // A newer sage (T6 or T9) adds two columns to tasks.tsv and gives T2 values in them.
   const tasks = join(s.dir, "tasks.tsv");
-  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\tkeys\n", "\tkeys\tprogram\twaits\n").replace(/^(T2\t.*)$/m, "$1\tP1\tT1"));
+  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\textra\n", "\textra\tprogram\twaits\n").replace(/^(T2\t.*)$/m, "$1\tP1\tT1"));
   const before = snapshot(s.dir);
   const why = `sage: ${tasks} has columns that this version of sage does not know (program, waits): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`;
   const writes = [
@@ -1711,9 +1711,9 @@ test("F-R65-2: only a header with every known column and more is a newer sage's;
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
   const tasks = join(s.dir, "tasks.tsv");
   const text = readFileSync(tasks, "utf8");
-  const why = `sage: ${damaged(tasks, "id, title, size, risk, route, state, branch, pr, round, keys")}`;
+  const why = `sage: ${damaged(tasks, "id, title, size, risk, route, state, branch, pr, round, keys, hold, extra")}`;
   for (const head of ["\n", "\tkept\n"]) { // a column lost, or renamed: so it lacks one, also with a column more
-    writeFileSync(tasks, text.replace("\tkeys\n", head));
+    writeFileSync(tasks, text.replace("\tkeys\thold\textra\n", head));
     assert.equal(s.no("log", "-", "x", "--why", "y"), why);
   }
   writeFileSync(tasks, text);
@@ -1735,7 +1735,7 @@ test("F-R65-3: no control character reaches the terminal: a cell keeps none, a p
   byHand(s.dir, "findings", 1, "K]0;TITLE[31mRED", (cells) => cells.with(1, key)); // a person's edit puts them back
   assert.equal(s.no("finding", "close", "T1", "F-T1-9"), "sage: no finding F-T1-9 on T1. The latest: K\\x1b]0;TITLE\\x07\\x1b[31mRED.");
   const tasks = join(s.dir, "tasks.tsv");
-  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\tkeys\n", "\tkeys\tnew\x1b[2J\n"));
+  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\textra\n", "\textra\tnew\x1b[2J\n"));
   assert.equal(s.no("log", "-", "x", "--why", "y"), `sage: ${tasks} has columns that this version of sage does not know (new\\x1b[2J): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
   const project = join(mkdtempSync(join(tmpdir(), "sage-ctl-")), "x\rrm -rf ~ #"); // printed raw, the CR showed another command
   mkdirSync(project);
@@ -2698,6 +2698,7 @@ test("F-T284-14: a move out of held gives the task exactly one more repair round
   };
   fix("one");
   assert.match(s.ok("round", "T1"), /^T1 repairing · round 1 of 1/);
+  s.ok("finding", "close", "T1", "F-T1-1"); // the round fixed it
   s.ok("task", "T1", "set", "state=reviewing");
   fix("two");
   assert.match(s.ok("round", "T1"), /^T1 held: 1 repair rounds did not make it clean/);
@@ -2709,4 +2710,66 @@ test("F-T284-14: a move out of held gives the task exactly one more repair round
   s.ok("task", "T1", "set", "state=reviewing");
   fix("four");
   assert.match(s.ok("round", "T1"), /^T1 held: 2 repair rounds did not make it clean/, "and then it holds again");
+});
+
+// Repair round 2 of T284 (R925). Each test fails on d563ef4 and passes after.
+/** A small task in reviewing with max_rounds=1, and a way to add a medium finding triaged fix. */
+function roundStore() {
+  const s = store();
+  s.ok("config", "max_rounds=1");
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  for (const state of ["briefed", "building"]) s.ok("task", "T1", "set", `state=${state}`);
+  s.fix = (summary) => {
+    const key = s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", summary).split(" ")[0];
+    s.ok("finding", "triage", "T1", key, "fix");
+    return key;
+  };
+  return s;
+}
+
+test("F-T284-15: only a hold that round set gives one more round; a hold by task set gives none", () => {
+  const s = roundStore();
+  s.ok("task", "T1", "set", "state=held"); // a hold for a product question
+  s.ok("task", "T1", "set", "state=building");
+  s.ok("task", "T1", "set", "state=reviewing");
+  s.fix("one");
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 1 of 1 /);
+  s.ok("task", "T1", "set", "state=reviewing");
+  s.fix("two");
+  assert.match(s.ok("round", "T1"), /^T1 held: 1 repair rounds did not make it clean/, "the question's hold added no round");
+  assert.equal(rows(s.dir, "tasks")[0].hold, "round");
+  s.ok("task", "T1", "set", "state=building");
+  assert.deepEqual([rows(s.dir, "tasks")[0].hold, rows(s.dir, "tasks")[0].extra], ["", "1"], "the round's hold gave one round, once");
+  s.ok("task", "T1", "set", "state=held"); // a later ordinary hold
+  s.ok("task", "T1", "set", "state=building");
+  assert.equal(rows(s.dir, "tasks")[0].extra, "1", "an ordinary hold adds nothing");
+});
+
+test("F-T284-16: the extra rounds come only from the state tool's own field, and the round message shows the real limit", () => {
+  const s = roundStore();
+  s.ok("log", "T1", "held → building: one more repair round", "--why", "task set"); // the same words as free text
+  s.ok("task", "T1", "set", "state=reviewing");
+  const one = s.fix("one");
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 1 of 1 /);
+  s.ok("finding", "close", "T1", one); // the round fixed it
+  s.ok("task", "T1", "set", "state=reviewing");
+  s.fix("two");
+  assert.match(s.ok("round", "T1"), /^T1 held: /, "a decision's text adds no round");
+  s.ok("task", "T1", "set", "state=building");
+  s.ok("task", "T1", "set", "state=reviewing");
+  s.fix("three");
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 2 of 2 /, "the limit with its extra round");
+});
+
+test("F-T284-17: a retry whose last round's findings are still open goes to replan", () => {
+  const s = roundStore();
+  s.ok("task", "T1", "set", "state=reviewing");
+  s.fix("one");
+  s.ok("round", "T1");
+  s.ok("task", "T1", "set", "state=reviewing");
+  s.fix("two");
+  assert.match(s.ok("round", "T1"), /^T1 held: /);
+  s.ok("task", "T1", "set", "state=building");
+  s.ok("task", "T1", "set", "state=reviewing");
+  assert.match(s.ok("round", "T1"), /^T1 replan: round 1 did not fix /, "the same open findings: replan, not a second try");
 });

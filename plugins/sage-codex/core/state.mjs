@@ -76,7 +76,7 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model> or model.<role>=<model> for an agent role's model";
 const TABLES = {
-  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"],
+  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra"],
   runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
   findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status"],
   ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
@@ -84,7 +84,7 @@ const TABLES = {
   decisions: ["at", "task", "decision", "why"],
 };
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model"] };
+const ADDED = { runs: ["model"], tasks: ["hold", "extra"] };
 const COMMANDS = ["init", "logbook", "standing", "pages", "task", "round", "run", "finding", "verdict", "gate", "log", "status", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
@@ -969,9 +969,15 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
           if (k === "state") {
             if (v === "repairing") refuse("start a repair with: sage round <task>");
-            // A move out of held gives the task one more repair round (F-T284-14): round reads these decision rows.
-            if (task.state === "held") decided.push({ at: now(), task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
+            // A move out of a hold that round set gives the task one more repair round, once per such hold (F-T284-14,
+            // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
+            const was = task.state;
             move(task, v); // the design's states first; the table is written only if every check below passes
+            if (was === "held" && task.hold === "round") {
+              task.extra = String(Number(task.extra || 0) + 1);
+              decided.push({ at: now(), task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
+            }
+            if (was === "held" || v === "held") task.hold = "";
             const build = builds(task);
             if ((v === "verified" && !build) || (v === "concluded" && build)) refuse(`${task.id} ${build ? "has a build block, so it ends at verified" : "has no build block, so it ends at concluded"}`);
             if (v === "verifying" || v === "concluded") {
@@ -1006,21 +1012,24 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (!keys) refuse(`${task.id} has no open findings marked fix`);
       if (fix.every((f) => f.severity === "low")) refuse(`${task.id}: only low findings are marked fix (${keys}). A repair round needs a medium or high finding. Dismiss the low ones with a reason, or let them join the next round.`);
       const round = Number(task.round) + 1;
-      const more = read(dir, "decisions").filter((d) => d.task === task.id && /^held → \S+: one more repair round$/.test(d.decision)).length;
-      if (round > config(env).max_rounds + more) {
-        task.state = "held";
+      const limit = config(env).max_rounds + Number(task.extra || 0); // the extra rounds of earlier holds by round (F-T284-14)
+      if (round > limit) {
+        Object.assign(task, { state: "held", hold: "round" });
         write(dir, "tasks", tasks);
         return `${task.id} held: ${round - 1} repair rounds did not make it clean. Stop and ask the user.`;
       }
-      if (keys === task.keys) {
+      // A round that fixed none of the last round's findings re-plans: also when new ones join them, and on the retry after
+      // a hold, whose last round's findings are still open (F-T284-17, option a).
+      const last = String(task.keys ?? "").split(",").filter(Boolean);
+      if (last.length && last.every((k) => keys.split(",").includes(k))) {
         task.state = "replan";
         write(dir, "tasks", tasks);
-        return `${task.id} replan: round ${round - 1} did not fix ${keys}. Attack the premise, then brief again.`;
+        return `${task.id} replan: round ${round - 1} did not fix ${task.keys}. Attack the premise, then brief again.`;
       }
       Object.assign(task, { state: "repairing", round, keys });
       write(dir, "tasks", tasks);
       const roles = [...new Set(fix.map((f) => f.source))].sort().join(","); // the repair's diff goes back to the roles that found the problems
-      return `${task.id} repairing · round ${round} of ${config(env).max_rounds} · fix ${keys} · re-run ${roles} on the repair's diff`;
+      return `${task.id} repairing · round ${round} of ${limit} · fix ${keys} · re-run ${roles} on the repair's diff`;
     }
     case "run": {
       const runs = read(dir, "runs");
