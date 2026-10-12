@@ -1902,6 +1902,11 @@ test("shared push policy validates and snapshots trusted branch readers and mess
   for (const value of [null, "", " ", "main\n", "master\r\n", "topic\tname", "topic\0name", true, Promise.resolve("topic")]) {
     assert.throws(() => api.createPushPolicy({ readBranch: () => value }).pushProblem("git push origin topic", f.dir), /readBranch/);
   }
+  // Git permits Unicode spaces inside branch names. These strings reach the parser, never a shell.
+  for (const value of ["topic\u00a0name", "topic\u2003name"]) {
+    assert.equal(execFileSync("git", ["check-ref-format", "--branch", value], { encoding: "utf8" }).trimEnd(), value);
+    assert.equal(api.createPushPolicy({ readBranch: () => value }).pushProblem(`git push origin '${value}'`, f.dir), undefined);
+  }
   const broken = api.createPushPolicy({ readBranch: () => { throw new Error("fixture read failure"); } });
   assert.throws(() => broken.pushProblem("git push origin topic", f.dir), /fixture read failure/);
   // Preserve the existing Claude rule; Codex can require its reader to throw on missing evidence.

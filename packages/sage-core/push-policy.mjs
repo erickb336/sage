@@ -81,7 +81,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     if (names[0] !== "origin") return `push to origin, not to "${names[0]}".`;
     if (remove) return undefined;
     const branch = readBranch(dir);
-    if (branch !== undefined && (typeof branch !== "string" || !branch || /[\s\x00-\x1f\x7f]/u.test(branch))) throw new TypeError("readBranch must return a branch name or undefined");
+    if (branch !== undefined && (typeof branch !== "string" || !branch || /[\x00-\x20\x7f]/.test(branch))) throw new TypeError("readBranch must return a branch name or undefined");
     return branch && MAIN_REF.test(branch) ? `this checkout is on ${branch}. Push from the task's worktree, on the task's branch.` : undefined;
   }
 
