@@ -1732,7 +1732,7 @@ test("native probe removes its profile after version failure and a stalled versi
 });
 
 
-test("native deadline releases its transport when the timeout callback throws", async t => {
+test("native deadline waits for child closure when the timeout callback throws", async t => {
   const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
   const { EventEmitter } = await import("node:events");
   const { PassThrough } = await import("node:stream");
@@ -1744,10 +1744,33 @@ test("native deadline releases its transport when the timeout callback throws", 
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const result = waitNative(child, { onTimeout: () => { throw new Error("simulated callback failure"); } });
   t.mock.timers.tick(120_000);
-  assert.deepEqual(await result, { timedOut: true, reason: "native_deadline", timeoutCallbackFailed: true });
+  let settled = false;
+  result.then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false, "closing pipes must not report an unclosed child as stopped");
+  child.emit("close", 0, null);
+  assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline", timeoutCallbackFailed: true });
   assert.equal(child.stdin.writableEnded, true);
   for (const stream of [child.stdin, child.stdout, child.stderr]) assert.equal(stream.destroyed, true);
-  assert.equal(detached, true);
+  assert.equal(detached, false);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+
+test("native spawn error waits for closure before releasing its owner", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const child = new EventEmitter();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  let settled = false;
+  result.then(() => { settled = true; });
+  child.emit("error", new Error("simulated spawn failure"));
+  await Promise.resolve();
+  assert.equal(settled, false, "an error is not the child closure event");
+  child.emit("close", -2, null);
+  assert.deepEqual(await result, { code: null, exitCode: -2, signal: null, spawnFailed: true });
   assert.equal(child.listenerCount("close"), 0);
   assert.equal(child.listenerCount("error"), 0);
 });
