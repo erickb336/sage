@@ -19,10 +19,23 @@ A successful dispatch does not establish recipient delivery. Relative target
 text still needs resolution against verified agent identities. The recipient's
 protected transcript must separately bind the saved message hash to its exact
 turn. The preparation adapter now pins the recipient and reserves outgoing capacity.
-Later-turn binding, report intake, and capacity release remain required before
-Sage can reuse an agent automatically.
+Later-turn binding now verifies the accepted sender receipt and the exact received
+message in the current child turn. The child keeps its original identity and path.
+Each assignment has a separate binding, transcript-turn reference, completion, and
+report. An old stop cannot release later work. A pending continuation stays managed
+after Sage off, including when its first callback is a no-tool stop.
+
+A resumed lead uses its current assignment for delegation and its original spawn
+for identity. A completed or ended lead run cannot prepare more work. Recovery
+from interrupted dispatch, missing callbacks, or changed sessions remains unfinished.
 
 Run `node scripts/probe-codex-lifecycle.mjs --follow-up` with fake process tools
 first on PATH. The isolated native probe verifies the sender receipt and each
 recipient turn separately. It uses simulated responses, not a real-project
 pilot, and removes its temporary profile. The installed runtime stays inactive.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-followup` for the integrated
+route. The real CLI receives simulated responses. A chief creates a second run,
+prepares a follow-up, and reuses the same native child. The probe checks two
+turns and completions, records the second report, and reads the first report
+unchanged. This does not verify full policy, recovery, or a real-project pilot.

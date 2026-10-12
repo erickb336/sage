@@ -170,7 +170,7 @@ It verifies report transport and acceptance, not review quality, project checks,
 The stop callback's `agent_transcript_path` supplies the child transcript. The adapter verifies and binds its exact initial assignment at that point.
 The chief report workflow then proceeds through one accepted verdict and an identical retry.
 Missing, changed, foreign, or stale transcript evidence refuses completion and retains the reservation.
-This does not add follow-up task binding or cross-session recovery.
+The later-turn path below adds follow-up binding. Cross-session recovery remains unfinished.
 
 
 The prepared server also exposes `sage_create_task`; see `task-create.md`.
@@ -216,6 +216,7 @@ ordinary policy evaluation.
 The packaged checks cover successful reservation and fixed recipients. The
 native `--sage-unprepared-followup` probe verifies refusal through the real CLI
 with simulated responses: the completed child stays stopped, no second turn or
-reservation appears, and the temporary profile is removed. Later-turn binding,
-report handling, and continuation recovery are not yet connected. This outgoing
-path is not a claim of working automatic agent reuse or installed activation.
+reservation appears, and the temporary profile is removed. The `--sage-followup`
+probe verifies accepted dispatch, a second bound turn, separate completion, and
+report intake for the same native child. See `native-followup.md`. Continuation
+recovery and installed activation remain unfinished.

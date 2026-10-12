@@ -62,7 +62,7 @@ export function createNativePolicy(options, evaluateTool) {
           const starts = readObservations(join(fixed.observationsRoot, event.session_id))
             .filter(row => row.kind === "child-start" && row.child === native.actor);
           if (before.sage) {
-            const current = starts.filter(row => row.turn === event.turn_id);
+            const current = starts; // Native child identity stays fixed across admitted turns.
             if (current.length !== 1) refuse();
             ({ parent, path } = current[0]);
           } else {

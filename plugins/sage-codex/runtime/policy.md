@@ -55,8 +55,9 @@ revoke native permission after it returns. A successful spawn in
 Sage mode must also consume a prepared assignment exactly once. Retries do not
 issue another permission. An active-mode follow-up must likewise consume its
 pinned preparation after exact pending-call verification. Unprepared follow-ups
-refuse even if the callback passes them. Later-turn binding and report handling
-remain unfinished; this admission rule does not activate agent reuse.
+refuse even if the callback passes them. A later child turn binds only after
+accepted sender dispatch and exact received-task verification. Completion and
+reports select that assignment's turn. This does not activate the installed runtime.
 The callback cannot change the reserved input by
 mutating its copy.
 

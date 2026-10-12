@@ -35,8 +35,8 @@ function verifiedReport(name, context, options) {
   const session = bound.session.slice(6);
   const observations = readObservations(join(options.observationsRoot, session));
   const starts = observations.filter(row => row.kind === "child-start" && row.child === bound.child);
-  const transcripts = observations.filter(row => row.kind === "child-transcript" && row.child === bound.child);
-  if (starts.length !== 1 || transcripts.length !== 1 || starts[0].turn !== bound.turn
+  const transcripts = observations.filter(row => row.kind === "child-transcript" && row.child === bound.child && row.turn === bound.turn);
+  if (starts.length !== 1 || transcripts.length !== 1 || (!assigned.continuation && starts[0].turn !== bound.turn)
     || starts[0].parent !== native.actor || transcripts[0].turn !== bound.turn) refuse();
   const path = starts[0].path;
   const evidence = readNativeReport(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, {

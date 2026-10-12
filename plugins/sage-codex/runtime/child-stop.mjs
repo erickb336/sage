@@ -31,6 +31,9 @@ function unmanagedStop(input, native, state, options, owner) {
   const scoped = row => row.project === options.project && row.session === session;
   const mode = owner && state.modes.filter(row => scoped(row) && row.epoch === owner.epoch).at(-1);
   if (mode?.sage || state.bindings.some(row => scoped(row) && row.child === native.actor && row.turn === input.turn_id)) return false;
+  if (state.reservations.some(row => scoped(row.assignment) && row.continuation
+    && state.bindings.some(bound => bound.assignment === row.continuation && bound.child === native.actor)
+    && !state.completions?.some(done => done.assignment === row.assignment.id))) return false;
   if (!input.agent_transcript_path) refuse();
   const initial = readChildTurn(input.agent_transcript_path, { sessionsDir: options.sessionsDir },
     { session: input.session_id, child: native.actor, turn: input.turn_id });
@@ -77,10 +80,10 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
   if (!assigned?.dispatch.taskHash) refuse();
   const directory = join(options.observationsRoot, session);
   const observations = readObservations(directory);
-  const transcripts = observations.filter(row => row.kind === "child-transcript" && row.child === bound.child);
+  const transcripts = observations.filter(row => row.kind === "child-transcript" && row.child === bound.child && row.turn === bound.turn);
   const starts = observations.filter(row => row.kind === "child-start" && row.child === bound.child);
   if (transcripts.length !== 1 || starts.length !== 1 || transcripts[0].turn !== bound.turn
-    || starts[0].turn !== bound.turn || starts[0].parent !== bound.issuer
+    || (!assigned.continuation && starts[0].turn !== bound.turn) || starts[0].parent !== bound.issuer
     || (suppliedPath && suppliedPath !== transcripts[0].transcript)) refuse();
   const path = starts[0].path;
   const completed = readNativeCompletion(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, {

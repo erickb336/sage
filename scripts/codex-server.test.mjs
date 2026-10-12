@@ -2935,3 +2935,123 @@ test('native follow-up policy denies unprepared active-mode calls but retains or
   f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
   assert.deepEqual(await f.evaluate(policy, { ...input, turn_id: turns[2] }), { decision: 'pass' });
 });
+
+async function deliveredFollowupFixture(t) {
+  const f = await preparedFollowupFixture(t);
+  const transcript = f.childTranscript(); appendReport(f, reportText.replace('RESULT PASS', 'RESULT first'));
+  f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: '0.160.0', session,
+    kind: 'child-transcript', child: childActor, turn: turns[1], transcript });
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  assert.deepEqual(await f.evaluate(policy, f.followupInput), { decision: 'pass' });
+  const accepted = [...f.rows(), { type: 'response_item', metadata: { client_authored: false }, payload: {
+    type: 'function_call_output', id: 'fco_followup', call_id: 'followup-1', output: '',
+    internal_chat_message_metadata_passthrough: { turn_id: turns[0] } } }];
+  f.save(accepted);
+  const later = [
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: turns[2] } },
+    { type: 'turn_context', payload: { turn_id: turns[2] } },
+    { type: 'response_item', payload: { type: 'agent_message', id: 'amsg_later', author: '/root', recipient: '/root/fixture_lead',
+      content: [{ type: 'encrypted_content', encrypted_content: f.prepared.message }] } },
+  ];
+  const before = readFileSync(transcript, 'utf8');
+  const deliver = rows => writeFileSync(transcript, before + rows.map(row => JSON.stringify(row) + '\n').join(''));
+  deliver(later);
+  const input = { ...patch(turns[2]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path: transcript };
+  const stop = { hook_event_name: 'SubagentStop', session_id: session, agent_id: childActor,
+    turn_id: turns[2], transcript_path: f.followupInput.transcript_path, agent_transcript_path: transcript };
+  return { ...f, policy, transcript, later, accepted, deliver, tool: input, stop };
+}
+
+test('native later turn binds exact follow-up once and retains the first assignment', async t => {
+  const f = await deliveredFollowupFixture(t);
+  assert.deepEqual(await f.evaluate(f.policy, f.tool, childActor), { decision: 'pass' });
+  assert.deepEqual(await f.evaluate(f.policy, f.tool, childActor), { decision: 'pass' });
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 2); assert.equal(state.completions.length, 1);
+  assert.deepEqual(state.bindings[0], f.prior);
+  assert.equal(state.bindings[1].child, childActor); assert.equal(state.bindings[1].turn, turns[2]);
+  assert.equal(state.bindings[1].assignment, state.reservations[1].assignment.id);
+  const observations = f.events.readObservations(join(f.options.observationsRoot, session));
+  assert.equal(observations.filter(row => row.kind === 'child-start').length, 1);
+  assert.deepEqual(observations.filter(row => row.kind === 'child-transcript').map(row => row.turn).sort(), [turns[1], turns[2]].sort());
+});
+
+test('native later turn refuses pending or changed dispatch and changed delivery before binding', async t => {
+  const f = await deliveredFollowupFixture(t);
+  const attempt = () => f.evaluate(f.policy, f.tool, childActor);
+  f.save(f.rows()); await assert.rejects(attempt());
+  for (const mutate of [rows => rows[3].payload.arguments = JSON.stringify({ ...f.followupInput.tool_input, target: session }),
+    rows => rows[4].metadata.client_authored = true]) {
+    const changed = structuredClone(f.accepted); mutate(changed); f.save(changed); await assert.rejects(attempt());
+  }
+  f.save(f.accepted);
+  for (const mutate of [rows => rows[2].payload.content[0].encrypted_content += '\nchanged',
+    rows => rows[2].payload.recipient = '/root/other', rows => rows[2].payload.author = '/root/other']) {
+    const changed = structuredClone(f.later); mutate(changed); f.deliver(changed); await assert.rejects(attempt());
+  }
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
+  f.deliver(f.later); assert.deepEqual(await attempt(), { decision: 'pass' });
+});
+
+test('native later turn no-tool stop binds after Sage off and keeps reports separate', async t => {
+  const f = await deliveredFollowupFixture(t);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'stop-observed' });
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  appendReport(f, reportText.replace('RESULT PASS', 'RESULT second'), childActor, turns[2]);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'completed' });
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'already-completed' });
+  const { readChildReport, recordChildReport } = await import(pathToFileURL(join(f.plugin, 'runtime/report-intake.mjs')));
+  const first = readChildReport({ name: f.input.name }, f.native(session), f.options);
+  const second = readChildReport({ name: f.request.name }, f.native(session), f.options);
+  assert.equal(first.run, 'R1'); assert.equal(second.run, 'R4');
+  assert.equal(first.report.RESULT, 'first'); assert.equal(second.report.RESULT, 'second');
+  assert.notEqual(first.assignment, second.assignment); assert.notEqual(first.turn, second.turn);
+  for (const [name, report] of [[f.input.name, first], [f.request.name, second]])
+    assert.equal(recordChildReport({ name, reportHash: report.reportHash }, f.native(session), f.options).decision, 'report-recorded');
+  assert.equal(f.core.readAdmission(f.options.directory).reports.length, 2);
+});
+
+test('native later turn old stop cannot release new work and parent reconciliation completes only its turn', async t => {
+  const f = await deliveredFollowupFixture(t);
+  await f.evaluate(f.policy, f.tool, childActor);
+  assert.deepEqual(f.policy.completeChild({ ...f.stop, turn_id: turns[1] }, f.native(childActor)), { decision: 'already-completed' });
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'stop-observed' });
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  reconcileNativeCompletions(f.native(session), session, f.options);
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  appendReport(f, reportText, childActor, turns[2]);
+  reconcileNativeCompletions(f.native(session), session, f.options);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 2); assert.deepEqual(state.completions[1], state.bindings[1]);
+  await assert.rejects(f.evaluate(f.policy, f.tool, childActor));
+});
+
+test('native later turn lead can prepare its team under the new run and loses access on completion', async t => {
+  const f = await deliveredFollowupFixture(t);
+  await f.evaluate(f.policy, f.tool, childActor);
+  const input = { ...f.input, name: 'later_qa', role: 'qa', run: 'R2', reviewCycle: 1 };
+  const saved = f.api.prepareNativeTask(input, f.native(childActor), f.options);
+  assert.equal(saved.role, 'qa'); assert.equal(saved.task, 'T1');
+  const restore = editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, status: 'done' } : row));
+  assert.throws(() => f.api.prepareNativeTask({ ...input, name: 'ended_lead_qa' }, f.native(childActor), f.options));
+  restore();
+  appendReport(f, reportText, childActor, turns[2]);
+  f.policy.completeChild(f.stop, f.native(childActor));
+  assert.throws(() => f.api.prepareNativeTask({ ...input, name: 'completed_lead_qa' }, f.native(childActor), f.options));
+});
+
+test('native later turn refuses a superseded recipient turn before binding', async t => {
+  const f = await deliveredFollowupFixture(t);
+  const laterTurn = 'a1111111-2222-4333-8444-555555555555';
+  f.deliver([...f.later,
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: turns[2] } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: laterTurn } },
+    { type: 'turn_context', payload: { turn_id: laterTurn } },
+  ]);
+  await assert.rejects(f.evaluate(f.policy, f.tool, childActor));
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
+  f.deliver(f.later);
+  assert.deepEqual(await f.evaluate(f.policy, f.tool, childActor), { decision: 'pass' });
+});
