@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,writeFileSync,rmSync,realpathSync,symlinkSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,rmSync,realpathSync,symlinkSync,truncateSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import * as identity from './identity.mjs';
@@ -90,4 +90,27 @@ test('native command evidence refuses interrupted turns for root and child comma
   {type:'turn_context',payload:{turn_id:other}},
   {type:'event_msg',payload:{type:'turn_aborted',turn_id:other,reason:'interrupted'}});
  f.save(current);assert.deepEqual(f.read(),envelope);
+});
+
+
+test('native command evidence enforces the complete transcript record limit', t => {
+ const f=fixture(t);assert.deepEqual(f.read(),envelope);
+ const value=rows();
+ const filler={type:'event_msg',payload:{type:'fixture_note'}};
+ while(value.length<65536)value.push(filler);
+ f.save(value);assert.deepEqual(f.read(),envelope);
+ value.push(filler);f.save(value);
+ assert.throws(()=>f.read(),{message:'Codex command evidence is unavailable'});
+});
+
+test('native command evidence refuses oversized or malformed later transcript bytes', t => {
+ const f=fixture(t);assert.deepEqual(f.read(),envelope);
+ truncateSync(f.path,16*1024*1024+1);
+ assert.throws(()=>f.read(),{message:'Codex command evidence is unavailable'});
+ f.save(rows());assert.deepEqual(f.read(),envelope);
+ const valid=rows().map(row=>JSON.stringify(row)).join('\n')+'\n';
+ writeFileSync(f.path,Buffer.concat([Buffer.from(valid),Buffer.from([0xff,10])]));
+ assert.throws(()=>f.read(),{message:'Codex command evidence is unavailable'});
+ writeFileSync(f.path,valid+'{');
+ assert.throws(()=>f.read(),{message:'Codex command evidence is unavailable'});
 });
