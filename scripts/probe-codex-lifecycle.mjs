@@ -1058,7 +1058,7 @@ data: ${JSON.stringify(event)}
       unexpectedItems, refusedTaskUpdates, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
     if (!verified) process.exitCode = 1;
-    if (childCompaction && childCompactionObserved && !childCompactionReady) throw Error("child_compaction_not_ready");
+    if (childCompaction && childCompactionObserved && !childCompactionReady && result.code !== 0) throw Error("child_compaction_not_ready");
     if (sage || sageOff) assert(chiefContextVerified, "chief_context_not_observed");
     if (createTask) assert(createdTaskVerified, "task_creation_not_observed");
     if (createRun) assert(createdRunVerified && finishedCreatedRun, "run_creation_not_observed");

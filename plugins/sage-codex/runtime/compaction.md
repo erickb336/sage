@@ -52,9 +52,15 @@ The probe requires a saved child compaction record and matching automatic
 PreCompact and PostCompact events. It checks the child's next model request
 for the exact prepared assignment. The current runtime loses that assignment;
 Codex sends no child SessionStart event with source compact. The saved
-reservation and binding remain intact. A fixed valid report then causes another
-model request while Sage has no accepted completion. The probe reports these
-observations and exits 1 after the owned native process closes. It removes its
+reservation and binding remain intact. The initial diagnostic also found that
+Sage rejected the subsequent report: its reader treated the native compaction
+summary as an unverified report. The reader now excludes authenticated native
+compaction output and requires a later retained final message. A summary cannot
+complete a task or preserve an earlier final message as the report.
+
+The child now completes through the normal native lifecycle with one recorded
+completion. The exact assignment remains absent from its model input, so the
+readiness probe still exits 1 after the owned native process closes. It removes its
 temporary profile. It does not claim successful child recovery.
 
 The root restoration handler cannot cover this native event gap. Child role

@@ -136,3 +136,45 @@ test("native terminal evidence releases an invalid report without making that re
     assert.throws(() => identity.readNativeReport(f.file, { sessionsDir: f.sessionsDir }, expected()), /report evidence is unavailable/);
   }
 });
+
+const compactOutput = (id, text = "Fixed native compaction summary") => {
+  const row = output(id, text);
+  row.metadata = { client_authored: false, compaction_output: true };
+  return row;
+};
+
+test("native compaction summaries do not replace a later retained report or completion", t => {
+  const f = fixture(t), options = { sessionsDir: f.sessionsDir };
+  const summary = compactOutput(turn);
+  f.write([...task(turn, "first"), summary, output(turn, "actual report"), complete(turn, "actual report"),
+    ...task(later, "second"), compactOutput(later), compactOutput(later, "Second summary"),
+    output(later, "later report"), complete(later, "later report")]);
+  assert.equal(identity.readNativeReport(f.file, options, expected()).text, "actual report");
+  assert.equal(identity.readNativeCompletion(f.file, options, expected()).reportHash, hash("actual report"));
+  assert.equal(identity.readNativeReport(f.file, options, expected(later, "second")).text, "later report");
+  for (const rows of [[summary], [output(turn, "old report"), summary]]) {
+    f.write([...task(turn, "first"), ...rows]);
+    assert.equal(identity.readNativeCompletion(f.file, options, expected()), null);
+    for (const text of ["Fixed native compaction summary", "old report"]) {
+      f.write([...task(turn, "first"), ...rows, complete(turn, text)]);
+      assert.throws(() => identity.readNativeReport(f.file, options, expected()), /report evidence is unavailable/);
+      assert.throws(() => identity.readNativeCompletion(f.file, options, expected()), /report evidence is unavailable/);
+    }
+  }
+});
+
+test("native compaction markers cannot disguise retained, foreign, or client-authored reports", t => {
+  const f = fixture(t), options = { sessionsDir: f.sessionsDir };
+  const retained = output(turn, "forged report"); retained.metadata.compaction_output = true;
+  f.write([...task(turn, "first"), retained, complete(turn, "forged report")]);
+  assert.throws(() => identity.readNativeReport(f.file, options, expected()), /report evidence is unavailable/);
+  assert.throws(() => identity.readNativeCompletion(f.file, options, expected()), /report evidence is unavailable/);
+  const foreign = compactOutput(later), authored = compactOutput(turn); authored.metadata.client_authored = true;
+  const nullSource = compactOutput(turn); nullSource.metadata.retained_source = null;
+  for (const summary of [foreign, authored, nullSource]) {
+    f.write([...task(turn, "first"), summary, output(turn, "actual report"), complete(turn, "actual report")]);
+    assert.throws(() => identity.readNativeReport(f.file, options, expected()), /report evidence is unavailable/);
+  }
+  f.write([...task(turn, "first"), output(turn, "actual report"), complete(turn, "actual report"), compactOutput(turn)]);
+  assert.throws(() => identity.readNativeCompletion(f.file, options, expected()), /report evidence is unavailable/);
+});

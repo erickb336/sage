@@ -190,6 +190,14 @@ function reportFromRecords(rows, expected, { pending = false, report = true } = 
       if (turn !== expected.turn) continue;
       if (row.type === "response_item" && payload.type === "message" && payload.role === "assistant") {
         if (completed || index <= position) unavailable();
+        // Native compaction output has no retained report source. A later final
+        // message must supply its own provenance before this turn can complete.
+        if (row.metadata?.compaction_output === true) {
+          if (row.metadata.client_authored !== false || Object.hasOwn(row.metadata, "retained_source")
+            || payload.internal_chat_message_metadata_passthrough?.turn_id !== turn) unavailable();
+          final = undefined;
+          continue;
+        }
         if (payload.phase !== undefined && payload.phase !== "final_answer") continue;
         const retained = row.metadata?.retained_source;
         if (typeof payload.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(payload.id)
