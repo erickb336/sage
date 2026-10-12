@@ -2236,3 +2236,44 @@ test("shared shell paths keep literal equals signs in operands and redirections"
     assert.equal(existsSync(join(cwd, "ordinary=a")), false);
   }
 });
+
+
+test("Codex shell path decisions protect linked targets and literal equals names", async t => {
+  const f = isolated(t, "codex");
+  const { shellPathDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof shellPathDecision, "function");
+  const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+  writeFileSync(join(root, "ledger.tsv"), "unchanged");
+  symlinkSync(root, join(cwd, "linked"));
+  linkSync(join(root, "ledger.tsv"), join(cwd, "hard"));
+  for (const command of ["tee linked/ledger.tsv", "printf fixed > hard", "touch linked/a=b",
+    "cd ../logbook && touch new.tsv", "sort -olinked/result.tsv input"])
+    assert.equal(shellPathDecision(command, { cwd, roots: [root] }).decision, "deny", command);
+  assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "unchanged");
+  assert.equal(existsSync(join(root, "a=b")), false);
+});
+
+test("Codex shell path decisions deny unresolved writes without treating reader data as paths", async t => {
+  const f = isolated(t, "codex");
+  const { shellPathDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof shellPathDecision, "function");
+  const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+  for (const command of [null, "touch $UNKNOWN", "cd $UNKNOWN && touch file", "touch ~/file", "echo 'unfinished"])
+    assert.equal(shellPathDecision(command, { cwd, roots: [root] }).decision, "deny", String(command));
+  for (const command of ["cat ordinary.txt", "touch ordinary.txt", "touch ordinary=a", `printf '%s' '${root}/ledger.tsv'`])
+    assert.equal(shellPathDecision(command, { cwd, roots: [root] }).decision, "pass", command);
+  assert.equal(existsSync(join(cwd, "ordinary.txt")), false);
+});
+
+test("Codex shell path decisions reject invalid execution context and retain custom-array roots", async t => {
+  const f = isolated(t, "codex");
+  const { shellPathDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof shellPathDecision, "function");
+  const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+  for (const context of [{ cwd: "relative", roots: [root] }, { cwd, roots: [] },
+    { cwd, roots: new Array(1) }, { cwd, roots: [null] }])
+    assert.throws(() => shellPathDecision("cat ordinary.txt", context));
+  const roots = [root];
+  roots.some = () => false; roots.map = () => []; roots[Symbol.iterator] = function* () {};
+  assert.equal(shellPathDecision(`touch ${root}/ledger.tsv`, { cwd, roots }).decision, "deny");
+});
