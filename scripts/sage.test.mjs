@@ -2791,3 +2791,52 @@ test("F-T284-19: leaving replan clears the old round's findings, so one that is 
   s.ok("finding", "triage", "T1", "F-T1-2", "fix");
   assert.match(s.ok("round", "T1"), /^T1 repairing · round 2 of 3 · fix F-T1-1,F-T1-2 /);
 });
+
+// T289: lead honesty before step 4. Each test fails on b4db88c and passes after.
+test("F-T289-2: a run backs one review or QA verdict of its task; a check verdict may name it too", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa"); // R1
+  const SHA = "c".repeat(40);
+  s.ok("verdict", "T1", "--kind", "checks-pass", "--sha", SHA, "--run", "R1");
+  s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--run", "R1");
+  assert.match(s.no("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--cycle", "2", "--run", "R1"), /R1 already backs the qa-pass verdict of T1 on ccccccc: one run backs one review or QA verdict/);
+  assert.match(s.no("verdict", "T1", "--kind", "review-clean", "--sha", "d".repeat(40), "--run", "R1"), /R1 already backs/, "also on another SHA and kind");
+  s.ok("verdict", "T1", "--kind", "checks-pass", "--sha", SHA, "--cycle", "2", "--run", "R1"); // a check needs no run of its own
+  s.ok("task", "add", "--title", "b", "--size", "small");
+  s.ok("verdict", "T2", "--kind", "qa-pass", "--sha", SHA, "--run", "R1"); // another task's ledger does not count
+});
+
+test("F-T289-9: a re-plan back to briefed ends the task's running lead run, with a decision", () => {
+  for (const from of ["held", "replan"]) {
+    const s = store();
+    s.ok("task", "add", "--title", "a", "--size", "small");
+    for (const state of ["briefed", "building"]) s.ok("task", "T1", "set", `state=${state}`);
+    s.ok("run", "add", "T1", "--role", "lead"); // R1
+    s.ok("run", "add", "T1", "--role", "qa"); // R2: a helper's run stays for the chief
+    byHand(s.dir, "tasks", 0, "T1", (cells) => Object.assign(cells, { 5: from }));
+    s.ok("task", "T1", "set", "state=briefed");
+    assert.deepEqual(rows(s.dir, "runs").map((r) => `${r.id} ${r.status}`), ["R1 blocked", "R2 running"], from);
+    assert.match(rows(s.dir, "decisions").at(-1).decision, /^R1 blocked: T1 went back to briefed$/, from);
+    s.ok("run", "add", "T1", "--role", "lead"); // the chief's new lead run, for the new brief
+  }
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "lead");
+  s.ok("task", "T1", "set", "state=briefed"); // the first brief: the lead run goes on
+  assert.equal(rows(s.dir, "runs")[0].status, "running");
+});
+
+test("F-T286-2 and F-T286-3: a non-whole extra counts as 0; a move from a round hold to abandoned gives no round", () => {
+  const s = roundStore();
+  byHand(s.dir, "tasks", 0, "T1", (cells) => Object.assign(cells, { 11: "x" }));
+  s.ok("task", "T1", "set", "state=reviewing");
+  s.fix("one");
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 1 of 1 /, "not NaN");
+  s.ok("task", "T1", "set", "state=reviewing");
+  s.fix("two");
+  assert.match(s.ok("round", "T1"), /^T1 held: /, "a NaN limit never held");
+  s.ok("task", "T1", "set", "state=abandoned");
+  assert.equal(rows(s.dir, "tasks")[0].extra, "x", "no extra round for an abandoned task");
+  assert.doesNotMatch(rows(s.dir, "decisions").map((d) => d.decision).join("\n"), /one more repair round/);
+});
