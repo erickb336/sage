@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -104,4 +104,28 @@ test("board install: explicit login artifact is private, exclusive and works fro
   rmSync(installed.cliPath);
   assert.throws(() => local.writeLoginFile({ ...f.options, plistPath: join(f.temp, "missing-cli.plist") }), /ENOENT/);
   assert.equal(existsSync(join(f.temp, "missing-cli.plist")), false);
+});
+
+
+test("board login stores the current Node through its stable PATH alias", async t => {
+  const f = await fixture(); t.after(() => rmSync(f.temp, { recursive: true, force: true }));
+  const bin = join(f.temp, "bin"); mkdirSync(bin);
+  const stable = join(bin, "node"); symlinkSync(f.nodePath, stable);
+  assert.equal(f.api.stableNodePath(bin), stable);
+  const options = { ...f.options, nodePath: stable, allowNodeAlias: true };
+  f.api.installBoard(options);
+  const plistPath = join(f.temp, "login.plist");
+  f.api.writeLoginFile({ ...options, plistPath });
+  assert.ok(readFileSync(plistPath, "utf8").includes(`<string>${xmlText(stable)}</string>`));
+  assert.ok(!readFileSync(plistPath, "utf8").includes(`<string>${xmlText(f.nodePath)}</string>`));
+  chmodSync(bin, 0o775);
+  assert.equal(f.api.stableNodePath(bin), stable, "Homebrew permits its owner group to update the bin directory");
+  chmodSync(bin, 0o777);
+  assert.throws(() => f.api.stableNodePath(bin), /upgrade-stable Node/);
+  assert.throws(() => f.api.installBoard(options), /owner-controlled/);
+  chmodSync(bin, 0o700);
+  const other = join(f.temp, "other-node"); writeFileSync(other, "fixture, never executed");
+  rmSync(stable); symlinkSync(other, stable);
+  assert.throws(() => f.api.stableNodePath(bin), /upgrade-stable Node/);
+  assert.throws(() => f.api.installBoard(options), /running Node/);
 });
