@@ -14,9 +14,12 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-child-message", "--sage-interruption", "--sage-followup-missed-callbacks", "--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-child-sandbox", "--sage-child-message", "--sage-interruption", "--sage-followup-missed-callbacks", "--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const childSandbox = process.argv.includes("--sage-child-sandbox");
+assert(!childSandbox || process.argv.slice(2).length === 1, "child_sandbox_is_a_separate_route");
+let childSandboxVerified = false;
 const childMessage = process.argv.includes("--sage-child-message");
 assert(!childMessage || process.argv.slice(2).length === 1, "child_message_is_a_separate_route");
 let chiefReceivedMessage = false, childMessageVerified = false, childMessagePhase = "wait", childMessageWaitCall, childMessageListCall;
@@ -58,7 +61,7 @@ const nestedReport = process.argv.includes("--sage-nested-report");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
 const reportProbe = process.argv.includes("--sage-report") || (noTool && !escapeReport);
-const sage = childMessage || interruption || sageFollowup || unpreparedFollowup || retargetedRun || endedRun || readonlyPatch || createTask || process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
+const sage = childSandbox || childMessage || interruption || sageFollowup || unpreparedFollowup || retargetedRun || endedRun || readonlyPatch || createTask || process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
 assert([failedSpawn, outage, process.argv.includes("--sage-report"), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
 assert([denySpawn, followUp, process.argv.includes("--nested"), sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
@@ -82,7 +85,7 @@ for (const dir of [workspace, baselineHome, codexHome, temporary]) mkdirSync(dir
 const catalogPath = join(root, "model-catalog.json");
 writeFileSync(catalogPath, JSON.stringify({ models: [{
   slug: "sage-native-parent", display_name: "Sage native lifecycle fixture",
-  supported_reasoning_levels: [], shell_type: "disabled", ...(readonlyPatch ? { apply_patch_tool_type: "freeform" } : {}), visibility: "list",
+  supported_reasoning_levels: [], shell_type: childSandbox ? "unified_exec" : "disabled", ...(readonlyPatch ? { apply_patch_tool_type: "freeform" } : {}), visibility: "list",
   supported_in_api: true, priority: 1, support_verbosity: false, multi_agent_version: "v2",
   truncation_policy: { mode: "bytes", limit: 10000 }, experimental_supported_tools: [], tool_mode: "direct",
   model_messages: { instructions_template: "Follow the fixed native-agent probe task. Do not use shell or external tools." },
@@ -168,7 +171,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   const runRequest = { request: "b1111111-2222-4333-8444-555555555555", task: "T1", role: "lead", branch: "", candidate: "" };
   const taskRequest = { request: "a1111111-2222-4333-8444-555555555555", title: "Native task creation", size: "small", risk: ["input"], add: ["ux-review"], why: "Check the fixed experience" };
   let prepared = false, reportReceipt, failedDispatchRecovered = false, childPatchTool, readonlyPatchVerified = false, endedRunVerified = false, retargetedRunVerified = false;
-  const calls = { childPeerMessage: "probe_child_peer_message", childChiefMessage: "probe_child_chief_message", resumedPrepare: "resumed_prepare", resumedSpawn: "resumed_spawn", resumedList: "resumed_list", followupCreate: "probe_followup_create", followupPrepare: "probe_followup_prepare", followupControl: "probe_followup_control", followupReport: "probe_followup_report", followupRecord: "probe_followup_record", followupOld: "probe_followup_old", readTask: "probe_read_task", brief: "probe_brief", briefRetry: "probe_brief_retry", build: "probe_build", review: "probe_review", verify: "probe_verify", verifyWithoutReviews: "probe_verify_without_reviews", createRun: "probe_create_run", createRunRetry: "probe_create_run_retry", createdRunAfterFinish: "probe_created_run_after_finish", create: "probe_create", createRetry: "probe_create_retry", failureList: "probe_failure_list", prepareRetry: "probe_prepare_retry", spawnRetry: "probe_spawn_retry", inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
+  const calls = { childSandbox: "probe_child_sandbox", childPeerMessage: "probe_child_peer_message", childChiefMessage: "probe_child_chief_message", resumedPrepare: "resumed_prepare", resumedSpawn: "resumed_spawn", resumedList: "resumed_list", followupCreate: "probe_followup_create", followupPrepare: "probe_followup_prepare", followupControl: "probe_followup_control", followupReport: "probe_followup_report", followupRecord: "probe_followup_record", followupOld: "probe_followup_old", readTask: "probe_read_task", brief: "probe_brief", briefRetry: "probe_brief_retry", build: "probe_build", review: "probe_review", verify: "probe_verify", verifyWithoutReviews: "probe_verify_without_reviews", createRun: "probe_create_run", createRunRetry: "probe_create_run_retry", createdRunAfterFinish: "probe_created_run_after_finish", create: "probe_create", createRetry: "probe_create_retry", failureList: "probe_failure_list", prepareRetry: "probe_prepare_retry", spawnRetry: "probe_spawn_retry", inspect: "probe_inspect", accept: "probe_accept", acceptRetry: "probe_accept_retry", finish: "probe_finish", finishRetry: "probe_finish_retry", record: "probe_record", recordRetry: "probe_record_retry", reread: "probe_reread", report: "probe_report", prepare: "probe_prepare", childControl: "probe_child_control", childSpawn: "probe_child_spawn", childWait: "probe_child_wait", childList: "probe_child_list", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed", followup: "probe_followup", followupWait: "probe_followup_wait", followupDone: "probe_followup_done" };
   const knownCalls = new Set([...Object.values(calls), ...Object.values(NESTED_CALLS)]);
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -197,7 +200,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       try { outputs[item.call_id] = JSON.parse(output); } catch {
         if (resumedFailure && item.call_id === calls.resumedSpawn) outputs[item.call_id] = output;
         else if ((denySpawn || outage || failedSpawn) && [calls.spawn, calls.spawnRetry].includes(item.call_id)) outputs[item.call_id] = output;
-        else if ([calls.childPeerMessage, calls.childChiefMessage, calls.verifyWithoutReviews, calls.followup, calls.followupControl, calls.childControl, NESTED_CALLS.control].includes(item.call_id)) outputs[item.call_id] = output;
+        else if ([calls.childSandbox, calls.childPeerMessage, calls.childChiefMessage, calls.verifyWithoutReviews, calls.followup, calls.followupControl, calls.childControl, NESTED_CALLS.control].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -225,9 +228,12 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const patchTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).filter(member => member.name === "apply_patch").map(member => ({ namespace: tool.name, ...member }))
       : tool.name === "apply_patch" ? [tool] : []);
+    const commandTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.name === "exec_command").map(member => ({ namespace: tool.name, name: member.name }))
+      : tool.name === "exec_command" ? [{ name: tool.name }] : []);
     const progressMessageSeen = tasks.some(row => row.author === "/root/probe_child" && row.recipient === "/root"
       && row.content?.some(part => part.type === "encrypted_content" && part.encrypted_content === "Fixed progress report"));
-    return { progressMessageSeen, outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen, patchTools,
+    return { commandTools, progressMessageSeen, outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen, patchTools,
       chiefCopies: chiefParts.map(part => textValues(input).reduce((count, text) => count + text.split(part).length - 1, 0)),
       chiefOrder: chiefParts.map(part => textValues(input).join("\n").indexOf(part)),
       readTaskTools: mcpTools("sage_read_task"), updateTaskTools: mcpTools("sage_update_task"), createRunTools: mcpTools("sage_create_run"), createTools: mcpTools("sage_create_task"), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review"), inspectTools: mcpTools("sage_read_recorded_report") };
@@ -356,6 +362,11 @@ data: ${JSON.stringify(event)}
           check(thread !== rootThread && thread !== childThread && (!grandchildThread || thread === grandchildThread), "nested_reviewer_identity_changed");
           grandchildThread = thread; grandchildRequests++; nestedFlow.reviewer(info, res); return;
         }
+        if (childSandbox && Object.hasOwn(info.outputs, calls.childSandbox)) {
+          check(thread === childThread && childRequests === 2, "child_sandbox_identity_changed");
+          check(String(info.outputs[calls.childSandbox]).includes("A child cannot request broader sandbox permissions. Ask the chief to run this command."), "child_sandbox_sage_denial_missing");
+          childRequests++; childSandboxVerified = true; respond(res, message(CHILD_MARKER)); return;
+        }
         if (childMessage && Object.hasOwn(info.outputs, calls.childChiefMessage)) {
           check(thread === childThread && childRequests === 3, "chief_message_identity_changed");
           check(info.outputs[calls.childChiefMessage] === "", "chief_message_receipt_missing");
@@ -368,6 +379,13 @@ data: ${JSON.stringify(event)}
         }
         if (sage && Object.hasOwn(info.outputs, calls.childControl)) {
           check(thread === childThread && childRequests === 1, "child_control_changed_identity_or_repeated"); childRequests++;
+          if (childSandbox) {
+            check(info.commandTools.length === 1, "child_command_tool_missing");
+            respond(res, { type: "function_call", ...info.commandTools[0], call_id: calls.childSandbox,
+              arguments: JSON.stringify({cmd: "printf sage-child-sandbox-control", shell: "/bin/sh", workdir: workspace,
+                sandbox_permissions: "require_escalated", justification: "Fixed harmless sandbox-denial probe", max_output_tokens: 100}) });
+            return;
+          }
           if (childMessage) {
             respond(res, call(calls.childPeerMessage, "send_message", { target: "/root/peer", message: "Fixed progress report" })); return;
           }
@@ -911,7 +929,7 @@ data: ${JSON.stringify(event)}
       "features.remote_plugin": false,
       "features.apps": false,
       "features.shell_snapshot": false,
-      "features.shell_tool": false,
+      "features.shell_tool": childSandbox,
       "features.enable_request_compression": false,
       "features.multi_agent": true,
       "features.multi_agent_v2": true,
@@ -986,10 +1004,10 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
     const verified = result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
-      && (!childMessage || childMessageVerified) && (!resumedFailure || resumedFailureVerified) && (!unpreparedFollowup || unpreparedFollowupVerified) && (!sageFollowup || sageFollowupVerified)
+      && (!childSandbox || childSandboxVerified) && (!childMessage || childMessageVerified) && (!resumedFailure || resumedFailureVerified) && (!unpreparedFollowup || unpreparedFollowupVerified) && (!sageFollowup || sageFollowupVerified)
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && refusedTaskUpdates === (taskLifecycle ? 1 : 0) && malformedEvents === 0 && rejectedRequests === 0;
     print({ type: "result", ...result, responseRequests, rootRequests, ...(failedSpawn ? { rejectedDispatchRootRequests: 3 } : {}), childRequests, childTaskSeen, childResponseSent,
@@ -1144,6 +1162,15 @@ data: ${JSON.stringify(event)}
       assert.equal(resumedFailureVerified, true);
       print({ type: "resumed_lead_failure_evidence", sameNativeLead: true, assignments: 2,
         failedChildDispatches: 1, extraChildren: 0, preservedCompletions: 2, simulatedModel: true });
+    }
+    if (childSandbox) {
+      const commands = rows.filter(row => row.hook_event_name === "PreToolUse" && row.tool_name === "Bash");
+      assert.equal(commands.length, 1);
+      assert.equal(commands[0].fixedSandboxCommandMatched, true);
+      assert.equal(rows.filter(row => row.hook_event_name === "PostToolUse" && row.tool_name === "Bash").length, 0);
+      assert.equal(childSandboxVerified, true);
+      print({type: "child_sandbox_evidence", nativeChild: true, sageDenialReceived: true,
+        preToolEvents: 1, postToolEvents: 0, simulatedModel: true});
     }
     if (sageFollowup) {
       const saved = integrated.readJournal();

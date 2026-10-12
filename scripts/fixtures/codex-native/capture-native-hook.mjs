@@ -10,6 +10,7 @@ const record=Object.fromEntries(['hook_event_name','session_id','agent_id','turn
 // Record field types only; command content stays private.
 record.toolInputShape=Object.fromEntries(Object.entries(input.tool_input??{}).map(([k,v])=>[k,typeof v]));
 record.fixedCommandMatched=input.tool_input?.command==='printf sage-native-command-ok; pwd';
+record.fixedSandboxCommandMatched=input.tool_input?.command==='printf sage-child-sandbox-control';
 if(record.fixedCommandMatched&&input.hook_event_name==='PreToolUse'){
  record.commandHookFields=Object.keys(input).sort();
  record.hookCwdIsWorkspace=input.cwd===join(root,'workspace');

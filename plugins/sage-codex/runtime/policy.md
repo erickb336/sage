@@ -123,3 +123,18 @@ Run `node scripts/probe-codex-lifecycle.mjs --sage-child-message` for the native
 It verifies a peer denial and exact progress-message delivery to the chief through real native agents.
 The chief waits for the child's terminal state after the progress message wakes its wait.
 The model responses are simulated. Off-mode coverage uses isolated adapter tests.
+
+A child cannot request `require_escalated`, `with_additional_permissions`, or non-null
+`additional_permissions` in a native command. This rule applies before the supplied
+evaluator, in either Sage mode. Ordinary child commands and chief commands retain
+that evaluator and Codex's native permission checks. The recovered request proves
+permission intent; it does not prove the effective inherited sandbox.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-child-sandbox` with fake process
+tools first on PATH. A real native child requests escalation for a fixed harmless
+command. It must receive Sage's exact denial, with one pre-tool event and no post-tool
+event. The child then completes its report, and the probe verifies cleanup.
+The capture stores a fixed-command match flag, not command text. Responses are
+simulated. Additional-permission and off-mode cases use adapter tests; this probe
+checks `require_escalated` while Sage is on. It does not establish installed activation
+or protection when Codex skips a required hook.
