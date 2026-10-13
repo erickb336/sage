@@ -2147,6 +2147,41 @@ test("shared shell write classification refuses unreadable input in either bundl
 });
 
 
+test("Codex direct patch targets retain all operations and both names of a move", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const patch = ["*** Begin Patch", "*** Add File: added name.txt", "+fixed",
+    "*** Update File: before", "*** Move to: after", "@@", "-old", "+new",
+    "*** Delete File: removed", "*** End Patch"].join("\n");
+  for (const text of [patch, patch.replaceAll("\n", "\r\n")])
+    assert.deepEqual(patchTargets(text), ["added name.txt", "before", "after", "removed"]);
+  assert.deepEqual(patchTargets("*** Begin Patch\n*** End Patch"), []);
+  assert.equal(existsSync(join(f.dir, "added name.txt")), false);
+});
+
+test("Codex direct patch targets distinguish content from headers", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const patch = ["*** Begin Patch", "*** Add File: added", "+*** Delete File: content-only",
+    "+*** End Patch", "*** Update File: updated", "@@", " *** Move to: context-only",
+    "-*** Delete File: old-content", "+*** Add File: new-content", "*** End of File", "*** End Patch"].join("\n");
+  assert.deepEqual(patchTargets(patch), ["added", "updated"]);
+});
+
+test("Codex direct patch targets refuse unsupported records and invalid targets", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const wrap = body => `*** Begin Patch\n${body}\n*** End Patch`;
+  for (const patch of [null, {}, "not a patch", "*** Begin Patch\n*** Add File: missing-end",
+    wrap("*** Unknown: x"), wrap("*** Move to: x"), wrap("*** Add File: x\n*** Move to: y"),
+    wrap("*** Update File: x\n@@\n+new\n*** Move to: y"),
+    wrap("*** Update File: x\n*** Move to: y\n*** Move to: z"),
+    wrap("*** Delete File: x\n+unexpected"), wrap("*** Add File: "),
+    wrap("*** Add File: control\0name"), wrap("*** Add File: tab\tname"),
+    wrap("*** Add File: x\nnot-prefixed-content")])
+    assert.throws(() => patchTargets(patch), /Codex patch targets are unavailable/);
+});
+
 test("native probe removes its profile after version failure and a stalled version process", t => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-probe-cleanup-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -2457,4 +2492,19 @@ test("shared command reader keeps structured redirection targets across executio
       assert.equal(Object.hasOwn(legacy[0], "target"), false);
     }
   }
+});
+
+test("Codex direct patch targets refuse header whitespace that native parsing removes", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const wrap = body => `*** Begin Patch\n${body}\n*** End Patch`;
+  for (const suffix of [" ", "\t", "\u00a0", "\u2003", "\u202f", "\u0085"]) {
+    for (const body of [`*** Add File: AGENTS.md${suffix}\n+fixed`,
+      `*** Update File: AGENTS.md${suffix}\n@@\n-old\n+new`,
+      `*** Delete File: AGENTS.md${suffix}`,
+      `*** Update File: ordinary\n*** Move to: AGENTS.md${suffix}\n@@\n-old\n+new`])
+      assert.throws(() => patchTargets(wrap(body)), /Codex patch targets are unavailable/);
+  }
+  assert.deepEqual(patchTargets(wrap("*** Add File: ordinary name\n+fixed")), ["ordinary name"]);
+  assert.equal(existsSync(join(f.dir, "AGENTS.md")), false);
 });
