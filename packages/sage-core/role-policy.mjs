@@ -18,10 +18,6 @@ export function checkRoleReservation(reservations, assignment, input) {
   }
   if (plan.issuerRole === "lead" && !TEAM.has(plan.role)) throw Error("A lead can start only its permitted team");
   const project = reservations.filter(row => row.assignment.project === assignment.project);
-  if (plan.role === "lead" && project.some(row => row.assignment.task === assignment.task
-    && (!row.rolePlan || row.rolePlan.role === "lead" || row.rolePlan.issuerRole === "lead"))) {
-    throw Error("The task already has an active lead or team");
-  }
   if (plan.role === "lead" && project.filter(row => !row.rolePlan || row.rolePlan.role === "lead").length >= 3) {
     throw Error("The project already holds three lead slots");
   }
@@ -37,4 +33,20 @@ export function roleEditDenied({ sage, role }) {
   if (typeof sage !== "boolean" || (role !== null && !ROLES.has(role)) || (sage && role === null))
     throw Error("Invalid role edit context");
   return sage && !["implementer", "designer", "arena-judge"].includes(role);
+}
+
+/** New reservations enforce ownership; historical records retain their original rules. */
+export function checkLeadOwnership(state, active, assignment, plan) {
+  if (plan.role !== "lead") return;
+  const occupied = active.filter(row => row.assignment.project === assignment.project).some(row => {
+    if (row.assignment.task === assignment.task
+      && (!row.rolePlan || row.rolePlan.role === "lead" || row.rolePlan.issuerRole === "lead")) return true;
+    if (row.rolePlan?.issuerRole !== "lead") return false;
+    return state.bindings.some(binding => binding.project === row.assignment.project
+      && binding.session === row.assignment.session && binding.epoch === row.assignment.epoch
+      && binding.child === row.assignment.issuer && state.reservations.some(lead =>
+        lead.assignment.id === binding.assignment && lead.rolePlan?.role === "lead"
+        && lead.assignment.task === assignment.task));
+  });
+  if (occupied) throw Error("The task already has an active lead or team");
 }

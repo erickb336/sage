@@ -1,0 +1,137 @@
+{
+  "source": "c241ec1243aef19a68e9397a82bd5e5f7ff51aaf",
+  "records": [
+    {
+      "schema": 1,
+      "revision": 0,
+      "previous": null,
+      "data": {
+        "kind": "configure",
+        "config": {
+          "total": 5,
+          "projects": [
+            {
+              "project": "upgrade-fixture",
+              "limit": 5
+            }
+          ]
+        }
+      },
+      "hash": "bc908b22b1e39d95965bdeb154b30243a541c6ce67d818ee2faacf792ebd0808"
+    },
+    {
+      "schema": 1,
+      "revision": 1,
+      "previous": "bc908b22b1e39d95965bdeb154b30243a541c6ce67d818ee2faacf792ebd0808",
+      "data": {
+        "kind": "activate",
+        "owner": {
+          "project": "upgrade-fixture",
+          "session": "root",
+          "activation": "a72422c7-509c-43aa-8c42-827c556f8a57",
+          "epoch": "638d7452-b05f-4282-aea4-dd56c37fbfcd"
+        },
+        "sage": true
+      },
+      "hash": "2d94d82759fce97b6db1b5063caa6e506b0acc809869079262a841d5de5217ff"
+    },
+    {
+      "schema": 1,
+      "revision": 2,
+      "previous": "2d94d82759fce97b6db1b5063caa6e506b0acc809869079262a841d5de5217ff",
+      "data": {
+        "kind": "reserve",
+        "assignment": {
+          "project": "upgrade-fixture",
+          "session": "root",
+          "epoch": "638d7452-b05f-4282-aea4-dd56c37fbfcd",
+          "id": "9ac5657d-f193-464c-9f14-690d634be9dc",
+          "task": "T1",
+          "run": "R1",
+          "issuer": "root",
+          "call": "spawn-1"
+        },
+        "dispatch": {
+          "tool": "spawn",
+          "turn": "fixture-turn",
+          "name": "lead-1",
+          "argumentsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "rolePlan": {
+          "issuerRole": "chief-of-staff",
+          "role": "lead"
+        },
+        "uniqueName": true
+      },
+      "hash": "5a12bed9062053b8d486c79d33f5cec15794162eabc4852ecfacdaa9070a81df"
+    },
+    {
+      "schema": 1,
+      "revision": 3,
+      "previous": "5a12bed9062053b8d486c79d33f5cec15794162eabc4852ecfacdaa9070a81df",
+      "data": {
+        "kind": "reserve",
+        "assignment": {
+          "project": "upgrade-fixture",
+          "session": "root",
+          "epoch": "638d7452-b05f-4282-aea4-dd56c37fbfcd",
+          "id": "93f6ce35-1782-4407-857f-bd69dad75b3c",
+          "task": "T1",
+          "run": "R2",
+          "issuer": "root",
+          "call": "spawn-2"
+        },
+        "dispatch": {
+          "tool": "spawn",
+          "turn": "fixture-turn",
+          "name": "lead-2",
+          "argumentsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "rolePlan": {
+          "issuerRole": "chief-of-staff",
+          "role": "lead"
+        },
+        "uniqueName": true
+      },
+      "hash": "3020395ec669a837e880c5c2342f1a25ddbd537693ecc7efab725d37b8fb7933"
+    },
+    {
+      "schema": 1,
+      "revision": 4,
+      "previous": "3020395ec669a837e880c5c2342f1a25ddbd537693ecc7efab725d37b8fb7933",
+      "data": {
+        "kind": "bind-child",
+        "binding": {
+          "project": "upgrade-fixture",
+          "session": "root",
+          "epoch": "638d7452-b05f-4282-aea4-dd56c37fbfcd",
+          "assignment": "9ac5657d-f193-464c-9f14-690d634be9dc",
+          "issuer": "root",
+          "call": "spawn-1",
+          "child": "first-lead",
+          "turn": "fixture-turn"
+        }
+      },
+      "hash": "ebf439876f8f56f43be4096fac8791eaa6875fa483e29bf7cda747fca73693df"
+    },
+    {
+      "schema": 1,
+      "revision": 5,
+      "previous": "ebf439876f8f56f43be4096fac8791eaa6875fa483e29bf7cda747fca73693df",
+      "data": {
+        "kind": "complete",
+        "completion": {
+          "project": "upgrade-fixture",
+          "session": "root",
+          "epoch": "638d7452-b05f-4282-aea4-dd56c37fbfcd",
+          "assignment": "9ac5657d-f193-464c-9f14-690d634be9dc",
+          "issuer": "root",
+          "call": "spawn-1",
+          "child": "first-lead",
+          "turn": "fixture-turn"
+        }
+      },
+      "hash": "5210b035798d8ef9a193dba94338564801363e9e309377219fc546cafcce71de"
+    }
+  ]
+}
