@@ -40,6 +40,16 @@ test("T45: executable suffixes cannot bypass the protected logbook path check", 
   }
 });
 
+test("T45: normalized reader arguments stay data while redirection targets stay protected", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider), root = join(f.dir, "logbook"); mkdirSync(root);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    for (const name of ["printf", "PRINTF.exe", "/tools/PrInTf.ExE"])
+      assert.equal(shellWriteOutsideRoots({ command: `${name} '%s' '${root}/ledger.tsv' > scratch.txt`, cwd: f.dir, roots: [root] }), true, name);
+    assert.equal(shellWriteOutsideRoots({ command: `PRINTF.exe '%s' data > ${root}/ledger.tsv`, cwd: f.dir, roots: [root] }), false);
+  }
+});
+
 test("T44: output-file dispatches count as writes in both packaged cores", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
