@@ -190,3 +190,63 @@ Existing journal records remain readable. New reservations cannot add an overlap
 Proven completion or dispatch failure releases the matching reservation.
 An independent chief-assigned specialist does not claim lead ownership.
 This component covers initial reservations. Prepared continuation on an existing lead is separate work.
+
+
+## Prepared continuations
+
+`reservePreparedContinuation(directory, scope, request, dispatch, issuerRole)`
+reserves a new run on a completed child. Its request has `preparation`, `issuer`,
+`call`, and `previous`, the prior assignment ID. Preparation still uses the
+normal API with a fresh logical name, saved brief, and run target. The dispatch
+must carry the task-message hash. The adapter must verify the actual task,
+current run, native recipient, and exact outgoing message before calling it.
+
+The predecessor must have an exact completed binding. Project, session, epoch,
+issuer, task, and role plan must stay the same. A changed task, role, or owner
+uses a new child; this API does not transfer ownership. The run must be new.
+Each predecessor has at most one continuation, including while the new child
+turn remains unbound. Concurrent requests cannot fork that history. An exact
+retry returns the old reservation and never grants another dispatch permit.
+
+The new reservation takes normal project, total, and role capacity in the same
+journal transaction. A resumed lead keeps its existing team: its running children
+still consume their own slots and count toward its child limit. Those children
+do not count as a competing lead, but another team still blocks admission.
+Neither an idle native child nor its earlier completion
+is permission to bypass those limits. Mode off refuses new reservations while
+retaining exact retry receipts. Unknown or failed continuation dispatches stay
+held: the initial-spawn failure API cannot release them.
+
+`bindContinuationAdmission(directory, binding)` binds the new assignment to
+the same native child and a new turn. The initial binding API refuses this
+assignment kind. The continuation API refuses an initial assignment, a different
+child, a reused turn, or a child with active work. The adapter must prove exact
+sender dispatch and recipient delivery before binding; this API does not read
+native transcripts. Completion and report operations retain each assignment's
+own binding. An old stop cannot complete the new assignment. A reused lead
+regains admission authority only after its new turn binds.
+
+These records add an explicit continuation reference and binding action. Older
+readers refuse them; update every participant before sharing this journal.
+Existing records retain their bytes and initial-binding rules. The Codex native
+adapter does not yet call these APIs. Recipient resolution, follow-up dispatch,
+later-turn tool binding, report intake, and recovery remain integration work.
+
+
+Preparation can also pin `continuation`, the completed predecessor's assignment
+ID. Core checks the saved owner, task, role, completion, and run target before
+publishing it. A retry cannot change or remove that predecessor. Dispatch must
+use the pinned continuation; the initial-spawn API cannot consume it. Older
+preparations retain their format, but the native continuation path requires this
+pin before accepting the recipient supplied by a tool call.
+
+
+## Saved run target
+
+`prepareAdmission` accepts an optional final object with `runTarget` and `continuation` fields.
+A run target contains `task`, `run`, `role`, `round`, `taskBranch`, `runBranch`, and `candidate`.
+Its task, run, and role must match the preparation. Every saved field is immutable.
+A repeated name with changed work refuses. Unknown options and malformed targets refuse before writing.
+Old preparations remain readable. A continuation requires a saved target and task-message hash.
+The provider must compare this snapshot with the actual current logbook before dispatch or tool permission.
+Core validates the snapshot and reservation; it does not establish logbook truth.

@@ -36,9 +36,14 @@ export function roleEditDenied({ sage, role }) {
 }
 
 /** New reservations enforce ownership; historical records retain their original rules. */
-export function checkLeadOwnership(state, active, assignment, plan) {
+export function checkLeadOwnership(state, active, assignment, plan, continuingLead) {
   if (plan.role !== "lead") return;
+  // Admission supplies this identity only after checking a completed predecessor.
+  const ownTeam = row => continuingLead && row.rolePlan?.issuerRole === "lead"
+    && row.assignment.issuer === continuingLead && row.assignment.session === assignment.session
+    && row.assignment.epoch === assignment.epoch;
   const occupied = active.filter(row => row.assignment.project === assignment.project).some(row => {
+    if (ownTeam(row)) return false;
     if (row.assignment.task === assignment.task
       && (!row.rolePlan || row.rolePlan.role === "lead" || row.rolePlan.issuerRole === "lead")) return true;
     if (row.rolePlan?.issuerRole !== "lead") return false;
