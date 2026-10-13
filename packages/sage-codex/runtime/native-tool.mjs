@@ -18,9 +18,12 @@ export function nativeToolContext(context) {
 export function nativeToolEvent(input, context, eventName) {
   const native = nativeToolContext(context);
   if (!["PreToolUse", "PostToolUse"].includes(eventName)) throw Error("Native event is unsupported");
-  const fields = eventName === "PostToolUse" ? [...FIELDS, "tool_response"] : FIELDS;
+  const fields = [...FIELDS, ...(eventName === "PostToolUse" ? ["tool_response"] : []),
+    ...(record(input) && Object.hasOwn(input, "transcript_path") ? ["transcript_path"] : [])];
   if (!record(input) || Object.keys(input).length !== fields.length || fields.some(key => !Object.hasOwn(input, key))
     || input.hook_event_name !== eventName || !["session_id", "turn_id", "tool_name", "tool_use_id"].every(key => text(input[key]))
-    || !UUID.test(input.session_id) || !UUID.test(input.turn_id) || !record(input.tool_input)) throw Error("Native input is invalid");
+    || !UUID.test(input.session_id) || !UUID.test(input.turn_id) || !record(input.tool_input)
+    || (Object.hasOwn(input, "transcript_path") && (typeof input.transcript_path !== "string"
+      || input.transcript_path.length > 4096 || !input.transcript_path.startsWith("/") || /\p{Cc}/u.test(input.transcript_path)))) throw Error("Native input is invalid");
   return { ...input, ...(native.actor === input.session_id ? {} : { agent_id: native.actor }) };
 }
