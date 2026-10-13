@@ -77,6 +77,7 @@ export function shellWriteOutsideRoots({ command, cwd, roots }) {
       if ((run.stdin ?? []).some(body => !check(body, run.dir))) return false;
     }
     for (const entry of evidence.redirects) {
+      if (entry.uncertainDirectory) return false;
       if (!check(entry.target, entry.dir)) return false;
     }
     return true;

@@ -2531,3 +2531,20 @@ test("shared write classification preserves numeric and device-like redirection 
     assert.equal(existsSync(join(root, "null")), false);
   }
 });
+
+
+test("shared shell paths refuse redirection-only writes after uncertain directory changes", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(join(cwd, "sub/sub"), { recursive: true });
+    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
+    // Parse only. The actual loop would change the directory twice.
+    assert.equal(check("for x in a b; do cd sub; done; > ../../../logbook/ledger.tsv"), false);
+    assert.equal(check("cd sub; cd sub; > ../../../logbook/ledger.tsv"), false);
+    assert.equal(check("cd sub; > ordinary.txt"), true);
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+    assert.equal(existsSync(join(cwd, "sub/ordinary.txt")), false);
+  }
+});
