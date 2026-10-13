@@ -3742,3 +3742,68 @@ test('native follow-up reports retain exact recovery evidence after off and tran
   assert.throws(()=>f.reports.readChildReport({name:'next'},{version:'0.160.0',actor:f.lead},f.options));
   assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,1);
 });
+
+async function leadPreparationFixture(t) {
+  const f=await nativeBindingFixture(t);
+  const preparation=await import(new URL('../runtime/preparation.mjs',f.url));
+  const instructions=await import(new URL('../runtime/instructions.mjs',f.url));
+  const first=f.reserve(1,'lead','chief-of-staff');
+  const prior=f.bind(f.identity()).binding;
+  const observationsRoot=join(f.journal,'..','lead-observations');
+  cpSync(f.observationsDirectory,join(observationsRoot,f.root),{recursive:true});
+  const options={directory:f.journal,project:f.scope.project,observationsRoot};
+  const native={version:'0.160.0',actor:f.lead};
+  const input={task:'T1',run:'R2',name:'reviewer',role:'qa',brief:completeBrief('Review the lead task.')};
+  const prepare=(changes={})=>preparation.prepareNativeTask({...input,...changes},native,options);
+  const spawnInput=saved=>({hook_event_name:'PreToolUse',session_id:f.root,turn_id:f.activation,
+    tool_name:'collaborationspawn_agent',tool_use_id:'team-spawn',tool_input:{task_name:saved.name,message:saved.message,fork_turns:'none'}});
+  const spawn=saved=>preparation.reservePreparedSpawn(spawnInput(saved),native,options);
+  return {...f,preparation,instructions,first,prior,options,native,input,prepare,spawn};
+}
+
+test('native lead preparation refuses other tasks while preserving same-task and chief work', async t => {
+  const f=await leadPreparationFixture(t),before=f.api.readAdmission(f.journal);
+  assert.throws(()=>f.prepare({task:'T2'}),/could not verify this task preparation/);
+  assert.deepEqual(f.api.readAdmission(f.journal),before);
+  const saved=f.prepare(); assert.equal(saved.task,'T1');
+  assert.equal(f.spawn(saved).decision,'permit-once');
+  const chief=f.preparation.prepareNativeTask({...f.input,task:'T2',run:'R3',name:'chief_review'},
+    {version:'0.160.0',actor:f.root},f.options);
+  assert.equal(chief.task,'T2');
+});
+
+test('native lead preparation blocks an older foreign-task preparation before dispatch', async t => {
+  const f=await leadPreparationFixture(t);
+  const old=f.api.prepareAdmission(f.journal,f.scope,{task:'T2',run:'R2',issuer:f.lead,name:'foreign'},
+    {issuerRole:'lead',role:'qa'},f.input.brief).preparation;
+  const before=f.api.readAdmission(f.journal);
+  assert.throws(()=>f.spawn({name:old.name,message:f.instructions.preparedTaskMessage(old)}),/could not verify this task preparation/);
+  assert.deepEqual(f.api.readAdmission(f.journal),before);
+});
+
+test('native lead preparation uses the unfinished continuation and original native identity', async t => {
+  const f=await leadPreparationFixture(t);
+  f.api.completeAdmission(f.journal,f.prior);
+  const next=f.api.prepareAdmission(f.journal,f.scope,{task:'T1',run:'R3',issuer:f.root,name:'lead_again'},
+    {issuerRole:'chief-of-staff',role:'lead'},completeBrief('Continue the lead task.'),
+    {runTarget:{task:'T1',run:'R3',role:'lead',round:0,taskBranch:'',runBranch:'',candidate:''}}).preparation;
+  const saved=f.api.reservePreparedContinuation(f.journal,f.scope,{preparation:next.id,issuer:f.root,call:'lead-followup',previous:f.first.id},
+    {tool:'collaborationfollowup_task',turn:f.activation,name:next.name,argumentsHash:'b'.repeat(64),taskHash:'c'.repeat(64)},'chief-of-staff');
+  const bound={...f.scope,assignment:saved.assignment.id,issuer:f.root,call:'lead-followup',child:f.lead,turn:'44444444-4444-4444-8444-444444444444'};
+  f.api.bindContinuationAdmission(f.journal,bound);
+  const child=f.prepare({run:'R4',name:'next_reviewer'});
+  assert.equal(child.task,'T1'); assert.equal(f.spawn(child).decision,'permit-once');
+  assert.throws(()=>f.prepare({task:'T2',run:'R5',name:'foreign_after_resume'}));
+  assert.equal(f.api.readAdmission(f.journal).bindings.length,2);
+  f.api.completeAdmission(f.journal,bound);
+  assert.throws(()=>f.prepare({run:'R5',name:'after_second_end'}));
+  for(const outcome of ['complete','interrupt']) {
+    const f=await leadPreparationFixture(t),saved=f.prepare();
+    if(outcome==='complete') f.api.completeAdmission(f.journal,f.prior);
+    else f.api.interruptAdmission(f.journal,f.prior,'a'.repeat(64));
+    const before=f.api.readAdmission(f.journal);
+    assert.throws(()=>f.prepare({run:'R3',name:'after_end'}));
+    assert.throws(()=>f.spawn(saved));
+    assert.deepEqual(f.api.readAdmission(f.journal),before);
+  }
+});
