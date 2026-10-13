@@ -537,7 +537,11 @@ const admissionApi = () => import("../packages/sage-core/index.mjs");
 const admissionConfig = { total: 3, projects: [{ project: "one", limit: 2 }, { project: "two", limit: 2 }] };
 const admissionOwner = { project: "one", session: "session-one", activation: "11111111-1111-4111-8111-111111111111" };
 const admissionDispatch = { tool: "native-spawn", turn: "parent-turn", name: "worker", argumentsHash: "a".repeat(64) };
-const admissionRequest = (call) => ({ task: "T1", run: "R1", issuer: "session-one", call });
+const admissionRuns = new Map();
+const admissionRequest = (call) => {
+  if (!admissionRuns.has(call)) admissionRuns.set(call, `R${admissionRuns.size + 1}`);
+  return { task: "T1", run: admissionRuns.get(call), issuer: "session-one", call };
+};
 const admissionScope = (owner) => ({ project: owner.project, session: owner.session, epoch: owner.epoch });
 function admissionTemp(t) {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-admission-"));
@@ -3237,5 +3241,107 @@ test('continuation preparation options reject unknown or malformed fields withou
       {task:'T1',run:'R2',issuer:'root',name:'invalid-options'},
       {issuerRole:'chief-of-staff',role:'lead'}, completeBrief('Keep the current task.'), options));
     assert.deepEqual(f.api.readAdmission(f.journal), before);
+  }
+});
+
+test('run claims refuse another dispatch across names owners and task labels', async t => {
+  const f = await roleAdmissionFixture(t), first = f.reserve(1);
+  const other = f.api.activateAdmission(f.journal, { project: f.scope.project, session: 'other-root', activation: f.activation });
+  const scope = admissionScope(other), args = f.args(2, 'other-root', scope);
+  args[2].run = 'R1'; args[2].task = 'T2';
+  for (const kind of ['plain', 'role', 'brief', 'prepared']) {
+    const reserve = () => {
+      if (kind === 'plain') return f.api.reserveAdmission(...args);
+      const plan = { issuerRole: 'chief-of-staff', role: 'qa' };
+      if (kind === 'role') return f.api.reserveRoleAdmission(...args, plan);
+      if (kind === 'brief') return f.api.reserveBriefAdmission(...args, plan, completeBrief('Check the work.'));
+      const prepared = f.api.prepareAdmission(f.journal, scope,
+        { task: 'T2', run: 'R1', issuer: 'other-root', name: 'agent-2' }, plan, completeBrief('Check the work.'));
+      return f.api.reservePreparedAdmission(f.journal, scope,
+        { preparation: prepared.preparation.id, issuer: 'other-root', call: 'spawn-2' }, args[3], 'chief-of-staff');
+    };
+    assert.throws(reserve, /run already has a dispatch/, kind);
+  }
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 1);
+  assert.deepEqual(f.reserve(1), { decision: 'already-reserved', assignment: first.assignment });
+  const otherProject = f.api.activateAdmission(f.journal, { project: 'project-b', session: 'other-root', activation: f.activation });
+  assert.equal(f.reserve(1, 'lead', 'chief-of-staff', 'other-root', admissionScope(otherProject)).decision, 'permit-once');
+});
+
+test('run claims allow proven pre-child failure retry but never reopen completed execution', async t => {
+  const f = await roleAdmissionFixture(t), first = f.reserve(1), failure = failureFor(first.assignment);
+  const nextArgs = f.args(2); nextArgs[2].run = 'R1';
+  const reserve = () => f.api.reserveRoleAdmission(...nextArgs, { issuerRole: 'chief-of-staff', role: 'lead' });
+  assert.throws(reserve, /run already has a dispatch/);
+  f.api.failAdmission(f.journal, failure);
+  const next = reserve(); assert.equal(next.decision, 'permit-once');
+  assert.notEqual(next.assignment.id, first.assignment.id);
+  assert.equal(f.api.failAdmission(f.journal, failure).decision, 'already-failed');
+  assert.throws(() => f.api.bindAdmission(f.journal, bindingFor(first.assignment)), /failed dispatch/);
+  const third = f.args(3); third[2].run = 'R1';
+  assert.throws(() => f.api.reserveAdmission(...third), /run already has a dispatch/);
+  const binding = bindingFor(next.assignment); f.api.bindAdmission(f.journal, binding); f.api.completeAdmission(f.journal, binding);
+  assert.throws(() => f.api.reserveAdmission(...third), /run already has a dispatch/);
+  assert.equal(reserve().decision, 'already-reserved');
+  assert.equal(f.reserve(4).decision, 'permit-once');
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 3);
+});
+
+test('run claims choose one winner for concurrent distinct dispatches of the same run', async t => {
+  const { spawn } = await import('node:child_process');
+  const f = await roleAdmissionFixture(t);
+  const owners = ['owner-a', 'owner-b'].map(session => f.api.activateAdmission(f.journal,
+    { project: f.scope.project, session, activation: f.activation }));
+  const program = `import {reserveAdmission} from ${JSON.stringify(f.url)};
+    process.send({ready:true}); process.once('message', args=>{try{process.send({result:reserveAdmission(...args)});}
+    catch(error){process.send({error:error.message});}process.disconnect();});`;
+  const children = owners.map((owner, index) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', program], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: process.env });
+    let result, stderr = '', stdout = '';
+    child.stderr.on('data', data => { stderr += data; }); child.stdout.on('data', data => { stdout += data; });
+    const ready = new Promise((resolve, reject) => { child.once('error', reject); child.once('message', value => value.ready ? resolve() : reject(Error('worker not ready'))); });
+    child.on('message', value => { if (!value.ready) result = value; });
+    const closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => {
+      try { assert.equal(code, 0, stderr); assert.equal(signal, null); assert.equal(stderr, ''); assert.equal(stdout, ''); assert(result); resolve(result); }
+      catch(error) { reject(error); }
+    }); });
+    const args = f.args(index + 1, owner.session, admissionScope(owner)); args[2].run = 'R1';
+    return { child, args, ready, closed };
+  });
+  await Promise.all(children.map(row => row.ready));
+  for (const row of children) row.child.send(row.args);
+  const settled = await Promise.allSettled(children.map(row => row.closed));
+  for (const row of settled) assert.equal(row.status, "fulfilled", row.reason?.message);
+  const results = settled.map(row => row.value);
+  assert.equal(results.filter(row => row.result?.decision === 'permit-once').length, 1);
+  assert.equal(results.filter(row => /run already has a dispatch/.test(row.error)).length, 1);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 1);
+});
+
+
+test('run claims preserve historical duplicate dispatches and still refuse new duplication', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await roleAdmissionFixture(t, undefined, provider);
+    const fixture = json('scripts/fixtures/admission-duplicate-runs.json');
+    const journal = join(f.journal, '..', 'upgrade-journal'); mkdirSync(journal);
+    for (const record of fixture.records) writeFileSync(join(journal, String(record.revision).padStart(8, '0') + '.json'), JSON.stringify(record) + '\n');
+    const bytes = readdirSync(journal).sort().map(file => readFileSync(join(journal, file), 'utf8'));
+    const state = f.api.readAdmission(journal);
+    assert.deepEqual(state.reservations.map(row => [row.assignment.task, row.assignment.run]), [['T1', 'R1'], ['T2', 'R1']]);
+    const first = state.reservations[0], second = state.reservations[1];
+    const { project, session, epoch } = first.assignment, scope = {project, session, epoch};
+    const reserve = run => f.api.reserveAdmission(journal, scope,
+      {task:'T3',run,issuer:'root',call:'spawn-3'},
+      {tool:'spawn',turn:'fixture-turn',name:'worker-3',argumentsHash:'a'.repeat(64)});
+    assert.throws(() => reserve('R1'), /run already has a dispatch/);
+    assert.deepEqual(readdirSync(journal).sort().map(file => readFileSync(join(journal, file), 'utf8')), bytes);
+    f.api.failAdmission(journal, failureFor(first.assignment));
+    assert.throws(() => reserve('R1'), /run already has a dispatch/);
+    const binding = bindingFor(second.assignment); f.api.bindAdmission(journal, binding); f.api.completeAdmission(journal, binding);
+    assert.throws(() => reserve('R1'), /run already has a dispatch/);
+    assert.equal(reserve('R2').decision, 'permit-once');
+    assert.equal(f.api.readAdmission(journal).reservations.length, 3);
+    for (const [index, record] of fixture.records.entries())
+      assert.equal(readFileSync(join(journal, String(record.revision).padStart(8, '0') + '.json'), 'utf8'), bytes[index]);
   }
 });

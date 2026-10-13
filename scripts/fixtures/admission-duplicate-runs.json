@@ -1,0 +1,99 @@
+{
+  "source": "a0f667472672c2e16a431dfd8a1a0a71b4309353",
+  "records": [
+    {
+      "schema": 1,
+      "revision": 0,
+      "previous": null,
+      "data": {
+        "kind": "configure",
+        "config": {
+          "total": 5,
+          "projects": [
+            {
+              "project": "upgrade-fixture",
+              "limit": 5
+            }
+          ]
+        }
+      },
+      "hash": "bc908b22b1e39d95965bdeb154b30243a541c6ce67d818ee2faacf792ebd0808"
+    },
+    {
+      "schema": 1,
+      "revision": 1,
+      "previous": "bc908b22b1e39d95965bdeb154b30243a541c6ce67d818ee2faacf792ebd0808",
+      "data": {
+        "kind": "activate",
+        "owner": {
+          "project": "upgrade-fixture",
+          "session": "root",
+          "activation": "a72422c7-509c-43aa-8c42-827c556f8a57",
+          "epoch": "5c28c999-7995-4d71-a2f5-f771ffdf9c97"
+        },
+        "sage": true
+      },
+      "hash": "94a7f703279606eab18f391a8dc05444f0da2aecf16aedbf0114988078496d1d"
+    },
+    {
+      "schema": 1,
+      "revision": 2,
+      "previous": "94a7f703279606eab18f391a8dc05444f0da2aecf16aedbf0114988078496d1d",
+      "data": {
+        "kind": "reserve",
+        "assignment": {
+          "project": "upgrade-fixture",
+          "session": "root",
+          "epoch": "5c28c999-7995-4d71-a2f5-f771ffdf9c97",
+          "id": "743463e2-fdc0-49af-9de7-7b061fc926af",
+          "task": "T1",
+          "run": "R1",
+          "issuer": "root",
+          "call": "spawn-1"
+        },
+        "dispatch": {
+          "tool": "spawn",
+          "turn": "fixture-turn",
+          "name": "worker-1",
+          "argumentsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "rolePlan": {
+          "issuerRole": "chief-of-staff",
+          "role": "qa"
+        },
+        "uniqueName": true
+      },
+      "hash": "fd3aa90d2e52018ce4290bb20251b7660df359eb1c7cb6d98fa234df98e2fded"
+    },
+    {
+      "schema": 1,
+      "revision": 3,
+      "previous": "fd3aa90d2e52018ce4290bb20251b7660df359eb1c7cb6d98fa234df98e2fded",
+      "data": {
+        "kind": "reserve",
+        "assignment": {
+          "project": "upgrade-fixture",
+          "session": "root",
+          "epoch": "5c28c999-7995-4d71-a2f5-f771ffdf9c97",
+          "id": "95cb8849-b67a-4542-bfa7-edcded9eab7c",
+          "task": "T2",
+          "run": "R1",
+          "issuer": "root",
+          "call": "spawn-2"
+        },
+        "dispatch": {
+          "tool": "spawn",
+          "turn": "fixture-turn",
+          "name": "worker-2",
+          "argumentsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "rolePlan": {
+          "issuerRole": "chief-of-staff",
+          "role": "qa"
+        },
+        "uniqueName": true
+      },
+      "hash": "24c995d9949dcb6b8e37112a1a74d3e34c4026a750cd48d8ea20ba93b17e98b2"
+    }
+  ]
+}
