@@ -24,4 +24,4 @@ export { REPORT_FIELDS, missingReportFields, parseReport } from "./report.mjs";
 
 export { roleEditDenied } from "./role-policy.mjs";
 
-export { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
+export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
