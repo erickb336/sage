@@ -1030,7 +1030,7 @@ test("native child tools refuse missing dispatch results changed tasks and forei
   let evaluated = 0;
   const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: "pass" }; });
   const transcript_path = f.childTranscript();
-  const input = { ...patch(turns[1]), transcript_path };
+  const input = { ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path };
   await assert.rejects(f.evaluate(policy, input, childActor));
   assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
   f.events.publish(join(f.options.observationsRoot, session), f.result);
@@ -1147,7 +1147,7 @@ async function completionFixture(t) {
   f.events.publish(join(f.options.observationsRoot, session), f.result);
   const transcript_path = f.childTranscript();
   const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
-  await f.evaluate(policy, { ...patch(turns[1]), transcript_path }, childActor);
+  await f.evaluate(policy, { ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path }, childActor);
   const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor,
     turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, "root.jsonl") };
   return { ...f, policy, stop };
@@ -1752,7 +1752,7 @@ test("native report read leaves an unrelated sibling unchanged with missing or t
   f.api.reservePreparedSpawn(f.spawnInput(name, "spawn-2"), f.native(session), f.options);
   f.events.publish(join(f.options.observationsRoot, session), { ...f.result, call: "spawn-2", path: `/root/${name}` });
   const transcript = f.childTranscript({ child: other, path: `/root/${name}`, turn: turns[2] });
-  await f.evaluate(f.policy, { ...patch(turns[2]), transcript_path: transcript }, other);
+  await f.evaluate(f.policy, { ...patch(turns[2]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path: transcript }, other);
   const original = readFileSync(transcript, "utf8");
   const before = f.core.readAdmission(f.options.directory);
   const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
