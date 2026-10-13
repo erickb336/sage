@@ -3480,3 +3480,73 @@ test('review claims refuse malformed input with fixed errors and no caller mutat
     assert.deepEqual(input,before);
   }
 });
+
+async function targetedNativeFixture(t, role = 'qa') {
+  const f = await nativeBindingFixture(t);
+  const instructions = await import(new URL('../runtime/instructions.mjs', f.url));
+  const review = reviewTarget(), runTarget = {task:'T1',run:'R1',role,round:0,taskBranch:review.branch,runBranch:'',candidate:review.sha};
+  const prepared = f.api.prepareAdmission(f.journal,f.scope,
+    {task:'T1',run:'R1',issuer:f.root,name:'agent_1'}, {issuerRole:'chief-of-staff',role},
+    completeBrief('Review this saved target.'), {review,runTarget}).preparation;
+  const message = instructions.preparedTaskMessage(prepared);
+  const {createHash} = await import('node:crypto');
+  const dispatch = {tool:'collaborationspawn_agent',turn:f.activation,name:'agent_1',argumentsHash:'a'.repeat(64),taskHash:createHash('sha256').update(message).digest('hex')};
+  const saved = f.api.reservePreparedAdmission(f.journal,f.scope,
+    {preparation:prepared.id,issuer:f.root,call:'spawn-1'},dispatch,'chief-of-staff');
+  const base = {schema:1,runtime:'0.160.0',session:f.root,actor:f.root,call:'spawn-1',turn:f.activation};
+  f.events.publish(f.observationsDirectory,{...base,kind:'spawn-request',name:'agent_1'});
+  f.events.publish(f.observationsDirectory,{...base,kind:'spawn-result',path:'/root/agent_1'});
+  const options = {directory:f.journal,project:f.scope.project,observationsDirectory:f.observationsDirectory};
+  return {...f,instructions,review,runTarget,prepared,message,saved,options};
+}
+
+test('target instructions deliver exact review scope and report values for every reviewer', async t => {
+  for (const role of ['code-reviewer','security-reviewer','ux-reviewer','qa']) {
+    const f = await targetedNativeFixture(t,role);
+    const delivered = f.instructions.boundChildInstructions(f.options,f.identity());
+    assert.equal(delivered.decision,'deliver');
+    for (const text of [f.message,delivered.brief]) {
+      assert(text.includes('# Saved run target\n\nTask round: 0\nTask branch: codex/t1-review\nRun branch: none\nCandidate: '+ 'a'.repeat(40)));
+      assert(text.includes('# Review target\n\nBranch: codex/t1-review\nCommit: '+ 'a'.repeat(40)+'\nTask round: 0\nReview cycle: 1'));
+      assert(text.includes(role === 'qa' ? 'RESULT is PASS or FAIL.' : 'RESULT is CLEAN or FINDINGS.'));
+      assert(text.includes('only the chief can accept the review'));
+      const evidence = /EVIDENCE must be a JSON object with exactly these fields: (\{[^\n]+\})/.exec(text);
+      assert(evidence, 'the child receives the exact evidence format');
+      const claims = f.api.parseReviewReport({...claimedReview(role),EVIDENCE:evidence[1]},role,f.review);
+      assert.equal(claims.evidence.commit,f.review.sha); assert.equal(claims.evidence.cycle,1);
+    }
+    assert.deepEqual(f.instructions.boundChildInstructions(f.options,f.identity()),delivered);
+    assert.equal(f.api.readAdmission(f.journal).bindings.length,1);
+  }
+});
+
+test('target instructions use only the linked preparation despite changed receipts or other saved work', async t => {
+  const f = await targetedNativeFixture(t);
+  f.api.prepareAdmission(f.journal,f.scope,{task:'T2',run:'R2',issuer:f.root,name:'other'},
+    {issuerRole:'chief-of-staff',role:'qa'},completeBrief('Other work.'),{review:{...f.review,sha:'b'.repeat(40)}});
+  f.prepared.review.sha='c'.repeat(40); f.prepared.runTarget.candidate='d'.repeat(40);
+  const bound = f.bind(f.identity());
+  assert.deepEqual(bound.review,f.review); assert.deepEqual(bound.runTarget,f.runTarget);
+  bound.review.sha='e'.repeat(40); bound.runTarget.candidate='f'.repeat(40);
+  const text = f.instructions.boundChildInstructions(f.options,f.identity()).brief;
+  assert(text.includes('Commit: '+ 'a'.repeat(40)));
+  for (const letter of ['b','c','d','e','f']) assert(!text.includes(letter.repeat(40)));
+  assert.throws(()=>f.instructions.boundChildInstructions(f.options,{...f.identity(),path:'/root/other'}));
+  assert.equal(f.api.readAdmission(f.journal).bindings.length,1);
+});
+
+test('target instructions include writer scope without introducing reviewer report rules', async t => {
+  const f = await roleAdmissionFixture(t);
+  const instructions = await import(new URL('../runtime/instructions.mjs',f.url));
+  const runTarget = {task:'T1',run:'R1',role:'implementer',round:2,taskBranch:'codex/t1-task',runBranch:'codex/r1-work',candidate:''};
+  const prepared = f.api.prepareAdmission(f.journal,f.scope,{task:'T1',run:'R1',issuer:'root',name:'writer'},
+    {issuerRole:'chief-of-staff',role:'implementer'},completeBrief('Build the saved work.'),{runTarget}).preparation;
+  const text = instructions.preparedTaskMessage(prepared);
+  assert(text.includes('Task round: 2\nTask branch: codex/t1-task\nRun branch: codex/r1-work\nCandidate: none'));
+  assert(!text.includes('# Review target')); assert(!text.includes('# Review report values'));
+  const plain = f.api.prepareAdmission(f.journal,f.scope,{task:'T2',run:'R2',issuer:'root',name:'plain'},
+    {issuerRole:'chief-of-staff',role:'implementer'},completeBrief('Ordinary saved work.')).preparation;
+  const ordinary = instructions.preparedTaskMessage(plain);
+  assert(ordinary.includes('Ordinary saved work.'));
+  assert(!ordinary.includes('# Saved run target')); assert(!ordinary.includes('# Review target'));
+});
