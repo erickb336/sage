@@ -133,6 +133,8 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     if (path === "graphql") {
       if (opaque || values.some(field => field.opaque)) return true;
       const query = values.filter(field => field.key === "query").map(field => field.value).join(" ");
+      // The shell reader does not retain which quote protected a dollar sign. Require literal query text.
+      if (/[$`]/.test(query)) return true;
       // GraphQL ignores comments and commas. Strings are data, so their words cannot select an operation.
       const operations = query.replace(/"""(?:\\[\s\S]|(?!""")[\s\S])*"""|"(?:\\[\s\S]|[^"\\])*"|#[^\r\n]*|,/g, " ");
       if (!/\bmutation\b/.test(operations)) return false;
@@ -143,7 +145,9 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
           (field.key !== "query" && /[$`\\]/.test(field.value))));
     }
     if ((method ?? (hasBodyFields || opaque ? "POST" : "GET")).toUpperCase() === "GET") return false;
-    const route = /^repos\/[^/]+\/[^/]+\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|branches\/.*\/rename)$/.exec(path)?.[1];
+    if (/[$`\\*\[\]]/.test(path)) return true;
+    // The merge policy already owns the merges endpoint and its refusal message.
+    const route = /^repos\/[^/]+\/[^/]+\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|branches\/.*\/rename)$/.exec(path)?.[1];
     if (!route) return false;
     if ((!route.startsWith("contents") && (protectedName(route) || !LITERAL.test(route))) || opaque) return true;
     const destinations = values.filter(field => /^(?:ref|branch|base|new_name)$/.test(field.key));
