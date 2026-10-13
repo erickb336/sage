@@ -3390,6 +3390,8 @@ test('native child sandbox escalation is refused before a permissive evaluator',
 
 test('native child sandbox escalation stays refused when off while chief permission checks remain authoritative', async t => {
   const f = await roleEditFixture(t, 'implementer'); let evaluated = 0;
+  const initial = commandPermissionInput(f, childActor, {sandbox_permissions: 'use_default'}, turns[1]);
+  assert.deepEqual(await f.evaluate(f.createNativePolicy(f.options, () => ({decision: 'pass'})), initial, childActor), {decision: 'pass'});
   const policy = f.createNativePolicy(f.options, () => { evaluated++; return {decision: 'deny', reason: 'Native permission check refused.'}; });
   f.core.changeAdmissionMode(f.options.directory, {...f.scope, after: turns[0], turn: turns[2], sage: false});
   const child = commandPermissionInput(f, childActor, {sandbox_permissions: 'require_escalated'}, turns[1]);
@@ -3401,6 +3403,21 @@ test('native child sandbox escalation stays refused when off while chief permiss
   assert.equal(evaluated, 1);
 });
 
+
+test('native child sandbox escalation refuses an unassigned off-mode child', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  f.core.changeAdmissionMode(f.options.directory, {...f.scope, after: turns[0], turn: turns[2], sage: false});
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return {decision: 'pass'}; });
+  const {input, envelope} = commandPolicyInput(f, childActor, 'printf fixed', turns[1], 'unassigned native child');
+  const rows = readFileSync(input.transcript_path, 'utf8').trim().split('\n').map(JSON.parse);
+  rows.at(-1).payload.arguments = JSON.stringify({...envelope, sandbox_permissions: 'require_escalated'});
+  writeFileSync(input.transcript_path, rows.map(row => JSON.stringify(row) + '\n').join(''));
+  assert.deepEqual(await f.evaluate(policy, input, childActor), {decision: 'deny',
+    reason: 'A child cannot request broader sandbox permissions. Ask the chief to run this command.'});
+  assert.equal(evaluated, 0);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  assert.equal(existsSync(join(f.options.observationsRoot, session)), false);
+});
 
 test('native child tool permission refuses terminal turns before evaluation without releasing capacity', async t => {
  for (const type of ['turn_aborted', 'task_complete']) {
