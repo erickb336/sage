@@ -27,3 +27,12 @@ including follow-up and message permissions. This composition does not invent
 those rules or authorize operations the callback rejects. It does not detect
 missing callbacks, accept reports, release slots, restore compacted context,
 or provide lifecycle recovery. Those remain required before activation.
+
+## Role-based edits
+
+The policy derives the role from the bound native assignment, not a supplied role name.
+With Sage on, the chief, lead, PE, reviewers, and QA cannot use `apply_patch` or known shell write forms.
+Implementers, designers, and arena judges retain the supplied evaluator's checks.
+With Sage off, ordinary evaluation resumes. The evaluator receives the verified role, or null when off.
+The shared command classifier detects known write forms; it does not prove arbitrary commands safe.
+Complete shell, path, and workflow checks remain required. This component does not enable installed Sage.

@@ -1,3 +1,4 @@
+import { commandWrites, roleEditDenied } from "sage-core";
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
 import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
 import { join, sep } from "node:path";
@@ -46,8 +47,10 @@ export function createNativePolicy(options, evaluateTool) {
       const observed = decodeEvent(event, native);
       if (observed) record(observed); // Keep inactive and denied attempts; name reuse must stay visible.
       const before = mode(event.session_id);
-      if (before.sage && child) bindNativeChildTool(raw, native, fixed);
-      else if (child) bindPendingNativeChildTool(raw, native, fixed);
+      if (child && !before.sage) bindPendingNativeChildTool(raw, native, fixed);
+      const bound = before.sage && child ? bindNativeChildTool(raw, native, fixed) : undefined;
+      const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
+      const editDenied = roleEditDenied({ sage: before.sage, role });
       let command, readCommand;
       // Path and state-tool protection also need original inputs while Sage is off.
       if (event.tool_name === "Bash") {
@@ -88,12 +91,16 @@ export function createNativePolicy(options, evaluateTool) {
         || command.additional_permissions != null)) {
         return { decision: "deny", reason: "A child cannot request broader sandbox permissions. Ask the chief to run this command." };
       }
+      // This text classification does not establish the effective execution context.
+      if (editDenied && (event.tool_name === "apply_patch" || (command && commandWrites(command.cmd)))) {
+        return { decision: "deny", reason: "This Sage role cannot edit files. Give the change to an implementer." };
+      }
       const recovery = child ? checkChildToolRecovery(event, native, fixed) : null;
       const recoveryReader = event.tool_name === "mcp__sage_preparation__sage_read_assignment"
         && Object.keys(event.tool_input).length === 0;
       const recoveryDenied = { decision: "deny", reason: "Read your current assignment with sage_read_assignment before continuing." };
       if (recovery?.required && !recoveryReader) return recoveryDenied;
-      const checked = decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage, ...(command ? { command: structuredClone(command) } : {}) })));
+      const checked = decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage, role, ...(command ? { command: structuredClone(command) } : {}) })));
       // A concurrent mode change cannot turn an earlier decision into current permission.
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
       if (checked.decision === "deny") return checked;
