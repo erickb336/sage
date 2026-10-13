@@ -1,9 +1,10 @@
 import { join } from "node:path";
-import { readAdmission, parseReport } from "../core/index.mjs";
+import { readAdmission, recordReportAdmission, parseReport } from "../core/index.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { readObservations } from "./events.mjs";
 import { reconcileNativeCompletions } from "./child-stop.mjs";
 import { readNativeReport } from "./identity.mjs";
+import { hasReportRecovery, recordReportRecovery } from "./report-recovery.mjs";
 
 const refuse = () => { throw Error("Sage could not verify this child's report"); };
 
@@ -29,6 +30,9 @@ function verifiedReport(name, context, options) {
   const complete = state.completions?.find(row => row.assignment === assigned.assignment.id);
   if (!bound || !complete || JSON.stringify(bound) !== JSON.stringify(complete) || !assigned.dispatch.taskHash
     || !bound.session.startsWith("codex:")) refuse();
+  const recorded = state.reports?.find(row => row.binding.assignment === bound.assignment);
+  // The journal rechecks its hash, fields, binding, task, and run while replaying the receipt.
+  if (recorded && hasReportRecovery(recorded, options)) return recorded;
   const session = bound.session.slice(6);
   const observations = readObservations(join(options.observationsRoot, session));
   const starts = observations.filter(row => row.kind === "child-start" && row.child === bound.child);
@@ -42,6 +46,7 @@ function verifiedReport(name, context, options) {
   });
   const report = { binding: bound, task: assigned.assignment.task, run: assigned.assignment.run,
     reportMessage: evidence.reportMessage, reportHash: evidence.reportHash, text: evidence.text };
+  if (recorded && JSON.stringify(recorded) !== JSON.stringify(report)) refuse();
   return report;
 }
 const receipt = (saved, decision) => ({ decision, assignment: saved.binding.assignment, task: saved.task,
@@ -52,4 +57,15 @@ const receipt = (saved, decision) => ({ decision, assignment: saved.binding.assi
 export function readChildReport(input, context, options) {
   inputFields(input, ["name"]);
   return receipt(verifiedReport(input.name, context, options), "report-ready");
+}
+
+/** Pin the previously read content hash. Replays preserve the original evidence and do not accept its claims. */
+export function recordChildReport(input, context, options) {
+  inputFields(input, ["name", "reportHash"]);
+  if (typeof input.reportHash !== "string" || !/^[0-9a-f]{64}$/.test(input.reportHash)) refuse();
+  const report = verifiedReport(input.name, context, options);
+  if (report.reportHash !== input.reportHash) refuse();
+  recordReportRecovery(report, options);
+  const recorded = recordReportAdmission(options.directory, report);
+  return receipt(recorded.report, recorded.decision);
 }

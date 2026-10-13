@@ -5,6 +5,7 @@ import { isAbsolute, join, parse, resolve, sep } from "node:path";
 import { createAssignment, parseAssignment } from "./assignments.mjs";
 import { parseRolePlan, checkRoleReservation } from "./role-policy.mjs";
 import { parseBrief } from "./brief.mjs";
+import { parseReport } from "./report.mjs";
 
 const KEY = /^[A-Za-z0-9_.:-]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -59,6 +60,15 @@ function preparation(input) {
   const { call, ...parsed } = parseAssignment({ ...identity, call: name });
   return { ...parsed, name: call, rolePlan: parseRolePlan(rolePlan), brief: parseBrief(brief) };
 }
+function reportRecord(input) {
+  fields(input, ["binding", "task", "run", "reportMessage", "reportHash", "text"]);
+  parseReport(input.text);
+  const report = { binding: childBinding(input.binding), task: word(input.task, "task", /^T[1-9][0-9]*$/),
+    run: word(input.run, "run", /^R[1-9][0-9]*$/), reportMessage: word(input.reportMessage, "report message"),
+    reportHash: word(input.reportHash, "report hash", /^[0-9a-f]{64}$/), text: input.text };
+  if (hash(report.text) !== report.reportHash) refuse("report content differs from its hash");
+  return report;
+}
 function action(input) {
   if (input?.kind === "configure") {
     fields(input, ["kind", "config"]);
@@ -93,6 +103,10 @@ function action(input) {
       ...(hasRole ? { rolePlan: parseRolePlan(input.rolePlan) } : {}), ...(uniqueName ? { uniqueName: true } : {}), ...(hasBrief ? { brief: parseBrief(input.brief) } : {}),
       ...(hasPreparation ? { preparation: word(input.preparation, "preparation", UUID) } : {}) };
   }
+  if (input?.kind === "record-report") {
+    fields(input, ["kind", "report"]);
+    return { kind: "record-report", report: reportRecord(input.report) };
+  }
   if (input?.kind === "interrupt") {
     fields(input, ["kind", "completion", "evidenceHash"]);
     return { kind: "interrupt", completion: childBinding(input.completion),
@@ -119,7 +133,7 @@ function apply(state, event) {
     return { state: copy, result: event.config, changed: true };
   }
   if (!copy.config) refuse("store is not configured");
-  const value = event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : event.kind === "bind-child" ? event.binding : ["complete", "interrupt"].includes(event.kind) ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
+  const value = event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : event.kind === "bind-child" ? event.binding : ["complete", "interrupt"].includes(event.kind) ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
   if (!copy.config.projects.some((p) => p.project === value.project)) refuse("project is not configured");
   const owner = copy.sessions.find((s) => s.project === value.project && s.session === value.session);
   if (event.kind === "activate") {
@@ -158,6 +172,22 @@ function apply(state, event) {
     }
     copy.completions = [...(copy.completions ?? []), terminal];
     return { state: copy, result: { decision: "completed", completion: terminal }, changed: true };
+  }
+  if (event.kind === "record-report") {
+    const bound = copy.bindings.find(row => row.assignment === value.assignment);
+    const completed = (copy.completions ?? []).find(row => row.assignment === value.assignment);
+    const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
+    if (!bound || !completed || json(bound) !== json(value) || json(completed) !== json(value)
+      || reserved?.assignment.task !== event.report.task || reserved?.assignment.run !== event.report.run) {
+      refuse("report has no matching completed assignment");
+    }
+    const previous = (copy.reports ?? []).find(row => row.binding.assignment === value.assignment);
+    if (previous) {
+      if (json(previous) !== json(event.report)) refuse("assignment already has a different recorded report");
+      return { state, result: { decision: "already-recorded", report: previous }, changed: false };
+    }
+    copy.reports = [...(copy.reports ?? []), event.report];
+    return { state: copy, result: { decision: "report-recorded", report: event.report }, changed: true };
   }
   const completed = new Set((copy.completions ?? []).map(row => row.assignment));
   const active = copy.reservations.filter(row => !completed.has(row.assignment.id));
@@ -367,3 +397,5 @@ export function readAdmission(dir) {
   if (!state.config) refuse("store is not configured");
   return state;
 }
+
+export const recordReportAdmission = (dir, report) => commit(dir, { kind: "record-report", report });
