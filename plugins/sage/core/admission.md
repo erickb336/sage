@@ -148,23 +148,30 @@ must use the prepared path consistently. The model-visible preparation server,
 its native identity checks, and the spawn correlation policy remain separate
 integration work. These core APIs do not start native agents.
 
-## Exact completion
+## Verified terminal evidence
 
-`completeAdmission(directory, binding)` records terminal evidence supplied by a trusted adapter.
-All binding fields must equal the saved child binding, including the assignment, child, and turn.
-The first call returns `completed`; an exact retry returns `already-completed` without another journal record.
-A different or missing binding refuses. Completion can arrive after mode-off.
+`completeAdmission(directory, binding)` records the exact bound assignment as
+complete and releases only its capacity. `interruptAdmission(directory, binding,
+evidenceHash)` records an interrupted outcome with its evidence hash. The trusted
+provider adapter must first verify terminal evidence from the native runtime.
+These core calls do not authenticate a caller or inspect a native transcript.
 
-The journal retains the reservation and binding as history.
-Snapshots gain a `completions` field only after the first completion; existing snapshot shapes stay unchanged. Completed assignments no longer consume capacity.
-A lead's completion does not release its children. Each child requires its own completion record.
-A completed issuer cannot prepare or reserve new work. The adapter must also reject its role authority.
-Concurrent completion and admission use the same atomic journal protocol as reservation.
+Every binding field must match the saved record and current owner epoch. An exact
+retry returns the first completion without another journal write. A changed child,
+turn, outcome or interruption hash is refused. History stays intact. A late event
+for an older assignment cannot release newer work. Sage off still accepts valid
+terminal evidence; it does not enable new dispatch.
 
-This record is not task success, report acceptance, or a review verdict.
-The core does not authenticate evidence: direct calls with arbitrary JSON are not proof of native completion.
-The provider must verify immutable dispatch evidence and the exact terminal child turn before calling this API.
-Initial child bindings remain unique. The continuation API handles later assignments separately; native recovery remains unfinished.
+Only unfinished assignments occupy total, project, lead and team slots. Completing
+a lead does not release its children's slots. A completed child cannot prepare or
+reserve more work. The atomic binding transition also refuses completed work,
+including an identical binding retry after a concurrent completion. The Codex binding adapter refuses renewed instructions for a
+completed assignment. Native delivery, terminal verification and recovery remain
+provider responsibilities; this extraction does not wire automatic completion.
+
+Completion records neither task success nor a review verdict. Report acceptance,
+run completion, failed dispatch before binding and later-turn reuse remain separate
+protocols. Concurrent journal writers still compete for one immutable next record.
 
 A dispatch can include `taskHash`, the SHA-256 hash of its exact task text.
 The journal stores it with the reservation and refuses changed dispatch evidence on a retry.
