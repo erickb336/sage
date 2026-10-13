@@ -19,7 +19,7 @@ assert(process.argv.slice(2).every(arg => ["--sage-followup-recovery", "--sage-c
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const followupRecovery = process.argv.includes("--sage-followup-recovery");
-let followupRecoveryPhase = 0, followupRecoveryVerified = false;
+let followupRecoveryPhase = 0, followupRecoveryVerified = false, followupAdmissionSnapshot;
 const repeatChildRecovery = process.argv.includes("--sage-child-repeat-recovery");
 const childRecovery = repeatChildRecovery || process.argv.includes("--sage-child-recovery");
 const childCompaction = childRecovery || process.argv.includes("--sage-child-compaction");
@@ -319,7 +319,10 @@ data: ${JSON.stringify(event)}
           author: "/root", turn: binding.turn, taskHash: createHash("sha256").update(FOLLOWUP_PROMPT).digest("hex") };
         const recovery = readNativeRecovery(transcript, { sessionsDir: join(codexHome, "sessions") }, expected);
         childRequests++;
+        if (followupRecoveryPhase !== 0) assert.deepEqual(state, followupAdmissionSnapshot,
+          "followup_recovery_changed_admission");
         if (followupRecoveryPhase === 0) {
+          followupAdmissionSnapshot = structuredClone(state);
           check(recovery.required && recovery.compaction && recovery.call === null,
             "followup_compaction_did_not_require_recovery");
           check(!textValues(request.input).some(text => text.includes(FOLLOWUP_PROMPT)),
