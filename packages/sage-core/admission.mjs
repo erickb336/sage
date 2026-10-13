@@ -7,6 +7,7 @@ import { parseRolePlan, checkRoleReservation, checkLeadOwnership } from "./role-
 import { parseBrief } from "./brief.mjs";
 import { parseReport } from "./report.mjs";
 import { parseRunTarget } from "./run-target.mjs";
+import { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
 
 const KEY = /^[A-Za-z0-9_.:-]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -63,15 +64,17 @@ function dispatchFailure(input) {
     evidenceHash: word(input.evidenceHash, "failure evidence hash", /^[0-9a-f]{64}$/) };
 }
 function preparation(input) {
+  const hasReview = Object.hasOwn(input ?? {}, "review");
   const hasRunTarget = Object.hasOwn(input ?? {}, "runTarget");
   const hasContinuation = Object.hasOwn(input ?? {}, "continuation");
-  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief", ...(hasRunTarget ? ["runTarget"] : []), ...(hasContinuation ? ["continuation"] : [])]);
-  const { name, rolePlan, brief, runTarget, continuation, ...identity } = input;
+  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief", ...(hasReview ? ["review"] : []), ...(hasRunTarget ? ["runTarget"] : []), ...(hasContinuation ? ["continuation"] : [])]);
+  const { name, rolePlan, brief, review, runTarget, continuation, ...identity } = input;
+  if (hasReview && !REVIEW_ROLES.includes(rolePlan?.role)) refuse("only a review role can carry a review target");
   const { call, ...parsed } = parseAssignment({ ...identity, call: name });
   const target = hasRunTarget ? parseRunTarget(runTarget) : undefined;
   if (target && (target.task !== parsed.task || target.run !== parsed.run || target.role !== rolePlan.role)) refuse("run target differs from its preparation");
   return { ...parsed, name: call, rolePlan: parseRolePlan(rolePlan), brief: parseBrief(brief),
-    ...(target ? { runTarget: target } : {}),
+    ...(hasReview ? { review: parseReviewTarget(review) } : {}), ...(target ? { runTarget: target } : {}),
     ...(hasContinuation ? { continuation: word(continuation, "prior assignment", UUID) } : {}) };
 }
 function reportRecord(input) {
@@ -441,12 +444,12 @@ export const reserveBriefAdmission = (dir, scope, request, dispatch, rolePlan, b
   { kind: "reserve", assignment: createAssignment(scope, request), dispatch, rolePlan: parseRolePlan(rolePlan), uniqueName: true, brief: parseBrief(brief) });
 /** Save instructions before the native dispatch call exists. No capacity or permission is granted. */
 export function prepareAdmission(dir, scope, request, rolePlan, brief, options = {}) {
-  const keys = ["runTarget", "continuation"].filter(key => Object.hasOwn(options ?? {}, key));
+  const keys = ["review", "runTarget", "continuation"].filter(key => Object.hasOwn(options ?? {}, key));
   fields(options, keys);
-  const { runTarget, continuation } = options;
+  const { review, runTarget, continuation } = options;
   fields(request, ["task", "run", "issuer", "name"]);
   const { call, ...identity } = createAssignment(scope, { task: request.task, run: request.run, issuer: request.issuer, call: request.name });
-  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief, ...(runTarget === undefined ? {} : { runTarget }), ...(continuation === undefined ? {} : { continuation }) } });
+  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief, ...(review === undefined ? {} : { review }), ...(runTarget === undefined ? {} : { runTarget }), ...(continuation === undefined ? {} : { continuation }) } });
 }
 /** The adapter verifies the current issuer and role, then supplies the actual native call and dispatch. */
 export function reservePreparedAdmission(dir, scope, request, dispatch, issuerRole) {
