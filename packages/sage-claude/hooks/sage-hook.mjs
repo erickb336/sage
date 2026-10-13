@@ -73,8 +73,8 @@ const reservedName = (name) => /^(?:main|lead-t\d+)$/i.test(String(name ?? "").t
 const agentEvent = (input) => "agent_id" in (input ?? {}) || (OURS.test(input?.agent_type ?? "") && !CHIEF.test(input.agent_type));
 export const BRIEF_FIELDS = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"];
 export const REPORT_FIELDS = ["STATUS", "RESULT", "EVIDENCE", "FINDINGS", "QUESTIONS", "NOT VERIFIED", "BRANCH"];
-/** A line end: LF, CRLF, and each other break that a reader sees as one: CR, VT, FF, NEL, U+2028 and U+2029 (F-T289-26). */
-const LINE_END = /\r\n|[\n\r\v\f\u0085\u2028\u2029]/;
+/** A line end, kept by a split: LF, CRLF, and each other break that a reader sees as one: CR, VT, FF, NEL, U+2028 and U+2029 (F-T289-26). */
+const LINE_END = /(\r\n|[\n\r\v\f\u0085\u2028\u2029])/;
 /**
  * The one field rule of a brief and a report (F-T289-24). A field starts at a line that is not indented and whose text,
  * after Markdown marks (*, _, #, |, >, -) and spaces, starts with the field's name: "STATUS done", "**STATUS**: done",
@@ -96,11 +96,14 @@ function fieldsOf(text, names) {
  * The lines of a text, each with whether it is in a code block or is one of its fences. A fence counts as CommonMark
  * has it: three or more backticks or tildes, indented by at most three spaces; the block ends at a fence of the same
  * character, at least as long, with nothing after it. An indented fence line is text, so it cannot hide a field (F-T289-52).
+ * A fence opens or closes only at a line that starts after LF, CR or CRLF, where Markdown starts a line too: after
+ * U+2028 or another break that Markdown does not show, a fence would hide fields that its reader sees (F-T289-63).
  */
 function linesOf(text) {
   let fence;
-  return String(text ?? "").split(LINE_END).map((line) => {
-    const mark = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  const parts = String(text ?? "").split(LINE_END);
+  return parts.filter((_, k) => k % 2 === 0).map((line, k) => {
+    const mark = (k === 0 || /^[\r\n]/.test(parts[2 * k - 1])) && /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     const opens = !fence && mark && !(mark[1][0] === "`" && mark[2].includes("`"));
     const closes = fence && mark && mark[1][0] === fence[0] && mark[1].length >= fence.length && !mark[2].trim();
     const fenced = Boolean(fence || opens);
@@ -336,7 +339,7 @@ export function handle(input, state, slots) {
       // one they read (F-T289-24, F-T289-39). The lead rules read no other role's report, so its FINDINGS may list what it
       // fixed or needs (F-T289-40).
       const { problem } = REVIEWERS.includes(input.agent_type.slice("sage:".length).toLowerCase()) ? reportOf(input.last_assistant_message) : {};
-      if (problem) return { decision: "block", reason: `sage: the hook cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. RESULT FINDINGS or FAIL needs a finding.` };
+      if (problem) return { decision: "block", reason: `sage: the hook cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. No line under FINDINGS has a severity word above the highest finding. RESULT FINDINGS or FAIL needs a finding.` };
     }
   }
   if (!main && ours && input.agent_id) slots.touch(input.agent_id, input.agent_type); // the agent's lease: a slot that no event touched for an hour expires
@@ -1030,6 +1033,21 @@ function lineOf(text) {
   if (item && /\d/.test(unmarked(key)) && !SEVERE.test(unmarked(key)) && /^(?:high|medium|low)$/i.test(word) && !LABEL.test(rest.slice(at + 1).join(" "))) return { severity: word.toLowerCase() };
   return { severe: SEVERE.test(unmarked(key)) || SEVERE.test(word) || LABEL.test(text) };
 }
+/** The levels of the severities, and the words that the report reader looks for in all of FINDINGS: critical, severe and blocker are high. */
+const LEVELS = ["none", "low", "medium", "high"];
+const LEVEL = { low: 1, medium: 2, high: 3, critical: 3, severe: 3, blocker: 3 };
+const LEVEL_WORD = /(?<![\p{L}\p{N}])(?:low|medium|high|critical|severe|blocker)(?![\p{L}\p{N}])/gu;
+/** Cyrillic and Greek letters that look like the Latin letters of LEVEL's words, in lower case, as the Latin letter. */
+const LOOK_ALIKE = { а: "a", в: "b", с: "c", ԁ: "d", е: "e", ԍ: "g", һ: "h", н: "h", і: "i", ӏ: "l", к: "k", м: "m", о: "o", р: "p", ѕ: "s", т: "t", у: "y", ԝ: "w", х: "x", α: "a", β: "b", ε: "e", η: "h", ι: "i", κ: "k", μ: "m", ν: "v", ο: "o", ρ: "p", τ: "t", υ: "u", ω: "w", χ: "x" };
+/**
+ * The level of the highest severity word in a line, as a whole word in any case, after NFKC, look-alike Cyrillic and
+ * Greek letters as Latin ones, and no zero-width or other format character: "a Hіgh risk" with a Cyrillic і is high
+ * (F-T289-60, F-T289-62, F-T289-63). 0 when it has none.
+ */
+function levelIn(line) {
+  const text = line.normalize("NFKC").toLowerCase().replace(/[^\0-\x7f]/g, (c) => LOOK_ALIKE[c] ?? c).replace(/\p{Cf}/gu, "");
+  return Math.max(0, ...[...text.matchAll(LEVEL_WORD)].map(([word]) => LEVEL[word]));
+}
 /** None alone, in any case, also as a list item or with a period: the one clean form of FINDINGS (F-T289-48, F-T289-51). */
 const NONE_LINE = /^(?:[-*+][ \t]+)?none\.?$/i;
 /** A line that starts a FINDINGS field in any form, also indented or as a list item ("- FINDINGS", F-T289-52). */
@@ -1048,6 +1066,9 @@ const findingsLine = (line) => FINDINGS_AT.test(line.trimStart().replace(/^(?:[-
  * RESULT_WORDS; when FINDINGS is empty, has none and findings, or none with RESULT FINDINGS or FAIL (F-T289-48); or when
  * a line under FINDINGS is longer than LINE_MAX, or is not none, a finding or detail: an unindented line, an indented
  * one with no finding above it (F-T289-25), or an indented line that is severe (F-T289-46, F-T289-54).
+ * The one global rule (F-T289-60, F-T289-62, F-T289-63): it is unreadable too when any line of FINDINGS, a finding,
+ * detail or prose, has a severity word (levelIn) above the highest finding that the reader counted. So an honest detail
+ * line such as "a high row count" under a low finding blocks once, and the helper writes it again.
  */
 function reportOf(text) {
   const fields = fieldsOf(text, REPORT_FIELDS), of = (name) => fields.filter((f) => f.name === name);
@@ -1066,11 +1087,13 @@ function reportOf(text) {
     else if (NONE_LINE.test(text)) none = true;
     else if (!(indented && severities.length && !severity && !severe)) odd ??= text;
   }
+  const read = Math.max(0, ...severities.map((v) => LEVEL[v])), seen = f && [f.rest, ...f.lines].map((line) => [line, levelIn(line)]).find(([, level]) => level > read);
   const problem = twice ? `${twice} is given twice, the second time in the line ${JSON.stringify((of(twice)[1]?.line ?? another).trim().slice(0, 80))}` : !r ? "it has no RESULT" : !f ? "it has no FINDINGS" :
     !RESULT_WORDS.includes(result) ? `RESULT starts with ${JSON.stringify((said ?? "").slice(0, 80))}, not with one of ${RESULT_WORDS.join(", ")}` :
     long ? `a line under FINDINGS is longer than ${LINE_MAX} characters` : odd !== undefined ? `a line under FINDINGS is not none alone and not a finding in the form ${FINDING_FORM}: ${JSON.stringify(odd.slice(0, 80))}` :
     none && severities.length ? "FINDINGS has none and findings" : !none && !severities.length ? "FINDINGS is empty" :
-    none && ["FINDINGS", "FAIL"].includes(result) ? `RESULT is ${result}, but FINDINGS is none` : undefined;
+    none && ["FINDINGS", "FAIL"].includes(result) ? `RESULT is ${result}, but FINDINGS is none` :
+    seen ? `the line ${JSON.stringify(seen[0].trim().slice(0, 80))} under FINDINGS has a severity word above ${severities.length ? `the highest finding that the hook read (${LEVELS[read]})` : "none"}: write that finding as its own line ${FINDING_FORM}` : undefined;
   return { result, severities, unreadable: Boolean(problem), ...(problem && { problem }) };
 }
 /**
@@ -1131,13 +1154,20 @@ function leadSpawnProblem(lead, spawned, name, slots) {
  * dismiss or move a medium or high finding, so a re-roll still needs a finding for each report. A report that the hook
  * cannot read, of a run that still runs, holds the role until the sage ends that run. The reason, or undefined.
  */
+/**
+ * Is a lead's finding row still the one that the lead recorded (F-T289-64)? The same source, severity and summary, and,
+ * on its own task, the same round: the sage's finding add on the key, which opens it again in the task's round, or
+ * raises or lowers it, makes it the sage's. A move keeps it (F-T289-49). A record of the old form has no row: it does
+ * not count (fail closed).
+ */
+const kept = (row, was) => Boolean(was?.source) && row.source === was.source && row.severity === was.severity && row.summary === was.summary && (row.task !== was.task || row.round === was.round);
 function gap(role, view, task, ctx) {
   if (!REVIEWERS.includes(role)) return undefined;
   const stops = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => r?.role === role && view.row(r.run)?.task === task.id);
   const odd = stops.find((r) => r.unreadable && view.row(r.run).status === "running");
   if (odd) return `${odd.run}'s helper gave a report that the hook cannot read, and ${odd.run} still runs: the sage ends it before this lead's next ${role} run, verdict or move (F-T289-18).`;
   const wanted = stops.filter((r) => !r.unreadable).flatMap((r) => (r.severities ?? []).map((v) => [r.run, v]));
-  const held = ctx.slots.findings(leadKey(ctx.lead)).map((key) => view.traced(key)).filter((f) => f?.source === role).map((f) => f.severity);
+  const held = ctx.slots.findings(leadKey(ctx.lead)).map(({ key, was }) => [view.traced(key), was]).filter(([f, was]) => f?.source === role && kept(f, was)).map(([f]) => f.severity);
   const atLeast = (list, levels) => list.filter((v) => levels.includes(v)).length;
   if ([["high"], ["high", "medium"]].every((levels) => atLeast(held, levels) >= atLeast(wanted.map(([, v]) => v), levels))) return undefined;
   const found = wanted.filter(([, v]) => v !== "low").map(([run, v]) => `${run} ${v}`).join(", ");
@@ -1249,7 +1279,7 @@ function leadWrote(input, slots) {
     if (cmd === "finding") {
       const [, key, severity] = /^(F-T[1-9]\d*-[1-9]\d*) open · (high|medium|low) · (T[1-9]\d*)$/.exec(out) ?? [], row = key && view.row(key);
       const [source] = asked("source");
-      if (row?.task === lead.task && row.status === "open" && row.severity === severity && asked("severity").join() === severity && asked("source").length === 1 && row.source === source) slots.found(`${leadKey(lead)}.${key}`);
+      if (row?.task === lead.task && row.status === "open" && row.severity === severity && asked("severity").join() === severity && asked("source").length === 1 && row.source === source) slots.found(`${leadKey(lead)}.${key}`, { task: row.task, round: row.round, source, severity, summary: row.summary });
       return;
     }
     const [, id, role] = /^(R[1-9]\d*) running · (\S+) on (T[1-9]\d*)(?: |$)/.exec(out) ?? [];
@@ -2307,7 +2337,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     /** A run that its lead added: the hook saw the lead's run add print its id (F-T289-16). */
     own: (key) => note(`owned-${key}`, "", helpers),
     /** A finding that a lead run recorded: the hook saw the lead's finding add print its key (F-T289-42, F-T289-43). */
-    found: (key) => note(`found-${key}`, "", helpers),
+    found: (key, row) => note(`found-${key}`, JSON.stringify(row), helpers),
     /** The time in ms for which a slot of this helper still holds its lease, or 0: a helper whose slot was freed without a stop left (F-T289-13, F-T289-31). */
     lease: (key) => Math.max(0, ...list().filter((slot) => mark(slot, "helper-") === key).map((slot) => STALE.agent - (now - statSync(join(dir, slot)).mtimeMs))),
     /** Removes the helper notes of the lead runs with these keys (F-T289-13). */
@@ -2322,11 +2352,11 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
       try { names = readdirSync(helpers); } catch (error) { if (error.code !== "ENOENT") throw error; }
       return names.filter((n) => n.startsWith(`stopped-${prefix}`)).map((n) => parsed(helperNote(n)));
     },
-    /** The finding keys that the lead run with this key recorded itself (F-T289-42). */
+    /** The findings that the lead run with this key recorded itself, each { key, was: its row then } (F-T289-42, F-T289-64). */
     findings: (lead) => {
       let names = [];
       try { names = readdirSync(helpers); } catch (error) { if (error.code !== "ENOENT") throw error; }
-      return names.filter((n) => n.startsWith(`found-${lead}.`)).map((n) => n.slice(`found-${lead}.`.length));
+      return names.filter((n) => n.startsWith(`found-${lead}.`)).map((n) => ({ key: n.slice(`found-${lead}.`.length), was: parsed(helperNote(n)) }));
     },
     /** The helper slot of this session's agent: its key and its started note, or undefined. */
     helperFor(agent) {

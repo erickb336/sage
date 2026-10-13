@@ -6046,11 +6046,11 @@ test("F-T289-50: a lead slot of the old form, with a floor and no recorded keys,
   assert.match(denied(stateRun(s, `run done ${run} --status done`)) ?? "", /\(R5 high\), and T1 holds 0 medium or high code-reviewer finding/);
 });
 
-test("F-T289-46: an indented step line with a severity word in its prose is detail of its finding", () => {
+test("F-T289-46: an indented step line with a severity word in its prose, not above its finding's, is detail of its finding", () => {
   const s = leadSession();
-  const message = report("FINDINGS", lines("", "- K1 medium the form loses text", "  - steps: load a high row count, then save", "  - expected: no loss at low memory"));
+  const message = report("FINDINGS", lines("", "- K1 high the form loses text", "  - steps: load a high row count, then save", "  - expected: no loss at low memory"));
   assert.equal(s.send({ hook_event_name: "SubagentStop", agent_id: "steps", agent_type: "sage:code-reviewer", last_assistant_message: message }), undefined, "the stop gate reads it");
-  assert.match(cleanVerdictOf(s, message) ?? "", /R5's helper reported FINDINGS with medium findings, so its verdict is findings/);
+  assert.match(cleanVerdictOf(s, message) ?? "", /R5's helper reported FINDINGS with high findings, so its verdict is findings/);
 });
 
 test("F-T289-47: a severity word as the key, or before the key, makes the report unreadable, never a lower finding", () => {
@@ -6089,7 +6089,7 @@ test("F-T289-54: a high under a low on an unmarked or severity-first line, or as
     assert.match(cleanVerdictOf(s, report("FINDINGS", lines("", "- L1 low noisy log", tail))) ?? "", UNREADABLE, JSON.stringify(tail));
   }
   assert.match(cleanVerdictOf(s, report("FINDINGS", "- L1 low noisy log; also a high: path traversal in the loader")) ?? "", UNREADABLE, "same line");
-  assert.equal(cleanVerdictOf(s, report("FINDINGS", lines("", "- L1 low noisy log", "    steps: found a High problem in the loader"))), undefined, "prose detail (F-T289-46)");
+  assert.match(cleanVerdictOf(s, report("FINDINGS", lines("", "- L1 low noisy log", "    steps: found a High problem in the loader"))) ?? "", UNREADABLE, "prose detail with a higher word (F-T289-62)");
 });
 
 test("F-T289-58: a prose bullet with a severity word as its second word is unreadable, not a finding; a key has a digit", () => {
@@ -6120,6 +6120,68 @@ test("F-T289-59: after the sage releases a held task to building, a refused repa
   assert.match(denied(stateRun(s, `verdict T1 --kind checks-pass --sha ${"b".repeat(40)} --pr 5`)) ?? "", WAY, "a verdict on a new SHA");
   setState(s, "T1", "reviewing");
   assert.match(denied(stateRun(s, "finding close T1 F-T1-1")) ?? "", /is not repairing: run round T1 first, then repair/, "from reviewing, round is the way");
+});
+
+test("F-T289-60: a higher severity word later on a finding line or in its detail makes the report unreadable, never a lower finding", () => {
+  for (const findings of [
+    "- K1 Low entropy session tokens let anyone guess a session (high)",
+    "- K1 low noisy log, K2 high SQL injection in the search box",
+    "- K1 low (raise to high) the log holds the session token",
+    "- K1 Medium confidence: SQL injection in /login, rated high",
+    lines("- K1 low noisy log", "    Correction, this one is HIGH because the log holds the session token"),
+    lines("- K1 low noisy log", "    Reclassified as critical after the proof of concept worked"),
+    lines("- K1 medium a race", "    a blocker for the release"),
+  ]) {
+    assert.match(freshVerdict(report("FINDINGS", `\n${findings}`)) ?? "", UNREADABLE, findings);
+  }
+  const s = leadSession();
+  const out = s.send({ hook_event_name: "SubagentStop", agent_id: "later", agent_type: "sage:code-reviewer", last_assistant_message: report("FINDINGS", "\n- K1 low noisy log, K2 high SQL injection") });
+  assert.match(out?.reason ?? "", /cannot read your report: the line "- K1 low noisy log, K2 high SQL injection" under FINDINGS has a severity word above the highest finding that the hook read \(low\): write that finding as its own line - <key> <severity> <summary>\./, "the stop gate quotes the line and names the way out");
+  assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 high the token is logged", "    the impact on the logs is low, a medium fix"))) ?? "", /reported FINDINGS with high findings, so its verdict is findings/, "a lower word under a higher finding is detail");
+});
+
+test("F-T289-62: an indented item or prose line with a higher severity word anywhere in it makes the report unreadable", () => {
+  for (const tail of ["  - K2 [security] high SQL injection in login", "  - K2 severity: high SQL injection", "  - Also K2 high SQL injection", "    steps: found a High problem in the loader", "    K2 is high: SQL injection", "    1. H1 high real crash"]) {
+    assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a typo", tail))) ?? "", UNREADABLE, tail);
+  }
+  // The trade-off: an honest detail line with a higher word blocks once at the stop, and the helper writes it again.
+  const s = leadSession();
+  const honest = report("FINDINGS", lines("", "- K1 low the list is slow", "    steps: load a high row count"));
+  assert.match(s.send({ hook_event_name: "SubagentStop", agent_id: "honest", agent_type: "sage:code-reviewer", last_assistant_message: honest })?.reason ?? "", /the line "steps: load a high row count" under FINDINGS has a severity word above the highest finding that the hook read \(low\)/);
+});
+
+test("F-T289-63: a look-alike or hidden severity word counts, and U+2028 before a fence does not hide a second FINDINGS", () => {
+  const ch = (...codes) => String.fromCharCode(...codes);
+  for (const tail of [
+    `  ${ch(0x2013)} K2 high SQL injection`, `  ${ch(0x2022)} K2 high SQL injection`, "  a) K2 high SQL injection", `  ${ch(0x2212)} K2 high SQL injection`,
+    `  - K2 h${ch(0x456)}gh SQL injection`, `  - K2 ${ch(0xff48, 0xff49, 0xff47, 0xff48)} SQL injection`, `  - K2 hi${ch(0x200b)}gh SQL injection`,
+    `  - K2 ${ch(0x397, 0x399)}G${ch(0x397)} SQL injection`, `  - K2 ${ch(0x441)}ritical SQL injection`,
+  ]) {
+    assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a typo", tail))) ?? "", UNREADABLE, JSON.stringify(tail));
+  }
+  const fence = `STATUS done\nRESULT CLEAN\nEVIDENCE ran it\nmore x${ch(0x2028)}\`\`\`\nFINDINGS - K1 high x\nmore${ch(0x2028)}\`\`\`\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH b`;
+  assert.match(freshVerdict(fence) ?? "", /cannot read \(FINDINGS is given twice/, "the fence after U+2028 is no fence");
+  const real = lines("STATUS done", "RESULT CLEAN", "EVIDENCE ran it", "```", "FINDINGS of an old report: - K1 high x", "```", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED none", "BRANCH b");
+  assert.equal(freshVerdict(real), undefined, "a real fence still hides its lines");
+});
+
+test("F-T289-64: a lead's finding that the sage raises, or adds again with another source, no longer counts for the lead", () => {
+  const raised = leadSession();
+  const run = leadAdd(raised, "code-reviewer"); // R5
+  helpRun(raised, run, "code-reviewer", LEAD, HIGH_ONE);
+  const key = leadFind(raised, "code-reviewer", "medium"); // the lead's medium, under the helper's high
+  const GAP = /\(R5 high\), and T1 holds 1 medium or high code-reviewer finding\(s\) that this lead run recorded/;
+  assert.match(denied(stateRun(raised, `run done ${run} --status done`)) ?? "", GAP, "the lead's medium does not cover a high");
+  raised.sage("finding", "add", "T1", "--key", key, "--source", "code-reviewer", "--severity", "high"); // the sage raises it
+  assert.match(denied(stateRun(raised, `run done ${run} --status done`)) ?? "", /\(R5 high\), and T1 holds 0 medium or high code-reviewer finding/, "a raised finding is the sage's");
+  const moved = leadSession();
+  const other = leadAdd(moved, "code-reviewer"); // R5
+  helpRun(moved, other, "code-reviewer", LEAD, HIGH_ONE);
+  const qaKey = leadFind(moved, "qa", "high"); // the lead's high of another role
+  moved.sage("finding", "add", "T1", "--key", qaKey, "--source", "code-reviewer", "--severity", "high"); // the sage gives it the role
+  assert.match(denied(stateRun(moved, `run done ${other} --status done`)) ?? "", /\(R5 high\), and T1 holds 0 medium or high code-reviewer finding/, "a finding that the sage gave another source is the sage's");
+  leadFind(moved, "code-reviewer", "high"); // the lead's own
+  assert.equal(denied(stateRun(moved, `run done ${other} --status done`)), undefined, "the lead's own finding, unchanged, counts");
 });
 
 test("F-T289-53: npm test runs each part of the hook tests once, so node runs them in parallel", () => {
