@@ -3862,3 +3862,72 @@ test('terminal bindings cannot revive through an atomic repeated binding request
     assert.deepEqual(f.api.readAdmission(f.journal), before);
   }
 });
+
+const reviewTarget = () => ({ branch: 'codex/t1-review', sha: 'a'.repeat(40), round: 0, cycle: 1 });
+
+test('saved review targets retain every review role and link reservations to immutable scope', async t => {
+  for (const provider of ['claude', 'codex']) for (const role of ['code-reviewer', 'security-reviewer', 'ux-reviewer', 'qa']) {
+    const f = await roleAdmissionFixture(t, undefined, provider), review = reviewTarget();
+    const request = {task:'T1',run:'R1',issuer:'root',name:'agent-1'};
+    const save = options => f.api.prepareAdmission(f.journal, f.scope, request,
+      {issuerRole:'chief-of-staff',role}, completeBrief('Review the saved commit.'), options);
+    const first = save({review});
+    assert.deepEqual(first.preparation.review, reviewTarget());
+    assert.equal(save({review}).decision, 'already-prepared');
+    const before = f.api.readAdmission(f.journal);
+    for (const changed of [{...review,branch:'codex/t2-review'}, {...review,sha:'b'.repeat(40)}, {...review,round:1}, {...review,cycle:2}])
+      assert.throws(() => save({review:changed}), /different work/);
+    assert.throws(() => save({}), /different work/);
+    assert.deepEqual(f.api.readAdmission(f.journal), before);
+    review.sha = 'c'.repeat(40); first.preparation.review.cycle = 7;
+    const receipt = f.api.reservePreparedAdmission(f.journal, f.scope,
+      {preparation:first.preparation.id,issuer:'root',call:'spawn-1'}, f.args(1)[3], 'chief-of-staff');
+    assert.equal(receipt.decision, 'permit-once');
+    const saved = f.api.readAdmission(f.journal);
+    assert.equal(saved.reservations[0].preparation, first.preparation.id);
+    assert.deepEqual(saved.preparations[0].review, reviewTarget());
+    const script = `import {readAdmission} from ${JSON.stringify(f.url)}; console.log(JSON.stringify(readAdmission(process.argv[1]).preparations[0].review));`;
+    const restarted = spawnSync(process.execPath, ['--input-type=module','-e',script,f.journal], {encoding:'utf8',env:process.env});
+    assert.equal(restarted.status, 0, restarted.stderr);
+    assert.deepEqual(JSON.parse(restarted.stdout), reviewTarget());
+  }
+});
+
+test('saved review target validation refuses invalid fresh scopes without writing', async t => {
+  const f = await roleAdmissionFixture(t), good = reviewTarget();
+  assert.deepEqual(f.api.parseReviewTarget(good), good);
+  const invalid = [null, [], {}, {...good,extra:true}, ...['main','MASTER','HEAD','refs/a','a..b','a.lock','a b'].map(branch=>({...good,branch})),
+    ...['A'.repeat(40),'a'.repeat(39),'z'.repeat(40)].map(sha=>({...good,sha})),
+    ...[-1,0.5,Number.MAX_SAFE_INTEGER+1,'0',NaN,Infinity].map(round=>({...good,round})),
+    ...[0,11,1.5,'1',NaN,Infinity].map(cycle=>({...good,cycle}))];
+  const before = f.api.readAdmission(f.journal);
+  for (const review of invalid) {
+    assert.throws(() => f.api.prepareAdmission(f.journal, f.scope,
+      {task:'T1',run:'R1',issuer:'root',name:'fresh-review'}, {issuerRole:'chief-of-staff',role:'qa'},
+      completeBrief('Review the saved commit.'), {review}));
+    assert.deepEqual(f.api.readAdmission(f.journal), before);
+  }
+  assert.deepEqual(f.api.parseReviewTarget({...good,round:Number.MAX_SAFE_INTEGER,cycle:10}), {...good,round:Number.MAX_SAFE_INTEGER,cycle:10});
+  for (const role of ['lead','pe','designer','arena-judge','implementer']) {
+    assert.throws(() => f.api.prepareAdmission(f.journal, f.scope,
+      {task:'T1',run:'R1',issuer:'root',name:'not-review'}, {issuerRole:'chief-of-staff',role}, completeBrief('Do the work.'), {review:good}), /only a review role/);
+    assert.deepEqual(f.api.readAdmission(f.journal), before);
+  }
+});
+
+test('saved review targets coexist with pinned run targets and prepared continuations', async t => {
+  const f = await roleAdmissionFixture(t), first = f.reserve(1, 'qa');
+  const bound = bindingFor(first.assignment); f.api.bindAdmission(f.journal, bound); f.api.completeAdmission(f.journal, bound);
+  const review = reviewTarget(), runTarget = {task:'T1',run:'R2',role:'qa',round:0,taskBranch:review.branch,runBranch:'',candidate:review.sha};
+  const prepared = f.api.prepareAdmission(f.journal, f.scope,
+    {task:'T1',run:'R2',issuer:'root',name:'continued-review'}, {issuerRole:'chief-of-staff',role:'qa'},
+    completeBrief('Review again.'), {review,runTarget,continuation:first.assignment.id}).preparation;
+  assert.deepEqual(prepared.review, review);
+  assert.deepEqual(prepared.runTarget, runTarget);
+  assert.equal(prepared.continuation, first.assignment.id);
+  const next = f.api.reservePreparedContinuation(f.journal, f.scope,
+    {preparation:prepared.id,issuer:'root',call:'follow-2',previous:first.assignment.id},
+    {tool:'followup',turn:'parent-turn',name:prepared.name,argumentsHash:'b'.repeat(64),taskHash:'c'.repeat(64)}, 'chief-of-staff');
+  assert.equal(next.decision, 'permit-once');
+  assert.equal(f.api.readAdmission(f.journal).reservations[1].preparation, prepared.id);
+});

@@ -261,3 +261,16 @@ Older journals can contain duplicate initial dispatches. They remain readable an
 New work still cannot reuse any run with an earlier dispatch that did not fail.
 Continuations retain their existing replay checks and require a new run.
 The provider must still verify the current logbook before dispatch.
+
+
+## Saved review target
+
+The optional `review` preparation field pins `branch`, `sha`, `round`, and `cycle`.
+Only code-reviewer, security-reviewer, ux-reviewer, and qa roles can carry it.
+The branch must be a valid task branch; the commit is a lowercase 40-digit hexadecimal SHA.
+Round is a nonnegative safe integer, and cycle is an integer from 1 through 10.
+
+A retry cannot change or remove its saved target. Other preparations remain readable.
+The review field can accompany a run target and a continuation reference.
+Core validates these supplied snapshots; the provider must check them against current Git and logbook records.
+Saving a target does not accept a verdict, count clean cycles, or authorize a merge.
