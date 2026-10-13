@@ -2093,6 +2093,60 @@ test("shared protected paths use validated values despite custom array methods",
   }
 });
 
+test("shared shell write classification detects writes without executing payloads in either bundle", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    // All strings below reach the parser only. None reaches a shell or interpreter.
+    for (const command of [
+      "printf fixed > ledger.tsv", "cat <> ledger.tsv", "echo fixed >& ledger.tsv",
+      "cp source target", "rm target", "ln source target", "uniq source target", "less -o target source",
+      "sed -i s/a/b/ target", "perl -pi -e x target", "awk -i inplace x target",
+      "sort --out=target source", "find . -delete", "find . -exec touch target ;",
+      "node -e 'writeFileSync(\"target\",\"fixed\")'", "python -c 'open(\"target\",\"w\")'",
+      "source script", "eval fixed", "exec fixed", "Set-Content target fixed",
+      "Out-File target", "New-Item target", "echo $(touch target)", "echo fixed | tee target",
+    ]) assert.equal(commandWrites(command, f.dir), true, command);
+    for (const command of ["cat ledger.tsv", "echo touch target", "printf rm", "grep -e tee ledger.tsv",
+      "cat < ledger.tsv", "echo fixed >/dev/null", "echo fixed >&2", "ls .", "jq . ledger.json"])
+      assert.equal(commandWrites(command, f.dir), false, command);
+    assert.equal(existsSync(join(f.dir, "target")), false);
+    assert.equal(existsSync(join(f.dir, "ledger.tsv")), false);
+  }
+});
+
+test("shared shell reader options preserve option values and function dispatch in either bundle", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    for (const command of ["rg --pre cat x", "rg --pre-glob '*.txt' x", "rg --search-zip x", "rg -z x",
+      "rg --hostname-bin program x", "file -C -m magic", "file --comp magic", "file -z ordinary",
+      "diff --paginate left right", "diff --pa left right", "diff -l left right",
+      "env rg --pre cat x", "LANG=C rg --pre cat x", "f() { rg --pre cat x; }; f",
+      "rg() { :; }; command rg --pre cat x"])
+      assert.equal(commandWrites(command, f.dir), true, command);
+    for (const command of ["rg -e --pre x", "rg -e--pre x", "rg --regexp=--pre x", "rg -- --pre x",
+      "rg --no-pre x", "file -m --compile ordinary", "file -- --compile", "diff -L --paginate left right",
+      "diff --label=--paginate left right", "diff -- --paginate right", "echo rg --pre cat x",
+      "rg() { :; }; rg --pre cat x", "f() { env rg --pre cat x; }; env() { :; }; f"])
+      assert.equal(commandWrites(command, f.dir), false, command);
+  }
+});
+
+test("shared shell write classification refuses unreadable input in either bundle", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    for (const command of ["echo 'unfinished", "$(unfinished", null, {}, undefined])
+      assert.equal(commandWrites(command, f.dir), true, JSON.stringify(command));
+    assert.equal(commandWrites("", f.dir), false);
+  }
+});
+
+
 test("Codex direct patch targets retain all operations and both names of a move", async t => {
   const f = isolated(t, "codex");
   const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
@@ -2127,57 +2181,6 @@ test("Codex direct patch targets refuse unsupported records and invalid targets"
     wrap("*** Add File: x\nnot-prefixed-content")])
     assert.throws(() => patchTargets(patch), /Codex patch targets are unavailable/);
 });
-
-test("Codex patch policy protects both move targets and logbook paths in every mode", async t => {
-  const f = isolated(t, "codex");
-  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
-  assert.equal(typeof patchEditDecision, "function");
-  const cwd = join(f.dir, "project"), root = join(f.dir, "logbook"); mkdirSync(cwd); mkdirSync(root);
-  symlinkSync(root, join(cwd, "linked"));
-  const input = text => ({ tool_name: "apply_patch", tool_input: { command: `*** Begin Patch\n${text}\n*** End Patch` } });
-  const options = { cwd, roots: [root] };
-  for (const context of [{ sage: true, chief: false }, { sage: false, chief: false }, { sage: false, chief: true }]) {
-    assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), context, options).decision, "pass");
-    for (const body of ["*** Add File: linked/new.tsv\n+fixed", "*** Delete File: ../logbook/ledger.tsv",
-      "*** Update File: ordinary\n*** Move to: ../logbook/new.tsv\n@@\n-old\n+new",
-      "*** Update File: ../logbook/ledger.tsv\n*** Move to: ordinary\n@@\n-old\n+new"])
-      assert.equal(patchEditDecision(input(body), context, options).decision, "deny");
-  }
-  assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), { sage: true, chief: true }, options).decision, "deny");
-});
-
-test("Codex patch policy rejects unknown input shapes and retains the chief edit gate", async t => {
-  const f = isolated(t, "codex");
-  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
-  assert.equal(typeof patchEditDecision, "function");
-  const options = { cwd: f.dir, roots: [join(f.dir, "logbook")] };
-  for (const value of [null, [], {}, { patch: "invented" }, { command: "bad", extra: true }, { command: 1 },
-    { command: "*** Begin Patch\n*** Unknown: x\n*** End Patch" }])
-    assert.throws(() => patchEditDecision({ tool_name: "apply_patch", tool_input: value }, { sage: false, chief: false }, options));
-  const input = { tool_name: "apply_patch", tool_input: { command: "*** Begin Patch\n*** Add File: ordinary\n+fixed\n*** End Patch" } };
-  assert.equal(patchEditDecision(input, { sage: true, chief: true }, options).decision, "deny");
-  assert.equal(patchEditDecision(input, { sage: false, chief: true }, options).decision, "pass");
-  assert.equal(patchEditDecision({ tool_name: "read_file" }, { sage: true, chief: true }, options).decision, "pass");
-  assert.throws(() => patchEditDecision(input, { sage: false, chief: false }, { cwd: "relative", roots: options.roots }));
-  assert.equal(existsSync(join(f.dir, "ordinary")), false);
-});
-
-test("Codex patch policy rejects linked move sources and targets without applying changes", async t => {
-  const f = isolated(t, "codex");
-  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
-  assert.equal(typeof patchEditDecision, "function");
-  const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-  writeFileSync(join(root, "ledger.tsv"), "fixed");
-  linkSync(join(root, "ledger.tsv"), join(cwd, "alias"));
-  const decide = body => patchEditDecision({ tool_name: "apply_patch", tool_input: {
-    command: `*** Begin Patch\n${body}\n*** End Patch` } }, { sage: false, chief: false }, { cwd, roots: [root] });
-  for (const body of ["*** Update File: alias\n*** Move to: ordinary\n@@\n-fixed\n+new",
-    "*** Update File: ordinary\n*** Move to: alias\n@@\n-fixed\n+new", "*** Delete File: alias"])
-    assert.equal(decide(body).decision, "deny");
-  assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
-  assert.equal(existsSync(join(cwd, "ordinary")), false);
-});
-
 
 test("native probe removes its profile after version failure and a stalled version process", t => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-probe-cleanup-"));
@@ -2357,4 +2360,69 @@ test("native deadline does not signal an exited child while output closure is pe
   child.emit("close", 0, null);
   assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline" });
   assert.deepEqual(signals, []);
+});
+
+test("Codex direct patch targets refuse header whitespace that native parsing removes", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const wrap = body => `*** Begin Patch\n${body}\n*** End Patch`;
+  for (const suffix of [" ", "\t", "\u00a0", "\u2003", "\u202f", "\u0085"]) {
+    for (const body of [`*** Add File: AGENTS.md${suffix}\n+fixed`,
+      `*** Update File: AGENTS.md${suffix}\n@@\n-old\n+new`,
+      `*** Delete File: AGENTS.md${suffix}`,
+      `*** Update File: ordinary\n*** Move to: AGENTS.md${suffix}\n@@\n-old\n+new`])
+      assert.throws(() => patchTargets(wrap(body)), /Codex patch targets are unavailable/);
+  }
+  assert.deepEqual(patchTargets(wrap("*** Add File: ordinary name\n+fixed")), ["ordinary name"]);
+  assert.equal(existsSync(join(f.dir, "AGENTS.md")), false);
+});
+
+test("Codex patch policy protects both move targets and logbook paths in every mode", async t => {
+  const f = isolated(t, "codex");
+  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof patchEditDecision, "function");
+  const cwd = join(f.dir, "project"), root = join(f.dir, "logbook"); mkdirSync(cwd); mkdirSync(root);
+  symlinkSync(root, join(cwd, "linked"));
+  const input = text => ({ tool_name: "apply_patch", tool_input: { command: `*** Begin Patch\n${text}\n*** End Patch` } });
+  const options = { cwd, roots: [root] };
+  for (const context of [{ sage: true, chief: false }, { sage: false, chief: false }, { sage: false, chief: true }]) {
+    assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), context, options).decision, "pass");
+    for (const body of ["*** Add File: linked/new.tsv\n+fixed", "*** Delete File: ../logbook/ledger.tsv",
+      "*** Update File: ordinary\n*** Move to: ../logbook/new.tsv\n@@\n-old\n+new",
+      "*** Update File: ../logbook/ledger.tsv\n*** Move to: ordinary\n@@\n-old\n+new"])
+      assert.equal(patchEditDecision(input(body), context, options).decision, "deny");
+  }
+  assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), { sage: true, chief: true }, options).decision, "deny");
+});
+
+test("Codex patch policy rejects unknown input shapes and retains the chief edit gate", async t => {
+  const f = isolated(t, "codex");
+  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof patchEditDecision, "function");
+  const options = { cwd: f.dir, roots: [join(f.dir, "logbook")] };
+  for (const value of [null, [], {}, { patch: "invented" }, { command: "bad", extra: true }, { command: 1 },
+    { command: "*** Begin Patch\n*** Unknown: x\n*** End Patch" }])
+    assert.throws(() => patchEditDecision({ tool_name: "apply_patch", tool_input: value }, { sage: false, chief: false }, options));
+  const input = { tool_name: "apply_patch", tool_input: { command: "*** Begin Patch\n*** Add File: ordinary\n+fixed\n*** End Patch" } };
+  assert.equal(patchEditDecision(input, { sage: true, chief: true }, options).decision, "deny");
+  assert.equal(patchEditDecision(input, { sage: false, chief: true }, options).decision, "pass");
+  assert.equal(patchEditDecision({ tool_name: "read_file" }, { sage: true, chief: true }, options).decision, "pass");
+  assert.throws(() => patchEditDecision(input, { sage: false, chief: false }, { cwd: "relative", roots: options.roots }));
+  assert.equal(existsSync(join(f.dir, "ordinary")), false);
+});
+
+test("Codex patch policy rejects linked move sources and targets without applying changes", async t => {
+  const f = isolated(t, "codex");
+  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof patchEditDecision, "function");
+  const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+  writeFileSync(join(root, "ledger.tsv"), "fixed");
+  linkSync(join(root, "ledger.tsv"), join(cwd, "alias"));
+  const decide = body => patchEditDecision({ tool_name: "apply_patch", tool_input: {
+    command: `*** Begin Patch\n${body}\n*** End Patch` } }, { sage: false, chief: false }, { cwd, roots: [root] });
+  for (const body of ["*** Update File: alias\n*** Move to: ordinary\n@@\n-fixed\n+new",
+    "*** Update File: ordinary\n*** Move to: alias\n@@\n-fixed\n+new", "*** Delete File: alias"])
+    assert.equal(decide(body).decision, "deny");
+  assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
+  assert.equal(existsSync(join(cwd, "ordinary")), false);
 });

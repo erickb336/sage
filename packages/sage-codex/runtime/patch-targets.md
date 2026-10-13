@@ -5,7 +5,7 @@ format. It includes add, update, and delete targets, plus both names of a move.
 Content lines that resemble file headers remain content.
 
 The parser accepts LF and CRLF line endings. Missing patch markers, unknown
-records, misplaced moves, control characters in targets, and oversized input
+records, misplaced moves, control characters or trailing whitespace in targets, and oversized input
 throw a fixed error. It never applies a patch or writes a file.
 
 This component is separate from the advice hook's loose header reader. A caller
