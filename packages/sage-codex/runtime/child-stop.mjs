@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { readAdmission, completeAdmission, interruptAdmission, REPORT_FIELDS, missingReportFields } from "sage-core";
 import { nativeToolContext } from "./native-tool.mjs";
 import { readChildTurn, readNativeCompletion, readNativeInterruption, readNativeRecovery } from "./identity.mjs";
-import { bindNativeChildTranscript, recoverNativeInitialDeliveries } from "./child-tool.mjs";
+import { bindNativeChildTranscript, recoverNativeChildDeliveries } from "./child-tool.mjs";
 import { RUNTIME_VERSION, decodeEvent, publish, readObservations } from "./events.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -31,6 +31,9 @@ function unmanagedStop(input, native, state, options, owner) {
   const scoped = row => row.project === options.project && row.session === session;
   const mode = owner && state.modes.filter(row => scoped(row) && row.epoch === owner.epoch).at(-1);
   if (mode?.sage || state.bindings.some(row => scoped(row) && row.child === native.actor && row.turn === input.turn_id)) return false;
+  if (state.reservations.some(row => scoped(row.assignment) && row.continuation
+    && state.bindings.some(bound => bound.assignment === row.continuation && bound.child === native.actor)
+    && !state.completions?.some(done => done.assignment === row.assignment.id))) return false;
   if (!input.agent_transcript_path) refuse();
   const initial = readChildTurn(input.agent_transcript_path, { sessionsDir: options.sessionsDir },
     { session: input.session_id, child: native.actor, turn: input.turn_id });
@@ -81,7 +84,7 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
   const transcripts = observations.filter(row => row.kind === "child-transcript" && row.child === bound.child && row.turn === bound.turn);
   const starts = observations.filter(row => row.kind === "child-start" && row.child === bound.child);
   if (transcripts.length !== 1 || starts.length !== 1 || transcripts[0].turn !== bound.turn
-    || (starts[0].turn !== bound.turn) || starts[0].parent !== bound.issuer
+    || (!assigned.continuation && starts[0].turn !== bound.turn) || starts[0].parent !== bound.issuer
     || (suppliedPath && suppliedPath !== transcripts[0].transcript)) refuse();
   const path = starts[0].path;
   const expected = {
@@ -102,7 +105,7 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
 export function reconcileNativeCompletions(context, session, options, assignment) {
   const native = nativeToolContext(context);
   if (typeof session !== "string" || !UUID.test(session)) refuse();
-  recoverNativeInitialDeliveries(native, session, options, assignment);
+  recoverNativeChildDeliveries(native, session, options, assignment);
   const state = readAdmission(options.directory);
   const key = `codex:${session}`;
   const owner = state.sessions.find(row => row.project === options.project && row.session === key);
