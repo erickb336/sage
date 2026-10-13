@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Isolated native V2 transport check with simulated model responses; not a live Sage pilot.
 // A wide deadlock guard closes transport first, then stops an unresponsive owned child.
 import http from "node:http";
@@ -10,11 +11,12 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--sage-completion"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--sage-completion", "--sage-report"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
-const completion = process.argv.includes("--sage-completion");
+const reportProbe = process.argv.includes("--sage-report");
+const completion = process.argv.includes("--sage-completion") || reportProbe;
 assert(!(denySpawn && completion), "incompatible_probe_modes");
 let denied = false;
 const MARKER = "sage-native-parent-ok";
@@ -76,7 +78,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
 } else {
   print({ type: "version", version });
   const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,deadlineMs});
-  let prepared = false, blockedStopVerified = false;
+  let prepared = false, blockedStopVerified = false, reportVerified = false, beforeReport;
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -94,7 +96,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -115,7 +117,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= (item.call_id === calls.prepare ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
         if (denySpawn && item.call_id === calls.spawn) outputs[item.call_id] = output;
@@ -135,10 +137,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       && task.content[0].type==="input_text"
       && task.content[0].text==="Message Type: NEW_TASK\nTask name: /root/probe_child\nSender: /root\nPayload:\n"
       && task.content[1].type==="encrypted_content" && task.content[1].encrypted_content===CHILD_PROMPT;
-    const prepareTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
-      ? (tool.tools ?? []).filter(member => member.name === "sage_prepare_task").map(member => ({namespace: tool.name, name: member.name}))
-      : tool.type === "function" && tool.name === "mcp__sage_preparation__sage_prepare_task" ? [{name: tool.name}] : []);
-    return { outputs, agentTools, childPromptSeen, prepareTools };
+    const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({namespace: tool.name, name: member.name}))
+      : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{name: tool.name}] : []);
+    return { outputs, agentTools, childPromptSeen, prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report") };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -270,6 +272,22 @@ data: ${JSON.stringify(event)}
         check(agent.agent_status?.completed === CHILD_MARKER, "native_child_completion_marker_mismatch");
         nativeCompleted = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "completed", agent_name: taskName, agent_status: { completed: CHILD_MARKER } });
+        if (reportProbe) {
+          check(info.reportTools.length === 1, "report_tool_missing");
+          beforeReport = JSON.stringify(integrated.readJournal());
+          respond(res, {type: "function_call", ...info.reportTools[0], call_id: calls.report,
+            arguments: JSON.stringify({name: "probe_child"})});
+        } else respond(res, message(MARKER));
+      } else if (reportProbe && rootRequests === 6) {
+        const report = info.outputs[calls.report], state = integrated.readJournal();
+        check(report?.decision === "report-ready" && report.assignment === state.bindings[0].assignment
+          && report.child === childThread && report.turn === state.bindings[0].turn && report.task === "T1" && report.run === "R1"
+          && report.reportHash === createHash("sha256").update(CHILD_MARKER).digest("hex")
+          && report.report.STATUS === "done" && report.report.RESULT === "sage-native-child-ok", "report_identity_or_text_changed");
+        check(JSON.stringify(state) === beforeReport, "report_read_changed_admission");
+        reportVerified = true;
+        print({type: "report_read_evidence", exactAssignment: true, exactTextHash: true, unchangedAdmission: true,
+          reportsAccepted: 0, simulatedModel: true, realModelConsumptionVerified: false});
         respond(res, message(MARKER));
       } else {
         throw new Error("unexpected_extra_root_request");
@@ -344,7 +362,7 @@ data: ${JSON.stringify(event)}
         && ["spawn_agent", "wait"].includes(event.item.tool) && event.item.status === "completed") {
         // The native tool result in the next request supplies the stricter state assertion.
       } else if (completion && event.type === "item.completed" && event.item?.type === "mcp_tool_call"
-        && event.item.server === "sage_preparation" && event.item.tool === "sage_prepare_task" && event.item.status === "completed") {
+        && event.item.server === "sage_preparation" && ["sage_prepare_task", ...(reportProbe ? ["sage_read_report"] : [])].includes(event.item.tool) && event.item.status === "completed") {
         // The prepared message and final journal verify this tool's result.
       } else if (event.type === "item.completed" && event.item?.type !== "reasoning") {
         unexpectedItems++;
@@ -370,7 +388,7 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === 5 && childRequests === (completion ? 2 : 1) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
+      : rootRequests === (reportProbe ? 6 : 5) && (!reportProbe || reportVerified) && childRequests === (completion ? 2 : 1) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
