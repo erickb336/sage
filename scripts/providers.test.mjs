@@ -16,6 +16,53 @@ const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
 
+test("T44: output-file dispatches count as writes in both packaged cores", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    for (const command of [
+      "curl -o result.txt https://example.invalid", "curl -fsSLoresult.txt https://example.invalid",
+      "CURL.exe --output=result.txt https://example.invalid", "env X=1 curl -D headers.txt https://example.invalid",
+      "curl --cookie-jar jar.txt https://example.invalid", "curl -O https://example.invalid/file",
+      "curl --trace trace.txt https://example.invalid", "curl --config settings.txt",
+      "git diff --output=result.txt", "git -C . show --output result.txt", "Git.exe log --output=result.txt",
+      "ditto source.txt target.txt", "scp source.txt target.txt", "wget -O result.txt https://example.invalid",
+      "openssl dgst -sha256 -out result.txt source.txt", "sqlite3 data.db '.output result.txt'",
+    ]) assert.equal(commandWrites(command, f.dir), true, command);
+  }
+});
+
+test("T44: reader operands and ordinary output-free commands remain data", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(commandWrites("curl -H '-o' -o result.txt https://example.invalid", f.dir), true);
+    for (const command of [
+      "curl -fsSL https://example.invalid", "curl -H '-o' https://example.invalid",
+      "curl --header '--output=file' https://example.invalid", "curl --data '-o' https://example.invalid",
+      "curl -- https://example.invalid/-o", "git diff -- --output=file", "git show --format=--output=file",
+      "echo curl -o result.txt", "printf '%s' 'git diff --output=result.txt'", "openssl dgst -sha256 source.txt",
+    ]) assert.equal(commandWrites(command, f.dir), false, command);
+  }
+});
+
+test("T44: known output programs cannot write protected paths but can write scratch files", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider), root = join(f.dir, "logbook"); mkdirSync(root);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    for (const form of [
+      path => `curl -o ${path} https://example.invalid`, path => `curl -sSo${path} https://example.invalid`,
+      path => `git diff --output=${path}`, path => `git show --output ${path}`,
+      path => `ditto source.txt ${path}`, path => `scp source.txt ${path}`,
+      path => `wget -O ${path} https://example.invalid`, path => `openssl dgst -out ${path} source.txt`,
+      path => `sqlite3 ${path} 'select 1'`,
+    ]) {
+      assert.equal(shellWriteOutsideRoots({ command: form(`${root}/ledger.tsv`), cwd: f.dir, roots: [root] }), false);
+      assert.equal(shellWriteOutsideRoots({ command: form("scratch.txt"), cwd: f.dir, roots: [root] }), true);
+    }
+  }
+});
+
 function isolated(t, provider) {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-provider-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
