@@ -83,6 +83,11 @@ export function createNativePolicy(options, evaluateTool) {
         }));
         command = readCommand();
       }
+      // Match Claude: a child cannot request a broader sandbox, even with Sage off.
+      if (child && command && (["require_escalated", "with_additional_permissions"].includes(command.sandbox_permissions)
+        || command.additional_permissions != null)) {
+        return { decision: "deny", reason: "A child cannot request broader sandbox permissions. Ask the chief to run this command." };
+      }
       const recovery = child ? checkChildToolRecovery(event, native, fixed) : null;
       const recoveryReader = event.tool_name === "mcp__sage_preparation__sage_read_assignment"
         && Object.keys(event.tool_input).length === 0;
