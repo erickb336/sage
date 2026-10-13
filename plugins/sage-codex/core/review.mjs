@@ -12,4 +12,3 @@ export function parseReviewTarget(value) {
     || !Number.isInteger(value.cycle) || value.cycle < 1 || value.cycle > 10) throw Error("Invalid review target");
   return { branch: value.branch, sha: value.sha, round: value.round, cycle: value.cycle };
 }
-
