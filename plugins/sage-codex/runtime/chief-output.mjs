@@ -1,6 +1,9 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { renderChiefInstructions } from "../core/index.mjs";
 import { readMode, updateOwnerMode } from "./mode.mjs";
+
+import { readSessionIdentity } from "./identity.mjs";
+import { nativeOwnerSessionStart } from "./owner.mjs";
 
 const stamp = state => JSON.stringify([state.owner?.epoch, state.modes.at(-1)]);
 
@@ -37,4 +40,20 @@ export function chiefInstructionParts() {
   if (part) parts.push(part);
   if (parts.length > 2 || parts.join("") !== text) throw Error("Sage chief instructions exceed the native hook budget");
   return parts.map((body, index) => `Sage chief instructions: part ${index + 1} of ${parts.length}\n\n${body}`);
+}
+
+/** Restore active chief context after the observed native compaction event. Never activate or change mode. */
+export function ownerSessionStartOutput(input, context, options, part = 0) {
+  if (!Number.isInteger(part) || part < 0 || part > 1) throw Error("Sage instruction part is unavailable");
+  if (realpathSync(options.projectDirectory) !== options.projectDirectory || input?.cwd !== options.projectDirectory)
+    throw Error("Sage owner session is unavailable");
+  const metadata = readSessionIdentity(input.transcript_path, { sessionsDir: options.sessionsDir });
+  const event = nativeOwnerSessionStart(input, context, metadata);
+  if (!event) throw Error("Sage owner session is unavailable");
+  if (event.source !== "compact") return {};
+  const current = readMode(options.directory, options.project, event.session);
+  if (!current.owner || !current.sage) return {};
+  const parts = chiefInstructionParts();
+  if (stamp(current) !== stamp(readMode(options.directory, options.project, event.session))) throw Error("Sage owner mode changed");
+  return parts[part] === undefined ? {} : { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: parts[part] } };
 }
