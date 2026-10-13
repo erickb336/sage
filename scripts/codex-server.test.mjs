@@ -2557,3 +2557,34 @@ test('native shell role enforcement blocks the chief and preserves off-mode and 
     assert.equal(calls, 1);
   }
 });
+
+test('native Sage child messages reach only the chief even when the supplied evaluator permits other targets', async t => {
+  const f = await completionFixture(t);
+  const event = target => ({ ...patch(turns[1]), tool_name: 'collaborationsend_message', tool_use_id: `message-${target.replace(/[^a-z0-9]/gi, '')}`,
+    tool_input: { target, message: 'Fixed progress report' }, transcript_path: join(f.mode.sessionsDir, `${childActor}.jsonl`) });
+  for (const target of ['/root/peer', '/root/fixture_lead/reviewer', 'peer', childActor]) {
+    const result = await f.evaluate(f.policy, event(target), childActor);
+    assert.equal(result.decision, 'deny'); assert.match(result.reason, /chief/);
+  }
+  for (const target of ['/root', session]) assert.deepEqual(await f.evaluate(f.policy, event(target), childActor), { decision: 'pass' });
+  assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+});
+test('native Sage child message restriction survives off while ordinary children and the chief retain evaluator access', async t => {
+  const f = await completionFixture(t);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const event = { ...patch(turns[1]), tool_name: 'collaborationsend_message', tool_use_id: 'off-message', tool_input: { target: '/root/peer', message: 'Fixed progress report' } };
+  assert.equal((await f.evaluate(f.policy, event, childActor)).decision, 'deny');
+  for (const actor of [session, 'a1111111-2222-4333-8444-555555555555']) {
+    assert.deepEqual(await f.evaluate(f.policy, { ...event, tool_use_id: `ordinary-${actor}` }, actor), { decision: 'pass' });
+  }
+  assert.equal(f.core.readAdmission(f.options.directory).modes.at(-1).sage, false);
+});
+test('native Sage child message permission cannot bypass malformed input or the supplied evaluator', async t => {
+  const f = await completionFixture(t);
+  const event = { ...patch(turns[1]), tool_name: 'collaborationsend_message', tool_use_id: 'checked-message', tool_input: { target: '/root', message: 'Fixed progress report' }, transcript_path: join(f.mode.sessionsDir, `${childActor}.jsonl`) };
+  for (const input of [{ target: '/root', message: '' }, { target: '/root', message: '   ' }, { target: '/root', message: 7 }, { ...event.tool_input, extra: true }]) {
+    await assert.rejects(f.evaluate(f.policy, { ...event, tool_input: input }, childActor));
+  }
+  const denied = f.createNativePolicy(f.options, () => ({ decision: 'deny', reason: 'Fixed native denial' }));
+  assert.deepEqual(await f.evaluate(denied, event, childActor), { decision: 'deny', reason: 'Fixed native denial' });
+});
