@@ -4061,3 +4061,121 @@ test('target instructions include writer scope without introducing reviewer repo
   assert(ordinary.includes('Ordinary saved work.'));
   assert(!ordinary.includes('# Saved run target')); assert(!ordinary.includes('# Review target'));
 });
+
+async function nativeContinuationFixture(t) {
+  const f = await nativeBindingFixture(t);
+  const { createHash } = await import('node:crypto');
+  const childTools = await import(new URL('../runtime/child-tool.mjs', f.url));
+  const stops = await import(new URL('../runtime/child-stop.mjs', f.url));
+  const instructions = await import(new URL('../runtime/instructions.mjs', f.url));
+  const first = f.reserve(1, 'qa', 'chief-of-staff');
+  const prior = f.bind(f.identity()).binding;
+  f.api.completeAdmission(f.journal, prior);
+  const observationsRoot = join(f.journal, '..', 'native-observations'), observations = join(observationsRoot, f.root);
+  cpSync(f.observationsDirectory, observations, { recursive: true });
+  const sessionsDir = join(f.journal, '..', 'sessions'); mkdirSync(sessionsDir);
+  const transcript = join(sessionsDir, 'child.jsonl'), sender = join(sessionsDir, 'root.jsonl');
+  const turn = '44444444-4444-4444-8444-444444444444';
+  const review = reviewTarget(), runTarget = {task:'T1',run:'R2',role:'qa',round:0,taskBranch:review.branch,runBranch:'',candidate:review.sha};
+  const prepared = f.api.prepareAdmission(f.journal, f.scope, {task:'T1',run:'R2',issuer:f.root,name:'next'},
+    {issuerRole:'chief-of-staff',role:'qa'}, completeBrief('Review the next saved assignment.'), {review,runTarget}).preparation;
+  const message = instructions.preparedTaskMessage(prepared);
+  const saved = f.api.reservePreparedContinuation(f.journal,f.scope,
+    {preparation:prepared.id,issuer:f.root,call:'followup-1',previous:first.id},
+    {tool:'collaborationfollowup_task',turn:f.activation,name:'next',argumentsHash:'b'.repeat(64),taskHash:createHash('sha256').update(message).digest('hex')},'chief-of-staff');
+  const start = value => [{type:'event_msg',payload:{type:'task_started',turn_id:value}},{type:'turn_context',payload:{turn_id:value}}];
+  const childPrefix = [{type:'session_meta',payload:{id:f.lead,session_id:f.root,parent_thread_id:f.root,agent_path:'/root/agent_1',cli_version:'0.160.0'}},
+    ...start(f.activation),{type:'event_msg',payload:{type:'task_complete',turn_id:f.activation}}];
+  const delivery = [...start(turn),{type:'response_item',payload:{type:'agent_message',id:'amsg_next',author:'/root',recipient:'/root/agent_1',content:[{type:'encrypted_content',encrypted_content:message}]}}];
+  const accepted = [{type:'session_meta',payload:{id:f.root,session_id:f.root,cli_version:'0.160.0'}},...start(f.activation),
+    {type:'response_item',metadata:{client_authored:false},payload:{type:'function_call',name:'followup_task',namespace:'collaboration',call_id:'followup-1',arguments:JSON.stringify({target:f.lead,message}),internal_chat_message_metadata_passthrough:{turn_id:f.activation}}},
+    {type:'response_item',metadata:{client_authored:false},payload:{type:'function_call_output',id:'fco_next',call_id:'followup-1',output:'',internal_chat_message_metadata_passthrough:{turn_id:f.activation}}}];
+  const save = (path, rows) => writeFileSync(path,rows.map(row=>JSON.stringify(row)+'\n').join(''));
+  save(sender,accepted); save(transcript,[...childPrefix,...delivery]);
+  f.events.publish(observations,{schema:1,runtime:'0.160.0',session:f.root,kind:'child-transcript',child:f.lead,turn:f.activation,transcript});
+  f.events.publish(observations,{schema:1,runtime:'0.160.0',session:f.root,kind:'followup-transcript',actor:f.root,call:'followup-1',turn:f.activation,target:f.lead,transcript:sender});
+  const options = {directory:f.journal,project:f.scope.project,observationsRoot,sessionsDir};
+  const native = {version:'0.160.0',actor:f.lead};
+  const input = {session:f.root,turn,transcript};
+  const bind = () => childTools.bindNativeChildTranscript(input,native,options);
+  const recover = () => childTools.recoverNativeChildDeliveries({version:'0.160.0',actor:f.root},f.root,options,saved.assignment.id);
+  const deliver = rows => save(transcript,[...childPrefix,...rows]);
+  return {...f,childTools,stops,prior,prepared,saved,review,runTarget,options,native,input,bind,recover,save,deliver,accepted,delivery,transcript,sender,turn,observations};
+}
+
+test('native continuation binding verifies both transcripts and preserves saved targets on retry', async t => {
+  const f = await nativeContinuationFixture(t);
+  const result = f.bind();
+  assert.equal(result.decision,'bound'); assert.equal(result.binding.turn,f.turn);
+  assert.deepEqual(result.review,f.review); assert.deepEqual(result.runTarget,f.runTarget);
+  assert.equal(f.bind().decision,'already-bound');
+  const state = f.api.readAdmission(f.journal);
+  assert.deepEqual(state.bindings[0],f.prior); assert.equal(state.bindings.length,2);
+  assert.equal(state.completions.length,1);
+  assert.equal(f.events.readObservations(f.observations).filter(row=>row.kind==='child-transcript').length,2);
+});
+
+test('native continuation binding refuses pending changed foreign duplicate and stale delivery evidence', async t => {
+  const f = await nativeContinuationFixture(t);
+  f.save(f.sender,f.accepted.slice(0,-1)); assert.throws(f.bind);
+  for (const mutate of [rows=>rows[3].payload.arguments=JSON.stringify({target:f.root,message:'changed'}),rows=>rows[4].metadata.client_authored=true]) {
+    const rows=structuredClone(f.accepted); mutate(rows); f.save(f.sender,rows); assert.throws(f.bind);
+  }
+  f.save(f.sender,f.accepted);
+  for (const mutate of [rows=>rows[2].payload.content[0].encrypted_content+='changed',rows=>rows[2].payload.recipient='/root/other',rows=>rows.push(structuredClone(rows[2])),
+    rows=>rows.push({type:'event_msg',payload:{type:'task_started',turn_id:'55555555-5555-4555-8555-555555555555'}})]) {
+    const rows=structuredClone(f.delivery); mutate(rows); f.deliver(rows); assert.throws(f.bind);
+  }
+  assert.equal(f.api.readAdmission(f.journal).bindings.length,1);
+  assert.equal(f.api.readAdmission(f.journal).completions.length,1);
+  f.deliver(f.delivery); assert.equal(f.bind().decision,'bound');
+});
+
+test('native continuation recovery retains pending capacity and recovers only its verified child after off', async t => {
+  const f = await nativeContinuationFixture(t);
+  f.api.changeAdmissionMode(f.journal,{...f.scope,after:f.activation,turn:'66666666-6666-4666-8666-666666666666',sage:false});
+  f.deliver([]); f.recover(); assert.equal(f.api.readAdmission(f.journal).bindings.length,1);
+  f.deliver(f.delivery); f.recover(); f.recover();
+  const state = f.api.readAdmission(f.journal);
+  assert.equal(state.bindings.length,2); assert.equal(state.completions.length,1);
+  assert.equal(state.bindings[1].assignment,f.saved.assignment.id);
+  assert.equal(f.api.completeAdmission(f.journal,f.prior).decision,'already-completed');
+  assert.equal(f.api.readAdmission(f.journal).completions.length,1);
+});
+
+function continuationTerminal(f) {
+  const text = 'Saved follow-up report.';
+  return [...f.delivery,{type:'response_item',payload:{type:'message',id:'next_report',role:'assistant',content:[{type:'output_text',text}],internal_chat_message_metadata_passthrough:{turn_id:f.turn}},
+    metadata:{client_authored:false,retained_source:{complete:true,id:{role:'assistant',turn_id:f.turn,message_id:'next_report'}}}},
+    {type:'event_msg',payload:{type:'task_complete',turn_id:f.turn,last_agent_message:text}}];
+}
+
+test('native continuation no-tool stop after off binds once and waits for terminal evidence', async t => {
+  const f = await nativeContinuationFixture(t);
+  f.api.changeAdmissionMode(f.journal,{...f.scope,after:f.activation,turn:'66666666-6666-4666-8666-666666666666',sage:false});
+  const stop={hook_event_name:'SubagentStop',session_id:f.root,agent_id:f.lead,turn_id:f.turn,transcript_path:f.sender,agent_transcript_path:f.transcript};
+  assert.equal(f.stops.completeNativeChild(stop,f.native,f.options).decision,'stop-observed');
+  assert.equal(f.api.readAdmission(f.journal).completions.length,1);
+  assert.throws(()=>f.stops.completeNativeChild({...stop,turn_id:f.activation},f.native,f.options));
+  assert.equal(f.api.readAdmission(f.journal).completions.length,1);
+  f.deliver(continuationTerminal(f));
+  assert.equal(f.stops.completeNativeChild(stop,f.native,f.options).decision,'completed');
+  assert.equal(f.stops.completeNativeChild(stop,f.native,f.options).decision,'already-completed');
+  assert.equal(f.api.readAdmission(f.journal).bindings.length,2);
+  assert.equal(f.api.readAdmission(f.journal).completions.length,2);
+});
+
+test('native continuation parent retries an unpublished transcript reference and completes exact work', async t => {
+  const f = await nativeContinuationFixture(t);
+  f.api.bindContinuationAdmission(f.journal,{...f.scope,assignment:f.saved.assignment.id,issuer:f.root,call:'followup-1',child:f.lead,turn:f.turn});
+  assert.equal(f.events.readObservations(f.observations).filter(row=>row.kind==='child-transcript').length,1);
+  f.deliver(continuationTerminal(f));
+  const reconcile=(actor,assignment=f.saved.assignment.id)=>f.stops.reconcileNativeCompletions({version:'0.160.0',actor},f.root,f.options,assignment);
+  reconcile(f.child); assert.equal(f.api.readAdmission(f.journal).completions.length,1);
+  reconcile(f.root,'unrelated'); assert.equal(f.api.readAdmission(f.journal).completions.length,1);
+  reconcile(f.root); reconcile(f.root);
+  const state=f.api.readAdmission(f.journal);
+  assert.equal(state.bindings.length,2); assert.equal(state.completions.length,2);
+  assert.equal(state.completions[1].assignment,f.saved.assignment.id);
+  assert.equal(f.events.readObservations(f.observations).filter(row=>row.kind==='child-transcript').length,2);
+});
