@@ -3668,3 +3668,77 @@ test('native continuation parent retries an unpublished transcript reference and
   assert.equal(state.completions[1].assignment,f.saved.assignment.id);
   assert.equal(f.events.readObservations(f.observations).filter(row=>row.kind==='child-transcript').length,2);
 });
+
+async function continuationReportFixture(t) {
+  const f = await nativeContinuationFixture(t);
+  const {createHash} = await import('node:crypto');
+  const reports = await import(new URL('../runtime/report-intake.mjs',f.url));
+  const recovery = await import(new URL('../runtime/report-recovery.mjs',f.url));
+  const fields = claimedReview('qa');
+  const text = Object.entries(fields).map(([key,value])=>key+'\n'+value).join('\n\n');
+  const terminal = continuationTerminal(f);
+  terminal.at(-2).payload.content[0].text=text;
+  terminal.at(-1).payload.last_agent_message=text;
+  f.deliver(terminal);
+  const parent={version:'0.160.0',actor:f.root};
+  const read=()=>reports.readChildReport({name:'next'},parent,f.options);
+  const record=reportHash=>reports.recordChildReport({name:'next',reportHash},parent,f.options);
+  const reportHash=createHash('sha256').update(text).digest('hex');
+  return {...f,reports,recovery,fields,text,terminal,parent,read,record,reportHash};
+}
+
+test('native follow-up reports reconcile exact terminal evidence and preserve one immutable receipt', async t => {
+  const f=await continuationReportFixture(t);
+  const ready=f.read();
+  assert.equal(ready.decision,'report-ready'); assert.equal(ready.assignment,f.saved.assignment.id);
+  assert.equal(ready.run,'R2'); assert.equal(ready.turn,f.turn); assert.deepEqual(ready.report,f.fields);
+  assert.equal(ready.reportHash,f.reportHash);
+  const before=f.api.readAdmission(f.journal);
+  assert.equal(before.completions.length,2); assert.equal((before.reports ?? []).length,0);
+  assert.deepEqual(f.read(),ready); assert.deepEqual(f.api.readAdmission(f.journal),before);
+  assert.equal(f.record(ready.reportHash).decision,'report-recorded');
+  assert.equal(f.record(ready.reportHash).decision,'already-recorded');
+  const after=f.api.readAdmission(f.journal);
+  assert.equal(after.reports.length,1); assert.equal(after.reports[0].binding.assignment,f.saved.assignment.id);
+  assert.deepEqual(after.reservations,before.reservations); assert.deepEqual(after.bindings,before.bindings);
+  assert.deepEqual(after.completions,before.completions); assert.deepEqual(after.modes,before.modes);
+  assert.deepEqual(after.reports[0].binding,after.bindings[1]);
+});
+
+test('native follow-up reports refuse foreign callers and changed hashes before saving claims', async t => {
+  const f=await continuationReportFixture(t);
+  assert.throws(()=>f.reports.readChildReport({name:'next'},{version:'0.160.0',actor:f.child},f.options));
+  assert.throws(()=>f.reports.readChildReport({name:'absent'},f.parent,f.options));
+  assert.throws(()=>f.record('a'.repeat(64)));
+  assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,0);
+  const ready=f.read();
+  const changed=structuredClone(f.terminal);
+  changed.at(-2).payload.content[0].text+='\nchanged'; changed.at(-1).payload.last_agent_message+='\nchanged';
+  f.deliver(changed); assert.throws(()=>f.record(ready.reportHash));
+  assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,0);
+  f.deliver(f.terminal); assert.equal(f.record(ready.reportHash).decision,'report-recorded');
+  assert.equal(f.api.readAdmission(f.journal).reports[0].reportHash,f.reportHash);
+});
+
+test('native follow-up reports retain exact recovery evidence after off and transcript removal', async t => {
+  const f=await continuationReportFixture(t);
+  f.recover();
+  f.stops.reconcileNativeCompletions(f.parent,f.root,f.options,f.saved.assignment.id);
+  const binding=f.api.readAdmission(f.journal).bindings.find(row=>row.assignment===f.saved.assignment.id);
+  const report={binding,task:'T1',run:'R2',reportMessage:'next_report',reportHash:f.reportHash,text:f.text};
+  for(const changed of [{...report,run:'R1'}, {...report,binding:{...binding,turn:f.activation}}, {...report,reportMessage:'other_report'}]) {
+    assert.throws(()=>f.recovery.recordReportRecovery(changed,f.options));
+  }
+  f.recovery.recordReportRecovery(report,f.options);
+  assert.equal(f.recovery.hasReportRecovery(report,f.options),true);
+  f.recovery.recordReportRecovery(report,f.options);
+  assert.equal(f.events.readObservations(f.observations).filter(row=>row.kind==='report-recovery-verified').length,1);
+  assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,0);
+  f.api.recordReportAdmission(f.journal,report);
+  f.api.changeAdmissionMode(f.journal,{...f.scope,after:f.activation,turn:'66666666-6666-4666-8666-666666666666',sage:false});
+  rmSync(f.transcript);
+  assert.deepEqual(f.read().report,f.fields);
+  assert.equal(f.record(f.reportHash).decision,'already-recorded');
+  assert.throws(()=>f.reports.readChildReport({name:'next'},{version:'0.160.0',actor:f.lead},f.options));
+  assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,1);
+});

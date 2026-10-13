@@ -47,7 +47,7 @@ export function recordReportRecovery(report, options) {
   const starts = observations.filter(row => row.kind === "child-start" && row.child === bound.child);
   const transcripts = observations.filter(row => row.kind === "child-transcript" && row.child === bound.child && row.turn === bound.turn);
   if (starts.length !== 1 || transcripts.length !== 1 || starts[0].parent !== bound.issuer
-    || (starts[0].turn !== bound.turn)) refuse();
+    || (!assigned.continuation && starts[0].turn !== bound.turn)) refuse();
   const path = starts[0].path;
   const evidence = readNativeReport(transcripts[0].transcript, { sessionsDir: options.sessionsDir, requireRecovery: true }, {
     session, child: bound.child, parent: bound.issuer, path, author: path.slice(0, path.lastIndexOf("/")),
