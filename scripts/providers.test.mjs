@@ -2014,59 +2014,6 @@ syncBuiltinESMExports();\n`);
   }
 });
 
-test("shared shell write classification detects writes without executing payloads in either bundle", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.equal(typeof commandWrites, "function");
-    // All strings below reach the parser only. None reaches a shell or interpreter.
-    for (const command of [
-      "printf fixed > ledger.tsv", "cat <> ledger.tsv", "echo fixed >& ledger.tsv",
-      "cp source target", "rm target", "ln source target", "uniq source target", "less -o target source",
-      "sed -i s/a/b/ target", "perl -pi -e x target", "awk -i inplace x target",
-      "sort --out=target source", "find . -delete", "find . -exec touch target ;",
-      "node -e 'writeFileSync(\"target\",\"fixed\")'", "python -c 'open(\"target\",\"w\")'",
-      "source script", "eval fixed", "exec fixed", "Set-Content target fixed",
-      "Out-File target", "New-Item target", "echo $(touch target)", "echo fixed | tee target",
-    ]) assert.equal(commandWrites(command, f.dir), true, command);
-    for (const command of ["cat ledger.tsv", "echo touch target", "printf rm", "grep -e tee ledger.tsv",
-      "cat < ledger.tsv", "echo fixed >/dev/null", "echo fixed >&2", "ls .", "jq . ledger.json"])
-      assert.equal(commandWrites(command, f.dir), false, command);
-    assert.equal(existsSync(join(f.dir, "target")), false);
-    assert.equal(existsSync(join(f.dir, "ledger.tsv")), false);
-  }
-});
-
-test("shared shell reader options preserve option values and function dispatch in either bundle", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.equal(typeof commandWrites, "function");
-    for (const command of ["rg --pre cat x", "rg --pre-glob '*.txt' x", "rg --search-zip x", "rg -z x",
-      "rg --hostname-bin program x", "file -C -m magic", "file --comp magic", "file -z ordinary",
-      "diff --paginate left right", "diff --pa left right", "diff -l left right",
-      "env rg --pre cat x", "LANG=C rg --pre cat x", "f() { rg --pre cat x; }; f",
-      "rg() { :; }; command rg --pre cat x"])
-      assert.equal(commandWrites(command, f.dir), true, command);
-    for (const command of ["rg -e --pre x", "rg -e--pre x", "rg --regexp=--pre x", "rg -- --pre x",
-      "rg --no-pre x", "file -m --compile ordinary", "file -- --compile", "diff -L --paginate left right",
-      "diff --label=--paginate left right", "diff -- --paginate right", "echo rg --pre cat x",
-      "rg() { :; }; rg --pre cat x", "f() { env rg --pre cat x; }; env() { :; }; f"])
-      assert.equal(commandWrites(command, f.dir), false, command);
-  }
-});
-
-test("shared shell write classification refuses unreadable input in either bundle", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.equal(typeof commandWrites, "function");
-    for (const command of ["echo 'unfinished", "$(unfinished", null, {}, undefined])
-      assert.equal(commandWrites(command, f.dir), true, JSON.stringify(command));
-    assert.equal(commandWrites("", f.dir), false);
-  }
-});
-
 test("shared protected paths check new files, ancestors, case folding and symlink parent traversal", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
@@ -2146,94 +2093,56 @@ test("shared protected paths use validated values despite custom array methods",
   }
 });
 
-test("shared shell paths refuse literal protected writes and preserve ordinary reads in both bundles", async t => {
+test("shared shell write classification detects writes without executing payloads in either bundle", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
-    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.equal(typeof shellWriteOutsideRoots, "function");
-    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
-    // Parser inputs only: no payload below is executed.
-    for (const command of [`printf fixed > ${root}/ledger.tsv`, `cp source ${root}/ledger.tsv`,
-      `rm -rf ${root}`, `sort --output=${root}/ledger.tsv source`, `env SAGE_HOME=${root} touch target`,
-      `node -e 'writeFileSync("${root}/ledger.tsv", "fixed")'`]) assert.equal(check(command), false, command);
-    for (const command of ["printf fixed > ordinary.txt", "cp source target", "touch ordinary.txt", `cat ${root}/ledger.tsv`])
-      assert.equal(check(command), true, command);
-    assert.equal(existsSync(join(root, "ledger.tsv")), false);
-    assert.equal(existsSync(join(cwd, "ordinary.txt")), false);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    // All strings below reach the parser only. None reaches a shell or interpreter.
+    for (const command of [
+      "printf fixed > ledger.tsv", "cat <> ledger.tsv", "echo fixed >& ledger.tsv",
+      "cp source target", "rm target", "ln source target", "uniq source target", "less -o target source",
+      "sed -i s/a/b/ target", "perl -pi -e x target", "awk -i inplace x target",
+      "sort --out=target source", "find . -delete", "find . -exec touch target ;",
+      "node -e 'writeFileSync(\"target\",\"fixed\")'", "python -c 'open(\"target\",\"w\")'",
+      "source script", "eval fixed", "exec fixed", "Set-Content target fixed",
+      "Out-File target", "New-Item target", "echo $(touch target)", "echo fixed | tee target",
+    ]) assert.equal(commandWrites(command, f.dir), true, command);
+    for (const command of ["cat ledger.tsv", "echo touch target", "printf rm", "grep -e tee ledger.tsv",
+      "cat < ledger.tsv", "echo fixed >/dev/null", "echo fixed >&2", "ls .", "jq . ledger.json"])
+      assert.equal(commandWrites(command, f.dir), false, command);
+    assert.equal(existsSync(join(f.dir, "target")), false);
+    assert.equal(existsSync(join(f.dir, "ledger.tsv")), false);
   }
 });
 
-test("shared shell paths use directory and alias evidence and refuse unresolved write paths", async t => {
+test("shared shell reader options preserve option values and function dispatch in either bundle", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
-    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.equal(typeof shellWriteOutsideRoots, "function");
-    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-    symlinkSync(root, join(cwd, "linked")); writeFileSync(join(root, "ledger.tsv"), "fixed");
-    linkSync(join(root, "ledger.tsv"), join(cwd, "hard"));
-    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
-    for (const command of ["printf fixed > linked/ledger.tsv", "printf fixed > hard", "cd ../logbook && touch new.tsv",
-      "cd $UNKNOWN && touch new.tsv", "touch $UNKNOWN", "touch link*", "touch har*", "touch ~/file", "sort -olinked/ledger.tsv input",
-      "sort -ohard input", "printf() { touch fixed; }; printf linked/ledger.tsv", "echo 'unfinished"])
-      assert.equal(check(command), false, command);
-    assert.equal(check("cd . && touch ordinary.txt"), true);
-    assert.equal(check("touch ordinary*"), true);
-    assert.equal(check("sort -oordinary.txt input"), true);
-    assert.equal(check("printf '%s' '{\"name\":\"fixed\"}' > config.json"), true);
-    assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    for (const command of ["rg --pre cat x", "rg --pre-glob '*.txt' x", "rg --search-zip x", "rg -z x",
+      "rg --hostname-bin program x", "file -C -m magic", "file --comp magic", "file -z ordinary",
+      "diff --paginate left right", "diff --pa left right", "diff -l left right",
+      "env rg --pre cat x", "LANG=C rg --pre cat x", "f() { rg --pre cat x; }; f",
+      "rg() { :; }; command rg --pre cat x"])
+      assert.equal(commandWrites(command, f.dir), true, command);
+    for (const command of ["rg -e --pre x", "rg -e--pre x", "rg --regexp=--pre x", "rg -- --pre x",
+      "rg --no-pre x", "file -m --compile ordinary", "file -- --compile", "diff -L --paginate left right",
+      "diff --label=--paginate left right", "diff -- --paginate right", "echo rg --pre cat x",
+      "rg() { :; }; rg --pre cat x", "f() { env rg --pre cat x; }; env() { :; }; f"])
+      assert.equal(commandWrites(command, f.dir), false, command);
   }
 });
 
-test("shared shell paths validate context before read-only or malformed commands", async t => {
+test("shared shell write classification refuses unreadable input in either bundle", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
-    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.equal(typeof shellWriteOutsideRoots, "function");
-    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-    for (const command of [null, {}, "echo 'unfinished"])
-      assert.equal(shellWriteOutsideRoots({ command, cwd, roots: [root] }), false);
-    assert.throws(() => shellWriteOutsideRoots({ command: "cat ordinary", cwd: "relative", roots: [root] }));
-    assert.throws(() => shellWriteOutsideRoots({ command: "cat ordinary", cwd, roots: Array(1) }));
-  }
-});
-
-test("shared shell paths retain protected roots despite custom array methods", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.equal(typeof shellWriteOutsideRoots, "function");
-    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-    let customMethodCalled = false;
-    const roots = [root];
-    roots.some = () => { customMethodCalled = true; return false; };
-    roots[Symbol.iterator] = function* () { customMethodCalled = true; };
-    // This string is parser input only. It never reaches an interpreter.
-    const command = `node -e 'writeFileSync("${root}/ledger.tsv", "fixed")'`;
-    assert.equal(shellWriteOutsideRoots({ command, cwd, roots }), false);
-    assert.equal(customMethodCalled, false);
-    assert.equal(existsSync(join(root, "ledger.tsv")), false);
-  }
-});
-
-test("shared shell paths keep literal equals signs in operands and redirections", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.equal(typeof shellWriteOutsideRoots, "function");
-    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-    symlinkSync(root, join(cwd, "linked"));
-    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
-    // Parser inputs only. '=' is part of these file names, not an assignment delimiter.
-    for (const command of [`touch ${root}/a=b`, `printf fixed > ${root}/a=b`,
-      "touch linked/a=b", "printf fixed > linked/a=b", "sort -olinked/a=b input",
-      "sort --output=linked/a=b input", `env OUT=${root}/a=b touch target`])
-      assert.equal(check(command), false, command);
-    for (const command of ["touch ordinary=a", "printf fixed > ordinary=a",
-      "sort -oordinary=a input", "sort --output=ordinary=a input", "env OUT=ordinary=a touch target"])
-      assert.equal(check(command), true, command);
-    assert.equal(existsSync(join(root, "a=b")), false);
-    assert.equal(existsSync(join(cwd, "ordinary=a")), false);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    for (const command of ["echo 'unfinished", "$(unfinished", null, {}, undefined])
+      assert.equal(commandWrites(command, f.dir), true, JSON.stringify(command));
+    assert.equal(commandWrites("", f.dir), false);
   }
 });
 
@@ -2416,4 +2325,95 @@ test("native deadline does not signal an exited child while output closure is pe
   child.emit("close", 0, null);
   assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline" });
   assert.deepEqual(signals, []);
+});
+
+test("shared shell paths refuse literal protected writes and preserve ordinary reads in both bundles", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
+    // Parser inputs only: no payload below is executed.
+    for (const command of [`printf fixed > ${root}/ledger.tsv`, `cp source ${root}/ledger.tsv`,
+      `rm -rf ${root}`, `sort --output=${root}/ledger.tsv source`, `env SAGE_HOME=${root} touch target`,
+      `node -e 'writeFileSync("${root}/ledger.tsv", "fixed")'`]) assert.equal(check(command), false, command);
+    for (const command of ["printf fixed > ordinary.txt", "cp source target", "touch ordinary.txt", `cat ${root}/ledger.tsv`])
+      assert.equal(check(command), true, command);
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+    assert.equal(existsSync(join(cwd, "ordinary.txt")), false);
+  }
+});
+
+test("shared shell paths use directory and alias evidence and refuse unresolved write paths", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    symlinkSync(root, join(cwd, "linked")); writeFileSync(join(root, "ledger.tsv"), "fixed");
+    linkSync(join(root, "ledger.tsv"), join(cwd, "hard"));
+    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
+    for (const command of ["printf fixed > linked/ledger.tsv", "printf fixed > hard", "cd ../logbook && touch new.tsv",
+      "cd $UNKNOWN && touch new.tsv", "touch $UNKNOWN", "touch link*", "touch har*", "touch ~/file", "sort -olinked/ledger.tsv input",
+      "sort -ohard input", "printf() { touch fixed; }; printf linked/ledger.tsv", "echo 'unfinished"])
+      assert.equal(check(command), false, command);
+    assert.equal(check("cd . && touch ordinary.txt"), true);
+    assert.equal(check("touch ordinary*"), true);
+    assert.equal(check("sort -oordinary.txt input"), true);
+    assert.equal(check("printf '%s' '{\"name\":\"fixed\"}' > config.json"), true);
+    assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
+  }
+});
+
+test("shared shell paths validate context before read-only or malformed commands", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    for (const command of [null, {}, "echo 'unfinished"])
+      assert.equal(shellWriteOutsideRoots({ command, cwd, roots: [root] }), false);
+    assert.throws(() => shellWriteOutsideRoots({ command: "cat ordinary", cwd: "relative", roots: [root] }));
+    assert.throws(() => shellWriteOutsideRoots({ command: "cat ordinary", cwd, roots: Array(1) }));
+  }
+});
+
+test("shared shell paths retain protected roots despite custom array methods", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    let customMethodCalled = false;
+    const roots = [root];
+    roots.some = () => { customMethodCalled = true; return false; };
+    roots[Symbol.iterator] = function* () { customMethodCalled = true; };
+    // This string is parser input only. It never reaches an interpreter.
+    const command = `node -e 'writeFileSync("${root}/ledger.tsv", "fixed")'`;
+    assert.equal(shellWriteOutsideRoots({ command, cwd, roots }), false);
+    assert.equal(customMethodCalled, false);
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+  }
+});
+
+test("shared shell paths keep literal equals signs in operands and redirections", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    symlinkSync(root, join(cwd, "linked"));
+    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
+    // Parser inputs only. '=' is part of these file names, not an assignment delimiter.
+    for (const command of [`touch ${root}/a=b`, `printf fixed > ${root}/a=b`,
+      "touch linked/a=b", "printf fixed > linked/a=b", "sort -olinked/a=b input",
+      "sort --output=linked/a=b input", `env OUT=${root}/a=b touch target`])
+      assert.equal(check(command), false, command);
+    for (const command of ["touch ordinary=a", "printf fixed > ordinary=a",
+      "sort -oordinary=a input", "sort --output=ordinary=a input", "env OUT=ordinary=a touch target"])
+      assert.equal(check(command), true, command);
+    assert.equal(existsSync(join(root, "a=b")), false);
+    assert.equal(existsSync(join(cwd, "ordinary=a")), false);
+  }
 });
