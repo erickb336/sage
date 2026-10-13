@@ -4236,3 +4236,62 @@ test("native failed dispatch rejects post-terminal evidence and preserves histor
     assert.deepEqual(f.core.readAdmission(f.options.directory), saved);
   }
 });
+
+test('native command policy rechecks pending evidence after an awaited evaluator', async t => {
+  for (const sage of [true, false]) {
+    for (const change of ['complete', 'interrupt', 'result', 'arguments']) {
+      const f = await composedPolicyFixture(t);
+      if (!sage) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+      const { input } = commandPolicyInput(f, session, 'printf fixed', sage ? turns[0] : turns[2]);
+      let entered, release;
+      const waiting = new Promise(resolve => { entered = resolve; });
+      const resume = new Promise(resolve => { release = resolve; });
+      const policy = f.createNativePolicy(f.options, async () => { entered(); await resume; return { decision: 'pass' }; });
+      const pending = f.evaluate(policy, input);
+      await waiting;
+      if (change === 'arguments') {
+        const rows = readFileSync(input.transcript_path, 'utf8').trim().split('\n').map(JSON.parse);
+        const args = JSON.parse(rows.at(-1).payload.arguments); args.workdir = join(f.dir, 'changed');
+        rows.at(-1).payload.arguments = JSON.stringify(args);
+        writeFileSync(input.transcript_path, rows.map(row => JSON.stringify(row) + '\n').join(''));
+      } else {
+        const row = change === 'result'
+          ? { type: 'response_item', payload: { type: 'function_call_output', call_id: input.tool_use_id, output: 'fixed' } }
+          : { type: 'event_msg', payload: { type: change === 'complete' ? 'task_complete' : 'turn_aborted', turn_id: input.turn_id } };
+        appendFileSync(input.transcript_path, JSON.stringify(row) + '\n');
+      }
+      release();
+      await assert.rejects(pending);
+    }
+  }
+});
+
+test('native command policy gives the evaluator a separate copy of command inputs', async t => {
+  const f = await composedPolicyFixture(t), { input, envelope } = commandPolicyInput(f);
+  const before = readFileSync(input.transcript_path, 'utf8');
+  const policy = f.createNativePolicy(f.options, (_input, context) => {
+    assert.deepEqual(context.command, envelope);
+    context.command.workdir = 'callback-local-change';
+    return { decision: 'pass' };
+  });
+  assert.deepEqual(await f.evaluate(policy, input), { decision: 'pass' });
+  assert.equal(readFileSync(input.transcript_path, 'utf8'), before);
+});
+
+test('native off-mode child command needs no observation directory and refuses invalid stored evidence', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const directory = join(f.options.observationsRoot, session);
+  assert.equal(existsSync(directory), false);
+  const policy = f.createNativePolicy(f.options, (_input, context) => {
+    evaluated++; assert.equal(context.command.cmd, 'printf fixed'); return { decision: 'pass' };
+  });
+  const { input } = commandPolicyInput(f, childActor, 'printf fixed', turns[1], 'unassigned native child');
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, 'pass');
+  assert.equal(existsSync(directory), false);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, 'unexpected.json'), '{}');
+  await assert.rejects(f.evaluate(policy, input, childActor), /unexpected published entry/);
+  assert.equal(evaluated, 1);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+});

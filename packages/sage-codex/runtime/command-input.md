@@ -28,3 +28,26 @@ later policy checks. The decoder does not select a shell, resolve a directory,
 approve a prefix, widen a sandbox, or permit a command. The complete evaluator
 must check effective execution context and all requested permission changes.
 No installed entry point or automatic workflow is enabled by this component.
+
+## Original native command evidence
+
+The composed native policy now connects the protected command reader to this decoder.
+Codex 0.160.0 hooks expose a `Bash` tool with command text only.
+The policy recovers the original pending `exec_command` arguments before it calls its evaluator.
+It verifies the authenticated actor, session, active turn, call ID, command text, and native metadata.
+The evaluator receives a separate copy in `context.command`.
+
+This check applies with Sage on or off. An admitted child uses its recorded native identity.
+An unassigned off-mode child uses its verified native transcript without creating an admission record.
+Missing, conflicting, completed, interrupted, or malformed evidence refuses before evaluation.
+After an asynchronous evaluator permits a command, the policy verifies the pending call again.
+Changed arguments or a finished turn cannot retain the earlier permission.
+
+The recovered values describe the requested command. They do not prove the effective shell,
+working directory, remote environment, or sandbox defaults. This component does not grant
+command permission or activate installed Sage. The native probe uses CLI 0.160.0 with simulated responses in a temporary profile.
+It verifies explicit and default arguments, denial before execution, and Sage-off input.
+Run `node scripts/probe-codex-command.mjs`; add `--deny-command`, `--default-command`,
+or `--extended-command --sage-off` for the other routes. Use fake process tools first on PATH.
+The fixed harmless command verifies its real output and working directory. The probe
+checks the evaluator receipt against every requested field and removes its temporary profile.
