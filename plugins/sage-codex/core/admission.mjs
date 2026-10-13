@@ -443,7 +443,10 @@ export const reserveRoleAdmission = (dir, scope, request, dispatch, rolePlan) =>
 export const reserveBriefAdmission = (dir, scope, request, dispatch, rolePlan, brief) => commit(dir,
   { kind: "reserve", assignment: createAssignment(scope, request), dispatch, rolePlan: parseRolePlan(rolePlan), uniqueName: true, brief: parseBrief(brief) });
 /** Save instructions before the native dispatch call exists. No capacity or permission is granted. */
-export function prepareAdmission(dir, scope, request, rolePlan, brief, review, runTarget, continuation) {
+export function prepareAdmission(dir, scope, request, rolePlan, brief, options = {}) {
+  const keys = ["review", "runTarget", "continuation"].filter(key => Object.hasOwn(options ?? {}, key));
+  fields(options, keys);
+  const { review, runTarget, continuation } = options;
   fields(request, ["task", "run", "issuer", "name"]);
   const { call, ...identity } = createAssignment(scope, { task: request.task, run: request.run, issuer: request.issuer, call: request.name });
   return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief, ...(review === undefined ? {} : { review }), ...(runTarget === undefined ? {} : { runTarget }), ...(continuation === undefined ? {} : { continuation }) } });

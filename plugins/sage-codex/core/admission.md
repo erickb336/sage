@@ -115,11 +115,12 @@ remain integration work. State files stay private to the local Sage store.
 
 ## Prepare a task before dispatch
 
-`prepareAdmission(directory, scope, request, rolePlan, brief, review, runTarget, continuation)` saves the task,
+`prepareAdmission(directory, scope, request, rolePlan, brief, options)` saves the task,
 run, issuer, unique child name, role plan, and complete brief. The request has
 `task`, `run`, `issuer`, and `name`. The trusted adapter supplies the current
 scope and issuer role. A preparation ID is a reference, not proof of authority.
-The optional `review` field keeps the exact review target. The optional
+The options object can carry `review`, `runTarget`, and `continuation`.
+Unknown option fields refuse. The optional `review` field keeps the exact review target. The optional
 `runTarget` field saves `task`, `run`, `role`, `round`, `taskBranch`, `runBranch`,
 and `candidate`. Task, run, and role must match the preparation. The remaining
 fields preserve the captured logbook values. A changed target is different work,

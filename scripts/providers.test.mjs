@@ -2082,7 +2082,7 @@ test("shared review targets persist once and reject malformed scopes or non-revi
   const review = { branch: "codex/t1-review", sha: "a".repeat(40), round: 0, cycle: 1 };
   const plan = { issuerRole: "chief-of-staff", role: "code-reviewer" };
   const brief = completeBrief("Review the fixed commit.");
-  const save = (target = review, role = plan, request = f.request) => f.api.prepareAdmission(f.journal, f.scope, request, role, brief, target);
+  const save = (target = review, role = plan, request = f.request) => f.api.prepareAdmission(f.journal, f.scope, request, role, brief, { review: target });
   const first = save();
   assert.deepEqual(first.preparation.review, review);
   assert.equal(save().decision, "already-prepared");
@@ -2508,7 +2508,7 @@ test('prepared run target is immutable and persists in both isolated provider bu
     const request = { task: 'T1', run: 'R1', issuer: 'root', name: 'pinned' };
     const plan = { issuerRole: 'chief-of-staff', role: 'lead' }, brief = completeBrief('Use the saved target.');
     const target = { task: 'T1', run: 'R1', role: 'lead', round: 0, taskBranch: 'codex/t1-work', runBranch: '', candidate: '' };
-    const prepare = value => f.api.prepareAdmission(f.journal, f.scope, request, plan, brief, undefined, value);
+    const prepare = value => f.api.prepareAdmission(f.journal, f.scope, request, plan, brief, { runTarget: value });
     const saved = prepare(target).preparation;
     assert.deepEqual(saved.runTarget, target);
     assert.equal(prepare({ ...target }).decision, 'already-prepared');
@@ -2529,7 +2529,7 @@ test('prepared run target rejects malformed or mismatched assignment fields befo
     { ...target, taskBranch: 1 }, { ...target, runBranch: 'x'.repeat(4097) }]) {
     assert.throws(() => f.api.prepareAdmission(f.journal, f.scope,
       { task: 'T1', run: 'R1', issuer: 'root', name: 'pinned' },
-      { issuerRole: 'chief-of-staff', role: 'lead' }, completeBrief('Use the saved target.'), undefined, value));
+      { issuerRole: 'chief-of-staff', role: 'lead' }, completeBrief('Use the saved target.'), { runTarget: value }));
   }
   assert.equal(f.api.readAdmission(f.journal).preparations.length, 0);
 });
@@ -2543,8 +2543,7 @@ async function continuationFixture(t, provider = 'codex', complete = true) {
   if (complete) f.api.completeAdmission(f.journal, prior);
   const prepare = (n, changes = {}, role = 'lead', target = true) => {
     const request = { task: 'T1', run: `R${n}`, issuer: 'root', name: `continue-${n}`, ...changes };
-    return f.api.prepareAdmission(f.journal, f.scope, request, { issuerRole: 'chief-of-staff', role }, completeBrief('Continue this task.'), undefined,
-      target ? { task: request.task, run: request.run, role, round: 0, taskBranch: '', runBranch: '', candidate: '' } : undefined).preparation;
+    return f.api.prepareAdmission(f.journal, f.scope, request, { issuerRole: 'chief-of-staff', role }, completeBrief('Continue this task.'), target ? { runTarget: { task: request.task, run: request.run, role, round: 0, taskBranch: '', runBranch: '', candidate: '' } } : {}).preparation;
   };
   const args = (prepared, previous = first.assignment.id, call = `call-${prepared.name}`) => [f.journal, f.scope,
     { preparation: prepared.id, issuer: 'root', call, previous },
@@ -2629,7 +2628,9 @@ test('continuation admission gives one permit when two processes compete for the
       try { assert.equal(code, 0, stderr); assert.equal(stderr, ''); resolve(JSON.parse(stdout)); } catch (e) { reject(e); }
     }); child.stdin.end();
   });
-  const result = await Promise.all(proposals.map(run));
+  const settled = await Promise.allSettled(proposals.map(run));
+  for (const row of settled) assert.equal(row.status, "fulfilled", row.reason?.message);
+  const result = settled.map(row => row.value);
   assert.equal(result.filter(row => row.decision === 'permit-once').length, 1);
   assert.equal(result.filter(row => /predecessor already has later work/.test(row.refused)).length, 1);
   assert.equal(f.api.readAdmission(f.journal).reservations.length, 2);
@@ -2662,8 +2663,8 @@ test('continuation admission resumes the same lead with its running children and
   f.api.completeAdmission(f.journal, lead);
   const prepared = f.api.prepareAdmission(f.journal, f.scope,
     { task: 'T1', run: 'R4', issuer: 'root', name: 'resumed-lead' }, { issuerRole: 'chief-of-staff', role: 'lead' },
-    completeBrief('Continue with the existing team.'), undefined,
-    { task: 'T1', run: 'R4', role: 'lead', round: 0, taskBranch: '', runBranch: '', candidate: '' }).preparation;
+    completeBrief('Continue with the existing team.'),
+    { runTarget: { task: 'T1', run: 'R4', role: 'lead', round: 0, taskBranch: '', runBranch: '', candidate: '' } }).preparation;
   const resumed = f.api.reservePreparedContinuation(f.journal, f.scope,
     { preparation: prepared.id, previous: first.assignment.id, issuer: 'root', call: 'resume-lead' },
     { tool: 'followup', turn: 'parent-turn', name: prepared.name, argumentsHash: 'b'.repeat(64), taskHash: 'c'.repeat(64) }, 'chief-of-staff');
@@ -2684,7 +2685,7 @@ test('continuation preparation pins its predecessor and prevents conversion to a
     const request = { task: 'T1', run: 'R2', issuer: 'root', name: 'pinned-continuation' };
     const plan = { issuerRole: 'chief-of-staff', role: 'lead' }, brief = completeBrief('Continue the saved work.');
     const target = { task: 'T1', run: 'R2', role: 'lead', round: 0, taskBranch: '', runBranch: '', candidate: '' };
-    const prepare = previous => f.api.prepareAdmission(f.journal, f.scope, request, plan, brief, undefined, target, previous);
+    const prepare = previous => f.api.prepareAdmission(f.journal, f.scope, request, plan, brief, { runTarget: target, continuation: previous });
     const saved = prepare(f.first.assignment.id).preparation;
     assert.equal(saved.continuation, f.first.assignment.id);
     assert.equal(prepare(f.first.assignment.id).decision, 'already-prepared');
@@ -2695,6 +2696,19 @@ test('continuation preparation pins its predecessor and prevents conversion to a
   }
 });
 
+
+
+
+test('continuation preparation options reject unknown or malformed fields without changing the journal', async t => {
+  const f = await roleAdmissionFixture(t);
+  const before = f.api.readAdmission(f.journal);
+  for (const options of [null, [], true, {unknown:true}, {continuation:'not-an-assignment'}, {runTarget:null}]) {
+    assert.throws(() => f.api.prepareAdmission(f.journal, f.scope,
+      {task:'T1',run:'R2',issuer:'root',name:'invalid-options'},
+      {issuerRole:'chief-of-staff',role:'lead'}, completeBrief('Keep the current task.'), options));
+    assert.deepEqual(f.api.readAdmission(f.journal), before);
+  }
+});
 
 test("Codex advice refuses linked or public state directories and cannot overwrite a linked target", t => {
   const { dir, plugin } = isolated(t, "codex");

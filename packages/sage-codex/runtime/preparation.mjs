@@ -71,7 +71,8 @@ export function prepareNativeTask(input, context, options) {
   const review = reviewRole && options.logbookRoot ? captureReview(options, input, input.reviewCycle) : undefined;
   const result = prepareAdmission(options.directory, scope,
     { task: input.task, run: input.run, issuer: native.actor, name: input.name },
-    { issuerRole: role, role: input.role }, input.brief, review, runTarget, hasPrevious ? input.previous : undefined);
+    { issuerRole: role, role: input.role }, input.brief,
+    { review, runTarget, ...(hasPrevious ? { continuation: input.previous } : {}) });
   const saved = result.preparation;
   return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role, message: preparedTaskMessage(saved), ...(previous ? { target: previous.child, previous: input.previous } : { fork_turns: "none" }), ...(saved.review ? { review: saved.review } : {}) };
 }
