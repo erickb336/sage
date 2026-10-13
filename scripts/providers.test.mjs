@@ -368,6 +368,8 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
       'gh api graphql -f "query=$QUERY"',
       'gh api "https://$DEST" -X PATCH -f sha=abc',
       'gh api "https://{branch}" -X PATCH -f sha=abc',
+      'gh api "https://{branch}@github.com" -X PUT -f content=abc',
+      "gh api 'https://api.github.com/{branch}/../repos/o/r/issues' -X PATCH -f sha=abc",
       'gh api "$ENDPOINT" -X PATCH -f sha=abc',
       'gh api "repos/o/r/$RESOURCE/heads/main" -X PATCH -f sha=abc',
       "gh api --method DELETE repos/o/r/git/refs/heads/main",
@@ -380,6 +382,7 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
       String.raw`gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: "\u006dain"}}) { clientMutationId } }'`,
     ]) assert.match(policy.pushProblem(command, f.dir), /work reaches main only through a pull request|the hook cannot prove that this command is only the merge command|the hook cannot establish the GitHub API command's destination/, `${provider}: ${command}`);
     for (const command of [
+      "gh api 'https://api.github.com/repos/{owner}/{repo}/git/refs/heads/topic' -X PATCH -f sha=abc",
       "gh api 'repos/{owner}/{repo}/git/refs/heads/topic' -X PATCH -f sha=abc",
       "gh api 'repos/:owner/:repo/git/refs/heads/topic' -X PATCH -f sha=abc",
       "gh api 'repos/o/r/{branch}' -X GET",
