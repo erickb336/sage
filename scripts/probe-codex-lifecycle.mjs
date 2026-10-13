@@ -15,9 +15,11 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-child-repeat-recovery", "--sage-child-recovery", "--sage-child-compaction", "--sage-child-sandbox", "--sage-child-message", "--sage-interruption", "--sage-followup-missed-callbacks", "--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-followup-recovery", "--sage-child-repeat-recovery", "--sage-child-recovery", "--sage-child-compaction", "--sage-child-sandbox", "--sage-child-message", "--sage-interruption", "--sage-followup-missed-callbacks", "--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const followupRecovery = process.argv.includes("--sage-followup-recovery");
+let followupRecoveryPhase = 0, followupRecoveryVerified = false;
 const repeatChildRecovery = process.argv.includes("--sage-child-repeat-recovery");
 const childRecovery = repeatChildRecovery || process.argv.includes("--sage-child-recovery");
 const childCompaction = childRecovery || process.argv.includes("--sage-child-compaction");
@@ -37,7 +39,7 @@ const unobservedFollowup = process.argv.includes("--sage-followup-missed-callbac
 const missedStop = unobservedFollowup || process.argv.includes("--sage-missed-stop");
 const followupNoTool = unobservedFollowup || process.argv.includes("--sage-followup-no-tool");
 const resumedFailure = process.argv.includes("--sage-followup-failed-child");
-const sageFollowup = resumedFailure || followupNoTool || missedStop || process.argv.includes("--sage-followup");
+const sageFollowup = followupRecovery || resumedFailure || followupNoTool || missedStop || process.argv.includes("--sage-followup");
 assert(!sageFollowup || process.argv.slice(2).length === 1, "sage_followup_is_a_separate_route");
 let sageFollowupVerified = false;
 let resumedFailureStep = 0, resumedFailureVerified = false;
@@ -135,7 +137,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport || resumedFailure,nestedReview:nestedReport || resumedFailure,blockStop,captureFailure:failedSpawn,emptyLogbook:createRun,taskLifecycle,omitStop:missedStop,captureCompaction:childCompaction,restoreCompaction:childCompaction,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport || resumedFailure,nestedReview:nestedReport || resumedFailure,blockStop,captureFailure:failedSpawn,emptyLogbook:createRun,taskLifecycle,omitStop:missedStop,captureCompaction:childCompaction || followupRecovery,restoreCompaction:childCompaction || followupRecovery,deadlineMs});
   const initialLogbook = sage || sageOff ? integrated.readLogbook() : null;
   if (createRun) { assert.equal(initialLogbook.tasks.length, 0); assert.equal(initialLogbook.runs.length, 0); }
   if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
@@ -263,7 +265,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     }
     events.push(
       { type: "response.output_item.done", output_index: 0, item },
-      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: childCompaction && [calls.childControl, calls.childRecompact].includes(item.call_id) ? 200000 : 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: childCompaction && [calls.childControl, calls.childRecompact].includes(item.call_id) ? 200000 : 0 } } },
+      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: (childCompaction && [calls.childControl, calls.childRecompact].includes(item.call_id) || followupRecovery && item.call_id === calls.followupControl) ? 200000 : 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: (childCompaction && [calls.childControl, calls.childRecompact].includes(item.call_id) || followupRecovery && item.call_id === calls.followupControl) ? 200000 : 0 } } },
     );
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "close" });
     for (const event of events) res.write(`event: ${event.type}
@@ -301,12 +303,58 @@ data: ${JSON.stringify(event)}
       try { request = JSON.parse(body); } catch { throw new Error("invalid_request_json"); }
       body = "";
       responseRequests++;
-      if (childCompaction && textValues(request.input).some(text => text.includes("SAGE_CHILD_COMPACT_REQUEST"))) {
+      if ((childCompaction || followupRecovery) && textValues(request.input).some(text => text.includes("SAGE_CHILD_COMPACT_REQUEST"))) {
         check(req.headers["thread-id"] === childThread, "compaction_wrong_child");
         check(++childCompactionRequests <= (repeatChildRecovery ? 2 : 1), "unexpected_child_compaction_count");
         respond(res, message("SAGE_CHILD_COMPACT_SUMMARY: Continue the fixed child probe.")); return;
       }
       const info = inspectRequest(request);
+      if (followupRecovery && childCompactionRequests && req.headers["thread-id"] === childThread) {
+        const state = integrated.readJournal(), binding = state.bindings[1];
+        check(state.bindings.length === 2 && state.reservations.length === 2
+          && state.completions.length === 1 && binding.child === childThread
+          && binding.turn !== state.bindings[0].turn, "followup_recovery_wrong_assignment");
+        const transcript = JSON.parse(readFileSync(join(root, `child-path-${childThread}.json`), "utf8"));
+        const expected = { session: rootThread, child: childThread, parent: rootThread, path: taskName,
+          author: "/root", turn: binding.turn, taskHash: createHash("sha256").update(FOLLOWUP_PROMPT).digest("hex") };
+        const recovery = readNativeRecovery(transcript, { sessionsDir: join(codexHome, "sessions") }, expected);
+        childRequests++;
+        if (followupRecoveryPhase === 0) {
+          check(recovery.required && recovery.compaction && recovery.call === null,
+            "followup_compaction_did_not_require_recovery");
+          check(!textValues(request.input).some(text => text.includes(FOLLOWUP_PROMPT)),
+            "followup_assignment_not_removed_by_compaction");
+          followupRecoveryPhase = 1;
+          respond(res, { type: "function_call", name: "list_mcp_resources", call_id: calls.childUnrecovered, arguments: "{}" });
+        } else if (followupRecoveryPhase === 1) {
+          check(String(info.outputs[calls.childUnrecovered]).includes("Read your current assignment with sage_read_assignment"),
+            "followup_unrecovered_tool_not_denied");
+          check(info.assignmentTools.length === 1, "followup_assignment_reader_missing");
+          followupRecoveryPhase = 2;
+          respond(res, { type: "function_call", ...info.assignmentTools[0], call_id: calls.childRecovery, arguments: "{}" });
+        } else {
+          check(followupRecoveryPhase === 2 && !recovery.required && recovery.call === calls.childRecovery,
+            "followup_recovery_not_verified");
+          const result = info.outputs[calls.childRecovery];
+          check(result?.decision === "current-assignment" && result.message === FOLLOWUP_PROMPT && result.message !== CHILD_PROMPT
+            && result.taskHash === expected.taskHash, "followup_restored_previous_assignment");
+          const events = readdirSync(join(root, "events")).map(name => JSON.parse(readFileSync(join(root, "events", name), "utf8")));
+          check(!events.some(row => row.hook_event_name === "PostToolUse" && row.tool_use_id === calls.childUnrecovered),
+            "followup_unrecovered_tool_ran");
+          const compactHooks = events.filter(row => ["PreCompact", "PostCompact"].includes(row.hook_event_name));
+          check(compactHooks.length === 2 && new Set(compactHooks.map(row => row.hook_event_name)).size === 2
+            && compactHooks.every(row => row.trigger === "auto" && row.agent_id === childThread
+              && row.session_id === rootThread && row.turn_id === binding.turn), "followup_compaction_identity_mismatch");
+          const history = readFileSync(transcript, "utf8").trim().split("\n").map(line => JSON.parse(line));
+          check(history.filter(row => row.type === "compacted").length === 1, "followup_saved_compaction_missing");
+          followupRecoveryVerified = true; followupRecoveryPhase = 3;
+          print({ type: "followup_compaction_recovery", exactCurrentAssignment: true,
+            previousAssignmentNotRestored: true, sameChildNewTurn: true, unchangedAdmission: true,
+            simulatedModel: true });
+          respond(res, message(FOLLOWUP_MARKER));
+        }
+        return;
+      }
       if (childCompaction && childCompactionRequests && req.headers["thread-id"] === childThread) {
         const recoveryCall = childCompactionRequests === 2 ? calls.childRecoverySecond : calls.childRecovery;
         const deniedCall = childCompactionRequests === 2 ? calls.childUnrecoveredSecond : calls.childUnrecovered;
@@ -1065,7 +1113,7 @@ data: ${JSON.stringify(event)}
       model_provider: "sage_native_lifecycle",
       model: "sage-native-parent",
       model_catalog_json: catalogPath,
-      ...(childCompaction ? { model_auto_compact_token_limit: 100000, compact_prompt: "SAGE_CHILD_COMPACT_REQUEST" } : {}),
+      ...(childCompaction || followupRecovery ? { model_auto_compact_token_limit: 100000, compact_prompt: "SAGE_CHILD_COMPACT_REQUEST" } : {}),
       cli_auth_credentials_store: "ephemeral",
       "features.hooks": true,
       "features.plugins": false,
@@ -1147,9 +1195,9 @@ data: ${JSON.stringify(event)}
     const noChild = denySpawn || (outage && denied);
     const routeVerified = noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (repeatChildRecovery ? 10 : childRecovery ? 6 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (repeatChildRecovery ? 10 : childRecovery ? 6 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (followupRecovery ? 6 : resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
-    const verified = (!childRecovery || recoveryTargetVerified) && (!childCompaction || (childCompactionObserved && childCompactionReady)) && result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
+    const verified = (!followupRecovery || followupRecoveryVerified) && (!childRecovery || recoveryTargetVerified) && (!childCompaction || (childCompactionObserved && childCompactionReady)) && result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
       && (!childSandbox || childSandboxVerified) && (!childMessage || childMessageVerified) && (!resumedFailure || resumedFailureVerified) && (!unpreparedFollowup || unpreparedFollowupVerified) && (!sageFollowup || sageFollowupVerified)
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && refusedTaskUpdates === (taskLifecycle ? 1 : 0) && malformedEvents === 0 && rejectedRequests === 0;

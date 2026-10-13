@@ -116,3 +116,17 @@ test('recovery output requires the exact native reader call, not cumulative MCP 
   }
   assert.throws(() => read(row, expected, null));
 });
+
+test('recovery output refuses more than one MiB even with a matching hash and enough replay budget', async () => {
+  const read = await load(), limit = 1024 * 1024;
+  const empty = fixture('');
+  const overhead = empty.row.payload.output.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0);
+  const message = 'a'.repeat(limit - overhead);
+  const exact = fixture(message);
+  assert.equal(exact.row.payload.output.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0), limit);
+  assert.equal(read(exact.row, { ...expected, taskHash: hash(message) }), message);
+  const oversized = fixture(`${message}a`);
+  assert.equal(oversized.row.payload.output.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0), limit + 1);
+  assert.throws(() => read(oversized.row, { ...expected, taskHash: hash(`${message}a`) }),
+    { message: 'Codex recovery output is unavailable' });
+});

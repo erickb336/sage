@@ -95,8 +95,8 @@ simulated; this does not prove that a real model follows the recovery instructio
 ## Verify complete reader output
 
 `readRecoveryOutput` checks one saved native reader result against the child's
-turn and exact task hash. It requires native MCP attribution and the saved
-output budget. The complete two-part text output must survive native replay
+turn and exact task hash. It requires the exact native reader call and saved
+output budget. Cumulative MCP attribution does not identify individual calls. The complete two-part text output must survive native replay
 without a change. Each part costs the ceiling of its UTF-8 byte length divided
 by four. The saved budget already includes the native serialization allowance.
 Missing budgets, unknown shapes, changed assignments, and insufficient budgets
@@ -108,8 +108,8 @@ are refused. This follows Codex `rust-v0.160.0`:
 - [UTF-8 token estimate](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/utils/string/src/truncate.rs).
 
 The native recovery probe checks this output evidence before declaring recovery.
-The function does not authenticate a transcript path, find the matching call,
-or prove ordering after the latest compaction. The production gates use the
+The function validates the supplied call and result. It does not authenticate a
+transcript path, locate the call, or prove ordering after the latest compaction. The production gates use the
 protected transcript reader below to establish those facts. Installed Sage
 remains disabled.
 
@@ -193,3 +193,17 @@ recovery, denies an ordinary tool and early report again, and accepts a fresh
 read. A changed target still blocks completion. After target restoration, the
 same assignment completes once, with no duplicate reservation or binding.
 The native run uses simulated model responses and removes its temporary profile.
+
+## Later assignments
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-followup-recovery` with fake
+process tools first on PATH. The native child completes and records one assignment,
+then receives another assignment in a new turn. Automatic compaction removes the
+second brief. An ordinary tool is refused until the reader returns that exact
+second brief and its hash. The previous brief cannot satisfy this check.
+
+The probe checks the saved checkpoint and both compaction events against the
+second turn. It records two assignments, two bindings and two completions for the
+same child, preserves the first report, and records the second report. Admission
+state does not change during recovery. Model responses and token counts are
+simulated. This check does not establish real-model recovery or installed operation.
