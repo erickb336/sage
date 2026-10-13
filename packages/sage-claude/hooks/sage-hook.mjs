@@ -79,16 +79,30 @@ const LINE_END = /\r\n|[\n\r\v\f\u0085\u2028\u2029]/;
  * The one field rule of a brief and a report (F-T289-24). A field starts at a line that is not indented and whose text,
  * after Markdown marks (*, _, #, |, >, -) and spaces, starts with the field's name: "STATUS done", "**STATUS**: done",
  * "| STATUS | done |". The field's text is the rest of that line, without the colon, bold marks or table bars around it,
- * and the lines up to the next field. An indented line never starts a field. The fields of the text, in order.
+ * and the lines up to the next field. An indented line, a list item ("- RESULT of npm test", F-T289-38) and a line in a
+ * code block ("STATUS 200" of a test's output) never start a field. The fields of the text, in order, each with its line.
+ * No pattern of the rule can backtrack far, so a padded line costs time in proportion to its length (F-T289-34).
  */
 function fieldsOf(text, names) {
   const out = [];
+  let fenced = false;
   for (const line of String(text ?? "").split(LINE_END)) {
-    const name = /^\s/.test(line) ? undefined : names.find((n) => new RegExp(`^(?:[*_#|>-]|${SP})*${n}\\b`).test(line));
-    if (name) out.push({ name, rest: line.slice(line.indexOf(name) + name.length).replace(/^[\s*_|:]+/, "").replace(/[\s*_|]+$/, ""), lines: [] });
+    if (/^\s*(?:```|~~~)/.test(line)) fenced = !fenced;
+    const name = fenced || /^\s/.test(line) || LIST_ITEM.test(line) ? undefined : names.find((n) => new RegExp(`^(?:[*_#|>-]|${SP})*${n}\\b`).test(line));
+    if (name) out.push({ name, line: line.slice(0, 80), rest: trimEnd(line.slice(line.indexOf(name) + name.length).replace(/^[\s*_|:]+/, "")), lines: [] });
     else out.at(-1)?.lines.push(line);
   }
   return out;
+}
+/** The most characters of a line, after its indent, that the report reader reads: a finding's shape is at its start. */
+const LINE_MAX = 4096;
+/** A Markdown list item: a bullet (-, * or +) or a number (1. or 1)), then a space. Bold (**) is no bullet. */
+const LIST_ITEM = /^[-*+][ \t]|^\d+[.)][ \t]/;
+/** The text without spaces, bold marks and table bars at its end, by a loop: a pattern such as /[\s*_|]+$/ takes time that grows with the square of a padded line (F-T289-34). */
+function trimEnd(text) {
+  let end = text.length;
+  while (end > 0 && /[\s*_|]/.test(text[end - 1])) end--;
+  return text.slice(0, end);
 }
 /** The fields of a template that the text does not give, by the one field rule. */
 function missingFields(fields, text) {
@@ -302,10 +316,12 @@ export function handle(input, state, slots) {
     // A sage agent finishes only with the full report. The second stop goes through, so this cannot loop.
     if (ours && !input.stop_hook_active && typeof input.last_assistant_message === "string") {
       const missing = missingFields(REPORT_FIELDS, input.last_assistant_message);
-      if (missing.length) return { decision: "block", reason: `sage: your report has no ${missing.join(", ")}. End with the report of the sage:report skill: ${REPORT_FIELDS.join(", ")}, each at the start of a line, with "none" where a field has nothing.` };
-      // The stop gate and the lead rules read a report with one reader, so a report that passes here is one they read (F-T289-24).
-      const { problem } = reportOf(input.last_assistant_message);
-      if (problem) return { decision: "block", reason: `sage: the hook cannot read your report: ${problem}. Give each field once, at the start of a line. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, with any detail on indented lines under it.` };
+      if (missing.length) return { decision: "block", reason: `sage: your report has no ${missing.join(", ")}. End with the report of the sage:report skill: ${REPORT_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.` };
+      // The stop gate and the lead rules read a review's or QA's report with one reader, so a report that passes here is
+      // one they read (F-T289-24, F-T289-39). The lead rules read no other role's report, so its FINDINGS may list what it
+      // fixed or needs (F-T289-40).
+      const { problem } = REVIEWERS.includes(input.agent_type.slice("sage:".length).toLowerCase()) ? reportOf(input.last_assistant_message) : {};
+      if (problem) return { decision: "block", reason: `sage: the hook cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none, or one line for each finding in the form ${FINDING_FORM}, where the severity is high, medium or low, with any detail on indented lines under it.` };
     }
   }
   if (!main && ours && input.agent_id) slots.touch(input.agent_id, input.agent_type); // the agent's lease: a slot that no event touched for an hour expires
@@ -410,13 +426,14 @@ export function handle(input, state, slots) {
     const run = view.leadRun(task);
     if (!run) return deny(event, `${task} has no running lead run in the logbook of ${project}. Record it first, as a command of its own: ${stateCommand(`run add ${task} --role lead`)}. A lead starts only from a session opened in the project's folder or one of its worktrees, so that the lead's logbook is the one that the session uses (F-T284-7).`);
     // The slot keeps the task, its logbook and its lead run, for the lead's writes (F-T273-1, F-T273-4).
-    leadMark = { task, logbook: digest(view.dir), run: run.id, folder: project };
+    // The highest finding number of the task so far: the lead's helpers' findings count only in findings added after it (F-T289-37).
+    leadMark = { task, logbook: digest(view.dir), run: run.id, floor: view.everFindings(task).reduce((max, f) => Math.max(max, keyNumber(f.was)), 0), folder: project };
     // The helper notes of the logbook's ended lead runs are of no more use: no lead can use those runs (F-T289-13).
     slots.prune(view.endedLeadRuns().map((r) => digest(`${leadMark.logbook}:${r.id}`)));
   }
   if (AGENT_TOOLS.test(tool) && OURS.test(spawned)) {
     const missing = missingFields(BRIEF_FIELDS, ti.prompt);
-    if (missing.length) return deny(event, `the brief has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line. A tiny task may keep each field to one line.`);
+    if (missing.length) return deny(event, `the brief has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block. A tiny task may keep each field to one line.`);
     let caps, project;
     try {
       if (stateTool.error) throw stateTool.error;
@@ -929,6 +946,8 @@ function runsNamed(text, cwd) {
  */
 const TASK = /^T[1-9]\d*$/;
 const TEAM = ["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
+/** The roles that review or check a change: their reports back a lead's verdicts and findings. */
+const REVIEWERS = TEAM.slice(1);
 /** The state moves of a cycle that a lead may make, by the task's current state (F-T273-7). A held task moves only by the sage. */
 const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified"], verified: ["reviewing"] };
 /**
@@ -944,7 +963,12 @@ const LEAD_PAIRS = {
   branch: (branch) => branch !== "", // the state tool takes only a branch of the task; a lead never clears it (T275)
   pr: (pr, task, view, own) => /^[1-9]\d*$/.test(pr) && !task.pr && [...view.prTasks(pr)].every((id) => id === own),
   // Option A (F-T284-12): the lead closes the round's fix findings while repairing, and leaves repairing only after.
-  state: (state, task, view) => (LEAD_MOVES[task.state] ?? []).includes(state) && !(task.state === "repairing" && roundFixOpen(task, view)),
+  // A refused move says which moves there are (F-T289-36).
+  state: (state, task, view) => {
+    const next = LEAD_MOVES[task.state] ?? [];
+    if (!next.includes(state)) return `${task.id} is ${task.state}: ${next.length ? `a lead moves it only to ${next.join(" or ")}` : "only the sage moves it from there"}.`;
+    return !(task.state === "repairing" && roundFixOpen(task, view)) || `${task.id} has an open fix finding of its round: close each one after the repair's commit (finding close), then move it to reviewing.`;
+  },
 };
 /** The keys of the task's current round: round sets them to its fix findings. */
 const roundKeys = (task) => String(task.keys ?? "").split(",").filter(Boolean);
@@ -960,29 +984,49 @@ const helperOf = (lead, run) => `${leadKey(lead)}.${run}`;
 const ownRun = (ctx, id) => /^R[1-9]\d*$/.test(id) && ctx.slots.helper(helperOf(ctx.lead, id)).owned;
 /** The states in which a lead writes nothing and starts no child: held, replan and the end states (F-T273-12, F-T289-7, F-T289-16). */
 const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
-/** The one form of a finding in a report's FINDINGS (the report skill gives it): the severity right after the key (F-T289-11). */
+/** The form of a finding in a report's FINDINGS that the report skill gives: the severity right after the key (F-T289-11). */
 export const FINDING_FORM = "- <key> <severity> <summary>";
-const FINDING_LINE = /^-[ \t]+\S+[ \t]+(high|medium|low)[ \t]+\S/;
+/** The words of RESULT that the lead rules read (F-T289-39). */
+const RESULT_WORDS = ["CLEAN", "PASS", "FINDINGS", "FAIL"];
 /**
- * The one reader of a report, for the stop gate and the lead rules: the first word of RESULT, in upper case, and the
- * severity of each finding under FINDINGS, by the one field rule (fieldsOf). FINDINGS is "none" alone (F-T289-21), or
- * finding lines in FINDING_FORM, each with any detail on indented lines under it (F-T289-29); a finding line counts also
- * when it is indented. The report is unreadable (problem) when a field is given twice (F-T289-20), when RESULT or
- * FINDINGS is missing, when FINDINGS is empty, or when it has any other line (F-T289-25). An unreadable report is never clean.
+ * A line in the shape of a finding, indented or not: a list mark (-, *, + or 1.), at most one word (its key), then the
+ * severity in any case, also after a dash or a colon, in brackets or in bold: "- K1 medium:", "* K1 (High)",
+ * "1. K1 - low -" (F-T289-33, F-T289-38). Every such line is a finding: a lenient form finds only more findings. The
+ * parts are classes that do not overlap, so the pattern cannot backtrack far (F-T289-34).
+ */
+const FINDING_LINE = /^(?:[-*+]|\d+[.)])[ \t]+(?:\S+[ \t]+)?(?:[-–—:|([*_][ \t]*)*(high|medium|low)\b/i;
+/** None, also as a list item or with words after it ("none found", "None (see EVIDENCE)"), but never with a severity word in it. */
+const NONE_LINE = /^(?:[-*+][ \t]+)?none\b/i;
+const SEVERITY = /\b(?:high|medium|low)\b/i;
+/**
+ * The one reader of a report, for the stop gate and the lead rules, by the one field rule (fieldsOf):
+ *   - result: the first word of RESULT, in upper case; when RESULT has no text on its line, the first word of the next
+ *     line with text ("## RESULT", then "PASS") (F-T289-39);
+ *   - severities: the severity of each finding line under FINDINGS (FINDING_LINE, or an indented list item with a
+ *     severity word), each with any detail on indented lines under it (F-T289-29). FINDINGS is either none (NONE_LINE)
+ *     or finding lines.
+ * The report is unreadable (problem) when a field is given twice (F-T289-20), when RESULT or FINDINGS is missing, when
+ * RESULT does not start with one of RESULT_WORDS, when FINDINGS is empty, has none and findings, or has any other line:
+ * an unindented one, or an indented one with no finding above it (F-T289-25). An unreadable report is never clean.
  */
 function reportOf(text) {
   const fields = fieldsOf(text, REPORT_FIELDS), of = (name) => fields.filter((f) => f.name === name);
-  const twice = REPORT_FIELDS.filter((name) => of(name).length > 1), [r] = of("RESULT"), [f] = of("FINDINGS");
-  const result = (/^[^A-Za-z]*([A-Za-z]+)/.exec(r?.rest ?? "")?.[1] ?? "").toUpperCase();
+  const twice = REPORT_FIELDS.find((name) => of(name).length > 1), [r] = of("RESULT"), [f] = of("FINDINGS");
+  const said = r && [r.rest, ...r.lines].map((line) => line.trimStart().slice(0, LINE_MAX).trim()).find(Boolean);
+  const result = (/^[^A-Za-z]*([A-Za-z]+)/.exec(said ?? "")?.[1] ?? "").toUpperCase();
   const severities = [];
   let none = false, odd;
   for (const line of f ? [f.rest, ...f.lines] : []) {
-    const severity = FINDING_LINE.exec(line.trim())?.[1];
-    if (severity) severities.push(severity);
-    else if (/^none\.?$/i.test(line.trim())) none = true;
-    else if (line.trim() && !(severities.length && /^\s/.test(line))) odd ??= line.trim();
+    const text = line.trimStart().slice(0, LINE_MAX).trim();
+    // An indented list item with a severity word anywhere is a finding too, at its highest severity: an odd form of an
+    // indented finding must not pass as detail (F-T289-33).
+    const severity = FINDING_LINE.exec(text)?.[1] ?? (/^\s/.test(line) && LIST_ITEM.test(text) ? ["high", "medium", "low"].find((v) => new RegExp(`\\b${v}\\b`, "i").test(text)) : undefined);
+    if (severity) severities.push(severity.toLowerCase());
+    else if (NONE_LINE.test(text) && !SEVERITY.test(text)) none = true;
+    else if (text && !(severities.length && /^\s/.test(line))) odd ??= text;
   }
-  const problem = twice.length ? `${twice.join(", ")} is given twice` : !r ? "it has no RESULT" : !f ? "it has no FINDINGS" :
+  const problem = twice ? `${twice} is given twice, the second time in the line ${JSON.stringify(of(twice)[1].line)}` : !r ? "it has no RESULT" : !f ? "it has no FINDINGS" :
+    !RESULT_WORDS.includes(result) ? `RESULT starts with ${JSON.stringify((said ?? "").slice(0, 80))}, not with one of ${RESULT_WORDS.join(", ")}` :
     odd !== undefined ? `a line under FINDINGS is not none and not a finding in the form ${FINDING_FORM}: ${JSON.stringify(odd.slice(0, 80))}` :
     none && severities.length ? "FINDINGS has none and findings" : !none && !severities.length ? "FINDINGS is empty" : undefined;
   return { result, severities, unreadable: Boolean(problem), ...(problem && { problem }) };
@@ -1034,23 +1078,29 @@ function leadSpawnProblem(lead, spawned, name, slots) {
   if (!ownRun({ lead, slots }, name)) return `${name} is not a run that this lead added: a lead helps only with its own runs, and the sage ends the others (F-T289-8, F-T289-16).`;
   return { helper: { key: helperOf(lead, name), folder: lead.folder, task: lead.task, role, run: name, tip: headOf(lead.folder, lead.task) } };
 }
+/** The number at the end of a finding's key: 3 for F-T1-3. */
+const keyNumber = (key) => Number(/-(\d+)$/.exec(String(key ?? ""))?.[1] ?? 0);
 /**
  * The findings of a review or QA role that the logbook does not hold yet (F-T289-4, F-T289-17, F-T289-18, F-T289-22):
- * each medium and high finding of every stopped helper of this lead's runs of the role in the task's round, run by run,
- * needs its own open finding of the round from that role, at its severity or above. A report that the hook cannot read,
- * of a run that still runs, holds the role until the sage ends that run. The reason, or undefined.
+ * each medium and high finding of every stopped helper of this lead's runs of the role on the task, in every round,
+ * needs its own finding from that role at its severity or above, added since the lead started (its floor). A finding
+ * counts in any status, also after the sage closed, dismissed or moved it, and its round does not matter, so that a
+ * round does not drop an earlier round's findings (F-T289-32) and the sage's moves do not hold the lead (F-T289-37). A
+ * lead cannot dismiss or move a medium or high finding, so a re-roll still needs a finding for each report. A report
+ * that the hook cannot read, of a run that still runs, holds the role until the sage ends that run. The reason, or undefined.
  */
 function gap(role, view, task, ctx) {
-  if (!TEAM.slice(1).includes(role)) return undefined;
-  const stops = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => r?.role === role && view.row(r.run)?.task === task.id && String(view.row(r.run).round) === String(task.round));
+  if (!REVIEWERS.includes(role)) return undefined;
+  const stops = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => r?.role === role && view.row(r.run)?.task === task.id);
   const odd = stops.find((r) => r.unreadable && view.row(r.run).status === "running");
   if (odd) return `${odd.run}'s helper gave a report that the hook cannot read, and ${odd.run} still runs: the sage ends it before this lead's next ${role} run, verdict or move (F-T289-18).`;
   const wanted = stops.filter((r) => !r.unreadable).flatMap((r) => (r.severities ?? []).map((v) => [r.run, v]));
-  const held = view.findings(task.id).filter((f) => f.status === "open" && f.source === role && String(f.round) === String(task.round)).map((f) => f.severity);
+  const floor = Number.isSafeInteger(ctx.lead.floor) ? ctx.lead.floor : Infinity; // a lead slot with no floor counts no finding (fail closed)
+  const held = view.everFindings(task.id).filter((f) => f.source === role && keyNumber(f.was) > floor).map((f) => f.severity);
   const atLeast = (list, levels) => list.filter((v) => levels.includes(v)).length;
   if ([["high"], ["high", "medium"]].every((levels) => atLeast(held, levels) >= atLeast(wanted.map(([, v]) => v), levels))) return undefined;
   const found = wanted.filter(([, v]) => v !== "low").map(([run, v]) => `${run} ${v}`).join(", ");
-  return `this lead's ${role} helpers reported medium or high findings in round ${task.round} (${found}), and ${task.id} holds ${atLeast(held, ["high", "medium"])} open ${role} finding(s) of the round: add each one first, as an open finding with --source ${role} at its severity or above, one for each finding of each run (F-T289-17, F-T289-18, F-T289-22).`;
+  return `this lead's ${role} helpers reported medium or high findings on ${task.id} (${found}), and ${task.id} holds ${atLeast(held, ["high", "medium"])} medium or high ${role} finding(s) added since this lead started, in any status: add each missing one, as a finding with --source ${role} at its severity or above, one for each finding of each run (F-T289-17, F-T289-18, F-T289-22, F-T289-32).`;
 }
 const LEAD_WRITES = {
   // No new run of a role while the findings of its round's reports are not all recorded (F-T289-18).
@@ -1083,7 +1133,7 @@ const LEAD_WRITES = {
     // A round's finding closes only on a new commit: not on one where a review or QA helper of this lead found the
     // round's problems, in a run of an earlier round, so that a lead cannot close the round's keys unchanged and re-add
     // the problem under a new key (F-T289-6). A re-review of this round that finds a new problem does not count (F-T289-12).
-    const found = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => TEAM.slice(1).includes(r?.role) && !cleanReport(r) && Number(view.row(r.run)?.round) < Number(task.round)).map((r) => r.sha);
+    const found = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => REVIEWERS.includes(r?.role) && !cleanReport(r) && Number(view.row(r.run)?.round) < Number(task.round)).map((r) => r.sha);
     const head = found.length ? headOf(ctx.lead.folder, own) : undefined;
     return head === undefined || (head !== "" && !found.includes(head)) ||
       `${key} is a finding of the round, and the head of ${own}'s branch ${head ? `(${head.slice(0, 7)}) is a commit on which a helper found problems` : "cannot be read"}: commit the repair first (F-T289-6).`;
@@ -1102,10 +1152,13 @@ const LEAD_WRITES = {
     const roles = VERDICT_ROLES[opt.kind], run = opt.run === undefined ? undefined : view.row(opt.run);
     if (!(t === own && Boolean(task.pr) && opt.pr === task.pr)) return false;
     if (roles === null) return opt.run === undefined || run?.task === own;
-    if (!(Array.isArray(roles) && run?.task === own && run.status === "done" && roles.includes(run.role) && String(run.round) === String(task.round) && !view.verdicts(own).some((v) => v.run === run.id))) return false;
+    if (!(Array.isArray(roles) && run?.task === own && roles.includes(run.role) && String(run.round) === String(task.round) && !view.verdicts(own).some((v) => v.run === run.id))) return false;
+    // The way out of a run that still runs, ended with no verdict to give, or gave no report (F-T289-36).
+    if (run.status === "running") return `${run.id} still runs: end it with run done ${run.id} first, then record its verdict (F-T289-36).`;
+    if (run.status !== "done") return `${run.id} ended as ${run.status}, so it backs no verdict: add a new ${run.role} run, or ask the sage (F-T289-36).`;
     if (!ownRun(ctx, run.id)) return `${run.id} is not a run that this lead added, so it backs no verdict of this lead (F-T289-8, F-T289-16).`;
     const report = ctx.slots.helper(helperOf(ctx.lead, run.id)).stopped;
-    if (!report) return false;
+    if (!report) return `${run.id}'s helper gave no report, so ${run.id} backs no verdict of this lead: ask the sage (F-T289-36).`;
     // A run whose helper gave no report, or one that the hook cannot read, backs no verdict of a lead: the sage reads it (F-T289-20, F-T289-23).
     if (!Array.isArray(report.severities) || report.unreadable) return `${run.id}'s helper gave ${report.unreadable ? `a report that the hook cannot read (${report.problem ?? "an old record"})` : "no report"}, so ${run.id} backs no verdict of this lead: the sage reads it (F-T289-20, F-T289-23).`;
     if (!report.sha || String(opt.sha ?? "").toLowerCase() !== report.sha) return `${run.id}'s helper reviewed ${report.sha ? report.sha.slice(0, 7) : "no one commit (the branch moved during its run, or the hook could not read it)"}, not this --sha: a verdict names the commit that its helper saw (F-T289-5, F-T289-14).`;
@@ -1117,10 +1170,13 @@ const LEAD_WRITES = {
   round: ([t], opt, own) => t === own,
   task: ([t, set, ...pairs], opt, own, view, task, ctx) => {
     const keys = pairs.map((kv) => kv.slice(0, kv.indexOf("=")));
-    const ok = t === own && set === "set" && pairs.length > 0 && new Set(keys).size === keys.length &&
-      pairs.every((kv, k) => Object.hasOwn(LEAD_PAIRS, keys[k]) && (keys[k] === "state" ? LEAD_PAIRS.state(kv.slice(kv.indexOf("=") + 1), task, view) : LEAD_PAIRS[keys[k]](kv.slice(kv.indexOf("=") + 1), task, view, own)));
-    // No state move while a role's findings of the round are not all recorded (F-T289-18).
-    return ok && (!keys.includes("state") || (TEAM.map((role) => gap(role, view, task, ctx)).find(Boolean) ?? true));
+    if (!(t === own && set === "set" && pairs.length > 0 && new Set(keys).size === keys.length && keys.every((key) => Object.hasOwn(LEAD_PAIRS, key)))) return false;
+    for (const [k, kv] of pairs.entries()) {
+      const ok = LEAD_PAIRS[keys[k]](kv.slice(kv.indexOf("=") + 1), task, view, own);
+      if (ok !== true) return ok;
+    }
+    // No state move while a role's findings are not all recorded (F-T289-18).
+    return !keys.includes("state") || (TEAM.map((role) => gap(role, view, task, ctx)).find(Boolean) ?? true);
   },
 };
 /** The roles whose finished run gives each verdict kind that a lead records; null for a check, which needs no run (F-T284-6). */
@@ -2112,7 +2168,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
       try {
         const initial = [`project-${project}`, `session-${session}`, `tool-${id(tu)}`, `pending-${id(tu)}`, `call-${call}`, `caller-${owner}`, `scope-${scope}`, `input-${hash(input)}`];
         if (role) initial.push(`role-${safe(role)}`);
-        if (role === "sage:lead" && lead) initial.push(`task-${lead.task}`, `logbook-${lead.logbook}`, `run-${lead.run}`); // the lead's own task, logbook and lead run (T273)
+        if (role === "sage:lead" && lead) initial.push(`task-${lead.task}`, `logbook-${lead.logbook}`, `run-${lead.run}`, `floor-${lead.floor}`); // the lead's own task, logbook and lead run (T273), and its findings floor (F-T289-37)
         if (helper) initial.push(`helper-${helper.key}`); // the run that this child helps with (F-T284-9)
         if (exact) initial.push("exact");
         if (caller !== undefined) initial.push(`parent-${hash(caller)}`);
@@ -2224,7 +2280,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
       const slot = ofSession().find(slot => has(slot, "ok") && mark(slot, "role-") === "sage_lead" && mark(slot, "bound-") === hash(agent));
       let folder;
       try { folder = slot && readFileSync(join(dir, slot, "folder"), "utf8"); } catch {}
-      const lead = slot && { task: mark(slot, "task-"), logbook: mark(slot, "logbook-"), run: mark(slot, "run-"), folder };
+      const lead = slot && { task: mark(slot, "task-"), logbook: mark(slot, "logbook-"), run: mark(slot, "run-"), floor: Number(mark(slot, "floor-") ?? NaN), folder };
       return lead && TASK.test(lead.task ?? "") && /^[0-9a-f]{64}$/.test(lead.logbook ?? "") && /^R[1-9]\d*$/.test(lead.run ?? "") ? lead : undefined;
     },
     reconcile: transaction((liveIds) => {

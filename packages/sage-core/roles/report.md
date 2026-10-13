@@ -12,6 +12,8 @@ NOT VERIFIED  what you did not check, and why
 BRANCH        the branch, its head SHA and the pull request link
 ```
 
-Give each field once, at the start of a line. Under FINDINGS, write `none` alone, or one line for each finding in exactly that form: a dash, the key, the severity in lower case, then the summary, for example `- F1 medium src/app.js:12 an empty name saves a blank row`. Put any detail of a finding, such as the attack or the steps, on indented lines under its line. The hook reads your report in this form only. A field given twice, or any other line under FINDINGS, makes your report unreadable: the hook stops you once to fix it, and a lead records no verdict from it.
+Give each field once, at the start of a line that is not in a list or a code block. Under FINDINGS, write `none`, or one line for each finding in that form: a dash, the key, the severity, then the summary, for example `- F1 medium src/app.js:12 an empty name saves a blank row`. Put any detail of a finding, such as the attack or the steps, on indented lines under its line. A role that finds no problems, such as an implementer, writes `none` and lists what it fixed in EVIDENCE.
+
+The hook reads the report of a review or QA with one reader. Start its RESULT with CLEAN, PASS, FINDINGS or FAIL. A line under FINDINGS that has a list mark, a key and a severity word is a finding, also when it is indented. The report is unreadable when a field is given twice, when RESULT starts with another word, or when a line under FINDINGS is not `none`, a finding or indented detail under a finding. `none` with words after it counts only when no severity word is among them. The hook stops you once to fix an unreadable report, and a lead records no verdict from it.
 
 Every claim has its evidence in the same report: the command and what it printed, or a screenshot. "It works" without a command or a screenshot is not evidence.

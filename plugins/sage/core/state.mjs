@@ -793,6 +793,14 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     },
     leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
     findings: (task) => rows("findings").filter((f) => f.task === task),
+    /** Every finding that the task ever had, in any status, each with the key that it had on the task (was): its own rows, and each row that finding move took to a follow-up task, found by the decision of the move. */
+    everFindings: (task) => [
+      ...rows("findings").filter((f) => f.task === task).map((f) => ({ ...f, was: f.key })),
+      ...rows("decisions").filter((d) => d.task === task && /^\S+ moved to /.test(d.decision)).flatMap((d) => {
+        const [was, , key] = subjects(d.decision);
+        return rows("findings").filter((f) => f.key === key).map((f) => ({ ...f, was }));
+      }),
+    ],
     shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
     verdicts: (task) => rows("ledger").filter((r) => r.task === task),
     endedLeadRuns: () => rows("runs").filter((r) => r.role === "lead" && r.status !== "running"),
