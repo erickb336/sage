@@ -245,6 +245,8 @@ function reportFromRecords(rows, expected, { pending = false, report = true, rec
       if (row.type === "event_msg" && payload.type === "task_started") turn = payload.turn_id;
       if (row.type === "event_msg" && payload.type === "turn_aborted"
         && (turn === expected.turn || payload.turn_id === expected.turn)) aborted = true;
+      if (row.type === "event_msg" && payload.type === "task_complete"
+        && payload.turn_id === expected.turn && turn !== expected.turn) unavailable();
       if (turn !== expected.turn) continue;
       if (row.type === "response_item" && payload.type === "message" && payload.role === "assistant") {
         if (completed || index <= position) unavailable();

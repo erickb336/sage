@@ -295,3 +295,14 @@ test('recovery evidence supports repeated and later reads without a new cumulati
   assert.equal(read(expected(later, 'second')).required, false);
   assert.equal(read(expected(later, 'second')).call, 'read_later');
 });
+
+test('native reports refuse terminal evidence for an earlier turn after a later turn starts', t => {
+  const f = fixture(t), options = { sessionsDir: f.sessionsDir };
+  for (const alreadyCompleted of [false, true]) {
+    f.write([...task(turn, 'first'), output(turn, 'report'),
+      ...(alreadyCompleted ? [complete(turn, 'report')] : []),
+      ...task(later, 'second'), complete(turn, 'report')]);
+    assert.throws(() => identity.readNativeReport(f.file, options, expected()), /report evidence is unavailable/);
+    assert.throws(() => identity.readNativeCompletion(f.file, options, expected()), /report evidence is unavailable/);
+  }
+});
