@@ -37,10 +37,12 @@ test("T44: reader operands and ordinary output-free commands remain data", async
     const f = isolated(t, provider);
     const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     assert.equal(commandWrites("curl -H '-o' -o result.txt https://example.invalid", f.dir), true);
+    assert.equal(commandWrites("git log --grep '--output=search' --output=result.txt", f.dir), true);
     for (const command of [
       "curl -fsSL https://example.invalid", "curl -H '-o' https://example.invalid",
       "curl --header '--output=file' https://example.invalid", "curl --data '-o' https://example.invalid",
       "curl -- https://example.invalid/-o", "git diff -- --output=file", "git show --format=--output=file",
+      "git log --grep '--output=result.txt'", "git show --format '--output=result.txt'",
       "echo curl -o result.txt", "printf '%s' 'git diff --output=result.txt'", "openssl dgst -sha256 source.txt",
     ]) assert.equal(commandWrites(command, f.dir), false, command);
   }
@@ -60,6 +62,25 @@ test("T44: known output programs cannot write protected paths but can write scra
       assert.equal(shellWriteOutsideRoots({ command: form(`${root}/ledger.tsv`), cwd: f.dir, roots: [root] }), false);
       assert.equal(shellWriteOutsideRoots({ command: form("scratch.txt"), cwd: f.dir, roots: [root] }), true);
     }
+  }
+});
+
+test("T44: value-taking options and alternate output spellings preserve the write boundary", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider), root = join(f.dir, "logbook"); mkdirSync(root);
+    const { commandWrites, shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    for (const command of [
+      `openssl dgst --out ${root}/ledger.tsv source.txt`,
+      `openssl dgst -hmac -out --out ${root}/ledger.tsv source.txt`,
+      `git diff --no-index --src-prefix '--' --output=${root}/ledger.tsv left.txt right.txt`,
+      `git show --out=${root}/ledger.tsv`,
+    ]) {
+      assert.equal(commandWrites(command, f.dir), true, command);
+      assert.equal(shellWriteOutsideRoots({ command, cwd: f.dir, roots: [root] }), false, command);
+    }
+    for (const command of ["openssl dgst -hmac -out source.txt", "openssl dgst -- --out", "openssl dgst out",
+      "git diff --src-prefix --output=file", "git diff --stat -- --output=file"])
+      assert.equal(commandWrites(command, f.dir), false, command);
   }
 });
 

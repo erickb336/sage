@@ -5,6 +5,24 @@ const WRITERS = new Set(["ditto", "scp", "wget", "sqlite3"]);
 const CURL_WRITE = new Set("output output-dir remote-name remote-name-all remote-header-name dump-header cookie-jar trace trace-ascii stderr libcurl etag-save alt-svc hsts ssl-sessions config write-out create-dirs xattr".split(" "));
 const CURL_VALUE = new Set("url user user-agent header proxy-header data data-ascii data-binary data-raw data-urlencode json form form-string request request-target referer cookie range upload-file max-time connect-timeout retry retry-delay retry-max-time proxy proxy-user noproxy cacert capath cert key pass resolve connect-to unix-socket interface variable url-query".split(" "));
 const CURL_FLAG = new Set("silent show-error location location-trusted fail fail-with-body head include show-headers verbose insecure compressed globoff get disable no-progress-meter progress-bar version help http1.0 http1.1 http2 http2-prior-knowledge http3 ipv4 ipv6 next".split(" "));
+const GIT_VALUE_OPTION = /^(?:--grep|--grep-reflog|--author|--committer|--since|--after|--until|--before|--format|--date|--encoding|--diff-filter|--find-object|--src-prefix|--dst-prefix|--line-prefix|--output-indicator-new|--output-indicator-old|--output-indicator-context|--word-diff-regex|--diff-algorithm|--anchored|--order-file|--rotate-to|--skip-to|--max-count|--skip|-S|-G|-L|-O|-n)$/;
+const GIT_FLAGS = new Set("--no-index --stat --numstat --shortstat --name-only --name-status --check --raw --patch --no-patch --oneline --all --no-ext-diff --no-color --color --no-prefix --relative --reverse --text --binary --exit-code --quiet --no-renames --find-renames --find-copies --ignore-space-change --ignore-all-space --ignore-space-at-eol --ignore-blank-lines -p -s -w -b -a -R".split(" "));
+const gitOutput = arg => /^--o(?:u(?:t(?:p(?:u(?:t)?)?)?)?)?(?:=|$)/.test(arg);
+
+function opensslWrites(args) {
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === "--") {
+      const prior = args[i - 1] ?? "";
+      if (/^--?[^=]+$/.test(prior) && !/^--?(?:hex|binary|r|c|list|help|debug|text|noout)$/.test(prior)) continue;
+      break;
+    }
+    if (!args[i].startsWith("-")) continue;
+    const option = args[i].replace(/^--?/, "");
+    if (/^(?:out|keyout|writerand)(?:=|$)/.test(option)) return true;
+    if (/^(?:in|inform|outform|hmac|mac|macopt|sigopt|signature|verify|prverify|passin|passout|inkey|keyform|digest|provider|provider-path|propquery|engine)$/.test(option)) i++;
+  }
+  return false;
+}
 
 /** Inspect actual argv, preserving option case and values. Unknown curl options are conservative. */
 function curlWrites(args) {
@@ -34,13 +52,20 @@ export function outputDispatchWrites(entry) {
   const name = programName(entry.run.word), args = entry.run.args;
   if (WRITERS.has(name)) return true;
   if (name === "curl") return curlWrites(args);
-  if (name === "openssl") return args.some(arg => /^-(?:out|keyout|writerand)(?:=|$)/.test(arg));
+  if (name === "openssl") return opensslWrites(args);
   if (name !== "git") return false;
   let i = 0;
   while (args[i]?.startsWith("-")) i += GIT_VALUE.test(args[i]) ? 2 : 1;
   if (!["diff", "show", "log"].includes(args[i++])) return false;
-  for (; i < args.length && args[i] !== "--"; i++) {
-    if (/^--output(?:=|$)/.test(args[i])) return true;
+  for (; i < args.length; i++) {
+    if (args[i] === "--") {
+      // An unknown option may consume '--' as its value. Do not hide a later output option.
+      const prior = args[i - 1] ?? "";
+      if (/^-[^=]+$/.test(prior) && !GIT_FLAGS.has(prior)) continue;
+      break;
+    }
+    if (gitOutput(args[i])) return true;
+    if (GIT_VALUE_OPTION.test(args[i])) i++;
   }
   return false;
 }
