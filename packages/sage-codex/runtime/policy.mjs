@@ -1,3 +1,4 @@
+import { readAdmission } from "sage-core";
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
 import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
 import { join, sep } from "node:path";
@@ -48,6 +49,18 @@ export function createNativePolicy(options, evaluateTool) {
       const before = mode(event.session_id);
       if (before.sage && child) bindNativeChildTool(raw, native, fixed);
       else if (child) bindPendingNativeChildTool(raw, native, fixed);
+      // A message can wake another child without a prepared dispatch or reserved slot.
+      const trackedMessage = child && event.tool_name === "collaborationsend_message" && (before.sage
+        || (before.owner && readAdmission(fixed.directory).bindings.some(row => row.project === fixed.project
+          && row.session === `codex:${event.session_id}` && row.epoch === before.owner.epoch && row.child === native.actor)));
+      if (trackedMessage) {
+        const message = event.tool_input;
+        if (Object.keys(message).length !== 2 || !Object.hasOwn(message, "target") || !Object.hasOwn(message, "message")
+          || typeof message.message !== "string" || !message.message.trim()) refuse();
+        if (message.target !== "/root" && message.target !== event.session_id) {
+          return { decision: "deny", reason: "A Sage child sends messages only to the chief. Report there or request a prepared task." };
+        }
+      }
       let command, readCommand;
       // Path and state-tool protection also need original inputs while Sage is off.
       if (event.tool_name === "Bash") {
