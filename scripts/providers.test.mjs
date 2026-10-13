@@ -2793,3 +2793,29 @@ test('terminal bindings cannot revive through an atomic repeated binding request
     assert.deepEqual(f.api.readAdmission(f.journal), before);
   }
 });
+
+const reportApi = await import("../plugins/sage-codex/core/index.mjs");
+const report = ["STATUS done", "RESULT PASS", "EVIDENCE node check.mjs: 3 passed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n");
+
+test("report structure retains evidence without converting a child claim into a verdict", () => {
+  assert.equal(typeof reportApi.parseReport, "function");
+  assert.equal(reportApi.parseReport(report).EVIDENCE, "node check.mjs: 3 passed");
+  for (const status of ["done", "blocked", "question"]) {
+    assert.equal(reportApi.parseReport(report.replace("STATUS done", `**STATUS**: ${status}`)).STATUS, status);
+  }
+  assert.deepEqual(Object.keys(reportApi.parseReport(report)), reportApi.REPORT_FIELDS);
+  assert.deepEqual(reportApi.parseReport("```text\n" + report + "\n```"), reportApi.parseReport(report));
+});
+
+test("report structure rejects missing empty repeated malformed and oversized fields", () => {
+  assert.equal(typeof reportApi.parseReport, "function");
+  for (const field of reportApi.REPORT_FIELDS) {
+    const rows = report.split("\n");
+    assert.throws(() => reportApi.parseReport(rows.filter(line => !line.startsWith(field)).join("\n")));
+    assert.throws(() => reportApi.parseReport(rows.map(line => line.startsWith(field) ? field : line).join("\n")));
+    assert.throws(() => reportApi.parseReport(report + `\n${field} other`));
+  }
+  for (const value of [null, {}, report.replace("STATUS done", "STATUS success"), report + "\0", report + "\ud800", report + "x".repeat(32 * 1024)]) {
+    assert.throws(() => reportApi.parseReport(value));
+  }
+});

@@ -20,4 +20,4 @@ export { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } f
 export { boardView } from "./board-view.mjs";
 export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
 
-export { REPORT_FIELDS, missingReportFields } from "./report.mjs";
+export { REPORT_FIELDS, missingReportFields, parseReport } from "./report.mjs";
