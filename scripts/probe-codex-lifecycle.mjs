@@ -11,16 +11,19 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const childSandbox = process.argv.includes("--sage-child-sandbox");
+assert(!childSandbox || process.argv.slice(2).length === 1, "sandbox_is_a_separate_probe");
+let sandboxVerified = false, childCommandTool;
 const denySpawn = process.argv.includes("--deny-spawn");
 const repeatRecovery = process.argv.includes("--sage-child-repeat-recovery");
 const recoveryProbe = repeatRecovery || process.argv.includes("--sage-child-recovery");
 const receiptProbe = process.argv.includes("--sage-receipt") || recoveryProbe;
 const reportProbe = process.argv.includes("--sage-report") || receiptProbe;
 const failedSpawn = process.argv.includes("--sage-failed-spawn");
-const completion = failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
+const completion = childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
 assert(!(failedSpawn && (reportProbe || recoveryProbe)), "incompatible_failure_probe");
 assert(!(denySpawn && completion), "incompatible_probe_modes");
 let denied = false;
@@ -39,7 +42,7 @@ for (const dir of [workspace, baselineHome, codexHome, temporary]) mkdirSync(dir
 const catalogPath = join(root, "model-catalog.json");
 writeFileSync(catalogPath, JSON.stringify({ models: [{
   slug: "sage-native-parent", display_name: "Sage native lifecycle fixture",
-  supported_reasoning_levels: [], shell_type: "disabled", visibility: "list",
+  supported_reasoning_levels: [], shell_type: childSandbox ? "unified_exec" : "disabled", visibility: "list",
   supported_in_api: true, priority: 1, support_verbosity: false,
   truncation_policy: { mode: "bytes", limit: 10000 }, experimental_supported_tools: [], tool_mode: "direct",
   model_messages: { instructions_template: "Follow the fixed native-agent probe task. Do not use shell or external tools." },
@@ -82,7 +85,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,commandProbe:childSandbox,deadlineMs});
   let failureStage = 0;
   let prepared = false, blockedStopVerified = false, reportVerified = false, receiptVerified = false, beforeReport, expectedReport, recordedState;
   let compactRequests = 0, recoveryRound = 0, recoveryPhase = "compact", recoveredRounds = 0;
@@ -105,7 +108,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -129,7 +132,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
         : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
-        if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
+        if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -139,6 +142,9 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
         for (const member of tool.tools ?? []) if (member.type === "function") agentTools.push(member.name);
       }
     }
+    const commandTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.type === "function" && member.name === "exec_command").map(member => ({namespace: tool.name, name: member.name}))
+      : tool.type === "function" && tool.name === "exec_command" ? [{name: tool.name}] : []);
     const tasks=input.filter(item=>item.type==="agent_message");
     const task=tasks[0];
     const childPromptSeen=tasks.length===1 && task.author==="/root" && task.recipient==="/root/probe_child"
@@ -149,7 +155,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({namespace: tool.name, name: member.name}))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{name: tool.name}] : []);
-    return { outputs, agentTools, childPromptSeen, prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), assignmentTools: mcpTools("sage_read_assignment") };
+    return { outputs, agentTools, childPromptSeen, commandTools, prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), assignmentTools: mcpTools("sage_read_assignment") };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -215,6 +221,17 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if (childSandbox && childRequests === 1) {
+          check(thread === childThread && childResponseSent, "wrong_sandbox_child");
+          check(typeof info.outputs[calls.sandbox] === "string" && info.outputs[calls.sandbox].includes(
+            "A child cannot request broader sandbox permissions. Ask the chief to run this command."), "sandbox_denial_missing");
+          check(!existsSync(join(root, "command-policy-receipt.json")), "sandbox_reached_evaluator");
+          const events = readdirSync(join(root, "events")).map(name => JSON.parse(readFileSync(join(root, "events", name), "utf8")));
+          check(!events.some(row => row.hook_event_name === "PostToolUse" && row.tool_use_id === calls.sandbox), "sandbox_command_executed");
+          sandboxVerified = true; childRequests++;
+          print({type:"sandbox_evidence", deniedBeforeEvaluator:true, noPostToolExecution:true, simulatedModel:true});
+          respond(res, message(CHILD_MARKER)); return;
+        }
         if (recoveryProbe && childRequests > 0) {
           check(thread === childThread && childResponseSent, "wrong_recovery_child");
           childRequests++;
@@ -260,7 +277,7 @@ data: ${JSON.stringify(event)}
           }
           recoveryPhase = "complete"; respond(res, message(CHILD_MARKER)); return;
         }
-        if (completion && childRequests === 1) {
+        if (completion && childRequests === (childSandbox ? 2 : 1)) {
           check(thread === childThread && childResponseSent, "unexpected_stop_retry");
           const state = integrated.readJournal(), stops = integrated.readStops();
           check(state.reservations.length === (failedSpawn ? 2 : 1) && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
@@ -274,6 +291,7 @@ data: ${JSON.stringify(event)}
         }
         check(rootThread && thread !== rootThread && childRequests === 0, "unexpected_child_request_identity");
         check(info.childPromptSeen, "child_did_not_receive_fixed_task");
+        if (childSandbox) { check(info.commandTools.length === 1, "command_tool_missing"); childCommandTool = info.commandTools[0]; }
         childThread = thread;
         childRequests++;
         childTaskSeen = true;
@@ -350,7 +368,9 @@ data: ${JSON.stringify(event)}
         nativeRunning = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
         respond(res, call(calls.wait, "wait_agent", {}));
-        respond(childResponse, recoveryProbe
+        respond(childResponse, childSandbox
+          ? {type:"function_call", ...childCommandTool, call_id:calls.sandbox, arguments:JSON.stringify({cmd:"printf sage-child-sandbox-control", shell:"/bin/sh", workdir:workspace, sandbox_permissions:"require_escalated", justification:"Fixed simulated sandbox refusal probe."})}
+          : recoveryProbe
           ? {type:"function_call", name:"list_mcp_resources", call_id:calls.compact1, arguments:"{}"}
           : message(CHILD_MARKER));
         childResponseSent = true;
@@ -440,7 +460,7 @@ data: ${JSON.stringify(event)}
       "features.remote_plugin": false,
       "features.apps": false,
       "features.shell_snapshot": false,
-      "features.shell_tool": false,
+      "features.shell_tool": childSandbox,
       "features.enable_request_compression": false,
       "features.multi_agent": true,
       "features.multi_agent_v2": true,
@@ -511,7 +531,7 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (receiptProbe ? 9 : reportProbe ? 6 : 5) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && childRequests === (recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+      : rootRequests === (receiptProbe ? 9 : reportProbe ? 6 : 5) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!childSandbox || sandboxVerified) && childRequests === (childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
         && (!recoveryProbe || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified

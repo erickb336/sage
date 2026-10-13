@@ -2409,3 +2409,65 @@ test('native off-mode child command needs no observation directory and refuses i
   assert.equal(evaluated, 1);
   assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
 });
+
+function commandPermissionInput(f, actor, permissions, turn) {
+  const command = commandPolicyInput(f, actor, 'cat example.txt', turn);
+  const rows = readFileSync(command.input.transcript_path, 'utf8').trim().split('\n').map(JSON.parse);
+  rows.at(-1).payload.arguments = JSON.stringify({...command.envelope, ...permissions});
+  writeFileSync(command.input.transcript_path, rows.map(row => JSON.stringify(row) + '\n').join(''));
+  return command.input;
+}
+
+test('native child sandbox escalation is refused before a permissive evaluator', async t => {
+  for (const role of ['lead', 'implementer']) {
+    const f = await composedPolicyFixture(t); let evaluated = 0;
+    f.input.role = role; f.bindLead();
+    const policy = f.createNativePolicy(f.options, () => { evaluated++; return {decision: 'pass'}; });
+    for (const permissions of [
+      {sandbox_permissions: 'require_escalated'},
+      {sandbox_permissions: 'with_additional_permissions'},
+      {sandbox_permissions: 'with_additional_permissions', additional_permissions: {network: {enabled: true}}},
+      {sandbox_permissions: 'use_default', additional_permissions: {file_system: {write: ['/outside']}}},
+    ]) {
+      const input = commandPermissionInput(f, childActor, permissions, turns[1]);
+      assert.equal((await f.evaluate(policy, input, childActor)).reason,
+        'A child cannot request broader sandbox permissions. Ask the chief to run this command.');
+      assert.equal(evaluated, 0);
+    }
+    const ordinary = commandPermissionInput(f, childActor, {sandbox_permissions: 'use_default', additional_permissions: null}, turns[1]);
+    assert.deepEqual(await f.evaluate(policy, ordinary, childActor), {decision: 'pass'});
+    assert.equal(evaluated, 1);
+  }
+});
+
+test('native child sandbox escalation stays refused when off while chief permission checks remain authoritative', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  f.input.role = 'implementer'; f.bindLead();
+  const initial = commandPermissionInput(f, childActor, {sandbox_permissions: 'use_default'}, turns[1]);
+  assert.deepEqual(await f.evaluate(f.createNativePolicy(f.options, () => ({decision: 'pass'})), initial, childActor), {decision: 'pass'});
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return {decision: 'deny', reason: 'Native permission check refused.'}; });
+  f.core.changeAdmissionMode(f.options.directory, {...f.scope, after: turns[0], turn: turns[2], sage: false});
+  const child = commandPermissionInput(f, childActor, {sandbox_permissions: 'require_escalated'}, turns[1]);
+  assert.equal((await f.evaluate(policy, child, childActor)).reason,
+    'A child cannot request broader sandbox permissions. Ask the chief to run this command.');
+  assert.equal(evaluated, 0);
+  const chief = commandPermissionInput(f, session, {sandbox_permissions: 'require_escalated'}, turns[2]);
+  assert.deepEqual(await f.evaluate(policy, chief), {decision: 'deny', reason: 'Native permission check refused.'});
+  assert.equal(evaluated, 1);
+});
+
+
+test('native child sandbox escalation refuses an unassigned off-mode child', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  f.core.changeAdmissionMode(f.options.directory, {...f.scope, after: turns[0], turn: turns[2], sage: false});
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return {decision: 'pass'}; });
+  const {input, envelope} = commandPolicyInput(f, childActor, 'printf fixed', turns[1], 'unassigned native child');
+  const rows = readFileSync(input.transcript_path, 'utf8').trim().split('\n').map(JSON.parse);
+  rows.at(-1).payload.arguments = JSON.stringify({...envelope, sandbox_permissions: 'require_escalated'});
+  writeFileSync(input.transcript_path, rows.map(row => JSON.stringify(row) + '\n').join(''));
+  assert.deepEqual(await f.evaluate(policy, input, childActor), {decision: 'deny',
+    reason: 'A child cannot request broader sandbox permissions. Ask the chief to run this command.'});
+  assert.equal(evaluated, 0);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  assert.equal(existsSync(join(f.options.observationsRoot, session)), false);
+});

@@ -51,3 +51,16 @@ Run `node scripts/probe-codex-command.mjs`; add `--deny-command`, `--default-com
 or `--extended-command --sage-off` for the other routes. Use fake process tools first on PATH.
 The fixed harmless command verifies its real output and working directory. The probe
 checks the evaluator receipt against every requested field and removes its temporary profile.
+
+## Child sandbox requests
+
+The policy refuses a child's `require_escalated` or `with_additional_permissions` request.
+It also refuses any non-null `additional_permissions`, including with `use_default`.
+This rule applies before the supplied evaluator, with Sage on or off.
+It covers unassigned native children and matches Claude's child sandbox rule.
+A chief request still needs the supplied evaluator and native permission checks.
+The guard does not prove the effective sandbox or enable installed Sage.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-child-sandbox` with fake process tools first on PATH.
+This simulated native probe verifies refusal before the evaluator, no command completion event,
+normal child completion, and temporary profile cleanup.
