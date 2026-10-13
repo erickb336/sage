@@ -5,6 +5,7 @@ export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
 export { createCommandPolicy, mentionsMerge, gitSubcommand } from "./command-policy.mjs";
 export { createPushPolicy } from "./push-policy.mjs";
 export { PR } from "./pull-request.mjs";
+export { fileWriteOutsideRoots } from "./protected-paths.mjs";
 export { commandWrites } from "./shell-write-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";
 export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp } from "./mode-policy.mjs";
