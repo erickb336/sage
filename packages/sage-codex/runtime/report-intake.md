@@ -11,3 +11,5 @@ Inspection can first reconcile terminal evidence for the requested assignment th
 Neither operation finishes a logbook run, accepts findings, or records a review verdict. A report describes the child's claims; it does not prove task success. Missing, changed, ambiguous, linked, or stale evidence is refused unless an exact saved receipt and valid recovery proof permit recovery. Later assignments remain separate work.
 
 Run `node scripts/probe-codex-lifecycle.mjs --sage-report` with fake process tools first on PATH. The probe uses CLI 0.160.0, a temporary profile, and simulated responses. It checks the exact report identity and text hash through the packaged MCP tool, then removes the temporary profile. It does not establish installed automatic Sage or real-model behavior.
+
+Run the same probe with `--sage-receipt` to verify persistence, exact-hash replay, and inspection after removal of the temporary child transcript. This route records one receipt and leaves the other admission records unchanged. It does not accept a verdict or enable installed automatic Sage.
