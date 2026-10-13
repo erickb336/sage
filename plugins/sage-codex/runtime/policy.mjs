@@ -1,5 +1,5 @@
 import { join, sep } from "node:path";
-import { commandWrites, roleEditDenied, readAdmission } from "../core/index.mjs";
+import { createCommandPolicy, commandWrites, roleEditDenied, readAdmission } from "../core/index.mjs";
 import { checkNativeRunAssignment } from "./run-assignment.mjs";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
@@ -24,6 +24,7 @@ const decision = value => {
   }
   refuse();
 };
+const mergePolicy = createCommandPolicy();
 const modeStamp = value => JSON.stringify([value.owner?.epoch, value.modes.at(-1)?.turn, value.sage]);
 
 /** The launcher supplies fixed storage and a complete tool policy. There is no permissive default. */
@@ -54,11 +55,11 @@ export function createNativePolicy(options, evaluateTool) {
       const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
       const assignment = bound ? { ...bound.assignment, role } : undefined;
       const activeRun = assignment ? checkNativeRunAssignment(fixed, assignment, bound.runTarget) : undefined;
-      const trackedChild = child && event.tool_name === "collaborationsend_message" && (before.sage
+      const trackedChild = child && (before.sage
         || (before.owner && readAdmission(fixed.directory).bindings.some(row => row.project === fixed.project
           && row.session === `codex:${event.session_id}` && row.epoch === before.owner.epoch && row.child === native.actor)));
       let messageDenied = false;
-      if (trackedChild) {
+      if (trackedChild && event.tool_name === "collaborationsend_message") {
         const input = event.tool_input;
         if (Object.keys(input).length !== 2 || !Object.hasOwn(input, "target") || !Object.hasOwn(input, "message")
           || typeof input.message !== "string" || !input.message.trim()) refuse();
@@ -100,13 +101,15 @@ export function createNativePolicy(options, evaluateTool) {
         }));
         command = readCommand();
       }
+      // Autopilot is unavailable in this runtime. A supplied evaluator cannot authorize a merge.
+      const mergeDenied = command && (before.sage || trackedChild) && mergePolicy.mergeIn(command.cmd);
       // This text-only denial does not infer a trusted shell or execution directory.
       const deniedEdit = editDenied && (event.tool_name === "apply_patch" || (command && commandWrites(command.cmd)));
       // The recovered envelope proves requested permission changes, not the effective sandbox.
       // Like the Claude adapter, children cannot ask to leave or extend their sandbox, in either mode.
       const sandboxDenied = child && command && (["require_escalated", "with_additional_permissions"].includes(command.sandbox_permissions)
         || command.additional_permissions != null);
-      const recovery = child && !sandboxDenied && !messageDenied && !deniedEdit ? checkChildToolRecovery(event, native, fixed) : null;
+      const recovery = child && !sandboxDenied && !messageDenied && !mergeDenied && !deniedEdit ? checkChildToolRecovery(event, native, fixed) : null;
       const recoveryReader = event.tool_name === "mcp__sage_preparation__sage_read_assignment"
         && Object.keys(event.tool_input).length === 0;
       const recoveryDenied = { decision: "deny", reason: "Read your current assignment with sage_read_assignment before continuing." };
@@ -115,6 +118,8 @@ export function createNativePolicy(options, evaluateTool) {
         ? { decision: "deny", reason: "A child cannot request broader sandbox permissions. Ask the chief to run this command." }
         : messageDenied
         ? { decision: "deny", reason: "A Sage child sends messages only to the chief. Report there or request a prepared task." }
+        : mergeDenied
+        ? { decision: "deny", reason: "This Sage runtime cannot merge pull requests. Leave the reviewed pull request for the owner." }
         : deniedEdit
         ? { decision: "deny", reason: "This Sage role cannot edit files. Give the change to an implementer." }
         : decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage, role,
