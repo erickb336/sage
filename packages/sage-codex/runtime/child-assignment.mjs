@@ -73,7 +73,7 @@ export function checkChildToolRecovery(event, native, options, prior) {
     path, author: path.slice(0, path.lastIndexOf("/")), taskHash: assigned.dispatch.taskHash,
   });
   // Uncompacted off-mode work keeps its existing behavior. Recovery itself requires
-  // the current saved task, active native turn, and native turn.
+  // the current saved assignment and an active native turn.
   if (recovery.compaction !== null) readNativeChildAssignment({}, native, options);
   return { assignment: bound.assignment, required: recovery.required };
 }

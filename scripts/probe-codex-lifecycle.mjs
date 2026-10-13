@@ -216,6 +216,7 @@ data: ${JSON.stringify(event)}
           check(thread === childThread && childResponseSent, "wrong_recovery_child");
           childRequests++;
           const evidence = integrated.childEvidence(childThread), {state, bound, recovery} = evidence;
+          check(JSON.stringify(state) === JSON.stringify(integrated.readRecoveryBaseline()), "recovery_changed_journal");
           check(state.reservations.length === 1 && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
             "recovery_changed_admission");
           if (recoveryPhase === "compact") {

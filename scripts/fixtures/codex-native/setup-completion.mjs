@@ -14,7 +14,7 @@ export async function setupCompletion(root) {
   const { readObservations } = await import(pathToFileURL(join(root, "plugin/runtime/events.mjs")));
   configureAdmission(options.directory, { total: 5, projects: [{ project: options.project, limit: 5 }] });
   writeFileSync(join(root, "completion-hooks.mjs"), `
-    import { appendFileSync } from 'node:fs';
+    import { appendFileSync, writeFileSync } from 'node:fs';
     import { readAdmission } from './plugin/core/index.mjs';
     import { serveHooks } from './plugin/runtime/mcp-server.mjs';
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
@@ -22,8 +22,12 @@ export async function setupCompletion(root) {
     const allowed = new Set(['collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
       'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report']);
     serveHooks({mode: options, loadPolicy: async () => {
-      const policy = createNativePolicy(options, input => allowed.has(input.tool_name)
-        ? {decision: 'pass'} : {decision: 'deny', reason: 'Outside the fixed completion fixture.'});
+      const policy = createNativePolicy(options, (input, context) => {
+        if (input.tool_use_id === 'probe_compact_1' && context.actor !== input.session_id) {
+          writeFileSync(${JSON.stringify(join(root, "recovery-baseline.json"))}, JSON.stringify(readAdmission(options.directory)), {flag: 'wx'});
+        }
+        return allowed.has(input.tool_name) ? {decision: 'pass'} : {decision: 'deny', reason: 'Outside the fixed completion fixture.'};
+      });
       return {...policy, completeChild(input, context) {
         const result = policy.completeChild(input, context);
         const state = readAdmission(options.directory);
@@ -43,7 +47,7 @@ export async function setupCompletion(root) {
     + '[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
   const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
   const { readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
-  return { config: config + receiptConfig, childEvidence(child) {
+  return { config: config + receiptConfig, readRecoveryBaseline: () => JSON.parse(readFileSync(join(root, "recovery-baseline.json"), "utf8")), childEvidence(child) {
       const state = readAdmission(options.directory);
       const bindings = state.bindings.filter(row => row.child === child);
       assert.equal(bindings.length, 1);
