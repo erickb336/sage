@@ -131,6 +131,8 @@ const readByPeople = [
   ...readdirSync(skillsDir).map((d) => `plugins/sage/skills/${d}/SKILL.md`).filter((f) => existsSync(join(ROOT, f)) && !readFileSync(join(ROOT, f), "utf8").includes(GENERATED)),
   "README.md",
   "docs/design/sage-mode.html",
+  ...["packages/sage-codex/runtime", "plugins/sage-codex/runtime"].flatMap(root =>
+    ["automatic-workflow-design.md", "claude-parity-audit.md"].map(name => `${root}/${name}`)),
   ...readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg")).map((f) => `docs/assets/${f}`),
 ];
 for (const f of dictionary ? readByPeople : []) {
