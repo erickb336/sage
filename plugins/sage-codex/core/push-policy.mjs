@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { shellCommands } from "./command-reader.mjs";
+import { programsRun, shellCommands } from "./command-reader.mjs";
 import { createCommandPolicy, GIT_VALUE, gitSubcommand } from "./command-policy.mjs";
 
 /** Shared push rules. The provider supplies a synchronous reader of the checkout's current branch.
@@ -28,12 +28,16 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     for (const { cmd, words, bodies } of runnable(commands)) {
       if (cmd.words[0] === "cd" && cmd.words.length === 2) dir = resolve(dir, cmd.words[1]);
       const git = words.findIndex((w, k) => /(?:^|\/)git$/.test(w) && /^push$/i.test(gitSubcommand(words, k + 1)));
-      if (git < 0 && apiWritesMain(words)) {
-        // Preserve the merge policy's more specific refusal without allowing an API write through this policy.
-        return mergeIn(command)?.problem ?? refuse(mainReason);
-      }
       const why = git >= 0 ? pushForm(words, git, dir) : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
       if (why) return refuse(why);
+    }
+    try {
+      // Use the shared reader for wrappers, their option values, and nested command text.
+      for (const run of programsRun(command, cwd)) {
+        if (apiWritesMain([run.word, ...run.args])) return mergeIn(command)?.problem ?? refuse(mainReason);
+      }
+    } catch {
+      if (/\bgh(?:\.exe)?\b/i.test(bare(command))) return mergeIn(command)?.problem ?? refuse("the hook cannot establish the GitHub API command's destination.");
     }
     return undefined;
   }
@@ -89,21 +93,15 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     return branch && MAIN_REF.test(branch) ? `this checkout is on ${branch}. Push from the task's worktree, on the task's branch.` : undefined;
   }
 
-  /** Whether the command is gh api: gh as the command word, as gh or a path that ends in /gh, after any NAME=value, env and command. */
-  function ghApi(words) {
-    let k = 0;
-    while (/^(?:[A-Za-z_]\w*=|env$|command$)/.test(words[k] ?? "")) k++;
-    return /(?:^|\/)gh$/.test(words[k] ?? "") && words[k + 1] === "api";
-  }
-
   /** Read request options, not display options or unrelated text, as branch evidence. Never open a supplied body file. */
   function apiWritesMain(words) {
-    if (!ghApi(words)) return false;
+    if (!/(?:^|[/\\])gh(?:\.exe)?$/i.test(words[0] ?? "")) return false;
     let method;
     let endpoint;
+    let api = false;
     let opaque = false;
     const fields = [];
-    const args = words.slice(words.indexOf("api") + 1);
+    const args = words.slice(1);
     for (let k = 0; k < args.length; k++) {
       const word = args[k];
       // Cobra permits flag bundles such as -iX PATCH and -ifbranch=main. A value flag owns the rest.
@@ -122,8 +120,12 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       else if (word === "--input") { opaque = true; k++; }
       else if (word.startsWith("--input=")) opaque = true;
       else if (/^(?:--hostname|--cache|--header|-H|--jq|-q|--preview|-p|--template|-t)$/.test(word)) k++;
-      else if (!word.startsWith("-")) endpoint ??= word;
+      else if (!word.startsWith("-")) {
+        if (!api) { if (word !== "api") return false; api = true; }
+        else endpoint ??= word;
+      }
     }
+    if (!api) return false;
     let path = endpoint ?? "";
     let search = "";
     if (/^https?:\/\//i.test(path)) {
@@ -134,11 +136,13 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       path = path.slice(0, split);
     }
     try { path = decodeURIComponent(path).replace(/^\//, ""); } catch { return true; }
+    path = path.replace(/^api\/v3\//, "").replace(/^api\/graphql$/, "graphql");
     const hasBodyFields = fields.length > 0;
     for (const [key, value] of new URLSearchParams(search)) fields.push({ value: `${key}=${value}`, typed: false });
     const values = fields.map(({ value, typed }) => {
       const split = value.indexOf("=");
-      return { key: value.slice(0, split), value: value.slice(split + 1), opaque: typed && value.slice(split + 1).startsWith("@") };
+      return { key: value.slice(0, split), value: value.slice(split + 1),
+        opaque: typed && /^(?:@)|\{(?:owner|repo|branch)\}/.test(value.slice(split + 1)) };
     });
     const protectedName = (text) => /(?:^|[\s/=:'"(])(?:refs\/)?(?:heads\/)?(?:main|master)(?=$|[\s/?&#:'"),}])/i.test(text);
     if (path === "graphql") {
@@ -150,10 +154,10 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       const operations = query.replace(/"""(?:\\[\s\S]|(?!""")[\s\S])*"""|"(?:\\[\s\S]|[^"\\])*"|#[^\r\n]*|,/g, " ");
       if (!/\bmutation\b/.test(operations)) return false;
       // Ref ids hide their branch name. A ref update or deletion must use the reviewed PR path.
-      if (/\b(?:updateRefs?|deleteRef)\s*\(/.test(operations)) return true;
+      if (/\b(?:updateRefs?|deleteRef|updatePullRequestBranch)\s*\(/.test(operations)) return true;
       if (/\bcreateCommitOnBranch\s*\(/.test(operations) &&
         (/\bbranch\s*:\s*\{[^{}]*\bid\s*:/.test(operations) || !/\bbranchName\s*:\s*"[^"\\]+"/.test(query))) return true;
-      return /\b(?:createCommitOnBranch|createRef|mergeBranch)\s*\(/.test(operations) &&
+      return /\b(?:createCommitOnBranch|createRef|createLinkedBranch|mergeBranch)\s*\(/.test(operations) &&
         (/\\/.test(query) || values.some(field => protectedName(field.value) ||
           (field.key !== "query" && /[$`\\]/.test(field.value))));
     }
@@ -161,8 +165,9 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     // Without quote provenance a question mark can be a shell glob, not an API query separator.
     if (endpoint?.includes("?")) return true;
     if (/[$`\\*\[\]]/.test(path)) return true;
-    const route = /^repos\/[^/]+\/[^/]+\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|branches\/.*\/rename)$/.exec(path)?.[1];
+    const route = /^(?:repos\/[^/]+\/[^/]+|repositories\/\d+)\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|merge-upstream|branches\/.*\/rename|pulls\/[^/]+\/update-branch)$/.exec(path)?.[1];
     if (!route) return false;
+    if (/^pulls\//.test(route)) return true; // The PR id does not prove which branch this request changes.
     if ((!route.startsWith("contents") && (protectedName(route) || !LITERAL.test(route))) || opaque) return true;
     const destinations = values.filter(field => /^(?:ref|branch|base|new_name)$/.test(field.key));
     if (destinations.some(field => field.opaque || !LITERAL.test(field.value) || MAIN_REF.test(field.value))) return true;
