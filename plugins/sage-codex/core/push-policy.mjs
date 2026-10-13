@@ -157,9 +157,10 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       return { key: value.slice(0, split), value: value.slice(split + 1),
         opaque: typed && /^(?:@)|\{(?:owner|repo|branch)\}|:(?:owner|repo|branch)\b/.test(value.slice(split + 1)) };
     });
+    const bracketedFields = values.some(field => /[\[\]]/.test(field.key));
     const protectedName = (text) => /(?:^|[\s/=:'"(])(?:refs\/)?(?:heads\/)?(?:main|master)(?=$|[\s/?&#:'"),}])/i.test(text);
     if (path === "graphql") {
-      if (opaque || values.some(field => field.opaque)) return true;
+      if (opaque || bracketedFields || values.some(field => field.opaque)) return true;
       const query = values.filter(field => field.key === "query").map(field => field.value).join(" ");
       // The shell reader does not retain which quote protected a dollar sign. Require literal query text.
       if (/[$`]/.test(query)) return true;
@@ -182,6 +183,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     if (/[$`\\*\[\]{}]|:(?:owner|repo|branch)\b/.test(literalPath)) return true;
     const route = /^(?:repos\/[^/]+\/[^/]+|repositories\/\d+)\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|merge-upstream|branches\/.*\/rename|pulls\/[^/]+\/update-branch)$/.exec(path)?.[1];
     if (!route) return false;
+    if (bracketedFields) return true; // gh interprets bracketed keys as structured fields, including incomplete brackets.
     if (/^pulls\//.test(route)) return true; // The PR id does not prove which branch this request changes.
     if ((!route.startsWith("contents") && (protectedName(route) || !LITERAL.test(route))) || opaque) return true;
     const destinations = values.filter(field => /^(?:ref|branch|base|new_name)$/.test(field.key));
