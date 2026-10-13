@@ -44,6 +44,18 @@ export function createPreparationServer(options = {}) {
       return { isError: true, content: [{ type: "text", text: "Sage could not read this report. Check the child name, completed assignment, and report fields." }] };
     }
   });
+  server.registerTool("sage_record_report", {
+    description: "Save your completed child's validated report using the exact hash returned by sage_read_report. Retries preserve one receipt. This records evidence, not task success or a review verdict.",
+    inputSchema: z.object({ name: z.string(), reportHash: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { recordChildReport } = await import("./report-intake.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(recordChildReport(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not record this report. Check the child name, completed assignment, and exact report hash." }] };
+    }
+  });
   return server;
 }
 
