@@ -128,10 +128,18 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       }
     }
     if (!api) return false;
+    const writes = (method ?? (fields.length || opaque ? "POST" : "GET")).toUpperCase() !== "GET";
+    // Expansion can put a complete path inside a hostname. Check before URL parsing discards it.
+    if (writes && /[$`\\*\[\]]/.test(endpoint ?? "")) return true;
     let path = (endpoint ?? "").split("#", 1)[0];
     let search = "";
     if (/^https?:\/\//i.test(path)) {
-      try { const url = new URL(path); path = url.pathname; search = url.search; } catch { return true; }
+      try {
+        const url = new URL(path);
+        if (writes && /[{}]|:(?:owner|repo|branch)\b/.test(url.host)) return true;
+        path = url.pathname;
+        search = url.search;
+      } catch { return true; }
     } else if (path.includes("?")) {
       const split = path.indexOf("?");
       search = path.slice(split);

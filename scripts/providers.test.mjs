@@ -366,6 +366,8 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
       "gh api graphql --input body.json",
       "gh api graphql -F query=@query.graphql",
       'gh api graphql -f "query=$QUERY"',
+      'gh api "https://$DEST" -X PATCH -f sha=abc',
+      'gh api "https://{branch}" -X PATCH -f sha=abc',
       'gh api "$ENDPOINT" -X PATCH -f sha=abc',
       'gh api "repos/o/r/$RESOURCE/heads/main" -X PATCH -f sha=abc',
       "gh api --method DELETE repos/o/r/git/refs/heads/main",
