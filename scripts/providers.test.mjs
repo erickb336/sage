@@ -2508,3 +2508,26 @@ test("Codex direct patch targets refuse header whitespace that native parsing re
   assert.deepEqual(patchTargets(wrap("*** Add File: ordinary name\n+fixed")), ["ordinary name"]);
   assert.equal(existsSync(join(f.dir, "AGENTS.md")), false);
 });
+
+
+test("shared write classification preserves numeric and device-like redirection targets", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites, shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    for (const name of ["&1", "&2", "&1-", "&-"]) {
+      symlinkSync(join(root, "ledger.tsv"), join(cwd, name));
+      const command = `printf fixed > '${name}'`;
+      assert.equal(commandWrites(command, cwd), true, command);
+      assert.equal(shellWriteOutsideRoots({ command, cwd, roots: [root] }), false, command);
+    }
+    mkdirSync(join(cwd, ">")); symlinkSync(root, join(cwd, ">", "dev"));
+    const command = "printf fixed > '>/dev/null'";
+    assert.equal(commandWrites(command, cwd), true, command);
+    assert.equal(shellWriteOutsideRoots({ command, cwd, roots: [root] }), false, command);
+    for (const command of ["printf fixed >&1", "printf fixed 2>&2", "printf fixed > /dev/null"])
+      assert.equal(commandWrites(command, cwd), false, command);
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+    assert.equal(existsSync(join(root, "null")), false);
+  }
+});
