@@ -2779,3 +2779,17 @@ test('terminal evidence frees its project and lead limits without changing anoth
   assert.throws(() => f.reserve(7, 'qa'), /total capacity/);
   assert.equal(f.api.readAdmission(f.journal).reservations.length, 5);
 });
+
+
+test('terminal bindings cannot revive through an atomic repeated binding request', async t => {
+  for (const provider of ['claude', 'codex']) for (const interrupted of [false, true]) {
+    const f = await roleAdmissionFixture(t, undefined, provider);
+    const binding = bindingFor(f.reserve(1).assignment);
+    f.api.bindAdmission(f.journal, binding);
+    if (interrupted) f.api.interruptAdmission(f.journal, binding, 'd'.repeat(64));
+    else f.api.completeAdmission(f.journal, binding);
+    const before = f.api.readAdmission(f.journal);
+    assert.throws(() => f.api.bindAdmission(f.journal, binding), /completed assignment cannot bind/);
+    assert.deepEqual(f.api.readAdmission(f.journal), before);
+  }
+});

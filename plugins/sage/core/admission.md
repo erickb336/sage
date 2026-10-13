@@ -158,7 +158,8 @@ terminal evidence; it does not enable new dispatch.
 
 Only unfinished assignments occupy total, project, lead and team slots. Completing
 a lead does not release its children's slots. A completed child cannot prepare or
-reserve more work. The Codex binding adapter refuses renewed instructions for a
+reserve more work. The atomic binding transition also refuses completed work,
+including an identical binding retry after a concurrent completion. The Codex binding adapter refuses renewed instructions for a
 completed assignment. Native delivery, terminal verification and recovery remain
 provider responsibilities; this extraction does not wire automatic completion.
 

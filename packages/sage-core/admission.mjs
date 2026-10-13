@@ -186,6 +186,7 @@ function apply(state, event) {
     const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
     if (!reserved || ["project", "session", "epoch", "issuer", "call"].some(key => reserved.assignment[key] !== value[key])) refuse("child binding has no matching reservation");
     if (!reserved.rolePlan) refuse("child binding requires a recorded role");
+    if (completed.has(value.assignment)) refuse("completed assignment cannot bind");
     if (value.child === value.issuer) refuse("issuer cannot bind itself as a child");
     const previous = copy.bindings.find(row => row.assignment === value.assignment);
     if (previous) {
