@@ -10,7 +10,7 @@ The required-hook outage check still permits an untracked child. This blocks act
 | Area | Implemented evidence | Work left before full parity |
 | --- | --- | --- |
 | Owner activation and off | Verified initial and later owner mode requests, saved mode, chief instruction assembly; off restores direct chief edits without interrupting children | Supported installed entry point and trusted hook enforcement |
-| Compaction and restart | Durable records survive adapter reconstruction; native CLI resume preserves one owner; manual and automatic root compaction restore exact chief context without active children | Child compaction loses the saved assignment; report completion is repaired; remote compaction, active-child restart, and session transfer remain unverified |
+| Compaction and restart | Durable records survive adapter reconstruction; root context recovery, repeated child compaction, and later-assignment recovery pass isolated native checks | Real-model recovery, remote compaction, active-child restart, and session transfer remain unverified |
 | Command and write rules | Role edit refusal, original command recovery, chief-only child messages, child sandbox-request refusal | Complete command, path, file-write and workflow policy; trusted effective execution context |
 | Briefs and dispatch | Saved briefs, atomic admission, initial and prepared follow-up binding, exact native task delivery | Required-hook outage protection and all missing-initial-evidence cases |
 | Roles and limits | Shared limits, one active lead per task, run-target checks, lead-to-reviewer delegation | One lead per PR across distinct task records; complete installed workflow |
@@ -26,6 +26,22 @@ Implementation details and repeatable checks are in [policy.md](policy.md),
 [dispatch-failure.md](dispatch-failure.md), and [native-interruption.md](native-interruption.md).
 The source pointers below identify the Claude baseline. Later sections record each implementation step;
 an earlier section's remaining-work statement describes that step, not the current summary above.
+
+## Latest integration evidence
+
+Integration commit `daa9bbe` includes main through PR #178. Build and repository checks pass, with all 1,255 tests passing.
+The ownership merge received an independent code review. This is not a final review of the whole runtime.
+
+These CLI 0.160.0 routes pass on that commit with simulated model responses:
+
+- `--sage-followup`: one child completes two assignments and preserves both reports.
+- `--sage-followup-missed-callbacks`: the parent recovers two assignments without stored stop callbacks or child tool calls.
+- `--sage-child-repeat-recovery`: both child compactions require fresh recovery before one assignment completes.
+- `--sage-followup-recovery`: the second assignment recovers after compaction and preserves the first report.
+
+Every route removes its temporary profile and exits. These checks do not establish real-model behavior or installed automatic operation.
+The remaining integration still needs topic extraction, complete policy enforcement, final independent reviews, and the real-project pilot.
+The required-hook failure and bundled SDK issue still prevent activation.
 
 ## Interpretation boundaries
 
