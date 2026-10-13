@@ -2819,3 +2819,67 @@ test("report structure rejects missing empty repeated malformed and oversized fi
     assert.throws(() => reportApi.parseReport(value));
   }
 });
+
+async function reportReceiptFixture(t) {
+  const f = await roleAdmissionFixture(t);
+  assert.equal(typeof f.api.recordReportAdmission, "function");
+  const assigned = f.reserve(1).assignment;
+  const binding = bindingFor(assigned);
+  f.api.bindAdmission(f.journal, binding);
+  const { createHash } = await import("node:crypto");
+  const receipt = (text = report, bound = binding, run = assigned.run, task = assigned.task) => ({ binding: bound, task,
+    run, reportMessage: "report-message", reportHash: createHash("sha256").update(text).digest("hex"), text });
+  return { ...f, binding, receipt };
+}
+
+test("durable reports record once after completion and preserve all other admission state", async t => {
+  const f = await reportReceiptFixture(t);
+  assert.throws(() => f.api.recordReportAdmission(f.journal, f.receipt()), /matching completed assignment/);
+  f.api.completeAdmission(f.journal, f.binding);
+  f.api.changeAdmissionMode(f.journal, { ...f.scope, after: f.activation, turn: modeTurn, sage: false });
+  const before = f.api.readAdmission(f.journal);
+  assert.equal(f.api.recordReportAdmission(f.journal, f.receipt()).decision, "report-recorded");
+  const files = readdirSync(f.journal);
+  assert.equal(f.api.recordReportAdmission(f.journal, f.receipt()).decision, "already-recorded");
+  assert.deepEqual(readdirSync(f.journal), files);
+  const { reports, ...after } = f.api.readAdmission(f.journal);
+  assert.deepEqual(after, before); assert.deepEqual(reports, [f.receipt()]);
+});
+
+test("durable reports refuse changed bindings content hashes task runs and replacement evidence", async t => {
+  const f = await reportReceiptFixture(t);
+  f.api.completeAdmission(f.journal, f.binding);
+  const receipt = f.receipt();
+  for (const key of Object.keys(f.binding)) {
+    assert.throws(() => f.api.recordReportAdmission(f.journal, { ...receipt, binding: { ...f.binding, [key]: "different" } }));
+  }
+  for (const changed of [{ task: "T2" }, { run: "R2" }, { reportHash: "a".repeat(64) }, { text: "STATUS done" }, { extra: true }]) {
+    assert.throws(() => f.api.recordReportAdmission(f.journal, { ...receipt, ...changed }));
+  }
+  assert.equal(f.api.recordReportAdmission(f.journal, receipt).decision, "report-recorded");
+  assert.throws(() => f.api.recordReportAdmission(f.journal, f.receipt(report.replace("RESULT PASS", "RESULT FAIL"))), /different recorded report/);
+  assert.throws(() => f.api.recordReportAdmission(f.journal, { ...receipt, reportMessage: "other-message" }), /different recorded report/);
+  assert.deepEqual(f.api.readAdmission(f.journal).reports, [receipt]);
+});
+
+test("concurrent durable report receipts publish once and conflicting reports cannot replace the winner", async t => {
+  const f = await reportReceiptFixture(t); f.api.completeAdmission(f.journal, f.binding);
+  const code = `const input=JSON.parse(process.argv[1]);const api=await import(input.url);
+    try{console.log(JSON.stringify(api.recordReportAdmission(input.dir,input.report)))}
+    catch{console.log(JSON.stringify({refused:true}))}`;
+  const run = report => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code, JSON.stringify({url:f.url,dir:f.journal,report})], {stdio:["pipe","pipe","pipe"],env:process.env,shell:false});
+    let output="", error="";
+    child.stdout.on("data",data=>output+=data);child.stderr.on("data",data=>error+=data);child.once("error",reject);
+    child.once("close",status=>{try{assert.equal(status,0,error);resolve(JSON.parse(output));}catch(e){reject(e)}});child.stdin.end();
+  });
+  const retries = await Promise.all([run(f.receipt()), run(f.receipt())]);
+  assert.deepEqual(retries.map(row=>row.decision).sort(), ["already-recorded", "report-recorded"]);
+  const second = f.reserve(2).assignment, bound = bindingFor(second,"child-2","turn-2");
+  f.api.bindAdmission(f.journal,bound);f.api.completeAdmission(f.journal,bound);
+  const different = await Promise.all([run(f.receipt(report,bound,second.run,second.task)),run(f.receipt(report.replace("RESULT PASS","RESULT FAIL"),bound,second.run,second.task))]);
+  assert.equal(different.filter(row=>row.decision==="report-recorded").length,1);
+  assert.equal(different.filter(row=>row.refused).length,1);
+  const saved=f.api.readAdmission(f.journal).reports;
+  assert.equal(saved.length,2);assert.deepEqual(saved[1],different.find(row=>row.decision==="report-recorded").report);
+});

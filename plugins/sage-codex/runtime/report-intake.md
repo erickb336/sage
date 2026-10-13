@@ -6,6 +6,8 @@ The reader resolves the current owner, saved assignment, child, turn, and task h
 
 Inspection can first reconcile terminal evidence for the requested assignment through the completion adapter. It does not reconcile other children. A stop callback or reported status alone cannot complete an assignment. An interrupted assignment cannot supply a completed report. Once completion is recorded, repeated reads change no admission state. Sage off still permits inspection of preserved work.
 
-The reader does not save report evidence, finish a logbook run, accept findings, or record a review verdict. A report describes the child's claims; it does not prove task success. Missing, changed, ambiguous, linked, or stale transcript evidence is refused. Durable receipts and later assignments remain separate work.
+`sage_record_report` saves the inspected report when the caller supplies its exact hash. Recovery proof binds the receipt to the verified assignment before the journal records it. A proof without a receipt grants no report authority. Exact retries preserve one receipt; conflicting evidence is refused. A saved receipt with valid recovery proof remains readable after native transcript removal.
+
+Neither operation finishes a logbook run, accepts findings, or records a review verdict. A report describes the child's claims; it does not prove task success. Missing, changed, ambiguous, linked, or stale evidence is refused unless an exact saved receipt and valid recovery proof permit recovery. Later assignments remain separate work.
 
 Run `node scripts/probe-codex-lifecycle.mjs --sage-report` with fake process tools first on PATH. The probe uses CLI 0.160.0, a temporary profile, and simulated responses. It checks the exact report identity and text hash through the packaged MCP tool, then removes the temporary profile. It does not establish installed automatic Sage or real-model behavior.

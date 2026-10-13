@@ -58,6 +58,7 @@ export function observation(input) {
     "child-start": { child: UUID, parent: UUID, path: TASK, turn: ID },
     "child-stop": { child: UUID, turn: ID },
     "child-transcript": { child: UUID, turn: UUID, transcript: /^\/[^\p{Cc}]{1,4095}$/u },
+    "report-recovery-verified": { assignment: UUID, child: UUID, turn: UUID, receiptHash: /^[0-9a-f]{64}$/ },
     "initial-child-transcript": { child: UUID, turn: UUID, transcript: /^\/[^\p{Cc}]{1,4095}$/u },
     "dispatch-request": { actor: UUID, call: ID, turn: ID, mode: /^(message|task)$/, target: TARGET },
     "dispatch-result": { actor: UUID, call: ID, turn: ID, mode: /^(message|task)$/, target: TARGET },
