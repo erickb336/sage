@@ -4218,3 +4218,21 @@ test("child assignment recovery refuses changed delivery and missing transcripts
   writeFileSync(path, bytes); assert.deepEqual(read(), expected);
 
 });
+
+test("native failed dispatch rejects post-terminal evidence and preserves historical rejection", async t => {
+  for (const type of ["task_complete", "turn_aborted"]) {
+    const f = await failedDispatchFixture(t);
+    const terminal = { type: "event_msg", payload: { type, turn_id: f.spawn.turn_id } };
+    for (const position of [0, 1]) {
+      const rows = structuredClone(f.rows); rows.splice(position, 0, terminal); f.write(rows);
+      assert.throws(() => f.policy.reconcileCompletions(f.event, f.native(session)), /failure evidence/);
+      assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+    }
+    f.write([...f.rows, terminal]);
+    f.policy.reconcileCompletions(f.event, f.native(session));
+    assert.equal(f.core.readAdmission(f.options.directory).failures.length, 1);
+    const saved = f.core.readAdmission(f.options.directory);
+    f.policy.reconcileCompletions(f.event, f.native(session));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), saved);
+  }
+});

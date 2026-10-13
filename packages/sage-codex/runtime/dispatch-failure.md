@@ -8,7 +8,7 @@ The adapter now reconciles this verified preflight rejection before a new spawn 
 It requires the current transport actor, owner epoch, original request, exact call and turn, and matching argument hash.
 The transcript must identify that actor and session. The call must name native `collaboration.spawn_agent`.
 Native metadata must mark the output as not client-authored. The output must match the unknown-model error for the dispatched model.
-Linked files, conflicting calls, changed arguments, and forged metadata refuse. Other errors retain capacity.
+Linked files, conflicting calls, changed arguments, and forged metadata refuse. A call or result after native turn completion or interruption refuses. Valid failure evidence recorded before termination remains readable. Other errors retain capacity.
 Any successful dispatch result, child-start evidence, or saved binding also retains capacity on this path.
 
 The adapter saves a failure receipt, not a child completion. The journal rejects a late binding and duplicate release.
