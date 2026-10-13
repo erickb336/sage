@@ -7,6 +7,7 @@ export { createPushPolicy } from "./push-policy.mjs";
 export { PR } from "./pull-request.mjs";
 export { fileWriteOutsideRoots } from "./protected-paths.mjs";
 export { commandWrites } from "./shell-write-policy.mjs";
+export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";
 export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp } from "./mode-policy.mjs";
 export { createAssignment, correlateReport } from "./assignments.mjs";
