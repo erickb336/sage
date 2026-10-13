@@ -1,6 +1,7 @@
 // Shared write classification from the existing hook rules. This never executes command text.
 import { basename } from "node:path";
 import { shellCommands, programsRun } from "./command-reader.mjs";
+import { outputDispatchWrites } from "./output-writes.mjs";
 
 const CODE = /^-(?:[a-z]*[ce]|p|-eval|-print|command)$/;
 /** The commands that write, move, remove or link a file, also in PowerShell (case does not matter there). uniq IN OUT and less -o FILE write, so uniq and less always count. */
@@ -89,7 +90,7 @@ export function commandWrites(text, cwd) {
   try {
     if (shellCommands(text).some(writesIn)) return true;
     const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
-    return evidence.redirects.some(toFile) || evidence.programs.some(readerDispatch);
+    return evidence.redirects.some(toFile) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry));
   } catch {
     return true;
   }
