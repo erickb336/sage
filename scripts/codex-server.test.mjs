@@ -694,3 +694,88 @@ test("composed native policy holds incomplete child evidence until the matching 
   assert.throws(() => policy.startChild(f.identity));
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
 });
+
+
+async function commandDecoder(t) {
+  const f = fixture(t);
+  const { decodeNativeCommand } = await import(pathToFileURL(join(f.plugin, 'runtime/command-input.mjs')));
+  return decodeNativeCommand;
+}
+
+test('native command decoder preserves all supported fields without approving or inventing defaults', async t => {
+  const decode = await commandDecoder(t);
+  assert.deepEqual(decode({ cmd: 'printf fixed' }), { cmd: 'printf fixed' });
+  const value = { cmd: 'printf fixed', shell: 'pwsh', login: false, tty: true, yield_time_ms: 0,
+    timeout_ms: 1000, max_output_tokens: 200, sandbox_permissions: 'with_additional_permissions',
+    additional_permissions: { network: { enabled: true }, file_system: { read: ['relative'], write: ['/fixture'] } },
+    justification: 'fixed reason', prefix_rule: ['printf'], environment_id: 'remote-fixture', workdir: '../relative' };
+  const saved = decode(value); assert.deepEqual(saved, value);
+  value.additional_permissions.file_system.write[0] = '/changed';
+  assert.deepEqual(saved.additional_permissions.file_system.write, ['/fixture']);
+  for (const mode of ['use_default', 'require_escalated', 'with_additional_permissions'])
+    assert.equal(decode({ cmd: 'fixed', sandbox_permissions: mode }).sandbox_permissions, mode);
+  const nullable = Object.fromEntries(['shell', 'login', 'timeout_ms', 'max_output_tokens', 'sandbox_permissions',
+    'additional_permissions', 'justification', 'prefix_rule', 'environment_id', 'workdir'].map(key => [key, null]));
+  assert.deepEqual(decode({ cmd: 'fixed', ...nullable }), { cmd: 'fixed', ...nullable });
+  assert.deepEqual(decode({ cmd: 'fixed', workdir: '' }), { cmd: 'fixed', workdir: '' });
+});
+
+test('native command decoder rejects malformed and unknown top-level fields with a fixed error', async t => {
+  const decode = await commandDecoder(t);
+  for (const fields of [{ cmd: '' }, { cmd: ['fixed'] }, { cmd: 'x'.repeat(1024 * 1024 + 1) }, { cmd: 'fixed\0private' },
+    { shell: 1 }, { shell: '' }, { shell: 'private\npath' }, { login: 'false' }, { tty: null }, { yield_time_ms: null },
+    { timeout_ms: -1 }, { max_output_tokens: 0.5 }, { yield_time_ms: Number.MAX_SAFE_INTEGER + 1 },
+    { sandbox_permissions: 'danger-full-access' }, { environment_id: {} }, { workdir: [] },
+    { justification: false }, { prefix_rule: ['fixed', 1] }, { prefix_rule: Array(2) },
+    { prefix_rule: Array(257).fill('fixed') }, { future_option: 'private' }])
+    assert.throws(() => decode({ cmd: 'fixed', ...fields }), { message: 'Codex command arguments are unavailable' });
+  for (const value of [null, [], Object.assign(Object.create({ shell: 'private' }), { cmd: 'fixed' })])
+    assert.throws(() => decode(value), { message: 'Codex command arguments are unavailable' });
+});
+
+test('native command decoder preserves permission variants and refuses mixed or malformed permission shapes', async t => {
+  const decode = await commandDecoder(t);
+  const paths = [{ type: 'path', path: '/fixture' }, { type: 'glob_pattern', pattern: '**/fixed' },
+    ...['root', 'minimal', 'tmpdir', 'slash_tmp'].map(kind => ({ type: 'special', value: { kind } })),
+    ...['project_roots', 'current_working_directory'].map(kind => ({ type: 'special', value: { kind, subpath: 'src' } })),
+    { type: 'special', value: { kind: 'unknown', path: ':future', subpath: null } }];
+  const permissions = { network: { enabled: false }, file_system: { entries: paths.map(path =>
+    ({ path, access: 'deny', missing_path_behavior: 'skip' })), glob_scan_max_depth: 3 } };
+  assert.deepEqual(decode({ cmd: 'fixed', additional_permissions: permissions }).additional_permissions, permissions);
+  for (const invalid of [[], { fileSystem: {} }, { network: { enabled: 'true' } }, { network: { other: true } },
+    { file_system: { read: ['/fixture'], entries: [] } }, { file_system: { entries: null } },
+    { file_system: { write: [false] } }, { file_system: { glob_scan_max_depth: 0 } },
+    { file_system: { entries: [{ path: paths[0], access: 'admin' }] } },
+    { file_system: { entries: [{ path: paths[0], access: 'write', missing_path_behavior: 'create' }] } },
+    { file_system: { entries: [{ path: { type: 'special', value: { kind: 'invented' } }, access: 'read' }] } },
+    { file_system: { entries: [{ path: { type: 'path', path: '/fixture', extra: true }, access: 'read' }] } }])
+    assert.throws(() => decode({ cmd: 'fixed', additional_permissions: invalid }), { message: 'Codex command arguments are unavailable' });
+});
+
+
+test('native command decoder refuses sparse arrays with extra or hidden keys', async t => {
+  const decode = await commandDecoder(t);
+  const hidden = Object.defineProperty(['fixed'], 'extra', { value: 'fixed' });
+  const symbolic = Object.assign(['fixed'], { [Symbol('extra')]: 'fixed' });
+  const hiddenIndex = Object.defineProperty(['fixed'], '0', { enumerable: false });
+  for (const values of [Object.assign(Array(1), { extra: 'fixed' }), hidden, symbolic, hiddenIndex]) {
+    for (const input of [{ cmd: 'fixed', prefix_rule: values },
+      { cmd: 'fixed', additional_permissions: { file_system: { read: values } } }])
+      assert.throws(() => decode(input), { message: 'Codex command arguments are unavailable' });
+  }
+});
+
+test('native command decoder refuses array getters and hides inspection failures', async t => {
+  const decode = await commandDecoder(t);
+  let called = false;
+  const values = [];
+  Object.defineProperty(values, '0', { enumerable: true,
+    get() { called = true; throw Error('private fixture text'); } });
+  assert.throws(() => decode({ cmd: 'fixed', prefix_rule: values }),
+    { message: 'Codex command arguments are unavailable' });
+  assert.equal(called, false);
+  const throwing = new Proxy({ cmd: 'fixed' }, { ownKeys() { throw Error('private fixture text'); } });
+  const unclonable = new Proxy({ cmd: 'fixed' }, {});
+  for (const input of [throwing, unclonable])
+    assert.throws(() => decode(input), { message: 'Codex command arguments are unavailable' });
+});
