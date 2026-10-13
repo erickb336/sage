@@ -3,7 +3,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { test } from "node:test";
@@ -327,4 +327,27 @@ test("an apostrophe right after a code span, a link or a tag opens no quote", ()
   assert.deepEqual(scan("Read `sage:report`'s fields in the store, not in the agents' notes."), ["1:store"]);
   assert.deepEqual(scan("[agent](x.md)'s fields go in the store, not the 'logbook' draft."), ["1:store"]);
   assert.deepEqual(scan("The <b>chief</b>'s store, and the 'store' word."), ["1:store"]);
+});
+
+
+test("Codex workflow documents use the dictionary in sources and built copies", t => {
+  const c = copy();
+  t.after(() => rmSync(c.dir, { recursive: true, force: true }));
+  for (const root of ['packages/sage-codex/runtime', 'plugins/sage-codex/runtime']) {
+    for (const name of ['automatic-workflow-design.md', 'claude-parity-audit.md']) {
+      const path = `${root}/${name}`, original = c.read(path);
+      c.write(path, original + '\nThe next stage needs merge gates.\n');
+      if (root.startsWith('packages/')) assert.equal(c.run('build').status, 0);
+      const result = c.run('check');
+      assert.equal(result.status, 1);
+      for (const word of ['stage', 'merge gates']) {
+        const line = result.stderr.split('\n').find(line => line.startsWith(`✗ ${path}:`) && line.includes(`"${word}" is a flagged word`));
+        assert.ok(line, `Missing dictionary diagnostic for ${path}: ${word}`);
+      }
+      c.write(path, original);
+      assert.equal(c.run('build').status, 0);
+    }
+  }
+  const clean = c.run('check');
+  assert.equal(clean.status, 0, clean.stderr);
 });

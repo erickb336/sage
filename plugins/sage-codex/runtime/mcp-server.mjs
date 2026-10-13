@@ -35,9 +35,9 @@ export function createHookServer({ mode, loadPolicy } = {}) {
         return result(await childStartOutput(input, native, configuredMode, loadPolicy));
       }
       if (input.hook_event_name === "UserPromptSubmit") {
-        const { updateOwnerMode } = await import("./mode.mjs");
-        const updated = updateOwnerMode(input, native, configuredMode);
-        return result(updated ? {} : denied(input.hook_event_name));
+        const { ownerPromptOutput } = await import("./chief-output.mjs");
+        const { instruction_part = 0, ...prompt } = input;
+        return result(ownerPromptOutput(prompt, native, configuredMode, instruction_part));
       }
     } catch {
       // Errors may contain private input or paths. A successful MCP result must carry the denial.

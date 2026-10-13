@@ -76,7 +76,7 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model> or model.<role>=<model> for an agent role's model";
 const TABLES = {
-  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"],
+  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra"],
   runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
   findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status"],
   ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
@@ -84,7 +84,7 @@ const TABLES = {
   decisions: ["at", "task", "decision", "why"],
 };
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model"] };
+const ADDED = { runs: ["model"], tasks: ["hold", "extra"] };
 const COMMANDS = ["init", "logbook", "standing", "pages", "task", "round", "run", "finding", "verdict", "gate", "log", "status", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
@@ -101,7 +101,7 @@ const OPTIONS = {
   "gate add": ["question", "options", "recommend", "default"],
   "gate answer": ["option", "other-hex"],
   log: ["why"],
-  "merge-check": ["sha", "pr", "cycles"],
+  "merge-check": ["sha", "pr", "cycles", "head"],
   board: ["remember", "name-hex", "view"],
 };
 /** The canonical number of a PR in an older row: "040" is PR 40. */
@@ -384,11 +384,11 @@ const lost = (dir, table, what, also = []) =>
  * header-only table is a table without rows: a cut that keeps only the header cannot be told from it. An editor's BOM
  * and CRLF line ends read as a plain file.
  */
-function sheet(dir, table, also = []) {
+function sheet(dir, table, also = [], max = Infinity) {
   const file = join(dir, `${table}.tsv`);
   let text;
   try {
-    text = readRegular(file);
+    text = readRegular(file, { max });
   } catch (e) {
     if (e instanceof Refusal || !e.code) throw e;
     refuse(`${file} cannot be read (${e.code}). ${fixIt(file, e.code)}`);
@@ -413,7 +413,7 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
  * file that it can read, is not empty, and has its header line. It refuses the first that fails and names its file. The
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
-const check = (dir, skip = []) => Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip)]));
+const check = (dir, skip = [], max = Infinity) => Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
 
 /**
  * Refuses, before any change, a logbook that a command could not change whole: one that fails the integrity check, or a
@@ -422,7 +422,7 @@ const check = (dir, skip = []) => Object.fromEntries(Object.keys(TABLES).filter(
  * new logbook (init writes tasks.tsv last), and it may have only tables without rows: rows without their tasks are a loss.
  */
 /** Does any table of the logbook folder hold a row? A folder without tasks.tsv that has one lost its tasks. */
-const hasRows = (dir) => Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`)) ?? "").trim().split(/\r?\n/).length > 1);
+const hasRows = (dir, max = Infinity) => Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`), { max }) ?? "").trim().split(/\r?\n/).length > 1);
 
 function ready(dir, skip = []) {
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
@@ -504,6 +504,13 @@ function parse(cmd, args) {
 const need = (value, what) => value || refuse(`missing ${what}`);
 /** A word as a shell reads it: in single quotes when it holds anything but letters, digits and ._/-, so a pasted command does only what it says. */
 const shell = (word) => (/^[\w./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
+
+/**
+ * A held task takes no new run, finding change or verdict, from any caller, until the sage moves it out of held (F-T273-18):
+ * a lead's command that the hook checked before the round set held still stops here. Nor does it take pr= or branch=
+ * (F-T284-3). The chief's own moves stay: task set state=, round, run done, finding move, and a triage ask or dismiss.
+ */
+const notHeld = (task, what) => task.state === "held" && refuse(`${task.id} is held, so it takes no ${what}: only the sage moves a held task (sage task ${task.id} set state=building or briefed), then ${what} again.`);
 
 /** Refuses an id that the logbook does not have, and names the latest ids that it has, to pick from. */
 const missing = (what, ids) => refuse(`no ${what}. ${ids.length ? `The latest: ${ids.slice(-10).join(", ")}.` : "There is none yet."}`);
@@ -671,12 +678,19 @@ function rebuild(root) {
  * With pr, the tasks of that pull request in those logbooks must pass too, and there must be one. Each task wants the
  * clean cycles of its size and risk (cyclesFor), or cycles when it is given and higher: cycles only raises. The hook calls this, so it
  * never throws: what it cannot read refuses the merge. With readOnly (the board), it takes no lock and writes nothing, so
- * it refuses when the known project list is missing instead of making it.
+ * it refuses when the known project list is missing instead of making it. With head (it needs pr), the name of the pull
+ * request's head branch on GitHub: each task of that pull request, now or in its PR history, must own it, by its branch=
+ * or as a branch of the task (ofTask), so a task cannot lend its verdicts to another task's pull request (F-T273-8).
+ * With project, the folder of the project being merged: only a task of its logbook counts as a task of the pull request
+ * that may approve the merge. A task of another logbook with verdicts on the SHA must still pass (F-T273-9).
  */
-function mergeCheck(sha, env = process.env, { cycles, pr, readOnly } = {}) {
+function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, project } = {}) {
   const root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
+    if (head !== undefined && !pr) return { ok: false, reason: "--head needs --pr: the head branch is the pull request's." };
+    if (head === "") return { ok: false, reason: "--head is empty: give the pull request's head branch (F-T273-10)." };
+    const mine = project === undefined ? undefined : basename(storeDir(project, env)); // the merged project's logbook
     sha = String(sha).toLowerCase(); // the ledger holds SHAs as git prints them
     pr &&= prNumber(String(pr)); // the tasks table holds it as text; "040" is PR 40
     const cfg = config(env); // once: the merge check may judge thousands of tasks
@@ -695,18 +709,23 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly } = {}) {
       if (!listed.has(basename(dir))) return strangers.push(dir), [];
       const [tasks, findings, decisions] = book ? [rowsOf(book.tasks), rowsOf(book.findings), rowsOf(book.decisions)] : [[], [], []];
       const repaired = decisions.some((d) => d.decision.startsWith("tasks.tsv started again without rows"));
-      const ofPr = pr ? prHistory(pr, tasks, decisions, ledger) : new Set();
+      const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
       const [byId, ownOf, findingsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings)];
       return [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
-        return { dir, id, ofPr: ofPr.has(id), own: own.length, ...judge(dir, task, findingsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr) };
+        // A held task never merges until the sage moves it (F-T273-12).
+        const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
+        return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...judge(dir, task, findingsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr), ...held };
       });
     });
     const one = strangers.length === 1;
     if (strangers.length) return { ok: false, reason: `${strangers.map(visible).join(" and ")} ${one ? "has" : "have"} verdicts on ${sha.slice(0, 7)} but ${one ? "is" : "are"} not in the known project list (${join(root, "projects.tsv")}), so the merge check refuses: a logbook that init did not make may be forged. init adds only a project's own logbook folder, so it does not help here. If ${one ? "it is" : "one is"} a project's logbook under another name (a renamed folder or a link), ask the user to give the folder back its own name, or to run ${REBUILD} and check each folder that it prints. If no project uses ${one ? "it" : "one"}, ask the user to remove it.` };
     if (!each.length) return { ok: false, reason: `no verdicts recorded for ${sha}. Record the reviews and QA with sage verdict first.` };
-    if (pr && !each.some((r) => r.ofPr)) return { ok: false, reason: `no task of PR ${pr} has verdicts on ${sha.slice(0, 7)}: only ${each.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")} ${each.length === 1 ? "has" : "have"}. Record PR ${pr}'s verdicts under its own task (sage verdict <T> --sha <sha> --pr ${pr}), or set its PR: sage task <T> set pr=${pr}.` };
+    if (pr && !each.some((r) => r.ofPr)) return { ok: false, reason: `no task of PR ${pr}${mine === undefined ? "" : ` in this project's logbook (${visible(mine)})`} has verdicts on ${sha.slice(0, 7)}: only ${each.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")} ${each.length === 1 ? "has" : "have"}. Record PR ${pr}'s verdicts under its own task (sage verdict <T> --sha <sha> --pr ${pr}), or set its PR: sage task <T> set pr=${pr}.` };
+    // The head branch rule comes after each task's own judgment, so a refusal names a task's missing verdicts first.
+    const strays = head === undefined ? [] : each.filter((r) => r.ofPr && !r.owns);
+    if (strays.length && each.every((r) => r.ok)) return { ok: false, reason: `PR ${pr}'s head branch ${JSON.stringify(head)} is not a branch of ${strays.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")}, so the merge check refuses: each task that is or was on a pull request must own its head branch, a branch named for the task. Rename the branch to a task name (for example sage/${strays[0].id.toLowerCase()}-<words>), or the user lands this pull request.` };
     if (each.length === 1) return { ok: each[0].ok, reason: each[0].reason };
     const all = `${each.length} tasks have verdicts on ${sha.slice(0, 7)}${pr ? ` or belong to PR ${pr}` : ""}, and each must pass`;
     const bad = each.filter((r) => !r.ok);
@@ -741,18 +760,33 @@ function status(dir, save) {
 }
 
 /**
- * The task that a run id (R<n>) or a finding key (F-T<n>-<k>) belongs to in the project's logbook, so that the hook can
- * keep a lead's writes on its own task. Undefined for an id of another form, an id that the logbook does not have, an
- * id on two tasks, or a project without a logbook (no tables with rows, as before init). It takes no lock and writes
- * nothing. A logbook that fails the integrity check, also one that lost tasks.tsv but has rows, throws its refusal,
- * which names the file at fault, so a caller fails closed.
+ * A read-only view of the project's logbook, so that the hook can keep a lead's writes on its own task: its folder
+ * (dir), a task's row, the row of a run id (R<n>) or a finding key (F-T<n>-<k>), a task's one running lead run, and the
+ * tasks that are or were on a PR. Each lookup gives undefined for an id of another form, an id that the logbook does not
+ * have, or an id on two rows; a project without a logbook (no tables with rows, as before init) has no rows. It reads
+ * every table once, takes no lock and writes nothing. A logbook that fails the integrity check, also one that lost
+ * tasks.tsv but has rows, throws its refusal, which names the file at fault, so a caller fails closed. With max, a table
+ * of more than max bytes throws too.
  */
-function taskFor(id, project, env = process.env) {
-  const [table, col] = /^R[1-9]\d*$/.test(id) ? ["runs", "id"] : /^F-T[1-9]\d*-[1-9]\d*$/.test(id) ? ["findings", "key"] : [];
+function logbookView(project, env = process.env, { max = Infinity } = {}) {
   const dir = storeDir(project, env);
-  if (!table || (!lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && !hasRows(dir))) return undefined;
-  const owners = new Set(rowsOf(check(dir)[table]).filter((r) => r[col] === id).map((r) => r.task));
-  return owners.size === 1 ? [...owners][0] : undefined;
+  const none = !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && !hasRows(dir, max);
+  const tables = Object.fromEntries(Object.entries(none ? {} : check(dir, [], max)).map(([t, sheet]) => [t, rowsOf(sheet)]));
+  const rows = (table) => tables[table] ?? [];
+  const one = (found) => (found.length === 1 ? found[0] : undefined);
+  return {
+    dir,
+    task: (id) => one(rows("tasks").filter((t) => t.id === id)),
+    row(id) {
+      const [table, col] = /^R[1-9]\d*$/.test(id) ? ["runs", "id"] : /^F-T[1-9]\d*-[1-9]\d*$/.test(id) ? ["findings", "key"] : [];
+      return table ? one(rows(table).filter((r) => r[col] === id)) : undefined;
+    },
+    leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
+    findings: (task) => rows("findings").filter((f) => f.task === task),
+    shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
+    verdictRuns: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.run).map((r) => r.run)),
+    prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),
+  };
 }
 
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
@@ -776,7 +810,7 @@ function sage(argv, env = process.env) {
   if (cmd === "merge-check") {
     const cycles = opt.cycles === undefined ? undefined : (typed("cycles.small", opt.cycles) ?? refuse("--cycles is a whole number from 1 to 10")); // the chief's explicit count: it only raises a task's own count
     if (opt.pr !== undefined && !PR.test(opt.pr)) refuse("--pr is the pull request's number, with no leading zero, for example --pr 5");
-    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr });
+    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project: resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd()) });
     return r.ok ? r.reason : refuse(r.reason);
   }
   if (cmd === "config") {
@@ -935,7 +969,17 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
           if (k === "state") {
             if (v === "repairing") refuse("start a repair with: sage round <task>");
+            // A move out of a hold that round set gives the task one more repair round, once per such hold (F-T284-14,
+            // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
+            const was = task.state;
             move(task, v); // the design's states first; the table is written only if every check below passes
+            if (was === "held" && task.hold === "round") {
+              task.extra = String(Number(task.extra || 0) + 1);
+              decided.push({ at: now(), task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
+            }
+            if (was === "held" || v === "held") task.hold = "";
+            // A new premise starts its own count: the round keys of the old plan go when the task leaves replan (F-T284-19).
+            if (was === "replan") task.keys = "";
             const build = builds(task);
             if ((v === "verified" && !build) || (v === "concluded" && build)) refuse(`${task.id} ${build ? "has a build block, so it ends at verified" : "has no build block, so it ends at concluded"}`);
             if (v === "verifying" || v === "concluded") {
@@ -952,8 +996,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
               if (!r.ok) refuse(`${task.id} is not verified on ${head.slice(0, 7)}: ${r.reason}`);
             }
             if (["merged", "concluded", "abandoned"].includes(v)) decided.push({ at: now(), task: task.id, decision: `state ${v}`, why: "task set" });
-          } else if (k === "pr") decided.push(...setPr(task, v, "task set"));
-          else if (k === "branch") task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
+          } else if (k === "pr") decided.push(...(notHeld(task, "pr="), setPr(task, v, "task set")));
+          else if (k === "branch") notHeld(task, "branch="), task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
           else if (k === "title") task.title = v;
           else refuse(`task set takes state=, branch=, pr= or title=`);
         }
@@ -970,25 +1014,30 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (!keys) refuse(`${task.id} has no open findings marked fix`);
       if (fix.every((f) => f.severity === "low")) refuse(`${task.id}: only low findings are marked fix (${keys}). A repair round needs a medium or high finding. Dismiss the low ones with a reason, or let them join the next round.`);
       const round = Number(task.round) + 1;
-      if (round > config(env).max_rounds) {
-        task.state = "held";
+      const limit = config(env).max_rounds + Number(task.extra || 0); // the extra rounds of earlier holds by round (F-T284-14)
+      if (round > limit) {
+        Object.assign(task, { state: "held", hold: "round" });
         write(dir, "tasks", tasks);
         return `${task.id} held: ${round - 1} repair rounds did not make it clean. Stop and ask the user.`;
       }
-      if (keys === task.keys) {
+      // A round that fixed none of the last round's findings re-plans: also when new ones join them, and on the retry after
+      // a hold, whose last round's findings are still open (F-T284-17, option a).
+      const last = String(task.keys ?? "").split(",").filter(Boolean);
+      if (last.length && last.every((k) => keys.split(",").includes(k))) {
         task.state = "replan";
         write(dir, "tasks", tasks);
-        return `${task.id} replan: round ${round - 1} did not fix ${keys}. Attack the premise, then brief again.`;
+        return `${task.id} replan: round ${round - 1} did not fix ${task.keys}. Attack the premise, then brief again.`;
       }
       Object.assign(task, { state: "repairing", round, keys });
       write(dir, "tasks", tasks);
       const roles = [...new Set(fix.map((f) => f.source))].sort().join(","); // the repair's diff goes back to the roles that found the problems
-      return `${task.id} repairing · round ${round} of ${config(env).max_rounds} · fix ${keys} · re-run ${roles} on the repair's diff`;
+      return `${task.id} repairing · round ${round} of ${limit} · fix ${keys} · re-run ${roles} on the repair's diff`;
     }
     case "run": {
       const runs = read(dir, "runs");
       if (sub === "add") {
         const { task } = taskOf(dir, need(id, "the task id"));
+        notHeld(task, "run add");
         // The role as the table stores it, in lower case, so that every check below sees the stored value ("Lead " is lead).
         const role = cell(need(opt.role, "--role")).toLowerCase();
         if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
@@ -1026,6 +1075,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const findings = read(dir, "findings");
       if (sub === "add") {
         const { task } = taskOf(dir, need(id, "the task id"));
+        notHeld(task, "finding add");
         const severity = need(opt.severity, "--severity");
         if (!["high", "medium", "low"].includes(severity)) refuse("severity is high, medium or low");
         const key = cell(opt.key) || nextId(dir, `F-${task.id}-`); // as the table holds it, so the same --key finds its finding again
@@ -1039,6 +1089,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         return `${key} open${again ? " again" : ""} · ${severity} · ${task.id}`;
       }
       const f = findings.find((x) => x.task === id && x.key === more[0]) ?? missing(`finding ${more[0]} on ${id}`, findings.filter((x) => x.task === id).map((x) => x.key));
+      // While held, the sage may still triage ask, or dismiss with a reason (F-T284-1); a fix or a close waits.
+      if (sub === "close" || (sub === "triage" && more[1] === "fix")) notHeld(taskOf(dir, id).task, sub === "close" ? "finding close" : "fix triage");
       if (sub === "triage") {
         const t = need(more[1], "fix, dismiss or ask");
         if (!["fix", "dismiss", "ask"].includes(t)) refuse("triage is fix, dismiss or ask");
@@ -1066,6 +1118,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     }
     case "verdict": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));
+      notHeld(task, "verdict");
       const kind = need(opt.kind, "--kind");
       if (!KINDS.includes(kind)) refuse(`kind is one of ${KINDS.join(", ")}`);
       // The clean rule: a cycle is clean when no medium or high finding is open. Low ones are fixed, moved or dismissed
@@ -1326,5 +1379,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, taskFor, sage, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, withLock, board, answerPaths, runCli };
 }

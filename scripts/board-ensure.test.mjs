@@ -10,6 +10,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { configId, createBoardConfig, readBoardConfig, runBoardCli } from "../packages/sage-board/cli.mjs";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
@@ -17,25 +18,52 @@ import { createBoardServer } from "../packages/sage-board/server.mjs";
 const CLI = fileURLToPath(new URL("../packages/sage-board/cli.mjs", import.meta.url));
 const PLUGIN_CLI = fileURLToPath(new URL("../plugins/sage/board/cli.mjs", import.meta.url));
 
+const TEST_CHILD = fileURLToPath(new URL("./board-test-child.mjs", import.meta.url));
+const owned = new Map();
+function startBoard(cli, args, env, cwd) {
+  const child = spawn(process.execPath, [TEST_CHILD, cli, ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe", "ipc"] });
+  // Explicit parent disconnect can suppress ChildProcess.close in Node. Observe exit and both pipes directly.
+  const exited = new Promise((done, fail) => { child.once("error", fail); child.once("exit", done); });
+  const closed = Promise.all([exited, finished(child.stdout), finished(child.stderr)]);
+  owned.set(child, { home: env.HOME, closed });
+  child.on("message", message => {
+    if (message.kind === "stop-request") {
+      for (const [root, record] of owned) if (record.home === env.HOME && root.connected) root.send({ kind: "close-pid", pid: message.pid }, () => {});
+    }
+  });
+  return child;
+}
+// A child can disconnect between connected and send. Actual close, not delivery, proves teardown.
+async function closeChild(child) {
+  if (child.connected) child.send({ kind: "close-tree" }, () => {});
+  await owned.get(child).closed;
+  owned.delete(child);
+}
+async function closeHome(home) {
+  await Promise.all([...owned].filter(([, record]) => record.home === home).map(([child]) => closeChild(child)));
+}
 function scratch(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-ensure-")));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(async () => { await closeHome(join(dir, "home")); rmSync(dir, { recursive: true, force: true }); });
   const env = { ...process.env, HOME: join(dir, "home") };
-  delete env.CODEX_HOME; // test-env.mjs removes CLAUDE_*; the Codex root must come from HOME too
-  delete env.SAGE_HOME; // and SAGE_HOME, when it is set, replaces both roots
+  delete env.CODEX_HOME;
+  delete env.SAGE_HOME;
   return { dir, env, config: join(dir, "home", ".config", "sage-board", "board.json") };
 }
 
-/** Run the board command; it resolves when the command exits, also when it left a detached server behind. */
-function board(cli, args, env) {
-  return new Promise((done, fail) => {
-    const child = spawn(process.execPath, [cli, "board", ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.once("error", fail);
-    child.once("close", (status) => done({ status, stdout, stderr }));
+function resultOf(child) {
+  return new Promise((resolve, reject) => {
+    const failed = status => { cleanup(); reject(new Error(`board wrapper exited before its result (${status})`)); };
+    const received = message => { if (message.kind === "result") { cleanup(); resolve(message); } };
+    const cleanup = () => { child.off("close", failed); child.off("message", received); child.off("error", failed); };
+    child.once("close", failed); child.once("error", failed); child.on("message", received);
   });
+}
+/** Return the CLI result while the supervisor retains every detached server handle. */
+function board(cli, args, env) {
+  const child = startBoard(cli, ["board", ...args], env);
+  child.stdout.resume(); child.stderr.resume();
+  return resultOf(child);
 }
 
 async function freePort() {
@@ -55,16 +83,8 @@ const get = (port) => new Promise((done) => {
   req.end();
 });
 
-/** Stop the server that the test started: by the pid that the board command wrote for it, then wait until the port is free. */
-async function stop(dir, port) {
-  const file = join(dir, "home", ".config", "sage-board", "board.pid");
-  if (!existsSync(file)) return;
-  const pid = Number(readFileSync(file, "utf8"));
-  if (!Number.isInteger(pid) || pid <= 1) return;
-  try { process.kill(pid, "SIGTERM"); } catch {}
-  // A wide guard for a busy Mac, not a speed check: the server closes in milliseconds.
-  for (const end = Date.now() + 15_000; Date.now() < end && !(await get(port)).error;) await new Promise((wake) => setTimeout(wake, 50));
-}
+/** Close every owned server attempt and await actual exit before removing its files. */
+async function stop(dir, _port) { await closeHome(join(dir, "home")); }
 
 test("T216: setup without --sources lists the standard Claude and Codex roots of the current user, also when they are missing", async (t) => {
   const { dir, env, config } = scratch(t);
@@ -298,7 +318,7 @@ test("F-T216-12: when board.pid cannot be written, the server closes and the com
   createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port });
   // A folder at board.pid, with a file in it, makes the write fail after the listener opened.
   mkdirSync(join(dirname(config), "board.pid", "inside"), { recursive: true });
-  const child = spawn(process.execPath, [CLI, "board", "--serve"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = startBoard(CLI, ["board", "--serve"], env);
   let stderr = ""; child.stderr.on("data", (chunk) => { stderr += chunk; });
   try {
     // A generous deadlock guard, not a speed check: before the fix, the command kept listening and never exited.
@@ -306,7 +326,7 @@ test("F-T216-12: when board.pid cannot be written, the server closes and the com
     assert.equal(status, 1, stderr);
     assert.match(stderr, /^sage board: /);
     assert.equal((await get(port)).error, "ECONNREFUSED");
-  } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM"); }
+  } finally { await closeChild(child); }
 });
 
 test("F-T216-13: the server writes board.pid as a new file, so a hard link at that name does not change the file it points to", async (t) => {
@@ -436,7 +456,7 @@ test("F-T216-17: the board guide's set-up commands run as written in the board f
   // The guide uses the default port; the test moves it to a free port, so it never touches a running board.
   const config = join(home, ".config", "sage-board", "board.json"), port = await freePort();
   writeFileSync(config, JSON.stringify({ ...JSON.parse(readFileSync(config, "utf8")), port }));
-  const child = spawn(process.execPath, serve.slice(1), { cwd: join(plugin, "board"), env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = startBoard(serve[1], serve.slice(2), env, join(plugin, "board"));
   try {
     let stdout = "";
     // A generous deadlock guard, not a speed check.
@@ -448,7 +468,7 @@ test("F-T216-17: the board guide's set-up commands run as written in the board f
     assert.equal(line, `Sage board: http://127.0.0.1:${port}/ · no sign-in needed on this Mac.\n`);
     assert.equal((await get(port)).status, 200);
   } finally {
-    if (child.exitCode === null && child.signalCode === null) { const closed = new Promise((done) => child.once("close", done)); child.kill("SIGTERM"); await closed; }
+    await closeChild(child);
   }
 });
 
@@ -528,4 +548,54 @@ test("T216: the plugin carries the board command that the hook's note names, and
   assert.equal(made.status, 0, made.stderr);
   const status = await board(PLUGIN_CLI, ["all", "--status"], env);
   assert.equal(status.status, 0, status.stderr);
+});
+
+// Deterministic teardown proof: the descendant cannot exit until the test closes its input pipe.
+test("board test teardown waits for an owned descendant after its shutdown handler starts", async (t) => {
+  const { dir, env } = scratch(t), fixture = join(dir, "fixture.mjs");
+  writeFileSync(fixture, `
+    import { spawn } from "node:child_process";
+    if (process.argv.includes("--descendant")) {
+      process.stdin.resume();
+      process.once("SIGTERM", () => console.log("closing"));
+      console.log("ready");
+    } else {
+      const child = spawn(process.execPath, [process.argv[1], "board", "--descendant"], { stdio: ["pipe", "pipe", "pipe"] });
+      child.stdout.on("data", chunk => process.stdout.write(chunk));
+      process.on("message", message => { if (message.kind === "fixture-release") child.stdin.end(); });
+      await new Promise(resolve => child.stdout.once("data", resolve));
+    }
+  `);
+  const child = startBoard(fixture, ["board"], env);
+  child.stdout.resume(); child.stderr.resume();
+  await resultOf(child);
+  let closed = false, timer, output = "";
+  const stopping = new Promise((resolve, reject) => {
+    child.stdout.on("data", chunk => { output += chunk; if (output.includes("closing\n")) resolve(); });
+    // A deadlock guard, not a speed requirement.
+    timer = setTimeout(() => reject(new Error(`descendant did not receive shutdown: ${output}`)), 30_000);
+  });
+  const completed = closeChild(child).then(() => { closed = true; });
+  try {
+    await stopping;
+    assert.equal(closed, false, "a shutdown request is not evidence of process exit");
+  } finally {
+    clearTimeout(timer);
+    if (child.connected) child.send({ kind: "fixture-release" }, () => {});
+    await completed;
+  }
+  assert.equal(closed, true);
+});
+
+test("board test supervisor closes its server tree when the parent disconnects", async (t) => {
+  const { dir, env } = scratch(t), port = await freePort();
+  const child = startBoard(CLI, ["board", "--ensure", "--port", String(port)], env);
+  child.stdout.resume(); child.stderr.resume();
+  const result = await resultOf(child);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((await get(port)).status, 200);
+  child.disconnect();
+  await owned.get(child).closed;
+  assert.equal((await get(port)).error, "ECONNREFUSED");
+  assert.equal(existsSync(join(dir, "home", ".config", "sage-board", "board.pid")), false);
 });
