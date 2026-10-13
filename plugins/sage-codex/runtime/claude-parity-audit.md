@@ -59,9 +59,11 @@ Event ordering under races, compaction, subsequent child tasks and real-model co
 ## Probe cleanup
 
 The probe removes its temporary profile after the native process closes.
-Its two-minute timeout ends the transport, then waits for native process closure.
-If the process does not close, the probe remains pending and must not report cleanup.
-It does not inspect or signal processes. A spawn error also waits for closure.
+Its two-minute timeout ends the transport and gives the native process 30 seconds to close.
+If needed, it sends SIGTERM through its owned child handle, then SIGKILL after another 30 seconds.
+It never selects a process from a PID file or the system process list.
+A signal is not proof of exit: the probe waits for actual closure before it reports cleanup.
+A spawn error also waits for closure. If the operating system cannot stop the child, cleanup remains unverified.
 The final cleanup record confirms that the temporary folder is absent.
 
 Older probes can leave folders named `sage-codex-one-child-` followed by random

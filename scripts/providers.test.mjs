@@ -2056,6 +2056,7 @@ test("native deadline waits for child closure when the timeout callback throws",
   assert.equal(settled, false, "closing pipes must not report an unclosed child as stopped");
   child.emit("close", 0, null);
   assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline", timeoutCallbackFailed: true });
+  t.mock.timers.tick(300_000); // A gracefully closed child must never reach either signal timer.
   assert.equal(child.stdin.writableEnded, true);
   for (const stream of [child.stdin, child.stdout, child.stderr]) assert.equal(stream.destroyed, true);
   assert.equal(detached, false);
@@ -2113,4 +2114,79 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
     assert.doesNotMatch(stdout, /discovered \d+ skills/);
     assert.match(stderr, /Codex package check failed:/);
   }
+});
+
+
+test("native deadline escalates only its owned child and still waits for closure", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter(), signals = [];
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  let settled = false; result.then(() => { settled = true; });
+  t.mock.timers.tick(120_000);
+  assert.deepEqual(signals, [], "transport shutdown gets the first chance");
+  t.mock.timers.tick(30_000); assert.deepEqual(signals, ["SIGTERM"]);
+  t.mock.timers.tick(30_000); assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  await Promise.resolve(); assert.equal(settled, false, "a signal is not proof of exit");
+  child.emit("close", null, "SIGKILL");
+  assert.deepEqual(await result, { code: null, exitCode: null, signal: "SIGKILL", timedOut: true, reason: "native_deadline" });
+  t.mock.timers.tick(300_000); assert.equal(signals.length, 2);
+});
+
+test("native deadline cancels escalation when the owned child closes", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter(), signals = [];
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  t.mock.timers.tick(120_000); t.mock.timers.tick(30_000);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  child.emit("close", 0, null); await result;
+  t.mock.timers.tick(300_000); assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("native deadline retains error handling across both termination attempts", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = () => true;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  try {
+    t.mock.timers.tick(120_000); t.mock.timers.tick(30_000);
+    child.emit("error", new Error("simulated SIGTERM failure"));
+    t.mock.timers.tick(30_000);
+    assert.doesNotThrow(() => child.emit("error", new Error("simulated SIGKILL failure")));
+  } finally { child.emit("close", 1, null); }
+  assert.deepEqual(await result, { code: null, exitCode: 1, signal: null, timedOut: true,
+    reason: "native_deadline", terminationFailed: true });
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+
+test("native deadline does not signal an exited child while output closure is pending", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = () => assert.fail("the exited child must not receive a signal");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  let settled = false; result.then(() => { settled = true; });
+  t.mock.timers.tick(120_000);
+  child.exitCode = 0;
+  t.mock.timers.tick(300_000);
+  await Promise.resolve(); assert.equal(settled, false);
+  child.emit("close", 0, null);
+  assert.equal((await result).timedOut, true);
 });
