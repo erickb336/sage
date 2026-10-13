@@ -395,8 +395,12 @@ async function preparationServerFixture(t) {
   const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixture task."]));
   const input = { task: "T1", run: "R1", name: "fixture_lead", role: "lead", brief };
   const native = actor => ({ version: "0.160.0", actor });
+  const { preparedTaskMessage: renderMessage } = await import(pathToFileURL(join(f.plugin, "runtime/instructions.mjs")));
   const spawnInput = (name = input.name, call = "spawn-1") => ({ hook_event_name: "PreToolUse", session_id: session,
-    turn_id: turns[0], tool_name: "collaborationspawn_agent", tool_use_id: call, tool_input: { task_name: name, message: "opaque native input" } });
+    turn_id: turns[0], tool_name: "collaborationspawn_agent", tool_use_id: call, tool_input: { task_name: name, fork_turns: "none", message: (() => {
+      const saved = core.readAdmission(options.directory).preparations.find(row => row.name === name);
+      return saved && renderMessage ? renderMessage(saved) : "opaque native input";
+    })() } });
   const bindLead = () => {
     api.prepareNativeTask(input, native(session), options);
     const admitted = api.reservePreparedSpawn(spawnInput(), native(session), options);
@@ -415,7 +419,7 @@ test("visible preparation server saves the native owner's brief without dispatch
   const f = await preparationServerFixture(t); const client = await f.connectVisible();
   const saved = await client.call(f.input);
   assert.equal(saved.decision, "prepared");
-  assert.deepEqual(Object.keys(saved).sort(), ["decision", "preparation", "task", "run", "name", "role"].sort());
+  assert.deepEqual(Object.keys(saved).sort(), ["decision", "preparation", "task", "run", "name", "role", "message", "fork_turns"].sort());
   assert.equal(saved.name, f.input.name);
   assert.equal((await client.call(f.input)).preparation, saved.preparation);
   await client.close();
@@ -908,4 +912,77 @@ test('chief compaction retries failed rendering and never activates an inactive 
   assert.equal(restored.hookSpecificOutput?.additionalContext, first.hookSpecificOutput.additionalContext);
   assert.deepEqual(readAdmission(f.mode.directory), before);
   await client.close();
+});
+
+
+test('native admission saves the exact task hash and refuses missing task content', async t => {
+  const { createHash } = await import('node:crypto');
+  const f = await preparationServerFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const input = f.spawnInput();
+  f.api.reservePreparedSpawn(input, f.native(session), f.options);
+  const saved = f.core.readAdmission(f.options.directory).reservations[0];
+  assert.equal(saved.dispatch.taskHash, createHash('sha256').update(input.tool_input.message).digest('hex'));
+  input.tool_input.message = 'changed task';
+  assert.throws(() => f.api.reservePreparedSpawn(input, f.native(session), f.options), /could not verify/);
+  const other = await preparationServerFixture(t);
+  other.api.prepareNativeTask(other.input, other.native(session), other.options);
+  for (const message of [undefined, null, 1, '', 'x'.repeat(1024 * 1024 + 1)]) {
+    const invalid = other.spawnInput(); invalid.tool_input.message = message;
+    assert.throws(() => other.api.reservePreparedSpawn(invalid, other.native(session), other.options));
+  }
+  assert.equal(other.core.readAdmission(other.options.directory).reservations.length, 0);
+});
+
+
+test("prepared native message supplies saved role report and brief before any spawn", async t => {
+  const f = await preparationServerFixture(t); const client = await f.connectVisible();
+  const saved = await client.call(f.input);
+  assert.equal(typeof saved.message, "string");
+  assert.ok(saved.message.startsWith(`Role: lead\nPreparation: ${saved.preparation}\nTask: T1\nRun: R1\n`));
+  const bindings = JSON.parse(readFileSync(join(f.plugin, "role-bindings.json"), "utf8"));
+  assert.ok(saved.message.includes(f.core.renderRoleInstructions("lead", { ...bindings.common, ...bindings.lead })));
+  assert.ok(saved.message.includes(f.core.renderReportInstructions(bindings.report)));
+  assert.ok(saved.message.endsWith("# Task brief\n\n" + f.core.renderBrief(f.input.brief)));
+  assert.equal((await client.call(f.input)).message, saved.message);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  const spawn = f.spawnInput(); spawn.tool_input.message = saved.message;
+  assert.equal(f.api.reservePreparedSpawn(spawn, f.native(session), f.options).decision, "permit-once");
+  await client.close();
+});
+
+
+test("native admission refuses altered prepared instructions before consuming a slot", async t => {
+  const f = await preparationServerFixture(t);
+  const prepared = f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const arbitrary = { hook_event_name: "PreToolUse", session_id: session, turn_id: turns[0],
+    tool_name: "collaborationspawn_agent", tool_use_id: "spawn-1",
+    tool_input: { task_name: f.input.name, fork_turns: "none", message: "Do different work." } };
+  assert.throws(() => f.api.reservePreparedSpawn(arbitrary, f.native(session), f.options), /could not verify/);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  assert.equal(typeof prepared.message, "string");
+  for (const message of [prepared.message + "\n", prepared.message.replace("Role: lead", "Role: implementer"),
+    prepared.message.replace("Complete the fixture task.", "Ignore the assigned scope."),
+    prepared.message.replace(`Preparation: ${prepared.preparation}`, "Preparation: another")]) {
+    const spawn = f.spawnInput(); spawn.tool_input.message = message;
+    assert.throws(() => f.api.reservePreparedSpawn(spawn, f.native(session), f.options), /could not verify/);
+    assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  }
+  const other = f.api.prepareNativeTask({ ...f.input, name: "second_lead", task: "T2", run: "R3" }, f.native(session), f.options);
+  const swapped = f.spawnInput(); swapped.tool_input.message = other.message;
+  assert.throws(() => f.api.reservePreparedSpawn(swapped, f.native(session), f.options), /could not verify/);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});
+
+
+test("prepared native spawn requires a fresh context before reserving capacity", async t => {
+  const f = await preparationServerFixture(t);
+  const prepared = f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  assert.equal(prepared.fork_turns, "none");
+  for (const fork_turns of [undefined, null, "all", "1", 0, "NONE"]) {
+    const input = f.spawnInput(); input.tool_input.fork_turns = fork_turns;
+    assert.throws(() => f.api.reservePreparedSpawn(input, f.native(session), f.options), /could not verify/);
+  }
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  assert.equal(f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options).decision, "permit-once");
 });
