@@ -20,6 +20,18 @@ export function createPreparationServer(options = {}) {
       return { isError: true, content: [{ type: "text", text: "Sage could not prepare this task. Check the active role, task brief, and unique agent name." }] };
     }
   });
+  server.registerTool("sage_read_assignment", {
+    description: "Read your own active Sage assignment, including the exact saved role, brief, and review target. No arguments. This read changes no state and grants no permission to act, complete, or merge. A completed or changed assignment is refused.",
+    inputSchema: z.object({}).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { readNativeChildAssignment } = await import("./child-assignment.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(readNativeChildAssignment(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not read your current assignment. Check the active child identity, saved delivery, and current task and run." }] };
+    }
+  });
   server.registerTool("sage_read_report", {
     description: "Read the validated final report for your completed named child. This does not mark a task successful or record a review verdict.",
     inputSchema: z.object({ name: z.string() }).strict(),

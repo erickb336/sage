@@ -11,11 +11,13 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
-const receiptProbe = process.argv.includes("--sage-receipt");
+const repeatRecovery = process.argv.includes("--sage-child-repeat-recovery");
+const recoveryProbe = repeatRecovery || process.argv.includes("--sage-child-recovery");
+const receiptProbe = process.argv.includes("--sage-receipt") || recoveryProbe;
 const reportProbe = process.argv.includes("--sage-report") || receiptProbe;
 const completion = process.argv.includes("--sage-completion") || reportProbe;
 assert(!(denySpawn && completion), "incompatible_probe_modes");
@@ -78,8 +80,11 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,deadlineMs});
   let prepared = false, blockedStopVerified = false, reportVerified = false, receiptVerified = false, beforeReport, expectedReport, recordedState;
+  let compactRequests = 0, recoveryRound = 0, recoveryPhase = "compact", recoveredRounds = 0;
+  const texts = value => typeof value === "string" ? [value] : Array.isArray(value) ? value.flatMap(texts)
+    : value && typeof value === "object" ? Object.values(value).flatMap(texts) : [];
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -97,7 +102,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -118,10 +123,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.reread, calls.retry].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
-        if (denySpawn && item.call_id === calls.spawn) outputs[item.call_id] = output;
+        if ((denySpawn && item.call_id === calls.spawn) || [calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -141,7 +146,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({namespace: tool.name, name: member.name}))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{name: tool.name}] : []);
-    return { outputs, agentTools, childPromptSeen, prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report") };
+    return { outputs, agentTools, childPromptSeen, prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), assignmentTools: mcpTools("sage_read_assignment") };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -161,7 +166,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     }
     events.push(
       { type: "response.output_item.done", output_index: 0, item },
-      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: 0 } } },
+      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: recoveryProbe && [calls.compact1, calls.compact2].includes(item.call_id) ? 200000 : 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: recoveryProbe && [calls.compact1, calls.compact2].includes(item.call_id) ? 200000 : 0 } } },
     );
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "close" });
     for (const event of events) res.write(`event: ${event.type}
@@ -193,6 +198,13 @@ data: ${JSON.stringify(event)}
       let request;
       try { request = JSON.parse(body); } catch { throw new Error("invalid_request_json"); }
       body = "";
+      if (recoveryProbe && texts(request.input).some(text => text.includes("SAGE_CHILD_COMPACT_REQUEST"))) {
+        responseRequests++;
+        check(req.headers["thread-id"] === childThread, "compaction_wrong_child");
+        check(++compactRequests <= (repeatRecovery ? 2 : 1), "unexpected_compaction_count");
+        respond(res, message("SAGE_CHILD_COMPACT_SUMMARY: Continue the fixed child probe.")); return;
+      }
+      const requestTexts = recoveryProbe ? texts(request.input) : [];
       const info = inspectRequest(request);
       request = null; // Retain only tool results, advertised names, and a fixed-task boolean.
       responseRequests++;
@@ -200,6 +212,51 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if (recoveryProbe && childRequests > 0) {
+          check(thread === childThread && childResponseSent, "wrong_recovery_child");
+          childRequests++;
+          const evidence = integrated.childEvidence(childThread), {state, bound, recovery} = evidence;
+          check(JSON.stringify(state) === JSON.stringify(integrated.readRecoveryBaseline()), "recovery_changed_journal");
+          check(state.reservations.length === 1 && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
+            "recovery_changed_admission");
+          if (recoveryPhase === "compact") {
+            recoveryRound++;
+            check(evidence.compactions === recoveryRound && compactRequests === recoveryRound
+              && recovery.required && recovery.compaction && recovery.call === null, "compaction_did_not_invalidate_recovery");
+            check(requestTexts.some(text => text.includes("SAGE_CHILD_COMPACT_SUMMARY")), "missing_compaction_summary");
+            recoveryPhase = "denied";
+            respond(res, {type:"function_call", name:"list_mcp_resources", call_id: calls[`denied${recoveryRound}`], arguments:"{}"}); return;
+          }
+          if (recoveryPhase === "denied") {
+            check(typeof info.outputs[calls[`denied${recoveryRound}`]] === "string"
+              && info.outputs[calls[`denied${recoveryRound}`]].includes("Read your current assignment"), "unrecovered_work_ran");
+            const events = readdirSync(join(root,"events")).map(name=>JSON.parse(readFileSync(join(root,"events",name),"utf8")));
+            check(!events.some(row=>row.hook_event_name==="PostToolUse" && row.tool_use_id===calls[`denied${recoveryRound}`]), "denied_tool_executed");
+            recoveryPhase = "stop"; respond(res, message(CHILD_MARKER)); return;
+          }
+          if (recoveryPhase === "stop") {
+            check(requestTexts.some(text=>text.includes("sage_read_assignment before completing this task")), "unrecovered_stop_not_blocked");
+            check(integrated.readStops().at(-1)?.decision === "recovery-required", "missing_recovery_stop");
+            blockedStopVerified = true;
+            check(info.assignmentTools.length === 1, "assignment_reader_missing");
+            recoveryPhase = "read";
+            respond(res, {type:"function_call", ...info.assignmentTools[0], call_id:calls[`recovery${recoveryRound}`], arguments:"{}"}); return;
+          }
+          check(recoveryPhase === "read", "unexpected_recovery_phase");
+          const result = info.outputs[calls[`recovery${recoveryRound}`]];
+          check(result?.decision === "current-assignment" && result.message === CHILD_PROMPT && result.child === childThread
+            && result.turn === bound.turn && result.assignment === bound.assignment && result.task === "T1" && result.run === "R1"
+            && result.taskHash === createHash("sha256").update(CHILD_PROMPT).digest("hex"), "assignment_recovery_changed_identity");
+          check(!recovery.required && recovery.call === calls[`recovery${recoveryRound}`], "native_recovery_output_not_verified");
+          recoveredRounds++;
+          print({type:"child_recovery_evidence", round:recoveryRound, exactSavedAssignment:true, latestCompactionVerified:true,
+            toolAndStopHeld:true, unchangedAdmission:true, simulatedModel:true});
+          if (repeatRecovery && recoveryRound === 1) {
+            recoveryPhase = "compact";
+            respond(res, {type:"function_call", name:"list_mcp_resources", call_id:calls.compact2, arguments:"{}"}); return;
+          }
+          recoveryPhase = "complete"; respond(res, message(CHILD_MARKER)); return;
+        }
         if (completion && childRequests === 1) {
           check(thread === childThread && childResponseSent, "unexpected_stop_retry");
           const state = integrated.readJournal(), stops = integrated.readStops();
@@ -260,7 +317,9 @@ data: ${JSON.stringify(event)}
         nativeRunning = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
         respond(res, call(calls.wait, "wait_agent", {}));
-        respond(childResponse, message(CHILD_MARKER));
+        respond(childResponse, recoveryProbe
+          ? {type:"function_call", name:"list_mcp_resources", call_id:calls.compact1, arguments:"{}"}
+          : message(CHILD_MARKER));
         childResponseSent = true;
       } else if (rootRequests === 4) {
         const result = info.outputs[calls.wait];
@@ -338,6 +397,7 @@ data: ${JSON.stringify(event)}
   } else {
     const args = ["exec", "--strict-config", "--skip-git-repo-check", "-C", workspace, "-s", "read-only", "--json"];
     const config = {
+      ...(recoveryProbe ? {model_auto_compact_token_limit:100000, compact_prompt:"SAGE_CHILD_COMPACT_REQUEST"} : {}),
       model_provider: "sage_native_lifecycle",
       model: "sage-native-parent",
       model_catalog_json: catalogPath,
@@ -418,7 +478,8 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (receiptProbe ? 9 : reportProbe ? 6 : 5) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && childRequests === (completion ? 2 : 1) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
+      : rootRequests === (receiptProbe ? 9 : reportProbe ? 6 : 5) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && childRequests === (recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+        && (!recoveryProbe || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
@@ -435,7 +496,7 @@ data: ${JSON.stringify(event)}
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
     assert.equal(before.length,1);
     assert.equal(start.length,denySpawn ? 0 : 1);
-    assert.equal(stop.length,denySpawn ? 0 : completion ? 2 : 1);
+    assert.equal(stop.length,denySpawn ? 0 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
     assert.equal(after.length,denySpawn ? 0 : 1);
     if (!denySpawn) {
     assert.equal(start[0].captureError,undefined);
@@ -452,7 +513,8 @@ data: ${JSON.stringify(event)}
       assert.deepEqual(state.completions[0], state.bindings[0]);
       assert.equal(state.bindings[0].child, childThread);
       assert.equal(state.reports?.length ?? 0, receiptProbe ? 1 : 0);
-      assert.equal(stops.length, 2); assert(stops.every(row => row.decision === "stop-observed" && row.completions === 0));
+      assert.equal(stops.length, recoveryProbe ? recoveredRounds + 1 : 2);
+      assert(stops.every((row, i) => row.decision === (recoveryProbe && i < recoveredRounds ? "recovery-required" : "stop-observed") && row.completions === 0));
       print({type: "completion_evidence", reservations: 1, bindings: 1, completions: 1,
         blockedStopRetainedCapacity: blockedStopVerified, stopCallbacksPrecedeTerminal: true,
         parentReconciledCompletion: true, reportsAccepted: 0, fullPolicyVerified: false,

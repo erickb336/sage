@@ -89,7 +89,7 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
     author: path.slice(0, path.lastIndexOf("/")), turn: bound.turn, taskHash: assigned.dispatch.taskHash,
   };
   const recovery = readNativeRecovery(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
-  if (recovery.required || recovery.compaction !== null) {
+  if (recovery.required) {
     const interrupted = readNativeInterruption(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
     return { directory, observations, completed: null, interrupted, recoveryRequired: true };
   }
@@ -134,7 +134,7 @@ export async function childStopOutput(input, context, loadPolicy) {
   if (!result || typeof result !== "object" || Array.isArray(result) || Object.keys(result).length !== 1
     || !Object.hasOwn(result, "decision") || !["stop-observed", "completed", "already-completed", "unmanaged", "recovery-required"].includes(result.decision)) refuse();
   if (result.decision === "recovery-required") return { decision: "block",
-    reason: "Sage cannot verify completion after compaction in this runtime." };
+    reason: "After compaction, read your current assignment with sage_read_assignment before completing this task." };
   // A native terminal record ends correction. Otherwise ask once, as Claude does.
   if (result.decision === "stop-observed" && !stop_hook_active) {
     const missing = missingReportFields(last_assistant_message);

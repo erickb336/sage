@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -66,7 +67,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_prepare_task", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_prepare_task", "sage_read_assignment", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -1762,6 +1763,206 @@ test("native report read leaves an unrelated sibling unchanged with missing or t
   appendReport(f, reportText, other, turns[2]);
   assert.equal(readChildReport({ name: f.input.name }, f.native(session), f.options).report.STATUS, "done");
   assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
+
+async function assignmentReader(f) {
+  const file = join(f.plugin, "runtime/child-assignment.mjs");
+  assert.ok(existsSync(file), "the current child assignment reader must ship");
+  const { readNativeChildAssignment } = await import(pathToFileURL(file));
+  return (input = {}, actor = childActor, options = f.options) => readNativeChildAssignment(input, f.native(actor), options);
+}
+
+test("child assignment recovery returns exact saved instructions without changing state", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  const before = JSON.stringify(f.core.readAdmission(f.options.directory));
+  const prepared = f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const result = read();
+  assert.equal(result.decision, "current-assignment"); assert.equal(result.message, prepared.message);
+  assert.equal(result.task, "T1"); assert.equal(result.run, "R1"); assert.equal(result.child, childActor);
+  assert.equal(result.turn, turns[1]); assert.equal(result.role, "lead");
+  assert.equal(result.taskHash, createHash("sha256").update(prepared.message).digest("hex"));
+  assert.deepEqual(read(), result);
+  assert.equal(JSON.stringify(f.core.readAdmission(f.options.directory)), before);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(read(), result, "an existing child can finish after Sage off");
+});
+
+test("child assignment recovery refuses selectors foreign actors and terminal turns", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  assert.equal(read().task, "T1");
+  for (const input of [{ task: "T1" }, { actor: childActor }, { turn: turns[1] }, [], null]) assert.throws(() => read(input));
+  for (const actor of [session, turns[0]]) assert.throws(() => read({}, actor));
+  assert.throws(() => read({}, childActor, { ...f.options, project: "foreign" }));
+  const api = await import(pathToFileURL(join(f.plugin, "runtime/child-assignment.mjs")));
+  assert.throws(() => api.readNativeChildAssignment({}, { version: "unsupported", actor: childActor }, f.options));
+  appendReport(f); assert.throws(() => read(), "native terminal evidence is sufficient to refuse a stale read");
+  f.childTranscript(); assert.equal(read().task, "T1");
+  f.policy.completeChild(f.stop, f.native(childActor));
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor)); assert.throws(() => read());
+});
+
+test("child assignment recovery refuses changed delivery and missing transcripts", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  const expected = read();
+  f.childTranscript({ message: "A changed task" }); assert.throws(() => read());
+  const path = f.childTranscript(); const bytes = readFileSync(path); rmSync(path); assert.throws(() => read());
+  writeFileSync(path, bytes); assert.deepEqual(read(), expected);
+
+});
+
+test("child assignment recovery is available only to the bound child through the packaged tool", async t => {
+  const f = await completionFixture(t);
+  assert.ok(existsSync(join(f.plugin, "runtime/child-assignment.mjs")), "the child recovery reader must ship");
+  writeFileSync(f.entry, `import { servePreparations } from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
+  const client = await connect(t, f, "0.160.0", "", "sage_read_assignment");
+  const result = await client.call({}, childActor); assert.equal(result.decision, "current-assignment");
+  assert.equal(result.message, f.api.prepareNativeTask(f.input, f.native(session), f.options).message);
+  assert.match((await client.call({}, session)).error, /could not read/);
+  appendReport(f); assert.match((await client.call({}, childActor)).error, /could not read/);
+  await client.close();
+});
+
+
+function appendRecoveryCheckpoint(transcript, number = 1, turn = turns[1]) {
+  appendFileSync(transcript, JSON.stringify({ type: "compacted", payload: { window_number: number,
+    window_id: `${String(number).padStart(8, "0")}-8888-4888-8888-888888888888`,
+    resume_metadata: { last_started_turn_id: turn, multi_agent_version: "v2" } } }) + "\n");
+}
+
+test("child tool recovery denies work after compaction in either Sage mode", async t => {
+  for (const sage of [true, false]) {
+    const f = await completionFixture(t); let calls = 0;
+    const transcript = f.childTranscript();
+    const input = { ...patch(turns[1]), transcript_path: transcript, tool_name: "list_mcp_resources", tool_input: {} };
+    const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: "pass" }; });
+    if (!sage) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
+    const before = f.core.readAdmission(f.options.directory);
+    appendRecoveryCheckpoint(transcript);
+    const result = await f.evaluate(policy, input, childActor);
+    assert.equal(result.decision, "deny"); assert.match(result.reason, /read.*assignment/i);
+    assert.equal(calls, 1, "unrecovered work must not reach the evaluator");
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    const reader = { ...input, tool_name: "mcp__sage_preparation__sage_read_assignment" };
+    assert.deepEqual(await f.evaluate(policy, reader, childActor), { decision: "pass" });
+    assert.equal(calls, 2, "the reader still needs the normal evaluator");
+    assert.equal((await f.evaluate(policy, { ...reader, tool_input: { task: "T1" } }, childActor)).decision, "deny");
+  }
+});
+
+test("child tool recovery rechecks compaction after an awaited evaluator", async t => {
+  const f = await completionFixture(t); let entered, release;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const resume = new Promise(resolve => { release = resolve; });
+  const transcript = f.childTranscript();
+  const input = { ...patch(turns[1]), transcript_path: transcript, tool_name: "list_mcp_resources", tool_input: {} };
+  const policy = f.createNativePolicy(f.options, async () => { entered(); await resume; return { decision: "pass" }; });
+  const result = f.evaluate(policy, input, childActor);
+  await waiting;
+  appendRecoveryCheckpoint(transcript);
+  release();
+  assert.equal((await result).decision, "deny");
+});
+
+
+test("child tool recovery permits work only after an intact current read and resets on compaction", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  const result = read(), transcript = f.childTranscript();
+  const input = { ...patch(turns[1]), transcript_path: transcript, tool_name: "list_mcp_resources", tool_input: {} };
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  appendRecoveryCheckpoint(transcript);
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+  appendAssignmentRecovery(transcript, result);
+  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
+  appendRecoveryCheckpoint(transcript, 2);
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+});
+
+
+
+function appendAssignmentRecovery(transcript, result) {
+  const stamp = { internal_chat_message_metadata_passthrough: { turn_id: result.turn } };
+  const rows = [{ type: "response_item", metadata: { client_authored: false }, payload: {
+    type: "function_call", id: "fc_read_current", namespace: "mcp__sage_preparation", name: "sage_read_assignment",
+    call_id: "read_current", arguments: "{}", ...stamp } },
+  { type: "response_item", metadata: { client_authored: false, fallback_token_limit_override: 100000,
+    mcp_attribution: { status: "complete", sources: [{ server_name: "sage_preparation", tool_name: "sage_read_assignment", first_turn_id: result.turn }] } },
+    payload: { type: "function_call_output", id: "fco_read_current", call_id: "read_current", ...stamp,
+      output: [{ type: "input_text", text: "Wall time: 0.01 seconds\nOutput:" }, { type: "input_text", text: JSON.stringify(result) }] } }];
+  appendFileSync(transcript, rows.map(row => JSON.stringify(row) + "\n").join(""));
+}
+
+test("child stop recovery blocks repeated stops and parent completion after compaction", async t => {
+  for (const sage of [true, false]) {
+    const f = await completionFixture(t), client = await stopReportClient(t, f);
+    if (!sage) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    appendRecoveryCheckpoint(f.childTranscript());
+    const before = f.core.readAdmission(f.options.directory);
+    for (const stop_hook_active of [false, true]) {
+      const result = await client.call({ ...f.stop, stop_hook_active, last_assistant_message: reportText }, childActor);
+      assert.equal(result.decision, "block"); assert.match(result.reason, /read.*assignment/i);
+      assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    }
+    appendReport(f);
+    const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+    assert.throws(() => reconcileNativeCompletions(f.native(session), session, f.options));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before, "a terminal report cannot bypass missing recovery");
+    const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+    assert.throws(() => readChildReport({ name: f.input.name }, f.native(session), f.options));
+    await client.close();
+  }
+});
+
+
+test("child stop recovery completes the recovered assignment once and preserves interruption", async t => {
+  for (const interrupted of [false, true]) {
+    const f = await completionFixture(t), read = await assignmentReader(f);
+    const result = read(), transcript = f.childTranscript();
+    f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    appendRecoveryCheckpoint(transcript);
+    assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "recovery-required" });
+    if (interrupted) {
+      appendFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "turn_aborted", turn_id: turns[1], reason: "interrupted" } }) + "\n");
+      const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+      reconcileNativeCompletions(f.native(session), session, f.options);
+      const state = f.core.readAdmission(f.options.directory);
+      assert.equal(state.completions.length, 1); assert.equal(state.completions[0].outcome, "interrupted");
+      assert.equal(state.reports?.length ?? 0, 0);
+    } else {
+      appendAssignmentRecovery(transcript, result);
+      const client = await stopReportClient(t, f);
+      assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: true, last_assistant_message: reportText }, childActor), {});
+      assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+      appendReport(f);
+      const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+      const report = readChildReport({ name: f.input.name }, f.native(session), f.options);
+      assert.equal(report.report.STATUS, "done");
+      const state = f.core.readAdmission(f.options.directory);
+      assert.equal(state.completions.length, 1); assert.equal(state.reports?.length ?? 0, 0);
+      assert.equal(state.bindings.length, 1); assert.equal(state.reservations.length, 1);
+      await client.close();
+    }
+  }
+});
+
+test("unbound child recovery after Sage off cannot bypass its pending assignment", async t => {
+  const f = await composedPolicyFixture(t); let calls = 0;
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const transcript = f.childTranscript(); appendRecoveryCheckpoint(transcript);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: "pass" }; });
+  const input = { ...patch(turns[1]), transcript_path: transcript, tool_name: "list_mcp_resources", tool_input: {} };
+  const result = await f.evaluate(policy, input, childActor);
+  assert.equal(result.decision, "deny"); assert.match(result.reason, /read.*assignment/i);
+  assert.equal(calls, 0);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 1); assert.equal(state.reservations.length, 1);
+  assert.equal(state.completions?.length ?? 0, 0); assert.equal(state.modes.at(-1).sage, false);
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
 });
 
 test("native durable reports pin the read hash and retain evidence after transcript removal", async t => {
