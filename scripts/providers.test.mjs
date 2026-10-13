@@ -79,6 +79,8 @@ test("T44: value-taking options and alternate output spellings preserve the writ
       assert.equal(shellWriteOutsideRoots({ command, cwd: f.dir, roots: [root] }), false, command);
     }
     for (const command of ["openssl dgst -hmac -out source.txt", "openssl dgst -- --out", "openssl dgst out",
+      "openssl dgst -hmac -x -- -out", "openssl dgst source.txt -out other.txt",
+      "git diff --src-prefix -x -- --output=file",
       "git diff --src-prefix --output=file", "git diff --stat -- --output=file"])
       assert.equal(commandWrites(command, f.dir), false, command);
   }

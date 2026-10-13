@@ -11,15 +11,11 @@ const gitOutput = arg => /^--o(?:u(?:t(?:p(?:u(?:t)?)?)?)?)?(?:=|$)/.test(arg);
 
 function opensslWrites(args) {
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === "--") {
-      const prior = args[i - 1] ?? "";
-      if (/^--?[^=]+$/.test(prior) && !/^--?(?:hex|binary|r|c|list|help|debug|text|noout)$/.test(prior)) continue;
-      break;
-    }
-    if (!args[i].startsWith("-")) continue;
+    if (args[i] === "--" || !args[i].startsWith("-") || args[i] === "-") break;
     const option = args[i].replace(/^--?/, "");
     if (/^(?:out|keyout|writerand)(?:=|$)/.test(option)) return true;
     if (/^(?:in|inform|outform|hmac|mac|macopt|sigopt|signature|verify|prverify|passin|passout|inkey|keyform|digest|provider|provider-path|propquery|engine)$/.test(option)) i++;
+    else if (!/^(?:hex|binary|r|c|list|help|debug|text|noout|md4|md5|sha1|sha224|sha256|sha384|sha512|sha512-224|sha512-256|sha3-224|sha3-256|sha3-384|sha3-512|shake128|shake256|blake2b512|blake2s256|ripemd160|sm3)$/.test(option)) return true;
   }
   return false;
 }
@@ -57,15 +53,16 @@ export function outputDispatchWrites(entry) {
   let i = 0;
   while (args[i]?.startsWith("-")) i += GIT_VALUE.test(args[i]) ? 2 : 1;
   if (!["diff", "show", "log"].includes(args[i++])) return false;
+  let unknownOption = false;
   for (; i < args.length; i++) {
     if (args[i] === "--") {
       // An unknown option may consume '--' as its value. Do not hide a later output option.
-      const prior = args[i - 1] ?? "";
-      if (/^-[^=]+$/.test(prior) && !GIT_FLAGS.has(prior)) continue;
+      if (unknownOption) { unknownOption = false; continue; }
       break;
     }
     if (gitOutput(args[i])) return true;
-    if (GIT_VALUE_OPTION.test(args[i])) i++;
+    unknownOption = /^-[^=]+$/.test(args[i]) && !GIT_FLAGS.has(args[i]);
+    if (GIT_VALUE_OPTION.test(args[i])) { i++; unknownOption = false; }
   }
   return false;
 }
