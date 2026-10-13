@@ -4253,3 +4253,91 @@ test('native follow-up reports retain exact recovery evidence after off and tran
   assert.throws(()=>f.reports.readChildReport({name:'next'},{version:'0.160.0',actor:f.lead},f.options));
   assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,1);
 });
+
+async function leadPreparationFixture(t) {
+  const f=await nativeBindingFixture(t);
+  const preparation=await import(new URL('../runtime/preparation.mjs',f.url));
+  const instructions=await import(new URL('../runtime/instructions.mjs',f.url));
+  const observationsRoot=join(f.journal,'..','lead-observations');
+  cpSync(f.observationsDirectory,join(observationsRoot,f.root),{recursive:true});
+  const options={directory:f.journal,project:f.scope.project,observationsRoot,
+    projectDirectory:join(f.journal,'..','lead-project'),logbookRoot:join(f.journal,'..','lead-logbook'),sessionsDir:join(f.journal,'..','sessions')};
+  mkdirSync(options.projectDirectory); mkdirSync(options.sessionsDir);
+  const tool=f.api.createStateTool({defaultRoot:()=>{throw Error('No ambient logbook');}});
+  const env={...process.env,SAGE_HOME:options.logbookRoot};
+  const cli=(...args)=>tool.sage([...args,'--project',options.projectDirectory],env);
+  const git=(...args)=>execFileSync('git',['-C',options.projectDirectory,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',
+    '-c','user.name=Fixture','-c','user.email=fixture@users.noreply.github.com',...args],{env,encoding:'utf8'});
+  git('init','--quiet','-b','codex/t1-fixture'); git('commit','--quiet','--allow-empty','-m','fixture'); git('branch','codex/t2-fixture');
+  cli('init'); cli('task','add','--title','Lead task','--size','small'); cli('task','T1','set','branch=codex/t1-fixture');
+  cli('run','add','T1','--role','lead'); cli('run','add','T1','--role','qa');
+  cli('task','add','--title','Other task','--size','small'); cli('task','T2','set','branch=codex/t2-fixture'); cli('run','add','T2','--role','qa');
+  const resumeLead=()=>{cli('run','done','R1','--status','done'); cli('run','add','T1','--role','lead'); cli('run','add','T1','--role','qa');};
+  const runTarget=(run,role='lead')=>tool.captureRunAssignment({project:options.projectDirectory,task:'T1',run,role},env);
+  const foreignTargets={runTarget:tool.captureRunAssignment({project:options.projectDirectory,task:'T2',run:'R3',role:'qa'},env),
+    review:tool.captureReviewTarget({project:options.projectDirectory,task:'T2',run:'R3',role:'qa',cycle:1},env)};
+  const initial=preparation.prepareNativeTask({task:'T1',run:'R1',name:'agent_1',role:'lead',brief:completeBrief('Lead this task.')},
+    {version:'0.160.0',actor:f.root},options);
+  const first=preparation.reservePreparedSpawn({hook_event_name:'PreToolUse',session_id:f.root,turn_id:f.activation,
+    tool_name:'collaborationspawn_agent',tool_use_id:'spawn-1',tool_input:{task_name:initial.name,message:initial.message,fork_turns:'none'}},
+    {version:'0.160.0',actor:f.root},options).assignment;
+  const observationsDirectory=join(observationsRoot,f.root);
+  f.events.publish(observationsDirectory,{schema:1,runtime:'0.160.0',session:f.root,kind:'spawn-result',actor:f.root,call:'spawn-1',turn:f.activation,path:'/root/agent_1'});
+  const binding=await import(new URL('../runtime/child-binding.mjs',f.url));
+  const prior=binding.bindNativeChild({directory:f.journal,project:f.scope.project,observationsDirectory},f.identity()).binding;
+  const native={version:'0.160.0',actor:f.lead};
+  const input={task:'T1',run:'R2',name:'reviewer',role:'qa',reviewCycle:1,brief:completeBrief('Review the lead task.')};
+  const prepare=(changes={})=>preparation.prepareNativeTask({...input,...changes},native,options);
+  const spawnInput=saved=>({hook_event_name:'PreToolUse',session_id:f.root,turn_id:f.activation,
+    tool_name:'collaborationspawn_agent',tool_use_id:'team-spawn',tool_input:{task_name:saved.name,message:saved.message,fork_turns:'none'}});
+  const spawn=saved=>preparation.reservePreparedSpawn(spawnInput(saved),native,options);
+  return {...f,preparation,instructions,first,prior,options,native,input,prepare,spawn,runTarget,resumeLead,foreignTargets};
+}
+
+test('native lead preparation refuses other tasks while preserving same-task and chief work', async t => {
+  const f=await leadPreparationFixture(t),before=f.api.readAdmission(f.journal);
+  assert.throws(()=>f.prepare({task:'T2',run:'R3'}),/could not verify this task preparation/);
+  assert.deepEqual(f.api.readAdmission(f.journal),before);
+  const saved=f.prepare(); assert.equal(saved.task,'T1');
+  assert.equal(f.spawn(saved).decision,'permit-once');
+  const chief=f.preparation.prepareNativeTask({...f.input,task:'T2',run:'R3',name:'chief_review'},
+    {version:'0.160.0',actor:f.root},f.options);
+  assert.equal(chief.task,'T2');
+});
+
+test('native lead preparation blocks an older foreign-task preparation before dispatch', async t => {
+  const f=await leadPreparationFixture(t);
+  const old=f.api.prepareAdmission(f.journal,f.scope,{task:'T2',run:'R3',issuer:f.lead,name:'foreign'},
+    {issuerRole:'lead',role:'qa'},f.input.brief,f.foreignTargets).preparation;
+  const before=f.api.readAdmission(f.journal);
+  assert.throws(()=>f.spawn({name:old.name,message:f.instructions.preparedTaskMessage(old)}),/could not verify this task preparation/);
+  assert.deepEqual(f.api.readAdmission(f.journal),before);
+});
+
+test('native lead preparation uses the unfinished continuation and original native identity', async t => {
+  const f=await leadPreparationFixture(t);
+  f.api.completeAdmission(f.journal,f.prior);
+  f.resumeLead();
+  const next=f.api.prepareAdmission(f.journal,f.scope,{task:'T1',run:'R4',issuer:f.root,name:'lead_again'},
+    {issuerRole:'chief-of-staff',role:'lead'},completeBrief('Continue the lead task.'),
+    {runTarget:f.runTarget('R4')}).preparation;
+  const saved=f.api.reservePreparedContinuation(f.journal,f.scope,{preparation:next.id,issuer:f.root,call:'lead-followup',previous:f.first.id},
+    {tool:'collaborationfollowup_task',turn:f.activation,name:next.name,argumentsHash:'b'.repeat(64),taskHash:'c'.repeat(64)},'chief-of-staff');
+  const bound={...f.scope,assignment:saved.assignment.id,issuer:f.root,call:'lead-followup',child:f.lead,turn:'44444444-4444-4444-8444-444444444444'};
+  f.api.bindContinuationAdmission(f.journal,bound);
+  const child=f.prepare({run:'R5',name:'next_reviewer'});
+  assert.equal(child.task,'T1'); assert.equal(f.spawn(child).decision,'permit-once');
+  assert.throws(()=>f.prepare({task:'T2',run:'R3',name:'foreign_after_resume'}));
+  assert.equal(f.api.readAdmission(f.journal).bindings.length,2);
+  f.api.completeAdmission(f.journal,bound);
+  assert.throws(()=>f.prepare({run:'R5',name:'after_second_end'}));
+  for(const outcome of ['complete','interrupt']) {
+    const f=await leadPreparationFixture(t),saved=f.prepare();
+    if(outcome==='complete') f.api.completeAdmission(f.journal,f.prior);
+    else f.api.interruptAdmission(f.journal,f.prior,'a'.repeat(64));
+    const before=f.api.readAdmission(f.journal);
+    assert.throws(()=>f.prepare({run:'R2',name:'after_end'}));
+    assert.throws(()=>f.spawn(saved));
+    assert.deepEqual(f.api.readAdmission(f.journal),before);
+  }
+});

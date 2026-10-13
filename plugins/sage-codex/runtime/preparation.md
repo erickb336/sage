@@ -233,3 +233,15 @@ The prepared-message extraction checks the packaged tool and admission policy.
 It verifies complete instructions, exact-byte refusals, fresh context, stable
 retries and saved message hashes. It does not establish child delivery through
 the native transport, report completion or installed automatic operation.
+
+## A lead's current task
+
+A native lead can prepare and dispatch children only for its unfinished saved assignment's task.
+The adapter selects one unfinished binding. Completed and interrupted assignments grant no preparation authority.
+A reused lead keeps its original native spawn identity, but its unfinished continuation supplies the current task.
+Missing, ambiguous or inconsistent identity evidence refuses preparation.
+
+The adapter checks task scope both when it saves a brief and when it reserves a spawn.
+A foreign-task brief saved by an earlier runtime cannot bypass the dispatch check.
+Chief preparation remains separate and can select another task.
+These checks enforce admission ownership. Current logbook run and held-task checks remain separate work before automatic activation.
