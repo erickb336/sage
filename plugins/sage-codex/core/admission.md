@@ -166,3 +166,15 @@ provider responsibilities; this extraction does not wire automatic completion.
 Completion records neither task success nor a review verdict. Report acceptance,
 run completion, failed dispatch before binding and later-turn reuse remain separate
 protocols. Concurrent journal writers still compete for one immutable next record.
+
+## Failed initial dispatch
+
+`failAdmission` records a verified failure for one exact unbound reservation.
+The receipt includes the owner epoch, issuer, native call, assignment, and evidence hash.
+The provider must verify the native rejection before it calls this operation.
+
+A failure releases that reservation's slot without creating a child completion.
+The same receipt is an unchanged retry. Changed identity or evidence refuses.
+A bound assignment cannot fail dispatch, and a failed assignment cannot bind later.
+The failed reservation remains in history; retrying it never grants another dispatch permission.
+Failure and binding use the same journal lock, so only one can win a concurrent attempt.
