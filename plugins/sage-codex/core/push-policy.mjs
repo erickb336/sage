@@ -151,11 +151,15 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       if (!/\bmutation\b/.test(operations)) return false;
       // Ref ids hide their branch name. A ref update or deletion must use the reviewed PR path.
       if (/\b(?:updateRefs?|deleteRef)\s*\(/.test(operations)) return true;
+      if (/\bcreateCommitOnBranch\s*\(/.test(operations) &&
+        (/\bbranch\s*:\s*\{[^{}]*\bid\s*:/.test(operations) || !/\bbranchName\s*:\s*"[^"\\]+"/.test(query))) return true;
       return /\b(?:createCommitOnBranch|createRef|mergeBranch)\s*\(/.test(operations) &&
         (/\\/.test(query) || values.some(field => protectedName(field.value) ||
           (field.key !== "query" && /[$`\\]/.test(field.value))));
     }
     if ((method ?? (hasBodyFields || opaque ? "POST" : "GET")).toUpperCase() === "GET") return false;
+    // Without quote provenance a question mark can be a shell glob, not an API query separator.
+    if (endpoint?.includes("?")) return true;
     if (/[$`\\*\[\]]/.test(path)) return true;
     const route = /^repos\/[^/]+\/[^/]+\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|branches\/.*\/rename)$/.exec(path)?.[1];
     if (!route) return false;
