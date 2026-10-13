@@ -178,3 +178,15 @@ The same receipt is an unchanged retry. Changed identity or evidence refuses.
 A bound assignment cannot fail dispatch, and a failed assignment cannot bind later.
 The failed reservation remains in history; retrying it never grants another dispatch permission.
 Failure and binding use the same journal lock, so only one can win a concurrent attempt.
+
+## One lead per task
+
+A project can hold only one active lead or lead-owned team for a task.
+The role reservation checks this rule inside the admission transaction, across owners.
+An identical retry retains its reservation; a distinct run cannot claim a second lead slot.
+Completing the lead does not release task ownership while its team still runs.
+The issuer binding retains the lead’s task even if a child names another task.
+Existing journal records remain readable. New reservations cannot add an overlapping lead.
+Proven completion or dispatch failure releases the matching reservation.
+An independent chief-assigned specialist does not claim lead ownership.
+This component covers initial reservations. Prepared continuation on an existing lead is separate work.

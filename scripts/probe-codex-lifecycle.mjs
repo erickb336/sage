@@ -11,9 +11,12 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const leadOwnership = process.argv.includes("--sage-lead-ownership");
+assert(!leadOwnership || process.argv.slice(2).length === 1, "ownership_is_a_separate_probe");
+let ownershipStage = 0;
 const roleEdit = process.argv.includes("--sage-role-edit");
 const writer = process.argv.includes("--writer");
 assert(!writer || roleEdit, "writer_needs_role_probe");
@@ -31,7 +34,7 @@ const recoveryProbe = repeatRecovery || process.argv.includes("--sage-child-reco
 const receiptProbe = process.argv.includes("--sage-receipt") || recoveryProbe;
 const reportProbe = process.argv.includes("--sage-report") || receiptProbe;
 const failedSpawn = process.argv.includes("--sage-failed-spawn");
-const completion = roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
+const completion = leadOwnership || roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
 assert(!(failedSpawn && (reportProbe || recoveryProbe)), "incompatible_failure_probe");
 assert(!(denySpawn && completion), "incompatible_probe_modes");
 let denied = false;
@@ -117,7 +120,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -138,10 +141,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (!["function_call_output", "custom_tool_call_output"].includes(item.type) || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.ownerPrepare, calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
-        if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
+        if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.ownerSpawn, calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -397,6 +400,33 @@ data: ${JSON.stringify(event)}
         check(receipt?.decision === "prepared" && typeof receipt.message === "string" && receipt.fork_turns === "none", "preparation_missing");
         CHILD_PROMPT = receipt.message; prepared = true;
       }
+      if (leadOwnership && rootRequests === 2 && ownershipStage < 3) {
+        if (ownershipStage === 0) {
+          check(childEntry(info.outputs[calls.running]).agent_status === "running" && !childResponseSent, "first_lead_not_held");
+          check(info.prepareTools.length === 1, "ownership_preparation_tool_missing");
+          ownershipStage = 1;
+          const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
+          respond(res, {type:"function_call", ...info.prepareTools[0], call_id:calls.ownerPrepare,
+            arguments:JSON.stringify({task:"T1",run:"R2",name:"second_lead",role:"lead",brief})}); return;
+        }
+        if (ownershipStage === 1) {
+          const receipt = info.outputs[calls.ownerPrepare];
+          check(receipt?.decision === "prepared" && typeof receipt.message === "string", "second_lead_not_prepared");
+          ownershipStage = 2;
+          respond(res, call(calls.ownerSpawn, "spawn_agent", {task_name:"second_lead",message:receipt.message,fork_turns:"none"})); return;
+        }
+        if (!Object.hasOwn(info.outputs, calls.ownerList)) {
+          check(typeof info.outputs[calls.ownerSpawn] === "string" && info.outputs[calls.ownerSpawn].includes("Sage could not verify this tool call."), "second_lead_not_denied");
+          const state = integrated.readJournal();
+          check(state.config.total === 5 && state.reservations.length === 1, "ownership_consumed_extra_capacity");
+          respond(res, call(calls.ownerList,"list_agents",{})); return;
+        }
+        const registry = info.outputs[calls.ownerList];
+        check(registry?.agents?.length === 2 && registry.agents.some(row => row.agent_name === "/root")
+          && registry.agents.some(row => row.agent_name === "/root/probe_child"), "ownership_started_extra_child");
+        ownershipStage = 3;
+        print({type:"lead_ownership_evidence",capacity:5,reservations:1,deniedSecondLead:true,nativeAgents:2,simulatedModel:true});
+      }
       rootRequests++;
       if (rootRequests === 1) {
         check(["spawn_agent", "list_agents", "wait_agent"].every((name) => info.agentTools.includes(name)), "required_native_tools_missing");
@@ -595,14 +625,14 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (receiptProbe ? 9 : reportProbe ? 6 : 5) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+      : rootRequests === (receiptProbe ? 9 : reportProbe ? 6 : 5) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
         && (!recoveryProbe || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && malformedEvents === 0 && rejectedRequests === 0;
     if (childMessage) print({type:"message_evidence",messageVerified,chiefMessageDelivered,messageWaitCycles,simulatedModel:true});
-    print({ type: "result", ...result, responseRequests, rootRequests: rootRequests + 2 * messageWaitCycles, childRequests, childTaskSeen, childResponseSent,
+    print({ type: "result", ...result, responseRequests, rootRequests: rootRequests + 2 * messageWaitCycles + (leadOwnership ? 3 : 0), childRequests, childTaskSeen, childResponseSent,
       nativeRunning, nativeWait, nativeCompleted, exactMessages, otherMessages, completedTurns, failedTurns,
       unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
@@ -612,7 +642,7 @@ data: ${JSON.stringify(event)}
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");
     const before=rows.filter(row=>row.hook_event_name==="PreToolUse"&&row.tool_name==="collaborationspawn_agent");
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
-    assert.equal(before.length,failedSpawn ? 2 : 1);
+    assert.equal(before.length,failedSpawn || leadOwnership ? 2 : 1);
     assert.equal(start.length,denySpawn ? 0 : 1);
     assert.equal(stop.length,denySpawn ? 0 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
     assert.equal(after.length,denySpawn ? 0 : 1);
@@ -628,7 +658,7 @@ data: ${JSON.stringify(event)}
     }
     if (completion) {
       const state = integrated.readJournal(), stops = integrated.readStops();
-      assert.equal(state.preparations.length, failedSpawn ? 2 : 1); assert.equal(state.reservations.length, failedSpawn ? 2 : 1);
+      assert.equal(state.preparations.length, failedSpawn || leadOwnership ? 2 : 1); assert.equal(state.reservations.length, failedSpawn ? 2 : 1);
       assert.equal(state.bindings.length, 1); assert.equal(state.completions.length, 1);
       assert.deepEqual(state.completions[0], state.bindings[0]);
       assert.equal(state.bindings[0].child, childThread);

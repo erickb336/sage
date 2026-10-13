@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, parse, resolve, sep } from "node:path";
 import { createAssignment, parseAssignment } from "./assignments.mjs";
-import { parseRolePlan, checkRoleReservation } from "./role-policy.mjs";
+import { parseRolePlan, checkRoleReservation, checkLeadOwnership } from "./role-policy.mjs";
 import { parseBrief } from "./brief.mjs";
 import { parseReport } from "./report.mjs";
 
@@ -133,7 +133,7 @@ function action(input) {
   }
   return refuse("unknown action");
 }
-function apply(state, event) {
+function apply(state, event, replay = false) {
   const copy = structuredClone(state);
   if (event.kind === "configure") {
     if (copy.config) {
@@ -275,6 +275,7 @@ function apply(state, event) {
       && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
       && row.dispatch.name === event.dispatch.name)) refuse("child dispatch name is already reserved");
     checkRoleReservation(active, value, event.rolePlan);
+    if (!replay) checkLeadOwnership(copy, active, value, event.rolePlan);
   }
   if (active.length >= copy.config.total) refuse("total capacity is occupied");
   const projectLimit = copy.config.projects.find((p) => p.project === value.project).limit;
@@ -347,7 +348,7 @@ function read(dir) {
     const event = action(record.data);
     const expected = envelope(revision, previous, event);
     if (json(expected) + "\n" !== bytes) refuse("journal chain or record differs");
-    const next = apply(state, event);
+    const next = apply(state, event, true);
     if (!next.changed) refuse("journal contains a duplicate transition");
     state = next.state;
     previous = expected.hash;
