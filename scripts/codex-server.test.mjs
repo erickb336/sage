@@ -4195,3 +4195,26 @@ test("cached report inspection refuses missing changed and conflicting recovery 
   assert.throws(() => api.readChildReport(input, f.native(session), f.options));
   assert.deepEqual(f.core.readAdmission(f.options.directory), before);
 });
+
+test("child assignment recovery refuses selectors foreign actors and terminal turns", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  assert.equal(read().task, "T1");
+  for (const input of [{ task: "T1" }, { actor: childActor }, { turn: turns[1] }, [], null]) assert.throws(() => read(input));
+  for (const actor of [session, turns[0]]) assert.throws(() => read({}, actor));
+  assert.throws(() => read({}, childActor, { ...f.options, project: "foreign" }));
+  const api = await import(pathToFileURL(join(f.plugin, "runtime/child-assignment.mjs")));
+  assert.throws(() => api.readNativeChildAssignment({}, { version: "unsupported", actor: childActor }, f.options));
+  appendReport(f); assert.throws(() => read(), "native terminal evidence is sufficient to refuse a stale read");
+  f.childTranscript(); assert.equal(read().task, "T1");
+  f.policy.completeChild(f.stop, f.native(childActor));
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor)); assert.throws(() => read());
+});
+
+test("child assignment recovery refuses changed delivery and missing transcripts", async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  const expected = read();
+  f.childTranscript({ message: "A changed task" }); assert.throws(() => read());
+  const path = f.childTranscript(); const bytes = readFileSync(path); rmSync(path); assert.throws(() => read());
+  writeFileSync(path, bytes); assert.deepEqual(read(), expected);
+
+});

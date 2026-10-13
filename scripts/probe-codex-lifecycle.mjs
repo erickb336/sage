@@ -390,7 +390,7 @@ data: ${JSON.stringify(event)}
           respond(res, message(CHILD_MARKER)); return;
         }
         if (childRecoveryGatePhase === 2) {
-          check(textValues(request.input).some(text => text.includes("Read your current assignment with sage_read_assignment before reporting completion.")),
+          check(textValues(request.input).some(text => text.includes("After compaction, read your current assignment with sage_read_assignment before completing this task.")),
             "unrecovered_stop_was_not_blocked");
           const state = integrated.readJournal();
           check(state.reservations.length === 1 && state.bindings.length === 1

@@ -144,7 +144,7 @@ export async function childStopOutput(input, context, loadPolicy) {
   if (!result || typeof result !== "object" || Array.isArray(result) || Object.keys(result).length !== 1
     || !Object.hasOwn(result, "decision") || !["stop-observed", "completed", "already-completed", "unmanaged", "recovery-required"].includes(result.decision)) refuse();
   if (result.decision === "recovery-required") return { decision: "block",
-    reason: "Read your current assignment with sage_read_assignment before reporting completion." };
+    reason: "After compaction, read your current assignment with sage_read_assignment before completing this task." };
   // A native terminal record ends correction. Otherwise ask once, as Claude does.
   if (result.decision === "stop-observed" && !stop_hook_active) {
     const missing = missingReportFields(last_assistant_message);
