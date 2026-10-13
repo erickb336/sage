@@ -8,7 +8,8 @@ export function patchTargets(patch) {
   const paths = [];
   let kind, body = false, moved = false;
   const target = value => {
-    if (!value || value.length > 4096 || /\p{Cc}/u.test(value)) refuse();
+    // Native Codex trims header endings. Refuse ambiguous targets before path checks.
+    if (!value || value.length > 4096 || /\p{Cc}/u.test(value) || /\p{White_Space}$/u.test(value)) refuse();
     paths.push(value);
     if (paths.length > 4096) refuse();
   };

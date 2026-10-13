@@ -2282,3 +2282,18 @@ test("native deadline does not signal an exited child while output closure is pe
   assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline" });
   assert.deepEqual(signals, []);
 });
+
+test("Codex direct patch targets refuse header whitespace that native parsing removes", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const wrap = body => `*** Begin Patch\n${body}\n*** End Patch`;
+  for (const suffix of [" ", "\t", "\u00a0", "\u2003", "\u202f", "\u0085"]) {
+    for (const body of [`*** Add File: AGENTS.md${suffix}\n+fixed`,
+      `*** Update File: AGENTS.md${suffix}\n@@\n-old\n+new`,
+      `*** Delete File: AGENTS.md${suffix}`,
+      `*** Update File: ordinary\n*** Move to: AGENTS.md${suffix}\n@@\n-old\n+new`])
+      assert.throws(() => patchTargets(wrap(body)), /Codex patch targets are unavailable/);
+  }
+  assert.deepEqual(patchTargets(wrap("*** Add File: ordinary name\n+fixed")), ["ordinary name"]);
+  assert.equal(existsSync(join(f.dir, "AGENTS.md")), false);
+});
