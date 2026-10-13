@@ -4,7 +4,7 @@
 
 The reader resolves the current owner, saved assignment, child, turn, and task hash. It verifies report provenance in the saved protected transcript. Required report fields must contain values, and status must be `done`, `blocked`, or `question`. The response includes the assignment identity and a SHA-256 hash of the exact report text.
 
-Inspection can first reconcile terminal evidence through the completion adapter. A stop callback or reported status alone cannot complete an assignment. An interrupted assignment cannot supply a completed report. Once completion is recorded, repeated reads change no admission state. Sage off still permits inspection of preserved work.
+Inspection can first reconcile terminal evidence for the requested assignment through the completion adapter. It does not reconcile other children. A stop callback or reported status alone cannot complete an assignment. An interrupted assignment cannot supply a completed report. Once completion is recorded, repeated reads change no admission state. Sage off still permits inspection of preserved work.
 
 The reader does not save report evidence, finish a logbook run, accept findings, or record a review verdict. A report describes the child's claims; it does not prove task success. Missing, changed, ambiguous, linked, or stale transcript evidence is refused. Durable receipts and later assignments remain separate work.
 

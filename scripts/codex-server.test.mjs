@@ -1739,3 +1739,27 @@ test("packaged report inspection contains transcript failures and preserves owne
   rmSync(file); writeFileSync(file, text); assert.equal((await client.call(input)).report.STATUS, "done");
   await client.close();
 });
+
+
+test("native report read leaves an unrelated sibling unchanged with missing or terminal evidence", async t => {
+  const f = await completionFixture(t);
+  appendReport(f);
+  f.policy.completeChild(f.stop, f.native(childActor));
+  const other = "a22422c7-509c-43aa-8c42-827c556f8a59";
+  const name = "other_lead";
+  f.api.prepareNativeTask({ ...f.input, task: "T2", run: "R2", name }, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(name, "spawn-2"), f.native(session), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), { ...f.result, call: "spawn-2", path: `/root/${name}` });
+  const transcript = f.childTranscript({ child: other, path: `/root/${name}`, turn: turns[2] });
+  await f.evaluate(f.policy, { ...patch(turns[2]), transcript_path: transcript }, other);
+  const original = readFileSync(transcript, "utf8");
+  const before = f.core.readAdmission(f.options.directory);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  rmSync(transcript);
+  assert.equal(readChildReport({ name: f.input.name }, f.native(session), f.options).report.STATUS, "done");
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  writeFileSync(transcript, original);
+  appendReport(f, reportText, other, turns[2]);
+  assert.equal(readChildReport({ name: f.input.name }, f.native(session), f.options).report.STATUS, "done");
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});

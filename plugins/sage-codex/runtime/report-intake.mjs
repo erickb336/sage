@@ -23,7 +23,7 @@ function verifiedReport(name, context, options) {
   if (candidates.length !== 1) refuse();
   const assigned = candidates[0];
   if (!assigned.assignment.session.startsWith("codex:")) refuse();
-  reconcileNativeCompletions(native, assigned.assignment.session.slice(6), options);
+  reconcileNativeCompletions(native, assigned.assignment.session.slice(6), options, assigned.assignment.id);
   state = readAdmission(options.directory);
   const bound = state.bindings.find(row => row.assignment === assigned.assignment.id);
   const complete = state.completions?.find(row => row.assignment === assigned.assignment.id);

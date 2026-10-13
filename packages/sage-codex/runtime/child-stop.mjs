@@ -99,16 +99,17 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
 }
 
 /** A native parent verifies terminal evidence for its own bound children. */
-export function reconcileNativeCompletions(context, session, options) {
+export function reconcileNativeCompletions(context, session, options, assignment) {
   const native = nativeToolContext(context);
   if (typeof session !== "string" || !UUID.test(session)) refuse();
-  recoverNativeInitialDeliveries(native, session, options);
+  recoverNativeInitialDeliveries(native, session, options, assignment);
   const state = readAdmission(options.directory);
   const key = `codex:${session}`;
   const owner = state.sessions.find(row => row.project === options.project && row.session === key);
   if (!owner) refuse();
   for (const bound of state.bindings.filter(row => row.project === options.project && row.session === key
-    && row.epoch === owner.epoch && row.issuer === native.actor)) {
+    && row.epoch === owner.epoch && row.issuer === native.actor
+    && (assignment === undefined || row.assignment === assignment))) {
     if (state.completions?.some(row => row.assignment === bound.assignment)) continue;
     // The start callback can bind a child before its first transcript reference arrives.
     // Keep that assignment pending; existing references still require full validation.
