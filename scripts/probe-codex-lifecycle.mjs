@@ -11,7 +11,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
@@ -19,7 +19,9 @@ const repeatRecovery = process.argv.includes("--sage-child-repeat-recovery");
 const recoveryProbe = repeatRecovery || process.argv.includes("--sage-child-recovery");
 const receiptProbe = process.argv.includes("--sage-receipt") || recoveryProbe;
 const reportProbe = process.argv.includes("--sage-report") || receiptProbe;
-const completion = process.argv.includes("--sage-completion") || reportProbe;
+const failedSpawn = process.argv.includes("--sage-failed-spawn");
+const completion = failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
+assert(!(failedSpawn && (reportProbe || recoveryProbe)), "incompatible_failure_probe");
 assert(!(denySpawn && completion), "incompatible_probe_modes");
 let denied = false;
 const MARKER = "sage-native-parent-ok";
@@ -80,7 +82,8 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,deadlineMs});
+  let failureStage = 0;
   let prepared = false, blockedStopVerified = false, reportVerified = false, receiptVerified = false, beforeReport, expectedReport, recordedState;
   let compactRequests = 0, recoveryRound = 0, recoveryPhase = "compact", recoveredRounds = 0;
   const texts = value => typeof value === "string" ? [value] : Array.isArray(value) ? value.flatMap(texts)
@@ -102,7 +105,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -123,10 +126,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
-        if ((denySpawn && item.call_id === calls.spawn) || [calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
+        if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -260,7 +263,7 @@ data: ${JSON.stringify(event)}
         if (completion && childRequests === 1) {
           check(thread === childThread && childResponseSent, "unexpected_stop_retry");
           const state = integrated.readJournal(), stops = integrated.readStops();
-          check(state.reservations.length === 1 && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
+          check(state.reservations.length === (failedSpawn ? 2 : 1) && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
             "blocked_stop_released_capacity");
           check(stops.length === 1 && stops[0].decision === "stop-observed" && stops[0].completions === 0,
             "stop_callback_was_not_observed");
@@ -282,6 +285,36 @@ data: ${JSON.stringify(event)}
       check(!subagent, "unexpected_non_spawn_agent_request");
       rootThread ??= thread;
       check(thread === rootThread, "unexpected_root_thread_identity");
+      if (failedSpawn && failureStage < 4) {
+        check(info.prepareTools.length === 1, "failure_prepare_tool_missing");
+        if (failureStage === 0) {
+          failureStage = 1;
+          const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
+          respond(res, {type: "function_call", ...info.prepareTools[0], call_id: calls.failurePrepare,
+            arguments: JSON.stringify({task: "T1", run: "R1", name: "probe_failed", role: "lead", brief})}); return;
+        }
+        if (failureStage === 1) {
+          const receipt = info.outputs[calls.failurePrepare];
+          check(receipt?.decision === "prepared" && typeof receipt.message === "string", "failure_preparation_missing");
+          failureStage = 2;
+          respond(res, call(calls.failureSpawn, "spawn_agent", {task_name: "probe_failed", message: receipt.message,
+            fork_turns: "none", model: "sage-fixture-nonexistent-model"})); return;
+        }
+        if (failureStage === 2) {
+          check(info.outputs[calls.failureSpawn] === "Unknown model `sage-fixture-nonexistent-model` for spawn_agent. Available models: sage-native-parent", "unexpected_native_preflight_error");
+          const state = integrated.readJournal();
+          check(state.config.total === 1 && state.reservations.length === 1 && state.bindings.length === 0
+            && (state.failures?.length ?? 0) === 0 && childRequests === 0, "failure_released_before_reconciliation");
+          failureStage = 3;
+          respond(res, call(calls.failureList, "list_agents", {})); return;
+        }
+        const registry = info.outputs[calls.failureList], state = integrated.readJournal();
+        check(registry?.agents?.length === 1 && registry.agents[0].agent_name === "/root", "failed_dispatch_created_child");
+        check(state.failures?.length === 1 && state.bindings.length === 0 && childRequests === 0
+          && state.failures[0].assignment === state.reservations[0].assignment.id, "failed_dispatch_not_reconciled");
+        failureStage = 4;
+        print({type: "failed_spawn_registry", onlyRoot: true, failures: 1, bindings: 0});
+      }
       if (completion && !prepared) {
         if (!Object.hasOwn(info.outputs, calls.prepare)) {
           check(info.prepareTools.length === 1, "preparation_tool_missing");
@@ -494,7 +527,7 @@ data: ${JSON.stringify(event)}
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");
     const before=rows.filter(row=>row.hook_event_name==="PreToolUse"&&row.tool_name==="collaborationspawn_agent");
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
-    assert.equal(before.length,1);
+    assert.equal(before.length,failedSpawn ? 2 : 1);
     assert.equal(start.length,denySpawn ? 0 : 1);
     assert.equal(stop.length,denySpawn ? 0 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
     assert.equal(after.length,denySpawn ? 0 : 1);
@@ -503,22 +536,34 @@ data: ${JSON.stringify(event)}
     assert.equal(start[0].agent_id,stop[0].agent_id);
     assert.equal(start[0].metadata.id,start[0].agent_id);
     assert.equal(start[0].metadata.session_id,before[0].session_id);
-    assert.equal(before[0].tool_use_id,after[0].tool_use_id);
+    const matched = before.filter(row => row.tool_use_id === after[0].tool_use_id);
+    assert.equal(matched.length, 1);
+    assert.equal(matched[0].tool_use_id, calls.spawn);
     assert.equal(after[0].resultTaskName,start[0].metadata.agent_path);
     }
     if (completion) {
       const state = integrated.readJournal(), stops = integrated.readStops();
-      assert.equal(state.preparations.length, 1); assert.equal(state.reservations.length, 1);
+      assert.equal(state.preparations.length, failedSpawn ? 2 : 1); assert.equal(state.reservations.length, failedSpawn ? 2 : 1);
       assert.equal(state.bindings.length, 1); assert.equal(state.completions.length, 1);
       assert.deepEqual(state.completions[0], state.bindings[0]);
       assert.equal(state.bindings[0].child, childThread);
       assert.equal(state.reports?.length ?? 0, receiptProbe ? 1 : 0);
       assert.equal(stops.length, recoveryProbe ? recoveredRounds + 1 : 2);
       assert(stops.every((row, i) => row.decision === (recoveryProbe && i < recoveredRounds ? "recovery-required" : "stop-observed") && row.completions === 0));
-      print({type: "completion_evidence", reservations: 1, bindings: 1, completions: 1,
+      print({type: "completion_evidence", reservations: state.reservations.length, bindings: 1, completions: 1,
         blockedStopRetainedCapacity: blockedStopVerified, stopCallbacksPrecedeTerminal: true,
         parentReconciledCompletion: true, reportsAccepted: 0, fullPolicyVerified: false,
         simulatedModel: true, automaticSage: false, realModelConsumptionVerified: false});
+    }
+    if (failedSpawn) {
+      const state = integrated.readJournal();
+      assert.equal(failureStage, 4); assert.equal(state.config.total, 1);
+      assert.equal(state.failures.length, 1);
+      assert.equal(state.failures[0].assignment, state.reservations[0].assignment.id);
+      assert.equal(state.completions[0].assignment, state.reservations[1].assignment.id);
+      print({type: "failed_spawn_evidence", capacity: 1, reservations: 2, failedDispatches: 1,
+        bindings: 1, completedChildren: 1, retryUsedReleasedSlot: true, simulatedModel: true,
+        otherFailureKindsVerified: false});
     }
     print({type:"hook_evidence",spawnRequest:before.length,spawnResult:after.length,childStart:start.length,childStop:stop.length,exactIdentityJoin:!denySpawn,noChildStarted:denySpawn,simulatedModel:true,automaticSage:false,realModelConsumptionVerified:false});
   }
