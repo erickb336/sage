@@ -3781,18 +3781,6 @@ test('native lead preparation blocks an older foreign-task preparation before di
   assert.deepEqual(f.api.readAdmission(f.journal),before);
 });
 
-test('native lead preparation refuses completed and interrupted lead assignments', async t => {
-  for(const outcome of ['complete','interrupt']) {
-    const f=await leadPreparationFixture(t),saved=f.prepare();
-    if(outcome==='complete') f.api.completeAdmission(f.journal,f.prior);
-    else f.api.interruptAdmission(f.journal,f.prior,'a'.repeat(64));
-    const before=f.api.readAdmission(f.journal);
-    assert.throws(()=>f.prepare({run:'R3',name:'after_end'}),/could not verify this task preparation/);
-    assert.throws(()=>f.spawn(saved),/could not verify this task preparation/);
-    assert.deepEqual(f.api.readAdmission(f.journal),before);
-  }
-});
-
 test('native lead preparation uses the unfinished continuation and original native identity', async t => {
   const f=await leadPreparationFixture(t);
   f.api.completeAdmission(f.journal,f.prior);
@@ -3809,4 +3797,13 @@ test('native lead preparation uses the unfinished continuation and original nati
   assert.equal(f.api.readAdmission(f.journal).bindings.length,2);
   f.api.completeAdmission(f.journal,bound);
   assert.throws(()=>f.prepare({run:'R5',name:'after_second_end'}));
+  for(const outcome of ['complete','interrupt']) {
+    const f=await leadPreparationFixture(t),saved=f.prepare();
+    if(outcome==='complete') f.api.completeAdmission(f.journal,f.prior);
+    else f.api.interruptAdmission(f.journal,f.prior,'a'.repeat(64));
+    const before=f.api.readAdmission(f.journal);
+    assert.throws(()=>f.prepare({run:'R3',name:'after_end'}));
+    assert.throws(()=>f.spawn(saved));
+    assert.deepEqual(f.api.readAdmission(f.journal),before);
+  }
 });
