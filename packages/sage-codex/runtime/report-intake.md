@@ -8,7 +8,7 @@ Inspection can first reconcile terminal evidence for the requested assignment th
 
 `sage_record_report` saves the inspected report when the caller supplies its exact hash. Recovery proof binds the receipt to the verified assignment before the journal records it. A proof without a receipt grants no report authority. Exact retries preserve one receipt; conflicting evidence is refused. A saved receipt with valid recovery proof remains readable after native transcript removal.
 
-Neither operation finishes a logbook run, accepts findings, or records a review verdict. A report describes the child's claims; it does not prove task success. Missing, changed, ambiguous, linked, or stale evidence is refused unless an exact saved receipt and valid recovery proof permit recovery. Later assignments remain separate work.
+Neither operation finishes a logbook run, accepts findings, or records a review verdict. A report describes the child's claims; it does not prove task success. Missing, changed, ambiguous, linked, or stale evidence is refused unless an exact saved receipt and valid recovery proof permit recovery. Later assignments use their saved turn, while the original child start still proves parent and path identity.
 
 Run `node scripts/probe-codex-lifecycle.mjs --sage-report` with fake process tools first on PATH. The probe uses CLI 0.160.0, a temporary profile, and simulated responses. It checks the exact report identity and text hash through the packaged MCP tool, then removes the temporary profile. It does not establish installed automatic Sage or real-model behavior.
 
@@ -17,3 +17,15 @@ Run the same probe with `--sage-receipt` to verify persistence, exact-hash repla
 ## Integration branch
 
 This branch also prepares later assignments, logbook run completion, and review operations. Its broader receipt probe checks those prepared operations with simulated responses. They still require separate extraction and review before installed activation.
+
+## Follow-up reports
+
+Each saved continuation names a distinct assignment, run and native turn on the same child.
+The parent reads and records that assignment by its saved dispatch name.
+The reader verifies the matching terminal record, task hash and final message.
+It does not require a second child-start event. Initial assignments still require their original start turn.
+
+Recovery proof binds the exact report receipt to that continuation.
+A verified receipt remains readable after transcript removal and Sage off.
+Changed hashes, foreign callers, wrong turns and mismatched report messages cannot replace it.
+Reading or recording a report does not accept its claims, finish a logbook run or grant merge authority.
