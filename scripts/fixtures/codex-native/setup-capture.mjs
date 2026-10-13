@@ -5,7 +5,7 @@ import {spawn} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
-export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,completion=false,deadlineMs=120_000}){
+export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,completion=false,recovery=false,deadlineMs=120_000}){
  assert(/^[A-Za-z0-9/._-]+$/.test(realpathSync(root)), "unsafe_probe_root");
  assert.equal(realpathSync(codexHome),join(realpathSync(root),'codex'));
  mkdirSync(join(root,'events'));
@@ -17,7 +17,7 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
  const blocker = join(root, 'block-first-stop.mjs');
  if(completion) writeFileSync(blocker, readFileSync(new URL('./block-first-stop.mjs', import.meta.url)));
  const events=['PreToolUse','PostToolUse','SubagentStart','SubagentStop',...(completion?['UserPromptSubmit']:[])];
- writeFileSync(join(codexHome,'hooks.json'),JSON.stringify({hooks:Object.fromEntries(events.map(event=>[event,[{hooks:[...(event==='UserPromptSubmit'?[]:[{type:'command',command,timeout:10}]),...(integrated?.hook(event)??[]),...(completion&&event==='SubagentStop'?[{type:'command',command:`node ${JSON.stringify(blocker)}`,timeout:10}]:[])]}]]))}));
+ writeFileSync(join(codexHome,'hooks.json'),JSON.stringify({hooks:Object.fromEntries(events.map(event=>[event,[{hooks:[...(event==='UserPromptSubmit'?[]:[{type:'command',command,timeout:10}]),...(integrated?.hook(event)??[]),...(completion&&!recovery&&event==='SubagentStop'?[{type:'command',command:`node ${JSON.stringify(blocker)}`,timeout:10}]:[])]}]]))}));
  writeFileSync(join(codexHome,'config.toml'),baseConfig);
  const args=['-c','analytics.enabled=false','-c','otel.exporter="none"','-c','otel.metrics_exporter="none"','-c','otel.trace_exporter="none"','app-server','-c','model_provider="sage_capture_loopback"','-c','model_providers.sage_capture_loopback={name="Isolated hook capture",base_url="http://127.0.0.1:1/v1",wire_api="responses",requires_openai_auth=false}','-c','cli_auth_credentials_store="ephemeral"','-c','features.hooks=true','-c','features.plugins=false','-c','features.apps=false','-c','features.remote_plugin=false'];
  const child=spawn(binary,args,{cwd:workspace,env,stdio:['pipe','pipe','pipe'],shell:false});
@@ -26,8 +26,8 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
  let hooks;
  const inspect=r=>{
   assert.equal(r.data.length,1);assert.equal(r.data[0].errors.length,0);
-  const hs=r.data[0].hooks;assert.equal(hs.length,completion?10:4);
-  assert.deepEqual(hs.map(h=>h.eventName).sort(),['preToolUse','postToolUse','subagentStart','subagentStop',...(completion?['preToolUse','postToolUse','subagentStop','subagentStop','userPromptSubmit','userPromptSubmit']:[])].sort());
+  const hs=r.data[0].hooks;assert.equal(hs.length,completion?(recovery?9:10):4);
+  assert.deepEqual(hs.map(h=>h.eventName).sort(),['preToolUse','postToolUse','subagentStart','subagentStop',...(completion?['preToolUse','postToolUse','subagentStop',...(!recovery?['subagentStop']:[]),'userPromptSubmit','userPromptSubmit']:[])].sort());
 
   assert(hs.every(h=>(completion||h.command===command)&&h.enabled&&h.sourcePath===join(codexHome,'hooks.json')));
   return hs;

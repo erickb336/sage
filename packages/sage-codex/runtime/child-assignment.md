@@ -9,3 +9,5 @@ Recovery remains available for preserved assignments after Sage off. A pending i
 A stop without recovery evidence remains blocked. Recovery alone does not release capacity: completion still requires native terminal evidence. An interruption remains a distinct outcome. Report claims do not establish task success.
 
 This component covers initial assignments. Later assignments and shared logbook task/run checks remain separate components. It does not enable installed automatic Sage or prove real-model behavior.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-child-repeat-recovery` with fake process tools first on PATH. The isolated CLI 0.160.0 probe triggers two native compactions with simulated responses. It checks work and stop refusal, exact assignment recovery after each compaction, completion, receipt storage, and cleanup. `--sage-child-recovery` covers one compaction. Neither route establishes real-model behavior or installed activation.

@@ -20,7 +20,7 @@ export async function setupCompletion(root) {
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(options)};
     const allowed = new Set(['collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
-      'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report']);
+      'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, input => allowed.has(input.tool_name)
         ? {decision: 'pass'} : {decision: 'deny', reason: 'Outside the fixed completion fixture.'});
@@ -41,8 +41,25 @@ export async function setupCompletion(root) {
   const config = [["sage_fixture", "completion-hooks.mjs"], ["sage_preparation", "completion-preparation.mjs"]]
     .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
-  const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
-  return { config: config + receiptConfig, removeChildTranscript(child) {
+  const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
+  const { readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
+  return { config: config + receiptConfig, childEvidence(child) {
+      const state = readAdmission(options.directory);
+      const bindings = state.bindings.filter(row => row.child === child);
+      assert.equal(bindings.length, 1);
+      const bound = bindings[0], session = bound.session.slice(6);
+      const rows = readObservations(join(options.observationsRoot, session));
+      const paths = rows.filter(row => row.kind === "child-transcript" && row.child === child && row.turn === bound.turn);
+      const starts = rows.filter(row => row.kind === "child-start" && row.child === child);
+      assert.equal(paths.length, 1); assert.equal(starts.length, 1);
+      const assigned = state.reservations.find(row => row.assignment.id === bound.assignment);
+      const recovery = readNativeRecovery(paths[0].transcript, { sessionsDir: options.sessionsDir }, {
+        session, child, parent: bound.issuer, path: starts[0].path, author: "/root", turn: bound.turn,
+        taskHash: assigned.dispatch.taskHash });
+      const text = readFileSync(paths[0].transcript, "utf8"); assert(Buffer.byteLength(text) <= 16 * 1024 * 1024);
+      const compactions = text.trim().split("\n").map(JSON.parse).filter(row => row.type === "compacted").length;
+      return { state, bound, recovery, compactions };
+    }, removeChildTranscript(child) {
       const bindings = readAdmission(options.directory).bindings.filter(row => row.child === child);
       assert.equal(bindings.length, 1);
       const bound = bindings[0];
