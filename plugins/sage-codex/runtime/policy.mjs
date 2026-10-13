@@ -1,6 +1,6 @@
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
 import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readMode } from "./mode.mjs";
@@ -54,8 +54,14 @@ export function createNativePolicy(options, evaluateTool) {
         if (Object.keys(event.tool_input).length !== 1 || !Object.hasOwn(event.tool_input, "command")) refuse();
         let parent = null, path = "/root";
         if (child) {
-          const starts = readObservations(join(fixed.observationsRoot, event.session_id))
-            .filter(row => row.kind === "child-start" && row.child === native.actor);
+          const directory = join(fixed.observationsRoot, event.session_id);
+          let observations;
+          try { observations = readObservations(directory); }
+          catch (error) {
+            if (before.sage || error.code !== "ENOENT" || error.syscall !== "lstat" || (typeof error.path !== "string" || (error.path !== directory && !directory.startsWith(error.path + sep)))) throw error;
+            observations = []; // An unassigned off-mode child need not have an observation directory.
+          }
+          const starts = observations.filter(row => row.kind === "child-start" && row.child === native.actor);
           if (before.sage) {
             const current = starts; // Native child identity stays fixed across admitted turns.
             if (current.length !== 1) refuse();

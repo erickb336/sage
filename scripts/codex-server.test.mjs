@@ -2391,3 +2391,21 @@ test('native command policy gives the evaluator a separate copy of command input
   assert.deepEqual(await f.evaluate(policy, input), { decision: 'pass' });
   assert.equal(readFileSync(input.transcript_path, 'utf8'), before);
 });
+
+test('native off-mode child command needs no observation directory and refuses invalid stored evidence', async t => {
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const directory = join(f.options.observationsRoot, session);
+  assert.equal(existsSync(directory), false);
+  const policy = f.createNativePolicy(f.options, (_input, context) => {
+    evaluated++; assert.equal(context.command.cmd, 'printf fixed'); return { decision: 'pass' };
+  });
+  const { input } = commandPolicyInput(f, childActor, 'printf fixed', turns[1], 'unassigned native child');
+  assert.equal((await f.evaluate(policy, input, childActor)).decision, 'pass');
+  assert.equal(existsSync(directory), false);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, 'unexpected.json'), '{}');
+  await assert.rejects(f.evaluate(policy, input, childActor), /unexpected published entry/);
+  assert.equal(evaluated, 1);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+});
