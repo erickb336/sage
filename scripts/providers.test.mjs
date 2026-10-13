@@ -2417,3 +2417,44 @@ test("shared shell paths keep literal equals signs in operands and redirections"
     assert.equal(existsSync(join(cwd, "ordinary=a")), false);
   }
 });
+
+test("shared shell paths preserve quoted redirection target prefixes", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    for (const prefix of ["&", ">", "<", "|"]) {
+      symlinkSync(root, join(cwd, `${prefix}linked`));
+      for (const operator of [">", ">>", ">|", "&>", "&>>", "<>"]) {
+        // These strings reach the parser only, never a shell.
+        assert.equal(shellWriteOutsideRoots({ command: `printf fixed ${operator} '${prefix}linked/ledger.tsv'`, cwd, roots: [root] }), false);
+        assert.equal(shellWriteOutsideRoots({ command: `printf fixed ${operator} '${prefix}ordinary'`, cwd, roots: [root] }), true);
+      }
+    }
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+  }
+});
+
+test("shared command reader keeps structured redirection targets across execution scopes", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { programsRun } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    for (const [command, operator, target] of [
+      ["printf fixed > '&name'", ">", "&name"],
+      ["{ printf fixed; } >> '>name'", ">>", ">name"],
+      ["(printf fixed) &> '|name'", "&>", "|name"],
+      ["printf fixed | cat 2> '<name'", ">", "<name"],
+      ['sh -c "printf fixed > \'&name\'"', ">", "&name"],
+      ["f() { printf fixed; }; f > '&name'", ">", "&name"],
+    ]) {
+      const legacy = programsRun(command, f.dir, "", { redirectEvidence: true });
+      const detailed = programsRun(command, f.dir, "", { redirectEvidence: true, redirectParts: true });
+      assert.equal(detailed.length, 1, command);
+      assert.equal(detailed[0].operator, operator, command);
+      assert.equal(detailed[0].target, target, command);
+      assert.deepEqual(detailed.map(({ operator, target, ...rest }) => rest), legacy);
+      assert.equal(Object.hasOwn(legacy[0], "operator"), false);
+      assert.equal(Object.hasOwn(legacy[0], "target"), false);
+    }
+  }
+});
