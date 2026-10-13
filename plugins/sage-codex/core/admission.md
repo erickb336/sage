@@ -274,3 +274,16 @@ A retry cannot change or remove its saved target. Other preparations remain read
 The review field can accompany a run target and a continuation reference.
 Core validates these supplied snapshots; the provider must check them against current Git and logbook records.
 Saving a target does not accept a verdict, count clean cycles, or authorize a merge.
+
+
+## Review report claims
+
+`parseReviewReport(report, role, target)` checks a structured report from `parseReport`.
+Evidence contains exactly `commit`, `round`, `cycle`, and a nonempty `summary`.
+The report branch and evidence must match the saved target. Questions must be `none`, and status must be `done`.
+Findings are an array of objects with `severity` and a nonempty `summary`. Severity is low, medium, or high.
+
+Code, security, and UX reviews use CLEAN or FINDINGS. QA uses PASS or FAIL.
+A medium or high finding requires the failure result. Low-only findings can accompany a clean result.
+The returned kind describes the claim, not an accepted verdict. This function changes no state.
+The caller must still verify current assignment, report identity, Git commit, and logbook before acceptance.

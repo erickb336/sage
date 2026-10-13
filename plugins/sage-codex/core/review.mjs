@@ -1,4 +1,5 @@
 import { BRANCH } from "./branch.mjs";
+import { REPORT_FIELDS } from "./report.mjs";
 
 export const REVIEW_ROLES = Object.freeze(["code-reviewer", "security-reviewer", "ux-reviewer", "qa"]);
 
@@ -22,6 +23,8 @@ const detail = value => typeof value === "string" && value.trim() && !/[\x00-\x0
 export function parseReviewReport(report, role, target) {
   const fail = () => { throw Error("The review report does not match its target or findings"); };
   parseReviewTarget(target);
+  if (!exactKeys(report, REPORT_FIELDS) || REPORT_FIELDS.some(key => typeof report[key] !== "string" || !report[key].trim())
+    || REPORT_FIELDS.reduce((size, key) => size + Buffer.byteLength(report[key], "utf8"), 0) > 32 * 1024) fail();
   if (!REVIEW_ROLES.includes(role) || report.STATUS !== "done" || report.BRANCH !== target.branch
     || report.QUESTIONS.toLowerCase() !== "none") fail();
   let evidence, findings;
