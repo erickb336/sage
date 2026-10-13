@@ -17,12 +17,14 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
   /** A command line without quotes, backslashes and line joins: the text that the rules test when the reader cannot read the line (fail closed). */
   const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
   const refuse = (why) => `${why} Push only with ${PUSH_FORM}.`;
+  const unreadableGitHub = (command) => /\bgh(?:\.exe)?\b/i.test(bare(command))
+    ? mergeIn(command)?.problem ?? refuse("the hook cannot establish the GitHub API command's destination.") : undefined;
   function pushProblem(command, cwd) {
     let commands;
     try {
       commands = shellCommands(command);
     } catch (e) {
-      return pushText(bare(command)) ? refuse(`the hook cannot read this command (${e.message}), so it refuses it. Close each quote, substitution and heredoc.`) : undefined;
+      return pushText(bare(command)) ? refuse(`the hook cannot read this command (${e.message}), so it refuses it. Close each quote, substitution and heredoc.`) : unreadableGitHub(command);
     }
     let dir = cwd;
     for (const { cmd, words, bodies } of runnable(commands)) {
@@ -37,7 +39,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
         if (apiWritesMain([run.word, ...run.args])) return mergeIn(command)?.problem ?? refuse(mainReason);
       }
     } catch {
-      if (/\bgh(?:\.exe)?\b/i.test(bare(command))) return mergeIn(command)?.problem ?? refuse("the hook cannot establish the GitHub API command's destination.");
+      return unreadableGitHub(command);
     }
     return undefined;
   }
@@ -142,7 +144,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     const values = fields.map(({ value, typed }) => {
       const split = value.indexOf("=");
       return { key: value.slice(0, split), value: value.slice(split + 1),
-        opaque: typed && /^(?:@)|\{(?:owner|repo|branch)\}/.test(value.slice(split + 1)) };
+        opaque: typed && /^(?:@)|\{(?:owner|repo|branch)\}|:(?:owner|repo|branch)\b/.test(value.slice(split + 1)) };
     });
     const protectedName = (text) => /(?:^|[\s/=:'"(])(?:refs\/)?(?:heads\/)?(?:main|master)(?=$|[\s/?&#:'"),}])/i.test(text);
     if (path === "graphql") {
@@ -164,7 +166,9 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     if ((method ?? (hasBodyFields || opaque ? "POST" : "GET")).toUpperCase() === "GET") return false;
     // Without quote provenance a question mark can be a shell glob, not an API query separator.
     if (endpoint?.includes("?")) return true;
-    if (/[$`\\*\[\]]/.test(path)) return true;
+    // Owner and repository templates each name one path part. Branch templates can insert a whole route.
+    const literalPath = path.replace(/\{(?:owner|repo)\}|:(?:owner|repo)\b/g, "template");
+    if (/[$`\\*\[\]{}]|:branch\b/.test(literalPath)) return true;
     const route = /^(?:repos\/[^/]+\/[^/]+|repositories\/\d+)\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|merge-upstream|branches\/.*\/rename|pulls\/[^/]+\/update-branch)$/.exec(path)?.[1];
     if (!route) return false;
     if (/^pulls\//.test(route)) return true; // The PR id does not prove which branch this request changes.

@@ -326,6 +326,11 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
     const policy = api.createPushPolicy({ readBranch: () => "topic" });
     for (const command of [
       "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
+      "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc\nprintf 'unfinished",
+      "gh api 'repos/o/r/{branch}' -X PATCH -f sha=abc",
+      "gh api 'repos/o/r/:branch' -X PATCH -f sha=abc",
+      "gh api repos/o/r/{git/refs/heads/main,issues} -X PATCH -f sha=abc",
+      `gh api graphql -F 'query=mutation { createCommitOnBranch(input: {branch: {branchName: ":branch"}}) { clientMutationId } }'`,
       "gh api -iX PATCH repos/o/r/git/refs/heads/main -f sha=abc",
       "gh api repos/o/r/contents/file -ifbranch=main -f content=abc",
       "env -u UNUSED gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc",
@@ -366,8 +371,12 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
       "gh api -X DELETE repos/o/r/git/refs/heads/maste?",
       "gh api -X PUT 'repos/o/r/contents/file?branch=main' -f branch=topic",
       String.raw`gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: "\u006dain"}}) { clientMutationId } }'`,
-    ]) assert.match(policy.pushProblem(command, f.dir), /work reaches main only through a pull request|the hook cannot prove that this command is only the merge command/, `${provider}: ${command}`);
+    ]) assert.match(policy.pushProblem(command, f.dir), /work reaches main only through a pull request|the hook cannot prove that this command is only the merge command|the hook cannot establish the GitHub API command's destination/, `${provider}: ${command}`);
     for (const command of [
+      "gh api 'repos/{owner}/{repo}/git/refs/heads/topic' -X PATCH -f sha=abc",
+      "gh api 'repos/:owner/:repo/git/refs/heads/topic' -X PATCH -f sha=abc",
+      "gh api 'repos/o/r/{branch}' -X GET",
+      `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: ":branch"}}) { clientMutationId } }'`,
       "gh api repos/o/r/git/refs/heads/main",
       "gh api repos/o/r/contents/file -X GET -f ref=main",
       "gh api --method=GET repos/o/r/contents/file -f ref=master",
