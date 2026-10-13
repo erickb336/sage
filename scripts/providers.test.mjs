@@ -3293,20 +3293,26 @@ test('run claims choose one winner for concurrent distinct dispatches of the sam
   const owners = ['owner-a', 'owner-b'].map(session => f.api.activateAdmission(f.journal,
     { project: f.scope.project, session, activation: f.activation }));
   const program = `import {reserveAdmission} from ${JSON.stringify(f.url)};
+    process.once('disconnect', () => process.exit(0));
     process.send({ready:true}); process.once('message', args=>{try{process.send({result:reserveAdmission(...args)});}
     catch(error){process.send({error:error.message});}process.disconnect();});`;
   const children = owners.map((owner, index) => {
     const child = spawn(process.execPath, ['--input-type=module', '-e', program], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: process.env });
     let result, stderr = '', stdout = '';
     child.stderr.on('data', data => { stderr += data; }); child.stdout.on('data', data => { stdout += data; });
-    const ready = new Promise((resolve, reject) => { child.once('error', reject); child.once('message', value => value.ready ? resolve() : reject(Error('worker not ready'))); });
+    const ready = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', () => reject(Error('worker closed before ready'))); child.once('message', value => value.ready ? resolve() : reject(Error('worker not ready'))); });
     child.on('message', value => { if (!value.ready) result = value; });
     const closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => {
       try { assert.equal(code, 0, stderr); assert.equal(signal, null); assert.equal(stderr, ''); assert.equal(stdout, ''); assert(result); resolve(result); }
       catch(error) { reject(error); }
     }); });
     const args = f.args(index + 1, owner.session, admissionScope(owner)); args[2].run = 'R1';
+    ready.catch(() => {}); closed.catch(() => {});
     return { child, args, ready, closed };
+  });
+  t.after(async () => {
+    for (const { child } of children) if (child.connected) child.disconnect();
+    await Promise.allSettled(children.map(row => row.closed));
   });
   await Promise.all(children.map(row => row.ready));
   for (const row of children) row.child.send(row.args);
