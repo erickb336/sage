@@ -4025,3 +4025,49 @@ test("native child delivery refuses foreign metadata linked paths and replaced c
   assert.deepEqual(await f.evaluate(policy, f.tool, childActor), { decision: "pass" });
   assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
 });
+
+test("native report correction is bounded and never accepts report claims", async t => {
+  const f = await completionFixture(t), client = await stopReportClient(t, f);
+  const stop = { ...f.stop, stop_hook_active: false, last_assistant_message: "STATUS done" };
+  const first = await client.call(stop, childActor);
+  assert.equal(first.decision, "block");
+  assert.match(first.reason, /RESULT, EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH/);
+  assert.deepEqual(await client.call({ ...stop, stop_hook_active: true }, childActor), {});
+  assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  assert.equal((await client.call({ ...stop, stop_hook_active: true, turn_id: turns[2] }, childActor)).decision, "block");
+  appendReport(f, stop.last_assistant_message);
+  assert.deepEqual(await client.call(stop, childActor), {});
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 1);
+  assert.equal(state.reports?.length ?? 0, 0);
+  await client.close();
+});
+
+test("native completion retains compacted work but can record verified interruption", async t => {
+  for (const interrupted of [false, true]) {
+    const f = await completionFixture(t);
+    appendFileSync(join(f.mode.sessionsDir, `${childActor}.jsonl`), JSON.stringify({ type: "compacted", payload: {
+      window_number: 1, window_id: "a1111111-2222-4333-8444-555555555555",
+      resume_metadata: { last_started_turn_id: turns[1], multi_agent_version: "v2" },
+    } }) + "\n");
+    if (interrupted) appendInterruption(f);
+    const client = await stopReportClient(t, f);
+    for (const stop_hook_active of [false, true]) {
+      const output = await client.call({ ...f.stop, stop_hook_active, last_assistant_message: reportText }, childActor);
+      assert.equal(output.decision, "block"); assert.match(output.reason, /sage_read_assignment/);
+      assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+    }
+    const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+    reconcileNativeCompletions(f.native(session), session, f.options);
+    const state = f.core.readAdmission(f.options.directory);
+    assert.equal(state.completions?.length ?? 0, interrupted ? 1 : 0);
+    if (interrupted) assert.equal(state.completions[0].outcome, "interrupted");
+    else {
+      appendReport(f);
+      assert.equal((await client.call({ ...f.stop, stop_hook_active: true, last_assistant_message: reportText }, childActor)).decision, "block");
+      assert.throws(() => reconcileNativeCompletions(f.native(session), session, f.options));
+      assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+    }
+    await client.close();
+  }
+});
