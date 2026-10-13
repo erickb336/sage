@@ -1,4 +1,4 @@
-import { commandWrites, roleEditDenied, readAdmission } from "sage-core";
+import { createCommandPolicy, commandWrites, roleEditDenied, readAdmission } from "sage-core";
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
 import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
 import { join, sep } from "node:path";
@@ -23,6 +23,7 @@ const decision = value => {
   }
   refuse();
 };
+const mergePolicy = createCommandPolicy();
 const modeStamp = value => JSON.stringify([value.owner?.epoch, value.modes.at(-1)?.turn, value.sage]);
 
 /** The launcher supplies fixed storage and a complete tool policy. There is no permissive default. */
@@ -52,9 +53,10 @@ export function createNativePolicy(options, evaluateTool) {
       const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
       const editDenied = roleEditDenied({ sage: before.sage, role });
       // A message can wake another child without a prepared dispatch or reserved slot.
-      const trackedMessage = child && event.tool_name === "collaborationsend_message" && (before.sage
+      const trackedChild = child && (before.sage
         || (before.owner && readAdmission(fixed.directory).bindings.some(row => row.project === fixed.project
           && row.session === `codex:${event.session_id}` && row.epoch === before.owner.epoch && row.child === native.actor)));
+      const trackedMessage = trackedChild && event.tool_name === "collaborationsend_message";
       if (trackedMessage) {
         const message = event.tool_input;
         if (Object.keys(message).length !== 2 || !Object.hasOwn(message, "target") || !Object.hasOwn(message, "message")
@@ -102,6 +104,10 @@ export function createNativePolicy(options, evaluateTool) {
       if (child && command && (["require_escalated", "with_additional_permissions"].includes(command.sandbox_permissions)
         || command.additional_permissions != null)) {
         return { decision: "deny", reason: "A child cannot request broader sandbox permissions. Ask the chief to run this command." };
+      }
+      // Autopilot is unavailable in this runtime. A supplied evaluator cannot authorize a merge.
+      if (command && (before.sage || trackedChild) && mergePolicy.mergeIn(command.cmd)) {
+        return { decision: "deny", reason: "This Sage runtime cannot merge pull requests. Leave the reviewed pull request for the owner." };
       }
       // This text classification does not establish the effective execution context.
       if (editDenied && (event.tool_name === "apply_patch" || (command && commandWrites(command.cmd)))) {

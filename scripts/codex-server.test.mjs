@@ -2718,3 +2718,66 @@ test("T43: report reader refuses an admission change while checking recovery pro
   t.mock.restoreAll(); syncBuiltinESMExports();
   assert.equal(f.read().text, reportText);
 });
+
+const nativeMergeRefusal = { decision: 'deny',
+  reason: 'This Sage runtime cannot merge pull requests. Leave the reviewed pull request for the owner.' };
+const nativeMergeCommands = [
+  `gh pr merge 123 --squash --delete-branch --match-head-commit ${'a'.repeat(40)}`,
+  'gh pr merge 123',
+  'env gh pr merge 123 --squash',
+  'sh -c "gh pr merge 123"',
+  'gh api repos/example/project/pulls/123/merge --method PUT',
+  'gh api graphql -f query="mutation { mergePullRequest(input: {pullRequestId: \\\"fixed\\\"}) { clientMutationId } }"',
+  'gh pr merge "',
+];
+
+test('native mandatory merge refusal blocks the chief before a permissive evaluator', async t => {
+  // Parser inputs only. These strings never reach a shell or GitHub.
+  const f = await composedPolicyFixture(t); let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: 'pass' }; });
+  for (const command of nativeMergeCommands) {
+    const { input } = commandPolicyInput(f, session, command);
+    assert.deepEqual(await f.evaluate(policy, input), nativeMergeRefusal, command);
+    assert.equal(evaluated, 0);
+  }
+  for (const command of ['git status', 'printf "%s" "gh pr merge 123"']) {
+    assert.deepEqual(await f.evaluate(policy, commandPolicyInput(f, session, command).input), { decision: 'pass' });
+  }
+  assert.equal(evaluated, 2);
+});
+
+test('native mandatory merge refusal blocks an implementer and preserves other evaluator denials', async t => {
+  const f = await roleEditFixture(t, 'implementer'); let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: 'pass' }; });
+  for (const command of nativeMergeCommands) {
+    assert.deepEqual(await f.evaluate(policy, commandPolicyInput(f, childActor, command).input, childActor), nativeMergeRefusal, command);
+    assert.equal(evaluated, 0);
+  }
+  const denied = { decision: 'deny', reason: 'Further command check refused.' };
+  const other = f.createNativePolicy(f.options, () => { evaluated++; return denied; });
+  assert.deepEqual(await f.evaluate(other, commandPolicyInput(f, childActor, 'git status').input, childActor), denied);
+  assert.equal(evaluated, 1);
+});
+
+test('native mandatory merge refusal survives off for bound children and preserves ordinary off evaluation', async t => {
+  const f = await roleEditFixture(t, 'implementer'); let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: 'pass' }; });
+  // Bind the native child before changing mode.
+  assert.deepEqual(await f.evaluate(policy, commandPolicyInput(f, childActor, 'git status').input, childActor), { decision: 'pass' });
+  evaluated = 0;
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  for (const command of nativeMergeCommands) {
+    assert.deepEqual(await f.evaluate(policy, commandPolicyInput(f, childActor, command).input, childActor), nativeMergeRefusal, command);
+    assert.equal(evaluated, 0);
+  }
+  const chief = commandPolicyInput(f, session, nativeMergeCommands[0], turns[2]);
+  assert.deepEqual(await f.evaluate(policy, chief.input), { decision: 'pass' });
+  assert.equal(evaluated, 1);
+  const unassigned = await composedPolicyFixture(t); let ordinaryCalls = 0;
+  unassigned.core.changeAdmissionMode(unassigned.options.directory, { ...unassigned.scope, after: turns[0], turn: turns[2], sage: false });
+  const ordinaryPolicy = unassigned.createNativePolicy(unassigned.options, () => { ordinaryCalls++; return { decision: 'pass' }; });
+  const ordinary = commandPolicyInput(unassigned, childActor, nativeMergeCommands[0], turns[1], 'unassigned native child');
+  assert.deepEqual(await unassigned.evaluate(ordinaryPolicy, ordinary.input, childActor), { decision: 'pass' });
+  assert.equal(ordinaryCalls, 1);
+  assert.equal(unassigned.core.readAdmission(unassigned.options.directory).bindings.length, 0);
+});

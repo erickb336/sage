@@ -56,3 +56,19 @@ The simulated native lead receives a refusal before evaluation, and no file appe
 Add `--writer` to prepare an implementer: the evaluator runs, and the fixed file contents must match.
 Both routes verify native completion and remove their temporary profiles.
 The fixture permits workspace writes so an external read-only sandbox cannot mask a missing Sage refusal.
+
+## Merge refusal
+
+This runtime keeps autopilot off. Before the supplied evaluator runs, the policy
+refuses merge commands recognized by the shared command classifier. It uses the
+original command recovered from the authenticated native transcript. Exact merge
+candidates and unsafe merge forms receive the same fixed public reason.
+
+The refusal applies to every actor with Sage on. It also applies after Sage off
+to children bound to the current owner epoch. Ordinary off-mode actors keep the
+supplied evaluator's checks. Harmless merge discussion still reaches that evaluator.
+
+This is a refusal for recognized shell commands, not complete merge enforcement.
+It does not cover GitHub MCP calls or prove unrecognized commands safe. Complete
+command, path, and workflow checks still need trusted effective execution context.
+It does not enable automatic Sage or change the owner's external merge authority.
