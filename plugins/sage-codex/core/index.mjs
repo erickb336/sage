@@ -19,3 +19,5 @@ export { buildBoardModel } from "./board-model.mjs";
 export { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
 export { boardView } from "./board-view.mjs";
 export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
+
+export { REPORT_FIELDS, missingReportFields } from "./report.mjs";

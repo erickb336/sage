@@ -69,3 +69,34 @@ function bindObservedTranscript(input, native, options) {
     child: native.actor, turn: initial.turn, transcript: event.transcript_path });
   return result;
 }
+
+/** A native parent can recover delivery through a path already verified for this child. */
+export function recoverNativeInitialDeliveries(context, session, options) {
+  const native = nativeToolContext(context);
+  if (typeof session !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(session)) refuse();
+  const state = readAdmission(options.directory);
+  const owner = state.sessions.find(row => row.project === options.project && row.session === `codex:${session}`);
+  if (!owner) refuse();
+  const scope = row => row.project === options.project && row.session === owner.session && row.epoch === owner.epoch;
+  const candidates = state.reservations.filter(row => scope(row.assignment) && row.assignment.issuer === native.actor
+    && !state.completions?.some(done => done.assignment === row.assignment.id));
+  if (!candidates.length) return;
+  const observations = readObservations(join(options.observationsRoot, session));
+  for (const assigned of candidates) {
+    const existing = state.bindings.find(row => row.assignment === assigned.assignment.id);
+    if (existing && observations.some(row => row.kind === "child-transcript" && row.child === existing.child && row.turn === existing.turn)) continue;
+    const starts = observations.filter(row => row.kind === "child-start" && row.parent === native.actor
+      && row.path.slice(row.path.lastIndexOf("/") + 1) === assigned.dispatch.name);
+    if (!starts.length) continue;
+    if (starts.length !== 1) refuse();
+    const started = starts[0];
+    const paths = observations.filter(row => row.kind === "initial-child-transcript"
+      && row.child === started.child && row.turn === started.turn);
+    if (!paths.length) continue;
+    if (paths.length !== 1) refuse();
+    if (!observations.some(row => row.kind === "spawn-result" && row.actor === native.actor
+      && row.call === assigned.assignment.call)) continue;
+    bindObservedTranscript({ session, turn: started.turn, transcript: paths[0].transcript },
+      { version: native.version, actor: started.child }, options);
+  }
+}

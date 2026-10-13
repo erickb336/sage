@@ -1,3 +1,4 @@
+import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
 import { join } from "node:path";
 import { decodeEvent, observation, publish, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
@@ -62,6 +63,16 @@ export function createNativePolicy(options, evaluateTool) {
       if (!["spawn-result", "dispatch-result"].includes(event.kind)) refuse();
       record(event);
       return { decision: "recorded" };
+    },
+    reconcileCompletions(input, context) {
+      const native = nativeToolContext(context);
+      const event = nativeToolEvent(input, native, "PostToolUse");
+      if (!["collaborationlist_agents", "collaborationwait_agent"].includes(event.tool_name)) refuse();
+      if (!mode(event.session_id).owner) return { decision: "reconciled" };
+      return reconcileNativeCompletions(native, event.session_id, fixed);
+    },
+    completeChild(input, context) {
+      return completeNativeChild(input, context, fixed);
     },
     startChild(identity) {
       // nativeChildStart has already authenticated this identity against the current connection.

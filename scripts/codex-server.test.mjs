@@ -1137,3 +1137,480 @@ test("native child delivery refuses foreign metadata linked paths and replaced c
   assert.deepEqual(await f.evaluate(policy, f.tool, childActor), { decision: "pass" });
   assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
 });
+
+async function completionFixture(t) {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const transcript_path = f.childTranscript();
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy, { ...patch(turns[1]), transcript_path }, childActor);
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor,
+    turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, "root.jsonl") };
+  return { ...f, policy, stop };
+}
+
+test("native completion uses the saved child transcript and releases once even after Sage off", async t => {
+  const f = await completionFixture(t);
+  appendReport(f);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "already-completed" });
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 1);
+  assert.deepEqual(state.completions[0], state.bindings[0]);
+  assert.equal(state.reservations.length, 1);
+  assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === "child-stop").length, 1);
+});
+
+test("native completion refuses forged stale unbound and changed assignment evidence", async t => {
+  const f = await completionFixture(t);
+  for (const input of [{ ...f.stop, agent_id: session }, { ...f.stop, turn_id: turns[2] },
+    { ...f.stop, session_id: childActor }, { ...f.stop, role: "lead" }, { ...f.stop, transcript_path: null }]) {
+    assert.throws(() => f.policy.completeChild(input, f.native(childActor)));
+  }
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(session)));
+  assert.throws(() => f.policy.completeChild(f.stop, { version: "unsupported", actor: childActor }));
+  f.childTranscript({ message: "Changed assignment" });
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === "child-stop").length, 0);
+  f.childTranscript();
+  appendReport(f);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
+  const unbound = await composedPolicyFixture(t);
+  unbound.api.prepareNativeTask(unbound.input, unbound.native(session), unbound.options);
+  unbound.api.reservePreparedSpawn(unbound.spawnInput(), unbound.native(session), unbound.options);
+  const policy = unbound.createNativePolicy(unbound.options, () => ({ decision: "pass" }));
+  assert.throws(() => policy.completeChild(f.stop, unbound.native(childActor)));
+  assert.equal((unbound.core.readAdmission(unbound.options.directory).completions ?? []).length, 0);
+});
+
+test("packaged MCP stop accepts exact completion and contains invalid stop requests", async t => {
+  const f = await completionFixture(t);
+  appendReport(f);
+  writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';
+    import { createNativePolicy } from './plugin/runtime/policy.mjs';
+    const options = ${JSON.stringify(f.options)};
+    serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(options, () => ({decision: 'pass'})) });`);
+  const client = await connect(t, f);
+  assert.equal((await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText, turn_id: turns[2] }, childActor)).decision, "block");
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText }, childActor), {});
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText }, childActor), {});
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  await client.close();
+});
+
+
+const reportText = ["STATUS done", "RESULT PASS", "EVIDENCE fixed fixture: 1 passed", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n");
+function appendReport(f, text = reportText, child = childActor, turn = turns[1]) {
+  const transcript = join(f.mode.sessionsDir, `${child}.jsonl`);
+  appendFileSync(transcript, [
+    { type: "response_item", payload: { type: "message", id: "fixture_report", role: "assistant",
+      content: [{ type: "output_text", text }], internal_chat_message_metadata_passthrough: { turn_id: turn } },
+      metadata: { client_authored: false, retained_source: { complete: true,
+        id: { role: "assistant", turn_id: turn, message_id: "fixture_report" } } } },
+    { type: "event_msg", payload: { type: "task_complete", turn_id: turn, last_agent_message: text } },
+  ].map(row => JSON.stringify(row) + "\n").join(""));
+}
+
+test("native blocked stop retains capacity until the transcript confirms completion", async t => {
+  const f = await completionFixture(t);
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "stop-observed" });
+    assert.deepEqual(reconcileNativeCompletions(f.native(session), session, f.options), { decision: "reconciled" });
+    assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  }
+  appendReport(f);
+  // A child cannot release its own slot through the parent's reconciliation route.
+  reconcileNativeCompletions(f.native(childActor), session, f.options);
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  reconcileNativeCompletions(f.native(session), session, f.options);
+  reconcileNativeCompletions(f.native(session), session, f.options);
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
+test("native status hooks require terminal evidence instead of a reported done status", async t => {
+  const f = await completionFixture(t);
+  const { postToolOutput } = await import(pathToFileURL(join(f.plugin, "runtime/post-tool.mjs")));
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "stop-observed" });
+  appendReport(f);
+  const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+  const complete = readFileSync(transcript, "utf8");
+  writeFileSync(transcript, complete.trimEnd().split("\n").slice(0, -1).join("\n") + "\n");
+  const input = { ...postSpawn(), tool_name: "collaborationlist_agents", tool_input: {},
+    tool_response: JSON.stringify({ status: "completed" }) };
+  assert.deepEqual(await postToolOutput(input, f.native(session), async () => f.policy), {});
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  writeFileSync(transcript, complete);
+  assert.deepEqual(await postToolOutput({ ...input, tool_name: "collaborationwait_agent" }, f.native(session), async () => f.policy), {});
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
+
+async function noToolCompletionFixture(t) {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  await f.evaluate(f.createNativePolicy(f.options, () => ({ decision: "pass" })));
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const transcript = f.childTranscript(); appendReport(f);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, "root.jsonl"), agent_transcript_path: transcript };
+  return { ...f, policy, stop, transcript };
+}
+
+test("no-tool completion refuses missing foreign changed or stale transcript evidence", async t => {
+  const f = await noToolCompletionFixture(t);
+  const { agent_transcript_path, ...missing } = f.stop;
+  for (const input of [missing, { ...f.stop, agent_transcript_path: f.stop.transcript_path },
+    { ...f.stop, agent_transcript_path: "relative" }, { ...f.stop, turn_id: turns[2] },
+    { ...f.stop, agent_id: session }, { ...f.stop, extra: true }]) assert.throws(() => f.policy.completeChild(input, f.native(childActor)));
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(session)));
+  assert.throws(() => f.policy.completeChild(f.stop, { version: "unsupported", actor: childActor }));
+  f.childTranscript({ message: "Changed task" }); assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 0); assert.equal(state.completions?.length ?? 0, 0);
+  f.childTranscript(); appendReport(f);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
+});
+
+test("no-tool completion retains missing-result work then completes it after the result even when mode is off", async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy);
+  const transcript = f.childTranscript(); appendReport(f);
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, "root.jsonl"), agent_transcript_path: transcript };
+  assert.throws(() => policy.completeChild(stop, f.native(childActor)));
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(policy.completeChild(stop, f.native(childActor)), { decision: "completed" });
+  assert.equal(f.core.readAdmission(f.options.directory).modes.at(-1).sage, false);
+});
+
+test("no-tool completion through the packaged stop tool refuses a conflicting path after completion", async t => {
+  const f = await noToolCompletionFixture(t);
+  writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';
+    import { createNativePolicy } from './plugin/runtime/policy.mjs';
+    const options = ${JSON.stringify(f.options)};
+    serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(options, () => ({decision: 'pass'})) });`);
+  const client = await connect(t, f);
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText }, childActor), {});
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText }, childActor), {});
+  assert.equal((await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: reportText, agent_transcript_path: f.stop.transcript_path }, childActor)).decision, "block");
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  await client.close();
+});
+
+
+test("no-tool completion recovers a binding whose transcript publication failed", async t => {
+  const f = await noToolCompletionFixture(t);
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = fs.linkSync;
+  t.mock.method(fs, "linkSync", (from, to) => {
+    if (String(from).startsWith(join(f.options.observationsRoot, session))
+      && JSON.parse(readFileSync(from, "utf8")).kind === "child-transcript") {
+      throw Object.assign(Error("Injected transcript publication failure"), { code: "EIO" });
+    }
+    return original(from, to);
+  });
+  syncBuiltinESMExports();
+  const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); }; t.after(restore);
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)), /Injected transcript publication failure/);
+  const before = f.core.readAdmission(f.options.directory);
+  assert.equal(before.bindings.length, 1); assert.equal(before.completions?.length ?? 0, 0);
+  restore();
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "completed" });
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: "already-completed" });
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
+
+async function stopReportClient(t, f) {
+  writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';
+    import { createNativePolicy } from './plugin/runtime/policy.mjs';
+    serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(${JSON.stringify(f.options)}, () => ({decision: 'pass'})) });`);
+  return connect(t, f);
+}
+
+test("native report correction requires typed native fields and the admitted child identity", async t => {
+  const f = await completionFixture(t), client = await stopReportClient(t, f);
+  const stop = { ...f.stop, stop_hook_active: false, last_assistant_message: reportText };
+  for (const invalid of [f.stop, { ...stop, stop_hook_active: "true" }, { ...stop, last_assistant_message: {} },
+    { ...stop, turn_id: turns[2] }, { ...stop, agent_id: session }]) {
+    assert.deepEqual(await client.call(invalid, childActor), { decision: "block", reason: "Sage could not verify this hook request." });
+  }
+  assert.equal(f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === "child-stop").length, 0);
+  assert.deepEqual(await client.call(stop, childActor), {});
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  await client.close();
+});
+
+test("native report correction matches Claude field presence without accepting invalid field values", async t => {
+  const f = await completionFixture(t), client = await stopReportClient(t, f);
+  assert.equal(typeof f.core.missingReportFields, "function");
+  const headings = f.core.REPORT_FIELDS.map(field => `| **${field}** |`).join("\n");
+  assert.deepEqual(f.core.missingReportFields(headings), []);
+  assert.deepEqual(f.core.missingReportFields("prefix STATUS\nRESULTS"), f.core.REPORT_FIELDS);
+  assert.deepEqual(f.core.missingReportFields("\u00a0STATUS done"), f.core.REPORT_FIELDS.slice(1));
+  assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: headings }, childActor), {});
+  assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
+  await client.close();
+});
+
+
+async function unmanagedStopFixture(t) {
+  const f = await composedPolicyFixture(t);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const transcript = f.childTranscript({ message: 'ordinary native task' });
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  const stop = { hook_event_name: 'SubagentStop', session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, 'root.jsonl'), agent_transcript_path: transcript };
+  const { childStopOutput } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  return { ...f, transcript, policy, stop, output: input => childStopOutput(input, f.native(childActor), async () => policy) };
+}
+
+test('off-mode ordinary child stops without a Sage report or admission writes', async t => {
+  const f = await unmanagedStopFixture(t);
+  const before = f.core.readAdmission(f.options.directory);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'unmanaged' });
+  assert.deepEqual(await f.output({ ...f.stop, stop_hook_active: false, last_assistant_message: 'ordinary answer' }), {});
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  assert.equal(existsSync(join(f.options.observationsRoot, session)), false);
+});
+
+test('off-mode ordinary stop requires matching protected child and current-turn evidence', async t => {
+  const f = await unmanagedStopFixture(t);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'unmanaged' });
+  const { agent_transcript_path, ...missing } = f.stop;
+  for (const input of [missing, { ...f.stop, agent_id: session }, { ...f.stop, turn_id: turns[2] },
+    { ...f.stop, agent_transcript_path: join(f.mode.sessionsDir, 'root.jsonl') }])
+    assert.throws(() => f.policy.completeChild(input, f.native(childActor)));
+  appendFileSync(f.transcript, [
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: turns[1] } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: turns[2] } },
+    { type: 'turn_context', payload: { turn_id: turns[2] } },
+  ].map(row => JSON.stringify(row) + '\n').join(''));
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+  assert.deepEqual(f.policy.completeChild({ ...f.stop, turn_id: turns[2] }, f.native(childActor)), { decision: 'unmanaged' });
+});
+
+test('off-mode ordinary child cannot hide a pending Sage reservation or release another run', async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  await f.evaluate(policy);
+  const transcript = f.childTranscript();
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const stop = { hook_event_name: 'SubagentStop', session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, 'root.jsonl'), agent_transcript_path: transcript };
+  assert.throws(() => policy.completeChild(stop, f.native(childActor)));
+  const before = f.core.readAdmission(f.options.directory);
+  const other = 'a22422c7-509c-43aa-8c42-827c556f8a59';
+  const otherTranscript = f.childTranscript({ child: other, path: '/root/ordinary', message: 'ordinary task' });
+  assert.deepEqual(policy.completeChild({ ...stop, agent_id: other, agent_transcript_path: otherTranscript }, f.native(other)), { decision: 'unmanaged' });
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  assert.equal(before.reservations.length, 1); assert.equal(before.completions?.length ?? 0, 0);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  assert.deepEqual(policy.completeChild(stop, f.native(childActor)), { decision: 'stop-observed' });
+  const bound = f.core.readAdmission(f.options.directory);
+  const reused = f.childTranscript({ child: other, message: 'ordinary task with a reused name' });
+  assert.deepEqual(policy.completeChild({ ...stop, agent_id: other, agent_transcript_path: reused }, f.native(other)), { decision: 'unmanaged' });
+  assert.deepEqual(f.core.readAdmission(f.options.directory), bound);
+});
+
+test('active-mode ordinary child still needs a Sage admission at stop', async t => {
+  const f = await unmanagedStopFixture(t);
+  assert.deepEqual(f.policy.completeChild(f.stop, f.native(childActor)), { decision: 'unmanaged' });
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[2], turn: turns[1], sage: true });
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+});
+
+test('ordinary native stop before owner activation leaves Sage state unchanged', async t => {
+  const f = await unmanagedStopFixture(t);
+  const directory = join(f.dir, 'unused-admission');
+  f.core.configureAdmission(directory, { total: 5, projects: [{ project: f.options.project, limit: 5 }] });
+  const policy = f.createNativePolicy({ ...f.options, directory }, () => ({ decision: 'pass' }));
+  const before = f.core.readAdmission(directory);
+  assert.equal(before.sessions.length, 0);
+  assert.deepEqual(policy.completeChild(f.stop, f.native(childActor)), { decision: 'unmanaged' });
+  assert.deepEqual(f.core.readAdmission(directory), before);
+});
+
+
+test('native missed-stop recovery refuses altered completion evidence without releasing capacity', async t => {
+  const f = await completionFixture(t);
+  appendReport(f);
+  const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+  const original = readFileSync(transcript, 'utf8');
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const reconcile = () => reconcileNativeCompletions(f.native(session), session, f.options);
+  const save = rows => writeFileSync(transcript, rows.map(row => JSON.stringify(row) + '\n').join(''));
+  for (const change of [rows => rows[0].payload.id = session,
+    rows => rows.at(-2).metadata.client_authored = true,
+    rows => rows.at(-1).payload.last_agent_message = 'changed terminal result',
+    rows => rows.at(-1).payload.turn_id = turns[2]]) {
+    const rows = original.trimEnd().split('\n').map(JSON.parse); change(rows); save(rows);
+    assert.throws(reconcile); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  }
+  const rows = original.trimEnd().split('\n').map(JSON.parse); rows.pop(); save(rows);
+  reconcile(); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  writeFileSync(transcript, original); reconcile();
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
+test('native missed-stop recovery waits for initial binding evidence before requiring a transcript', async t => {
+  const f = await composedPolicyFixture(t); f.bindLead();
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const reconcile = () => reconcileNativeCompletions(f.native(session), session, f.options);
+  assert.deepEqual(reconcile(), { decision: 'reconciled' });
+  assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  await f.evaluate(policy, { ...patch(turns[1]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path: f.childTranscript() }, childActor);
+  appendReport(f); reconcile();
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
+
+
+function appendInterruption(f, turn = turns[1], reason = 'interrupted') {
+  appendFileSync(join(f.mode.sessionsDir, `${childActor}.jsonl`), JSON.stringify({ type: 'event_msg',
+    payload: { type: 'turn_aborted', turn_id: turn, reason } }) + '\n');
+}
+test('native interruption recovery records one terminal outcome without a report or successful run', async t => {
+  const f = await completionFixture(t);
+  const before = f.core.readAdmission(f.options.directory);
+  appendInterruption(f);
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const reconcile = actor => reconcileNativeCompletions(f.native(actor), session, f.options);
+  reconcile(childActor); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  reconcile(session);
+  const state = f.core.readAdmission(f.options.directory), ended = state.completions[0];
+  assert.equal(state.completions.length, 1);
+  assert.deepEqual({ ...ended, outcome: undefined, evidenceHash: undefined }, { ...before.bindings[0], outcome: undefined, evidenceHash: undefined });
+  assert.equal(ended.outcome, 'interrupted'); assert.match(ended.evidenceHash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(state.reservations, before.reservations); assert.deepEqual(state.reports, before.reports);
+  reconcile(session); assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+  assert.throws(() => f.core.completeAdmission(f.options.directory, before.bindings[0]));
+  assert.throws(() => f.core.interruptAdmission(f.options.directory, before.bindings[0], '0'.repeat(64)));
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+});
+test('native interruption recovery refuses wrong turns and conflicting terminal records', async t => {
+  const f = await completionFixture(t), file = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+  const before = readFileSync(file, 'utf8');
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  const reconcile = () => reconcileNativeCompletions(f.native(session), session, f.options);
+  for (const [turn, reason] of [[turns[2], 'interrupted'], [turns[1], 'replaced']]) {
+    writeFileSync(file, before); appendInterruption(f, turn, reason);
+    assert.throws(reconcile); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  }
+  for (const abortFirst of [true, false]) {
+    writeFileSync(file, before);
+    if (abortFirst) appendInterruption(f);
+    appendReport(f);
+    if (!abortFirst) appendInterruption(f);
+    assert.throws(reconcile); assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  }
+});
+
+test("native report correction is bounded and never accepts report claims", async t => {
+  const f = await completionFixture(t), client = await stopReportClient(t, f);
+  const stop = { ...f.stop, stop_hook_active: false, last_assistant_message: "STATUS done" };
+  const first = await client.call(stop, childActor);
+  assert.equal(first.decision, "block");
+  assert.match(first.reason, /RESULT, EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH/);
+  assert.deepEqual(await client.call({ ...stop, stop_hook_active: true }, childActor), {});
+  assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  assert.equal((await client.call({ ...stop, stop_hook_active: true, turn_id: turns[2] }, childActor)).decision, "block");
+  appendReport(f, stop.last_assistant_message);
+  assert.deepEqual(await client.call(stop, childActor), {});
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 1);
+  assert.equal(state.reports?.length ?? 0, 0);
+  await client.close();
+});
+
+test("native completion retains compacted work but can record verified interruption", async t => {
+  for (const interrupted of [false, true]) {
+    const f = await completionFixture(t);
+    appendFileSync(join(f.mode.sessionsDir, `${childActor}.jsonl`), JSON.stringify({ type: "compacted", payload: {
+      window_number: 1, window_id: "a1111111-2222-4333-8444-555555555555",
+      resume_metadata: { last_started_turn_id: turns[1], multi_agent_version: "v2" },
+    } }) + "\n");
+    if (interrupted) appendInterruption(f);
+    const client = await stopReportClient(t, f);
+    for (const stop_hook_active of [false, true]) {
+      const output = await client.call({ ...f.stop, stop_hook_active, last_assistant_message: reportText }, childActor);
+      assert.equal(output.decision, "block"); assert.match(output.reason, /compaction/);
+      assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+    }
+    const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+    reconcileNativeCompletions(f.native(session), session, f.options);
+    const state = f.core.readAdmission(f.options.directory);
+    assert.equal(state.completions?.length ?? 0, interrupted ? 1 : 0);
+    if (interrupted) assert.equal(state.completions[0].outcome, "interrupted");
+    else {
+      appendReport(f);
+      assert.equal((await client.call({ ...f.stop, stop_hook_active: true, last_assistant_message: reportText }, childActor)).decision, "block");
+      assert.throws(() => reconcileNativeCompletions(f.native(session), session, f.options));
+      assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+    }
+    await client.close();
+  }
+});
+test("initial delivery recovery binds a late result without another child callback", async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy);
+  const transcript = f.childTranscript(); appendReport(f);
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, "root.jsonl"), agent_transcript_path: transcript };
+  assert.throws(() => policy.completeChild(stop, f.native(childActor)));
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+  const reconcile = actor => reconcileNativeCompletions(f.native(actor), session, f.options);
+  reconcile(session);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  reconcile(childActor);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  reconcile(session);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 1);
+  assert.equal(state.completions.length, 1);
+  assert.equal(state.modes.at(-1).sage, false);
+  reconcile(session);
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+});
+
+test("initial delivery recovery refuses changed or missing transcript evidence", async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy);
+  const transcript = f.childTranscript(); appendReport(f);
+  const stop = { hook_event_name: "SubagentStop", session_id: session, agent_id: childActor, turn_id: turns[1],
+    transcript_path: join(f.mode.sessionsDir, "root.jsonl"), agent_transcript_path: transcript };
+  assert.throws(() => policy.completeChild(stop, f.native(childActor)));
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, "runtime/child-stop.mjs")));
+  const reconcile = () => reconcileNativeCompletions(f.native(session), session, f.options);
+  const original = readFileSync(transcript, "utf8");
+  f.childTranscript({ message: "Changed task" });
+  assert.throws(reconcile);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  rmSync(transcript);
+  assert.throws(reconcile);
+  assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  writeFileSync(transcript, original);
+  reconcile();
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+});
