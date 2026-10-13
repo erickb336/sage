@@ -144,6 +144,15 @@ simulated. Additional-permission and off-mode cases use adapter tests; this prob
 checks `require_escalated` while Sage is on. It does not establish installed activation
 or protection when Codex skips a required hook.
 
+## Role-based edits
+
+The policy derives the role from the bound native assignment, not a supplied role name.
+With Sage on, the chief, lead, PE, reviewers, and QA cannot use `apply_patch` or known shell write forms.
+Implementers, designers, and arena judges retain the supplied evaluator's checks.
+With Sage off, ordinary evaluation resumes. The evaluator receives the verified role, or null when off.
+The shared command classifier detects known write forms; it does not prove arbitrary commands safe.
+Complete shell, path, and workflow checks remain required. This component does not enable installed Sage.
+
 ## Child messages
 
 A Sage child can send a message only to the root chief, by `/root` or its session ID.
@@ -157,3 +166,9 @@ Run `node scripts/probe-codex-lifecycle.mjs --sage-child-message` with fake proc
 The native CLI 0.160.0 probe uses simulated responses and a temporary profile.
 It checks peer refusal before evaluation, exact chief delivery, normal completion, and cleanup.
 The model catalog explicitly selects native multi-agent V2 for children.
+
+On this integration branch, run `node scripts/probe-codex-lifecycle.mjs --sage-readonly-patch`
+with fake process tools first on PATH. It verifies the native lead's refusal and unchanged files.
+The component PR #176 additionally verifies an implementer's exact file creation through its
+`--sage-role-edit --writer` probe on main. Neither probe establishes installed automatic Sage.
+The component writer fixture permits workspace writes so an external read-only sandbox cannot mask a missing Sage refusal.
