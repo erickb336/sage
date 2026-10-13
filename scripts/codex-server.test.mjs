@@ -4152,3 +4152,46 @@ test("native report read leaves an unrelated sibling unchanged with missing or t
   assert.equal(readChildReport({ name: f.input.name }, f.native(session), f.options).report.STATUS, "done");
   assert.deepEqual(f.core.readAdmission(f.options.directory), before);
 });
+
+test("report recovery proof alone cannot replace a missing durable receipt", async t => {
+  const f = await completionFixture(t); appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  const api = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  const recovery = await import(pathToFileURL(join(f.plugin, "runtime/report-recovery.mjs")));
+  const read = api.readChildReport({ name: f.input.name }, f.native(session), f.options);
+  const state = f.core.readAdmission(f.options.directory);
+  const report = { binding: state.bindings[0], task: "T1", run: "R1", reportMessage: read.reportMessage,
+    reportHash: read.reportHash, text: reportText };
+  recovery.recordReportRecovery(report, f.options);
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+  const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`), saved = readFileSync(transcript, "utf8");
+  rmSync(transcript);
+  assert.throws(() => api.readChildReport({ name: f.input.name }, f.native(session), f.options));
+  assert.throws(() => api.recordChildReport({ name: f.input.name, reportHash: read.reportHash }, f.native(session), f.options));
+  assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+  writeFileSync(transcript, saved);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.equal(api.recordChildReport({ name: f.input.name, reportHash: read.reportHash }, f.native(session), f.options).decision, "report-recorded");
+  rmSync(transcript);
+  assert.deepEqual(api.readChildReport({ name: f.input.name }, f.native(session), f.options), read);
+});
+
+test("cached report inspection refuses missing changed and conflicting recovery proofs", async t => {
+  const f = await completionFixture(t); appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  const api = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  const input = { name: f.input.name };
+  const read = api.readChildReport(input, f.native(session), f.options);
+  api.recordChildReport({ ...input, reportHash: read.reportHash }, f.native(session), f.options);
+  const directory = join(f.options.observationsRoot, session);
+  const proof = f.events.readObservations(directory).find(row => row.kind === "report-recovery-verified");
+  assert.ok(proof);
+  const file = readdirSync(directory).find(name => name.endsWith(".json")
+    && JSON.parse(readFileSync(join(directory, name), "utf8")).kind === "report-recovery-verified");
+  rmSync(join(directory, file)); rmSync(join(f.mode.sessionsDir, `${childActor}.jsonl`));
+  const before = f.core.readAdmission(f.options.directory);
+  assert.throws(() => api.readChildReport(input, f.native(session), f.options));
+  f.events.publish(directory, { ...proof, receiptHash: "f".repeat(64) });
+  assert.throws(() => api.readChildReport(input, f.native(session), f.options));
+  f.events.publish(directory, proof);
+  assert.throws(() => api.readChildReport(input, f.native(session), f.options));
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
