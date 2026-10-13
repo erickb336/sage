@@ -319,6 +319,62 @@ test("shared merge and push extraction applies push rules and injected branch ev
   }
 });
 
+test("T41: shared push policy refuses GitHub API writes to protected branches in both bundles", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const policy = api.createPushPolicy({ readBranch: () => "topic" });
+    for (const command of [
+      "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
+      "gh api repos/o/r/git/refs/heads/master --method=PATCH -f sha=abc",
+      "gh api -XPUT repos/o/r/contents/file -f branch=main -f content=abc",
+      "gh api repos/o/r/contents/file --method PUT --raw-field=branch=master",
+      "gh api repos/o/r/git/refs -f ref=refs/heads/main -f sha=abc",
+      "gh api graphql -f 'query=mutation { updateRefs(input: {repositoryId: \"id\", refUpdates: []}) { clientMutationId } }'",
+      "gh api graphql -f 'query=mutation { updateRef(input: {refId: \"id\", oid: \"abc\"}) { clientMutationId } }'",
+      "gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: \"main\"}}) { clientMutationId } }'",
+      "gh api repos/o/r/contents/file --input body.json",
+      "gh api repos/o/r/contents/file -f content=abc",
+      "gh api repos/o/r/contents/file -F branch=@branch.txt -f content=abc",
+      "gh api graphql --input body.json",
+      "gh api graphql -F query=@query.graphql",
+      "gh api --method DELETE repos/o/r/git/refs/heads/main",
+      "gh api -X PATCH https://api.github.com/repos/o/r/git/refs/heads/%6dain -f sha=abc",
+      'gh api repos/o/r/contents/file -X PUT -f branch="$BRANCH"',
+      "gh api -X PUT 'repos/o/r/contents/file?branch=main' -f branch=topic",
+      String.raw`gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: "\u006dain"}}) { clientMutationId } }'`,
+    ]) assert.match(policy.pushProblem(command, f.dir), /work reaches main only through a pull request/, `${provider}: ${command}`);
+    for (const command of [
+      "gh api repos/o/r/git/refs/heads/main",
+      "gh api repos/o/r/contents/file -X GET -f ref=main",
+      "gh api --method=GET repos/o/r/contents/file -f ref=master",
+      "gh api -XGET repos/o/r/git/refs -f ref=refs/heads/main",
+      "gh api repos/o/r/contents/file -X PUT -f branch=topic",
+      "gh api graphql -f 'query=query { repository(owner: \"o\", name: \"r\") { ref(qualifiedName: \"refs/heads/main\") { id } } }'",
+      "gh api repos/o/r/issues -f title=main",
+      "gh api repos/o/r/issues --input body.json",
+      "gh api repos/o/r/git/refs/heads/topic -X PATCH -f sha=abc --template main",
+      "gh api repos/o/r/contents/main -X PUT -f branch=topic -f content=abc",
+      "gh api 'repos/o/r/contents/file?ref=main'",
+    ]) assert.equal(policy.pushProblem(command, f.dir), undefined, `${provider}: ${command}`);
+    if (provider === "claude") {
+      const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+      for (const actor of [{}, { agent_id: "fixture-child", agent_type: "sage:implementer" }]) {
+        for (const command of [
+          "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
+          "gh api -X PUT repos/o/r/contents/file -f branch=main -f content=abc",
+          "gh api graphql -f 'query=mutation { updateRefs(input: {repositoryId: \"id\", refUpdates: []}) { clientMutationId } }'",
+        ]) {
+          const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
+            tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
+          assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny", command);
+          if (!actor.agent_id) assert.match(result.hookSpecificOutput.permissionDecisionReason, /work reaches main only through a pull request/);
+        }
+      }
+    }
+  }
+});
+
 test("shared merge and push extraction keeps transitive module failures closed and broken-state merge diagnostics", async t => {
   for (const missing of ["core/push-policy.mjs", "core/pull-request.mjs"]) {
     const f = isolated(t, "claude");

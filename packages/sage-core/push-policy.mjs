@@ -28,7 +28,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     for (const { cmd, words, bodies } of runnable(commands)) {
       if (cmd.words[0] === "cd" && cmd.words.length === 2) dir = resolve(dir, cmd.words[1]);
       const git = words.findIndex((w, k) => /(?:^|\/)git$/.test(w) && /^push$/i.test(gitSubcommand(words, k + 1)));
-      const why = git >= 0 ? pushForm(words, git, dir) : ghApi(words) && words.some((w) => REFS_ENDPOINT.test(w)) && words.some((w) => MAIN_FIELD.test(w)) ? mainReason : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
+      const why = git >= 0 ? pushForm(words, git, dir) : apiWritesMain(words) ? mainReason : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
       if (why) return refuse(why);
     }
     return undefined;
@@ -92,10 +92,63 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     return /(?:^|\/)gh$/.test(words[k] ?? "") && words[k + 1] === "api";
   }
 
-  /** A gh api endpoint of git refs: repos/<o>/<r>/git/refs or repos/<o>/<r>/git/refs/<ref>. */
-  const REFS_ENDPOINT = /^\/?repos\/[^/]+\/[^/]+\/git\/refs(?:\/|$)/;
-  /** A gh api field that names main or master as the ref, such as -f ref=refs/heads/main. */
-  const MAIN_FIELD = /^(?:-[fF]|--(?:raw-)?field=)?ref=(?:refs\/)?(?:heads\/)?(?:main|master)$/i;
+  /** Read request options, not display options or unrelated text, as branch evidence. Never open a supplied body file. */
+  function apiWritesMain(words) {
+    if (!ghApi(words)) return false;
+    let method;
+    let endpoint;
+    let opaque = false;
+    const fields = [];
+    for (let k = words.indexOf("api") + 1; k < words.length; k++) {
+      const word = words[k];
+      if (word === "-X" || word === "--method") method = words[++k];
+      else if (word.startsWith("--method=")) method = word.slice(9);
+      else if (/^-X./.test(word)) method = word.slice(2).replace(/^=/, "");
+      else if (/^(?:-[fF]|--(?:raw-)?field)$/.test(word)) fields.push({ value: words[++k] ?? "", typed: word === "-F" || word === "--field" });
+      else if (/^(?:-[fF].|--(?:raw-)?field=)/.test(word)) fields.push({
+        value: word.replace(/^(?:-[fF]=?|--(?:raw-)?field=)/, ""), typed: /^-F|^--field=/.test(word),
+      });
+      else if (word === "--input") { opaque = true; k++; }
+      else if (word.startsWith("--input=")) opaque = true;
+      else if (/^(?:--hostname|--cache|--header|-H|--jq|-q|--preview|-p|--template|-t)$/.test(word)) k++;
+      else if (!word.startsWith("-")) endpoint ??= word;
+    }
+    let path = endpoint ?? "";
+    let search = "";
+    if (/^https?:\/\//i.test(path)) {
+      try { const url = new URL(path); path = url.pathname; search = url.search; } catch { return true; }
+    } else if (path.includes("?")) {
+      const split = path.indexOf("?");
+      search = path.slice(split);
+      path = path.slice(0, split);
+    }
+    try { path = decodeURIComponent(path).replace(/^\//, ""); } catch { return true; }
+    const hasBodyFields = fields.length > 0;
+    for (const [key, value] of new URLSearchParams(search)) fields.push({ value: `${key}=${value}`, typed: false });
+    const values = fields.map(({ value, typed }) => {
+      const split = value.indexOf("=");
+      return { key: value.slice(0, split), value: value.slice(split + 1), opaque: typed && value.slice(split + 1).startsWith("@") };
+    });
+    const protectedName = (text) => /(?:^|[\s/=:'"(])(?:refs\/)?(?:heads\/)?(?:main|master)(?=$|[\s/?&#:'"),}])/i.test(text);
+    if (path === "graphql") {
+      if (opaque || values.some(field => field.opaque)) return true;
+      const query = values.filter(field => field.key === "query").map(field => field.value).join(" ");
+      if (!/\bmutation\b/.test(query)) return false;
+      // Ref ids hide their branch name. A ref update or deletion must use the reviewed PR path.
+      if (/\b(?:updateRefs?|deleteRef)\s*\(/.test(query)) return true;
+      return /\b(?:createCommitOnBranch|createRef|mergeBranch)\s*\(/.test(query) &&
+        (/\\/.test(query) || values.some(field => protectedName(field.value) ||
+          (field.key !== "query" && /[$`\\]/.test(field.value))));
+    }
+    if ((method ?? (hasBodyFields || opaque ? "POST" : "GET")).toUpperCase() === "GET") return false;
+    const route = /^repos\/[^/]+\/[^/]+\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|branches\/.*\/rename)$/.exec(path)?.[1];
+    if (!route) return false;
+    if ((!route.startsWith("contents") && protectedName(route)) || opaque) return true;
+    const destinations = values.filter(field => /^(?:ref|branch|base|new_name)$/.test(field.key));
+    if (destinations.some(field => field.opaque || !LITERAL.test(field.value) || MAIN_REF.test(field.value))) return true;
+    // The contents API defaults an omitted branch to the repository's default branch, which may be main.
+    return /^contents(?:\/|$)/.test(route) && !destinations.some(field => field.key === "branch");
+  }
 
   return Object.freeze({ pushProblem });
 }
