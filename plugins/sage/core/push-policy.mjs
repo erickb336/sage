@@ -103,12 +103,19 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     let endpoint;
     let opaque = false;
     const fields = [];
-    for (let k = words.indexOf("api") + 1; k < words.length; k++) {
-      const word = words[k];
-      if (word === "-X" || word === "--method") method = words[++k];
+    const args = words.slice(words.indexOf("api") + 1);
+    for (let k = 0; k < args.length; k++) {
+      const word = args[k];
+      // Cobra permits flag bundles such as -iX PATCH and -ifbranch=main. A value flag owns the rest.
+      if (/^-[ih]./.test(word)) {
+        args.splice(k, 1, word.slice(0, 2), `-${word.slice(2)}`);
+        k--;
+        continue;
+      }
+      if (word === "-X" || word === "--method") method = args[++k];
       else if (word.startsWith("--method=")) method = word.slice(9);
       else if (/^-X./.test(word)) method = word.slice(2).replace(/^=/, "");
-      else if (/^(?:-[fF]|--(?:raw-)?field)$/.test(word)) fields.push({ value: words[++k] ?? "", typed: word === "-F" || word === "--field" });
+      else if (/^(?:-[fF]|--(?:raw-)?field)$/.test(word)) fields.push({ value: args[++k] ?? "", typed: word === "-F" || word === "--field" });
       else if (/^(?:-[fF].|--(?:raw-)?field=)/.test(word)) fields.push({
         value: word.replace(/^(?:-[fF]=?|--(?:raw-)?field=)/, ""), typed: /^-F|^--field=/.test(word),
       });

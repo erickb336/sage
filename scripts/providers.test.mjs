@@ -326,6 +326,8 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
     const policy = api.createPushPolicy({ readBranch: () => "topic" });
     for (const command of [
       "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
+      "gh api -iX PATCH repos/o/r/git/refs/heads/main -f sha=abc",
+      "gh api repos/o/r/contents/file -ifbranch=main -f content=abc",
       "gh api repos/o/r/git/refs/heads/master --method=PATCH -f sha=abc",
       "gh api -XPUT repos/o/r/contents/file -f branch=main -f content=abc",
       "gh api repos/o/r/contents/file --method PUT --raw-field=branch=master",
@@ -356,6 +358,7 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
       "gh api repos/o/r/contents/file -X GET -f ref=main",
       "gh api --method=GET repos/o/r/contents/file -f ref=master",
       "gh api -XGET repos/o/r/git/refs -f ref=refs/heads/main",
+      "gh api -iX GET repos/o/r/git/refs/heads/main",
       "gh api repos/o/r/contents/file -X PUT -f branch=topic",
       "gh api graphql -f 'query=query { repository(owner: \"o\", name: \"r\") { ref(qualifiedName: \"refs/heads/main\") { id } } }'",
       "gh api repos/o/r/issues -f title=main",
