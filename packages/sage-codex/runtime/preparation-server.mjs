@@ -111,15 +111,15 @@ export function createPreparationServer(options = {}) {
     }
   });
   server.registerTool("sage_read_recorded_report", {
-    description: "Chief only: inspect an already recorded report by its assignment ID and exact hash, including reports from a lead's children. Returns the saved text, role, provenance, and review target when present. This changes no task, run, finding, or verdict.",
+    description: "Chief only: inspect an already recorded team report by its assignment ID and exact hash, including a lead's child. Returns saved text, provenance, and an optional pinned review target. This changes no state and accepts no claims.",
     inputSchema: z.object({ assignment: z.string(), reportHash: z.string() }).strict(),
   }, async (input, context) => {
     const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
     try {
-      const { readRecordedReport } = await import("./run-report.mjs");
+      const { readRecordedReport } = await import("./recorded-report.mjs");
       return { content: [{ type: "text", text: JSON.stringify(readRecordedReport(input, native, fixed)) }] };
     } catch {
-      return { isError: true, content: [{ type: "text", text: "Sage could not read this saved report. Check the chief identity, recorded assignment, exact report hash, and configured logbook." }] };
+      return { isError: true, content: [{ type: "text", text: "Sage could not read this saved report. Check the chief identity, recorded assignment, exact hash, and recovery proof." }] };
     }
   });
   server.registerTool("sage_finish_run", {
