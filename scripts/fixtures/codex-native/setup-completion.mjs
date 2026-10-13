@@ -4,7 +4,7 @@ import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
@@ -23,6 +23,10 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
       'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
+        if (${JSON.stringify(roleEditProbe)} && input.tool_name === 'apply_patch') {
+          writeFileSync(${JSON.stringify(join(root, "edit-evaluation.json"))}, JSON.stringify({call:input.tool_use_id,role:context.role}), {flag:'wx'});
+          return {decision:'pass'};
+        }
         if (${JSON.stringify(childMessageProbe)} && input.tool_name === 'collaborationsend_message') {
           appendFileSync(${JSON.stringify(join(root, "message-evaluations.jsonl"))}, JSON.stringify({call:input.tool_use_id,target:input.tool_input.target}) + '\\n');
           return {decision:'pass'};

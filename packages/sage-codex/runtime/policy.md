@@ -50,3 +50,9 @@ Run `node scripts/probe-codex-lifecycle.mjs --sage-child-message` with fake proc
 The native CLI 0.160.0 probe uses simulated responses and a temporary profile.
 It checks peer refusal before evaluation, exact chief delivery, normal completion, and cleanup.
 The model catalog explicitly selects native multi-agent V2 for children.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-role-edit` with fake process tools first on PATH.
+The simulated native lead receives a refusal before evaluation, and no file appears.
+Add `--writer` to prepare an implementer: the evaluator runs, and the fixed file contents must match.
+Both routes verify native completion and remove their temporary profiles.
+The fixture permits workspace writes so an external read-only sandbox cannot mask a missing Sage refusal.
