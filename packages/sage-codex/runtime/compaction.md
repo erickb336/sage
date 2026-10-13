@@ -27,7 +27,15 @@ and requires no chief instructions before or after it. Both routes use a fresh
 profile, fixed simulated responses, no child dispatch, and graceful process
 closure before removing temporary files.
 
-This verifies manual local-provider compaction without active children.
-Automatic or remote compaction, child context restoration, active-child
+Add `--automatic` to test native compaction before the next ordinary turn.
+The simulated first response reports 200,000 tokens against a 100,000-token
+threshold. The probe sends no manual compaction request. It requires native
+PreCompact and PostCompact events with trigger `auto`, the saved record, and
+both exact instruction parts in the next model request. Combine it with
+`--sage-off` for the inactive control. Token counts are fixed fixture inputs,
+not measurements of real model use.
+
+This verifies manual and automatic local-provider compaction without active children.
+Remote compaction, child context restoration, active-child
 restart, cross-session transfer, real-model behavior, and installed automatic
 Sage remain unverified. The required-hook outage still blocks activation.

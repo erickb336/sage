@@ -9,7 +9,9 @@ import { pathToFileURL } from "node:url";
 import { setupCompaction } from "./fixtures/codex-native/setup-compaction.mjs";
 import { waitNative } from "./fixtures/codex-native/wait-native.mjs";
 
-assert(process.argv.length === 2 || (process.argv.length === 3 && process.argv[2] === "--sage-off"), "unknown_probe_arguments");
+const options = process.argv.slice(2);
+assert(options.every(value => ["--sage-off", "--automatic"].includes(value)) && new Set(options).size === options.length, "unknown_probe_arguments");
+const automatic = options.includes("--automatic");
 const sageOff = process.argv.includes("--sage-off");
 const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-compaction-")));
 const pending = new Set();
@@ -46,6 +48,8 @@ try {
       let body = "";
       for await (const chunk of req) { body += chunk; assert(body.length <= 2 * 1024 * 1024, "request_too_large"); }
       const request = JSON.parse(body); requests++;
+      assert(requests <= 3, "too_many_model_requests");
+      if (automatic) phase = requests - 1;
       assert.equal(requests, phase + 1, "unexpected_model_request");
       const values = strings(request.input);
       deliveries.push(chiefParts.map(part => values.reduce((count, text) => count + text.split(part).length - 1, 0)));
@@ -58,7 +62,7 @@ try {
       res.writeHead(200, { "Content-Type": "text/event-stream", Connection: "close" });
       for (const event of [{ type: "response.created", response: { id, status: "in_progress", output: [] } },
         { type: "response.output_item.done", output_index: 0, item },
-        { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } }]) {
+        { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: automatic && phase === 0 ? 200000 : 0, output_tokens: 0, total_tokens: automatic && phase === 0 ? 200000 : 0 } } }]) {
         res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       }
       res.end();
@@ -66,7 +70,7 @@ try {
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   const config = { model_provider: "sage_compact_fixture", model: "sage-compact-fixture", model_catalog_json: catalog,
-    cli_auth_credentials_store: "ephemeral", compact_prompt: "SAGE_FIXED_COMPACTION_REQUEST", model_auto_compact_token_limit: 1000000,
+    cli_auth_credentials_store: "ephemeral", compact_prompt: "SAGE_FIXED_COMPACTION_REQUEST", model_auto_compact_token_limit: automatic ? 100000 : 1000000,
     "features.hooks": true, "features.plugins": false, "features.remote_plugin": false, "features.apps": false,
     "features.shell_snapshot": false, "features.shell_tool": false, "features.enable_request_compression": false,
     "features.multi_agent": true, "features.multi_agent_v2": true, "agents.enabled": true, allow_login_shell: false };
@@ -137,7 +141,8 @@ try {
   assert.equal(activated.modes[0].sage, !sageOff); assert.deepEqual(deliveries[0], sageOff ? [0, 0] : [1, 1]);
   phase = 1;
   const afterCompact = events.length;
-  await rpc("thread/compact/start", { threadId: session });
+  if (automatic) await runTurn("Continue the fixed fixture after compaction.");
+  else await rpc("thread/compact/start", { threadId: session });
   const compacted = await observe(afterCompact, e => e.method === "item/completed" && e.params.threadId === session && e.params.item.type === "contextCompaction");
   const compactTurn = compacted.params.turnId;
   const compactStart = events.slice(afterCompact).find(e => e.method === "item/started" && e.params.threadId === session
@@ -145,13 +150,18 @@ try {
   assert(compactStart, "missing_native_compaction_start");
   const compactEnd = await observe(afterCompact, e => e.method === "turn/completed" && e.params.threadId === session && e.params.turn.id === compactTurn);
   assert.equal(compactEnd.params.turn.status, "completed");
-  phase = 2; await runTurn("Continue the fixed fixture after compaction.");
+  if (!automatic) { phase = 2; await runTurn("Continue the fixed fixture after compaction."); }
   assert(!fixtureError, "model_fixture_failed"); assert.equal(requests, 3);
   const final = integrated.readJournal(); assert.deepEqual(final, activated, "compaction_changed_journal");
+  assert.equal(final.reservations.length, 0, "unexpected_child_dispatch");
   assert.deepEqual(integrated.readLogbook(), initialLogbook, "compaction_changed_logbook");
   const captures = readdirSync(join(root, "events")).map(name => JSON.parse(readFileSync(join(root, "events", name), "utf8")));
   const compactHooks = captures.filter(row => ["PreCompact", "PostCompact"].includes(row.hook_event_name));
   const sessionHooks = captures.filter(row => row.hook_event_name === "SessionStart");
+  assert.deepEqual(compactHooks.map(row => row.hook_event_name).sort(), ["PostCompact", "PreCompact"]);
+  assert(compactHooks.every(row => row.session_id === session && row.turn_id === compactTurn
+    && row.trigger === (automatic ? "auto" : "manual")), "wrong_compaction_trigger_or_identity");
+  assert.equal(sessionHooks.filter(row => row.source === "compact" && row.session_id === session).length, 1);
   const saved = JSON.parse(readFileSync(join(root, "compaction-transcript.json"), "utf8")); assert.equal(saved.session, session);
   const transcriptStat = lstatSync(saved.path);
   assert(transcriptStat.isFile() && transcriptStat.size <= 16 * 1024 * 1024, "invalid_fixture_transcript");
@@ -166,7 +176,7 @@ try {
   assert(Array.isArray(checkpoint.replacement_history), "missing_replacement_history");
   const chiefContextPresent = deliveries[2].every(count => count >= 1);
   console.log(JSON.stringify({ type: "compaction_evidence", nativeCompactionCompleted: true, persistedCompaction: true,
-    sameOwnerAndEpoch: true, unchangedLogbook: true, sage: !sageOff, noChildDispatch: final.reservations.length === 0,
+    automatic, sameOwnerAndEpoch: true, unchangedLogbook: true, sage: !sageOff, noChildDispatch: final.reservations.length === 0,
     compactHooks: compactHooks.map(row => ({ event: row.hook_event_name, trigger: row.trigger, fields: row.inputKeys })),
     sessionHooks: sessionHooks.map(row => ({ source: row.source, fields: row.inputKeys })),
     instructionCopiesByPhase: deliveries, chiefContextPresent, simulatedModel: true, installedSageVerified: false, stderrBytes }));
