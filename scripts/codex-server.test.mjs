@@ -67,7 +67,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_prepare_task", "sage_read_assignment", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -2587,4 +2587,134 @@ test('native Sage child message permission cannot bypass malformed input or the 
   }
   const denied = f.createNativePolicy(f.options, () => ({ decision: 'deny', reason: 'Fixed native denial' }));
   assert.deepEqual(await f.evaluate(denied, event, childActor), { decision: 'deny', reason: 'Fixed native denial' });
+});
+
+async function savedReportFixture(t) {
+  const f = await completionFixture(t);
+  const { readRecordedReport } = await import(pathToFileURL(join(f.plugin, "runtime/recorded-report.mjs")));
+  const intake = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  const report = intake.readChildReport({ name: f.input.name }, f.native(session), f.options);
+  const input = { assignment: report.assignment, reportHash: report.reportHash };
+  return { ...f, intake, savedInput: input, readRecordedReport,
+    record: () => intake.recordChildReport({ name: f.input.name, reportHash: report.reportHash }, f.native(session), f.options),
+    read: (request = input, actor = session, options = f.options) => readRecordedReport(request, f.native(actor), options) };
+}
+const journalBytes = f => readdirSync(f.options.directory).sort().map(name => [name, readFileSync(join(f.options.directory, name), "utf8")]);
+
+test("T43: chief reads only recorded evidence and retains it after transcript loss and off", async t => {
+  const f = await savedReportFixture(t);
+  assert.throws(() => f.read()); f.record();
+  const before = journalBytes(f), state = f.core.readAdmission(f.options.directory);
+  const expected = { decision: "recorded-report", ...f.savedInput, task: "T1", run: "R1", role: "lead",
+    issuer: session, child: childActor, turn: turns[1], text: reportText };
+  assert.deepEqual(f.read(), expected); assert.deepEqual(f.read(), expected);
+  assert.deepEqual(journalBytes(f), before); assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  rmSync(f.mode.sessionsDir, { recursive: true });
+  const off = journalBytes(f);
+  assert.deepEqual(f.read(), expected); assert.deepEqual(journalBytes(f), off);
+});
+
+test("T43: chief report reader refuses forged inputs actors versions and scope without writes", async t => {
+  const f = await savedReportFixture(t); f.record(); const before = journalBytes(f);
+  for (const request of [null, [], {}, { ...f.savedInput, extra: true }, { ...f.savedInput, assignment: turns[0] },
+    { ...f.savedInput, reportHash: "a".repeat(64) }, { ...f.savedInput, reportHash: 1 }]) assert.throws(() => f.read(request));
+  for (const actor of [childActor, turns[0], null]) assert.throws(() => f.read(f.savedInput, actor));
+  assert.throws(() => f.read(f.savedInput, session, { ...f.options, project: "other" }));
+  assert.throws(() => f.readRecordedReport(f.savedInput, { version: "unsupported", actor: session }, f.options));
+  assert.deepEqual(journalBytes(f), before);
+});
+
+test("T43: saved report reads refuse missing changed and conflicting recovery proof", async t => {
+  const f = await savedReportFixture(t); f.record();
+  const directory = join(f.options.observationsRoot, session);
+  const proof = f.events.readObservations(directory).find(row => row.kind === "report-recovery-verified");
+  const file = readdirSync(directory).find(name => name.endsWith(".json")
+    && JSON.parse(readFileSync(join(directory, name), "utf8")).kind === "report-recovery-verified");
+  rmSync(join(directory, file)); const before = journalBytes(f);
+  assert.throws(() => f.read());
+  f.events.publish(directory, { ...proof, receiptHash: "f".repeat(64) }); assert.throws(() => f.read());
+  f.events.publish(directory, proof); assert.throws(() => f.read());
+  assert.deepEqual(journalBytes(f), before);
+});
+
+test("T43: root chief reads a lead child's recorded review without parent authority", async t => {
+  const f = await completionFixture(t);
+  const { readRecordedReport } = await import(pathToFileURL(join(f.plugin, "runtime/recorded-report.mjs")));
+  const qa = "a22422c7-509c-43aa-8c42-827c556f8a59", path = "/root/fixture_lead/qa_child";
+  const request = { task: "T1", run: "R2", name: "qa_child", role: "qa", brief: f.input.brief };
+  const review = { branch: "codex/fixture", sha: "a".repeat(40), round: 0, cycle: 1 };
+  f.core.prepareAdmission(f.options.directory, f.scope,
+    { task: request.task, run: request.run, name: request.name, issuer: childActor },
+    { issuerRole: "lead", role: "qa" }, request.brief, { review });
+  const spawn = { ...f.spawnInput(request.name, "spawn-qa"), turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, `${childActor}.jsonl`) };
+  f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), { ...f.result, actor: childActor, call: "spawn-qa", turn: turns[1], path });
+  const transcript = f.childTranscript({ child: qa, parent: childActor, path, turn: turns[2] });
+  await f.evaluate(f.policy, { ...patch(turns[2]), transcript_path: transcript }, qa);
+  appendReport(f, reportText, qa, turns[2]);
+  f.policy.completeChild({ hook_event_name: "SubagentStop", session_id: session, agent_id: qa, turn_id: turns[2],
+    transcript_path: join(f.mode.sessionsDir, `${childActor}.jsonl`) }, f.native(qa));
+  const intake = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  assert.throws(() => intake.readChildReport({ name: request.name }, f.native(session), f.options));
+  const report = intake.readChildReport({ name: request.name }, f.native(childActor), f.options);
+  intake.recordChildReport({ name: request.name, reportHash: report.reportHash }, f.native(childActor), f.options);
+  const input = { assignment: report.assignment, reportHash: report.reportHash }, before = journalBytes(f);
+  const read = readRecordedReport(input, f.native(session), f.options);
+  assert.equal(read.issuer, childActor); assert.equal(read.child, qa); assert.equal(read.role, "qa");
+  assert.equal(read.text, reportText); assert.deepEqual(read.review, review);
+  for (const actor of [childActor, qa]) assert.throws(() => readRecordedReport(input, f.native(actor), f.options));
+  assert.throws(() => intake.readChildReport({ name: request.name }, f.native(session), f.options));
+  assert.deepEqual(journalBytes(f), before);
+});
+
+test("T43: packaged v2 report reader needs no logbook and survives reconnect", async t => {
+  const f = await savedReportFixture(t); f.record();
+  const config = join(f.dir, "config.json");
+  writeFileSync(config, JSON.stringify({ version: 2, mode: { ...f.mode, observationsRoot: f.options.observationsRoot } }));
+  writeFileSync(f.entry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(config)});`);
+  const expected = f.read(), before = journalBytes(f);
+  const client = await connect(t, f, "0.160.0", "", "sage_read_recorded_report");
+  assert.match((await client.call(f.savedInput, childActor)).error, /could not read/);
+  assert.deepEqual(await client.call(f.savedInput), expected); await client.close();
+  rmSync(join(f.mode.sessionsDir, `${childActor}.jsonl`));
+  const retry = await connect(t, f, "0.160.0", "", "sage_read_recorded_report");
+  assert.deepEqual(await retry.call(f.savedInput), expected); await retry.close();
+  assert.deepEqual(journalBytes(f), before);
+});
+
+test("T43: recorded report proof cannot be replayed under another owner epoch", async t => {
+  const f = await savedReportFixture(t); f.record();
+  let previous = null;
+  for (const name of readdirSync(f.options.directory).sort()) {
+    const file = join(f.options.directory, name);
+    const row = JSON.parse(readFileSync(file, "utf8").replaceAll(f.scope.epoch, turns[2]));
+    const body = { schema: row.schema, revision: row.revision, previous, data: row.data };
+    previous = createHash("sha256").update(JSON.stringify(body)).digest("hex");
+    writeFileSync(file, JSON.stringify({ ...body, hash: previous }) + "\n");
+  }
+  assert.equal(f.core.readAdmission(f.options.directory).sessions[0].epoch, turns[2]);
+  const before = journalBytes(f);
+  assert.throws(() => f.read()); assert.deepEqual(journalBytes(f), before);
+});
+
+test("T43: report reader refuses an admission change while checking recovery proof", async t => {
+  const f = await savedReportFixture(t); f.record();
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = fs.openSync, directory = join(f.options.observationsRoot, session);
+  let changed = false;
+  t.mock.method(fs, "openSync", (file, ...args) => {
+    if (!changed && typeof file === "string" && file.startsWith(`${directory}/`)) {
+      changed = true;
+      f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    }
+    return original(file, ...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  assert.throws(() => f.read()); assert.equal(changed, true);
+  t.mock.restoreAll(); syncBuiltinESMExports();
+  assert.equal(f.read().text, reportText);
 });
