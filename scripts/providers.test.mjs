@@ -2372,40 +2372,63 @@ test('run claims choose one winner for concurrent distinct dispatches of the sam
   const owners = ['owner-a', 'owner-b'].map(session => f.api.activateAdmission(f.journal,
     { project: f.scope.project, session, activation: f.activation }));
   const program = `import {reserveAdmission} from ${JSON.stringify(f.url)};
+    process.once('disconnect', () => process.exit(0));
     process.send({ready:true}); process.once('message', args=>{try{process.send({result:reserveAdmission(...args)});}
     catch(error){process.send({error:error.message});}process.disconnect();});`;
   const children = owners.map((owner, index) => {
     const child = spawn(process.execPath, ['--input-type=module', '-e', program], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: process.env });
     let result, stderr = '', stdout = '';
     child.stderr.on('data', data => { stderr += data; }); child.stdout.on('data', data => { stdout += data; });
-    const ready = new Promise((resolve, reject) => { child.once('error', reject); child.once('message', value => value.ready ? resolve() : reject(Error('worker not ready'))); });
+    const ready = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', () => reject(Error('worker closed before ready'))); child.once('message', value => value.ready ? resolve() : reject(Error('worker not ready'))); });
     child.on('message', value => { if (!value.ready) result = value; });
     const closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => {
       try { assert.equal(code, 0, stderr); assert.equal(signal, null); assert.equal(stderr, ''); assert.equal(stdout, ''); assert(result); resolve(result); }
       catch(error) { reject(error); }
     }); });
     const args = f.args(index + 1, owner.session, admissionScope(owner)); args[2].run = 'R1';
+    ready.catch(() => {}); closed.catch(() => {});
     return { child, args, ready, closed };
+  });
+  t.after(async () => {
+    for (const { child } of children) if (child.connected) child.disconnect();
+    await Promise.allSettled(children.map(row => row.closed));
   });
   await Promise.all(children.map(row => row.ready));
   for (const row of children) row.child.send(row.args);
-  const results = await Promise.all(children.map(row => row.closed));
+  const settled = await Promise.allSettled(children.map(row => row.closed));
+  for (const row of settled) assert.equal(row.status, "fulfilled", row.reason?.message);
+  const results = settled.map(row => row.value);
   assert.equal(results.filter(row => row.result?.decision === 'permit-once').length, 1);
   assert.equal(results.filter(row => /run already has a dispatch/.test(row.error)).length, 1);
   assert.equal(f.api.readAdmission(f.journal).reservations.length, 1);
 });
 
-test('run claims refuse correctly hashed journal history that dispatches one run twice', async t => {
-  const { createHash } = await import('node:crypto');
-  const f = await roleAdmissionFixture(t); f.reserve(1); f.reserve(2);
-  const file = join(f.journal, '00000003.json'), record = JSON.parse(readFileSync(file, 'utf8'));
-  record.data.assignment.run = 'R1';
-  const { hash, ...body } = record;
-  const damaged = JSON.stringify({ ...body, hash: createHash('sha256').update(JSON.stringify(body)).digest('hex') }) + '\n';
-  writeFileSync(file, damaged);
-  assert.throws(() => f.api.readAdmission(f.journal), /run already has a dispatch/);
-  assert.throws(() => f.reserve(3), /run already has a dispatch/);
-  assert.equal(readFileSync(file, 'utf8'), damaged);
+
+test('run claims preserve historical duplicate dispatches and still refuse new duplication', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await roleAdmissionFixture(t, undefined, provider);
+    const fixture = json('scripts/fixtures/admission-duplicate-runs.json');
+    const journal = join(f.journal, '..', 'upgrade-journal'); mkdirSync(journal);
+    for (const record of fixture.records) writeFileSync(join(journal, String(record.revision).padStart(8, '0') + '.json'), JSON.stringify(record) + '\n');
+    const bytes = readdirSync(journal).sort().map(file => readFileSync(join(journal, file), 'utf8'));
+    const state = f.api.readAdmission(journal);
+    assert.deepEqual(state.reservations.map(row => [row.assignment.task, row.assignment.run]), [['T1', 'R1'], ['T2', 'R1']]);
+    const first = state.reservations[0], second = state.reservations[1];
+    const { project, session, epoch } = first.assignment, scope = {project, session, epoch};
+    const reserve = run => f.api.reserveAdmission(journal, scope,
+      {task:'T3',run,issuer:'root',call:'spawn-3'},
+      {tool:'spawn',turn:'fixture-turn',name:'worker-3',argumentsHash:'a'.repeat(64)});
+    assert.throws(() => reserve('R1'), /run already has a dispatch/);
+    assert.deepEqual(readdirSync(journal).sort().map(file => readFileSync(join(journal, file), 'utf8')), bytes);
+    f.api.failAdmission(journal, failureFor(first.assignment));
+    assert.throws(() => reserve('R1'), /run already has a dispatch/);
+    const binding = bindingFor(second.assignment); f.api.bindAdmission(journal, binding); f.api.completeAdmission(journal, binding);
+    assert.throws(() => reserve('R1'), /run already has a dispatch/);
+    assert.equal(reserve('R2').decision, 'permit-once');
+    assert.equal(f.api.readAdmission(journal).reservations.length, 3);
+    for (const [index, record] of fixture.records.entries())
+      assert.equal(readFileSync(join(journal, String(record.revision).padStart(8, '0') + '.json'), 'utf8'), bytes[index]);
+  }
 });
 
 test('lead ownership permits only one active lead for a task across owners', async t => {

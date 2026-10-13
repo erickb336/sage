@@ -316,10 +316,10 @@ function apply(state, event, replay = false) {
   if (event.rolePlan && event.uniqueName && copy.reservations.some(row => row.assignment.project === value.project && row.assignment.session === value.session
     && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
     && row.dispatch.name === event.dispatch.name)) refuse("child dispatch name is already reserved");
-  // A run is one execution, across all owners in this participating store. A proven
-  // failure before child creation may retry; completion does not create a new run.
-  if (copy.reservations.some(row => row.assignment.project === value.project && row.assignment.run === value.run
-    && !failed.has(row.assignment.id))) refuse("run already has a dispatch; record a new run");
+  // A run names one execution. Preserve initial records written before this rule;
+  // continuation records already required a new run. Failed starts may retry.
+  if ((!replay || event.continuation) && copy.reservations.some(row => row.assignment.project === value.project
+    && row.assignment.run === value.run && !failed.has(row.assignment.id))) refuse("run already has a dispatch; record a new run");
   if (event.rolePlan) {
     checkRoleReservation(active, value, event.rolePlan);
     if (!replay) checkLeadOwnership(copy, active, value, event.rolePlan, continuingLead);

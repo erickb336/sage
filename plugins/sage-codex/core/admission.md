@@ -248,3 +248,16 @@ Existing journal records remain readable. New reservations cannot add an overlap
 Proven completion or dispatch failure releases the matching reservation.
 An independent chief-assigned specialist does not claim lead ownership.
 A verified continuation can reuse its own lead and team after the predecessor completes.
+
+
+## One dispatch per run
+
+A run names one execution within its project, across owners and task labels.
+New reservations refuse a run with an earlier dispatch, even after completion.
+A proven initial dispatch failure permits a new attempt; an exact retry retains its receipt.
+Other projects can use the same run name.
+
+Older journals can contain duplicate initial dispatches. They remain readable and retain their bytes.
+New work still cannot reuse any run with an earlier dispatch that did not fail.
+Continuations retain their existing replay checks and require a new run.
+The provider must still verify the current logbook before dispatch.
