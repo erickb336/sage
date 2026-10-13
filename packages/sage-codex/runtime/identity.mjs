@@ -461,7 +461,7 @@ export function readNativeDispatchFailure(transcriptPath, options, expected) {
     } else if (!uuid.test(expected.parent ?? "") || !/^\/root(?:\/(?!root(?:\/|$))[a-z0-9_]+)+$/.test(expected.path ?? "")
       || meta.parent_thread_id !== expected.parent || meta.agent_path !== expected.path) unavailable();
     let turn, context, request, result;
-    const turns = new Set();
+    const turns = new Set(), completed = new Set();
     for (const row of rows.slice(1)) {
       if (!record(row) || !record(row.payload) || row.type === "session_meta") unavailable();
       const p = row.payload;
@@ -469,12 +469,16 @@ export function readNativeDispatchFailure(transcriptPath, options, expected) {
         if (!uuid.test(p.turn_id ?? "") || turns.has(p.turn_id)) unavailable();
         turns.add(p.turn_id); turn = p.turn_id; context = undefined;
       }
+      if (row.type === "event_msg" && ["task_complete", "turn_aborted"].includes(p.type)) {
+        if (!turn || p.turn_id !== turn || completed.has(turn)) unavailable();
+        completed.add(turn);
+      }
       if (row.type === "turn_context") {
-        if (!turn || p.turn_id !== turn) unavailable();
+        if (!turn || p.turn_id !== turn || completed.has(turn)) unavailable();
         context = turn;
       }
       if (row.type !== "response_item" || p.call_id !== expected.call) continue;
-      if (turn !== expected.turn || context !== turn || p.internal_chat_message_metadata_passthrough?.turn_id !== turn
+      if (turn !== expected.turn || context !== turn || completed.has(turn) || p.internal_chat_message_metadata_passthrough?.turn_id !== turn
         || row.metadata?.client_authored !== false) unavailable();
       if (p.type === "function_call") {
         if (request || result || p.name !== "spawn_agent" || p.namespace !== "collaboration" || typeof p.arguments !== "string") unavailable();

@@ -2,7 +2,7 @@
 
 An initial spawn reserves capacity before Codex tries to create the child. The runtime releases that slot only when the protected sender transcript proves the captured Codex 0.160.0 unknown-model rejection.
 
-The adapter checks the current actor, owner epoch, original request, call, turn, and argument hash. Native metadata must mark both records as server-authored. The error must name the dispatched model. Other errors retain capacity. A successful dispatch result, child-start record, or saved binding also retains capacity on this path.
+The adapter checks the current actor, owner epoch, original request, call, turn, and argument hash. Native metadata must mark both records as server-authored. The error must name the dispatched model. A call or result after native turn completion or interruption refuses. Valid failure evidence recorded before the turn ends remains readable. Other errors retain capacity. A successful dispatch result, child-start record, or saved binding also retains capacity on this path.
 
 Reconciliation runs before a new admitted spawn and after native list or wait callbacks. It can recover preserved work after Sage turns off. An initial lead can reconcile its own rejected child; another actor cannot release that reservation.
 
