@@ -45,5 +45,9 @@ Changed arguments or a finished turn cannot retain the earlier permission.
 
 The recovered values describe the requested command. They do not prove the effective shell,
 working directory, remote environment, or sandbox defaults. This component does not grant
-command permission or activate installed Sage. Native allow and deny verification for this
-extraction remains pending.
+command permission or activate installed Sage. The native probe uses CLI 0.160.0 with simulated responses in a temporary profile.
+It verifies explicit and default arguments, denial before execution, and Sage-off input.
+Run `node scripts/probe-codex-command.mjs`; add `--deny-command`, `--default-command`,
+or `--extended-command --sage-off` for the other routes. Use fake process tools first on PATH.
+The fixed harmless command verifies its real output and working directory. The probe
+checks the evaluator receipt against every requested field and removes its temporary profile.
