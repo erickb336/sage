@@ -56,6 +56,18 @@ export function createPreparationServer(options = {}) {
       return { isError: true, content: [{ type: "text", text: "Sage could not record this report. Check the child name, completed assignment, and exact report hash." }] };
     }
   });
+  server.registerTool("sage_read_recorded_report", {
+    description: "Chief only: inspect an already recorded team report by its assignment ID and exact hash, including a lead's child. Returns saved text, provenance, and an optional pinned review target. This changes no state and accepts no claims.",
+    inputSchema: z.object({ assignment: z.string(), reportHash: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { readRecordedReport } = await import("./recorded-report.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(readRecordedReport(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not read this saved report. Check the chief identity, recorded assignment, exact hash, and recovery proof." }] };
+    }
+  });
   return server;
 }
 
