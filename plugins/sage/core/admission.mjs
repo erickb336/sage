@@ -1,4 +1,4 @@
-// Atomic admission journal. Unknown work stays reserved until a later verified completion protocol.
+// Atomic admission journal. Unknown work stays reserved until an exact verified completion.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, parse, resolve, sep } from "node:path";
@@ -93,6 +93,15 @@ function action(input) {
       ...(hasRole ? { rolePlan: parseRolePlan(input.rolePlan) } : {}), ...(uniqueName ? { uniqueName: true } : {}), ...(hasBrief ? { brief: parseBrief(input.brief) } : {}),
       ...(hasPreparation ? { preparation: word(input.preparation, "preparation", UUID) } : {}) };
   }
+  if (input?.kind === "interrupt") {
+    fields(input, ["kind", "completion", "evidenceHash"]);
+    return { kind: "interrupt", completion: childBinding(input.completion),
+      evidenceHash: word(input.evidenceHash, "interruption evidence hash", /^[0-9a-f]{64}$/) };
+  }
+  if (input?.kind === "complete") {
+    fields(input, ["kind", "completion"]);
+    return { kind: "complete", completion: childBinding(input.completion) };
+  }
   if (input?.kind === "bind-child") {
     fields(input, ["kind", "binding"]);
     return { kind: "bind-child", binding: childBinding(input.binding) };
@@ -110,7 +119,7 @@ function apply(state, event) {
     return { state: copy, result: event.config, changed: true };
   }
   if (!copy.config) refuse("store is not configured");
-  const value = event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : event.kind === "bind-child" ? event.binding : event.kind === "prepare" ? event.preparation : event.assignment;
+  const value = event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : event.kind === "bind-child" ? event.binding : ["complete", "interrupt"].includes(event.kind) ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
   if (!copy.config.projects.some((p) => p.project === value.project)) refuse("project is not configured");
   const owner = copy.sessions.find((s) => s.project === value.project && s.session === value.session);
   if (event.kind === "activate") {
@@ -138,6 +147,24 @@ function apply(state, event) {
     copy.modes.push(value);
     return { state: copy, result: { decision: "changed", mode: value }, changed: true };
   }
+  if (["complete", "interrupt"].includes(event.kind)) {
+    const bound = copy.bindings.find(row => row.assignment === value.assignment);
+    if (!bound || json(bound) !== json(value)) refuse("completion has no matching child binding");
+    const terminal = event.kind === "interrupt" ? { ...value, outcome: "interrupted", evidenceHash: event.evidenceHash } : value;
+    const previous = (copy.completions ?? []).find(row => row.assignment === value.assignment);
+    if (previous) {
+      if (json(previous) !== json(terminal)) refuse("assignment already has different terminal evidence");
+      return { state, result: { decision: "already-completed", completion: previous }, changed: false };
+    }
+    copy.completions = [...(copy.completions ?? []), terminal];
+    return { state: copy, result: { decision: "completed", completion: terminal }, changed: true };
+  }
+  const completed = new Set((copy.completions ?? []).map(row => row.assignment));
+  const active = copy.reservations.filter(row => !completed.has(row.assignment.id));
+  const issuerBindings = copy.bindings.filter(row => row.project === value.project
+    && row.session === value.session && row.epoch === value.epoch && row.child === value.issuer);
+  if (["prepare", "reserve"].includes(event.kind) && issuerBindings.length
+    && issuerBindings.every(row => completed.has(row.assignment))) refuse("completed issuer cannot admit new work");
   if (event.kind === "prepare") {
     const previous = copy.preparations.find(row => ["project", "session", "epoch", "issuer", "name"].every(key => row[key] === value[key]));
     if (previous) {
@@ -159,6 +186,7 @@ function apply(state, event) {
     const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
     if (!reserved || ["project", "session", "epoch", "issuer", "call"].some(key => reserved.assignment[key] !== value[key])) refuse("child binding has no matching reservation");
     if (!reserved.rolePlan) refuse("child binding requires a recorded role");
+    if (completed.has(value.assignment)) refuse("completed assignment cannot bind");
     if (value.child === value.issuer) refuse("issuer cannot bind itself as a child");
     const previous = copy.bindings.find(row => row.assignment === value.assignment);
     if (previous) {
@@ -191,11 +219,11 @@ function apply(state, event) {
     if (event.uniqueName && copy.reservations.some(row => row.assignment.project === value.project && row.assignment.session === value.session
       && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
       && row.dispatch.name === event.dispatch.name)) refuse("child dispatch name is already reserved");
-    checkRoleReservation(copy.reservations, value, event.rolePlan);
+    checkRoleReservation(active, value, event.rolePlan);
   }
-  if (copy.reservations.length >= copy.config.total) refuse("total capacity is occupied");
+  if (active.length >= copy.config.total) refuse("total capacity is occupied");
   const projectLimit = copy.config.projects.find((p) => p.project === value.project).limit;
-  if (copy.reservations.filter(({ assignment: a }) => a.project === value.project).length >= projectLimit) refuse("project capacity is occupied");
+  if (active.filter(({ assignment: a }) => a.project === value.project).length >= projectLimit) refuse("project capacity is occupied");
   copy.reservations.push({ assignment: value, dispatch: event.dispatch, ...(event.rolePlan ? { rolePlan: event.rolePlan } : {}), ...(event.brief ? { brief: event.brief } : {}), ...(event.preparation ? { preparation: event.preparation } : {}) });
   return { state: copy, result: { decision: "permit-once", assignment: value }, changed: true };
 }
@@ -329,6 +357,11 @@ export function reservePreparedAdmission(dir, scope, request, dispatch, issuerRo
 }
 /** Record a verified initial child identity. This neither permits dispatch nor releases capacity. */
 export const bindAdmission = (dir, binding) => commit(dir, { kind: "bind-child", binding });
+/** Only a trusted adapter may submit authoritative terminal evidence for this exact binding.
+ * Completion releases capacity; task success and report acceptance remain separate. */
+export const completeAdmission = (dir, completion) => commit(dir, { kind: "complete", completion });
+/** Verified interruption ends capacity ownership, not the task or its report gates. */
+export const interruptAdmission = (dir, completion, evidenceHash) => commit(dir, { kind: "interrupt", completion, evidenceHash });
 export function readAdmission(dir) {
   const { state } = read(dir);
   if (!state.config) refuse("store is not configured");

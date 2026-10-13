@@ -2638,3 +2638,158 @@ test("Codex shell path decisions reject invalid execution context and retain cus
   roots.some = () => false; roots.map = () => []; roots[Symbol.iterator] = function* () {};
   assert.equal(shellPathDecision(`touch ${root}/ledger.tsv`, { cwd, roots }).decision, "deny");
 });
+
+// Completion changes capacity only. It does not record a successful task or review.
+test('exact completion releases one slot and repeated stale events cannot release newer work', async t => {
+  const f = await roleAdmissionFixture(t, { total: 1, projects: [{ project: 'project-a', limit: 1 }] });
+  assert.equal(typeof f.api.completeAdmission, 'function');
+  const first = f.reserve(1), binding = bindingFor(first.assignment);
+  f.api.bindAdmission(f.journal, binding);
+  assert.throws(() => f.reserve(2), /capacity is occupied/);
+  assert.equal(f.api.completeAdmission(f.journal, binding).decision, 'completed');
+  const second = f.reserve(2);
+  assert.equal(second.decision, 'permit-once');
+  assert.equal(f.api.completeAdmission(f.journal, binding).decision, 'already-completed');
+  assert.throws(() => f.reserve(3), /capacity is occupied/);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 2, 'history is retained');
+  assert.deepEqual(f.api.readAdmission(f.journal).completions, [binding]);
+});
+
+test('completion refuses missing bindings and every changed identity field', async t => {
+  const f = await roleAdmissionFixture(t);
+  assert.equal(typeof f.api.completeAdmission, 'function');
+  const binding = bindingFor(f.reserve(1).assignment);
+  assert.throws(() => f.api.completeAdmission(f.journal, binding), /matching child binding/);
+  f.api.bindAdmission(f.journal, binding);
+  for (const key of Object.keys(binding)) {
+    const replacement = key === 'assignment' || key === 'epoch' ? f.activation : 'different';
+    assert.throws(() => f.api.completeAdmission(f.journal, { ...binding, [key]: replacement }));
+  }
+  assert.deepEqual(f.api.readAdmission(f.journal).completions ?? [], []);
+  f.api.changeAdmissionMode(f.journal, { ...f.scope, after: f.activation, turn: 'b72422c7-509c-43aa-8c42-827c556f8a57', sage: false });
+  assert.equal(f.api.completeAdmission(f.journal, binding).decision, 'completed', 'off does not discard terminal evidence');
+});
+
+test('a completed lead keeps child capacity held and cannot admit new children', async t => {
+  const f = await roleAdmissionFixture(t, { total: 3, projects: [{ project: 'project-a', limit: 3 }] });
+  assert.equal(typeof f.api.completeAdmission, 'function');
+  const lead = bindingFor(f.reserve(1).assignment, 'lead-a'); f.api.bindAdmission(f.journal, lead);
+  f.reserve(2, 'qa', 'lead', 'lead-a');
+  f.reserve(3, 'implementer', 'lead', 'lead-a');
+  f.api.completeAdmission(f.journal, lead);
+  assert.throws(() => f.reserve(4, 'qa', 'lead', 'lead-a'), /completed issuer/);
+  assert.equal(f.reserve(5).decision, 'permit-once');
+  assert.throws(() => f.reserve(6), /capacity is occupied/);
+});
+
+test('concurrent completion publishes once and reopened capacity still has one winner', async t => {
+  const f = await roleAdmissionFixture(t, { total: 1, projects: [{ project: 'project-a', limit: 1 }] });
+  assert.equal(typeof f.api.completeAdmission, 'function');
+  const binding = bindingFor(f.reserve(1).assignment); f.api.bindAdmission(f.journal, binding);
+  const code = `const input=JSON.parse(process.argv[1]); const api=await import(input.url);
+    try { console.log(JSON.stringify(input.binding ? api.completeAdmission(input.dir,input.binding)
+      : api.reserveRoleAdmission(...input.args,{issuerRole:'chief-of-staff',role:'lead'}))); }
+    catch(error) { console.log(JSON.stringify({refused:error.message})); }`;
+  const run = input => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code, JSON.stringify({ url: f.url, dir: f.journal, ...input })], { stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
+    let output = '', error = '';
+    child.stdout.on('data', bytes => { output += bytes; }); child.stderr.on('data', bytes => { error += bytes; });
+    child.once('error', reject); child.once('close', status => {
+      try { assert.equal(status, 0, error); resolve(JSON.parse(output)); } catch (e) { reject(e); }
+    }); child.stdin.end();
+  });
+  const completed = await Promise.all([run({ binding }), run({ binding })]);
+  assert.deepEqual(completed.map(row => row.decision).sort(), ['already-completed', 'completed']);
+  const admitted = await Promise.all([run({ args: f.args(2) }), run({ args: f.args(3) })]);
+  assert.equal(admitted.filter(row => row.decision === 'permit-once').length, 1);
+  assert.equal(admitted.filter(row => /capacity is occupied/.test(row.refused)).length, 1);
+  assert.equal(f.api.readAdmission(f.journal).completions.length, 1);
+});
+
+test('completed native children cannot regain instructions through a repeated start binding', async t => {
+  const f = await nativeBindingFixture(t);
+  const assignment = f.reserve(1, 'lead', 'chief-of-staff');
+  const bound = f.bind(f.identity());
+  f.api.completeAdmission(f.journal, bound.binding);
+  assert.throws(() => f.bind(f.identity()), /could not bind/);
+  assert.equal(f.api.readAdmission(f.journal).completions[0].assignment, assignment.id);
+});
+
+
+test('verified interruption is immutable and releases only the exact bound slot in either provider', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await roleAdmissionFixture(t, { total: 1, projects: [{ project: 'project-a', limit: 1 }] }, provider);
+    assert.equal(typeof f.api.interruptAdmission, 'function');
+    const binding = bindingFor(f.reserve(1).assignment), evidence = 'b'.repeat(64);
+    assert.throws(() => f.api.interruptAdmission(f.journal, binding, evidence), /matching child binding/);
+    f.api.bindAdmission(f.journal, binding);
+    const before = f.api.readAdmission(f.journal);
+    for (const hash of [undefined, '', 'b'.repeat(63), 'B'.repeat(64), 'x'.repeat(64)])
+      assert.throws(() => f.api.interruptAdmission(f.journal, binding, hash));
+    for (const key of Object.keys(binding)) {
+      const replacement = key === 'assignment' || key === 'epoch' ? f.activation : 'different';
+      assert.throws(() => f.api.interruptAdmission(f.journal, { ...binding, [key]: replacement }, evidence));
+    }
+    assert.deepEqual(f.api.readAdmission(f.journal), before);
+    const result = f.api.interruptAdmission(f.journal, binding, evidence);
+    assert.equal(result.decision, 'completed');
+    assert.deepEqual(result.completion, { ...binding, outcome: 'interrupted', evidenceHash: evidence });
+    const next = f.reserve(2); assert.equal(next.decision, 'permit-once');
+    const saved = f.api.readAdmission(f.journal);
+    assert.equal(f.api.interruptAdmission(f.journal, binding, evidence).decision, 'already-completed');
+    assert.throws(() => f.api.interruptAdmission(f.journal, binding, 'c'.repeat(64)), /different terminal evidence/);
+    assert.throws(() => f.api.completeAdmission(f.journal, binding), /different terminal evidence/);
+    assert.throws(() => f.reserve(3), /capacity is occupied/);
+    assert.deepEqual(f.api.readAdmission(f.journal), saved);
+    const nextBinding = bindingFor(next.assignment, 'child-2'); f.api.bindAdmission(f.journal, nextBinding);
+    f.api.completeAdmission(f.journal, nextBinding);
+    assert.throws(() => f.api.interruptAdmission(f.journal, nextBinding, evidence), /different terminal evidence/);
+  }
+});
+
+test('terminal lead cannot prepare work and off-mode interruption preserves mode and child slots', async t => {
+  const f = await roleAdmissionFixture(t, { total: 2, projects: [{ project: 'project-a', limit: 2 }] });
+  assert.equal(typeof f.api.interruptAdmission, 'function');
+  const lead = bindingFor(f.reserve(1).assignment, 'lead-a'); f.api.bindAdmission(f.journal, lead);
+  f.reserve(2, 'qa', 'lead', 'lead-a');
+  f.api.changeAdmissionMode(f.journal, { ...f.scope, after: f.activation, turn: 'b72422c7-509c-43aa-8c42-827c556f8a57', sage: false });
+  const modes = f.api.readAdmission(f.journal).modes;
+  f.api.interruptAdmission(f.journal, lead, 'b'.repeat(64));
+  assert.deepEqual(f.api.readAdmission(f.journal).modes, modes);
+  const brief = Object.fromEntries(f.api.BRIEF_FIELDS.map(field => [field, 'Fixed task brief.']));
+  assert.throws(() => f.api.prepareAdmission(f.journal, f.scope,
+    { task: 'T1', run: 'R3', issuer: 'lead-a', name: 'next-child' }, { issuerRole: 'lead', role: 'qa' }, brief), /completed issuer/);
+  assert.throws(() => f.reserve(3), /Sage mode is off/);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 2);
+  assert.equal(f.api.readAdmission(f.journal).completions.length, 1);
+});
+
+test('terminal evidence frees its project and lead limits without changing another project', async t => {
+  const f = await roleAdmissionFixture(t, { total: 4, projects: [{ project: 'project-a', limit: 3 }, { project: 'project-b', limit: 1 }] });
+  assert.equal(typeof f.api.completeAdmission, 'function');
+  const first = f.reserve(1); f.reserve(2); f.reserve(3);
+  const owner = f.api.activateAdmission(f.journal, { project: 'project-b', session: 'other', activation: f.activation });
+  const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
+  f.reserve(4, 'qa', 'chief-of-staff', 'other', scope);
+  assert.throws(() => f.reserve(5), /three lead slots/);
+  const binding = bindingFor(first.assignment); f.api.bindAdmission(f.journal, binding);
+  f.api.completeAdmission(f.journal, binding);
+  assert.throws(() => f.reserve(5, 'qa', 'chief-of-staff', 'other', scope), /project capacity/);
+  assert.equal(f.reserve(6).decision, 'permit-once');
+  assert.throws(() => f.reserve(7, 'qa'), /total capacity/);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 5);
+});
+
+
+test('terminal bindings cannot revive through an atomic repeated binding request', async t => {
+  for (const provider of ['claude', 'codex']) for (const interrupted of [false, true]) {
+    const f = await roleAdmissionFixture(t, undefined, provider);
+    const binding = bindingFor(f.reserve(1).assignment);
+    f.api.bindAdmission(f.journal, binding);
+    if (interrupted) f.api.interruptAdmission(f.journal, binding, 'd'.repeat(64));
+    else f.api.completeAdmission(f.journal, binding);
+    const before = f.api.readAdmission(f.journal);
+    assert.throws(() => f.api.bindAdmission(f.journal, binding), /completed assignment cannot bind/);
+    assert.deepEqual(f.api.readAdmission(f.journal), before);
+  }
+});

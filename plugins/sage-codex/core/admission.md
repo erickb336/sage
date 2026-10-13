@@ -12,7 +12,7 @@ The base API has five operations:
 
 Only a newly committed reservation returns `decision: "permit-once"`. An exact retry returns `"already-reserved"` with the saved assignment. It must not permit another native call. Changed arguments, tool, turn, name, task, or run are refused. After an uncertain result, keep the reservation held; do not invent another call identity to repeat the same work.
 
-All reserved assignments count toward both limits. A report submission, native stop, elapsed time, or new activation does not release one. Project and session names are identity keys, not paths. The adapter must validate issuer rights separately and convert every refusal or storage error into an explicit native denial. Throwing from a hook alone might not deny the tool.
+All reserved assignments without verified completion count toward both limits. A report submission, native stop, elapsed time, or new activation does not release one. Project and session names are identity keys, not paths. The adapter must validate issuer rights separately and convert every refusal or storage error into an explicit native denial. Throwing from a hook alone might not deny the tool.
 
 The journal consists of immutable, numbered, hash-linked records. Each reader checks the complete prefix and its state transitions. A writer syncs the pending record before linking it to the next revision. Only one concurrent writer can publish that revision. A loser reads again and rechecks capacity. Directory sync precedes permission, including when a retry finds an existing reservation. A failure after publication keeps the record and its reservation.
 
@@ -140,3 +140,29 @@ reservation APIs do not automatically enforce preparation. A production adapter
 must use the prepared path consistently. The model-visible preparation server,
 its native identity checks, and the spawn correlation policy remain separate
 integration work. These core APIs do not start native agents.
+
+
+## Verified terminal evidence
+
+`completeAdmission(directory, binding)` records the exact bound assignment as
+complete and releases only its capacity. `interruptAdmission(directory, binding,
+evidenceHash)` records an interrupted outcome with its evidence hash. The trusted
+provider adapter must first verify terminal evidence from the native runtime.
+These core calls do not authenticate a caller or inspect a native transcript.
+
+Every binding field must match the saved record and current owner epoch. An exact
+retry returns the first completion without another journal write. A changed child,
+turn, outcome or interruption hash is refused. History stays intact. A late event
+for an older assignment cannot release newer work. Sage off still accepts valid
+terminal evidence; it does not enable new dispatch.
+
+Only unfinished assignments occupy total, project, lead and team slots. Completing
+a lead does not release its children's slots. A completed child cannot prepare or
+reserve more work. The atomic binding transition also refuses completed work,
+including an identical binding retry after a concurrent completion. The Codex binding adapter refuses renewed instructions for a
+completed assignment. Native delivery, terminal verification and recovery remain
+provider responsibilities; this extraction does not wire automatic completion.
+
+Completion records neither task success nor a review verdict. Report acceptance,
+run completion, failed dispatch before binding and later-turn reuse remain separate
+protocols. Concurrent journal writers still compete for one immutable next record.
