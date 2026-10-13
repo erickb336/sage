@@ -69,4 +69,3 @@ function bindObservedTranscript(input, native, options) {
     child: native.actor, turn: initial.turn, transcript: event.transcript_path });
   return result;
 }
-
