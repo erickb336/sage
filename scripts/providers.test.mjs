@@ -2424,7 +2424,7 @@ test('lead ownership permits only one active lead for a task across owners', asy
 test('lead ownership retains a task while the old team runs and releases proven failures', async t => {
   const f = await roleAdmissionFixture(t), first = f.reserve(1), lead = bindingFor(first.assignment, 'lead-child');
   f.api.bindAdmission(f.journal, lead);
-  const args = f.args(2, 'lead-child'); args[2].task = 'T1';
+  const args = f.args(2, 'lead-child'); args[2].task = 'T2';
   const child = f.api.reserveRoleAdmission(...args, { issuerRole: 'lead', role: 'qa' });
   f.api.completeAdmission(f.journal, lead);
   const next = f.args(3); next[2].task = 'T1';
@@ -2440,26 +2440,52 @@ test('lead ownership retains a task while the old team runs and releases proven 
 test('lead ownership chooses one task owner under concurrent distinct run requests', async t => {
   const { spawn } = await import('node:child_process'), f = await roleAdmissionFixture(t);
   const program = `import {reserveRoleAdmission} from ${JSON.stringify(f.url)};
+    process.once('disconnect', () => process.exit(0));
     process.send({ready:true}); process.once('message', args=>{try{process.send({result:reserveRoleAdmission(...args)});}
     catch(error){process.send({error:error.message});}process.disconnect();});`;
   const children = [1, 2].map(index => {
     const child = spawn(process.execPath, ['--input-type=module', '-e', program], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: process.env });
     let result, stdout = '', stderr = '';
     child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
-    const ready = new Promise((resolve, reject) => { child.once('error', reject); child.once('message', value => value.ready ? resolve() : reject(Error('worker not ready'))); });
+    const ready = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', () => reject(Error('worker closed before ready'))); child.once('message', value => value.ready ? resolve() : reject(Error('worker not ready'))); });
     child.on('message', value => { if (!value.ready) result = value; });
     const closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => {
       try { assert.equal(code, 0, stderr); assert.equal(signal, null); assert.equal(stdout, ''); assert.equal(stderr, ''); assert(result); resolve(result); }
       catch(error) { reject(error); }
     }); });
     const args = f.args(index); args[2].task = 'T1'; args.push({ issuerRole: 'chief-of-staff', role: 'lead' });
+    ready.catch(() => {}); closed.catch(() => {});
     return { child, args, ready, closed };
+  });
+  t.after(async () => {
+    for (const { child } of children) if (child.connected) child.disconnect();
+    await Promise.allSettled(children.map(row => row.closed));
   });
   await Promise.all(children.map(row => row.ready)); for (const row of children) row.child.send(row.args);
   const results = await Promise.all(children.map(row => row.closed));
   assert.equal(results.filter(row => row.result?.decision === 'permit-once').length, 1);
   assert.equal(results.filter(row => /active lead or team/.test(row.error)).length, 1);
   assert.equal(f.api.readAdmission(f.journal).reservations.length, 1);
+});
+
+test('lead ownership preserves a main journal with historical overlapping leads and gates new work', async t => {
+  const f = await roleAdmissionFixture(t);
+  const fixture = json('scripts/fixtures/admission-overlapping-leads.json');
+  assert.equal(fixture.source, 'c241ec1243aef19a68e9397a82bd5e5f7ff51aaf');
+  const journal = join(f.journal, '..', 'upgrade-journal'); mkdirSync(journal);
+  for (const record of fixture.records) writeFileSync(join(journal, String(record.revision).padStart(8, '0') + '.json'), JSON.stringify(record) + '\n');
+  const state = f.api.readAdmission(journal);
+  assert.equal(state.reservations.length, 2); assert.equal(state.completions.length, 1);
+  const remaining = state.reservations[1].assignment;
+  const scope = { project: remaining.project, session: remaining.session, epoch: remaining.epoch };
+  const reserve = () => f.api.reserveRoleAdmission(journal, scope,
+    {task:'T1',run:'R3',issuer:'root',call:'spawn-3'},
+    {tool:'spawn',turn:'fixture-turn',name:'lead-3',argumentsHash:'a'.repeat(64)},
+    {issuerRole:'chief-of-staff',role:'lead'});
+  assert.throws(reserve, /active lead or team/);
+  const binding = bindingFor(remaining); f.api.bindAdmission(journal, binding); f.api.completeAdmission(journal, binding);
+  assert.equal(reserve().decision, 'permit-once');
+  assert.equal(f.api.readAdmission(journal).completions.length, 2);
 });
 
 test('role edit policy matches the shared writer and independent review roles in both bundles', async t => {

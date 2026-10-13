@@ -235,3 +235,15 @@ publishing it. A retry cannot change or remove that predecessor. Dispatch must
 use the pinned continuation; the initial-spawn API cannot consume it. Older
 preparations retain their format, but the native continuation path requires this
 pin before accepting the recipient supplied by a tool call.
+
+## One lead per task
+
+A project can hold only one active lead or lead-owned team for a task.
+The role reservation checks this rule inside the admission transaction, across owners.
+An identical retry retains its reservation; a distinct run cannot claim a second lead slot.
+Completing the lead does not release task ownership while its team still runs.
+The issuer binding retains the lead’s task even if a child names another task.
+Existing journal records remain readable. New reservations cannot add an overlapping lead.
+Proven completion or dispatch failure releases the matching reservation.
+An independent chief-assigned specialist does not claim lead ownership.
+A verified continuation can reuse its own lead and team after the predecessor completes.

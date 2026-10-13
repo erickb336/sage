@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, parse, resolve, sep } from "node:path";
 import { createAssignment, parseAssignment } from "./assignments.mjs";
-import { parseRolePlan, checkRoleReservation } from "./role-policy.mjs";
+import { parseRolePlan, checkRoleReservation, checkLeadOwnership } from "./role-policy.mjs";
 import { parseBrief } from "./brief.mjs";
 import { parseReport } from "./report.mjs";
 import { parseRunTarget } from "./run-target.mjs";
@@ -146,7 +146,7 @@ function action(input) {
   }
   return refuse("unknown action");
 }
-function apply(state, event) {
+function apply(state, event, replay = false) {
   const copy = structuredClone(state);
   if (event.kind === "configure") {
     if (copy.config) {
@@ -320,7 +320,10 @@ function apply(state, event) {
   // failure before child creation may retry; completion does not create a new run.
   if (copy.reservations.some(row => row.assignment.project === value.project && row.assignment.run === value.run
     && !failed.has(row.assignment.id))) refuse("run already has a dispatch; record a new run");
-  if (event.rolePlan) checkRoleReservation(active, value, event.rolePlan, continuingLead);
+  if (event.rolePlan) {
+    checkRoleReservation(active, value, event.rolePlan);
+    if (!replay) checkLeadOwnership(copy, active, value, event.rolePlan, continuingLead);
+  }
   if (active.length >= copy.config.total) refuse("total capacity is occupied");
   const projectLimit = copy.config.projects.find((p) => p.project === value.project).limit;
   if (active.filter(({ assignment: a }) => a.project === value.project).length >= projectLimit) refuse("project capacity is occupied");
@@ -392,7 +395,7 @@ function read(dir) {
     const event = action(record.data);
     const expected = envelope(revision, previous, event);
     if (json(expected) + "\n" !== bytes) refuse("journal chain or record differs");
-    const next = apply(state, event);
+    const next = apply(state, event, true);
     if (!next.changed) refuse("journal contains a duplicate transition");
     state = next.state;
     previous = expected.hash;
