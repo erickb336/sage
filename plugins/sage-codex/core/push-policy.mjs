@@ -9,7 +9,7 @@ import { createCommandPolicy, GIT_VALUE, gitSubcommand } from "./command-policy.
 export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work reaches main only through a pull request. Push the task's branch and open a pull request." } = {}) {
   if (typeof readBranch !== "function") throw new TypeError("readBranch must be a function");
   if (typeof mainReason !== "string" || !mainReason.trim() || mainReason.length > 2048 || /[\x00-\x1f\x7f]/.test(mainReason)) throw new TypeError("mainReason must be a bounded message without control characters");
-  const { runnable } = createCommandPolicy({ stateToolPath });
+  const { runnable, mergeIn } = createCommandPolicy({ stateToolPath });
   const PUSH_FORM = 'git [-C <dir>] push [-u] [--follow-tags] [-o <option>] origin <branch>, as a command of its own, with the literal name of the task\'s branch: not main or master, HEAD, @, a pattern, a variable, or a refspec with ":" or "+". To delete a branch: git push --delete origin <branch>';
   /** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
   const gitThen = (text, word) => new RegExp(`\\b${word}\\b`, "i").test(/\bgit\b([\s\S]*)/i.exec(text)?.[1] ?? "");
@@ -28,7 +28,11 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     for (const { cmd, words, bodies } of runnable(commands)) {
       if (cmd.words[0] === "cd" && cmd.words.length === 2) dir = resolve(dir, cmd.words[1]);
       const git = words.findIndex((w, k) => /(?:^|\/)git$/.test(w) && /^push$/i.test(gitSubcommand(words, k + 1)));
-      const why = git >= 0 ? pushForm(words, git, dir) : apiWritesMain(words) ? mainReason : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
+      if (git < 0 && apiWritesMain(words)) {
+        // Preserve the merge policy's more specific refusal without allowing an API write through this policy.
+        return mergeIn(command)?.problem ?? refuse(mainReason);
+      }
+      const why = git >= 0 ? pushForm(words, git, dir) : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
       if (why) return refuse(why);
     }
     return undefined;
@@ -146,8 +150,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     }
     if ((method ?? (hasBodyFields || opaque ? "POST" : "GET")).toUpperCase() === "GET") return false;
     if (/[$`\\*\[\]]/.test(path)) return true;
-    // The merge policy already owns the merges endpoint and its refusal message.
-    const route = /^repos\/[^/]+\/[^/]+\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|branches\/.*\/rename)$/.exec(path)?.[1];
+    const route = /^repos\/[^/]+\/[^/]+\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|branches\/.*\/rename)$/.exec(path)?.[1];
     if (!route) return false;
     if ((!route.startsWith("contents") && (protectedName(route) || !LITERAL.test(route))) || opaque) return true;
     const destinations = values.filter(field => /^(?:ref|branch|base|new_name)$/.test(field.key));
