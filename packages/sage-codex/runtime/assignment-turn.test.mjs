@@ -306,3 +306,52 @@ test('native reports refuse terminal evidence for an earlier turn after a later 
     assert.throws(() => identity.readNativeCompletion(f.file, options, expected()), /report evidence is unavailable/);
   }
 });
+
+
+const deliveryExpected = text => {
+  const { turn: omitted, ...wanted } = expected(turn, text);
+  return wanted;
+};
+
+test('delivery discovery finds only the exact saved task in the current child turn', t => {
+  const f = fixture(t);
+  f.write([...task(turn, 'first'), ...task(later, 'second')]);
+  const read = wanted => identity.readDeliveredAssignment(f.file, { sessionsDir: f.sessionsDir }, wanted);
+  assert.deepEqual(read(deliveryExpected('second')), {
+    session, child, turn: later, message: `amsg_${later}`, taskHash: hash('second'),
+  });
+  assert.equal(read(deliveryExpected('not delivered')), null);
+  assert.throws(() => read(deliveryExpected('first')), /delivery evidence is unavailable/);
+  f.write(task(turn, 'first'));
+  assert.equal(read(deliveryExpected('first')).turn, turn);
+});
+
+test('delivery discovery rejects ambiguous delivery and malformed current-turn evidence', t => {
+  const f = fixture(t);
+  const read = () => identity.readDeliveredAssignment(f.file, { sessionsDir: f.sessionsDir }, deliveryExpected('first'));
+  for (const rows of [[...task(turn, 'first'), ...task(later, 'first')],
+    [message('first', 'amsg_orphan')], [task(turn, 'first')[0], message('first', 'amsg_orphan')],
+    [task(turn, 'first')[0], {type:'turn_context',payload:{turn_id:later}}, message('first','amsg_wrong')]]) {
+    f.write(rows); assert.throws(read, /delivery evidence is unavailable/);
+  }
+  for (const change of [{author:'/root/other'}, {recipient:'/root/other'}]) {
+    const rows = task(turn, 'first'); Object.assign(rows[2].payload, change);
+    f.write(rows); assert.throws(read, /delivery evidence is unavailable/);
+  }
+});
+
+test('delivery discovery requires exact caller identity and a protected complete transcript', t => {
+  const f = fixture(t);
+  const read = (wanted = deliveryExpected('first'), path = f.file) =>
+    identity.readDeliveredAssignment(path, {sessionsDir:f.sessionsDir}, wanted);
+  for (const change of [{id:session}, {session_id:child}, {parent_thread_id:child},
+    {agent_path:'/root/other'}, {cli_version:'0.159.2'}]) {
+    f.write(task(turn, 'first'), {...metadata,...change}); assert.throws(() => read(), /delivery evidence is unavailable/);
+  }
+  f.write(task(turn,'first'));
+  for (const wanted of [{...deliveryExpected('first'), turn}, {...deliveryExpected('first'),taskHash:'bad'},
+    {...deliveryExpected('first'),child:session}, {}]) assert.throws(() => read(wanted), /delivery evidence is unavailable/);
+  const linked = join(f.sessionsDir,'delivery-link.jsonl'); symlinkSync(f.file,linked);
+  assert.throws(() => read(deliveryExpected('first'),linked), /delivery evidence is unavailable/);
+  writeFileSync(f.file, '{'); assert.throws(() => read(), /delivery evidence is unavailable/);
+});

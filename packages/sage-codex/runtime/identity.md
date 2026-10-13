@@ -16,3 +16,15 @@ and latest turn context. It rejects duplicate turns, conflicting context, and a
 request for an older turn. It also returns the initial turn so off-mode stop
 handling can distinguish an ordinary child from a pending first-task reservation.
 This read proves identity only; it grants no admission and proves no completion.
+
+
+## Discover a delivered assignment
+
+`readDeliveredAssignment` accepts the verified child identity and exact saved task hash without a turn ID.
+It returns the matching message and current native turn, or null if that task is not present.
+A match in an earlier turn, duplicate matches, changed identity, or an invalid transcript refuses.
+It uses the same protected transcript checks as `readAssignmentTurn`.
+
+This reader does not reserve work, bind a child, accept a report, or grant tool permission.
+Later follow-up recovery must join this evidence to the saved dispatch and current assignment.
+Installed automatic Sage remains disabled.
