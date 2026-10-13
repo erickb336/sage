@@ -40,9 +40,11 @@ function modeChange(input) {
     turn: word(input.turn, "mode turn", UUID), sage: input.sage };
 }
 function dispatchIdentity(input) {
-  fields(input, ["tool", "turn", "name", "argumentsHash"]);
+  const hasTaskHash = Object.hasOwn(input ?? {}, "taskHash");
+  fields(input, ["tool", "turn", "name", "argumentsHash", ...(hasTaskHash ? ["taskHash"] : [])]);
   return { tool: word(input.tool, "tool"), turn: word(input.turn, "turn"), name: word(input.name, "name"),
-    argumentsHash: word(input.argumentsHash, "argumentsHash", /^[0-9a-f]{64}$/) };
+    argumentsHash: word(input.argumentsHash, "argumentsHash", /^[0-9a-f]{64}$/),
+    ...(hasTaskHash ? { taskHash: word(input.taskHash, "taskHash", /^[0-9a-f]{64}$/) } : {}) };
 }
 function childBinding(input) {
   fields(input, ["project", "session", "epoch", "assignment", "issuer", "call", "child", "turn"]);
