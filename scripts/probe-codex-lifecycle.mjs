@@ -11,9 +11,14 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const roleEdit = process.argv.includes("--sage-role-edit");
+const writer = process.argv.includes("--writer");
+assert(!writer || roleEdit, "writer_needs_role_probe");
+assert(!roleEdit || process.argv.slice(2).every(arg => ["--sage-role-edit","--writer"].includes(arg)), "role_edit_is_a_separate_probe");
+let roleEditVerified = false, childPatchTool;
 const childMessage = process.argv.includes("--sage-child-message");
 assert(!childMessage || process.argv.slice(2).length === 1, "message_is_a_separate_probe");
 let messageVerified = false, chiefMessageDelivered = false, messageWaitCycles = 0;
@@ -26,7 +31,7 @@ const recoveryProbe = repeatRecovery || process.argv.includes("--sage-child-reco
 const receiptProbe = process.argv.includes("--sage-receipt") || recoveryProbe;
 const reportProbe = process.argv.includes("--sage-report") || receiptProbe;
 const failedSpawn = process.argv.includes("--sage-failed-spawn");
-const completion = childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
+const completion = roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
 assert(!(failedSpawn && (reportProbe || recoveryProbe)), "incompatible_failure_probe");
 assert(!(denySpawn && completion), "incompatible_probe_modes");
 let denied = false;
@@ -45,6 +50,7 @@ for (const dir of [workspace, baselineHome, codexHome, temporary]) mkdirSync(dir
 const catalogPath = join(root, "model-catalog.json");
 writeFileSync(catalogPath, JSON.stringify({ models: [{
   slug: "sage-native-parent", display_name: "Sage native lifecycle fixture",
+  ...(roleEdit ? {apply_patch_tool_type:"freeform"} : {}),
   supported_reasoning_levels: [], shell_type: childSandbox ? "unified_exec" : "disabled", visibility: "list",
   supported_in_api: true, priority: 1, support_verbosity: false, multi_agent_version: "v2",
   truncation_policy: { mode: "bytes", limit: 10000 }, experimental_supported_tools: [], tool_mode: "direct",
@@ -88,7 +94,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,commandProbe:childSandbox,childMessageProbe:childMessage,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,deadlineMs});
   let failureStage = 0;
   let prepared = false, blockedStopVerified = false, reportVerified = false, receiptVerified = false, beforeReport, expectedReport, recordedState;
   let compactRequests = 0, recoveryRound = 0, recoveryPhase = "compact", recoveredRounds = 0;
@@ -111,7 +117,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -129,13 +135,13 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const outputs = {};
     const input = Array.isArray(request.input) ? request.input : [];
     for (const item of input) {
-      if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
+      if (!["function_call_output", "custom_tool_call_output"].includes(item.type) || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
         : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
-        if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
+        if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -148,6 +154,9 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const commandTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).filter(member => member.type === "function" && member.name === "exec_command").map(member => ({namespace: tool.name, name: member.name}))
       : tool.type === "function" && tool.name === "exec_command" ? [{name: tool.name}] : []);
+    const patchTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.name === "apply_patch").map(member => ({namespace:tool.name, name:member.name}))
+      : tool.name === "apply_patch" ? [{name:tool.name}] : []);
     const tasks=input.filter(item=>item.type==="agent_message");
     const task=tasks[0];
     const childPromptSeen=tasks.length===1 && task.author==="/root" && task.recipient==="/root/probe_child"
@@ -158,7 +167,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({namespace: tool.name, name: member.name}))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{name: tool.name}] : []);
-    return { outputs, agentTools, childPromptSeen, commandTools,
+    return { outputs, agentTools, childPromptSeen, commandTools, patchTools,
       chiefMessageDelivered: input.some(item => item.type === "agent_message" && item.author === "/root/probe_child"
         && item.recipient === "/root" && texts(item.content).includes("Fixed progress report")), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), assignmentTools: mcpTools("sage_read_assignment") };
   };
@@ -226,6 +235,23 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if (roleEdit && childRequests === 1) {
+          check(thread === childThread && childResponseSent, "wrong_edit_child");
+          const file = join(workspace,"role-edit-proof.txt");
+          if (writer) {
+            check(existsSync(file) && readFileSync(file,"utf8") === "fixed role edit proof\n", "writer_file_missing_or_changed");
+            const receipt = JSON.parse(readFileSync(join(root,"edit-evaluation.json"),"utf8"));
+            check(receipt.call === calls.edit && receipt.role === "implementer", "wrong_writer_evaluation");
+          } else {
+            check(typeof info.outputs[calls.edit] === "string" && info.outputs[calls.edit].includes("This Sage role cannot edit files"), "role_edit_denial_missing");
+            check(!existsSync(file) && !existsSync(join(root,"edit-evaluation.json")), "readonly_edit_reached_evaluator_or_file");
+          }
+          const events = readdirSync(join(root,"events")).map(name => JSON.parse(readFileSync(join(root,"events",name),"utf8")));
+          check(events.filter(row => row.hook_event_name === "PostToolUse" && row.tool_use_id === calls.edit).length === (writer ? 1 : 0), "edit_execution_event_mismatch");
+          roleEditVerified = true; childRequests++;
+          print({type:"role_edit_evidence",writer,roleEditVerified,fileWritten:writer,simulatedModel:true});
+          respond(res,message(CHILD_MARKER)); return;
+        }
         if (childMessage && childRequests === 1) {
           check(thread === childThread && Object.hasOwn(info.outputs,calls.messageControl), "message_control_missing");
           check(info.agentTools.includes("send_message"), "child_message_tool_missing");
@@ -302,7 +328,7 @@ data: ${JSON.stringify(event)}
           }
           recoveryPhase = "complete"; respond(res, message(CHILD_MARKER)); return;
         }
-        if (completion && childRequests === (childMessage ? 4 : childSandbox ? 2 : 1)) {
+        if (completion && childRequests === (roleEdit ? 2 : childMessage ? 4 : childSandbox ? 2 : 1)) {
           check(thread === childThread && childResponseSent, "unexpected_stop_retry");
           const state = integrated.readJournal(), stops = integrated.readStops();
           check(state.reservations.length === (failedSpawn ? 2 : 1) && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
@@ -316,6 +342,7 @@ data: ${JSON.stringify(event)}
         }
         check(rootThread && thread !== rootThread && childRequests === 0, "unexpected_child_request_identity");
         check(info.childPromptSeen, "child_did_not_receive_fixed_task");
+        if (roleEdit) { check(info.patchTools.length === 1, "patch_tool_missing"); childPatchTool = info.patchTools[0]; }
         if (childSandbox) { check(info.commandTools.length === 1, "command_tool_missing"); childCommandTool = info.commandTools[0]; }
         childThread = thread;
         childRequests++;
@@ -364,7 +391,7 @@ data: ${JSON.stringify(event)}
           check(info.prepareTools.length === 1, "preparation_tool_missing");
           const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
           respond(res, {type: "function_call", ...info.prepareTools[0], call_id: calls.prepare,
-            arguments: JSON.stringify({task: "T1", run: "R1", name: "probe_child", role: "lead", brief})}); return;
+            arguments: JSON.stringify({task: "T1", run: "R1", name: "probe_child", role: writer ? "implementer" : "lead", brief})}); return;
         }
         const receipt = info.outputs[calls.prepare];
         check(receipt?.decision === "prepared" && typeof receipt.message === "string" && receipt.fork_turns === "none", "preparation_missing");
@@ -394,7 +421,9 @@ data: ${JSON.stringify(event)}
         nativeRunning = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
         respond(res, call(calls.wait, "wait_agent", {}));
-        respond(childResponse, childMessage
+        respond(childResponse, roleEdit
+          ? {type:"custom_tool_call",...childPatchTool,call_id:calls.edit,input:"*** Begin Patch\n*** Add File: role-edit-proof.txt\n+fixed role edit proof\n*** End Patch"}
+          : childMessage
           ? {type:"function_call",name:"list_mcp_resources",call_id:calls.messageControl,arguments:"{}"}
           : childSandbox
           ? {type:"function_call", ...childCommandTool, call_id:calls.sandbox, arguments:JSON.stringify({cmd:"printf sage-child-sandbox-control", shell:"/bin/sh", workdir:workspace, sandbox_permissions:"require_escalated", justification:"Fixed simulated sandbox refusal probe."})}
@@ -483,7 +512,7 @@ data: ${JSON.stringify(event)}
     print({ type: "result", verified: false, reason: "loopback_listener_failed" });
     process.exitCode = 1;
   } else {
-    const args = ["exec", "--strict-config", "--skip-git-repo-check", "-C", workspace, "-s", "read-only", "--json"];
+    const args = ["exec", "--strict-config", "--skip-git-repo-check", "-C", workspace, "-s", roleEdit ? "workspace-write" : "read-only", "--json"];
     const config = {
       ...(recoveryProbe ? {model_auto_compact_token_limit:100000, compact_prompt:"SAGE_CHILD_COMPACT_REQUEST"} : {}),
       model_provider: "sage_native_lifecycle",
@@ -566,7 +595,7 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (receiptProbe ? 9 : reportProbe ? 6 : 5) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+      : rootRequests === (receiptProbe ? 9 : reportProbe ? 6 : 5) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
         && (!recoveryProbe || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified

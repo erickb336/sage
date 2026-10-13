@@ -28,6 +28,15 @@ those rules or authorize operations the callback rejects. It does not detect
 missing callbacks, accept reports, release slots, restore compacted context,
 or provide lifecycle recovery. Those remain required before activation.
 
+## Role-based edits
+
+The policy derives the role from the bound native assignment, not a supplied role name.
+With Sage on, the chief, lead, PE, reviewers, and QA cannot use `apply_patch` or known shell write forms.
+Implementers, designers, and arena judges retain the supplied evaluator's checks.
+With Sage off, ordinary evaluation resumes. The evaluator receives the verified role, or null when off.
+The shared command classifier detects known write forms; it does not prove arbitrary commands safe.
+Complete shell, path, and workflow checks remain required. This component does not enable installed Sage.
+
 ## Child messages
 
 A Sage child can send a message only to the root chief, by `/root` or its session ID.
@@ -41,3 +50,9 @@ Run `node scripts/probe-codex-lifecycle.mjs --sage-child-message` with fake proc
 The native CLI 0.160.0 probe uses simulated responses and a temporary profile.
 It checks peer refusal before evaluation, exact chief delivery, normal completion, and cleanup.
 The model catalog explicitly selects native multi-agent V2 for children.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-role-edit` with fake process tools first on PATH.
+The simulated native lead receives a refusal before evaluation, and no file appears.
+Add `--writer` to prepare an implementer: the evaluator runs, and the fixed file contents must match.
+Both routes verify native completion and remove their temporary profiles.
+The fixture permits workspace writes so an external read-only sandbox cannot mask a missing Sage refusal.
