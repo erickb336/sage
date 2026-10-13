@@ -801,49 +801,7 @@ test("native admission refuses altered prepared instructions before consuming a 
 });
 
 
-test("native child first tool binds the exact admitted task without an MCP start callback", async t => {
-  const f = await composedPolicyFixture(t);
-  f.api.prepareNativeTask(f.input, f.native(session), f.options);
-  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
-  f.events.publish(join(f.options.observationsRoot, session), f.result);
-  const transcript_path = f.childTranscript();
-  let evaluated = 0;
-  const policy = f.createNativePolicy(f.options, () => {
-    assert.equal(f.core.readAdmission(f.options.directory).bindings[0].child, childActor);
-    evaluated++; return { decision: "pass" };
-  });
-  const input = { ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path };
-  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
-  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
-  assert.equal(evaluated, 2);
-  const state = f.core.readAdmission(f.options.directory);
-  assert.equal(state.bindings.length, 1);
-  const paths = f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === "child-transcript");
-  assert.deepEqual(paths.map(row => [row.child, row.turn, row.transcript]), [[childActor, turns[1], transcript_path]]);
-  f.core.completeAdmission(f.options.directory, state.bindings[0]);
-  await assert.rejects(f.evaluate(policy, input, childActor));
-  assert.equal(evaluated, 2);
-});
 
-test("native child tools refuse missing dispatch results changed tasks and foreign turns before policy", async t => {
-  const f = await composedPolicyFixture(t);
-  f.api.prepareNativeTask(f.input, f.native(session), f.options);
-  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
-  let evaluated = 0;
-  const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: "pass" }; });
-  const transcript_path = f.childTranscript();
-  const input = { ...patch(turns[1]), transcript_path };
-  await assert.rejects(f.evaluate(policy, input, childActor));
-  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
-  f.events.publish(join(f.options.observationsRoot, session), f.result);
-  await assert.rejects(f.evaluate(policy, { ...input, turn_id: turns[2] }, childActor));
-  await assert.rejects(f.evaluate(policy, patch(turns[1]), childActor));
-  f.childTranscript({ message: "Changed task" });
-  await assert.rejects(f.evaluate(policy, input, childActor));
-  assert.equal(evaluated, 0);
-  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
-  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
-});
 
 
 test("prepared native spawn requires a fresh context before reserving capacity", async t => {
@@ -858,25 +816,6 @@ test("prepared native spawn requires a fresh context before reserving capacity",
   assert.equal(f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options).decision, "permit-once");
 });
 
-test("configured MCP child tools bind without any SubagentStart call", async t => {
-  const f = await preparationServerFixture(t);
-  f.api.prepareNativeTask(f.input, f.native(session), f.options);
-  writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';
-    import { createNativePolicy } from './plugin/runtime/policy.mjs';
-    const options = ${JSON.stringify(f.options)};
-    serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(options, () => ({decision: 'pass'})) });`);
-  const client = await connect(t, f);
-  const spawn = f.spawnInput();
-  assert.deepEqual(await client.call(spawn), {});
-  assert.deepEqual(await client.call({ ...spawn, hook_event_name: "PostToolUse", tool_response: { task_name: "/root/fixture_lead" } }), {});
-  const transcript_path = f.childTranscript();
-  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
-  assert.deepEqual(await client.call({ ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path }, childActor), {});
-  assert.equal(f.core.readAdmission(f.options.directory).bindings[0].child, childActor);
-  const refused = await client.call({ ...patch(turns[2]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path }, childActor);
-  assert.equal(refused.hookSpecificOutput.permissionDecision, "deny");
-  await client.close();
-});
 
 
 async function completionFixture(t) {
@@ -3477,22 +3416,6 @@ test('native child tool permission refuses terminal turns before evaluation with
  }
 });
 
-test('native child tool permission rechecks terminal evidence after an awaited evaluator', async t => {
- for (const type of ['turn_aborted', 'task_complete']) {
-  const f = await roleEditFixture(t, 'implementer'); let entered, resume;
-  const waiting = new Promise(resolve => {entered=resolve;});
-  const release = new Promise(resolve => {resume=resolve;});
-  const policy = f.createNativePolicy(f.options, async () => {entered();await release;return {decision:'pass'};});
-  const input = {...f.editInput,tool_name:'list_mcp_resources',tool_input:{}};
-  const result = f.evaluate(policy,input,childActor);
-  await waiting;
-  const before = f.core.readAdmission(f.options.directory);
-  appendFileSync(input.transcript_path,JSON.stringify({type:'event_msg',payload:{type,turn_id:turns[1],reason:'interrupted'}})+'\n');
-  resume();
-  await assert.rejects(result,/child turn evidence is unavailable/);
-  assert.deepEqual(f.core.readAdmission(f.options.directory),before);
- }
-});
 
 test('native command decoder refuses sparse arrays with extra or hidden keys', async t => {
   const decode = await commandDecoder(t);
@@ -3958,4 +3881,147 @@ test("unbound child recovery refuses changed delivery and waits for the parent r
   assert.equal((await f.evaluate(policy, input, childActor)).decision, "deny");
   assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
   assert.equal(calls, 0);
+});
+
+
+test("native child first tool binds the exact admitted task without an MCP start callback", async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const transcript_path = f.childTranscript();
+  let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, () => {
+    assert.equal(f.core.readAdmission(f.options.directory).bindings[0].child, childActor);
+    evaluated++; return { decision: "pass" };
+  });
+  const input = { ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path };
+  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
+  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
+  assert.equal(evaluated, 2);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.bindings.length, 1);
+  const paths = f.events.readObservations(join(f.options.observationsRoot, session)).filter(row => row.kind === "child-transcript");
+  assert.deepEqual(paths.map(row => [row.child, row.turn, row.transcript]), [[childActor, turns[1], transcript_path]]);
+  f.core.completeAdmission(f.options.directory, state.bindings[0]);
+  await assert.rejects(f.evaluate(policy, input, childActor));
+  assert.equal(evaluated, 2);
+});
+
+
+test("native child tools refuse missing dispatch results changed tasks and foreign turns before policy", async t => {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: "pass" }; });
+  const transcript_path = f.childTranscript();
+  const input = { ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path };
+  await assert.rejects(f.evaluate(policy, input, childActor));
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  await assert.rejects(f.evaluate(policy, { ...input, turn_id: turns[2] }, childActor));
+  await assert.rejects(f.evaluate(policy, patch(turns[1]), childActor));
+  f.childTranscript({ message: "Changed task" });
+  await assert.rejects(f.evaluate(policy, input, childActor));
+  assert.equal(evaluated, 0);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
+  f.childTranscript();
+  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: "pass" });
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
+});
+
+
+
+test("configured MCP child tools bind without any SubagentStart call", async t => {
+  const f = await preparationServerFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  writeFileSync(f.entry, `import { serveHooks } from './plugin/runtime/mcp-server.mjs';
+    import { createNativePolicy } from './plugin/runtime/policy.mjs';
+    const options = ${JSON.stringify(f.options)};
+    serveHooks({ mode: ${JSON.stringify(f.mode)}, loadPolicy: async () => createNativePolicy(options, () => ({decision: 'pass'})) });`);
+  const client = await connect(t, f);
+  const spawn = f.spawnInput();
+  assert.deepEqual(await client.call(spawn), {});
+  assert.deepEqual(await client.call({ ...spawn, hook_event_name: "PostToolUse", tool_response: { task_name: "/root/fixture_lead" } }), {});
+  const transcript_path = f.childTranscript();
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  assert.deepEqual(await client.call({ ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path }, childActor), {});
+  assert.equal(f.core.readAdmission(f.options.directory).bindings[0].child, childActor);
+  const refused = await client.call({ ...patch(turns[2]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path }, childActor);
+  assert.equal(refused.hookSpecificOutput.permissionDecision, "deny");
+  await client.close();
+});
+
+
+
+async function deliveredChildFixture(t) {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const tool = { ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path: f.childTranscript() };
+  return { ...f, tool };
+}
+
+test("native child tool permission refuses terminal turns without releasing capacity", async t => {
+  for (const type of ["turn_aborted", "task_complete"]) {
+    const f = await deliveredChildFixture(t); let calls = 0;
+    const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: "pass" }; });
+    assert.deepEqual(await f.evaluate(policy, f.tool, childActor), { decision: "pass" });
+    const before = f.core.readAdmission(f.options.directory);
+    appendFileSync(f.tool.transcript_path, JSON.stringify({ type: "event_msg", payload: { type, turn_id: turns[1] } }) + "\n");
+    await assert.rejects(f.evaluate(policy, f.tool, childActor), /child turn evidence is unavailable/);
+    assert.equal(calls, 1);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+});
+
+test("native child tool permission rechecks terminal evidence after an awaited evaluator", async t => {
+  for (const type of ["turn_aborted", "task_complete"]) {
+    const f = await deliveredChildFixture(t); let entered, resume;
+    const waiting = new Promise(resolve => { entered = resolve; });
+    const release = new Promise(resolve => { resume = resolve; });
+    const policy = f.createNativePolicy(f.options, async () => { entered(); await release; return { decision: "pass" }; });
+    const result = f.evaluate(policy, f.tool, childActor);
+    // A broken precondition must fail, not leave this test waiting for a callback that never ran.
+    await Promise.race([waiting, result.then(() => { throw Error("The evaluator did not wait"); })]);
+    const before = f.core.readAdmission(f.options.directory);
+    appendFileSync(f.tool.transcript_path, JSON.stringify({ type: "event_msg", payload: { type, turn_id: turns[1] } }) + "\n");
+    resume();
+    await assert.rejects(result, /child turn evidence is unavailable/);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+});
+
+test("native child delivery refuses foreign metadata linked paths and replaced current turns", async t => {
+  const f = await deliveredChildFixture(t); let calls = 0;
+  const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: "pass" }; });
+  const original = readFileSync(f.tool.transcript_path, "utf8");
+  for (const change of [{ id: session }, { session_id: childActor }, { parent_thread_id: childActor },
+    { agent_path: "/root/other" }, { cli_version: "old" }]) {
+    const rows = original.trim().split("\n").map(JSON.parse);
+    Object.assign(rows[0].payload, change);
+    writeFileSync(f.tool.transcript_path, rows.map(row => JSON.stringify(row) + "\n").join(""));
+    await assert.rejects(f.evaluate(policy, f.tool, childActor));
+  }
+  writeFileSync(f.tool.transcript_path, original);
+  const linked = join(f.mode.sessionsDir, "linked.jsonl"); symlinkSync(f.tool.transcript_path, linked);
+  await assert.rejects(f.evaluate(policy, { ...f.tool, transcript_path: linked }, childActor));
+  const outside = join(f.dir, "outside.jsonl"); writeFileSync(outside, original);
+  await assert.rejects(f.evaluate(policy, { ...f.tool, transcript_path: outside }, childActor));
+  for (const rows of [
+    [{ type: "event_msg", payload: { type: "task_started", turn_id: turns[2] } }, { type: "turn_context", payload: { turn_id: turns[2] } }],
+    [{ type: "event_msg", payload: { type: "task_started", turn_id: turns[1] } }],
+    [{ type: "turn_context", payload: { turn_id: turns[2] } }],
+  ]) {
+    writeFileSync(f.tool.transcript_path, original + rows.map(row => JSON.stringify(row) + "\n").join(""));
+    await assert.rejects(f.evaluate(policy, f.tool, childActor));
+  }
+  assert.equal(calls, 0);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 0);
+  writeFileSync(f.tool.transcript_path, original);
+  assert.deepEqual(await f.evaluate(policy, f.tool, childActor), { decision: "pass" });
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
 });

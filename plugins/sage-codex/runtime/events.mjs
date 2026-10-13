@@ -48,7 +48,7 @@ export function decodeEvent(input, { version, metadata } = {}) {
   return observation({ ...base, kind: "spawn-result", actor, call, turn, path: value(result, "task_name", TASK) });
 }
 
-/** A canonical record has no prompt, transcript, tool command, timestamp, or arbitrary extra field. */
+/** A canonical record has no prompt, transcript content, tool command, timestamp, or arbitrary extra field. */
 export function observation(input) {
   if (!input || typeof input !== "object" || Array.isArray(input) || input.schema !== 1 || input.runtime !== RUNTIME_VERSION) refuse("unsupported observation");
   const out = { schema: 1, runtime: RUNTIME_VERSION, session: value(input, "session", UUID), kind: input.kind };
