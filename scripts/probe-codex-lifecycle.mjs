@@ -10,14 +10,16 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => arg === "--deny-spawn"), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--deny-spawn", "--sage-completion"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const denySpawn = process.argv.includes("--deny-spawn");
+const completion = process.argv.includes("--sage-completion");
+assert(!(denySpawn && completion), "incompatible_probe_modes");
 let denied = false;
 const MARKER = "sage-native-parent-ok";
-const CHILD_MARKER = "sage-native-child-ok";
-const CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
+const CHILD_MARKER = completion ? ["STATUS done", "RESULT sage-native-child-ok", "EVIDENCE simulated native fixture", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n") : "sage-native-child-ok";
+let CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const binary = process.env.SAGE_CODEX_BIN ?? "codex";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-one-child-")));
 try {
@@ -73,7 +75,8 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  await setupCapture({root,codexHome,workspace,env,binary,denySpawn,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,deadlineMs});
+  let prepared = false, blockedStopVerified = false;
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -91,7 +94,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -112,7 +115,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length === 1 && item.output[0]?.type === "input_text" ? item.output[0].text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= (item.call_id === calls.prepare ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
         if (denySpawn && item.call_id === calls.spawn) outputs[item.call_id] = output;
@@ -132,7 +135,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       && task.content[0].type==="input_text"
       && task.content[0].text==="Message Type: NEW_TASK\nTask name: /root/probe_child\nSender: /root\nPayload:\n"
       && task.content[1].type==="encrypted_content" && task.content[1].encrypted_content===CHILD_PROMPT;
-    return { outputs, agentTools, childPromptSeen };
+    const prepareTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.name === "sage_prepare_task").map(member => ({namespace: tool.name, name: member.name}))
+      : tool.type === "function" && tool.name === "mcp__sage_preparation__sage_prepare_task" ? [{name: tool.name}] : []);
+    return { outputs, agentTools, childPromptSeen, prepareTools };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -161,7 +167,7 @@ data: ${JSON.stringify(event)}
 `);
     res.end();
   };
-  const message = (text) => ({ id: `message_${text}`, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
+  const message = (text) => ({ id: `message_${responseId + 1}`, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
   // This separate namespace field matches the current Responses protocol and upstream fixtures.
   const call = (call_id, name, args) => ({ type: "function_call", namespace: "collaboration", name, call_id, arguments: JSON.stringify(args) });
   const childEntry = (result) => {
@@ -191,6 +197,18 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if (completion && childRequests === 1) {
+          check(thread === childThread && childResponseSent, "unexpected_stop_retry");
+          const state = integrated.readJournal(), stops = integrated.readStops();
+          check(state.reservations.length === 1 && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
+            "blocked_stop_released_capacity");
+          check(stops.length === 1 && stops[0].decision === "stop-observed" && stops[0].completions === 0,
+            "stop_callback_was_not_observed");
+          check(existsSync(join(root, `blocked-${childThread}.json`)), "blocking_hook_did_not_run");
+          blockedStopVerified = true; childRequests++;
+          print({type: "blocked_stop_evidence", slotRetained: true, nextNativeRequestObserved: true});
+          respond(res, message(CHILD_MARKER)); return;
+        }
         check(rootThread && thread !== rootThread && childRequests === 0, "unexpected_child_request_identity");
         check(info.childPromptSeen, "child_did_not_receive_fixed_task");
         childThread = thread;
@@ -204,6 +222,17 @@ data: ${JSON.stringify(event)}
       check(!subagent, "unexpected_non_spawn_agent_request");
       rootThread ??= thread;
       check(thread === rootThread, "unexpected_root_thread_identity");
+      if (completion && !prepared) {
+        if (!Object.hasOwn(info.outputs, calls.prepare)) {
+          check(info.prepareTools.length === 1, "preparation_tool_missing");
+          const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
+          respond(res, {type: "function_call", ...info.prepareTools[0], call_id: calls.prepare,
+            arguments: JSON.stringify({task: "T1", run: "R1", name: "probe_child", role: "lead", brief})}); return;
+        }
+        const receipt = info.outputs[calls.prepare];
+        check(receipt?.decision === "prepared" && typeof receipt.message === "string" && receipt.fork_turns === "none", "preparation_missing");
+        CHILD_PROMPT = receipt.message; prepared = true;
+      }
       rootRequests++;
       if (rootRequests === 1) {
         check(["spawn_agent", "list_agents", "wait_agent"].every((name) => info.agentTools.includes(name)), "required_native_tools_missing");
@@ -314,6 +343,9 @@ data: ${JSON.stringify(event)}
       } else if (event.type === "item.completed" && event.item?.type === "collab_tool_call"
         && ["spawn_agent", "wait"].includes(event.item.tool) && event.item.status === "completed") {
         // The native tool result in the next request supplies the stricter state assertion.
+      } else if (completion && event.type === "item.completed" && event.item?.type === "mcp_tool_call"
+        && event.item.server === "sage_preparation" && event.item.tool === "sage_prepare_task" && event.item.status === "completed") {
+        // The prepared message and final journal verify this tool's result.
       } else if (event.type === "item.completed" && event.item?.type !== "reasoning") {
         unexpectedItems++;
       }
@@ -329,7 +361,7 @@ data: ${JSON.stringify(event)}
     });
     child.stderr.on("data", (data) => { stderrBytes += data.length; stderrText = (stderrText + data).slice(0, 4096); });
     child.stdin.on("error", () => {});
-    child.stdin.end(`Run the fixed one-child native lifecycle probe. Finish with exactly ${MARKER}. Do not use shell tools.\n`);
+    child.stdin.end(completion ? "sage mode\n" : `Run the fixed one-child native lifecycle probe. Finish with exactly ${MARKER}. Do not use shell tools.\n`);
     print({ type: "event", event: "baseline_started" });
     const result = await waitNative(child, { deadlineMs, onTimeout: () => failFixture("native_root_deadline") });
     acceptLine(buffer);
@@ -338,7 +370,7 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === 5 && childRequests === 1 && rootThread !== childThread
+      : rootRequests === 5 && childRequests === (completion ? 2 : 1) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
@@ -355,7 +387,7 @@ data: ${JSON.stringify(event)}
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
     assert.equal(before.length,1);
     assert.equal(start.length,denySpawn ? 0 : 1);
-    assert.equal(stop.length,denySpawn ? 0 : 1);
+    assert.equal(stop.length,denySpawn ? 0 : completion ? 2 : 1);
     assert.equal(after.length,denySpawn ? 0 : 1);
     if (!denySpawn) {
     assert.equal(start[0].captureError,undefined);
@@ -364,6 +396,19 @@ data: ${JSON.stringify(event)}
     assert.equal(start[0].metadata.session_id,before[0].session_id);
     assert.equal(before[0].tool_use_id,after[0].tool_use_id);
     assert.equal(after[0].resultTaskName,start[0].metadata.agent_path);
+    }
+    if (completion) {
+      const state = integrated.readJournal(), stops = integrated.readStops();
+      assert.equal(state.preparations.length, 1); assert.equal(state.reservations.length, 1);
+      assert.equal(state.bindings.length, 1); assert.equal(state.completions.length, 1);
+      assert.deepEqual(state.completions[0], state.bindings[0]);
+      assert.equal(state.bindings[0].child, childThread);
+      assert.equal(state.reports?.length ?? 0, 0);
+      assert.equal(stops.length, 2); assert(stops.every(row => row.decision === "stop-observed" && row.completions === 0));
+      print({type: "completion_evidence", reservations: 1, bindings: 1, completions: 1,
+        blockedStopRetainedCapacity: blockedStopVerified, stopCallbacksPrecedeTerminal: true,
+        parentReconciledCompletion: true, reportsAccepted: 0, fullPolicyVerified: false,
+        simulatedModel: true, automaticSage: false, realModelConsumptionVerified: false});
     }
     print({type:"hook_evidence",spawnRequest:before.length,spawnResult:after.length,childStart:start.length,childStop:stop.length,exactIdentityJoin:!denySpawn,noChildStarted:denySpawn,simulatedModel:true,automaticSage:false,realModelConsumptionVerified:false});
   }
