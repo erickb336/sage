@@ -163,7 +163,11 @@ if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${B
 const CLOCK = String.raw`(?:(?:Date\.now|performance\.now|process\.hrtime(?:\.bigint)?)\(\)|process\.cpuUsage\([^)]*\))`;
 const FIX = 'assert CPU time (process.cpuUsage) as a ratio between two sizes with a generous bound, an order of events or a flag (for example: the lock holder still holds when the command returns), or a count. If none can, end the line with "// timing-ok: <reason>"';
 let timingOk = 0;
-for (const f of readdirSync(join(ROOT, "scripts")).filter((f) => f.endsWith(".test.mjs"))) {
+// Every test source: each test file and each file of scripts/ that a test file imports, such as sage-hook-tests.mjs,
+// which the six sage-hook-<n>.test.mjs parts run (F-T289-61).
+const testFiles = readdirSync(join(ROOT, "scripts")).filter((f) => f.endsWith(".test.mjs"));
+const imported = testFiles.flatMap((f) => [...readFileSync(join(ROOT, "scripts", f), "utf8").matchAll(/["']\.\/([\w.-]+\.mjs)["']/g)].map((m) => m[1]));
+for (const f of [...new Set([...testFiles, ...imported])].filter((f) => existsSync(join(ROOT, "scripts", f)))) {
   const lines = readFileSync(join(ROOT, "scripts", f), "utf8").split("\n").map((l) => l.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '""').replace(/(^|\s)\/\/(?! timing-ok:).*$/, "$1")); // no strings, no comments
   const clocked = new Set();
   const takes = (text) => new RegExp(`${CLOCK}${clocked.size ? `|(?<![\\w$.])(?:${[...clocked].join("|")})(?![\\w$])` : ""}`).test(text);

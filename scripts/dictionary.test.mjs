@@ -115,6 +115,19 @@ test("npm run check refuses a wall-clock time under a fixed number of ms in a te
   }
 });
 
+test("F-T289-61: the timing check reads each file that a test file imports, such as sage-hook-tests.mjs, and counts its marks", () => {
+  const c = copy();
+  const marks = c.read("scripts/sage-hook-tests.mjs").split("\n").filter((line) => /\/\/ timing-ok: \S/.test(line)).length;
+  assert.ok(marks > 0, "sage-hook-tests.mjs has timing-ok marks");
+  const counted = () => Number(c.run("check").stdout.match(/✓ all checks pass \((\d+) timing bounds? carr/)?.[1]);
+  assert.ok(counted() >= marks, `the check counts the ${marks} marks of sage-hook-tests.mjs`);
+  c.write("scripts/sample-tests.mjs", "import assert from \"node:assert/strict\";\nconst t0 = Date.now();\nassert.ok(Date.now() - t0 < 3000);\n");
+  c.write("scripts/sample.test.mjs", "await import(\"./sample-tests.mjs\");\n");
+  const r = c.run("check");
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /✗ scripts\/sample-tests\.mjs:3: a test holds a wall-clock or CPU time under a fixed number/);
+});
+
 test("T188: check rejects fixed CPU-time bounds and permits ratios or a reason", () => {
   const c = copy();
   const forms = [
