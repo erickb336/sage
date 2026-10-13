@@ -793,14 +793,26 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     },
     leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
     findings: (task) => rows("findings").filter((f) => f.task === task),
-    /** Every finding that the task ever had, in any status, each with the key that it had on the task (was): its own rows, and each row that finding move took to a follow-up task, found by the decision of the move. */
-    everFindings: (task) => [
-      ...rows("findings").filter((f) => f.task === task).map((f) => ({ ...f, was: f.key })),
-      ...rows("decisions").filter((d) => d.task === task && /^\S+ moved to /.test(d.decision)).flatMap((d) => {
-        const [was, , key] = subjects(d.decision);
-        return rows("findings").filter((f) => f.key === key).map((f) => ({ ...f, was }));
-      }),
-    ],
+    /**
+     * The row of a finding key now, in any status: its own row, or after finding move (once or more), the row that the
+     * moves gave it. A move counts only as the decision that finding move writes: on the key's task, in the form "<key>
+     * moved to <task> as <new key on that task>: <summary>", where the summary is the one of the row at the end
+     * (F-T289-44, F-T289-49). Undefined when a key on the way is on no row and in no one such move, or on two rows.
+     */
+    traced(key) {
+      const said = [];
+      for (let k = key, seen = new Set(); !seen.has(k); ) {
+        seen.add(k);
+        const now = rows("findings").filter((f) => f.key === k);
+        if (now.length) return said.every((s) => s === now[0].summary) ? one(now) : undefined;
+        const moves = rows("decisions").filter((d) => d.task === /^F-(T[1-9]\d*)-[1-9]\d*$/.exec(k)?.[1] && subjects(d.decision)[0] === k && /^F-T[1-9]\d*-[1-9]\d*$/.test(subjects(d.decision)[2] ?? ""));
+        const [, to, next] = moves.length === 1 ? subjects(moves[0].decision) : [];
+        if (!next?.startsWith(`F-${to}-`)) return undefined;
+        said.push(moves[0].decision.slice(`${k} moved to ${to} as ${next}: `.length));
+        k = next;
+      }
+      return undefined;
+    },
     shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
     verdicts: (task) => rows("ledger").filter((r) => r.task === task),
     endedLeadRuns: () => rows("runs").filter((r) => r.role === "lead" && r.status !== "running"),
