@@ -16,6 +16,30 @@ const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
 
+test("T45: executable spellings preserve shared writer and reader-option checks", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    for (const command of ["CP.exe source.txt target.txt", "/tools/Cp.ExE source.txt target.txt",
+      "RG.exe --pre cat sample", "/tools/RG.ExE -z sample", "FILE.exe -C", "DIFF.exe -l left right",
+      "SED.exe -i 's/a/b/' sample", "SORT.exe -o result.txt sample", "FIND.exe . -delete"])
+      assert.equal(commandWrites(command, f.dir), true, command);
+    for (const command of ["cat.exe cp", "PRINTF.exe '%s' 'cp target.txt'", "RG.exe -C 2 sample",
+      "RG.exe --regexp=--pre sample", "RG.exe -- --pre", "FILE.exe -c magic.txt", "DIFF.exe --label=-l left right"])
+      assert.equal(commandWrites(command, f.dir), false, command);
+  }
+});
+
+test("T45: executable suffixes cannot bypass the protected logbook path check", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider), root = join(f.dir, "logbook"); mkdirSync(root);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(shellWriteOutsideRoots({ command: `CP.exe source.txt ${root}/ledger.tsv`, cwd: f.dir, roots: [root] }), false);
+    assert.equal(shellWriteOutsideRoots({ command: "CP.exe source.txt scratch.txt", cwd: f.dir, roots: [root] }), true);
+    assert.equal(shellWriteOutsideRoots({ command: `CAT.exe ${root}/ledger.tsv`, cwd: f.dir, roots: [root] }), true);
+  }
+});
+
 test("T44: output-file dispatches count as writes in both packaged cores", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);

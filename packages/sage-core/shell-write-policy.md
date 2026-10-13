@@ -4,6 +4,9 @@
 that can run another program. It parses text without executing it. Non-text or
 unreadable input counts as a write form.
 
+Executable-name checks ignore case and a trailing `.exe`, using the shared
+normalizer. Reader-option parsing keeps the original arguments and option case.
+
 The public core entry point exposes the same function in both provider bundles.
 This component prepares shared rules for the Codex runtime. It does not change
 the active Claude hook or install a Codex hook.
