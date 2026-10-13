@@ -128,7 +128,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       }
     }
     if (!api) return false;
-    let path = endpoint ?? "";
+    let path = (endpoint ?? "").split("#", 1)[0];
     let search = "";
     if (/^https?:\/\//i.test(path)) {
       try { const url = new URL(path); path = url.pathname; search = url.search; } catch { return true; }
@@ -167,8 +167,8 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     // Without quote provenance a question mark can be a shell glob, not an API query separator.
     if (endpoint?.includes("?")) return true;
     // Owner and repository templates each name one path part. Branch templates can insert a whole route.
-    const literalPath = path.replace(/\{(?:owner|repo)\}|:(?:owner|repo)\b/g, "template");
-    if (/[$`\\*\[\]{}]|:branch\b/.test(literalPath)) return true;
+    const literalPath = path.replace(/^repos\/([^/]+)\/([^/]+)/, (prefix) => prefix.replace(/\{(?:owner|repo)\}|:(?:owner|repo)\b/g, "template"));
+    if (/[$`\\*\[\]{}]|:(?:owner|repo|branch)\b/.test(literalPath)) return true;
     const route = /^(?:repos\/[^/]+\/[^/]+|repositories\/\d+)\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|merge-upstream|branches\/.*\/rename|pulls\/[^/]+\/update-branch)$/.exec(path)?.[1];
     if (!route) return false;
     if (/^pulls\//.test(route)) return true; // The PR id does not prove which branch this request changes.

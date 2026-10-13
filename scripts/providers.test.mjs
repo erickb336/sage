@@ -327,6 +327,11 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
     for (const command of [
       "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
       "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc\nprintf 'unfinished",
+      "GH_REPO=o/contents gh api 'repos/victim/repo/{repo}/file' -X PUT -f content=abc",
+      "GH_REPO=o/merges gh api 'repos/victim/repo/:repo' -f base=main -f head=topic",
+      `gh api 'graphql#fragment' -f 'query=mutation { updateRef(input: {refId: "id", oid: "abc"}) { clientMutationId } }'`,
+      "gh api 'repos/o/r/merge-upstream#fragment' -f branch=main",
+      "gh api 'repos/o/r/branches/main/rename#fragment' -f new_name=topic",
       "gh api 'repos/o/r/{branch}' -X PATCH -f sha=abc",
       "gh api 'repos/o/r/:branch' -X PATCH -f sha=abc",
       "gh api repos/o/r/{git/refs/heads/main,issues} -X PATCH -f sha=abc",
