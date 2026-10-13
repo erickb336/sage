@@ -33,3 +33,7 @@ if(input.hook_event_name==='SubagentStart'){
  }catch(e){record.captureError=e.code??e.message;}
 }
 writeFileSync(join(root,'events',randomUUID()+'.json'),JSON.stringify(record),{flag:'wx'});
+
+if(process.argv[2] === "--deny-spawn" && input.hook_event_name === "PreToolUse" && input.tool_name === "collaborationspawn_agent") {
+ process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:"sage-native-denial-fixture"}}));
+}

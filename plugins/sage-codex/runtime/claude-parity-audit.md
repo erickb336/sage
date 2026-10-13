@@ -16,8 +16,8 @@ This audit compares repository behavior with the prepared Codex runtime. It is a
 | Slot release | Subagent stop, failed dispatch and registry reconciliation; lease expiry also exists | Native stop/result evidence must identify the exact assignment; no stale event can release a newer slot |
 | Reports/verdicts | Chief records run result, findings and exact-head verdicts using state commands | Add verified report intake and durable records; child claims do not directly write the logbook |
 | Reviews/repairs | Shared rounds, held/replan and clean cycles; a new head restarts cycles | Use shared state/merge-check behavior, including blocking verdict regression |
-| Manual merging | Autopilot starts off; verified work waits for owner merge | First delivery stage matches this behavior |
-| Autopilot | Explicit owner on; chief merges only after exact-head gates; children never merge | Prepared Codex adapter always false; a separate stage is required for full parity |
+| Manual merging | Autopilot starts off; verified work waits for owner merge | First delivery step matches this behavior |
+| Autopilot | Explicit owner on; chief merges only after checks for the exact commit; children never merge | Prepared Codex adapter always false; a separate step is required for full parity |
 | Board/status | Shared rich board and status dispatch, source-qualified questions | Model is shared; installed Codex phrase delivery remains unverified |
 | Arena/models | Shared chief describes candidate/judge workflow; provider binds model settings | Preserve arena workflow, use Codex model names and supported native configuration |
 
@@ -31,7 +31,7 @@ Claude's lease expiry and registry cleanup cannot be assumed to map to Codex. Is
 
 ## First implementation unit
 
-Produce a reproducible isolated native transport probe for the supported installed runtime. Record owner prompt identity, dispatch/result/start/stop ordering, denial behavior and compaction. Do not activate the automatic workflow until those boundaries and the complete tool policy pass.
+Produce a reproducible isolated native transport probe for the supported installed runtime. Record matching dispatch/result/start/stop identities and running/completed states. Check owner prompt identity, race ordering and compaction in later units. Do not activate the automatic workflow until those boundaries and the complete tool policy pass.
 
 Current local CLI reports version 0.160.0, matching the prepared adapter's exact version. Generated native schemas expose turn interruption keyed by both thread and turn, and a separate turn-completed notification. Schema presence is not proof that an active child stopped.
 
@@ -50,4 +50,25 @@ The native task arrived as an `agent_message` with an opaque payload. The fixtur
 
 Run `node scripts/probe-codex-lifecycle.mjs` with fake process tools first on PATH. It requires Codex 0.160.0 and a loopback listener. It creates an isolated temporary profile and trusts only the test observer there. It does not trust or change hooks in the owner's profile.
 
-Denial enforcement, event ordering under races, compaction, subsequent child tasks and real-model consumption remain separate checks. This result does not activate Sage.
+Run the same probe with `--deny-spawn` to check a fixed pre-tool denial. The native parent receives the exact denial reason and finishes. The observer must record one spawn attempt, no successful spawn result, no child start and no child stop. The simulated response server must receive no child request.
+
+Both saved variants passed locally on Codex 0.160.0. This proves the denial boundary for this native spawn path. It does not prove complete Sage command policy or coverage of other tools.
+
+Event ordering under races, compaction, subsequent child tasks and real-model consumption remain separate checks. These results do not activate Sage.
+
+## Probe cleanup
+
+The probe removes its temporary profile after the native process closes.
+Its two-minute timeout ends the transport and gives the native process 30 seconds to close.
+If needed, it sends SIGTERM through its owned child handle, then SIGKILL after another 30 seconds.
+It never selects a process from a PID file or the system process list.
+A signal is not proof of exit: the probe waits for actual closure before it reports cleanup.
+A spawn error also waits for closure. If the operating system cannot stop the child, cleanup remains unverified.
+The final cleanup record confirms that the temporary folder is absent.
+
+Older probes can leave folders named `sage-codex-one-child-` followed by random
+characters. To find the temporary directory, run `node -p 'require("node:os").tmpdir()'`.
+After your probe exits, inspect each matching folder in your file manager.
+Remove only old probe folders that contain the test profile, scripts, and captured
+events. Keep any folder used by a probe that is still running. Do not delete the
+whole temporary directory or unrelated Sage folders.

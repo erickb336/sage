@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync, spawn } from "node:child_process";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -2065,4 +2065,185 @@ test("shared shell write classification refuses unreadable input in either bundl
       assert.equal(commandWrites(command, f.dir), true, JSON.stringify(command));
     assert.equal(commandWrites("", f.dir), false);
   }
+});
+
+
+test("native probe removes its profile after version failure and a stalled version process", t => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-probe-cleanup-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const stalled of [false, true]) {
+    const temporary = join(dir, stalled ? "stalled" : "failed"); mkdirSync(temporary);
+    const fake = join(dir, stalled ? "stalled-codex" : "failed-codex");
+    // The fixture stays alive until its output transport closes, then exits without a signal.
+    writeFileSync(fake, stalled
+      ? "#!/usr/bin/env node\nprocess.stdin.resume(); const timer = setInterval(() => process.stdout.write('fixture\\n'), 25); process.stdout.on('error', () => { clearInterval(timer); process.exit(0); });\n"
+      : "#!/usr/bin/env node\nprocess.exit(0);\n", { mode: 0o700 });
+    const result = spawnSync(process.execPath, [join(ROOT, "scripts/probe-codex-lifecycle.mjs")], {
+      env: { ...process.env, TMPDIR: temporary, SAGE_CODEX_BIN: fake, ...(stalled ? { SAGE_PROBE_TEST_DEADLINE_MS: "1" } : {}) },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1, result.stderr);
+    const rows = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+    assert.equal(rows.find(row => row.type === "result").reason, stalled ? "native_deadline" : "version_check_failed");
+    assert.equal(rows.at(-1).temporaryRootRemoved, true);
+    assert.deepEqual(readdirSync(temporary), [], "the actual temporary profile is gone");
+  }
+});
+
+
+test("native deadline waits for child closure when the timeout callback throws", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  let detached = false;
+  child.unref = () => { detached = true; };
+  const signals = [];
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child, { onTimeout: () => { throw new Error("simulated callback failure"); } });
+  t.mock.timers.tick(120_000);
+  let settled = false;
+  result.then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false, "closing pipes must not report an unclosed child as stopped");
+  child.emit("close", 0, null);
+  assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline", timeoutCallbackFailed: true });
+  t.mock.timers.tick(300_000); // A gracefully closed child must never reach either signal timer.
+  assert.deepEqual(signals, []);
+  assert.equal(child.stdin.writableEnded, true);
+  for (const stream of [child.stdin, child.stdout, child.stderr]) assert.equal(stream.destroyed, true);
+  assert.equal(detached, false);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+
+test("native spawn error waits for closure before releasing its owner", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const child = new EventEmitter();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  let settled = false;
+  result.then(() => { settled = true; });
+  child.emit("error", new Error("simulated spawn failure"));
+  await Promise.resolve();
+  assert.equal(settled, false, "an error is not the child closure event");
+  child.emit("close", -2, null);
+  assert.deepEqual(await result, { code: null, exitCode: -2, signal: null, spawnFailed: true });
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+// Signals are intercepted in the check process: even the old implementation cannot signal a test child.
+for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex package check: ${scenario} closes its child without signals`, async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'sage-package-check-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const signalLog = join(dir, 'signals'), closed = join(dir, 'closed');
+  const preload = join(dir, 'no-signals.mjs'), binary = join(dir, 'codex');
+  writeFileSync(preload, `import {ChildProcess} from 'node:child_process';\nimport {appendFileSync} from 'node:fs';\nChildProcess.prototype.kill = function(signal) { appendFileSync(${JSON.stringify(signalLog)}, String(signal)+'\\n'); this.stdin?.end(); return true; };\n`);
+  const plugin = {
+    skills: readdirSync(join(ROOT, 'plugins/sage-codex/skills')).map(name => ({name: `sage:${name}`})),
+    hooks: ['preToolUse', 'userPromptSubmit'].map(eventName => ({eventName})),
+    summary: {source: {path: join(ROOT, 'plugins/sage-codex')}},
+  };
+  if (scenario === 'bad-manifest') plugin.hooks = [];
+  writeFileSync(binary, `#!${process.execPath}\nimport {createInterface} from 'node:readline';\nimport {writeFileSync} from 'node:fs';\nif (process.argv.includes('--version')) { console.log('codex-cli 0.160.0'); } else {\nconst reader = createInterface({input: process.stdin});\nreader.on('line', line => { const request = JSON.parse(line); if (request.id) console.log(JSON.stringify({id:request.id,result:request.id===1?{}:{plugin:${JSON.stringify(plugin)}}})); });\nreader.on('close', () => { writeFileSync(${JSON.stringify(closed)}, 'stdin closed'); process.exitCode=${scenario === 'exit-error' ? 7 : 0}; });\n}\n`, {mode: 0o700});
+  const child = spawn(process.execPath, ['--import', preload, join(ROOT, 'scripts/check-codex.mjs')], {
+    env: {...process.env, SAGE_CODEX_BIN: binary}, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', data => { stdout += data; });
+  child.stderr.on('data', data => { stderr += data; });
+  const result = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({code, signal})); });
+  assert.equal(result.signal, null);
+  assert.equal(existsSync(signalLog), false, 'the check requested a process signal');
+  assert.equal(readFileSync(closed, 'utf8'), 'stdin closed', 'the child acknowledged transport closure');
+  if (scenario === 'success') {
+    assert.equal(result.code, 0, stderr);
+    assert.match(stdout, /discovered \d+ skills and 2 hooks/);
+  } else {
+    assert.equal(result.code, 1, stdout + stderr);
+    assert.doesNotMatch(stdout, /discovered \d+ skills/);
+    assert.match(stderr, /Codex package check failed:/);
+  }
+});
+
+
+test("native deadline escalates only its owned child and still waits for closure", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter(), signals = [];
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  let settled = false; result.then(() => { settled = true; });
+  t.mock.timers.tick(120_000);
+  assert.deepEqual(signals, [], "transport shutdown gets the first chance");
+  t.mock.timers.tick(30_000); assert.deepEqual(signals, ["SIGTERM"]);
+  t.mock.timers.tick(30_000); assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  await Promise.resolve(); assert.equal(settled, false, "a signal is not proof of exit");
+  child.emit("close", null, "SIGKILL");
+  assert.deepEqual(await result, { code: null, exitCode: null, signal: "SIGKILL", timedOut: true, reason: "native_deadline" });
+  t.mock.timers.tick(300_000); assert.equal(signals.length, 2);
+});
+
+test("native deadline cancels escalation when the owned child closes", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter(), signals = [];
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  t.mock.timers.tick(120_000); t.mock.timers.tick(30_000);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  child.emit("close", 0, null); await result;
+  t.mock.timers.tick(300_000); assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("native deadline retains error handling across both termination attempts", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = () => true;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  try {
+    t.mock.timers.tick(120_000); t.mock.timers.tick(30_000);
+    child.emit("error", new Error("simulated SIGTERM failure"));
+    t.mock.timers.tick(30_000);
+    assert.doesNotThrow(() => child.emit("error", new Error("simulated SIGKILL failure")));
+  } finally { child.emit("close", 1, null); }
+  assert.deepEqual(await result, { code: null, exitCode: 1, signal: null, timedOut: true,
+    reason: "native_deadline", terminationFailed: true });
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+
+test("native deadline does not signal an exited child while output closure is pending", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  const signals = [];
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  let settled = false; result.then(() => { settled = true; });
+  t.mock.timers.tick(120_000);
+  child.exitCode = 0;
+  t.mock.timers.tick(300_000);
+  await Promise.resolve(); assert.equal(settled, false);
+  child.emit("close", 0, null);
+  assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline" });
+  assert.deepEqual(signals, []);
 });
