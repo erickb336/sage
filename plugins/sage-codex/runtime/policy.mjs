@@ -4,7 +4,8 @@ import { decodeEvent, observation, publish, RUNTIME_VERSION } from "./events.mjs
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn } from "./preparation.mjs";
-import { bindNativeChildTool } from "./child-tool.mjs";
+import { checkChildToolRecovery } from "./child-assignment.mjs";
+import { bindNativeChildTool, bindPendingNativeChildTool } from "./child-tool.mjs";
 import { readChildTurn } from "./identity.mjs";
 import { boundChildInstructions } from "./instructions.mjs";
 
@@ -44,10 +45,18 @@ export function createNativePolicy(options, evaluateTool) {
       if (observed) record(observed); // Keep inactive and denied attempts; name reuse must stay visible.
       const before = mode(event.session_id);
       if (before.sage && child) bindNativeChildTool(raw, native, fixed);
+      else if (child) bindPendingNativeChildTool(raw, native, fixed);
+      const recovery = child ? checkChildToolRecovery(event, native, fixed) : null;
+      const recoveryReader = event.tool_name === "mcp__sage_preparation__sage_read_assignment"
+        && Object.keys(event.tool_input).length === 0;
+      const recoveryDenied = { decision: "deny", reason: "Read your current assignment with sage_read_assignment before continuing." };
+      if (recovery?.required && !recoveryReader) return recoveryDenied;
       const checked = decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage })));
       // A concurrent mode change cannot turn an earlier decision into current permission.
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
       if (checked.decision === "deny") return checked;
+      const recovered = child ? checkChildToolRecovery(event, native, fixed, recovery?.assignment) : null;
+      if (recovered?.required && !recoveryReader) return recoveryDenied;
       if (before.sage && child) readChildTurn(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
         session: event.session_id, child: native.actor, turn: event.turn_id,
       }, { active: true });
