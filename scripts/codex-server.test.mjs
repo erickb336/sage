@@ -86,7 +86,9 @@ test("packaged native server persists owner mode and keeps native child identity
   const f = fixture(t);
   for (const [index, text] of ["sage mode", "continue", "sage mode off"].entries()) {
     const client = await connect(t, f);
-    assert.deepEqual(await client.call(f.prompt(text, turns[index])), {});
+    const promptOutput = await client.call(f.prompt(text, turns[index]));
+    if (index === 0) assert.match(promptOutput.hookSpecificOutput?.additionalContext, /Sage chief instructions/);
+    else assert.deepEqual(promptOutput, {});
     const output = await client.call(patch(turns[index]));
     if (index < 2) assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
     else assert.deepEqual(output, {});
@@ -165,7 +167,7 @@ test("native launcher configuration reads fixed project settings without changin
   assert.equal(Object.isFrozen(mode), true);
   assert.deepEqual(readdirSync(f.mode.directory).sort().map(name => [name, readFileSync(join(f.mode.directory, name), "utf8")]), before);
   const client = await connect(t, f);
-  assert.deepEqual(await client.call(f.prompt("sage mode")), {});
+  assert.match((await client.call(f.prompt("sage mode"))).hookSpecificOutput?.additionalContext, /Sage chief instructions/);
   assert.equal((await client.call(patch())).hookSpecificOutput.permissionDecision, "deny");
   // A connection keeps its verified configuration even if the file changes later.
   writeFileSync(f.configFile, "invalid");
@@ -217,7 +219,7 @@ test("invalid native launcher configuration blocks prompts and tools until a new
   assert.equal(existsSync(marker), false, "invalid configuration must not invoke policy loading");
   await client.close();
   const repaired = await connect(t, f);
-  assert.deepEqual(await repaired.call(f.prompt("sage mode")), {});
+  assert.match((await repaired.call(f.prompt("sage mode"))).hookSpecificOutput?.additionalContext, /Sage chief instructions/);
   assert.equal((await repaired.call(patch())).hookSpecificOutput.permissionDecision, "deny");
   assert.equal(readFileSync(marker, "utf8"), "called");
   await repaired.close();
@@ -516,7 +518,7 @@ test("shared server configuration fixes the same journal project and event store
   writeFileSync(f.entry, "import { writeFileSync } from 'node:fs';\n" + readFileSync(f.entry, "utf8")
     .replace("async mode => {", `async mode => { writeFileSync(${JSON.stringify(loaded)}, JSON.stringify(mode));`));
   const hooks = await connect(t, f);
-  assert.deepEqual(await hooks.call(f.prompt("sage mode")), {});
+  assert.match((await hooks.call(f.prompt("sage mode"))).hookSpecificOutput?.additionalContext, /Sage chief instructions/);
   const visible = await connect(t, { ...f, entry: f.preparationEntry }, "0.160.0", "", "sage_prepare_task");
   // Both connections retain their startup values after the file changes.
   writeFileSync(f.configFile, "invalid");
@@ -693,6 +695,74 @@ test("composed native policy holds incomplete child evidence until the matching 
   await f.evaluate(denied, f.spawnInput(f.input.name, "reused-call"));
   assert.throws(() => policy.startChild(f.identity));
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
+});
+
+test('chief context replays activation across connections without repeating on ordinary prompts', async t => {
+  const f = fixture(t);
+  const client = await connect(t, f);
+  const first = await client.call(f.prompt('sage mode'));
+  assert.equal(first.hookSpecificOutput?.hookEventName, 'UserPromptSubmit');
+  const expected = readFileSync(join(f.plugin, 'runtime/chief-instructions.md'), 'utf8').split('\n---\n\n')[1].slice(0, -1); // The Markdown file adds its own final newline.
+  const second = await client.call({ ...f.prompt('sage mode'), instruction_part: 1 });
+  const strip = text => text.replace(/^Sage chief instructions: part [12] of [12]\n\n/, '');
+  assert.equal(strip(first.hookSpecificOutput.additionalContext) + strip(second.hookSpecificOutput.additionalContext), expected);
+  for (const output of [first, second]) assert.ok(Buffer.byteLength(output.hookSpecificOutput.additionalContext, 'utf8') < 8_000);
+  assert.match(expected, /sage_prepare_task/); assert.match(expected, /Autopilot remains off/);
+  await client.close();
+  const retry = await connect(t, f);
+  assert.deepEqual(await retry.call(f.prompt('sage mode')), first);
+  assert.deepEqual(await retry.call({ ...f.prompt('sage mode'), instruction_part: 1 }), second);
+  assert.deepEqual(await retry.call({ ...f.prompt('continue', turns[1]), instruction_part: 1 }), {});
+  assert.deepEqual(await retry.call(f.prompt('continue', turns[1])), {});
+  assert.deepEqual(await retry.call(f.prompt('sage mode', turns[1])), {});
+  assert.deepEqual(await retry.call(f.prompt('sage mode')), first);
+  await retry.close();
+});
+
+test('chief context restarts after off-to-on and refuses delivery to a native child', async t => {
+  const f = fixture(t), client = await connect(t, f);
+  const first = await client.call(f.prompt('sage mode'));
+  assert.ok(first.hookSpecificOutput?.additionalContext);
+  assert.deepEqual(await client.call(f.prompt('sage mode off', turns[1])), {});
+  assert.deepEqual(await client.call(f.prompt('continue', turns[2])), {});
+  assert.equal((await client.call(f.prompt('sage mode', turns[2]), childActor)).decision, 'block');
+  for (const part of [-1, 2, null, '1']) assert.equal((await client.call({ ...f.prompt('sage mode', turns[2]), instruction_part: part })).decision, 'block');
+  assert.deepEqual(await client.call(f.prompt('sage mode', turns[2])), first);
+  assert.deepEqual(await client.call(f.prompt('sage mode')), {});
+  await client.close();
+});
+
+test('chief context retries rendering failure without losing the saved activation', async t => {
+  const f = fixture(t), client = await connect(t, f);
+  const bindings = join(f.plugin, 'chief-bindings.json'), saved = readFileSync(bindings, 'utf8');
+  writeFileSync(bindings, 'invalid fixture JSON');
+  assert.equal((await client.call(f.prompt('sage mode'))).decision, 'block');
+  const { readAdmission } = await import(pathToFileURL(join(f.plugin, 'core/index.mjs')));
+  assert.equal(readAdmission(f.mode.directory).modes.length, 1);
+  writeFileSync(bindings, saved);
+  const restored = await client.call(f.prompt('sage mode'));
+  assert.match(restored.hookSpecificOutput?.additionalContext, /sage_prepare_task/);
+  assert.deepEqual(await client.call(f.prompt('sage mode')), restored);
+  assert.equal(readAdmission(f.mode.directory).modes.length, 1);
+  await client.close();
+});
+
+
+test('chief context refuses oversized rules and recovers all parts after repair', async t => {
+  const f = fixture(t), client = await connect(t, f);
+  const bindings = join(f.plugin, 'chief-bindings.json'), saved = readFileSync(bindings, 'utf8');
+  for (const oversized of ['x'.repeat(8_000), 'Extra instruction.\n'.repeat(1_000)]) {
+    writeFileSync(bindings, JSON.stringify({ ...JSON.parse(saved), TEAM: oversized }));
+    for (const part of [0, 1])
+      assert.equal((await client.call({ ...f.prompt('sage mode'), instruction_part: part })).decision, 'block');
+  }
+  writeFileSync(bindings, saved);
+  for (const part of [0, 1]) {
+    const restored = await client.call({ ...f.prompt('sage mode'), instruction_part: part });
+    assert.ok(restored.hookSpecificOutput?.additionalContext);
+    assert.equal((await client.call({ ...f.prompt('sage mode'), instruction_part: part }, childActor)).decision, 'block');
+  }
+  await client.close();
 });
 
 
