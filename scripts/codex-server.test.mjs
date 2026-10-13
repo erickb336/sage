@@ -621,7 +621,7 @@ test("composed native policy connects configured preparation spawn and nested ch
   };
   for (const [request, actor, child, path, turn] of [
     [f.input, session, childActor, "/root/fixture_lead", turns[1]],
-    [{ ...f.input, name: "qa_child", role: "qa" }, childActor, qa, "/root/fixture_lead/qa_child", turns[2]],
+    [{ ...f.input, run: "R2", name: "qa_child", role: "qa" }, childActor, qa, "/root/fixture_lead/qa_child", turns[2]],
   ]) {
     assert.equal((await visible.call(request, actor)).decision, "prepared");
     const spawn = f.spawnInput(request.name, request.name);

@@ -250,3 +250,16 @@ A repeated name with changed work refuses. Unknown options and malformed targets
 Old preparations remain readable. A continuation requires a saved target and task-message hash.
 The provider must compare this snapshot with the actual current logbook before dispatch or tool permission.
 Core validates the snapshot and reservation; it does not establish logbook truth.
+
+
+## One dispatch per run
+
+A run names one execution within its project, across owners and task labels.
+New reservations refuse a run with an earlier dispatch, even after completion.
+A proven initial dispatch failure permits a new attempt; an exact retry retains its receipt.
+Other projects can use the same run name.
+
+Older journals can contain duplicate initial dispatches. They remain readable and retain their bytes.
+New work still cannot reuse any run with an earlier dispatch that did not fail.
+Continuations retain their existing replay checks and require a new run.
+The provider must still verify the current logbook before dispatch.
