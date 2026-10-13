@@ -319,6 +319,54 @@ test("shared merge and push extraction applies push rules and injected branch ev
   }
 });
 
+test("T42: shared push policy recognizes executable spelling in both bundles", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const policy = api.createPushPolicy({ readBranch: () => "Topic" });
+    for (const executable of ["GIT", "Git", "git.exe", "GIT.EXE", "/usr/bin/Git", "'C:\\Tools\\Git.EXE'"]) {
+      assert.match(policy.pushProblem(`${executable} push origin main`, f.dir), /work reaches main only through a pull request/, executable);
+      assert.match(policy.pushProblem(`${executable} push --force origin Topic`, f.dir), /never force-pushes/, executable);
+      assert.equal(policy.pushProblem(`${executable} push origin Topic`, f.dir), undefined, executable);
+      assert.equal(policy.pushProblem(`${executable} status`, f.dir), undefined, executable);
+    }
+    assert.equal(policy.pushProblem("echo 'GIT push origin main'", f.dir), undefined);
+    assert.match(api.createPushPolicy({ readBranch: () => "main" }).pushProblem("GIT -C nested push origin Topic", f.dir), /checkout is on main/);
+    for (const executable of ["GH", "Gh.exe", "/usr/bin/GH", "'C:\\Tools\\GH.EXE'"]) {
+      assert.match(policy.pushProblem(`${executable} api repos/o/r/git/refs/heads/main -X PATCH -f sha=abc`, f.dir), /work reaches main only through a pull request/);
+      assert.equal(policy.pushProblem(`${executable} api repos/o/r/git/refs/heads/main`, f.dir), undefined);
+    }
+    if (provider === "claude") {
+      const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+      for (const command of ["GIT push origin main", "Git.exe push --force origin Topic"]) {
+        const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
+          tool_input: { command } }, { sage: true }, { touch() {} });
+        assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny", command);
+      }
+    }
+  }
+});
+
+test("T42: shared expansion rules recognize executable spelling without changing arguments or merge form", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const policy = api.createCommandPolicy();
+    for (const executable of ["GIT", "Git.exe", "/usr/bin/GIT", "'C:\\Tools\\Git.EXE'"]) {
+      assert.match(policy.expansionProblem(`${executable} p* origin main`, f.dir), /shell expansion can hide the command/, executable);
+      assert.equal(policy.expansionProblem(`${executable} status 'Topic*'`, f.dir), undefined, executable);
+    }
+    for (const executable of ["GH", "Gh.exe", "/usr/bin/GH", "'C:\\Tools\\GH.EXE'"]) {
+      assert.match(policy.expansionProblem(`${executable} pr m*`, f.dir), /shell expansion can hide the command/, executable);
+      assert.match(policy.expansionProblem(`${executable} p? merge`, f.dir), /shell expansion can hide the command/, executable);
+      assert.equal(policy.expansionProblem(`${executable} pr view 'Topic*'`, f.dir), undefined, executable);
+      assert.equal(policy.expansionProblem(`${executable} api 'repos/{owner}/{repo}/issues'`, f.dir), undefined, executable);
+      assert.match(policy.mergeIn(`${executable} pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`)?.problem, /cannot prove/, executable);
+    }
+    assert.deepEqual(policy.mergeIn(`gh pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`), { pr: "12", sha: "a".repeat(40) });
+  }
+});
+
 test("T41: shared push policy refuses GitHub API writes to protected branches in both bundles", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);

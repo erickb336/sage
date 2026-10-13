@@ -5,6 +5,9 @@ import { PR } from "./pull-request.mjs";
 const MERGE_FORM = "gh pr merge <n> --squash --delete-branch --match-head-commit <sha>";
 const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
 
+/** Recognize executable spellings across providers without changing arguments or merge authorization. */
+export const programName = (word) => word.split(/[/\\]/).at(-1).replace(/\.exe$/i, "").toLowerCase();
+
 /**
  * Text that names a merge: the word gh and the word merge in any order (so also "$G pr merge" or "gh pr $(echo merge)"),
  * a merge path of the REST API, or a GraphQL merge mutation. Each test is one linear scan.
@@ -39,7 +42,7 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     }
     for (const { word, args, stdin, piped } of runs) {
       if (expands(word)) return reason;
-      const name = word.split("/").pop();
+      const name = programName(word);
       // A shell can run text from a pipe, including through filters. Its output is unknown: refuse expansion in that text.
       if (piped && commandText(name, args, stdin) === stdin && runnable(shellCommands(command)).some(({ words, bodies }) => [...words, ...bodies].some(expands))) return reason;
       if (name === "git" && expansion.test(gitSubcommand(args, 0))) return reason;

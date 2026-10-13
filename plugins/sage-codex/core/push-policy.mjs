@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { programsRun, shellCommands } from "./command-reader.mjs";
-import { createCommandPolicy, GIT_VALUE, gitSubcommand } from "./command-policy.mjs";
+import { createCommandPolicy, GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
 
 /** Shared push rules. The provider supplies a synchronous reader of the checkout's current branch.
  * This module never executes a command or offers a first-upload exception.
@@ -29,7 +29,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     let dir = cwd;
     for (const { cmd, words, bodies } of runnable(commands)) {
       if (cmd.words[0] === "cd" && cmd.words.length === 2) dir = resolve(dir, cmd.words[1]);
-      const git = words.findIndex((w, k) => /(?:^|\/)git$/.test(w) && /^push$/i.test(gitSubcommand(words, k + 1)));
+      const git = words.findIndex((w, k) => programName(w) === "git" && /^push$/i.test(gitSubcommand(words, k + 1)));
       const why = git >= 0 ? pushForm(words, git, dir) : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
       if (why) return refuse(why);
     }
@@ -97,7 +97,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
 
   /** Read request options, not display options or unrelated text, as branch evidence. Never open a supplied body file. */
   function apiWritesMain(words) {
-    if (!/(?:^|[/\\])gh(?:\.exe)?$/i.test(words[0] ?? "")) return false;
+    if (programName(words[0] ?? "") !== "gh") return false;
     let method;
     let endpoint;
     let api = false;
