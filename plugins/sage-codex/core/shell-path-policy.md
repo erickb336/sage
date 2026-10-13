@@ -7,7 +7,8 @@ using caller-supplied array methods. A true result grants no execution permissio
 
 The check uses the shared write classifier and command reader. It checks literal
 arguments, assignments, redirections, and directory changes against protected
-paths. Literal '=' characters remain part of a file name; option and assignment
+paths. Redirection evidence keeps the operator separate from the complete target,
+including quoted file names that begin with shell punctuation. Literal '=' characters remain part of a file name; option and assignment
 values also receive checks. Ordinary arguments to echo, printf, and jq remain data; their redirections
 still need checks. Shell functions and wrappers do not receive this exception.
 

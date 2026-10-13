@@ -1,4 +1,4 @@
-// Read only the bounded first native session record. This does not authenticate a hook caller.
+// Read bounded native session records. This does not authenticate a hook caller.
 import { constants, openSync, closeSync, fstatSync, lstatSync, readSync } from "node:fs";
 import { isAbsolute, normalize, parse, relative, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";

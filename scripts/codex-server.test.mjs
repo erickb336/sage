@@ -88,9 +88,9 @@ test("packaged native server persists owner mode and keeps native child identity
   const f = fixture(t);
   for (const [index, text] of ["sage mode", "continue", "sage mode off"].entries()) {
     const client = await connect(t, f);
-    const ownerOutput = await client.call(f.prompt(text, turns[index]));
-    if (index === 0) assert.match(ownerOutput.hookSpecificOutput.additionalContext, /sage_prepare_task/);
-    else assert.deepEqual(ownerOutput, {});
+    const promptOutput = await client.call(f.prompt(text, turns[index]));
+    if (index === 0) assert.match(promptOutput.hookSpecificOutput?.additionalContext, /Sage chief instructions/);
+    else assert.deepEqual(promptOutput, {});
     const output = await client.call(patch(turns[index]));
     if (index < 2) assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
     else assert.deepEqual(output, {});
@@ -169,7 +169,7 @@ test("native launcher configuration reads fixed project settings without changin
   assert.equal(Object.isFrozen(mode), true);
   assert.deepEqual(readdirSync(f.mode.directory).sort().map(name => [name, readFileSync(join(f.mode.directory, name), "utf8")]), before);
   const client = await connect(t, f);
-  assert.match((await client.call(f.prompt("sage mode"))).hookSpecificOutput.additionalContext, /sage_prepare_task/);
+  assert.match((await client.call(f.prompt("sage mode"))).hookSpecificOutput?.additionalContext, /Sage chief instructions/);
   assert.equal((await client.call(patch())).hookSpecificOutput.permissionDecision, "deny");
   // A connection keeps its verified configuration even if the file changes later.
   writeFileSync(f.configFile, "invalid");
@@ -221,7 +221,7 @@ test("invalid native launcher configuration blocks prompts and tools until a new
   assert.equal(existsSync(marker), false, "invalid configuration must not invoke policy loading");
   await client.close();
   const repaired = await connect(t, f);
-  assert.match((await repaired.call(f.prompt("sage mode"))).hookSpecificOutput.additionalContext, /sage_prepare_task/);
+  assert.match((await repaired.call(f.prompt("sage mode"))).hookSpecificOutput?.additionalContext, /Sage chief instructions/);
   assert.equal((await repaired.call(patch())).hookSpecificOutput.permissionDecision, "deny");
   assert.equal(readFileSync(marker, "utf8"), "called");
   await repaired.close();
@@ -556,7 +556,7 @@ test("shared server configuration fixes the same journal project and event store
   writeFileSync(f.entry, "import { writeFileSync } from 'node:fs';\n" + readFileSync(f.entry, "utf8")
     .replace("async mode => {", `async mode => { writeFileSync(${JSON.stringify(loaded)}, JSON.stringify(mode));`));
   const hooks = await connect(t, f);
-  assert.match((await hooks.call(f.prompt("sage mode"))).hookSpecificOutput.additionalContext, /sage_prepare_task/);
+  assert.match((await hooks.call(f.prompt("sage mode"))).hookSpecificOutput?.additionalContext, /Sage chief instructions/);
   const visible = await connect(t, { ...f, entry: f.preparationEntry }, "0.160.0", "", "sage_prepare_task");
   // Both connections retain their startup values after the file changes.
   writeFileSync(f.configFile, "invalid");

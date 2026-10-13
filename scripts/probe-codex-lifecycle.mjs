@@ -1,5 +1,5 @@
 // Isolated native V2 transport check with simulated model responses; not a live Sage pilot.
-// A wide deadlock guard ends the isolated transport without a process signal.
+// A wide deadlock guard closes transport first, then stops an unresponsive owned child.
 import http from "node:http";
 import { NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
 import {createHash} from "node:crypto";

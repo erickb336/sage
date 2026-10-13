@@ -3096,6 +3096,43 @@ syncBuiltinESMExports();\n`);
   }
 });
 
+test("shared protected paths check new files, ancestors, case folding and symlink parent traversal", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd); mkdirSync(join(root, "nested"));
+    symlinkSync(join(root, "nested"), join(cwd, "linked"));
+    symlinkSync(join(root, "missing"), join(cwd, "dangling"));
+    const check = paths => fileWriteOutsideRoots({ paths, cwd, roots: [root] });
+    for (const path of [root, f.dir, join(root, "new.tsv"), join(f.dir, "LOGBOOK/new.tsv"),
+      "../logbook/new.tsv", "linked/../new.tsv", "dangling/new.tsv"])
+      assert.equal(check([path]), false, path);
+    assert.equal(check(["ordinary.txt", "../logbook-other/new.tsv"]), true);
+    assert.equal(check(["ordinary.txt", "../logbook/new.tsv"]), false);
+    assert.equal(existsSync(join(root, "new.tsv")), false);
+  }
+});
+
+test("shared protected paths refuse hard links, loops and invalid path context", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { fileWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof fileWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(cwd); writeFileSync(join(root, "ledger.tsv"), "fixed");
+    linkSync(join(root, "ledger.tsv"), join(cwd, "alias"));
+    symlinkSync("loop-b", join(cwd, "loop-a")); symlinkSync("loop-a", join(cwd, "loop-b"));
+    assert.equal(fileWriteOutsideRoots({ paths: ["alias"], cwd, roots: [root] }), false);
+    assert.throws(() => fileWriteOutsideRoots({ paths: ["loop-a"], cwd, roots: [root] }));
+    for (const input of [{ paths: ["x"], cwd, roots: [] }, { paths: ["x\0"], cwd, roots: [root] },
+      { paths: ["x"], cwd: "relative", roots: [root] }, { paths: [null], cwd, roots: [root] }])
+      assert.throws(() => fileWriteOutsideRoots(input));
+    assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
+  }
+});
+
 test("shared protected paths refuse missing entries in supplied path lists", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
@@ -3135,6 +3172,314 @@ test("shared protected paths use validated values despite custom array methods",
     paths[Symbol.iterator] = function* () { customMethodCalled = true; };
     assert.equal(fileWriteOutsideRoots({ paths, cwd, roots: [root] }), false);
     assert.equal(customMethodCalled, false);
+  }
+});
+
+test("shared shell write classification detects writes without executing payloads in either bundle", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    // All strings below reach the parser only. None reaches a shell or interpreter.
+    for (const command of [
+      "printf fixed > ledger.tsv", "cat <> ledger.tsv", "echo fixed >& ledger.tsv",
+      "cp source target", "rm target", "ln source target", "uniq source target", "less -o target source",
+      "sed -i s/a/b/ target", "perl -pi -e x target", "awk -i inplace x target",
+      "sort --out=target source", "find . -delete", "find . -exec touch target ;",
+      "node -e 'writeFileSync(\"target\",\"fixed\")'", "python -c 'open(\"target\",\"w\")'",
+      "source script", "eval fixed", "exec fixed", "Set-Content target fixed",
+      "Out-File target", "New-Item target", "echo $(touch target)", "echo fixed | tee target",
+    ]) assert.equal(commandWrites(command, f.dir), true, command);
+    for (const command of ["cat ledger.tsv", "echo touch target", "printf rm", "grep -e tee ledger.tsv",
+      "cat < ledger.tsv", "echo fixed >/dev/null", "echo fixed >&2", "ls .", "jq . ledger.json"])
+      assert.equal(commandWrites(command, f.dir), false, command);
+    assert.equal(existsSync(join(f.dir, "target")), false);
+    assert.equal(existsSync(join(f.dir, "ledger.tsv")), false);
+  }
+});
+
+test("shared shell reader options preserve option values and function dispatch in either bundle", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    for (const command of ["rg --pre cat x", "rg --pre-glob '*.txt' x", "rg --search-zip x", "rg -z x",
+      "rg --hostname-bin program x", "file -C -m magic", "file --comp magic", "file -z ordinary",
+      "diff --paginate left right", "diff --pa left right", "diff -l left right",
+      "env rg --pre cat x", "LANG=C rg --pre cat x", "f() { rg --pre cat x; }; f",
+      "rg() { :; }; command rg --pre cat x"])
+      assert.equal(commandWrites(command, f.dir), true, command);
+    for (const command of ["rg -e --pre x", "rg -e--pre x", "rg --regexp=--pre x", "rg -- --pre x",
+      "rg --no-pre x", "file -m --compile ordinary", "file -- --compile", "diff -L --paginate left right",
+      "diff --label=--paginate left right", "diff -- --paginate right", "echo rg --pre cat x",
+      "rg() { :; }; rg --pre cat x", "f() { env rg --pre cat x; }; env() { :; }; f"])
+      assert.equal(commandWrites(command, f.dir), false, command);
+  }
+});
+
+test("shared shell write classification refuses unreadable input in either bundle", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof commandWrites, "function");
+    for (const command of ["echo 'unfinished", "$(unfinished", null, {}, undefined])
+      assert.equal(commandWrites(command, f.dir), true, JSON.stringify(command));
+    assert.equal(commandWrites("", f.dir), false);
+  }
+});
+
+
+test("Codex direct patch targets retain all operations and both names of a move", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const patch = ["*** Begin Patch", "*** Add File: added name.txt", "+fixed",
+    "*** Update File: before", "*** Move to: after", "@@", "-old", "+new",
+    "*** Delete File: removed", "*** End Patch"].join("\n");
+  for (const text of [patch, patch.replaceAll("\n", "\r\n")])
+    assert.deepEqual(patchTargets(text), ["added name.txt", "before", "after", "removed"]);
+  assert.deepEqual(patchTargets("*** Begin Patch\n*** End Patch"), []);
+  assert.equal(existsSync(join(f.dir, "added name.txt")), false);
+});
+
+test("Codex direct patch targets distinguish content from headers", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const patch = ["*** Begin Patch", "*** Add File: added", "+*** Delete File: content-only",
+    "+*** End Patch", "*** Update File: updated", "@@", " *** Move to: context-only",
+    "-*** Delete File: old-content", "+*** Add File: new-content", "*** End of File", "*** End Patch"].join("\n");
+  assert.deepEqual(patchTargets(patch), ["added", "updated"]);
+});
+
+test("Codex direct patch targets refuse unsupported records and invalid targets", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const wrap = body => `*** Begin Patch\n${body}\n*** End Patch`;
+  for (const patch of [null, {}, "not a patch", "*** Begin Patch\n*** Add File: missing-end",
+    wrap("*** Unknown: x"), wrap("*** Move to: x"), wrap("*** Add File: x\n*** Move to: y"),
+    wrap("*** Update File: x\n@@\n+new\n*** Move to: y"),
+    wrap("*** Update File: x\n*** Move to: y\n*** Move to: z"),
+    wrap("*** Delete File: x\n+unexpected"), wrap("*** Add File: "),
+    wrap("*** Add File: control\0name"), wrap("*** Add File: tab\tname"),
+    wrap("*** Add File: x\nnot-prefixed-content")])
+    assert.throws(() => patchTargets(patch), /Codex patch targets are unavailable/);
+});
+
+test("native probe removes its profile after version failure and a stalled version process", t => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-probe-cleanup-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const stalled of [false, true]) {
+    const temporary = join(dir, stalled ? "stalled" : "failed"); mkdirSync(temporary);
+    const fake = join(dir, stalled ? "stalled-codex" : "failed-codex");
+    // The fixture stays alive until its output transport closes, then exits without a signal.
+    writeFileSync(fake, stalled
+      ? "#!/usr/bin/env node\nprocess.stdin.resume(); const timer = setInterval(() => process.stdout.write('fixture\\n'), 25); process.stdout.on('error', () => { clearInterval(timer); process.exit(0); });\n"
+      : "#!/usr/bin/env node\nprocess.exit(0);\n", { mode: 0o700 });
+    const result = spawnSync(process.execPath, [join(ROOT, "scripts/probe-codex-lifecycle.mjs")], {
+      env: { ...process.env, TMPDIR: temporary, SAGE_CODEX_BIN: fake, ...(stalled ? { SAGE_PROBE_TEST_DEADLINE_MS: "1" } : {}) },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1, result.stderr);
+    const rows = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+    assert.equal(rows.find(row => row.type === "result").reason, stalled ? "native_deadline" : "version_check_failed");
+    assert.equal(rows.at(-1).temporaryRootRemoved, true);
+    assert.deepEqual(readdirSync(temporary), [], "the actual temporary profile is gone");
+  }
+});
+
+
+test("native deadline waits for child closure when the timeout callback throws", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  let detached = false;
+  child.unref = () => { detached = true; };
+  const signals = [];
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child, { onTimeout: () => { throw new Error("simulated callback failure"); } });
+  t.mock.timers.tick(120_000);
+  let settled = false;
+  result.then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false, "closing pipes must not report an unclosed child as stopped");
+  child.emit("close", 0, null);
+  assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline", timeoutCallbackFailed: true });
+  t.mock.timers.tick(300_000); // A gracefully closed child must never reach either signal timer.
+  assert.deepEqual(signals, []);
+  assert.equal(child.stdin.writableEnded, true);
+  for (const stream of [child.stdin, child.stdout, child.stderr]) assert.equal(stream.destroyed, true);
+  assert.equal(detached, false);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+
+test("native spawn error waits for closure before releasing its owner", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const child = new EventEmitter();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  let settled = false;
+  result.then(() => { settled = true; });
+  child.emit("error", new Error("simulated spawn failure"));
+  await Promise.resolve();
+  assert.equal(settled, false, "an error is not the child closure event");
+  child.emit("close", -2, null);
+  assert.deepEqual(await result, { code: null, exitCode: -2, signal: null, spawnFailed: true });
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+// Signals are intercepted in the check process: even the old implementation cannot signal a test child.
+for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex package check: ${scenario} closes its child without signals`, async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'sage-package-check-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const signalLog = join(dir, 'signals'), closed = join(dir, 'closed');
+  const preload = join(dir, 'no-signals.mjs'), binary = join(dir, 'codex');
+  writeFileSync(preload, `import {ChildProcess} from 'node:child_process';\nimport {appendFileSync} from 'node:fs';\nChildProcess.prototype.kill = function(signal) { appendFileSync(${JSON.stringify(signalLog)}, String(signal)+'\\n'); this.stdin?.end(); return true; };\n`);
+  const plugin = {
+    skills: readdirSync(join(ROOT, 'plugins/sage-codex/skills')).map(name => ({name: `sage:${name}`})),
+    hooks: ['preToolUse', 'userPromptSubmit'].map(eventName => ({eventName})),
+    summary: {source: {path: join(ROOT, 'plugins/sage-codex')}},
+  };
+  if (scenario === 'bad-manifest') plugin.hooks = [];
+  writeFileSync(binary, `#!${process.execPath}\nimport {createInterface} from 'node:readline';\nimport {writeFileSync} from 'node:fs';\nif (process.argv.includes('--version')) { console.log('codex-cli 0.160.0'); } else {\nconst reader = createInterface({input: process.stdin});\nreader.on('line', line => { const request = JSON.parse(line); if (request.id) console.log(JSON.stringify({id:request.id,result:request.id===1?{}:{plugin:${JSON.stringify(plugin)}}})); });\nreader.on('close', () => { writeFileSync(${JSON.stringify(closed)}, 'stdin closed'); process.exitCode=${scenario === 'exit-error' ? 7 : 0}; });\n}\n`, {mode: 0o700});
+  const child = spawn(process.execPath, ['--import', preload, join(ROOT, 'scripts/check-codex.mjs')], {
+    env: {...process.env, SAGE_CODEX_BIN: binary}, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', data => { stdout += data; });
+  child.stderr.on('data', data => { stderr += data; });
+  const result = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({code, signal})); });
+  assert.equal(result.signal, null);
+  assert.equal(existsSync(signalLog), false, 'the check requested a process signal');
+  assert.equal(readFileSync(closed, 'utf8'), 'stdin closed', 'the child acknowledged transport closure');
+  if (scenario === 'success') {
+    assert.equal(result.code, 0, stderr);
+    assert.match(stdout, /discovered \d+ skills and 2 hooks/);
+  } else {
+    assert.equal(result.code, 1, stdout + stderr);
+    assert.doesNotMatch(stdout, /discovered \d+ skills/);
+    assert.match(stderr, /Codex package check failed:/);
+  }
+});
+
+
+test("native deadline escalates only its owned child and still waits for closure", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter(), signals = [];
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  let settled = false; result.then(() => { settled = true; });
+  t.mock.timers.tick(120_000);
+  assert.deepEqual(signals, [], "transport shutdown gets the first chance");
+  t.mock.timers.tick(30_000); assert.deepEqual(signals, ["SIGTERM"]);
+  t.mock.timers.tick(30_000); assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  await Promise.resolve(); assert.equal(settled, false, "a signal is not proof of exit");
+  child.emit("close", null, "SIGKILL");
+  assert.deepEqual(await result, { code: null, exitCode: null, signal: "SIGKILL", timedOut: true, reason: "native_deadline" });
+  t.mock.timers.tick(300_000); assert.equal(signals.length, 2);
+});
+
+test("native deadline cancels escalation when the owned child closes", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter(), signals = [];
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  t.mock.timers.tick(120_000); t.mock.timers.tick(30_000);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  child.emit("close", 0, null); await result;
+  t.mock.timers.tick(300_000); assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("native deadline retains error handling across both termination attempts", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = () => true;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  try {
+    t.mock.timers.tick(120_000); t.mock.timers.tick(30_000);
+    child.emit("error", new Error("simulated SIGTERM failure"));
+    t.mock.timers.tick(30_000);
+    assert.doesNotThrow(() => child.emit("error", new Error("simulated SIGKILL failure")));
+  } finally { child.emit("close", 1, null); }
+  assert.deepEqual(await result, { code: null, exitCode: 1, signal: null, timedOut: true,
+    reason: "native_deadline", terminationFailed: true });
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+
+test("native deadline does not signal an exited child while output closure is pending", async t => {
+  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  const signals = [];
+  child.kill = signal => { signals.push(signal); return true; };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const result = waitNative(child);
+  let settled = false; result.then(() => { settled = true; });
+  t.mock.timers.tick(120_000);
+  child.exitCode = 0;
+  t.mock.timers.tick(300_000);
+  await Promise.resolve(); assert.equal(settled, false);
+  child.emit("close", 0, null);
+  assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline" });
+  assert.deepEqual(signals, []);
+});
+
+test("shared shell paths refuse literal protected writes and preserve ordinary reads in both bundles", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
+    // Parser inputs only: no payload below is executed.
+    for (const command of [`printf fixed > ${root}/ledger.tsv`, `cp source ${root}/ledger.tsv`,
+      `rm -rf ${root}`, `sort --output=${root}/ledger.tsv source`, `env SAGE_HOME=${root} touch target`,
+      `node -e 'writeFileSync("${root}/ledger.tsv", "fixed")'`]) assert.equal(check(command), false, command);
+    for (const command of ["printf fixed > ordinary.txt", "cp source target", "touch ordinary.txt", `cat ${root}/ledger.tsv`])
+      assert.equal(check(command), true, command);
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+    assert.equal(existsSync(join(cwd, "ordinary.txt")), false);
+  }
+});
+
+test("shared shell paths use directory and alias evidence and refuse unresolved write paths", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assert.equal(typeof shellWriteOutsideRoots, "function");
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    symlinkSync(root, join(cwd, "linked")); writeFileSync(join(root, "ledger.tsv"), "fixed");
+    linkSync(join(root, "ledger.tsv"), join(cwd, "hard"));
+    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
+    for (const command of ["printf fixed > linked/ledger.tsv", "printf fixed > hard", "cd ../logbook && touch new.tsv",
+      "cd $UNKNOWN && touch new.tsv", "touch $UNKNOWN", "touch link*", "touch har*", "touch ~/file", "sort -olinked/ledger.tsv input",
+      "sort -ohard input", "printf() { touch fixed; }; printf linked/ledger.tsv", "echo 'unfinished"])
+      assert.equal(check(command), false, command);
+    assert.equal(check("cd . && touch ordinary.txt"), true);
+    assert.equal(check("touch ordinary*"), true);
+    assert.equal(check("sort -oordinary.txt input"), true);
+    assert.equal(check("printf '%s' '{\"name\":\"fixed\"}' > config.json"), true);
+    assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
   }
 });
 
@@ -3190,6 +3535,120 @@ test("shared shell paths keep literal equals signs in operands and redirections"
   }
 });
 
+test("shared shell paths preserve quoted redirection target prefixes", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    for (const prefix of ["&", ">", "<", "|"]) {
+      symlinkSync(root, join(cwd, `${prefix}linked`));
+      for (const operator of [">", ">>", ">|", "&>", "&>>", "<>"]) {
+        // These strings reach the parser only, never a shell.
+        assert.equal(shellWriteOutsideRoots({ command: `printf fixed ${operator} '${prefix}linked/ledger.tsv'`, cwd, roots: [root] }), false);
+        assert.equal(shellWriteOutsideRoots({ command: `printf fixed ${operator} '${prefix}ordinary'`, cwd, roots: [root] }), true);
+      }
+    }
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+  }
+});
+
+test("shared command reader keeps structured redirection targets across execution scopes", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { programsRun } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    for (const [command, operator, target] of [
+      ["printf fixed > '&name'", ">", "&name"],
+      ["{ printf fixed; } >> '>name'", ">>", ">name"],
+      ["(printf fixed) &> '|name'", "&>", "|name"],
+      ["printf fixed | cat 2> '<name'", ">", "<name"],
+      ['sh -c "printf fixed > \'&name\'"', ">", "&name"],
+      ["f() { printf fixed; }; f > '&name'", ">", "&name"],
+    ]) {
+      const legacy = programsRun(command, f.dir, "", { redirectEvidence: true });
+      const detailed = programsRun(command, f.dir, "", { redirectEvidence: true, redirectParts: true });
+      assert.equal(detailed.length, 1, command);
+      assert.equal(detailed[0].operator, operator, command);
+      assert.equal(detailed[0].target, target, command);
+      assert.deepEqual(detailed.map(({ operator, target, ...rest }) => rest), legacy);
+      assert.equal(Object.hasOwn(legacy[0], "operator"), false);
+      assert.equal(Object.hasOwn(legacy[0], "target"), false);
+    }
+  }
+});
+
+test("Codex direct patch targets refuse header whitespace that native parsing removes", async t => {
+  const f = isolated(t, "codex");
+  const { patchTargets } = await import(pathToFileURL(join(f.plugin, "runtime/patch-targets.mjs")));
+  const wrap = body => `*** Begin Patch\n${body}\n*** End Patch`;
+  for (const suffix of [" ", "\t", "\u00a0", "\u2003", "\u202f", "\u0085"]) {
+    for (const body of [`*** Add File: AGENTS.md${suffix}\n+fixed`,
+      `*** Update File: AGENTS.md${suffix}\n@@\n-old\n+new`,
+      `*** Delete File: AGENTS.md${suffix}`,
+      `*** Update File: ordinary\n*** Move to: AGENTS.md${suffix}\n@@\n-old\n+new`])
+      assert.throws(() => patchTargets(wrap(body)), /Codex patch targets are unavailable/);
+  }
+  assert.deepEqual(patchTargets(wrap("*** Add File: ordinary name\n+fixed")), ["ordinary name"]);
+  assert.equal(existsSync(join(f.dir, "AGENTS.md")), false);
+});
+
+
+test("shared write classification preserves numeric and device-like redirection targets", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites, shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
+    for (const name of ["&1", "&2", "&1-", "&-"]) {
+      symlinkSync(join(root, "ledger.tsv"), join(cwd, name));
+      const command = `printf fixed > '${name}'`;
+      assert.equal(commandWrites(command, cwd), true, command);
+      assert.equal(shellWriteOutsideRoots({ command, cwd, roots: [root] }), false, command);
+    }
+    mkdirSync(join(cwd, ">")); symlinkSync(root, join(cwd, ">", "dev"));
+    const command = "printf fixed > '>/dev/null'";
+    assert.equal(commandWrites(command, cwd), true, command);
+    assert.equal(shellWriteOutsideRoots({ command, cwd, roots: [root] }), false, command);
+    for (const command of ["printf fixed >&1", "printf fixed 2>&2", "printf fixed > /dev/null"])
+      assert.equal(commandWrites(command, cwd), false, command);
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+    assert.equal(existsSync(join(root, "null")), false);
+  }
+});
+
+
+test("shared shell paths refuse redirection-only writes after uncertain directory changes", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteOutsideRoots } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const root = join(f.dir, "logbook"), cwd = join(f.dir, "project");
+    mkdirSync(root); mkdirSync(join(cwd, "sub/sub"), { recursive: true });
+    const check = command => shellWriteOutsideRoots({ command, cwd, roots: [root] });
+    // Parse only. The actual loop would change the directory twice.
+    assert.equal(check("for x in a b; do cd sub; done; > ../../../logbook/ledger.tsv"), false);
+    assert.equal(check("cd sub; cd sub; > ../../../logbook/ledger.tsv"), false);
+    assert.equal(check("cd sub; > ordinary.txt"), true);
+    assert.equal(existsSync(join(root, "ledger.tsv")), false);
+    assert.equal(existsSync(join(cwd, "sub/ordinary.txt")), false);
+  }
+});
+
+test("Codex patch policy protects both move targets and logbook paths in every mode", async t => {
+  const f = isolated(t, "codex");
+  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
+  assert.equal(typeof patchEditDecision, "function");
+  const cwd = join(f.dir, "project"), root = join(f.dir, "logbook"); mkdirSync(cwd); mkdirSync(root);
+  symlinkSync(root, join(cwd, "linked"));
+  const input = text => ({ tool_name: "apply_patch", tool_input: { command: `*** Begin Patch\n${text}\n*** End Patch` } });
+  const options = { cwd, roots: [root] };
+  for (const context of [{ sage: true, chief: false }, { sage: false, chief: false }, { sage: false, chief: true }]) {
+    assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), context, options).decision, "pass");
+    for (const body of ["*** Add File: linked/new.tsv\n+fixed", "*** Delete File: ../logbook/ledger.tsv",
+      "*** Update File: ordinary\n*** Move to: ../logbook/new.tsv\n@@\n-old\n+new",
+      "*** Update File: ../logbook/ledger.tsv\n*** Move to: ordinary\n@@\n-old\n+new"])
+      assert.equal(patchEditDecision(input(body), context, options).decision, "deny");
+  }
+  assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), { sage: true, chief: true }, options).decision, "deny");
+});
+
 test("Codex patch policy rejects unknown input shapes and retains the chief edit gate", async t => {
   const f = isolated(t, "codex");
   const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
@@ -3221,7 +3680,6 @@ test("Codex patch policy rejects linked move sources and targets without applyin
   assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
   assert.equal(existsSync(join(cwd, "ordinary")), false);
 });
-
 
 test("Codex shell path decisions protect linked targets and literal equals names", async t => {
   const f = isolated(t, "codex");

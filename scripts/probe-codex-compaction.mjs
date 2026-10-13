@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, lstat
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { setupCapture } from "./fixtures/codex-native/setup-capture.mjs";
+import { setupCompaction } from "./fixtures/codex-native/setup-compaction.mjs";
 import { waitNative } from "./fixtures/codex-native/wait-native.mjs";
 
 const options = process.argv.slice(2);
@@ -29,7 +29,7 @@ try {
   version.stdout.on("data", data => { versionText += data; }); version.stderr.resume(); version.stdin.end();
   assert.equal((await waitNative(version)).code, 0);
   assert.equal(versionText.trim(), "codex-cli 0.160.0", "unverified_native_version");
-  const integrated = await setupCapture({ root, codexHome, workspace, env, binary, sage: true, captureCompaction: true, restoreCompaction: true });
+  const integrated = await setupCompaction({ root, codexHome, workspace, env, binary });
   const { chiefInstructionParts } = await import(pathToFileURL(join(root, "plugin/runtime/chief-output.mjs")));
   const chiefParts = chiefInstructionParts();
   const catalog = join(root, "models.json");

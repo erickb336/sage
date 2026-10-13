@@ -63,14 +63,12 @@ function readerRuns(name, args) {
 /** Function arguments are data; only an actual reader dispatch owns its options. */
 const readerDispatch = entry => !entry.wrapper && !entry.shellFunction && !entry.resolvedDeclaration &&
   readerRuns(basename(entry.run.word).toLowerCase(), entry.run.args);
-/** A redirection (operator and target, as shellCommands keeps it) to a file: not /dev/null, /dev/stdout or /dev/stderr, an input or a &N duplicate. */
-function toFile(redirect) {
-  const [, op, to] = /^(&>>?|>>|>\||>&|<>|<&|>|<)([^]*)$/.exec(redirect);
+/** Keep operator and target separate: quoted filename prefixes are not shell operators. */
+function toFile({ operator: op, target: to }) {
   if (op === "<" || op === "<&" || (op === ">&" && /^(?:\d+-?|-)$/.test(to))) return false;
   return !/^\/dev\/(?:null|stdout|stderr)$/.test(to);
 }
-function writesIn({ words, redirects }) {
-  if (redirects.some(toFile)) return true;
+function writesIn({ words }) {
   const low = words.map((w) => w.toLowerCase());
   const base = low.map((w) => basename(w));
   if (READERS.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")) return false;
@@ -90,7 +88,8 @@ export function commandWrites(text, cwd) {
   if (typeof text !== "string") return true;
   try {
     if (shellCommands(text).some(writesIn)) return true;
-    return programsRun(text, cwd, undefined, { contextEvidence: true }).programs.some(readerDispatch);
+    const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
+    return evidence.redirects.some(toFile) || evidence.programs.some(readerDispatch);
   } catch {
     return true;
   }

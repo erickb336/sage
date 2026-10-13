@@ -68,11 +68,12 @@ const SHELLS = /^(?:sh|bash|zsh|dash|ksh|fish)$/;
  * With executableEvidence, also retain external wrappers and literal command names. Wrapper options own their values;
  * shell syntax and builtin wrappers are not external executable evidence. Both views use the same semantic traversal.
  * With redirectEvidence, return { redirect, dir } and optional uncertainDirectory for each shell redirection.
+ * With redirectParts, each redirection also includes its separate operator and target.
  * With contextEvidence, return programs with their wrapper and directory certainty, plus those redirects.
  * Throws when the shell reader cannot read the line (see shellCommands), and for text nested more than 3 levels deep.
  */
-export function programsRun(command, cwd, path = process.env.PATH ?? "", { executableEvidence = false, redirectEvidence = false, contextEvidence = false, uncertainDirectory = false } = {}) {
-  const found = { redirects: [], contexts: [], publicEntries: new WeakSet() };
+export function programsRun(command, cwd, path = process.env.PATH ?? "", { executableEvidence = false, redirectEvidence = false, contextEvidence = false, uncertainDirectory = false, redirectParts = false } = {}) {
+  const found = { redirects: [], contexts: [], publicEntries: new WeakSet(), redirectParts };
   readPrograms(command, cwd, path, 0, found, uncertainDirectory);
   if (contextEvidence) return { programs: found.contexts, redirects: found.redirects };
   return redirectEvidence ? found.redirects : found.contexts
@@ -587,7 +588,11 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
     return { states, status: negate && status !== undefined ? !status : status };
   };
   execute.redirects = (redirects, states) => {
-    for (const state of states) for (const redirect of redirects) found.redirects.push({ redirect, dir: state.dir, ...(state.uncertainDirectory ? { uncertainDirectory: true } : {}) });
+    for (const state of states) for (let index = 0; index < redirects.length; index++) {
+      const parts = found.redirectParts ? REDIRECT_PARTS.get(redirects)[index] : {};
+      found.redirects.push({ redirect: redirects[index], ...parts, dir: state.dir,
+        ...(state.uncertainDirectory ? { uncertainDirectory: true } : {}) });
+    }
   };
   execute.function = (name, body, states) => {
     if (!functionIds.has(body)) {
@@ -777,6 +782,7 @@ function program(word, dir, path, uncertain = false) {
  */
 const FLOWS = new WeakMap();
 const COMMAND_CONTEXT = new WeakMap();
+const REDIRECT_PARTS = new WeakMap();
 
 export function shellCommands(src) {
   const out = [], flow = { nodes: [] };
@@ -798,6 +804,7 @@ function readCommands(src, i, close, out, host, flow) {
   const fresh = () => {
     const command = { words: [], syntax: [], bodies: [], host, piped: false, grouped: false, writes: false, redirects: [], heredoc: false };
     COMMAND_CONTEXT.set(command, { children: [] });
+    REDIRECT_PARTS.set(command.redirects, []);
     return command;
   };
   let cmd = fresh();
@@ -812,7 +819,10 @@ function readCommands(src, i, close, out, host, flow) {
   const endWord = () => {
     if (word === undefined) return;
     if (target === "body") cmd.bodies.push(word);
-    else if (target) cmd.redirects.push(target + word);
+    else if (target) {
+      cmd.redirects.push(target + word);
+      REDIRECT_PARTS.get(cmd.redirects).push({ operator: target, target: word });
+    }
     else {
       if (!quoted && !cmd.words.length && /^(?:if|for|while|until|select|case)$/.test(word)) openScope("opaque");
       if (!quoted && !cmd.words.length && /^(?:fi|done|esac)$/.test(word) && flow.kind === "opaque") COMMAND_CONTEXT.get(cmd).closesScope = true;
