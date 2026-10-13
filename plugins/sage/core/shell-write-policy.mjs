@@ -1,7 +1,7 @@
 // Shared write classification from the existing hook rules. This never executes command text.
-import { basename } from "node:path";
 import { shellCommands, programsRun } from "./command-reader.mjs";
 import { outputDispatchWrites } from "./output-writes.mjs";
+import { programName } from "./command-policy.mjs";
 
 const CODE = /^-(?:[a-z]*[ce]|p|-eval|-print|command)$/;
 /** The commands that write, move, remove or link a file, also in PowerShell (case does not matter there). uniq IN OUT and less -o FILE write, so uniq and less always count. */
@@ -63,7 +63,7 @@ function readerRuns(name, args) {
 }
 /** Function arguments are data; only an actual reader dispatch owns its options. */
 const readerDispatch = entry => !entry.wrapper && !entry.shellFunction && !entry.resolvedDeclaration &&
-  readerRuns(basename(entry.run.word).toLowerCase(), entry.run.args);
+  readerRuns(programName(entry.run.word), entry.run.args);
 /** Keep operator and target separate: quoted filename prefixes are not shell operators. */
 function toFile({ operator: op, target: to }) {
   if (op === "<" || op === "<&" || (op === ">&" && /^(?:\d+-?|-)$/.test(to))) return false;
@@ -71,7 +71,7 @@ function toFile({ operator: op, target: to }) {
 }
 function writesIn({ words }) {
   const low = words.map((w) => w.toLowerCase());
-  const base = low.map((w) => basename(w));
+  const base = words.map(programName);
   if (READERS.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")) return false;
   const has = (re) => base.some((w) => re.test(w));
   return (
