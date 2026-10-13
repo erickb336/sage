@@ -3,7 +3,7 @@ import { McpServer, serveStdio, z } from "./mcp-sdk.mjs";
 const reason = "Sage could not verify this hook request.";
 const denied = event => event === "PreToolUse" ? {
   hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
-} : { decision: "block", reason };
+} : event === "SessionStart" ? { continue: false, stopReason: reason } : { decision: "block", reason };
 const result = output => ({ content: [{ type: "text", text: JSON.stringify(output) }] });
 
 /** Configuration and policy loaders come from the server launcher, never tool arguments. */
@@ -33,6 +33,11 @@ export function createHookServer({ mode, loadPolicy } = {}) {
       if (input.hook_event_name === "SubagentStart") {
         const { childStartOutput } = await import("./child-start.mjs");
         return result(await childStartOutput(input, native, configuredMode, loadPolicy));
+      }
+      if (input.hook_event_name === "SessionStart") {
+        const { ownerSessionStartOutput } = await import("./chief-output.mjs");
+        const { instruction_part = 0, ...started } = input;
+        return result(ownerSessionStartOutput(started, native, configuredMode, instruction_part));
       }
       if (input.hook_event_name === "UserPromptSubmit") {
         const { ownerPromptOutput } = await import("./chief-output.mjs");

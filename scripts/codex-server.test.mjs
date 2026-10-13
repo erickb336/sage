@@ -849,3 +849,63 @@ test('native command decoder refuses array getters and hides inspection failures
   for (const input of [throwing, unclonable])
     assert.throws(() => decode(input), { message: 'Codex command arguments are unavailable' });
 });
+
+function compactStart(f, source = 'compact') {
+  const { prompt, turn_id, ...fields } = f.prompt('sage mode');
+  return { ...fields, hook_event_name: 'SessionStart', source };
+}
+
+test('chief compaction restores both instruction parts without changing mode or ownership', async t => {
+  const f = fixture(t), client = await connect(t, f);
+  const first = await client.call(f.prompt('sage mode'));
+  const second = await client.call({ ...f.prompt('sage mode'), instruction_part: 1 });
+  const { readAdmission } = await import(pathToFileURL(join(f.plugin, 'core/index.mjs')));
+  const before = readAdmission(f.mode.directory);
+  for (const [part, expected] of [first, second].entries()) {
+    const input = { ...compactStart(f), instruction_part: part };
+    const restored = await client.call(input);
+    assert.deepEqual(restored, { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: expected.hookSpecificOutput.additionalContext } });
+    assert.deepEqual(await client.call(input), restored);
+  }
+  assert.deepEqual(readAdmission(f.mode.directory), before);
+  assert.deepEqual(await client.call(compactStart(f, 'startup')), {});
+  await client.call(f.prompt('sage mode off', turns[1]));
+  const off = readAdmission(f.mode.directory);
+  assert.deepEqual(await client.call(compactStart(f)), {});
+  assert.deepEqual(readAdmission(f.mode.directory), off);
+  await client.close();
+});
+
+test('chief compaction refuses foreign callers unsupported sources and malformed context', async t => {
+  const f = fixture(t), client = await connect(t, f);
+  await client.call(f.prompt('sage mode'));
+  assert.ok((await client.call(compactStart(f))).hookSpecificOutput?.additionalContext);
+  const denied = { continue: false, stopReason: 'Sage could not verify this hook request.' };
+  assert.deepEqual(await client.call(compactStart(f), childActor), denied);
+  for (const input of [{ ...compactStart(f), source: 'resume' }, { ...compactStart(f), cwd: '/wrong' },
+    { ...compactStart(f), agent_id: childActor }, { ...compactStart(f), turn_id: turns[0] },
+    { ...compactStart(f), instruction_part: -1 }, { ...compactStart(f), instruction_part: 2 },
+    { ...compactStart(f), instruction_part: null }, { ...compactStart(f), transcript_path: null }])
+    assert.deepEqual(await client.call(input), denied);
+  await client.close();
+  const wrongVersion = await connect(t, f, '0.159.0');
+  assert.deepEqual(await wrongVersion.call(compactStart(f)), denied);
+  await wrongVersion.close();
+});
+
+test('chief compaction retries failed rendering and never activates an inactive owner', async t => {
+  const f = fixture(t), client = await connect(t, f);
+  assert.deepEqual(await client.call(compactStart(f)), {});
+  const first = await client.call(f.prompt('sage mode'));
+  const bindings = join(f.plugin, 'chief-bindings.json'), saved = readFileSync(bindings, 'utf8');
+  const { readAdmission } = await import(pathToFileURL(join(f.plugin, 'core/index.mjs')));
+  const before = readAdmission(f.mode.directory);
+  writeFileSync(bindings, 'invalid fixture JSON');
+  assert.deepEqual(await client.call(compactStart(f)), { continue: false, stopReason: 'Sage could not verify this hook request.' });
+  assert.deepEqual(readAdmission(f.mode.directory), before);
+  writeFileSync(bindings, saved);
+  const restored = await client.call(compactStart(f));
+  assert.equal(restored.hookSpecificOutput?.additionalContext, first.hookSpecificOutput.additionalContext);
+  assert.deepEqual(readAdmission(f.mode.directory), before);
+  await client.close();
+});

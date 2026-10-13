@@ -55,3 +55,18 @@ export function nativeOwnerPrompt(input, context, metadata) {
     || !UUID.test(context.actor) || context.actor !== input?.session_id) return null;
   return ownerPrompt(input, { version: context.version, metadata });
 }
+
+/** Only the observed startup and compact root events are supported. This grants no mode ownership. */
+export function nativeOwnerSessionStart(input, context, metadata) {
+  if (!record(context) || Object.keys(context).length !== 2
+    || !Object.hasOwn(context, "version") || !Object.hasOwn(context, "actor")
+    || context.version !== RUNTIME_VERSION || context.actor !== input?.session_id) return null;
+  if (!record(input) || input.hook_event_name !== "SessionStart" || !["startup", "compact"].includes(input.source)
+    || Object.keys(input).length !== START_FIELDS.length || START_FIELDS.some(key => !Object.hasOwn(input, key))) return null;
+  if (!text(input.session_id, 36) || !UUID.test(input.session_id)
+    || !text(input.cwd, 4096) || !isAbsolute(input.cwd) || !text(input.transcript_path, 4096) || !isAbsolute(input.transcript_path)
+    || !text(input.model, 256) || !text(input.permission_mode, 64)) return null;
+  if (!record(metadata) || metadata.id !== input.session_id || metadata.session_id !== input.session_id
+    || metadata.cli_version !== RUNTIME_VERSION || Object.hasOwn(metadata, "parent_thread_id") || Object.hasOwn(metadata, "agent_path")) return null;
+  return { kind: "owner-session-start", session: input.session_id, source: input.source };
+}
