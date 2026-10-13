@@ -3,6 +3,7 @@ import { readdirSync } from "node:fs";
 import { programsRun } from "./command-reader.mjs";
 import { commandWrites } from "./shell-write-policy.mjs";
 import { fileWriteOutsideRoots } from "./protected-paths.mjs";
+import { programName } from "./command-policy.mjs";
 
 // Bounded '*'/'?' matching without a backtracking regular expression.
 function simpleGlob(pattern, name) {
@@ -71,7 +72,7 @@ export function shellWriteOutsideRoots({ command, cwd, roots }) {
       const { run } = entry;
       // These programs do not treat their ordinary arguments as write targets or execute them.
       const dataOnly = !entry.wrapper && !entry.shellFunction && !entry.resolvedDeclaration
-        && /(?:^|\/)(?:echo|printf|jq)$/.test(run.word);
+        && /^(?:echo|printf|jq)$/.test(programName(run.word));
       const words = dataOnly ? [run.word] : [run.word, ...run.args];
       if (!words.every(word => check(word, run.dir))) return false;
       if ((run.stdin ?? []).some(body => !check(body, run.dir))) return false;
