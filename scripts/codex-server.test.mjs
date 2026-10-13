@@ -4071,3 +4071,84 @@ test("native completion retains compacted work but can record verified interrupt
     await client.close();
   }
 });
+
+test("report inspection pins exact text identity and refuses changed native provenance", async t => {
+  const f = await completionFixture(t);
+  const { createHash } = await import("node:crypto");
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  const file = join(f.mode.sessionsDir, `${childActor}.jsonl`), original = readFileSync(file, "utf8");
+  const before = f.core.readAdmission(f.options.directory);
+  const read = () => readChildReport({name: f.input.name}, f.native(session), f.options);
+  const result = read();
+  assert.equal(result.reportHash, createHash("sha256").update(reportText).digest("hex"));
+  assert.equal(result.reportMessage, "fixture_report"); assert.equal(result.turn, turns[1]);
+  for (const change of [rows => rows[0].payload.parent_thread_id = childActor,
+    rows => rows.at(-2).metadata.client_authored = true,
+    rows => rows.at(-2).metadata.retained_source.complete = false,
+    rows => rows.at(-2).payload.internal_chat_message_metadata_passthrough.turn_id = turns[2],
+    rows => rows.at(-1).payload.last_agent_message = "changed text",
+    rows => rows.at(-1).payload.turn_id = turns[2],
+    rows => rows.pop()]) {
+    const rows = original.trimEnd().split("\n").map(JSON.parse); change(rows);
+    writeFileSync(file, rows.map(row => JSON.stringify(row) + "\n").join(""));
+    assert.throws(read);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+  writeFileSync(file, original); assert.deepEqual(read(), result);
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
+
+
+test("report inspection refuses interrupted assignments without accepting their report text", async t => {
+  const f = await completionFixture(t);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  appendInterruption(f);
+  assert.throws(() => readChildReport({name: f.input.name}, f.native(session), f.options));
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 1); assert.equal(state.completions[0].outcome, "interrupted");
+  assert.equal(state.reports?.length ?? 0, 0);
+});
+
+
+test("packaged report inspection contains transcript failures and preserves owner scope", async t => {
+  const f = await completionFixture(t);
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  writeFileSync(f.entry, `import { servePreparations } from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
+  const client = await connect(t, f, "0.160.0", "", "sage_read_report");
+  const input = {name: f.input.name};
+  assert.equal((await client.call(input)).report.STATUS, "done");
+  for (const actor of [null, childActor, "a22422c7-509c-43aa-8c42-827c556f8a59"])
+    assert.match((await client.call(input, actor)).error, /could not read/);
+  const file = join(f.mode.sessionsDir, `${childActor}.jsonl`), text = readFileSync(file, "utf8");
+  rmSync(file); assert.match((await client.call(input)).error, /could not read/);
+  const target = join(f.mode.sessionsDir, "other.jsonl"); writeFileSync(target, text); symlinkSync(target, file);
+  assert.match((await client.call(input)).error, /could not read/);
+  rmSync(file); writeFileSync(file, text); assert.equal((await client.call(input)).report.STATUS, "done");
+  await client.close();
+});
+
+
+
+test("native report read leaves an unrelated sibling unchanged with missing or terminal evidence", async t => {
+  const f = await completionFixture(t);
+  appendReport(f);
+  f.policy.completeChild(f.stop, f.native(childActor));
+  const other = "a22422c7-509c-43aa-8c42-827c556f8a59";
+  const name = "other_lead";
+  f.api.prepareNativeTask({ ...f.input, task: "T2", run: "R3", name }, f.native(session), f.options);
+  f.api.reservePreparedSpawn(f.spawnInput(name, "spawn-2"), f.native(session), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), { ...f.result, call: "spawn-2", path: `/root/${name}` });
+  const transcript = f.childTranscript({ child: other, path: `/root/${name}`, turn: turns[2] });
+  await f.evaluate(f.policy, { ...patch(turns[2]), transcript_path: transcript }, other);
+  const original = readFileSync(transcript, "utf8");
+  const before = f.core.readAdmission(f.options.directory);
+  const { readChildReport } = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  rmSync(transcript);
+  assert.equal(readChildReport({ name: f.input.name }, f.native(session), f.options).report.STATUS, "done");
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  writeFileSync(transcript, original);
+  appendReport(f, reportText, other, turns[2]);
+  assert.equal(readChildReport({ name: f.input.name }, f.native(session), f.options).report.STATUS, "done");
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});

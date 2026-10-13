@@ -141,7 +141,7 @@ function bindLaterTurn(event, child, options, state, owner, started) {
 
 
 /** A native parent can recover delivery through a path already verified for this child. */
-export function recoverNativeChildDeliveries(context, session, options) {
+export function recoverNativeChildDeliveries(context, session, options, assignment) {
   const native = nativeToolContext(context);
   if (typeof session !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(session)) refuse();
   const state = readAdmission(options.directory);
@@ -149,6 +149,7 @@ export function recoverNativeChildDeliveries(context, session, options) {
   if (!owner) refuse();
   const scope = row => row.project === options.project && row.session === owner.session && row.epoch === owner.epoch;
   const candidates = state.reservations.filter(row => scope(row.assignment) && row.assignment.issuer === native.actor
+    && (assignment === undefined || row.assignment.id === assignment)
     && !state.completions?.some(done => done.assignment === row.assignment.id));
   if (!candidates.length) return;
   const observations = readObservations(join(options.observationsRoot, session));
