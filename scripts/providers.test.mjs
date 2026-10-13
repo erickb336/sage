@@ -2046,7 +2046,8 @@ test("native deadline waits for child closure when the timeout callback throws",
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   let detached = false;
   child.unref = () => { detached = true; };
-  child.kill = () => assert.fail("a deadline must never signal the child");
+  const signals = [];
+  child.kill = signal => { signals.push(signal); return true; };
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const result = waitNative(child, { onTimeout: () => { throw new Error("simulated callback failure"); } });
   t.mock.timers.tick(120_000);
@@ -2057,6 +2058,7 @@ test("native deadline waits for child closure when the timeout callback throws",
   child.emit("close", 0, null);
   assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline", timeoutCallbackFailed: true });
   t.mock.timers.tick(300_000); // A gracefully closed child must never reach either signal timer.
+  assert.deepEqual(signals, []);
   assert.equal(child.stdin.writableEnded, true);
   for (const stream of [child.stdin, child.stdout, child.stderr]) assert.equal(stream.destroyed, true);
   assert.equal(detached, false);
@@ -2179,7 +2181,8 @@ test("native deadline does not signal an exited child while output closure is pe
   const { PassThrough } = await import("node:stream");
   const child = new EventEmitter();
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
-  child.kill = () => assert.fail("the exited child must not receive a signal");
+  const signals = [];
+  child.kill = signal => { signals.push(signal); return true; };
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const result = waitNative(child);
   let settled = false; result.then(() => { settled = true; });
@@ -2188,5 +2191,6 @@ test("native deadline does not signal an exited child while output closure is pe
   t.mock.timers.tick(300_000);
   await Promise.resolve(); assert.equal(settled, false);
   child.emit("close", 0, null);
-  assert.equal((await result).timedOut, true);
+  assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline" });
+  assert.deepEqual(signals, []);
 });
