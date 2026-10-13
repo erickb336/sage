@@ -2883,3 +2883,57 @@ test("concurrent durable report receipts publish once and conflicting reports ca
   const saved=f.api.readAdmission(f.journal).reports;
   assert.equal(saved.length,2);assert.deepEqual(saved[1],different.find(row=>row.decision==="report-recorded").report);
 });
+
+const failureFor = assignment => ({ project: assignment.project, session: assignment.session, epoch: assignment.epoch,
+  assignment: assignment.id, issuer: assignment.issuer, call: assignment.call, evidenceHash: "a".repeat(64) });
+
+test("failed dispatch receipts release one slot and cannot release or bind later work", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = await roleAdmissionFixture(t, { total: 1, projects: [{ project: "project-a", limit: 1 }] }, provider);
+    assert.equal(typeof f.api.failAdmission, "function");
+    const first = f.reserve(1), failure = failureFor(first.assignment);
+    assert.throws(() => f.reserve(2), /capacity is occupied/);
+    assert.equal(f.api.failAdmission(f.journal, failure).decision, "dispatch-failed");
+    assert.throws(() => f.api.bindAdmission(f.journal, bindingFor(first.assignment)), /failed dispatch/);
+    assert.equal(f.reserve(1).decision, "already-reserved", "retry never issues a second dispatch permission");
+    assert.equal(f.reserve(2).decision, "permit-once");
+    assert.equal(f.api.failAdmission(f.journal, failure).decision, "already-failed");
+    assert.throws(() => f.reserve(3), /capacity is occupied/);
+    assert.equal(f.api.readAdmission(f.journal).failures.length, 1);
+    assert.equal(f.api.readAdmission(f.journal).completions?.length ?? 0, 0);
+  }
+});
+
+test("failed dispatch receipts refuse changed identity, changed evidence, and bound assignments", async t => {
+  const f = await roleAdmissionFixture(t), first = f.reserve(1), failure = failureFor(first.assignment);
+  assert.equal(typeof f.api.failAdmission, "function");
+  for (const key of ["project", "session", "epoch", "assignment", "issuer", "call"]) {
+    assert.throws(() => f.api.failAdmission(f.journal, { ...failure, [key]: key === "epoch" || key === "assignment" ? f.activation : "other" }));
+  }
+  const bound = f.reserve(2); f.api.bindAdmission(f.journal, bindingFor(bound.assignment));
+  assert.throws(() => f.api.failAdmission(f.journal, failureFor(bound.assignment)), /bound assignment/);
+  f.api.changeAdmissionMode(f.journal, { ...f.scope, after: f.activation, turn: "b72422c7-509c-43aa-8c42-827c556f8a57", sage: false });
+  assert.equal(f.api.failAdmission(f.journal, failure).decision, "dispatch-failed");
+  assert.throws(() => f.api.failAdmission(f.journal, { ...failure, evidenceHash: "b".repeat(64) }), /different failure evidence/);
+  assert.equal(f.api.readAdmission(f.journal).failures.length, 1);
+});
+
+test("concurrent failure and binding preserve one terminal history", async t => {
+  const f = await roleAdmissionFixture(t), first = f.reserve(1);
+  assert.equal(typeof f.api.failAdmission, "function");
+  const code = `const input=JSON.parse(process.argv[1]); const api=await import(input.url);
+    try { console.log(JSON.stringify(input.failure ? api.failAdmission(input.dir,input.failure) : api.bindAdmission(input.dir,input.binding))); }
+    catch(error) { console.log(JSON.stringify({refused:error.message})); }`;
+  const run = input => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code, JSON.stringify({ url: f.url, dir: f.journal, ...input })], { stdio: ["pipe", "pipe", "pipe"], env: process.env });
+    let output = "", error = "";
+    child.stdout.on("data", bytes => { output += bytes; }); child.stderr.on("data", bytes => { error += bytes; });
+    child.once("error", reject); child.once("close", status => {
+      try { assert.equal(status, 0, error); resolve(JSON.parse(output)); } catch (e) { reject(e); }
+    }); child.stdin.end();
+  });
+  const result = await Promise.all([run({ failure: failureFor(first.assignment) }), run({ binding: bindingFor(first.assignment) })]);
+  assert.equal(result.filter(row => row.refused).length, 1);
+  const state = f.api.readAdmission(f.journal);
+  assert.equal(state.bindings.length + (state.failures?.length ?? 0), 1);
+});

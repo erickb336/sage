@@ -4,7 +4,7 @@ import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root) {
+export async function setupCompletion(root, { failedSpawn = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
@@ -12,7 +12,7 @@ export async function setupCompletion(root) {
   mkdirSync(options.observationsRoot);
   const { configureAdmission, readAdmission } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
   const { readObservations } = await import(pathToFileURL(join(root, "plugin/runtime/events.mjs")));
-  configureAdmission(options.directory, { total: 5, projects: [{ project: options.project, limit: 5 }] });
+  configureAdmission(options.directory, { total: failedSpawn ? 1 : 5, projects: [{ project: options.project, limit: failedSpawn ? 1 : 5 }] });
   writeFileSync(join(root, "completion-hooks.mjs"), `
     import { appendFileSync, writeFileSync } from 'node:fs';
     import { readAdmission } from './plugin/core/index.mjs';

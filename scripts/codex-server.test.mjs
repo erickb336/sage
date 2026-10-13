@@ -2047,3 +2047,132 @@ test("cached report inspection refuses missing changed and conflicting recovery 
   assert.throws(() => api.readChildReport(input, f.native(session), f.options));
   assert.deepEqual(f.core.readAdmission(f.options.directory), before);
 });
+
+function failedCallRows(spawn) {
+  const metadata = { client_authored: false }, turn = spawn.turn_id, call = spawn.tool_use_id;
+  return [
+    { type: "response_item", payload: { type: "function_call", namespace: "collaboration", name: "spawn_agent", id: "fc_fixture",
+      call_id: call, arguments: JSON.stringify(spawn.tool_input), internal_chat_message_metadata_passthrough: { turn_id: turn } }, metadata },
+    { type: "response_item", payload: { type: "function_call_output", id: "fco_fixture", call_id: call,
+      output: `Unknown model \`${spawn.tool_input.model}\` for spawn_agent. Available models: fixture`,
+      internal_chat_message_metadata_passthrough: { turn_id: turn } }, metadata: { ...metadata } },
+  ];
+}
+async function failedDispatchFixture(t) {
+  const f = await composedPolicyFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const spawn = f.spawnInput(); spawn.tool_input.model = "missing-fixture-model";
+  f.api.reservePreparedSpawn(spawn, f.native(session), f.options);
+  const transcript = join(f.mode.sessionsDir, "root.jsonl");
+  const prefix = readFileSync(transcript, "utf8") + [
+    { type: "event_msg", payload: { type: "task_started", turn_id: spawn.turn_id } },
+    { type: "turn_context", payload: { turn_id: spawn.turn_id } },
+  ].map(row => JSON.stringify(row) + "\n").join("");
+  const rows = failedCallRows(spawn);
+  const write = (input = rows) => writeFileSync(transcript, prefix + input.map(row => JSON.stringify(row) + "\n").join(""));
+  write();
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  const event = { ...postSpawn(), tool_name: "collaborationlist_agents", tool_input: {}, tool_response: "{}", transcript_path: transcript };
+  return { ...f, spawn, transcript, rows, write, policy, event };
+}
+
+test("native failed dispatch reconciliation binds the exact call and survives Sage off and retries", async t => {
+  const f = await failedDispatchFixture(t);
+  assert.equal((f.core.readAdmission(f.options.directory).failures ?? []).length, 0);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(f.policy.reconcileCompletions(f.event, f.native(session)), { decision: "reconciled" });
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.failures.length, 1); assert.equal(state.failures[0].assignment, state.reservations[0].assignment.id);
+  assert.equal(state.bindings.length, 0); assert.equal(state.completions?.length ?? 0, 0);
+  assert.equal(state.reports?.length ?? 0, 0);
+  assert.deepEqual(f.policy.reconcileCompletions(f.event, f.native(session)), { decision: "reconciled" });
+  assert.equal(f.core.readAdmission(f.options.directory).failures.length, 1);
+});
+
+test("native failed dispatch reconciliation retains unknown errors and refuses forged or conflicting evidence", async t => {
+  const f = await failedDispatchFixture(t);
+  for (const text of ["other failure", "Unknown model `other` for spawn_agent. Available models: fixture", "", "Unknown model `missing-fixture-model` for spawn_agent. Available models: fixture\nextra"]) {
+    const rows = structuredClone(f.rows); rows[1].payload.output = text; f.write(rows);
+    f.policy.reconcileCompletions(f.event, f.native(session));
+    assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+  }
+  for (const alter of [rows => { rows[1].metadata.client_authored = true; },
+    rows => { rows[0].payload.name = "other_tool"; }, rows => { rows[0].payload.arguments = "{}"; },
+    rows => { rows[1].payload.internal_chat_message_metadata_passthrough.turn_id = turns[2]; },
+    rows => { rows.push(structuredClone(rows[1])); }, rows => { rows.reverse(); }]) {
+    const rows = structuredClone(f.rows); alter(rows); f.write(rows);
+    assert.throws(() => f.policy.reconcileCompletions(f.event, f.native(session)), /failure evidence/);
+    assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+  }
+  f.write();
+  f.policy.reconcileCompletions(f.event, f.native(childActor));
+  assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+  const linked = join(f.mode.sessionsDir, "linked-root.jsonl"); symlinkSync(f.transcript, linked);
+  assert.throws(() => f.policy.reconcileCompletions({ ...f.event, transcript_path: linked }, f.native(session)));
+  f.policy.reconcileCompletions(f.event, f.native(session));
+  assert.equal(f.core.readAdmission(f.options.directory).failures.length, 1);
+});
+
+test("native failed dispatch reconciliation retains any dispatch with child or success evidence", async t => {
+  const good = await failedDispatchFixture(t);
+  good.policy.reconcileCompletions(good.event, good.native(session));
+  assert.equal(good.core.readAdmission(good.options.directory).failures.length, 1);
+  for (const kind of ["result", "start"]) {
+    const f = await failedDispatchFixture(t);
+    f.events.publish(join(f.options.observationsRoot, session), kind === "result" ? f.result : {
+      schema: 1, runtime: "0.160.0", kind: "child-start", session, child: childActor, parent: session,
+      turn: turns[1], path: `/root/${f.input.name}`,
+    });
+    f.policy.reconcileCompletions(f.event, f.native(session));
+    assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+  }
+});
+
+test("native failed dispatch reconciliation lets an admitted lead recover its own rejected child only", async t => {
+  const f = await completionFixture(t), request = { ...f.input, name: "failed_qa", run: "R2", role: "qa" };
+  f.api.prepareNativeTask(request, f.native(childActor), f.options);
+  const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+  const spawn = { ...f.spawnInput(request.name, "failed-qa"), turn_id: turns[1], transcript_path: transcript };
+  spawn.tool_input.model = "missing-fixture-model";
+  f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options);
+  appendFileSync(transcript, failedCallRows(spawn).map(row => JSON.stringify(row) + "\n").join(""));
+  const event = { ...postSpawn(), turn_id: turns[1], tool_name: "collaborationwait_agent", tool_input: {}, tool_response: "", transcript_path: transcript };
+  f.policy.reconcileCompletions(event, f.native(session));
+  assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+  f.policy.reconcileCompletions(event, f.native(childActor));
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.failures.length, 1); assert.equal(state.failures[0].issuer, childActor);
+  assert.equal(state.failures[0].assignment, state.reservations.find(row => row.assignment.run === "R2").assignment.id);
+  assert.equal(state.bindings.length, 1); assert.equal(state.completions?.length ?? 0, 0);
+});
+
+
+test("native failed dispatch reconciliation runs before a new admitted spawn", async t => {
+  const f = await failedDispatchFixture(t), request = { ...f.input, name: "retry_lead" };
+  f.api.prepareNativeTask(request, f.native(session), f.options);
+  const next = { ...f.spawnInput(request.name, "retry-call"), transcript_path: f.transcript };
+  assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+  assert.deepEqual(await f.evaluate(f.policy, next), { decision: "pass" });
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.failures.length, 1); assert.equal(state.reservations.length, 2);
+  assert.equal(state.failures[0].assignment, state.reservations[0].assignment.id);
+  assert.notEqual(state.failures[0].assignment, state.reservations[1].assignment.id);
+});
+
+test("native failed dispatch rejects post-terminal evidence and preserves historical rejection", async t => {
+  for (const type of ["task_complete", "turn_aborted"]) {
+    const f = await failedDispatchFixture(t);
+    const terminal = { type: "event_msg", payload: { type, turn_id: f.spawn.turn_id } };
+    for (const position of [0, 1]) {
+      const rows = structuredClone(f.rows); rows.splice(position, 0, terminal); f.write(rows);
+      assert.throws(() => f.policy.reconcileCompletions(f.event, f.native(session)), /failure evidence/);
+      assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+    }
+    f.write([...f.rows, terminal]);
+    f.policy.reconcileCompletions(f.event, f.native(session));
+    assert.equal(f.core.readAdmission(f.options.directory).failures.length, 1);
+    const saved = f.core.readAdmission(f.options.directory);
+    f.policy.reconcileCompletions(f.event, f.native(session));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), saved);
+  }
+});
