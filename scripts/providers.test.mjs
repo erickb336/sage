@@ -3420,3 +3420,63 @@ test('saved review targets coexist with pinned run targets and prepared continua
   assert.equal(next.decision, 'permit-once');
   assert.equal(f.api.readAdmission(f.journal).reservations[1].preparation, prepared.id);
 });
+
+function claimedReview(role, changes = {}) {
+  const target = reviewTarget();
+  return { STATUS:'done', RESULT:role === 'qa' ? 'PASS' : 'CLEAN',
+    EVIDENCE:JSON.stringify({commit:target.sha,round:target.round,cycle:target.cycle,summary:'Reviewed the saved change.'}),
+    FINDINGS:'[]', QUESTIONS:'none', 'NOT VERIFIED':'Real model behavior.', BRANCH:target.branch, ...changes };
+}
+
+test('review claims map every clean and blocking result without accepting a verdict', async t => {
+  for (const provider of ['claude','codex']) {
+    const f = await roleAdmissionFixture(t, undefined, provider), before = f.api.readAdmission(f.journal);
+    for (const [role,kind] of [['code-reviewer','review-clean'],['security-reviewer','security-clean'],['ux-reviewer','ux-clean'],['qa','qa-pass']]) {
+      const report = claimedReview(role), original = structuredClone(report), target = reviewTarget();
+      const clean = f.api.parseReviewReport(report, role, target);
+      assert.deepEqual(clean, {kind,evidence:{commit:target.sha,round:0,cycle:1,summary:'Reviewed the saved change.'},findings:[]});
+      for (const severity of ['low','medium','high']) {
+        const findings = [{severity,summary:'A concrete finding.'}];
+        const result = severity === 'low' ? report.RESULT : role === 'qa' ? 'FAIL' : 'FINDINGS';
+        const parsed = f.api.parseReviewReport({...report,RESULT:result,FINDINGS:JSON.stringify(findings)},role,target);
+        assert.equal(parsed.kind, severity === 'low' ? kind : role === 'qa' ? 'qa-fail' : 'findings');
+        assert.deepEqual(parsed.findings,findings);
+      }
+      assert.deepEqual(report, original); assert.deepEqual(target, reviewTarget());
+      clean.evidence.commit = 'b'.repeat(40);
+      assert.equal(f.api.parseReviewReport(report,role,target).evidence.commit,'a'.repeat(40));
+    }
+    assert.deepEqual(f.api.readAdmission(f.journal), before);
+  }
+});
+
+test('review claims refuse changed targets unanswered questions and contradictory findings', async t => {
+  const f = await roleAdmissionFixture(t);
+  assert.equal(f.api.parseReviewReport(claimedReview('qa'),'qa',reviewTarget()).kind,'qa-pass');
+  for (const role of ['code-reviewer','security-reviewer','ux-reviewer','qa']) {
+    const good = claimedReview(role), evidence = JSON.parse(good.EVIDENCE);
+    const changes = [{BRANCH:'codex/t2'}, {STATUS:'blocked'}, {STATUS:'question'}, {QUESTIONS:'Please approve this.'},
+      {RESULT:'done'}, {RESULT:role === 'qa' ? 'CLEAN' : 'PASS'},
+      ...[{commit:'b'.repeat(40)},{round:1},{cycle:2}].map(change=>({EVIDENCE:JSON.stringify({...evidence,...change})})),
+      {FINDINGS:JSON.stringify([{severity:'medium',summary:'A blocking finding.'}])},
+      {RESULT:role === 'qa' ? 'FAIL' : 'FINDINGS'},
+      {RESULT:role === 'qa' ? 'FAIL' : 'FINDINGS',FINDINGS:JSON.stringify([{severity:'low',summary:'A small finding.'}])}];
+    for (const change of changes) assert.throws(()=>f.api.parseReviewReport({...good,...change},role,reviewTarget()), /does not match/);
+  }
+  for (const role of ['lead','implementer','chief-of-staff','unknown',null])
+    assert.throws(()=>f.api.parseReviewReport(claimedReview('qa'),role,reviewTarget()),/does not match/);
+});
+
+test('review claims refuse malformed input with fixed errors and no caller mutation', async t => {
+  const f = await roleAdmissionFixture(t), good = claimedReview('qa'), evidence = JSON.parse(good.EVIDENCE);
+  assert.equal(f.api.parseReviewReport(good,'qa',reviewTarget()).kind,'qa-pass');
+  const inputs = [null,[],{}, {...good,EXTRA:'private'}, {...good,QUESTIONS:null}, {...good,EVIDENCE:'{private invalid json'},
+    ...[null,[],{...evidence,extra:true},{...evidence,summary:''},{...evidence,summary:'private\u0001'}].map(value=>({...good,EVIDENCE:JSON.stringify(value)})),
+    ...[null,{},[null],[{severity:'critical',summary:'private'}],[{severity:'low',summary:''}],[{severity:'low',summary:'private',extra:true}]].map(value=>({...good,FINDINGS:JSON.stringify(value)})),
+    {...good,EVIDENCE:'x'.repeat(32769)}];
+  for (const input of inputs) {
+    const before = structuredClone(input);
+    assert.throws(()=>f.api.parseReviewReport(input,'qa',reviewTarget()), error => error.message === 'The review report does not match its target or findings');
+    assert.deepEqual(input,before);
+  }
+});
