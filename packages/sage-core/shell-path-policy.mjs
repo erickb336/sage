@@ -30,7 +30,7 @@ export function shellWriteOutsideRoots({ command, cwd, roots }) {
   if (typeof command !== "string" || command.length > 1024 * 1024) return false;
   if (!commandWrites(command, cwd)) return true;
   try {
-    const evidence = programsRun(command, cwd, undefined, { contextEvidence: true, redirectEvidence: true });
+    const evidence = programsRun(command, cwd, undefined, { contextEvidence: true, redirectEvidence: true, redirectParts: true });
     const check = (word, dir) => {
       if (typeof word !== "string" || word.length > 4096 || typeof dir !== "string" || !isAbsolute(dir)) return false;
       // This check does not expand runtime values, complex globs, or home-directory syntax.
@@ -77,8 +77,8 @@ export function shellWriteOutsideRoots({ command, cwd, roots }) {
       if ((run.stdin ?? []).some(body => !check(body, run.dir))) return false;
     }
     for (const entry of evidence.redirects) {
-      const target = entry.redirect.replace(/^\d*[<>&|]+/, "");
-      if (!check(target, entry.dir)) return false;
+      if (entry.uncertainDirectory) return false;
+      if (!check(entry.target, entry.dir)) return false;
     }
     return true;
   } catch { return false; }
