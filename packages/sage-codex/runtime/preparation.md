@@ -16,14 +16,20 @@ child binding, plus matching request, result, and start observations. Ambiguous
 path reuse refuses the request. Specialists cannot prepare children.
 
 The tool saves the instructions through core and returns a preparation receipt.
-It starts no agent and occupies no capacity. The returned name selects the work
-for a later native spawn by the same actor in the same project and owner epoch.
+It starts no agent and occupies no capacity. The receipt includes the complete
+saved role, report rules and brief as `message`, plus `fork_turns: "none"`. Pass
+these exact values and the returned name to the later native spawn. The actor,
+project and owner epoch must still match.
 Retries cannot replace instructions. A receipt is not spawn permission.
 
 `reservePreparedSpawn(rawInput, nativeContext, options)` handles the actual
 native PreToolUse spawn. Pass the raw payload before adding a derived `agent_id`.
 It records the request, including rejected or inactive attempts, then checks the
-actor and consumes the matching preparation through core. Only `permit-once`
+actor, the exact prepared message and the fresh-context setting. Changed,
+missing, invalid UTF-8 or oversized messages are refused before capacity changes.
+The admitted dispatch stores the message SHA-256 as `taskHash`. Earlier dispatch
+records without that field remain readable; later delivery checks still need
+exact evidence. Only `permit-once`
 can pass the spawn. An `already-reserved` result must not grant another dispatch.
 The command hook must retain its normal native permission checks.
 
@@ -53,3 +59,10 @@ nested check caught that fixture error. Codex's pinned
 [tool-selection source](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/spec_plan.rs)
 requires this capability for a V2 child's collaboration tools. Installation must
 verify the selected model's capabilities too.
+
+## Extraction checks
+
+The prepared-message extraction checks the packaged tool and admission policy.
+It verifies complete instructions, exact-byte refusals, fresh context, stable
+retries and saved message hashes. It does not establish child delivery through
+the native transport, report completion or installed automatic operation.

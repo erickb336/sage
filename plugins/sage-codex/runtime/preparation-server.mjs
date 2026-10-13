@@ -5,7 +5,7 @@ export function createPreparationServer(options = {}) {
   const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot });
   const server = new McpServer({ name: "sage-preparation", version: "0.1.0" });
   server.registerTool("sage_prepare_task", {
-    description: "Save a complete Sage task brief before spawning a named agent. Preparation does not start the agent or reserve capacity. Use the returned name for the later spawn.",
+    description: "Save a complete Sage task brief before spawning a named agent. Preparation does not start the agent or reserve capacity. Pass the returned name, exact message and fork_turns to the later spawn.",
     inputSchema: z.object({ task: z.string(), run: z.string(), name: z.string(), role: z.string(),
       brief: z.object({ GOAL: z.string(), SCOPE: z.string(), CONTEXT: z.string(), DECISIONS: z.string(),
         ACCEPTANCE: z.string(), VERIFY: z.string(), BUDGET: z.string(), FORBIDDEN: z.string(), REPORT: z.string(), STANDING: z.string() }).strict() }).strict(),
