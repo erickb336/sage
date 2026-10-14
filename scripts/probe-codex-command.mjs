@@ -24,6 +24,9 @@ try {
  const commandArgs=defaultCommand?{cmd:command,max_output_tokens:1000}:{cmd:command,shell:'/bin/sh',workdir:commandDirectory,tty:false,max_output_tokens:1000};
  if(extendedCommand)Object.assign(commandArgs,{login:false,timeout_ms:60000,sandbox_permissions:'use_default',additional_permissions:null,justification:null,prefix_rule:null,environment_id:null});
  const env={PATH:process.env.PATH??'/usr/bin:/bin',HOME:join(root,'home'),CODEX_HOME:codexHome,TMPDIR:join(root,'tmp'),LANG:'en_US.UTF-8',DO_NOT_TRACK:'1'};
+ // Prevent machine-identity queries in this process and the isolated native profile.
+ process.env.SAGE_TEST_MACHINE_ID='native-fixture';
+ env.SAGE_TEST_MACHINE_ID='native-fixture';
  const binary=process.env.SAGE_CODEX_BIN??'codex';
  const telemetry=['-c','analytics.enabled=false','-c','otel.exporter="none"','-c','otel.metrics_exporter="none"','-c','otel.trace_exporter="none"'];
  const launch=args=>spawn(binary,[...telemetry,...args],{cwd:workspace,env,shell:false,stdio:['pipe','pipe','pipe']});
