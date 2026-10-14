@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { recordedWrites, assertNoPendingWrite } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
 // The store is plain TSV and Markdown under the configured root ($SAGE_HOME overrides it), and every
 // table has one writer: this tool. It holds the rules that prompts alone did not hold in Orchestrator: no dropped
@@ -397,11 +398,15 @@ function sheet(dir, table, also = [], max = Infinity) {
     refuse(`${file} cannot be read (${e.code}). ${fixIt(file, e.code)}`);
   }
   if (text === undefined) throw lost(dir, table, "is missing or is a link to nothing", also);
-  const [head, ...lines] = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
-  if (!head) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
-  const cols = head.split("\t");
+  const { cols, lines } = sheetText(text);
+  if (!cols.length) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
   if (!TABLES[table].every((c) => cols.includes(c) || ADDED[table]?.includes(c))) refuse(`the header of ${file} is damaged: its first line must be the column names ${TABLES[table].join(", ")}, separated by tabs. Ask the user to fix or add that line.`);
   return { cols, lines };
+}
+
+function sheetText(text) {
+  const [head, ...lines] = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
+  return { cols: head?.split("\t") ?? [], lines };
 }
 
 const rowsOf = ({ cols, lines }) =>
@@ -416,7 +421,12 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
  * file that it can read, is not empty, and has its header line. It refuses the first that fails and names its file. The
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
-const check = (dir, skip = [], max = Infinity) => Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
+const check = (dir, skip = [], max = Infinity) => {
+  const version = taskWrites.readVersion(dir);
+  const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
+  if (taskWrites.readVersion(dir) !== version) refuse("A task was created while this logbook was read. Retry the read.");
+  return tables;
+};
 
 /**
  * Refuses, before any change, a logbook that a command could not change whole: one that fails the integrity check, or a
@@ -428,6 +438,7 @@ const check = (dir, skip = [], max = Infinity) => Object.fromEntries(Object.keys
 const hasRows = (dir, max = Infinity) => Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`), { max }) ?? "").trim().split(/\r?\n/).length > 1);
 
 function ready(dir, skip = []) {
+  assertNoPendingWrite(dir);
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
   if (!skip.includes("tasks") && !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false })) {
     if (skip.length || hasRows(dir)) throw lost(dir, "tasks", "is missing", skip);
@@ -437,6 +448,75 @@ function ready(dir, skip = []) {
     const extra = cols.filter((c) => c && !TABLES[table].includes(c));
     if (extra.length) refuse(`${join(dir, `${table}.tsv`)} has columns that this version of sage does not know (${extra.join(", ")}): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
   }
+}
+
+const taskWrites = recordedWrites({ schema: 2, tables: ["tasks", "decisions"], folder: "task-requests",
+  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json",
+  validate: validateTaskWrite });
+
+/** Validate saved task publication as one pure update before any recovery write. */
+function validateTaskWrite({ reference, result }, tables) {
+  const deny = () => refuse("The saved task update is damaged. No task table changed.");
+  if (!result || !/^T[1-9]\d*$/.test(result.id)
+    || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, reference.title, reference.size, reference.risk, reference.add))) deny();
+  if (!tables) return;
+  const rows = (table, text) => {
+    const { cols, lines } = sheetText(text);
+    if (!TABLES[table].every(c => cols.includes(c) || ADDED[table]?.includes(c))
+      || cols.some(c => !TABLES[table].includes(c)) || new Set(cols).size !== cols.length) deny();
+    return rowsOf({ cols, lines });
+  };
+  const tasks = rows("tasks", tables.tasks.before), decisions = rows("decisions", tables.decisions.before);
+  if (tasks.some(task => task.id === result.id)
+    || tables.tasks.after !== tableText("tasks", [...tasks, result])) deny();
+  if (reference.add.length) {
+    const after = rows("decisions", tables.decisions.after), at = after.at(-1)?.at;
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(at ?? "")
+      || !Number.isFinite(Date.parse(at)) || new Date(at).toISOString().replace(".000Z", "Z") !== at) deny();
+    decisions.push({ at, task: result.id, decision: `added ${reference.add.join(",")}`, why: reference.why });
+  }
+  if (tables.decisions.after !== tableText("decisions", decisions)) deny();
+}
+
+/** Create one task for a durable caller request. The provider authenticates the opaque owner scope. */
+function createRequestedTask(input, env = process.env) {
+  const fields = ["project", "owner", "request", "title", "size", "risk", "add", "why"];
+  const deny = () => refuse("Task creation needs a complete, unchanged request and a valid route.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
+    || fields.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
+    || typeof input.owner !== "string" || !input.owner || input.owner.length > 1024 || /\p{Cc}/u.test(input.owner)
+    || typeof input.request !== "string" || !new RegExp(`^${UUID}$`).test(input.request)
+    || !["title", "why"].every(key => typeof input[key] === "string" && input[key].length <= 4096 && cell(input[key]) === input[key])
+    || !input.title.trim() || typeof input.size !== "string" || !Object.hasOwn(SIZES, input.size)
+    || !Array.isArray(input.risk) || input.risk.length > RISKS.length || input.risk.some(value => !RISKS.includes(value))
+    || !Array.isArray(input.add) || input.add.length > BLOCKS.length || input.add.some(value => !BLOCKS.includes(value))
+    || new Set(input.risk).size !== input.risk.length || new Set(input.add).size !== input.add.length
+    || (input.add.length && !input.why.trim()) || (!input.add.length && input.why)
+    || (input.size === "investigate" && input.add.includes("build"))) deny();
+  const { project, ...request } = input;
+  // Property order supplied by a transport must not change retry identity.
+  const reference = Object.fromEntries(fields.filter(key => key !== "project").map(key => [key, request[key]]));
+  const dir = storeDir(project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  const checked = receipt => {
+    const result = receipt.result;
+    const matches = read(dir, "tasks").filter(row => row.id === result.id);
+    if (matches.length !== 1) deny();
+    return result;
+  };
+  return withLock(dir, () => {
+    const recovered = taskWrites.recover(dir, reference);
+    if (recovered) { const task = checked(recovered); status(dir, true); return { decision: "task-created", task }; }
+    const prior = taskWrites.readReceipt(dir, reference);
+    if (prior) return { decision: "already-created", task: checked(prior) };
+    ready(dir);
+    const task = taskFrame(nextId(dir, "T"), input.title, input.size, input.risk, input.add);
+    const decisions = read(dir, "decisions");
+    if (input.add.length) decisions.push({ at: now(), task: task.id, decision: `added ${input.add.join(",")}`, why: input.why });
+    taskWrites.commit(dir, { reference, result: task }, { tasks: tableText("tasks", [...read(dir, "tasks"), task]), decisions: tableText("decisions", decisions) });
+    status(dir, true);
+    return { decision: "task-created", task };
+  });
 }
 
 /** Finish only a run from evidence already authenticated by the provider. This never records a verdict. */
@@ -573,9 +653,12 @@ function captureReviewTarget(input, env = process.env) {
   });
 }
 
-function write(dir, table, rows) {
+function tableText(table, rows) {
   const cols = TABLES[table];
-  put(join(dir, `${table}.tsv`), [cols.join("\t"), ...rows.map((r) => cols.map((c) => cell(r[c])).join("\t"))].join("\n") + "\n");
+  return [cols.join("\t"), ...rows.map((r) => cols.map((c) => cell(r[c])).join("\t"))].join("\n") + "\n";
+}
+function write(dir, table, rows) {
+  put(join(dir, `${table}.tsv`), tableText(table, rows));
 }
 
 const now = () => new Date().toISOString().slice(0, 19) + "Z";
@@ -659,9 +742,13 @@ function taskOf(dir, id) {
 }
 
 /** Frames a task with its route and writes it: the least route of its size, the security review for a risk, and the added blocks. */
-function frame(dir, title, size, risk, add) {
+function taskFrame(id, title, size, risk, add) {
   const blocks = new Set([...SIZES[size], ...(risk.length && size !== "investigate" ? ["security-review"] : []), ...add]);
-  const task = { id: nextId(dir, "T"), title, size, risk: risk.join(","), route: BLOCKS.filter((b) => blocks.has(b)).join(","), state: "framed", round: 0 }; // the blocks in their order
+  const task = { id, title, size, risk: risk.join(","), route: BLOCKS.filter((b) => blocks.has(b)).join(","), state: "framed", round: 0 }; // the blocks in their order
+  return task;
+}
+function frame(dir, title, size, risk, add) {
+  const task = taskFrame(nextId(dir, "T"), title, size, risk, add);
   write(dir, "tasks", [...read(dir, "tasks"), task]);
   return task;
 }
@@ -1547,5 +1634,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, finishReportedRun, captureRunAssignment, captureReviewTarget, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, createRequestedTask, finishReportedRun, captureRunAssignment, captureReviewTarget, withLock, board, answerPaths, runCli };
 }
