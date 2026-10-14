@@ -4,6 +4,19 @@ import { execFileSync } from "node:child_process";
 import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
+// The native policy authenticates context.actor before it calls this fixture evaluator.
+export function fixtureInterruptDecision(input, context, enabled) {
+  if (input.tool_name !== "collaborationinterrupt_agent") return null;
+  const args = input.tool_input;
+  const permitted = enabled && typeof input.session_id === "string" && input.session_id.length > 0
+    && context.actor === input.session_id && !Object.hasOwn(input, "agent_id")
+    && args !== null && typeof args === "object" && !Array.isArray(args)
+    && Object.keys(args).length === 1 && Object.hasOwn(args, "target")
+    && args.target === "/root/probe_child";
+  return permitted ? { decision: "pass" }
+    : { decision: "deny", reason: "Outside the fixed interruption fixture." };
+}
+
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
 export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, env = process.env } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
@@ -49,10 +62,13 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     import { serveHooks } from './plugin/runtime/mcp-server.mjs';
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(options)};
-    const allowed = new Set([...(${JSON.stringify(interruption)} ? ['collaborationinterrupt_agent'] : []),...(${JSON.stringify(acceptReview)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
+    const interruptDecision = ${fixtureInterruptDecision.toString()};
+    const allowed = new Set([...(${JSON.stringify(acceptReview)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
       'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
+        const interrupt = interruptDecision(input, context, ${JSON.stringify(interruption)});
+        if (interrupt) return interrupt;
         if (${JSON.stringify(roleEditProbe)} && input.tool_name === 'apply_patch') {
           writeFileSync(${JSON.stringify(join(root, "edit-evaluation.json"))}, JSON.stringify({call:input.tool_use_id,role:context.role}), {flag:'wx'});
           return {decision:'pass'};
