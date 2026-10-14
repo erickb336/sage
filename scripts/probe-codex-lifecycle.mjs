@@ -763,7 +763,7 @@ data: ${JSON.stringify(event)}
         && ["spawn_agent", "wait"].includes(event.item.tool) && event.item.status === "completed") {
         // The native tool result in the next request supplies the stricter state assertion.
       } else if (completion && event.type === "item.completed" && event.item?.type === "mcp_tool_call"
-        && event.item.server === "sage_preparation" && ["sage_create_task", "sage_create_run", "sage_prepare_task", ...(reportProbe ? ["sage_read_report"] : []), ...(receiptProbe ? ["sage_record_report"] : []), ...(finishRun ? ["sage_finish_run"] : [])].includes(event.item.tool) && event.item.status === "completed") {
+        && event.item.server === "sage_preparation" && ["sage_create_task", "sage_create_run", "sage_prepare_task", ...(reportProbe ? ["sage_read_report"] : []), ...(receiptProbe ? ["sage_record_report"] : []), ...(finishRun ? ["sage_finish_run"] : []), ...(acceptReview ? ["sage_accept_review"] : [])].includes(event.item.tool) && event.item.status === "completed") {
         // The prepared message and final journal verify this tool's result.
       } else if (event.type === "item.completed" && event.item?.type !== "reasoning") {
         unexpectedItems++;
