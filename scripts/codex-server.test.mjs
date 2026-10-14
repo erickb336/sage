@@ -3140,3 +3140,137 @@ test("T53: held tasks refuse new preparation and saved dispatch without ending t
     assert.equal(f.api.prepareNativeTask(f.input, f.native(session), f.options).decision, prepared ? "already-prepared" : "prepared");
   }
 });
+
+async function preparedFollowupFixture(t, role = "lead") {
+  const f = await composedPolicyFixture(t);
+  if (role === "qa") Object.assign(f.input, { role, run: "R2", reviewCycle: 1 });
+  f.bindLead();
+  const prior = f.core.readAdmission(f.options.directory).bindings[0];
+  f.core.completeAdmission(f.options.directory, prior);
+  f.assignmentCli('run', 'done', f.input.run, '--status', 'done');
+  f.assignmentCli('run', 'add', 'T1', '--role', role);
+  const request = { ...f.input, run: 'R4', name: 'continued_lead', previous: prior.assignment };
+  const prepared = f.api.prepareNativeTask(request, f.native(session), f.options);
+  const transcript = join(f.mode.sessionsDir, 'followup-parent.jsonl');
+  const input = { hook_event_name: 'PreToolUse', session_id: session, turn_id: turns[0],
+    tool_name: 'collaborationfollowup_task', tool_use_id: 'followup-1', transcript_path: transcript,
+    tool_input: { target: prepared.target, message: prepared.message } };
+  const rows = () => [
+    { type: 'session_meta', payload: { id: session, session_id: session, cli_version: '0.160.0' } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: turns[0] } },
+    { type: 'turn_context', payload: { turn_id: turns[0] } },
+    { type: 'response_item', metadata: { client_authored: false }, payload: { type: 'function_call', namespace: 'collaboration',
+      name: 'followup_task', call_id: input.tool_use_id, arguments: JSON.stringify(input.tool_input),
+      internal_chat_message_metadata_passthrough: { turn_id: turns[0] } } },
+  ];
+  const save = value => writeFileSync(transcript, value.map(row => JSON.stringify(row) + '\n').join(''));
+  save(rows());
+  return { ...f, prior, request, prepared, followupInput: input, rows, save };
+}
+
+test('native follow-up preparation fixes the recipient and cannot dispatch as an initial spawn', async t => {
+  const f = await preparedFollowupFixture(t);
+  assert.equal(f.prepared.target, childActor); assert.equal(f.prepared.previous, f.prior.assignment);
+  assert.equal(Object.hasOwn(f.prepared, 'fork_turns'), false);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.reservations.length, 1);
+  assert.equal(state.preparations[1].continuation, f.prior.assignment);
+  assert.equal(f.api.prepareNativeTask(f.request, f.native(session), f.options).preparation, f.prepared.preparation);
+  assert.throws(() => f.api.reservePreparedSpawn({ ...f.spawnInput(f.request.name, 'wrong-spawn'), tool_input: { task_name: f.prepared.name, message: f.prepared.message, fork_turns: 'none' } }, f.native(session), f.options));
+  const visible = await f.connectVisible();
+  const response = await visible.call(f.request);
+  assert.deepEqual(response, { ...f.prepared, decision: 'already-prepared' });
+  await visible.close();
+  for (const change of [{ previous: session }, { previous: 'invalid' }, { task: 'T2' }, { role: 'qa' }])
+    assert.throws(() => f.api.prepareNativeTask({ ...f.request, ...change }, f.native(session), f.options));
+});
+
+test('native follow-up dispatch consumes exact prepared work once before permitting a callback-approved call', async t => {
+  const f = await preparedFollowupFixture(t);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  assert.deepEqual(await f.evaluate(policy, f.followupInput), { decision: 'pass' });
+  const retry = await f.evaluate(policy, f.followupInput);
+  assert.equal(retry.decision, 'deny'); assert.match(retry.reason, /already reserved/);
+  const state = f.core.readAdmission(f.options.directory), saved = state.reservations[1];
+  assert.equal(saved.continuation, f.prior.assignment); assert.equal(saved.assignment.run, 'R4');
+  assert.equal(saved.preparation, f.prepared.preparation); assert.equal(state.bindings.length, 1);
+  assert.equal(state.completions.length, 1);
+  const observations = f.events.readObservations(join(f.options.observationsRoot, session));
+  const evidence = observations.filter(row => row.kind === 'followup-transcript');
+  assert.equal(evidence.length, 1); assert.equal(evidence[0].target, childActor);
+  assert.equal(evidence[0].call, f.followupInput.tool_use_id);
+});
+
+test('native follow-up dispatch refuses changed fields stale runs and forged or finished calls without capacity', async t => {
+  const f = await preparedFollowupFixture(t);
+  const reserve = input => f.api.reservePreparedFollowup(input, f.native(session), f.options);
+  for (const change of [{ target: session }, { target: '/root/fixture_lead' }, { message: 'replacement' }, { extra: true }])
+    assert.throws(() => reserve({ ...f.followupInput, tool_input: { ...f.followupInput.tool_input, ...change } }));
+  const restore = editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, status: 'done' } : row));
+  assert.throws(() => reserve(f.followupInput)); restore();
+  for (const change of [rows => rows[0].payload.id = childActor, rows => rows[3].metadata.client_authored = true,
+    rows => rows[3].payload.arguments = JSON.stringify({ ...f.followupInput.tool_input, message: 'replacement' }),
+    rows => rows.push({ type: 'event_msg', payload: { type: 'task_complete', turn_id: turns[0] } }),
+    rows => rows.push({ type: 'response_item', metadata: { client_authored: false }, payload: { type: 'function_call_output',
+      id: 'fco_done', call_id: 'followup-1', output: '', internal_chat_message_metadata_passthrough: { turn_id: turns[0] } } })]) {
+    const rows = f.rows(); change(rows); f.save(rows); assert.throws(() => reserve(f.followupInput));
+  }
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
+  f.save(f.rows()); assert.equal(reserve(f.followupInput).decision, 'permit-once');
+});
+
+test('native follow-up policy denies unprepared active-mode calls but retains ordinary off-mode checks', async t => {
+  const f = await composedPolicyFixture(t);
+  const input = { hook_event_name: 'PreToolUse', session_id: session, turn_id: turns[0],
+    tool_name: 'collaborationfollowup_task', tool_use_id: 'unprepared-followup', tool_input: { target: childActor, message: 'unprepared' } };
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  const { mcpPreToolResult } = await import(pathToFileURL(join(f.plugin, 'runtime/mcp-policy.mjs')));
+  const result = await mcpPreToolResult(JSON.stringify(input), f.native(session), async () => policy);
+  assert.equal(result.isError, undefined);
+  assert.equal(JSON.parse(result.content[0].text).hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(await f.evaluate(policy, { ...input, turn_id: turns[2] }), { decision: 'pass' });
+});
+
+
+
+test('native follow-up dispatch keeps evaluator denial free of reservations', async t => {
+  const f = await preparedFollowupFixture(t), before = f.core.readAdmission(f.options.directory);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'deny', reason: 'Fixture refused.' }));
+  assert.deepEqual(await f.evaluate(policy, f.followupInput), { decision: 'deny', reason: 'Fixture refused.' });
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
+
+test('native follow-up dispatch rechecks run review and held targets after awaited approval', async t => {
+  for (const change of ['candidate', 'held', 'review']) {
+    const f = await preparedFollowupFixture(t, change === 'review' ? 'qa' : 'lead');
+    const before = f.core.readAdmission(f.options.directory);
+    const policy = f.createNativePolicy(f.options, async () => {
+      await Promise.resolve();
+      if (change === 'held') editAssignmentRows(f, 'tasks', rows => rows.map(row => row.id === 'T1' ? {...row,state:'held',hold:'Owner pause'} : row));
+      else if (change === 'candidate') editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? {...row,candidate:'other'} : row));
+      else execFileSync('git',['-C',f.options.projectDirectory,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',
+        '-c','user.name=Fixture','-c','user.email=fixture@users.noreply.github.com','commit','--quiet','--allow-empty','-m','Changed review target'],{env:f.assignmentEnv});
+      return {decision:'pass'};
+    });
+    await assert.rejects(f.evaluate(policy, f.followupInput));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+});
+
+test('native follow-up preparation requires a completed predecessor owned by the same actor', async t => {
+  const f = await composedPolicyFixture(t); f.bindLead();
+  const previous = f.core.readAdmission(f.options.directory).bindings[0].assignment;
+  // The next run is independently valid; only admission completion is absent.
+  f.assignmentCli('run','done','R1','--status','done'); f.assignmentCli('run','add','T1','--role','lead');
+  const request = {...f.input,run:'R4',name:'continued',previous};
+  assert.throws(()=>f.api.prepareNativeTask(request,f.native(session),f.options));
+  const bound = f.core.readAdmission(f.options.directory).bindings[0];
+  f.core.completeAdmission(f.options.directory,bound);
+  const other = '44444444-4444-4444-8444-444444444444';
+  f.core.activateAdmission(f.options.directory,{project:f.options.project,session:`codex:${other}`,activation:turns[0]});
+  assert.throws(()=>f.api.prepareNativeTask(request,f.native(other),f.options));
+  assert.equal(f.api.prepareNativeTask(request,f.native(session),f.options).target,childActor);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length,1);
+});

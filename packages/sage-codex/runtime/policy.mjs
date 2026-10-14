@@ -5,7 +5,7 @@ import { join, sep } from "node:path";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readMode } from "./mode.mjs";
-import { reservePreparedSpawn } from "./preparation.mjs";
+import { reservePreparedSpawn, reservePreparedFollowup } from "./preparation.mjs";
 import { checkChildToolRecovery } from "./child-assignment.mjs";
 import { bindNativeChildTool, bindPendingNativeChildTool } from "./child-tool.mjs";
 import { decodeNativeCommand } from "./command-input.mjs";
@@ -133,6 +133,11 @@ export function createNativePolicy(options, evaluateTool) {
         const reserved = reservePreparedSpawn(raw, native, fixed);
         return reserved.decision === "permit-once" ? { decision: "pass" }
           : { decision: "deny", reason: "Sage already reserved this native dispatch." };
+      }
+      if (before.sage && observed?.kind === "dispatch-request" && observed.mode === "task") {
+        const reserved = reservePreparedFollowup(raw, native, fixed);
+        return reserved.decision === "permit-once" ? { decision: "pass" }
+          : { decision: "deny", reason: "Sage already reserved this native follow-up." };
       }
       return checked;
     },

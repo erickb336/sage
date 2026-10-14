@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { readAdmission, prepareAdmission, reservePreparedAdmission, createStateTool, REVIEW_ROLES } from "sage-core";
+import { readAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, createStateTool, REVIEW_ROLES } from "sage-core";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { bindings, decodeEvent, publish, readObservations } from "./events.mjs";
 
+import { readNativeFollowup } from "./identity.mjs";
 import { preparedTaskMessage } from "./instructions.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
 import { captureNativeRunAssignment, checkNativeRunAssignment } from "./run-assignment.mjs";
@@ -56,20 +57,22 @@ function captureReview(options, input, cycle) {
 export function prepareNativeTask(input, context, options) {
   const native = nativeToolContext(context);
   const hasCycle = Object.hasOwn(input ?? {}, "reviewCycle");
-  const keys = ["task", "run", "name", "role", "brief", ...(hasCycle ? ["reviewCycle"] : [])];
+  const hasPrevious = Object.hasOwn(input ?? {}, "previous");
+  const keys = ["task", "run", "name", "role", "brief", ...(hasCycle ? ["reviewCycle"] : []), ...(hasPrevious ? ["previous"] : [])];
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
     || keys.some(key => !Object.hasOwn(input, key)) || typeof input.name !== "string" || !NAME.test(input.name)) refuse();
   const { scope, role, task } = actorScope(options, native);
   if (role === "lead" && input.task !== task) refuse();
+  const previous = hasPrevious ? completedRecipient(options, scope, native.actor, input.previous, input.task, input.role) : undefined;
   const runTarget = captureNativeRunAssignment(options, input);
   const reviewRole = REVIEW_ROLES.includes(input.role);
   if (hasCycle && !reviewRole) refuse();
   const review = reviewRole ? captureReview(options, input, input.reviewCycle) : undefined;
   const result = prepareAdmission(options.directory, scope,
     { task: input.task, run: input.run, issuer: native.actor, name: input.name },
-    { issuerRole: role, role: input.role }, input.brief, { review, runTarget });
+    { issuerRole: role, role: input.role }, input.brief, { review, runTarget, ...(hasPrevious ? { continuation: input.previous } : {}) });
   const saved = result.preparation;
-  return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role, message: preparedTaskMessage(saved), fork_turns: "none", ...(saved.review ? { review: saved.review } : {}) };
+  return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role, message: preparedTaskMessage(saved), ...(previous ? { target: previous.child, previous: input.previous } : { fork_turns: "none" }), ...(saved.review ? { review: saved.review } : {}) };
 }
 
 /** Input is the raw native PreToolUse payload, before any derived agent_id is added. */
@@ -89,7 +92,7 @@ export function reservePreparedSpawn(input, context, options) {
   if (scope.session !== `codex:${observed.session}`) refuse();
   const prepared = readAdmission(options.directory).preparations.filter(row => row.project === scope.project
     && row.session === scope.session && row.epoch === scope.epoch && row.issuer === native.actor && row.name === observed.name);
-  if (prepared.length !== 1 || message !== preparedTaskMessage(prepared[0])) refuse();
+  if (prepared.length !== 1 || prepared[0].continuation || message !== preparedTaskMessage(prepared[0])) refuse();
   if (role === "lead" && prepared[0].task !== task) refuse();
   checkNativeRunAssignment(options, { ...prepared[0], role: prepared[0].rolePlan.role }, prepared[0].runTarget);
   if (REVIEW_ROLES.includes(prepared[0].rolePlan.role)) {
@@ -101,4 +104,64 @@ export function reservePreparedSpawn(input, context, options) {
     { preparation: prepared[0].id, issuer: native.actor, call: observed.call },
     { tool: input.tool_name, turn: observed.turn, name: observed.name,
       argumentsHash: createHash("sha256").update(JSON.stringify(input.tool_input)).digest("hex"), taskHash }, role);
+}
+
+/** A saved assignment, not a supplied agent name, fixes the continuation recipient. */
+function completedRecipient(options, scope, issuer, previous, task, role) {
+  if (typeof previous !== "string" || !UUID.test(previous)) refuse();
+  const state = readAdmission(options.directory);
+  const assigned = state.reservations.find(row => row.assignment.id === previous);
+  const bound = state.bindings.find(row => row.assignment === previous);
+  if (!assigned || !bound || !state.completions?.some(row => row.assignment === previous)
+    || !UUID.test(bound.child) || bound.child === issuer
+    || ["project", "session", "epoch"].some(key => assigned.assignment[key] !== scope[key])
+    || assigned.assignment.issuer !== issuer || assigned.assignment.task !== task || assigned.rolePlan?.role !== role) refuse();
+  return bound;
+}
+
+/** Reserve an exact saved follow-up before native dispatch. Binding its later turn remains separate. */
+export function reservePreparedFollowup(input, context, options) {
+  const native = nativeToolContext(context);
+  const event = nativeToolEvent(input, native, "PreToolUse");
+  const observed = decodeEvent(event, native);
+  if (observed?.kind !== "dispatch-request" || observed.mode !== "task"
+    || Object.keys(event.tool_input).length !== 2 || !Object.hasOwn(event.tool_input, "target")
+    || !Object.hasOwn(event.tool_input, "message") || !UUID.test(event.tool_input.target ?? "")) refuse();
+  const { scope, role, task } = actorScope(options, native);
+  if (scope.session !== `codex:${event.session_id}`) refuse();
+  const message = event.tool_input.message;
+  if (typeof message !== "string" || Buffer.byteLength(message) > 1024 * 1024) refuse();
+  // The header locates a candidate; only complete saved bytes can authorize it.
+  const id = /^Role: [a-z-]+\nPreparation: ([0-9a-f-]{36})\n/.exec(message)?.[1];
+  if (!id || !UUID.test(id)) refuse();
+  const prepared = readAdmission(options.directory).preparations.filter(row => row.id === id && row.project === scope.project
+    && row.session === scope.session && row.epoch === scope.epoch && row.issuer === native.actor
+    && row.continuation && message === preparedTaskMessage(row));
+  if (prepared.length !== 1) refuse();
+  const saved = prepared[0];
+  if (role === "lead" && saved.task !== task) refuse();
+  const previous = completedRecipient(options, scope, native.actor, saved.continuation, saved.task, saved.rolePlan.role);
+  if (event.tool_input.target !== previous.child) refuse();
+  checkNativeRunAssignment(options, { ...saved, role: saved.rolePlan.role }, saved.runTarget);
+  if (REVIEW_ROLES.includes(saved.rolePlan.role)) {
+    if (!saved.review || JSON.stringify(captureReview(options, { ...saved, role: saved.rolePlan.role }, saved.review.cycle)) !== JSON.stringify(saved.review)) refuse();
+  }
+  const taskHash = createHash("sha256").update(event.tool_input.message).digest("hex");
+  const directory = join(options.observationsRoot, event.session_id);
+  const sender = native.actor === event.session_id ? { parent: null, path: "/root" } : (() => {
+    const starts = readObservations(directory).filter(row => row.kind === "child-start" && row.child === native.actor);
+    if (starts.length !== 1) refuse();
+    return { parent: starts[0].parent, path: starts[0].path };
+  })();
+  if (readNativeFollowup(event.transcript_path, { sessionsDir: options.sessionsDir }, {
+    session: event.session_id, actor: native.actor, ...sender, turn: event.turn_id,
+    call: event.tool_use_id, target: previous.child, taskHash,
+  }) !== null) refuse(); // A completed call cannot become a new dispatch permission.
+  publish(directory, observed);
+  publish(directory, { schema: 1, runtime: native.version, kind: "followup-transcript", session: event.session_id,
+    actor: native.actor, call: event.tool_use_id, turn: event.turn_id, target: previous.child, transcript: event.transcript_path });
+  return reservePreparedContinuation(options.directory, scope,
+    { preparation: saved.id, issuer: native.actor, call: event.tool_use_id, previous: saved.continuation },
+    { tool: event.tool_name, turn: event.turn_id, name: saved.name,
+      argumentsHash: createHash("sha256").update(JSON.stringify(event.tool_input)).digest("hex"), taskHash }, role);
 }

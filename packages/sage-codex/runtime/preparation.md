@@ -105,3 +105,14 @@ This check runs after an awaited policy evaluator. A lead must also retain its o
 Missing, duplicate, ended, or changed records refuse. A held task cannot prepare or dispatch work until the chief resumes it. Old unpinned preparations remain readable but cannot dispatch.
 A changed target needs a new run and brief. This component does not validate active child work, completion,
 continuation dispatch, or review acceptance. It does not enable installed automatic Sage.
+
+## Prepared follow-ups
+
+Supply `previous` with a completed assignment ID to prepare another assignment for the same child.
+Use a new run and logical name, with the same task, role, owner and epoch.
+The response contains the saved child UUID as `target` and the complete `message`.
+Copy both fields unchanged to `followup_task`. A follow-up preparation cannot authorize an initial spawn.
+
+Native policy requires an authenticated pending call and current run and review targets after evaluator approval.
+The atomic reservation consumes capacity once. Repeating that dispatch does not grant another permission.
+Binding the child's later turn remains a separate check. This does not enable installed automatic Sage.

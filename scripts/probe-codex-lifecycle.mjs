@@ -11,9 +11,11 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-followup", "--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const followup = process.argv.includes("--sage-followup");
+assert(!followup || process.argv.slice(2).length === 1, "followup_is_a_separate_probe");
 const leadOwnership = process.argv.includes("--sage-lead-ownership");
 assert(!leadOwnership || process.argv.slice(2).length === 1, "ownership_is_a_separate_probe");
 let ownershipStage = 0;
@@ -35,7 +37,7 @@ const finishRun = process.argv.includes("--sage-report");
 const receiptProbe = finishRun || process.argv.includes("--sage-receipt") || recoveryProbe;
 const reportProbe = process.argv.includes("--sage-report") || receiptProbe;
 const failedSpawn = process.argv.includes("--sage-failed-spawn");
-const completion = leadOwnership || roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
+const completion = followup || leadOwnership || roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
 assert(!(failedSpawn && (reportProbe || recoveryProbe)), "incompatible_failure_probe");
 assert(!(denySpawn && completion), "incompatible_probe_modes");
 let denied = false;
@@ -102,8 +104,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,writer,leadOwnership,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,writer,leadOwnership,followup,deadlineMs});
   let failureStage = 0;
+  let followupPrepared, followupVerified = false, followupResponse, releaseFollowup;
+  const followupReady = new Promise(resolve => { releaseFollowup = resolve; });
   let finishVerified = false, firstFinish, beforeFinishLogbook, finishedLogbook;
   let prepared = false, blockedStopVerified = false, reportVerified = false, receiptVerified = false, beforeReport, expectedReport, recordedState;
   let compactRequests = 0, recoveryRound = 0, recoveryPhase = "compact", recoveredRounds = 0;
@@ -126,7 +130,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { finish: "probe_finish", finishRetry: "probe_finish_retry", ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { followPrepare:"probe_follow_prepare", follow:"probe_follow", followWait:"probe_follow_wait", followDone:"probe_follow_done", finish: "probe_finish", finishRetry: "probe_finish_retry", ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -138,6 +142,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     fixtureFailure ??= reason;
     print({ type: "fixture_failure", reason: fixtureFailure });
     releaseChildReady();
+    releaseFollowup();
     for (const response of pending) reject(response);
   };
   const inspectRequest = (request) => {
@@ -147,10 +152,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (!["function_call_output", "custom_tool_call_output"].includes(item.type) || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.finish, calls.finishRetry, calls.ownerPrepare, calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.followPrepare, calls.finish, calls.finishRetry, calls.ownerPrepare, calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
-        if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.ownerSpawn, calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
+        if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.follow, calls.ownerSpawn, calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -176,7 +181,9 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({namespace: tool.name, name: member.name}))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{name: tool.name}] : []);
-    return { finishTools: mcpTools("sage_finish_run"), outputs, agentTools, childPromptSeen, commandTools, patchTools,
+    const followupPromptSeen = tasks.at(-1)?.author === "/root" && tasks.at(-1)?.recipient === "/root/probe_child"
+      && tasks.at(-1)?.content?.some(part => part.type === "encrypted_content" && part.encrypted_content === followupPrepared?.message);
+    return { followupPromptSeen, finishTools: mcpTools("sage_finish_run"), outputs, agentTools, childPromptSeen, commandTools, patchTools,
       chiefMessageDelivered: input.some(item => item.type === "agent_message" && item.author === "/root/probe_child"
         && item.recipient === "/root" && texts(item.content).includes("Fixed progress report")), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), assignmentTools: mcpTools("sage_read_assignment") };
   };
@@ -244,6 +251,10 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if (followup && childRequests === 2) {
+          check(thread === childThread && info.followupPromptSeen, "followup_child_or_message_changed");
+          childRequests++; followupResponse = res; releaseFollowup(); return;
+        }
         if (roleEdit && childRequests === 1) {
           check(thread === childThread && childResponseSent, "wrong_edit_child");
           const file = join(workspace,"role-edit-proof.txt");
@@ -485,12 +496,44 @@ data: ${JSON.stringify(event)}
         check(agent.agent_status?.completed === CHILD_MARKER, "native_child_completion_marker_mismatch");
         nativeCompleted = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "completed", agent_name: taskName, agent_status: { completed: CHILD_MARKER } });
-        if (reportProbe) {
+        if (followup) {
+          const state = integrated.readJournal();
+          check(state.bindings.length === 1 && state.completions.length === 1, "followup_predecessor_not_completed");
+          integrated.prepareFollowupRun();
+          const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native follow-up fixture task."]));
+          respond(res, {type:"function_call", ...info.prepareTools[0], call_id:calls.followPrepare,
+            arguments:JSON.stringify({task:"T1",run:"R2",name:"continued_child",role:"lead",previous:state.bindings[0].assignment,brief})});
+        } else if (reportProbe) {
           check(info.reportTools.length === 1, "report_tool_missing");
           beforeReport = JSON.stringify(integrated.readJournal());
           respond(res, {type: "function_call", ...info.reportTools[0], call_id: calls.report,
             arguments: JSON.stringify({name: "probe_child"})});
         } else respond(res, message(MARKER));
+      } else if (followup && rootRequests === 6) {
+        followupPrepared = info.outputs[calls.followPrepare];
+        check(followupPrepared?.decision === "prepared" && followupPrepared.target === childThread
+          && typeof followupPrepared.message === "string" && !Object.hasOwn(followupPrepared,"fork_turns"), "followup_preparation_invalid");
+        respond(res, call(calls.follow,"followup_task",{target:followupPrepared.target,message:followupPrepared.message}));
+      } else if (followup && rootRequests === 7) {
+        check(info.outputs[calls.follow] === "", "followup_not_accepted");
+        const state = integrated.readJournal();
+        check(state.reservations.length === 2 && state.reservations[1].continuation === state.bindings[0].assignment,
+          "followup_reservation_missing");
+        await followupReady;
+        if (fixtureFailure) { reject(res); return; }
+        respond(res, call(calls.followWait,"wait_agent",{}));
+        respond(followupResponse,message(CHILD_MARKER));
+      } else if (followup && rootRequests === 8) {
+        check(info.outputs[calls.followWait]?.timed_out === false, "followup_wait_failed");
+        respond(res,call(calls.followDone,"list_agents",{path_prefix:taskName}));
+      } else if (followup && rootRequests === 9) {
+        check(childEntry(info.outputs[calls.followDone]).agent_status?.completed === CHILD_MARKER, "followup_completion_missing");
+        const state=integrated.readJournal();
+        check(state.reservations.length===2 && state.bindings.length===2 && state.completions.length===2
+          && state.bindings.every(row=>row.child===childThread) && state.bindings[0].turn!==state.bindings[1].turn, "followup_identity_changed");
+        followupVerified=true;
+        print({type:"followup_evidence",sameChild:true,exactSavedMessage:true,reservations:2,completedTurns:2,simulatedModel:true,automaticSage:false});
+        respond(res,message(MARKER));
       } else if (reportProbe && rootRequests === 6) {
         const report = info.outputs[calls.report], state = integrated.readJournal();
         check(report?.decision === "report-ready" && report.assignment === state.bindings[0].assignment
@@ -659,7 +702,7 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+      : rootRequests === (followup ? 9 : finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!followup || followupVerified) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (followup ? 3 : roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
         && (!recoveryProbe || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
@@ -678,7 +721,7 @@ data: ${JSON.stringify(event)}
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
     assert.equal(before.length,failedSpawn || leadOwnership ? 2 : 1);
     assert.equal(start.length,denySpawn ? 0 : 1);
-    assert.equal(stop.length,denySpawn ? 0 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
+    assert.equal(stop.length,denySpawn ? 0 : followup ? 3 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
     assert.equal(after.length,denySpawn ? 0 : 1);
     if (!denySpawn) {
     assert.equal(start[0].captureError,undefined);
@@ -692,14 +735,14 @@ data: ${JSON.stringify(event)}
     }
     if (completion) {
       const state = integrated.readJournal(), stops = integrated.readStops();
-      assert.equal(state.preparations.length, failedSpawn || leadOwnership ? 2 : 1); assert.equal(state.reservations.length, failedSpawn ? 2 : 1);
-      assert.equal(state.bindings.length, 1); assert.equal(state.completions.length, 1);
+      assert.equal(state.preparations.length, failedSpawn || leadOwnership || followup ? 2 : 1); assert.equal(state.reservations.length, failedSpawn || followup ? 2 : 1);
+      assert.equal(state.bindings.length, followup ? 2 : 1); assert.equal(state.completions.length, followup ? 2 : 1);
       assert.deepEqual(state.completions[0], state.bindings[0]);
       assert.equal(state.bindings[0].child, childThread);
       assert.equal(state.reports?.length ?? 0, receiptProbe ? 1 : 0);
-      assert.equal(stops.length, recoveryProbe ? recoveredRounds + 1 : 2);
-      assert(stops.every((row, i) => row.decision === (recoveryProbe && i < recoveredRounds ? "recovery-required" : "stop-observed") && row.completions === 0));
-      print({type: "completion_evidence", reservations: state.reservations.length, bindings: 1, completions: 1,
+      assert.equal(stops.length, followup ? 3 : recoveryProbe ? recoveredRounds + 1 : 2);
+      assert(stops.every((row, i) => row.decision === (recoveryProbe && i < recoveredRounds ? "recovery-required" : "stop-observed") && row.completions === (followup && i === 2 ? 1 : 0)));
+      print({type: "completion_evidence", reservations: state.reservations.length, bindings: state.bindings.length, completions: state.completions.length,
         blockedStopRetainedCapacity: blockedStopVerified, stopCallbacksPrecedeTerminal: true,
         parentReconciledCompletion: true, reportsAccepted: 0, fullPolicyVerified: false,
         simulatedModel: true, automaticSage: false, realModelConsumptionVerified: false});
