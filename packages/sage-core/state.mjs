@@ -457,7 +457,7 @@ const taskWrites = recordedWrites({ schema: 2, tables: ["tasks", "decisions"], f
 /** Validate saved task publication as one pure update before any recovery write. */
 function validateTaskWrite({ reference, result }, tables) {
   const deny = () => refuse("The saved task update is damaged. No task table changed.");
-  if (!result || !/^T[1-9]\d*$/.test(result.id)
+  if (!result || typeof result.id !== "string" || !/^T[1-9]\d*$/.test(result.id)
     || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, reference.title, reference.size, reference.risk, reference.add))) deny();
   if (!tables) return;
   const rows = (table, text) => {
