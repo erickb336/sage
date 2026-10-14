@@ -1,1 +1,1 @@
-export { createCommandPolicy, mentionsMerge, createPushPolicy, gitSubcommand } from "../core/index.mjs";
+export { createCommandPolicy, mentionsMerge, createPushPolicy, gitSubcommand, programName } from "../core/index.mjs";

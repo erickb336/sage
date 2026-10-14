@@ -6,7 +6,8 @@ const MERGE_FORM = "gh pr merge <n> --squash --delete-branch --match-head-commit
 const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
 
 /** Recognize executable spellings across providers without changing arguments or merge authorization. */
-export const programName = (word) => word.split(/[/\\]/).at(-1).replace(/\.exe$/i, "").toLowerCase();
+export { programName } from "./program-name.mjs";
+import { programName } from "./program-name.mjs";
 
 /**
  * Text that names a merge: the word gh and the word merge in any order (so also "$G pr merge" or "gh pr $(echo merge)"),
@@ -30,14 +31,15 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     throw new TypeError("stateToolPath must be an absolute path without control characters");
   }
   /** Expansion in a command word can hide git, gh, push or merge. Arguments keep their ordinary braces and globs. */
-  function expansionProblem(command, cwd) {
+  function expansionProblem(command, cwd, options = {}) {
     const expansion = /[{[*?]/;
     const expands = (word) => !/^(?:[{}]|\[\[?)$/.test(word) && expansion.test(word); // literal groups and test commands
     const reason = "shell expansion can hide the command. Use literal program and git or gh subcommand words, without {, [, * or ?.";
     let runs;
     try {
-      runs = programsRun(command, cwd);
+      runs = programsRun(command, cwd, undefined, options);
     } catch (e) {
+      if (e.code === "SAGE_POWERSHELL_LAUNCH") return e.message;
       return expansion.test(command) ? `${reason} The hook cannot read this command (${e.message}).` : undefined;
     }
     for (const { word, args, stdin, piped } of runs) {

@@ -16,6 +16,93 @@ const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
 
+test("T51: built hook normalizes agent stash, process, reader and writer executable names", async t => {
+  const f = isolated(t, "claude"), logbook = join(f.dir, "logbook"); mkdirSync(logbook);
+  const previous = process.env.SAGE_HOME; process.env.SAGE_HOME = logbook;
+  t.after(() => { if (previous === undefined) delete process.env.SAGE_HOME; else process.env.SAGE_HOME = previous; });
+  const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+  const decide = command => hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
+    agent_id: "fixture", agent_type: "sage:implementer", tool_input: { command } }, { sage: true }, { touch() {} });
+  for (const executable of ["GIT", "Git.exe", "/opt/homebrew/bin/GIT", "'/tools/Git.EXE'"]) {
+    assert.match(decide(`${executable} stash`)?.hookSpecificOutput?.permissionDecisionReason ?? "", /never runs git stash/, executable);
+    assert.notEqual(decide(`${executable} status`)?.hookSpecificOutput?.permissionDecision, "deny", executable);
+  }
+  for (const name of ["PS", "PGREP.exe", "KiLlAll.EXE", "/tools/GET-PROCESS.exe"])
+    assert.match(decide(`${name} sample`)?.hookSpecificOutput?.permissionDecisionReason ?? "", /process list/, name);
+  const fake = join(f.dir, "PS.EXE"); writeFileSync(fake, "#!/bin/sh\nexit 0\n"); chmodSync(fake, 0o755);
+  assert.notEqual(decide(`'${fake}' sample`)?.hookSpecificOutput?.permissionDecision, "deny", "a real temporary fake remains allowed");
+  for (const command of [`CP.exe source '${logbook}/tasks.tsv'`, `RG.exe --pre cat '${logbook}/tasks.tsv'`, `FILE.exe -C '${logbook}/tasks.tsv'`])
+    assert.equal(decide(command)?.hookSpecificOutput?.permissionDecision, "deny", command);
+  for (const command of [`CAT.exe '${logbook}/tasks.tsv'`, `PRINTF.exe '%s' 'GIT stash'`, `CAT.exe '${f.plugin}/skills/sage/sage.mjs'`])
+    assert.notEqual(decide(command)?.hookSpecificOutput?.permissionDecision, "deny", command);
+});
+
+test("T51: PowerShell launcher evidence preserves literal arguments and reaches push and stash guards", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const options = { powerShell: true };
+    const forms = [
+      `Start-Process git -ArgumentList 'push','origin','main'`,
+      `start -ArgumentList 'push origin main' -FilePath Git.exe`,
+      `START-PROCESS -FilePath '/tools/GIT.exe' -Wait -ArgumentList "push", "origin", "main"`,
+      `Start-Process git 'push', 'origin', 'main'`,
+      `Start-Process -ArgumentList 'push','--force','origin','topic' -FilePath git`,
+    ];
+    const policy = api.createPushPolicy({ readBranch: () => "topic" });
+    for (const command of forms) {
+      const runs = api.programsRun(command, f.dir, "", options);
+      assert.equal(runs.length, 1, command);
+      assert.equal(runs[0].args[0], "push", "the launcher exposes the real child subcommand");
+      assert.equal(api.programName(runs[0].word), "git");
+      assert.ok(policy.pushProblem(command, f.dir, options), command);
+    }
+    const comma = api.programsRun(`Start-Process -FilePath echo -ArgumentList 'literal,comma','"two words"'`, f.dir, "", options);
+    assert.deepEqual(comma[0].args, ["literal,comma", "two words"]);
+    assert.deepEqual(api.programsRun(`Start-Process start -ArgumentList 'literal'`, f.dir, "", options).map(({ word, args }) => ({ word, args })), [{ word: "start", args: ["literal"] }], "a native child is not interpreted again as a PowerShell alias");
+    assert.equal(api.programsRun(`start git -ArgumentList 'stash'`, f.dir, "")[0].word, "start", "Bash start remains an ordinary executable");
+    const nested = `pwsh -Command "Start-Process git -ArgumentList 'stash'"`;
+    const nestedPush = `PowerShell.exe -Command "start -ArgumentList 'push','origin','main' -FilePath git"`;
+    assert.ok(policy.pushProblem(nestedPush, f.dir), "nested launcher push reaches the policy");
+    assert.ok(api.programsRun(nested, f.dir, "").some(run => api.programName(run.word) === "git" && run.args[0] === "stash"));
+    if (provider !== "claude") continue;
+    const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+    const decide = (command, actor = {}, tool_name = "PowerShell") => hook.handle({ hook_event_name: "PreToolUse", tool_name,
+      cwd: f.dir, tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
+    for (const actor of [{}, { agent_id: "fixture", agent_type: "sage:implementer" }]) {
+      for (const command of [...forms, nestedPush, "Git push origin main", "git.exe push --force origin topic"])
+        assert.equal(decide(command, actor)?.hookSpecificOutput?.permissionDecision, "deny", command);
+      for (const command of [`Start-Process git -ArgumentList 'status'`, `start -ArgumentList 'status' -FilePath git -Wait`, `git status`])
+        assert.notEqual(decide(command, actor)?.hookSpecificOutput?.permissionDecision, "deny", command);
+    }
+    for (const command of [`Start-Process git -ArgumentList 'stash'`, `start -ArgumentList 'stash' -FilePath git`, nested])
+      assert.equal(decide(command, { agent_id: "fixture", agent_type: "sage:implementer" }, command === nested ? "Bash" : "PowerShell")?.hookSpecificOutput?.permissionDecision, "deny", command);
+    assert.equal(decide(`Start-Process GH.exe -ArgumentList 'repo delete example'`, { agent_id: "fixture", agent_type: "sage:implementer" })?.hookSpecificOutput?.permissionDecision, "deny", "launcher child reaches the agent gh policy");
+    for (const command of [`Start-Process -FilePath $program -ArgumentList 'status'`, `Start-Process git -Mystery ignored -ArgumentList status`])
+      assert.equal(decide(command)?.hookSpecificOutput?.permissionDecision, "deny", command);
+  }
+});
+
+test("T51: PowerShell quote ambiguity cannot hide a protected push or merge", async t => {
+  const f = isolated(t, "claude");
+  const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+  const wrap = command => `echo "\\"; ${command}; echo "\\"`;
+  for (const actor of [{}, { agent_id: "fixture", agent_type: "sage:implementer" }]) {
+    for (const protectedCommand of ["git push origin main", "Gh.exe pr merge 1 --admin"]) {
+      const command = wrap(protectedCommand);
+      const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "PowerShell", cwd: f.dir,
+        tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
+      assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny", command);
+    }
+    const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "PowerShell", cwd: f.dir,
+      tool_input: { command: `echo 'ordinary text'` }, ...actor }, { sage: true }, { touch() {} });
+    assert.notEqual(result?.hookSpecificOutput?.permissionDecision, "deny");
+    const bash = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
+      tool_input: { command: wrap("git push origin main") }, ...actor }, { sage: true }, { touch() {} });
+    assert.notEqual(bash?.hookSpecificOutput?.permissionDecision, "deny", "Bash quote semantics remain unchanged");
+  }
+});
+
 test("T49: built Claude hook protects the logbook from output writers while preserving reads and scratch output", async t => {
   const f = isolated(t, "claude"), logbook = join(f.dir, "logbook"); mkdirSync(logbook);
   const previous = process.env.SAGE_HOME; process.env.SAGE_HOME = logbook;
