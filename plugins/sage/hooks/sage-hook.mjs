@@ -809,8 +809,7 @@ function writesIn({ words, redirects }) {
 /** Does one field of a command's text have a write form? A text that the hook cannot read counts as one (fail closed). */
 function writes(text, cwd) {
   try {
-    if (shellCommands(text).some(writesIn)) return true;
-    return programsRun(text, cwd, undefined, { contextEvidence: true }).programs.some(readerDispatch);
+    return boardPolicy.commandWrites(text, cwd);
   } catch {
     return true;
   }
