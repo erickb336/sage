@@ -27,7 +27,7 @@ const BOOT = (() => {
  */
 const timeout = 60_000;
 /** The model keys that sage config prints by default, after the numbers. */
-const MODEL_DEFAULTS = "model.code-reviewer.tiny=fable model.code-reviewer.small=fable model.security-reviewer.tiny=fable model.security-reviewer.small=fable model.ux-reviewer.tiny=fable model.ux-reviewer.small=fable model.qa.tiny=fable model.qa.small=fable";
+const MODEL_DEFAULTS = "model.pe=opus model.designer=opus model.implementer=opus model.code-reviewer=opus model.security-reviewer=opus model.ux-reviewer=sonnet model.qa=opus model.arena-judge=opus model.implementer.tiny=sonnet model.code-reviewer.tiny=sonnet model.qa.tiny=sonnet model.qa.small=sonnet";
 /** Every line that the tool printed in this file's tests: the last test reads them. */
 const said = [];
 
@@ -195,7 +195,7 @@ test("one writer per branch", () => {
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "small");
   assert.match(s.no("run", "add", "T1", "--role", "implementer"), /needs --branch/);
-  assert.equal(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), "R1 running · implementer on T1 · claude/t1");
+  assert.equal(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), "R1 running · implementer on T1 · claude/t1 · model opus");
   assert.match(s.no("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), /R1 \(implementer\) still writes claude\/t1/);
   assert.match(s.ok("run", "add", "T1", "--role", "code-reviewer", "--branch", "claude/t1"), /R2 running/, "readers do not count");
   s.ok("run", "done", "R1", "--status", "done", "--tokens", "52000");
@@ -266,7 +266,7 @@ test("F-T266-3: run add takes the role as the table stores it, in lower case, so
     assert.equal(s.no("run", "add", "T1", "--role", role), "sage: R1 is the running lead run of T1, and a task has one running lead. Finish R1 first (sage run done R1 --status done, blocked, question or failed).", `${JSON.stringify(role)} is lead`);
   }
   assert.equal(s.ok("run", "add", "T2", "--role", "Lead "), "R2 running · lead on T2");
-  assert.equal(s.ok("run", "add", "T2", "--role", "QA"), "R3 running · qa on T2 · model fable", "QA is qa, with qa's model for a small task");
+  assert.equal(s.ok("run", "add", "T2", "--role", "QA"), "R3 running · qa on T2 · model sonnet", "QA is qa, with qa's model for a small task");
   assert.deepEqual(rows(s.dir, "runs").map((r) => r.role), ["lead", "lead", "qa"]);
   assert.equal(s.no("run", "add", "T2", "--role", "builder"), 'sage: "builder" is not a role of a run. Roles: lead, implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate, evidence-review.');
   assert.match(s.no("run", "add", "T2", "--role", "ｌｅａｄ"), /^sage: "ｌｅａｄ" is not a role of a run\./, "a look-alike is no role");
@@ -2342,22 +2342,60 @@ test("F-T42-2: a config write never lands on a link's target, also when a link r
   assert.deepEqual(readdirSync(s.home).filter((n) => n.startsWith("config.json.") && !/\.(l|r)$/.test(n)), [], "no temp file is left");
 });
 
+
+
+test("Balanced defaults cover every role and size without a config file", () => {
+  const s = store();
+  const roles = ["pe", "designer", "implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "arena-judge"];
+  for (const size of ["tiny", "small", "large", "investigate"]) {
+    const task = s.ok("task", "add", "--title", size, "--size", size).split(" ")[0];
+    for (const role of roles) {
+      const expected = role === "ux-reviewer" || (role === "qa" && ["tiny", "small"].includes(size))
+        || (["implementer", "code-reviewer"].includes(role) && size === "tiny") ? "sonnet" : "opus";
+      const args = ["run", "add", task, "--role", role];
+      if (["implementer", "designer"].includes(role)) args.push("--branch", `sample/${task}-${role}`);
+      assert.ok(s.ok(...args).endsWith(` · model ${expected}`), `${role} on ${size}`);
+    }
+  }
+});
+
+test("risk model overrides size, inherit restores size, and arena candidates retain their selected model", async () => {
+  const s = store();
+  s.ok("task", "add", "--title", "plain", "--size", "small");
+  s.ok("task", "add", "--title", "flagged", "--size", "small", "--risk", "auth");
+  assert.match(s.ok("config", "model.qa.small=sonnet", "model.qa.risk=opus"), /model\.qa\.risk=opus/);
+  assert.ok(s.ok("run", "add", "T1", "--role", "qa").endsWith(" · model sonnet"));
+  assert.ok(s.ok("run", "add", "T2", "--role", "qa").endsWith(" · model opus"));
+  s.ok("config", "model.qa.risk=inherit");
+  assert.ok(s.ok("run", "add", "T2", "--role", "qa").endsWith(" · model sonnet"));
+  s.ok("config", "model.qa.risk=opus", "arena_models=sonnet,opus");
+  assert.ok(s.ok("run", "add", "T2", "--role", "qa", "--candidate", "1").endsWith(" · model sonnet"));
+  s.ok("config", "arena_models=inherit,sonnet");
+  assert.ok(s.ok("run", "add", "T2", "--role", "qa", "--candidate", "1").endsWith(" · candidate 1"), "an inherited arena choice does not fall through to risk");
+  const { modelFor } = await import(LIB);
+  assert.equal(modelFor("qa", "small", "", { "model.qa.small": "sonnet", "model.qa.risk": "opus" }), "sonnet", "four-argument callers retain size selection");
+  const { tool } = await import(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
+  assert.equal(tool.modelFor("qa", "small", "", tool.DEFAULTS, "auth"), "", "Codex still inherits its selected model");
+});
+
 test("T40: each agent role gets its model by task size; run add prints it and records it; an old runs.tsv gets the column at its next write", () => {
   const s = store();
   const out = s.ok("config");
   assert.ok(out.startsWith("max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 model."), out);
   assert.equal(out.slice(out.indexOf(" model.") + 1), MODEL_DEFAULTS, "the model keys print after the numbers");
   for (const size of ["tiny", "small", "large", "investigate"]) s.ok("task", "add", "--title", size, "--size", size);
-  const fable = (t) => (["T1", "T2"].includes(t) ? " · model fable" : "");
+  const selected = (t, role) => role === "ux-reviewer" || (role === "qa" && ["T1", "T2"].includes(t)) || (role === "code-reviewer" && t === "T1") ? "sonnet" : "opus";
   let r = 0;
   for (const t of ["T1", "T2", "T3", "T4"]) {
-    for (const role of ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"]) assert.equal(s.ok("run", "add", t, "--role", role), `R${++r} running · ${role} on ${t}${fable(t)}`);
-    assert.equal(s.ok("run", "add", t, "--role", "implementer", "--branch", `b/${t}`), `R${++r} running · implementer on ${t} · b/${t}`, "the implementer keeps its own model");
+    for (const role of ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"]) assert.equal(s.ok("run", "add", t, "--role", role), `R${++r} running · ${role} on ${t} · model ${selected(t, role)}`);
+    assert.equal(s.ok("run", "add", t, "--role", "implementer", "--branch", `b/${t}`), `R${++r} running · implementer on ${t} · b/${t} · model ${t === "T1" ? "sonnet" : "opus"}`, "the implementer uses the Balanced default");
   }
-  assert.deepEqual(rows(s.dir, "runs").map((x) => x.model), ["fable", "fable", "fable", "fable", "", "fable", "fable", "fable", "fable", "", "", "", "", "", "", "", "", "", "", ""]);
+  assert.deepEqual(rows(s.dir, "runs").map((x) => x.model), ["sonnet", "opus", "sonnet", "sonnet", "sonnet", "opus", "opus", "sonnet", "sonnet", "opus", "opus", "opus", "sonnet", "opus", "opus", "opus", "opus", "sonnet", "opus", "opus"]);
 
   // One size, then the role; inherit clears a key, so the next level (or the agent's own model) counts.
-  assert.match(s.ok("config", "model.qa.small=sonnet", "model.qa=opus"), / model\.qa\.small=sonnet .*model\.qa=opus$/);
+  const configured = s.ok("config", "model.qa.small=sonnet", "model.qa=opus");
+  assert.match(configured, / model\.qa\.small=sonnet(?: |$)/);
+  assert.match(configured, / model\.qa=opus(?: |$)/);
   assert.equal(s.ok("run", "add", "T2", "--role", "qa"), "R21 running · qa on T2 · model sonnet");
   assert.equal(s.ok("run", "add", "T3", "--role", "qa"), "R22 running · qa on T3 · model opus");
   s.ok("config", "model.qa.small=inherit");
@@ -2372,8 +2410,9 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   for (const key of ["model.qa.huge", "model.chief.small", "model"]) assert.match(s.no("config", `${key}=opus`), /config takes .*model\.<role>\.<size>=<model>/);
   writeFileSync(join(s.home, "config.json"), '{"model.code-reviewer.tiny": "gpt-5", "model.qa": 3, "model.pe": "haiku", "model.pe.huge": "opus"}');
   const read = s.ok("config");
-  assert.match(read, / model\.code-reviewer\.tiny=fable /, "a bad value in config.json reads as the default");
-  assert.ok(read.endsWith(" model.qa.small=fable model.pe=haiku"), read);
+  assert.match(read, / model\.code-reviewer\.tiny=sonnet /, "a bad value in config.json reads as the default");
+  assert.match(read, /model\.qa\.small=sonnet/);
+  assert.match(read, /model\.pe=haiku/);
   assert.equal(s.ok("run", "add", "T3", "--role", "pe"), "R25 running · pe on T3 · model haiku");
 
   // An arena candidate takes its place in arena_models.
@@ -2387,11 +2426,11 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   const file = join(o.dir, "runs.tsv");
   writeFileSync(file, "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\nR1\tT1\timplementer\t0\t\tb/1\tdone\t900\t\t2026-10-01T00:00:00Z\t2026-10-01T01:00:00Z\n");
   assert.match(o.ok("status"), /agents  1 runs · 0 running · about 1k tokens/);
-  assert.equal(o.ok("run", "add", "T1", "--role", "qa"), "R2 running · qa on T1 · model fable");
+  assert.equal(o.ok("run", "add", "T1", "--role", "qa"), "R2 running · qa on T1 · model sonnet");
   const [head, ...lines] = readFileSync(file, "utf8").trim().split("\n");
   assert.equal(head, "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel");
   assert.equal(lines[0], "R1\tT1\timplementer\t0\t\tb/1\tdone\t900\t\t2026-10-01T00:00:00Z\t2026-10-01T01:00:00Z\t");
-  assert.match(lines[1], /^R2\tT1\tqa\t0\t\t\trunning\t\t\t\S+\t\tfable$/);
+  assert.match(lines[1], /^R2\tT1\tqa\t0\t\t\trunning\t\t\t\S+\t\tsonnet$/);
   assert.equal(o.ok("run", "done", "R1", "--status", "done"), "R1 done");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) o.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.match(o.ok("merge-check", "--sha", SHA), /may merge/);
