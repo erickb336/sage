@@ -23,6 +23,25 @@ export const gitSubcommand = (words, k) => {
   return words[k] ?? "";
 };
 
+/** Conservative refusal candidates after an external command; never executable evidence or permission to run.
+ * Inspect only literal command operand chains. Do not evaluate text, infer directory changes, or expand words.
+ */
+export function* externalCommandOperands(command, cwd, options) {
+  const { programs } = programsRun(command, cwd, undefined, { ...options, contextEvidence: true });
+  for (const entry of programs) {
+    if (entry.wrapper || entry.shellFunction || entry.resolvedDeclaration) continue;
+    let { word, args } = entry.run;
+    while (word === "command") {
+      let next = 0;
+      while (args[next] === "-p") next++;
+      if (args[next] === "--") next++;
+      if (!args[next] || args[next].startsWith("-")) break; // queries and unknown options do not establish a command operand
+      [word, ...args] = args.slice(next);
+      yield { word, args };
+    }
+  }
+}
+
 /** Classify command text without executing it. The path is trusted provider configuration, never tool input.
  * A matching merge is only a candidate: role, mode and ledger approval are separate checks.
  */
@@ -38,6 +57,7 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     let runs;
     try {
       runs = programsRun(command, cwd, undefined, options);
+      if (runs.some(run => run.word === "command")) runs.push(...externalCommandOperands(command, cwd, options));
     } catch (e) {
       if (e.code === "SAGE_POWERSHELL_LAUNCH") return e.message;
       return expansion.test(command) ? `${reason} The hook cannot read this command (${e.message}).` : undefined;

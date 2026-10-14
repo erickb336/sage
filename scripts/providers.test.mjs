@@ -16,6 +16,44 @@ const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
 
+test("T51: external command operands retain executable identity and expansion refusals", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const bin = join(f.dir, "bin"); mkdirSync(bin);
+    const external = join(bin, "command"); writeFileSync(external, "#!/bin/sh\nexit 0\n"); chmodSync(external, 0o755);
+    const sample = "env X=1 command g{i..i}t push origin HEAD:main";
+    const runs = api.programsRun(sample, f.dir, bin);
+    assert.deepEqual(runs.map(({ word, file, args }) => ({ word, file, args })), [
+      { word: "command", file: external, args: ["g{i..i}t", "push", "origin", "HEAD:main"] },
+    ], "prospective operands must not become executable evidence");
+    const policy = api.createCommandPolicy();
+    for (const command of [sample, "env command -p command -- git pu{s..s}h origin topic", "env command -- gh pr m?rg* 1"])
+      assert.match(policy.expansionProblem(command, f.dir), /shell expansion can hide the command/, command);
+    for (const command of ["env command printf '%s' 'g{i..i}t push origin HEAD:main'", "env command git log --format='{x}'",
+      "env command gh api 'repos/{owner}/{repo}/pulls?state=open'", "env command eval 'g{i..i}t push origin HEAD:main'", "env command -v 'g*'",
+      "command() { printf '%s' \"$@\"; }; command 'g{i..i}t' push origin HEAD:main"])
+      assert.equal(policy.expansionProblem(command, f.dir), undefined, command);
+  }
+});
+
+test("T51: external command operands keep protected API refusals without judging data or reads", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const request = "/usr/local/bin/gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111";
+    const sample = `A=1 env B=2 command ${request}`;
+    assert.deepEqual(api.programsRun(sample, f.dir, "").map(run => run.word), ["command"]);
+    const policy = api.createPushPolicy({ readBranch: () => "topic" });
+    for (const command of [sample, `env command -p command -- ${request}`])
+      assert.match(policy.pushProblem(command, f.dir), /work reaches main only through a pull request/, command);
+    for (const command of [sample.replace("heads/main", "heads/topic"), sample.replace("-X POST", "-X GET"),
+      `env command printf '%s' '${request}'`, `env command eval '${request}'`, `env command -v gh`,
+      `command() { printf '%s' "$@"; }; command ${request}`])
+      assert.equal(policy.pushProblem(command, f.dir), undefined, command);
+  }
+});
+
 test("T51: builtin chains retain shell lookup while native wrappers retain argv identity", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
