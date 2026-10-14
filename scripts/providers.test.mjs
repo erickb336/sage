@@ -1640,7 +1640,7 @@ test("Codex bundles the MCP SDK with native identity and hidden tool metadata in
 test("Codex includes each bundled MCP dependency license", (t) => {
   const { plugin } = isolated(t, "codex");
   for (const name of ['@modelcontextprotocol-server', '@modelcontextprotocol-core', 'zod',
-    'ajv', 'ajv-formats', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'content-type']) {
+    'content-type']) {
     const text = readFileSync(join(plugin, 'licenses', name + '.txt'), 'utf8');
     assert.match(text, name.startsWith('@modelcontextprotocol') ? /Apache License/ : /MIT|Permission is hereby granted/);
     assert.match(text, /[Cc]opyright/);
@@ -4065,5 +4065,89 @@ test('native lead preparation uses the unfinished continuation and original nati
     assert.throws(()=>f.prepare({run:'R3',name:'after_end'}));
     assert.throws(()=>f.spawn(saved));
     assert.deepEqual(f.api.readAdmission(f.journal),before);
+  }
+});
+
+test('T47: packaged SDK keeps Zod tool validation and refuses unused JSON Schema elicitation', async t => {
+  const { dir, plugin } = isolated(t, 'codex');
+  const entry = join(dir, 'sdk-validation.mjs');
+  writeFileSync(entry, `
+    import { McpServer, serveStdio, z } from './plugin/runtime/mcp-sdk.mjs';
+    serveStdio(() => {
+      const server = new McpServer({ name: 'sage-validation-test', version: '0.1.0' });
+      server.registerTool('double', { inputSchema: z.object({ value: z.number().int() }) },
+        async ({ value }) => ({ content: [{ type: 'text', text: String(value * 2) }] }));
+      server.registerTool('form_fixture', { inputSchema: z.object({}) }, async () => ({
+        content: [{ type: 'text', text: JSON.stringify(await server.server.elicitInput({
+          mode: 'form', message: 'Fixed fixture form', requestedSchema: {
+            type: 'object', properties: { fixed: { type: 'string' } }, required: ['fixed'],
+          },
+        })) }],
+      }));
+      return server;
+    });
+  `);
+  const child = spawn(process.execPath, [entry], { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
+  t.after(() => child.stdin.end());
+  let stderr = '', next = 0, forms = 0;
+  const pending = new Map();
+  const closed = new Promise(resolve => child.once('close', (code, signal) => {
+    for (const { reject } of pending.values()) reject(Error('fixture closed before response'));
+    resolve({ code, signal });
+  }));
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  createInterface({ input: child.stdout }).on('line', line => {
+    try {
+      const message = JSON.parse(line);
+      if (message.method === 'elicitation/create') {
+        forms++;
+        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: message.id,
+          result: { action: 'accept', content: { fixed: 'valid fixture value' } } }) + '\n');
+      } else { pending.get(message.id)?.resolve(message); pending.delete(message.id); }
+    } catch (error) { for (const { reject } of pending.values()) reject(error); child.stdin.end(); }
+  });
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const id = ++next; pending.set(id, { resolve, reject });
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+  });
+  const initialized = await request('initialize', { protocolVersion: '2025-06-18',
+    capabilities: { elicitation: { form: {} } }, clientInfo: { name: 'fixed-fixture', version: '1.0.0' } });
+  assert.equal(initialized.result.protocolVersion, '2025-06-18');
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+  const good = await request('tools/call', { name: 'double', arguments: { value: 3 } });
+  assert.equal(good.result.isError, undefined);
+  assert.deepEqual(good.result.content, [{ type: 'text', text: '6' }]);
+  const invalid = await request('tools/call', { name: 'double', arguments: { value: '3' } });
+  assert.equal(invalid.result.isError, true);
+  const form = await request('tools/call', { name: 'form_fixture', arguments: {} });
+  assert.equal(forms, 1, 'the fixture supplies a valid accepted form through the real transport');
+  assert.equal(form.result.isError, true, 'unused JSON Schema validation must refuse, never silently accept');
+  assert.match(form.result.content[0].text, /Sage does not support JSON Schema elicitation validation\./);
+  child.stdin.end();
+  assert.deepEqual(await closed, { code: 0, signal: null });
+  assert.equal(stderr, '');
+});
+
+test('T47: build refuses the published SDK validator graph even without a root fast-uri pin', async () => {
+  const { assertSdkBundleGraph } = await import('./build.mjs');
+  assert.equal(typeof assertSdkBundleGraph, 'function', 'the build must check its actual dependency graph');
+  const { buildSync } = await import('esbuild');
+  const raw = buildSync({ absWorkingDir: ROOT, entryPoints: ['packages/sage-codex/runtime/mcp-sdk.mjs'],
+    bundle: true, platform: 'node', target: 'node20', format: 'esm', write: false,
+    metafile: true, minify: false, logLevel: 'silent' });
+  assert.equal(Object.hasOwn(json('package.json').devDependencies, 'fast-uri'), false);
+  assert.ok(Object.keys(raw.metafile.inputs).some(file => /ajvProvider/.test(file)), 'negative control must contain the real embedded provider');
+  const provider = Object.keys(raw.metafile.inputs).find(file => /ajvProvider/.test(file));
+  assert.match(readFileSync(join(ROOT, provider), 'utf8'), /fast-uri@3\.1\.0/);
+  assert.ok(/require_fast_uri/.test(raw.outputFiles[0].text), 'the diagnostic bundle retains the embedded resolver');
+  assert.throws(() => assertSdkBundleGraph(raw.metafile), /excluded JSON Schema validator dependency/);
+  // A new published chunk name must not hide an old embedded resolver.
+  assert.throws(() => assertSdkBundleGraph({ inputs: { 'renamed-sdk.mjs': {} } },
+    () => '// node_modules/.pnpm/fast-uri@3.1.0/node_modules/fast-uri/index.js'), /excluded JSON Schema validator dependency/);
+  const built = outputs().get('plugins/sage-codex/runtime/mcp-sdk.mjs');
+  assert.ok(built === source('plugins/sage-codex/runtime/mcp-sdk.mjs'), 'inspect the same bundle that ships');
+  assert.doesNotMatch(built, /require_fast_uri|fast-uri@|ajvProvider/);
+  for (const name of ['ajv', 'ajv-formats', 'fast-deep-equal', 'fast-uri', 'json-schema-traverse']) {
+    assert.equal(existsSync(join(ROOT, 'plugins/sage-codex/licenses', name + '.txt')), false, 'removed dependencies must not have stale license-version claims');
   }
 });
