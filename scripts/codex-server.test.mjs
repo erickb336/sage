@@ -3660,3 +3660,21 @@ test('T56: read-only aliases remain valid and missing task tables cannot approve
   assert.equal(empty.tool.mergeCheck('1'.repeat(40),empty.env).ok,false);
   assert.throws(()=>empty.cli('init'),/incomplete/);
 });
+
+
+test('T56: checksum-valid malformed receipt values cannot publish another task', async t => {
+  for (const value of [null, false, 0, '', true, 1, [], {}]) await t.test(JSON.stringify(value), async t => {
+    const f = await taskCreationFixture(t);
+    f.create();
+    const folder = join(f.logbook, 'task-requests');
+    const receipt = join(folder, readdirSync(folder)[0]);
+    const damaged = JSON.stringify({ value, hash: createHash('sha256').update(JSON.stringify(value)).digest('hex') }) + '\n';
+    writeFileSync(receipt, damaged);
+    const before = Object.fromEntries(['tasks', 'decisions'].map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')]));
+    assert.throws(() => f.create());
+    assert.deepEqual(Object.fromEntries(Object.keys(before).map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')])), before);
+    assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+    assert.equal(readFileSync(receipt, 'utf8'), damaged);
+    assert.equal(readdirSync(folder).length, 1);
+  });
+});

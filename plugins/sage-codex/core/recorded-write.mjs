@@ -85,14 +85,14 @@ function readVersion(dir) {
 }
 function readReceipt(dir, reference) {
   const value = decode(join(receiptFolder(dir), recordName(reference)));
-  if (value && (!keys(value, ["reference", "result"]) || json(value.reference) !== json(reference))) fail();
+  if (value !== undefined && (!keys(value, ["reference", "result"]) || json(value.reference) !== json(reference))) fail();
   return value;
 }
 /** Pending intent preserves all before/after bytes. Recovery refuses any unrelated table edit. */
 function recover(dir, reference) {
   canonical(dir);
   const pending = decode(join(dir, PENDING));
-  if (!pending) return undefined;
+  if (pending === undefined) return undefined;
   if (!keys(pending, ["schema", "receipt", "tables"]) || pending.schema !== schema
     || !keys(pending.receipt, ["reference", "result"]) || json(pending.receipt.reference) !== json(reference)
     || !keys(pending.tables, TABLES)) fail();
