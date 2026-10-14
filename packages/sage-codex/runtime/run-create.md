@@ -8,7 +8,8 @@ The request has `request` (a UUID), `task`, `role`, `branch`, and `candidate`.
 Use empty strings for an unused branch or candidate. The tool fixes the owner,
 project, and logbook from its native connection and configuration. Requests
 cannot select storage or override a model. The core derives the round and
-recorded model from the current task and shared settings.
+recorded model from the current task and shared settings. Native roles use their
+canonical lowercase form. The CLI still normalizes role text.
 
 A writer needs a branch. Another running writer cannot use that branch,
 whether the CLI or native tool created its run. The shared core owns this rule.
@@ -44,15 +45,19 @@ attempt. Unknown outcomes retain their reservation. Separate admission journals
 are not coordinated by this rule. Earlier journal history that dispatches one
 run twice without a verified failure is refused; the tool does not rewrite it.
 
-Reuse the same request UUID and fields after a lost response. A retry returns
-the original creation record. It does not reopen a completed run or reset its
+A new request on a held task is refused. Reuse the same request UUID and fields
+after a lost response. A retry returns the original creation record, including
+its model, round, and timestamp. It does not reopen a completed run or reset its
 report. Use a fresh request UUID for a new run. The shared `running` status
 means a recorded assignment; it does not prove that a native agent started.
 
 The core writes the run and immutable receipt under the logbook lock. Partial
 writes retain an intent that blocks other writes and merge checks. The exact
-request recovers it. Recovery refuses unrelated table changes. A different
-request cannot take over the pending write. Earlier state tools with the
+request recovers it. Before recovery writes, a pure run validator checks the
+saved result and exact table append. Damaged records, conflicting receipts,
+redirected receipt folders, and unrelated table edits refuse publication.
+Task and run receipts protect snapshots against transactions that finish between
+table reads. A different request cannot take over the pending write. Earlier state tools with the
 pending-review guard refuse this newer intent but cannot recover it; older
 tools without that guard are not safe concurrent writers.
 

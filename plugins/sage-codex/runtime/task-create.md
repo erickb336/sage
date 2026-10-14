@@ -10,4 +10,4 @@ Guarded snapshots compare receipt names before and after the table reads. They r
 
 The native probe uses a real CLI and a temporary logbook with simulated model responses. `--sage-create-task` checks one task, one decision, an exact retry, and no run or dispatch. It does not enable automatic Sage.
 
-Integration-only run creation, task updates, and review acceptance still use the older recorded writer. They need separate domain validators before recovery publishes tables. Task creation uses the validated writer here. Run creation also needs the held-task guard tracked in #224. See `run-create.md` and `task-update.md` for those prepared APIs.
+Integration-only task updates and review acceptance still use the older recorded writer. They need separate domain validators before recovery publishes tables. Task and run creation use the validated writer. See `run-create.md` and `task-update.md` for those prepared APIs.

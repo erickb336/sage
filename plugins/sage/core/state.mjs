@@ -17,7 +17,7 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { BRANCH } from "./branch.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
-// Integration-only run, task-update, and review consumers retain their existing writer until each has a domain validator.
+// Integration-only task-update and review consumers retain their existing writer until each has a domain validator.
 import { recordedWrites as legacyRecordedWrites, reviewReadVersion, readReviewReceipt, recoverReviewWrite, commitReviewWrite } from "./review-write.mjs";
 import { recordedWrites, assertNoPendingWrite } from "./recorded-write.mjs";
 import { ROLES } from "./roles.mjs";
@@ -417,9 +417,9 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
 const check = (dir, skip = [], max = Infinity) => {
-  const version = taskWrites.readVersion(dir);
+  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir)]);
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
-  if (taskWrites.readVersion(dir) !== version) refuse("A task was created while this logbook was read. Retry the read.");
+  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir)]) !== version) refuse("A task or run was created while this logbook was read. Retry the read.");
   return tables;
 };
 
@@ -519,8 +519,8 @@ function createRequestedTask(input, env = process.env) {
   });
 }
 
-const runWrites = legacyRecordedWrites({ schema: 3, tables: ["runs"], folder: "run-requests",
-  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json" });
+const runWrites = recordedWrites({ schema: 3, tables: ["runs"], folder: "run-requests",
+  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json", validate: validateRunWrite });
 
 /** Record one run request using the same writer, branch, round and model rules as the CLI. */
 function createRequestedRun(input, env = process.env) {
@@ -539,10 +539,6 @@ function createRequestedRun(input, env = process.env) {
   if (realpathSync(dir) !== resolve(dir)) deny();
   const checked = receipt => {
     const run = receipt.result;
-    if (!run || !/^R[1-9]\d*$/.test(run.id) || !/^(0|[1-9]\d*)$/.test(run.round)
-      || typeof run.model !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(run.started)
-      || JSON.stringify(run) !== JSON.stringify({ id: run.id, task: input.task, role: input.role, round: run.round,
-        candidate: input.candidate, branch: input.branch, status: "running", started: run.started, model: run.model })) deny();
     const matches = read(dir, "runs").filter(row => row.id === run.id);
     if (matches.length !== 1 || matches[0].task !== input.task || matches[0].role !== input.role) deny();
     return run;
@@ -555,6 +551,7 @@ function createRequestedRun(input, env = process.env) {
     ready(dir);
     const matches = read(dir, "tasks").filter(row => row.id === input.task);
     if (matches.length !== 1 || !/^(0|[1-9]\d*)$/.test(matches[0].round) || !Number.isSafeInteger(Number(matches[0].round))) deny();
+    notHeld(matches[0], "run add");
     const run = runFrame(dir, matches[0], input.role, input.branch, input.candidate, env);
     runWrites.commit(dir, { reference, result: run }, { runs: tableText("runs", [...read(dir, "runs"), run]) });
     status(dir, true);
@@ -581,6 +578,23 @@ function runFrame(dir, task, role, branch, candidate, env) {
   }
   return { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch,
     status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
+}
+
+/** Saved run facts survive later task/config changes; validate the record rather than recompute them. */
+function validateRunWrite({ reference, result: run }, tables) {
+  const deny = () => refuse("The saved run update is damaged. No run table changed.");
+  if (!run || typeof run.id !== "string" || !/^R[1-9]\d*$/.test(run.id) || typeof run.round !== "string" || !/^(0|[1-9]\d*)$/.test(run.round)
+    || !Number.isSafeInteger(Number(run.round)) || !RUN_ROLES.includes(run.role) || typeof run.model !== "string" || cell(run.model) !== run.model
+    || typeof run.started !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(run.started)
+    || !Number.isFinite(Date.parse(run.started)) || new Date(run.started).toISOString().replace(".000Z", "Z") !== run.started
+    || JSON.stringify(run) !== JSON.stringify({ id: run.id, task: reference.task, role: reference.role, round: run.round,
+      candidate: reference.candidate, branch: reference.branch, status: "running", started: run.started, model: run.model })) deny();
+  if (!tables) return;
+  const { cols, lines } = sheetText(tables.runs.before);
+  if (!TABLES.runs.every(c => cols.includes(c) || ADDED.runs?.includes(c))
+    || cols.some(c => !TABLES.runs.includes(c)) || new Set(cols).size !== cols.length) deny();
+  const runs = rowsOf({ cols, lines });
+  if (runs.some(row => row.id === run.id) || tables.runs.after !== tableText("runs", [...runs, run])) deny();
 }
 
 function proveTask(dir, task, proof) {
