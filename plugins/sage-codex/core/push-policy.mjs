@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { programsRun, shellCommands } from "./command-reader.mjs";
-import { createCommandPolicy, GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
+import { createCommandPolicy, externalCommandOperands, GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
 
 /** Shared push rules. The provider supplies a synchronous reader of the checkout's current branch.
  * This module never executes a command or offers a first-upload exception.
@@ -19,7 +19,7 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
   const refuse = (why) => `${why} Push only with ${PUSH_FORM}.`;
   const unreadableGitHub = (command) => /\bgh(?:\.exe)?\b/i.test(bare(command))
     ? mergeIn(command)?.problem ?? refuse("the hook cannot establish the GitHub API command's destination.") : undefined;
-  function pushProblem(command, cwd) {
+  function pushProblem(command, cwd, options = {}) {
     let commands;
     try {
       commands = shellCommands(command);
@@ -34,12 +34,21 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       if (why) return refuse(why);
     }
     try {
-      // Use the shared reader for wrappers, their option values, and nested command text.
-      for (const run of programsRun(command, cwd)) {
+      // Preserve the raw push path above. Only launcher descendants add new push evidence here;
+      // checking every git twice would read branches twice with different cd-failure semantics.
+      const runs = programsRun(command, cwd, undefined, options);
+      for (const run of runs) {
+        if (run.powerShellLaunch && programName(run.word) === "git" && /^push$/i.test(gitSubcommand(run.args, 0))) {
+          const why = pushForm([run.word, ...run.args], 0, run.dir);
+          if (why) return refuse(why);
+        }
         if (apiWritesMain([run.word, ...run.args])) return mergeIn(command)?.problem ?? refuse(mainReason);
       }
-    } catch {
-      return unreadableGitHub(command);
+      if (runs.some(run => run.word === "command") && [...externalCommandOperands(command, cwd, options)]
+        .some(({ word, args }) => apiWritesMain([word, ...args]))) return mergeIn(command)?.problem ?? refuse(mainReason);
+    } catch (error) {
+      if (error.code === "SAGE_POWERSHELL_LAUNCH") return refuse(error.message);
+      return pushText(bare(command)) ? refuse("the hook cannot establish the push command") : unreadableGitHub(command);
     }
     return undefined;
   }
