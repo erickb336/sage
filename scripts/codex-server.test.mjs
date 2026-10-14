@@ -2702,7 +2702,7 @@ test("T43: root chief reads a lead child's recorded review without parent author
 test("T43: packaged v2 report reader needs no logbook and survives reconnect", async t => {
   const f = await savedReportFixture(t); f.record();
   const config = join(f.dir, "config.json");
-  writeFileSync(config, JSON.stringify({ version: 3, mode: { ...f.mode, ...f.options } }));
+  writeFileSync(config, JSON.stringify({ version: 2, mode: { ...f.mode, observationsRoot: f.options.observationsRoot } }));
   writeFileSync(f.entry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(config)});`);
   const expected = f.read(), before = journalBytes(f);
   const client = await connect(t, f, "0.160.0", "", "sage_read_recorded_report");

@@ -1,26 +1,41 @@
 import { cpSync, mkdirSync, readFileSync, writeFileSync, realpathSync, unlinkSync, existsSync } from "node:fs";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, finishRun = false } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, env = process.env } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
     observationsRoot: join(root, "observations") };
   mkdirSync(options.observationsRoot);
-  let runTool, runEnv, logbook;
-  if (finishRun) {
-    assert.equal(process.env.SAGE_TEST_MACHINE_ID, "native-fixture", "native state writes need the hardware-query guard");
-    options.logbookRoot = join(root, "logbook");
-    const { createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
-    runTool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
-    runEnv = { ...process.env, SAGE_HOME: options.logbookRoot, SAGE_TEST_MACHINE_ID: "native-fixture" };
-    const cli = (...args) => runTool.sage([...args, "--project", options.projectDirectory], runEnv);
-    cli("init"); cli("task", "add", "--title", "Native recorded run", "--size", "small");
-    cli("run", "add", "T1", "--role", "lead");
-    logbook = runTool.storeDir(options.projectDirectory, runEnv);
+  // Every preparation route needs actual active records. The identity marker prevents hardware queries.
+  assert.equal(env.SAGE_TEST_MACHINE_ID, "native-fixture", "native state writes need the hardware-query guard");
+  options.logbookRoot = join(root, "logbook");
+  const { createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
+  const runTool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+  const runEnv = { ...env, SAGE_HOME: options.logbookRoot, SAGE_TEST_MACHINE_ID: "native-fixture" };
+  const git = (...args) => execFileSync("git", ["-C", options.projectDirectory, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+    "-c", "user.name=Fixture", "-c", "user.email=fixture@users.noreply.github.com", ...args], { env: runEnv, encoding: "utf8" });
+  git("init", "--quiet", "-b", "codex/t1-native"); git("commit", "--quiet", "--allow-empty", "-m", "Native fixture");
+  const cli = (...args) => runTool.sage([...args, "--project", options.projectDirectory], runEnv);
+  cli("init"); cli("task", "add", "--title", "Native recorded run", "--size", "small");
+  cli("task", "T1", "set", "branch=codex/t1-native");
+  cli("run", "add", "T1", "--role", writer ? "implementer" : "lead", ...(writer ? ["--branch", "codex/t1-native"] : []));
+  const logbook = runTool.storeDir(options.projectDirectory, runEnv);
+  if (leadOwnership) {
+    // Synthetic historical overlap: the CLI now prevents two active leads. Restore only the saved R1 row
+    // to exercise admission's independent protection against an older overlapping logbook.
+    const file = join(logbook, "runs.tsv"), before = readFileSync(file, "utf8").trimEnd().split("\n");
+    const id = before[0].split("\t").indexOf("id"), original = before.filter(row => row.split("\t")[id] === "R1");
+    assert.equal(original.length, 1);
+    cli("run", "done", "R1", "--status", "done"); cli("run", "add", "T1", "--role", "lead");
+    const after = readFileSync(file, "utf8").trimEnd().split("\n");
+    assert.equal(after.filter(row => row.split("\t")[id] === "R1").length, 1);
+    writeFileSync(file, after.map(row => row.split("\t")[id] === "R1" ? original[0] : row).join("\n") + "\n");
+    console.log(JSON.stringify({ type: "fixture", event: "historical_lead_overlap", synthetic: true, restoredRun: "R1" }));
   }
   const { configureAdmission, readAdmission } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
   const { readObservations } = await import(pathToFileURL(join(root, "plugin/runtime/events.mjs")));
