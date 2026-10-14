@@ -596,7 +596,7 @@ data: ${JSON.stringify(event)}
         check(report?.decision === "report-ready" && report.assignment === state.bindings[0].assignment
           && report.child === childThread && report.turn === state.bindings[0].turn && report.task === "T1" && report.run === "R1"
           && report.reportHash === createHash("sha256").update(CHILD_MARKER).digest("hex")
-          && report.report.STATUS === "done" && report.report.RESULT === "sage-native-child-ok", "report_identity_or_text_changed");
+          && report.report.STATUS === "done" && report.report.RESULT === (acceptReview ? "CLEAN" : "sage-native-child-ok"), "report_identity_or_text_changed");
         check(JSON.stringify(state) === beforeReport, "report_read_changed_admission");
         reportVerified = true;
         print({type: "report_read_evidence", exactAssignment: true, exactTextHash: true, unchangedAdmission: true,
@@ -665,6 +665,7 @@ data: ${JSON.stringify(event)}
         acceptedReview=info.outputs[calls.accept];
         const book=integrated.readLogbook(), prior=JSON.parse(finishedLogbook);
         check(acceptedReview?.decision==="review-accepted" && acceptedReview.kind==="review-clean" && acceptedReview.run==="R1"
+          && acceptedReview.sha===JSON.parse(expectedReport.report.EVIDENCE).commit && acceptedReview.cycle===1
           && book.ledger.length===1 && book.ledger[0].sha===acceptedReview.sha && book.ledger[0].run==="R1","review_acceptance_missing");
         for(const key of ["tasks","runs","findings","gates","decisions"]) check(JSON.stringify(book[key])===JSON.stringify(prior[key]),"review_changed_"+key);
         check(JSON.stringify(integrated.readJournal())===recordedState,"review_changed_admission");
@@ -830,7 +831,7 @@ data: ${JSON.stringify(event)}
       assert(stops.every((row, i) => row.decision === ((recoveryProbe && i < recoveredRounds) || (followupRecovery && i === 2) ? "recovery-required" : "stop-observed") && row.completions === (followup && i >= 2 ? 1 : 0)));
       print({type: "completion_evidence", reservations: state.reservations.length, bindings: state.bindings.length, completions: state.completions.length,
         blockedStopRetainedCapacity: blockedStopVerified, stopCallbacksPrecedeTerminal: true,
-        parentReconciledCompletion: true, reportsAccepted: 0, fullPolicyVerified: false,
+        parentReconciledCompletion: true, reportsAccepted: acceptReview ? 1 : 0, fullPolicyVerified: false,
         simulatedModel: true, automaticSage: false, realModelConsumptionVerified: false});
     }
     if (failedSpawn) {
