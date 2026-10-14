@@ -4503,3 +4503,18 @@ test('native mandatory merge refusal survives off for bound children and preserv
   assert.equal(ordinaryCalls, 1);
   assert.equal(unassigned.core.readAdmission(unassigned.options.directory).bindings.length, 0);
 });
+
+test("native recorded run requires its exact saved recovery proof before writing", async t => {
+  const f = await runReportFixture(t); f.record();
+  const directory = join(f.options.observationsRoot, session);
+  const names = readdirSync(directory).filter(name => name.endsWith(".json"));
+  const proofs = names.filter(name => JSON.parse(readFileSync(join(directory, name), "utf8")).kind === "report-recovery-verified");
+  assert.equal(proofs.length, 1);
+  const file = join(directory, proofs[0]), bytes = readFileSync(file);
+  const before = readFileSync(join(f.logbook, "runs.tsv"), "utf8");
+  rmSync(file);
+  assert.throws(() => f.finish());
+  assert.equal(readFileSync(join(f.logbook, "runs.tsv"), "utf8"), before);
+  writeFileSync(file, bytes);
+  assert.equal(f.finish().decision, "run-finished");
+});

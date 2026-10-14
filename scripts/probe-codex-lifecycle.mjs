@@ -109,6 +109,10 @@ const env = {
   LANG: "en_US.UTF-8",
   DO_NOT_TRACK: "1",
 };
+// Disable real machine-identity queries in this probe process and its native child.
+// Outside NODE_TEST_CONTEXT the fixed marker means unavailable identity, never trusted hardware evidence.
+process.env.SAGE_TEST_MACHINE_ID = "native-fixture";
+env.SAGE_TEST_MACHINE_ID = "native-fixture";
 const print = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const telemetryArgs = ["-c", "analytics.enabled=false", "-c", 'otel.exporter="none"', "-c", 'otel.metrics_exporter="none"', "-c", 'otel.trace_exporter="none"'];
 const launch = (args) => spawn(binary, [...telemetryArgs, ...args], { cwd: workspace, env, shell: false, stdio: ["pipe", "pipe", "pipe"] });
@@ -151,7 +155,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let chiefContextVerified = false;
   const textValues = value => typeof value === "string" ? [value] : Array.isArray(value)
     ? value.flatMap(textValues) : value && typeof value === "object" ? Object.values(value).flatMap(textValues) : [];
-  let finishedRun, acceptedReview, prematureCompletions;
+  let finishedRun, acceptedReview, prematureCompletions, beforeFinishJournal, finishedLogbook;
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -1040,6 +1044,7 @@ data: ${JSON.stringify(event)}
         check(JSON.stringify(integrated.readLogbook()) === JSON.stringify(initialLogbook), "saved_report_read_changed_logbook");
         print({type:"chief_report_read_evidence",exactSavedText:true,provenanceMatches:true,reviewTargetMatches:true,
           logbookUnchanged:true,simulatedModel:true});
+        beforeFinishJournal = JSON.stringify(integrated.readJournal());
         check(info.finishTools.length === 1, "finish_run_tool_missing");
         respond(res, { type: "function_call", ...info.finishTools[0], call_id: calls.finish,
           arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
@@ -1051,12 +1056,17 @@ data: ${JSON.stringify(event)}
           && logbook.runs[0].report === finishedRun.report && integrated.readRunReport() === CHILD_MARKER, "run_finish_mismatch");
         check(["tasks", "ledger", "findings", "gates", "decisions"].every(key =>
           JSON.stringify(logbook[key]) === JSON.stringify(initialLogbook[key])), "report_changed_task_or_gates");
+        finishedLogbook = JSON.stringify(logbook);
+        check(JSON.stringify(integrated.readJournal()) === beforeFinishJournal, "finish_changed_admission");
         check(info.finishTools.length === 1, "finish_run_tool_missing");
         respond(res, { type: "function_call", ...info.finishTools[0], call_id: calls.finishRetry,
           arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
       } else if (rootRequests === 12 && reportProbe) {
         check(JSON.stringify(info.outputs[calls.finishRetry]) === JSON.stringify({ ...finishedRun, decision: "already-finished" })
           && integrated.readLogbook().runs[0].ended === finishedRun.ended, "run_retry_changed_result");
+        check(integrated.readRunReport() === CHILD_MARKER
+          && JSON.stringify(integrated.readLogbook()) === finishedLogbook
+          && JSON.stringify(integrated.readJournal()) === beforeFinishJournal, "finish_retry_changed_evidence");
         print({type:"run_report_evidence",savedRunFinished:true,reportMatches:true,retryPreservesResult:true,taskAndGatesUnchanged:true,claimsVerified:false,simulatedModel:true});
         check(info.acceptTools.length === 1, "review_accept_tool_missing");
         respond(res, { type: "function_call", ...info.acceptTools[0], call_id: calls.accept,

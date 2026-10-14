@@ -15,6 +15,9 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
  const script=join(root,'capture.mjs');
  writeFileSync(script,readFileSync(new URL('./capture-native-hook.mjs',import.meta.url)));
  const command=`node ${JSON.stringify(script)}${denySpawn ? " --deny-spawn" : ""}`;
+ // Every caller uses the same hardware-isolated Sage fixture.
+ process.env.SAGE_TEST_MACHINE_ID="native-fixture";
+ env.SAGE_TEST_MACHINE_ID="native-fixture";
  const integrated=sage?await setupSage(root,{disconnectOnSpawn,review,nestedReview,capacity:captureFailure?1:5,denyCommand,emptyLogbook,taskLifecycle,omitStop,restoreCompaction}):null;
  const baseConfig=integrated?.config??'';
  const blocker=join(root,'block-first-stop.mjs');
