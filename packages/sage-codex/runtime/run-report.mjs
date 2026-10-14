@@ -50,4 +50,3 @@ export function finishRecordedRun(input, context, options) {
   const { tool, work, env } = recordedRun(input, context, options);
   return tool.finishReportedRun(work, env);
 }
-
