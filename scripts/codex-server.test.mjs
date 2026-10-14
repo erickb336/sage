@@ -2840,12 +2840,14 @@ test('native shell role enforcement blocks the chief and preserves off-mode and 
   }
 });
 
-async function preparedFollowupFixture(t) {
-  const f = await composedPolicyFixture(t); f.bindLead();
+async function preparedFollowupFixture(t, role = "lead") {
+  const f = await composedPolicyFixture(t);
+  if (role === "qa") Object.assign(f.input, { role, run: "R2", reviewCycle: 1 });
+  f.bindLead();
   const prior = f.core.readAdmission(f.options.directory).bindings[0];
   f.core.completeAdmission(f.options.directory, prior);
-  f.assignmentCli('run', 'done', 'R1', '--status', 'done');
-  f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
+  f.assignmentCli('run', 'done', f.input.run, '--status', 'done');
+  f.assignmentCli('run', 'add', 'T1', '--role', role);
   const request = { ...f.input, run: 'R4', name: 'continued_lead', previous: prior.assignment };
   const prepared = f.api.prepareNativeTask(request, f.native(session), f.options);
   const transcript = join(f.mode.sessionsDir, 'followup-parent.jsonl');
@@ -2873,7 +2875,7 @@ test('native follow-up preparation fixes the recipient and cannot dispatch as an
   assert.equal(state.reservations.length, 1);
   assert.equal(state.preparations[1].continuation, f.prior.assignment);
   assert.equal(f.api.prepareNativeTask(f.request, f.native(session), f.options).preparation, f.prepared.preparation);
-  assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(f.request.name, 'wrong-spawn'), f.native(session), f.options));
+  assert.throws(() => f.api.reservePreparedSpawn({ ...f.spawnInput(f.request.name, 'wrong-spawn'), tool_input: { task_name: f.prepared.name, message: f.prepared.message, fork_turns: 'none' } }, f.native(session), f.options));
   const visible = await f.connectVisible();
   const response = await visible.call(f.request);
   assert.deepEqual(response, { ...f.prepared, decision: 'already-prepared' });
@@ -4705,4 +4707,56 @@ test("T53: held tasks refuse new preparation and saved dispatch without ending t
     editAssignmentRows(f, "tasks", rows => rows.map(row => row.id === "T1" ? { ...row, hold: "Historical reason" } : row));
     assert.equal(f.api.prepareNativeTask(f.input, f.native(session), f.options).decision, prepared ? "already-prepared" : "prepared");
   }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+test('native follow-up dispatch keeps evaluator denial free of reservations', async t => {
+  const f = await preparedFollowupFixture(t), before = f.core.readAdmission(f.options.directory);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'deny', reason: 'Fixture refused.' }));
+  assert.deepEqual(await f.evaluate(policy, f.followupInput), { decision: 'deny', reason: 'Fixture refused.' });
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
+
+test('native follow-up dispatch rechecks run review and held targets after awaited approval', async t => {
+  for (const change of ['candidate', 'held', 'review']) {
+    const f = await preparedFollowupFixture(t, change === 'review' ? 'qa' : 'lead');
+    const before = f.core.readAdmission(f.options.directory);
+    const policy = f.createNativePolicy(f.options, async () => {
+      await Promise.resolve();
+      if (change === 'held') editAssignmentRows(f, 'tasks', rows => rows.map(row => row.id === 'T1' ? {...row,state:'held',hold:'Owner pause'} : row));
+      else if (change === 'candidate') editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? {...row,candidate:'other'} : row));
+      else execFileSync('git',['-C',f.options.projectDirectory,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',
+        '-c','user.name=Fixture','-c','user.email=fixture@users.noreply.github.com','commit','--quiet','--allow-empty','-m','Changed review target'],{env:f.assignmentEnv});
+      return {decision:'pass'};
+    });
+    await assert.rejects(f.evaluate(policy, f.followupInput));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+});
+
+test('native follow-up preparation requires a completed predecessor owned by the same actor', async t => {
+  const f = await composedPolicyFixture(t); f.bindLead();
+  const previous = f.core.readAdmission(f.options.directory).bindings[0].assignment;
+  // The next run is independently valid; only admission completion is absent.
+  f.assignmentCli('run','done','R1','--status','done'); f.assignmentCli('run','add','T1','--role','lead');
+  const request = {...f.input,run:'R4',name:'continued',previous};
+  assert.throws(()=>f.api.prepareNativeTask(request,f.native(session),f.options));
+  const bound = f.core.readAdmission(f.options.directory).bindings[0];
+  f.core.completeAdmission(f.options.directory,bound);
+  const other = '44444444-4444-4444-8444-444444444444';
+  f.core.activateAdmission(f.options.directory,{project:f.options.project,session:`codex:${other}`,activation:turns[0]});
+  assert.throws(()=>f.api.prepareNativeTask(request,f.native(other),f.options));
+  assert.equal(f.api.prepareNativeTask(request,f.native(session),f.options).target,childActor);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length,1);
 });
