@@ -3545,7 +3545,7 @@ test('native task creation refuses recovery after an unrelated partial-table edi
   appendFileSync(join(f.logbook, 'decisions.tsv'), 'changed outside the tool\n');
   assert.throws(() => f.create());
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
-  assert.equal(existsSync(receipts), false);
+  assert.deepEqual(existsSync(receipts) ? readdirSync(receipts) : [], []);
 });
 
 test('native task creation allows manual off-mode records without dispatch and serializes concurrent retries', async t => {
@@ -3676,5 +3676,57 @@ test('T56: checksum-valid malformed receipt values cannot publish another task',
     assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
     assert.equal(readFileSync(receipt, 'utf8'), damaged);
     assert.equal(readdirSync(folder).length, 1);
+  });
+});
+
+
+test('T56: malformed saved task results refuse before recovery publishes tables', async t => {
+  for (const result of [null, false, {}, { id: 'T1' }, { id: 'T999', title: 'changed' }]) await t.test(JSON.stringify(result), async t => {
+    const f = await taskCreationFixture(t);
+    const restore = await stopTaskWrite(t, f, 'tasks');
+    assert.throws(() => f.create());
+    restore();
+    const pending = join(f.logbook, 'review-pending.json');
+    const record = JSON.parse(readFileSync(pending, 'utf8'));
+    record.value.receipt.result = result;
+    record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    const damaged = JSON.stringify(record) + '\n';
+    writeFileSync(pending, damaged);
+    const before = Object.fromEntries(['tasks', 'decisions'].map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')]));
+    assert.throws(() => f.create());
+    assert.deepEqual(Object.fromEntries(Object.keys(before).map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')])), before);
+    assert.equal(readFileSync(pending, 'utf8'), damaged);
+    assert.deepEqual(existsSync(join(f.logbook, 'task-requests')) ? readdirSync(join(f.logbook, 'task-requests')) : [], []);
+  });
+});
+
+
+test('T56: recovery preflights table meaning and receipt destinations before publication', async t => {
+  for (const damage of ['task-after', 'decision-after', 'receipt-conflict', 'receipt-alias']) await t.test(damage, async t => {
+    const f = await taskCreationFixture(t);
+    f.cli('task', 'add', '--title', 'Keep this task', '--size', 'tiny');
+    const restore = await stopTaskWrite(t, f, 'tasks');
+    assert.throws(() => f.create());
+    restore();
+    const pending = join(f.logbook, 'review-pending.json');
+    const record = JSON.parse(readFileSync(pending, 'utf8'));
+    if (damage === 'task-after') record.value.tables.tasks.after = record.value.tables.tasks.after.replace('Keep this task', 'Unrelated rewrite');
+    if (damage === 'decision-after') record.value.tables.decisions.after = record.value.tables.decisions.before;
+    record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    const damaged = JSON.stringify(record) + '\n';
+    writeFileSync(pending, damaged);
+    const folder = join(f.logbook, 'task-requests');
+    if (damage === 'receipt-alias') { const elsewhere = join(f.dir, 'elsewhere'); mkdirSync(elsewhere); if (existsSync(folder)) { assert.deepEqual(readdirSync(folder), []); rmSync(folder, { recursive: true }); } symlinkSync(elsewhere, folder, 'dir'); }
+    if (damage === 'receipt-conflict') {
+      mkdirSync(folder, { recursive: true });
+      const { owner, request } = record.value.receipt.reference;
+      writeFileSync(join(folder, createHash('sha256').update(JSON.stringify([owner, request])).digest('hex') + '.json'), 'conflict');
+    }
+    const before = Object.fromEntries(['tasks', 'decisions'].map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')]));
+    const receipts = existsSync(folder) ? readdirSync(folder) : [];
+    assert.throws(() => f.create());
+    assert.deepEqual(Object.fromEntries(Object.keys(before).map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')])), before);
+    assert.equal(readFileSync(pending, 'utf8'), damaged);
+    assert.deepEqual(existsSync(folder) ? readdirSync(folder) : [], receipts);
   });
 });

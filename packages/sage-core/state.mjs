@@ -398,11 +398,15 @@ function sheet(dir, table, also = [], max = Infinity) {
     refuse(`${file} cannot be read (${e.code}). ${fixIt(file, e.code)}`);
   }
   if (text === undefined) throw lost(dir, table, "is missing or is a link to nothing", also);
-  const [head, ...lines] = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
-  if (!head) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
-  const cols = head.split("\t");
+  const { cols, lines } = sheetText(text);
+  if (!cols.length) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
   if (!TABLES[table].every((c) => cols.includes(c) || ADDED[table]?.includes(c))) refuse(`the header of ${file} is damaged: its first line must be the column names ${TABLES[table].join(", ")}, separated by tabs. Ask the user to fix or add that line.`);
   return { cols, lines };
+}
+
+function sheetText(text) {
+  const [head, ...lines] = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
+  return { cols: head?.split("\t") ?? [], lines };
 }
 
 const rowsOf = ({ cols, lines }) =>
@@ -447,7 +451,32 @@ function ready(dir, skip = []) {
 }
 
 const taskWrites = recordedWrites({ schema: 2, tables: ["tasks", "decisions"], folder: "task-requests",
-  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json" });
+  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json",
+  validate: validateTaskWrite });
+
+/** Validate saved task publication as one pure update before any recovery write. */
+function validateTaskWrite({ reference, result }, tables) {
+  const deny = () => refuse("The saved task update is damaged. No task table changed.");
+  if (!result || !/^T[1-9]\d*$/.test(result.id)
+    || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, reference.title, reference.size, reference.risk, reference.add))) deny();
+  if (!tables) return;
+  const rows = (table, text) => {
+    const { cols, lines } = sheetText(text);
+    if (!TABLES[table].every(c => cols.includes(c) || ADDED[table]?.includes(c))
+      || cols.some(c => !TABLES[table].includes(c)) || new Set(cols).size !== cols.length) deny();
+    return rowsOf({ cols, lines });
+  };
+  const tasks = rows("tasks", tables.tasks.before), decisions = rows("decisions", tables.decisions.before);
+  if (tasks.some(task => task.id === result.id)
+    || tables.tasks.after !== tableText("tasks", [...tasks, result])) deny();
+  if (reference.add.length) {
+    const after = rows("decisions", tables.decisions.after), at = after.at(-1)?.at;
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(at ?? "")
+      || !Number.isFinite(Date.parse(at)) || new Date(at).toISOString().replace(".000Z", "Z") !== at) deny();
+    decisions.push({ at, task: result.id, decision: `added ${reference.add.join(",")}`, why: reference.why });
+  }
+  if (tables.decisions.after !== tableText("decisions", decisions)) deny();
+}
 
 /** Create one task for a durable caller request. The provider authenticates the opaque owner scope. */
 function createRequestedTask(input, env = process.env) {
@@ -471,7 +500,6 @@ function createRequestedTask(input, env = process.env) {
   if (realpathSync(dir) !== resolve(dir)) deny();
   const checked = receipt => {
     const result = receipt.result;
-    if (!result || !/^T[1-9]\d*$/.test(result.id) || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, input.title, input.size, input.risk, input.add))) deny();
     const matches = read(dir, "tasks").filter(row => row.id === result.id);
     if (matches.length !== 1) deny();
     return result;

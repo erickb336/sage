@@ -60,7 +60,7 @@ export function assertNoPendingWrite(dir) {
   if (lstatSync(join(dir, PENDING), { throwIfNoEntry: false })) fail();
 }
 /** Guarded core consumers share one pending marker and refuse partial recorded writes. */
-export function recordedWrites({ schema, tables: TABLES, folder: FOLDER, name: NAME, receiptName }) {
+export function recordedWrites({ schema, tables: TABLES, folder: FOLDER, name: NAME, receiptName, validate }) {
 function recordName(reference) {
   const name = receiptName(reference);
   if (!NAME.test(name)) fail();
@@ -86,6 +86,7 @@ function readVersion(dir) {
 function readReceipt(dir, reference) {
   const value = decode(join(receiptFolder(dir), recordName(reference)));
   if (value !== undefined && (!keys(value, ["reference", "result"]) || json(value.reference) !== json(reference))) fail();
+  if (value !== undefined) validate(value);
   return value;
 }
 /** Pending intent preserves all before/after bytes. Recovery refuses any unrelated table edit. */
@@ -102,13 +103,17 @@ function recover(dir, reference) {
     const current = regular(join(dir, `${table}.tsv`));
     if (current !== value.before && current !== value.after) fail();
   }
+  // Validate the complete saved update and its destination before publishing any table.
+  validate(pending.receipt, pending.tables);
+  const folder = receiptFolder(dir), receipt = encode(pending.receipt);
+  const existing = regular(join(folder, recordName(reference)));
+  if (existing !== undefined && existing !== receipt) fail();
+  mkdirSync(folder, { recursive: true, mode: 0o700 }); canonical(folder); sync(dir);
   for (const table of TABLES) {
     const file = `${table}.tsv`, value = pending.tables[table];
     if (regular(join(dir, file)) !== value.after) atomic(dir, file, value.after);
   }
-  const folder = receiptFolder(dir);
-  mkdirSync(folder, { recursive: true, mode: 0o700 }); canonical(folder); sync(dir);
-  atomic(folder, recordName(reference), encode(pending.receipt), true);
+  atomic(folder, recordName(reference), receipt, true);
   unlinkSync(join(dir, PENDING)); sync(dir);
   return pending.receipt;
 }
