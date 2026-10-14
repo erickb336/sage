@@ -15,6 +15,7 @@ import { boardView } from "./board-view.mjs";
 import { createBoard } from "./board.mjs";
 import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
+import { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
@@ -507,6 +508,70 @@ function finishReportedRun(input, env = process.env) {
   });
 }
 
+
+function reviewHead(project, branch, env) {
+  const clean = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
+  return git(["-C", project, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], clean).trim();
+}
+
+/** Validate recorded work immediately before provider preparation or dispatch. This grants no role authority. */
+function captureRunAssignment(input, env = process.env) {
+  const keys = ["project", "task", "run", "role"];
+  const deny = () => refuse("The assignment needs one active run on its current task, role, branch, and round.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
+    || keys.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
+    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
+    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run)
+    || typeof input.role !== "string" || !/^[a-z][a-z-]{0,63}$/.test(input.role)) deny();
+  const dir = storeDir(input.project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  return withLock(dir, () => {
+    ready(dir);
+    const tasks = read(dir, "tasks").filter(row => row.id === input.task);
+    const runs = read(dir, "runs").filter(row => row.id === input.run);
+    if (tasks.length !== 1 || runs.length !== 1) deny();
+    const task = tasks[0], run = runs[0];
+    notHeld(task, "assignment");
+    if (!STATES.includes(task.state) || ["merged", "concluded", "abandoned"].includes(task.state)
+      || run.task !== task.id || run.role !== input.role || run.round !== task.round || run.status !== "running"
+      || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
+      || !Number.isSafeInteger(Number(task.round))
+      || (task.branch && !ofTask(task.id, branchOf(task.branch)))
+      || (run.branch && run.branch !== task.branch) || (WRITERS.includes(run.role) && !run.branch)) deny();
+    if (WRITERS.includes(run.role) && read(dir, "runs").some(row => row.id !== run.id
+      && row.status === "running" && WRITERS.includes(row.role) && row.branch === run.branch)) deny();
+    return { task: task.id, run: run.id, role: run.role, round: Number(task.round),
+      taskBranch: task.branch, runBranch: run.branch, candidate: run.candidate };
+  });
+}
+
+/** Capture a review subject from the actual logbook and local branch, never from a reported SHA. */
+function captureReviewTarget(input, env = process.env) {
+  const keys = ["project", "task", "run", "role", "cycle"];
+  const deny = () => refuse("The review needs an active run on its task's current branch and round.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
+    || keys.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
+    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
+    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run) || !REVIEW_ROLES.includes(input.role)
+    || !Number.isInteger(input.cycle) || input.cycle < 1 || input.cycle > 10) deny();
+  const dir = storeDir(input.project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  return withLock(dir, () => {
+    ready(dir);
+    const tasks = read(dir, "tasks").filter(row => row.id === input.task);
+    const runs = read(dir, "runs").filter(row => row.id === input.run);
+    if (tasks.length !== 1 || runs.length !== 1) deny();
+    const task = tasks[0], run = runs[0];
+    notHeld(task, "assignment");
+    if (run.task !== task.id || run.role !== input.role || run.round !== task.round || run.status !== "running"
+      || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
+      || !Number.isSafeInteger(Number(task.round)) || (run.branch && run.branch !== task.branch)) deny();
+    const branch = branchOf(task.branch);
+    // Repository-selection and injected-config environment variables cannot redirect this read.
+    const sha = reviewHead(input.project, branch, env);
+    return parseReviewTarget({ branch, sha, round: Number(task.round), cycle: input.cycle });
+  });
+}
 
 function write(dir, table, rows) {
   const cols = TABLES[table];
@@ -1482,5 +1547,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, finishReportedRun, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, finishReportedRun, captureRunAssignment, captureReviewTarget, withLock, board, answerPaths, runCli };
 }

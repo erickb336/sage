@@ -30,7 +30,7 @@ const modeStamp = value => JSON.stringify([value.owner?.epoch, value.modes.at(-1
 export function createNativePolicy(options, evaluateTool) {
   if (!options || typeof evaluateTool !== "function"
     || !["directory", "project", "observationsRoot"].every(key => typeof options[key] === "string" && options[key])) refuse();
-  const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot, sessionsDir: options.sessionsDir });
+  const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot, sessionsDir: options.sessionsDir, projectDirectory: options.projectDirectory, logbookRoot: options.logbookRoot });
   const mode = session => readMode(fixed.directory, fixed.project, session);
   const record = value => {
     const event = observation(value);

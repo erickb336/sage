@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -383,13 +383,32 @@ test("packaged child start rejects inherited policy fields instead of delivering
   }
 });
 
+function assignmentLogbookFixture(core, options) {
+  mkdirSync(options.projectDirectory, { recursive: true }); mkdirSync(options.observationsRoot, { recursive: true });
+  const assignmentTool = core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+  const assignmentEnv = { ...process.env, SAGE_HOME: options.logbookRoot };
+  const assignmentCli = (...args) => assignmentTool.sage([...args, "--project", options.projectDirectory], assignmentEnv);
+  const assignmentGit = (...args) => execFileSync("git", ["-C", options.projectDirectory, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+    "-c", "user.name=Fixture", "-c", "user.email=fixture@users.noreply.github.com", ...args], { env: assignmentEnv, encoding: "utf8" });
+  assignmentGit("init", "--quiet", "-b", "codex/t1-fixture"); assignmentGit("commit", "--quiet", "--allow-empty", "-m", "fixture");
+  assignmentCli("init"); assignmentCli("task", "add", "--title", "Fixture task", "--size", "small");
+  assignmentCli("task", "T1", "set", "branch=codex/t1-fixture");
+  assignmentCli("run", "add", "T1", "--role", "lead"); assignmentCli("run", "add", "T1", "--role", "qa");
+  assignmentCli("task", "add", "--title", "Second fixture task", "--size", "small");
+  assignmentCli("run", "add", "T2", "--role", "lead");
+  const assignmentLogbook = assignmentTool.storeDir(options.projectDirectory, assignmentEnv);
+  return { assignmentTool, assignmentEnv, assignmentCli, assignmentLogbook };
+}
+
 async function preparationServerFixture(t) {
   const f = fixture(t);
   assert.ok(existsSync(join(f.plugin, "runtime/preparation-server.mjs")), "the separate preparation server must ship");
   const core = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   const events = await import(pathToFileURL(join(f.plugin, "runtime/events.mjs")));
   const api = await import(pathToFileURL(join(f.plugin, "runtime/preparation.mjs")));
-  const options = { directory: f.mode.directory, project: f.mode.project, observationsRoot: join(f.dir, "observations"), sessionsDir: f.mode.sessionsDir };
+  const options = { directory: f.mode.directory, project: f.mode.project, sessionsDir: f.mode.sessionsDir, observationsRoot: join(f.dir, "observations"),
+    projectDirectory: join(f.dir, "assignment-project"), logbookRoot: join(f.dir, "assignment-logbook") };
+  const { assignmentTool, assignmentEnv, assignmentCli, assignmentLogbook } = assignmentLogbookFixture(core, options);
   core.configureAdmission(options.directory, { total: 5, projects: [{ project: options.project, limit: 5 }] });
   const owner = core.activateAdmission(options.directory, { project: options.project, session: `codex:${session}`, activation: turns[0] });
   const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
@@ -426,7 +445,7 @@ async function preparationServerFixture(t) {
       call: "spawn-1", child: childActor, turn: turns[1] });
   };
   const connectVisible = version => connect(t, f, version, "", "sage_prepare_task");
-  return { ...f, core, events, api, options, scope, input, native, spawnInput, childTranscript, bindLead, connectVisible };
+  return { ...f, core, events, api, options, scope, input, native, spawnInput, childTranscript, bindLead, connectVisible, assignmentTool, assignmentEnv, assignmentCli, assignmentLogbook };
 }
 
 test("visible preparation server saves the native owner's brief without dispatch or capacity", async t => {
@@ -442,7 +461,7 @@ test("visible preparation server saves the native owner's brief without dispatch
   assert.equal(state.preparations[0].issuer, session);
   assert.deepEqual(state.preparations[0].brief, f.input.brief);
   assert.deepEqual(state.reservations, []);
-  assert.equal(existsSync(f.options.observationsRoot), false);
+  assert.deepEqual(readdirSync(f.options.observationsRoot), [], "fixed observation directory remains empty");
 });
 
 test("visible preparation server refuses forged identity unsupported versions and invalid work", async t => {
@@ -461,7 +480,7 @@ test("visible preparation server refuses forged identity unsupported versions an
 
 test("visible preparation server uses a verified lead binding and rejects ambiguous native history", async t => {
   const f = await preparationServerFixture(t); f.bindLead(); const client = await f.connectVisible();
-  const task = { ...f.input, name: "qa_child", role: "qa" };
+  const task = { ...f.input, run: "R2", name: "qa_child", role: "qa", reviewCycle: 1 };
   assert.equal((await client.call(task, childActor)).decision, "prepared");
   assert.equal(typeof (await client.call({ ...task, name: "nested_lead", role: "lead" }, childActor)).error, "string");
   f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: "0.160.0", session,
@@ -511,25 +530,29 @@ test("visible preparation server contains missing modules and unavailable storag
     assert.deepEqual(output, { error: "Sage could not prepare this task. Check the active role, task brief, and unique agent name." });
     await client.close();
   }
-  const specialist = await preparationServerFixture(t); specialist.input.role = "qa"; specialist.bindLead();
+  const specialist = await preparationServerFixture(t); specialist.input.role = "qa"; specialist.input.run = "R2"; specialist.input.reviewCycle = 1; specialist.bindLead();
   const client = await specialist.connectVisible();
   assert.equal(typeof (await client.call({ ...specialist.input, name: "third_layer" }, childActor)).error, "string");
   await client.close();
   assert.equal(specialist.core.readAdmission(specialist.options.directory).preparations.length, 1);
 });
 
-async function sharedConfiguration(t) {
+async function sharedConfiguration(t, recorded = false) {
   const f = await configured(t);
   const observationsRoot = join(f.dir, "observations"); mkdirSync(observationsRoot);
-  const config = { version: 2, mode: { ...f.mode, observationsRoot } };
+  const config = { version: recorded ? 3 : 2, mode: { ...f.mode, observationsRoot, ...(recorded ? { projectDirectory: join(f.dir, "fixed-project"), logbookRoot: join(f.dir, "fixed-logbook") } : {}) } };
+  if (recorded) {
+    const core = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    assignmentLogbookFixture(core, config.mode);
+  }
   writeFileSync(f.configFile, JSON.stringify(config));
   const preparationEntry = join(f.dir, "preparation.mjs");
   writeFileSync(preparationEntry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(f.configFile)});`);
-  return { ...f, config, preparationEntry };
+  return { ...f, config, preparationEntry, ...(recorded ? { prompt: (...args) => ({ ...f.prompt(...args), cwd: config.mode.projectDirectory }) } : {}) };
 }
 
 test("shared server configuration fixes the same journal project and event store for both launchers", async t => {
-  const f = await sharedConfiguration(t);
+  const f = await sharedConfiguration(t, true);
   assert.deepEqual(f.readHookConfiguration(f.configFile), f.config.mode);
   assert.equal(Object.isFrozen(f.readHookConfiguration(f.configFile)), true);
   const loaded = join(f.dir, "loaded-config.json");
@@ -569,7 +592,7 @@ test("shared server configuration rejects missing linked or unknown observation 
 });
 
 test("shared server configuration leaves invalid preparation connections unavailable until restart", async t => {
-  const f = await sharedConfiguration(t);
+  const f = await sharedConfiguration(t, true);
   assert.equal(typeof f.serveConfiguredPreparations, "function");
   const core = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   const hooks = await connect(t, f);
@@ -602,9 +625,9 @@ async function composedPolicyFixture(t) {
 
 test("composed native policy connects configured preparation spawn and nested child instructions", async t => {
   const f = await composedPolicyFixture(t);
-  mkdirSync(f.options.observationsRoot);
+  mkdirSync(f.options.observationsRoot, { recursive: true });
   const config = join(f.dir, "policy.json");
-  writeFileSync(config, JSON.stringify({ version: 2, mode: { ...f.mode, observationsRoot: f.options.observationsRoot } }));
+  writeFileSync(config, JSON.stringify({ version: 3, mode: { ...f.mode, ...f.options } }));
   const hiddenEntry = join(f.dir, "hidden.mjs");
   writeFileSync(hiddenEntry, `import { serveConfiguredHooks } from './plugin/runtime/configuration.mjs';
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
@@ -621,7 +644,7 @@ test("composed native policy connects configured preparation spawn and nested ch
   };
   for (const [request, actor, child, path, turn] of [
     [f.input, session, childActor, "/root/fixture_lead", turns[1]],
-    [{ ...f.input, run: "R2", name: "qa_child", role: "qa" }, childActor, qa, "/root/fixture_lead/qa_child", turns[2]],
+    [{ ...f.input, run: "R2", name: "qa_child", role: "qa", reviewCycle: 1 }, childActor, qa, "/root/fixture_lead/qa_child", turns[2]],
   ]) {
     assert.equal((await visible.call(request, actor)).decision, "prepared");
     const spawn = f.spawnInput(request.name, request.name);
@@ -1748,7 +1771,7 @@ test("native report read leaves an unrelated sibling unchanged with missing or t
   f.policy.completeChild(f.stop, f.native(childActor));
   const other = "a22422c7-509c-43aa-8c42-827c556f8a59";
   const name = "other_lead";
-  f.api.prepareNativeTask({ ...f.input, task: "T2", run: "R2", name }, f.native(session), f.options);
+  f.api.prepareNativeTask({ ...f.input, task: "T2", run: "R3", name }, f.native(session), f.options);
   f.api.reservePreparedSpawn(f.spawnInput(name, "spawn-2"), f.native(session), f.options);
   f.events.publish(join(f.options.observationsRoot, session), { ...f.result, call: "spawn-2", path: `/root/${name}` });
   const transcript = f.childTranscript({ child: other, path: `/root/${name}`, turn: turns[2] });
@@ -2129,7 +2152,7 @@ test("native failed dispatch reconciliation retains any dispatch with child or s
 });
 
 test("native failed dispatch reconciliation lets an admitted lead recover its own rejected child only", async t => {
-  const f = await completionFixture(t), request = { ...f.input, name: "failed_qa", run: "R2", role: "qa" };
+  const f = await completionFixture(t), request = { ...f.input, name: "failed_qa", run: "R2", role: "qa", reviewCycle: 1 };
   f.api.prepareNativeTask(request, f.native(childActor), f.options);
   const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
   const spawn = { ...f.spawnInput(request.name, "failed-qa"), turn_id: turns[1], transcript_path: transcript };
@@ -2421,7 +2444,7 @@ function commandPermissionInput(f, actor, permissions, turn) {
 test('native child sandbox escalation is refused before a permissive evaluator', async t => {
   for (const role of ['lead', 'implementer']) {
     const f = await composedPolicyFixture(t); let evaluated = 0;
-    f.input.role = role; f.bindLead();
+    recordedFixtureRole(f, role); f.bindLead();
     const policy = f.createNativePolicy(f.options, () => { evaluated++; return {decision: 'pass'}; });
     for (const permissions of [
       {sandbox_permissions: 'require_escalated'},
@@ -2442,7 +2465,7 @@ test('native child sandbox escalation is refused before a permissive evaluator',
 
 test('native child sandbox escalation stays refused when off while chief permission checks remain authoritative', async t => {
   const f = await composedPolicyFixture(t); let evaluated = 0;
-  f.input.role = 'implementer'; f.bindLead();
+  recordedFixtureRole(f, 'implementer'); f.bindLead();
   const initial = commandPermissionInput(f, childActor, {sandbox_permissions: 'use_default'}, turns[1]);
   assert.deepEqual(await f.evaluate(f.createNativePolicy(f.options, () => ({decision: 'pass'})), initial, childActor), {decision: 'pass'});
   const policy = f.createNativePolicy(f.options, () => { evaluated++; return {decision: 'deny', reason: 'Native permission check refused.'}; });
@@ -2472,9 +2495,18 @@ test('native child sandbox escalation refuses an unassigned off-mode child', asy
   assert.equal(existsSync(join(f.options.observationsRoot, session)), false);
 });
 
+function recordedFixtureRole(f, role) {
+  f.input.role = role;
+  if (role !== "lead") {
+    f.assignmentCli("run", "add", "T1", "--role", role, ...(role === "implementer" || role === "designer" ? ["--branch", "codex/t1-fixture"] : []));
+    f.input.run = "R4";
+  }
+  if (f.core.REVIEW_ROLES.includes(role)) f.input.reviewCycle = 1;
+}
+
 async function roleEditFixture(t, role) {
   const f = await composedPolicyFixture(t);
-  f.input.role = role;
+  recordedFixtureRole(f, role);
   f.api.prepareNativeTask(f.input, f.native(session), f.options);
   f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
   f.events.publish(join(f.options.observationsRoot, session), f.result);
@@ -2643,11 +2675,9 @@ test("T43: root chief reads a lead child's recorded review without parent author
   const f = await completionFixture(t);
   const { readRecordedReport } = await import(pathToFileURL(join(f.plugin, "runtime/recorded-report.mjs")));
   const qa = "a22422c7-509c-43aa-8c42-827c556f8a59", path = "/root/fixture_lead/qa_child";
-  const request = { task: "T1", run: "R2", name: "qa_child", role: "qa", brief: f.input.brief };
-  const review = { branch: "codex/fixture", sha: "a".repeat(40), round: 0, cycle: 1 };
-  f.core.prepareAdmission(f.options.directory, f.scope,
-    { task: request.task, run: request.run, name: request.name, issuer: childActor },
-    { issuerRole: "lead", role: "qa" }, request.brief, { review });
+  const request = { task: "T1", run: "R2", name: "qa_child", role: "qa", reviewCycle: 1, brief: f.input.brief };
+  f.api.prepareNativeTask(request, f.native(childActor), f.options);
+  const review = f.core.readAdmission(f.options.directory).preparations.find(row => row.name === request.name).review;
   const spawn = { ...f.spawnInput(request.name, "spawn-qa"), turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, `${childActor}.jsonl`) };
   f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options);
   f.events.publish(join(f.options.observationsRoot, session), { ...f.result, actor: childActor, call: "spawn-qa", turn: turns[1], path });
@@ -2672,7 +2702,7 @@ test("T43: root chief reads a lead child's recorded review without parent author
 test("T43: packaged v2 report reader needs no logbook and survives reconnect", async t => {
   const f = await savedReportFixture(t); f.record();
   const config = join(f.dir, "config.json");
-  writeFileSync(config, JSON.stringify({ version: 2, mode: { ...f.mode, observationsRoot: f.options.observationsRoot } }));
+  writeFileSync(config, JSON.stringify({ version: 3, mode: { ...f.mode, ...f.options } }));
   writeFileSync(f.entry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(config)});`);
   const expected = f.read(), before = journalBytes(f);
   const client = await connect(t, f, "0.160.0", "", "sage_read_recorded_report");
@@ -2898,4 +2928,215 @@ test("native recorded run requires its exact saved recovery proof before writing
   assert.equal(readFileSync(join(f.logbook, "runs.tsv"), "utf8"), before);
   writeFileSync(file, bytes);
   assert.equal(f.finish().decision, "run-finished");
+});
+
+function editAssignmentRows(f, table, change) {
+  const file = join(f.assignmentLogbook, `${table}.tsv`), text = readFileSync(file, 'utf8');
+  const lines = text.trimEnd().split('\n'), keys = lines.shift().split('\t');
+  const rows = lines.map(line => Object.fromEntries(line.split('\t').map((value, index) => [keys[index], value])));
+  const next = change(rows);
+  writeFileSync(file, keys.join('\t') + '\n' + next.map(row => keys.map(key => row[key] ?? '').join('\t')).join('\n') + '\n');
+  return () => writeFileSync(file, text);
+}
+
+test('T53: native assignment preparation requires one actual matching active task and run', async t => {
+  const f = await preparationServerFixture(t);
+  for (const input of [{ ...f.input, task: 'T3' }, { ...f.input, run: 'R4' },
+    { ...f.input, task: 'T2' }, { ...f.input, role: 'implementer' }])
+    assert.throws(() => f.api.prepareNativeTask(input, f.native(session), f.options));
+  for (const [table, field, value] of [
+    ['runs', 'status', 'done'], ['runs', 'report', 'reports/saved.md'], ['runs', 'ended', '2026-01-01T00:00:00Z'],
+    ['runs', 'round', '1'], ['runs', 'task', 'T2'], ['runs', 'role', 'qa'], ['runs', 'branch', 'codex/t1-other'],
+    ['tasks', 'round', '-1'], ['tasks', 'round', '9007199254740992'], ['tasks', 'state', 'abandoned'],
+    ['tasks', 'state', 'merged'], ['tasks', 'state', 'concluded'], ['tasks', 'state', 'unknown'], ['tasks', 'branch', 'codex/t2-foreign']]) {
+    const restore = editAssignmentRows(f, table, rows => rows.map((row, index) => index ? row : { ...row, [field]: value }));
+    assert.throws(() => f.api.prepareNativeTask(f.input, f.native(session), f.options), `${table}.${field}=${value}`);
+    restore();
+  }
+  for (const table of ['tasks', 'runs']) for (const duplicate of [false, true]) {
+    const restore = editAssignmentRows(f, table, rows => duplicate ? [...rows, rows[0]] : rows.slice(1));
+    assert.throws(() => f.api.prepareNativeTask(f.input, f.native(session), f.options)); restore();
+  }
+  assert.equal(f.core.readAdmission(f.options.directory).preparations.length, 0);
+  assert.equal(f.api.prepareNativeTask(f.input, f.native(session), f.options).decision, 'prepared');
+});
+
+test('T53: native assignment dispatch rechecks records changed after preparation without taking capacity', async t => {
+  const f = await preparationServerFixture(t);
+  f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  for (const [table, field, value] of [['runs', 'status', 'failed'], ['runs', 'round', '1'],
+    ['runs', 'branch', 'codex/t1-other'], ['tasks', 'state', 'abandoned'], ['runs', 'role', 'qa']]) {
+    const restore = editAssignmentRows(f, table, rows => rows.map((row, index) => index ? row : { ...row, [field]: value }));
+    assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options));
+    assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0); restore();
+  }
+  assert.equal(f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options).decision, 'permit-once');
+});
+
+
+async function reviewPreparationFixture(t, role = "code-reviewer") {
+  const f = await composedPolicyFixture(t);
+  const projectDirectory = join(f.dir, "project"); mkdirSync(projectDirectory);
+  const env = { ...process.env, SAGE_HOME: join(f.dir, "logbook") };
+  const git = (...args) => execFileSync("git", ["-C", projectDirectory, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+    "-c", "user.name=Fixture", "-c", "user.email=fixture@users.noreply.github.com", ...args], { env, encoding: "utf8" }).trim();
+  git("init", "--quiet", "-b", "codex/t1-review");
+  git("commit", "--quiet", "--allow-empty", "-m", "fixture");
+  const tool = f.core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+  const cli = (...args) => tool.sage([...args, "--project", projectDirectory], env);
+  cli("init"); cli("task", "add", "--title", "Pinned review", "--size", "small");
+  cli("task", "T1", "set", "branch=codex/t1-review");
+  cli("run", "add", "T1", "--role", role);
+  mkdirSync(f.options.observationsRoot, { recursive: true });
+  const options = { ...f.options, projectDirectory, logbookRoot: env.SAGE_HOME };
+  const input = { ...f.input, role, reviewCycle: 1 };
+  const prepare = (request = input) => f.api.prepareNativeTask(request, f.native(session), options);
+  const logbook = tool.storeDir(projectDirectory, env);
+  return { ...f, options, input, prepare, git, cli, tool, env, logbook };
+}
+
+test("T53: native review target captures the actual head round and cycle in immutable child instructions", async t => {
+  const f = await reviewPreparationFixture(t);
+  const receipt = f.prepare();
+  const expected = { branch: "codex/t1-review", sha: f.git("rev-parse", "HEAD"), round: 0, cycle: 1 };
+  assert.deepEqual(receipt.review, expected);
+  assert.match(receipt.message, new RegExp(`Commit: ${expected.sha}`));
+  assert.match(receipt.message, /Task round: 0\nReview cycle: 1/);
+  assert.deepEqual(f.prepare().review, expected);
+  assert.throws(() => f.prepare({ ...f.input, reviewCycle: 2 }));
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  assert.deepEqual(await f.evaluate(policy), { decision: "pass" });
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const delivered = policy.startChild(f.identity);
+  assert.match(delivered.brief, new RegExp(`Commit: ${expected.sha}`));
+  assert.match(delivered.brief, /Review cycle: 1/);
+  const journal = f.core.readAdmission(f.options.directory);
+  assert.deepEqual(journal.preparations[0].review, expected);
+  assert.equal(journal.reservations[0].preparation, journal.preparations[0].id);
+});
+
+test("T53: native review target refuses stale heads before reservation and preserves the saved review", async t => {
+  const f = await reviewPreparationFixture(t);
+  const receipt = f.prepare();
+  f.git("commit", "--quiet", "--allow-empty", "-m", "changed head");
+  assert.notEqual(f.git("rev-parse", "HEAD"), receipt.review.sha);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(policy));
+  const journal = f.core.readAdmission(f.options.directory);
+  assert.equal(journal.reservations.length, 0);
+  assert.deepEqual(journal.preparations[0].review, receipt.review);
+  assert.throws(() => f.prepare());
+});
+
+test("T53: native review target rejects missing cycles foreign roles and changed run state", async t => {
+  const f = await reviewPreparationFixture(t);
+  const receipt = f.prepare();
+  assert.ok(receipt.review);
+  const { reviewCycle, ...missing } = f.input;
+  for (const request of [missing, { ...f.input, reviewCycle: 0 }, { ...f.input, reviewCycle: 11 },
+    { ...f.input, reviewCycle: "1" }, { ...f.input, role: "lead" }, { ...f.input, role: "qa" },
+    { ...f.input, task: "T2" }, { ...f.input, sha: receipt.review.sha }]) assert.throws(() => f.prepare(request));
+  f.cli("run", "done", "R1", "--status", "done");
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(policy));
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});
+
+test("T53: native review target ignores injected git selection and refuses a stale task round", async t => {
+  const f = await reviewPreparationFixture(t);
+  const receipt = f.prepare();
+  f.git("checkout", "--quiet", "-b", "other-branch");
+  f.git("commit", "--quiet", "--allow-empty", "-m", "other branch");
+  assert.notEqual(f.git("rev-parse", "HEAD"), receipt.review.sha);
+  const request = { project: f.options.projectDirectory, task: "T1", run: "R1", role: "code-reviewer", cycle: 1 };
+  assert.deepEqual(f.tool.captureReviewTarget(request, { ...f.env, GIT_DIR: join(f.dir, "missing-repository"),
+    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "false" }), receipt.review);
+  const table = join(f.logbook, "tasks.tsv");
+  const lines = readFileSync(table, "utf8").trimEnd().split("\n");
+  const columns = lines[0].split("\t"), row = lines[1].split("\t");
+  row[columns.indexOf("round")] = "1";
+  writeFileSync(table, lines[0] + "\n" + row.join("\t") + "\n");
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(policy));
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});
+
+test("T53: native review target refuses redirected project logbooks and missing fixed options", async t => {
+  const { renameSync } = await import("node:fs");
+  const f = await reviewPreparationFixture(t);
+  assert.ok(f.prepare().review);
+  const incomplete = f.createNativePolicy({ ...f.options, logbookRoot: undefined }, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(incomplete));
+  renameSync(f.logbook, `${f.logbook}-saved`);
+  symlinkSync(`${f.logbook}-saved`, f.logbook);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await assert.rejects(f.evaluate(policy));
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});
+
+
+
+test('T53: native saved run target holds lead delegation and is delivered with the saved brief', async t => {
+  const f = await preparationServerFixture(t); f.bindLead();
+  const saved = f.core.readAdmission(f.options.directory).preparations[0];
+  const receipt = f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  assert.match(receipt.message, /# Saved run target/);
+  assert.match(receipt.message, /Task branch: codex\/t1-fixture/);
+  assert.equal(saved.runTarget.round, 0);
+  const child = { ...f.input, name: 'pinned_qa', run: 'R2', role: 'qa', reviewCycle: 1 };
+  f.api.prepareNativeTask(child, f.native(childActor), f.options);
+  editAssignmentRows(f, 'tasks', rows => rows.map(row => row.id === 'T1' ? { ...row, branch: 'codex/t1-other' } : row));
+  assert.throws(() => f.api.prepareNativeTask({ ...child, name: 'late_qa' }, f.native(childActor), f.options), /saved run target changed/);
+  const input = { ...f.spawnInput(child.name, 'qa-spawn'), turn_id: turns[1], transcript_path: f.childTranscript() };
+  assert.throws(() => f.api.reservePreparedSpawn(input, f.native(childActor), f.options), /saved run target changed/);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
+});
+
+
+test('T53: native saved run target refuses a legacy unpinned preparation without replacing it', async t => {
+  const f = await preparationServerFixture(t);
+  const saved = f.core.prepareAdmission(f.options.directory, f.scope,
+    { task: f.input.task, run: f.input.run, issuer: session, name: f.input.name },
+    { issuerRole: 'chief-of-staff', role: f.input.role }, f.input.brief).preparation;
+  assert.equal(saved.runTarget, undefined);
+  assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options), /saved run target changed/);
+  assert.throws(() => f.api.prepareNativeTask(f.input, f.native(session), f.options), /different work/);
+  assert.deepEqual(f.core.readAdmission(f.options.directory).preparations, [saved]);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+});
+
+
+
+
+test("T53: saved targets refuse valid retargets and changes during awaited evaluation", async t => {
+  for (const change of ["branch", "round", "candidate", "status"]) {
+    const f = await composedPolicyFixture(t);
+    f.api.prepareNativeTask(f.input, f.native(session), f.options);
+    const mutate = () => {
+      const value = change === "branch" ? "codex/t1-other" : change === "round" ? "1" : change === "status" ? "done" : "other";
+      editAssignmentRows(f, "runs", rows => rows.map(row => row.id === "R1" ? { ...row, [change]: value } : row));
+      if (change === "branch" || change === "round") editAssignmentRows(f, "tasks", rows => rows.map(row => row.id === "T1" ? { ...row, [change]: value } : row));
+    };
+    const policy = f.createNativePolicy(f.options, async () => { await Promise.resolve(); mutate(); return { decision: "pass" }; });
+    await assert.rejects(f.evaluate(policy));
+    assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  }
+});
+
+
+test("T53: held tasks refuse new preparation and saved dispatch without ending the active run", async t => {
+  for (const prepared of [false, true]) {
+    const f = await preparationServerFixture(t);
+    if (prepared) f.api.prepareNativeTask(f.input, f.native(session), f.options);
+    const runs = f.assignmentTool.read(f.assignmentLogbook, "runs");
+    const restore = editAssignmentRows(f, "tasks", rows => rows.map(row => row.id === "T1" ? { ...row, state: "held", hold: "Owner pause" } : row));
+    assert.throws(() => prepared ? f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options)
+      : f.api.prepareNativeTask(f.input, f.native(session), f.options), /is held/);
+    assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+    assert.deepEqual(f.assignmentTool.read(f.assignmentLogbook, "runs"), runs);
+    assert.throws(() => f.assignmentTool.captureReviewTarget({ project: f.options.projectDirectory, task: "T1", run: "R2", role: "qa", cycle: 1 }, f.assignmentEnv), /is held/);
+    restore();
+    editAssignmentRows(f, "tasks", rows => rows.map(row => row.id === "T1" ? { ...row, hold: "Historical reason" } : row));
+    assert.equal(f.api.prepareNativeTask(f.input, f.native(session), f.options).decision, prepared ? "already-prepared" : "prepared");
+  }
 });
