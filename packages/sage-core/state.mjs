@@ -422,9 +422,9 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
 const check = (dir, skip = [], max = Infinity) => {
-  const version = taskWrites.readVersion(dir);
+  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir)]);
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
-  if (taskWrites.readVersion(dir) !== version) refuse("A task was created while this logbook was read. Retry the read.");
+  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir)]) !== version) refuse("A task or run was created while this logbook was read. Retry the read.");
   return tables;
 };
 
@@ -517,6 +517,84 @@ function createRequestedTask(input, env = process.env) {
     status(dir, true);
     return { decision: "task-created", task };
   });
+}
+
+const runWrites = recordedWrites({ schema: 3, tables: ["runs"], folder: "run-requests",
+  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json", validate: validateRunWrite });
+
+/** Record one run request using the same writer, branch, round and model rules as the CLI. */
+function createRequestedRun(input, env = process.env) {
+  const fields = ["project", "owner", "request", "task", "role", "branch", "candidate"];
+  const deny = () => refuse("Run creation needs a complete, unchanged request and an existing task.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
+    || fields.some(key => !Object.hasOwn(input, key) || typeof input[key] !== "string") || !input.project
+    || !input.owner || input.owner.length > 1024 || /\p{Cc}/u.test(input.owner)
+    || !new RegExp(`^${UUID}$`).test(input.request) || !/^T[1-9]\d*$/.test(input.task)
+    || !/^[a-z][a-z0-9-]{0,63}$/.test(input.role)
+    || !["branch", "candidate"].every(key => input[key].length <= 4096 && cell(input[key]) === input[key])) deny();
+  if (input.branch) branchOf(input.branch);
+  const { project, ...request } = input;
+  const reference = Object.fromEntries(fields.filter(key => key !== "project").map(key => [key, request[key]]));
+  const dir = storeDir(project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  const checked = receipt => {
+    const run = receipt.result;
+    const matches = read(dir, "runs").filter(row => row.id === run.id);
+    if (matches.length !== 1 || matches[0].task !== input.task || matches[0].role !== input.role) deny();
+    return run;
+  };
+  return withLock(dir, () => {
+    const recovered = runWrites.recover(dir, reference);
+    if (recovered) { const run = checked(recovered); status(dir, true); return { decision: "run-created", run }; }
+    const prior = runWrites.readReceipt(dir, reference);
+    if (prior) return { decision: "already-created", run: checked(prior) };
+    ready(dir);
+    const matches = read(dir, "tasks").filter(row => row.id === input.task);
+    if (matches.length !== 1 || !/^(0|[1-9]\d*)$/.test(matches[0].round) || !Number.isSafeInteger(Number(matches[0].round))) deny();
+    notHeld(matches[0], "run add");
+    const run = runFrame(dir, matches[0], input.role, input.branch, input.candidate, env);
+    runWrites.commit(dir, { reference, result: run }, { runs: tableText("runs", [...read(dir, "runs"), run]) });
+    status(dir, true);
+    return { decision: "run-created", run };
+  });
+}
+
+/** A recorded running run is an assignment record, not proof that a native agent started. */
+function runFrame(dir, task, role, branch, candidate, env) {
+  if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
+  if (role === "lead") {
+    // A lead carries one task's pull request: one running lead per task, and at most LEADS per project.
+    if (["merged", "abandoned", "concluded"].includes(task.state)) refuse(`${task.id} is ${task.state}, so it takes no lead run: the task has ended.`);
+    if (!builds(task)) refuse(`${task.id} is an investigation: it has no build and no pull request, so it takes no lead run. The chief runs its steps.`);
+    const leads = read(dir, "runs").filter((r) => r.role === "lead" && r.status === "running");
+    const same = leads.find((r) => r.task === task.id);
+    if (same) refuse(`${same.id} is the running lead run of ${task.id}, and a task has one running lead. Finish ${same.id} first (sage run done ${same.id} --status done, blocked, question or failed).`);
+    if (leads.length >= LEADS) refuse(`the project has ${leads.length} running lead runs, the most it holds: ${leads.map((r) => `${r.id} on ${r.task}`).join(", ")}. Finish one of them first (sage run done <R> --status done, blocked, question or failed).`);
+  }
+  if (WRITERS.includes(role)) {
+    if (!branch) refuse(`a ${role} run needs --branch`);
+    const other = read(dir, "runs").find(row => row.branch === branch && row.status === "running" && WRITERS.includes(row.role));
+    if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
+  }
+  return { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch,
+    status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
+}
+
+/** Saved run facts survive later task/config changes; validate the record rather than recompute them. */
+function validateRunWrite({ reference, result: run }, tables) {
+  const deny = () => refuse("The saved run update is damaged. No run table changed.");
+  if (!run || !/^R[1-9]\d*$/.test(run.id) || typeof run.round !== "string" || !/^(0|[1-9]\d*)$/.test(run.round)
+    || !Number.isSafeInteger(Number(run.round)) || !RUN_ROLES.includes(run.role) || typeof run.model !== "string" || cell(run.model) !== run.model
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(run.started ?? "")
+    || !Number.isFinite(Date.parse(run.started)) || new Date(run.started).toISOString().replace(".000Z", "Z") !== run.started
+    || JSON.stringify(run) !== JSON.stringify({ id: run.id, task: reference.task, role: reference.role, round: run.round,
+      candidate: reference.candidate, branch: reference.branch, status: "running", started: run.started, model: run.model })) deny();
+  if (!tables) return;
+  const { cols, lines } = sheetText(tables.runs.before);
+  if (!TABLES.runs.every(c => cols.includes(c) || ADDED.runs?.includes(c))
+    || cols.some(c => !TABLES.runs.includes(c)) || new Set(cols).size !== cols.length) deny();
+  const runs = rowsOf({ cols, lines });
+  if (runs.some(row => row.id === run.id) || tables.runs.after !== tableText("runs", [...runs, run])) deny();
 }
 
 /** Finish only a run from evidence already authenticated by the provider. This never records a verdict. */
@@ -1264,24 +1342,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         notHeld(task, "run add");
         // The role as the table stores it, in lower case, so that every check below sees the stored value ("Lead " is lead).
         const role = cell(need(opt.role, "--role")).toLowerCase();
-        if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
         const branch = opt.branch === undefined ? "" : branchOf(opt.branch);
-        if (WRITERS.includes(role)) {
-          if (!branch) refuse(`a ${role} run needs --branch`);
-          const other = runs.find((r) => r.branch === branch && r.status === "running" && WRITERS.includes(r.role));
-          if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
-        }
-        if (role === "lead") {
-          // A lead carries one task's pull request: one running lead per task, and at most LEADS per project.
-          if (["merged", "abandoned", "concluded"].includes(task.state)) refuse(`${task.id} is ${task.state}, so it takes no lead run: the task has ended.`);
-          if (!builds(task)) refuse(`${task.id} is an investigation: it has no build and no pull request, so it takes no lead run. The chief runs its steps.`);
-          const leads = runs.filter((r) => r.role === "lead" && r.status === "running");
-          const same = leads.find((r) => r.task === task.id);
-          if (same) refuse(`${same.id} is the running lead run of ${task.id}, and a task has one running lead. Finish ${same.id} first (sage run done ${same.id} --status done, blocked, question or failed).`);
-          if (leads.length >= LEADS) refuse(`the project has ${leads.length} running lead runs, the most it holds: ${leads.map((r) => `${r.id} on ${r.task}`).join(", ")}. Finish one of them first (sage run done <R> --status done, blocked, question or failed).`);
-        }
         const candidate = opt.candidate ?? "";
-        const run = { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch, status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
+        const run = runFrame(dir, task, role, branch, candidate, env);
         write(dir, "runs", [...runs, run]);
         return `${run.id} running · ${role} on ${task.id}${branch ? ` · ${branch}` : ""}${candidate ? ` · candidate ${candidate}` : ""}${run.model ? ` · model ${run.model}` : ""}`;
       }
@@ -1634,5 +1697,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, createRequestedTask, finishReportedRun, captureRunAssignment, captureReviewTarget, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, createRequestedTask, createRequestedRun, finishReportedRun, captureRunAssignment, captureReviewTarget, withLock, board, answerPaths, runCli };
 }
