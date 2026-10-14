@@ -67,7 +67,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_finish_run", "sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -2780,4 +2780,122 @@ test('native mandatory merge refusal survives off for bound children and preserv
   assert.deepEqual(await unassigned.evaluate(ordinaryPolicy, ordinary.input, childActor), { decision: 'pass' });
   assert.equal(ordinaryCalls, 1);
   assert.equal(unassigned.core.readAdmission(unassigned.options.directory).bindings.length, 0);
+});
+
+async function runReportFixture(t) {
+  const f = await completionFixture(t);
+  const projectDirectory = join(f.dir, "project"); mkdirSync(projectDirectory);
+  const logbookRoot = join(f.dir, "logbook");
+  const options = { ...f.options, projectDirectory, logbookRoot };
+  const tool = f.core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+  const env = { ...process.env, SAGE_HOME: logbookRoot };
+  const cli = (...args) => tool.sage([...args, "--project", projectDirectory], env);
+  cli("init"); cli("task", "add", "--title", "Native report fixture", "--size", "small");
+  cli("run", "add", "T1", "--role", "lead");
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  const reports = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  const runtime = await import(pathToFileURL(join(f.plugin, "runtime/run-report.mjs")));
+  const receipt = reports.readChildReport({ name: f.input.name }, f.native(session), options);
+  const record = () => reports.recordChildReport({ name: f.input.name, reportHash: receipt.reportHash }, f.native(session), options);
+  const input = { assignment: receipt.assignment, reportHash: receipt.reportHash };
+  const logbook = tool.storeDir(projectDirectory, env);
+  const finish = (request = input, actor = session, fixed = options) => runtime.finishRecordedRun(request, f.native(actor), fixed);
+  return { ...f, options, tool, env, cli, record, logbook, finish, finishInput: input };
+}
+
+test("native recorded run requires a saved receipt and only finishes its assigned logbook run", async t => {
+  const f = await runReportFixture(t);
+  assert.throws(() => f.finish());
+  f.record();
+  const journal = f.core.readAdmission(f.options.directory);
+  const tables = () => Object.fromEntries(["tasks", "ledger", "findings", "gates", "decisions"].map(name =>
+    [name, readFileSync(join(f.logbook, `${name}.tsv`), "utf8")]));
+  const before = tables();
+  const first = f.finish();
+  assert.equal(first.decision, "run-finished");
+  assert.equal(first.status, "done");
+  assert.equal(readFileSync(join(f.logbook, first.report), "utf8"), reportText);
+  assert.deepEqual(f.finish(), { ...first, decision: "already-finished" });
+  assert.deepEqual(tables(), before);
+  assert.deepEqual(f.core.readAdmission(f.options.directory), journal);
+});
+
+test("native recorded run rejects foreign agents forged paths hashes scopes and unsupported clients", async t => {
+  const f = await runReportFixture(t); f.record();
+  const bytes = readFileSync(join(f.logbook, "runs.tsv"), "utf8");
+  for (const actor of [childActor, "a22422c7-509c-43aa-8c42-827c556f8a59"]) assert.throws(() => f.finish(f.finishInput, actor));
+  for (const change of [{ reportHash: "f".repeat(64) }, { assignment: turns[0] }, { text: reportText }, { logbookRoot: f.dir }]) {
+    assert.throws(() => f.finish({ ...f.finishInput, ...change }));
+  }
+  for (const change of [{ project: "foreign" }, { logbookRoot: undefined }, { logbookRoot: f.options.projectDirectory }]) {
+    assert.throws(() => f.finish(f.finishInput, session, { ...f.options, ...change }));
+  }
+  const { finishRecordedRun } = await import(pathToFileURL(join(f.plugin, "runtime/run-report.mjs")));
+  assert.throws(() => finishRecordedRun(f.finishInput, { version: "unsupported", actor: session }, f.options));
+  assert.equal(readFileSync(join(f.logbook, "runs.tsv"), "utf8"), bytes);
+  assert.equal(f.core.readAdmission(f.options.directory).reports.length, 1);
+});
+
+test("native recorded run finishes preserved work after off and transcript loss without changing mode", async t => {
+  const f = await runReportFixture(t); f.record();
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  rmSync(join(f.mode.sessionsDir, `${childActor}.jsonl`));
+  const before = f.core.readAdmission(f.options.directory);
+  assert.equal(f.finish().decision, "run-finished");
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
+
+test("native logbook configuration fixes an external location and refuses redirects or unknown versions", async t => {
+  const f = await runReportFixture(t);
+  const { readHookConfiguration } = await import(pathToFileURL(join(f.plugin, "runtime/configuration.mjs")));
+  const file = join(f.dir, "native-run.json");
+  const config = { version: 3, mode: f.options };
+  writeFileSync(file, JSON.stringify(config));
+  assert.deepEqual(readHookConfiguration(file), f.options);
+  const alias = join(f.dir, "logbook-link"); symlinkSync(f.options.logbookRoot, alias);
+  for (const bad of [{ ...config, version: 4 }, { ...config, version: 2 },
+    { ...config, mode: { ...f.options, logbookRoot: undefined } },
+    ...[alias, f.options.projectDirectory, f.options.directory, f.options.observationsRoot, f.options.sessionsDir, join(f.options.projectDirectory, "..")].map(logbookRoot =>
+      ({ ...config, mode: { ...f.options, logbookRoot } }))]) {
+    writeFileSync(file, JSON.stringify(bad));
+    assert.throws(() => readHookConfiguration(file), configDenied);
+  }
+});
+
+test("packaged chief run tool uses fixed configuration rejects children and survives reconnect", async t => {
+  const f = await runReportFixture(t); f.record();
+  const file = join(f.dir, "run-config.json");
+  writeFileSync(file, JSON.stringify({ version: 3, mode: f.options }));
+  writeFileSync(f.entry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(file)});`);
+  const client = await connect(t, f, "0.160.0", "", "sage_finish_run");
+  assert.match((await client.call(f.finishInput, childActor)).error, /could not finish/);
+  assert.equal(f.tool.read(f.logbook, "runs")[0].status, "running");
+  const first = await client.call(f.finishInput);
+  assert.equal(first.decision, "run-finished");
+  await client.close();
+  const retry = await connect(t, f, "0.160.0", "", "sage_finish_run");
+  assert.deepEqual(await retry.call(f.finishInput), { ...first, decision: "already-finished" });
+  await retry.close();
+  const { logbookRoot, ...legacy } = f.options;
+  writeFileSync(file, JSON.stringify({ version: 2, mode: legacy }));
+  const unavailable = await connect(t, f, "0.160.0", "", "sage_finish_run");
+  assert.match((await unavailable.call(f.finishInput)).error, /could not finish/);
+  await unavailable.close();
+});
+
+
+
+test("native recorded run requires its exact saved recovery proof before writing", async t => {
+  const f = await runReportFixture(t); f.record();
+  const directory = join(f.options.observationsRoot, session);
+  const names = readdirSync(directory).filter(name => name.endsWith(".json"));
+  const proofs = names.filter(name => JSON.parse(readFileSync(join(directory, name), "utf8")).kind === "report-recovery-verified");
+  assert.equal(proofs.length, 1);
+  const file = join(directory, proofs[0]), bytes = readFileSync(file);
+  const before = readFileSync(join(f.logbook, "runs.tsv"), "utf8");
+  rmSync(file);
+  assert.throws(() => f.finish());
+  assert.equal(readFileSync(join(f.logbook, "runs.tsv"), "utf8"), before);
+  writeFileSync(file, bytes);
+  assert.equal(f.finish().decision, "run-finished");
 });

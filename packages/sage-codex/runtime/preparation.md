@@ -78,3 +78,16 @@ The adapter checks task scope both when it saves a brief and when it reserves a 
 A foreign-task brief saved by an earlier runtime cannot bypass the dispatch check.
 Chief preparation remains separate and can select another task.
 These checks enforce admission ownership. Current logbook run and held-task checks remain separate work before automatic activation.
+
+## Finish a recorded run
+
+`sage_finish_run` accepts an assignment ID and exact saved report hash from the current chief.
+The launcher supplies configuration version 3 with a fixed external `logbookRoot`.
+The tool requires a saved receipt and recovery proof, writes exact report bytes, and finishes only its matching run.
+Identical retries preserve the original result; an interrupted publication can resume without rewriting evidence.
+Tasks, verdicts, admission, and mode remain unchanged. This does not enable installed automatic Sage.
+
+The consumed native check is `node scripts/probe-codex-lifecycle.mjs --sage-report`.
+It uses a fresh profile and simulated responses, records the verified report, removes its child transcript,
+finishes the run, and retries. It checks exact saved report bytes and unchanged task, verdict, admission, and mode records.
+Run it with fake process tools first on PATH. It does not verify a real model or installed automatic activation.

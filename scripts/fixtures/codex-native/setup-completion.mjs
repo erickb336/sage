@@ -4,12 +4,23 @@ import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, finishRun = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
     observationsRoot: join(root, "observations") };
   mkdirSync(options.observationsRoot);
+  let runTool, runEnv, logbook;
+  if (finishRun) {
+    options.logbookRoot = join(root, "logbook");
+    const { createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
+    runTool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+    runEnv = { ...process.env, SAGE_HOME: options.logbookRoot, SAGE_TEST_MACHINE_ID: "native-fixture" };
+    const cli = (...args) => runTool.sage([...args, "--project", options.projectDirectory], runEnv);
+    cli("init"); cli("task", "add", "--title", "Native recorded run", "--size", "small");
+    cli("run", "add", "T1", "--role", "lead");
+    logbook = runTool.storeDir(options.projectDirectory, runEnv);
+  }
   const { configureAdmission, readAdmission } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
   const { readObservations } = await import(pathToFileURL(join(root, "plugin/runtime/events.mjs")));
   configureAdmission(options.directory, { total: failedSpawn ? 1 : 5, projects: [{ project: options.project, limit: failedSpawn ? 1 : 5 }] });
@@ -20,7 +31,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(options)};
     const allowed = new Set(['collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
-      'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report']);
+      'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
         if (${JSON.stringify(roleEditProbe)} && input.tool_name === 'apply_patch') {
@@ -59,9 +70,11 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
   const config = [["sage_fixture", "completion-hooks.mjs"], ["sage_preparation", "completion-preparation.mjs"]]
     .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
-  const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
+  const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
   const { readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
-  return { config: config + receiptConfig, readRecoveryBaseline: () => JSON.parse(readFileSync(join(root, "recovery-baseline.json"), "utf8")), childEvidence(child) {
+  return { readLogbook: () => Object.fromEntries(["tasks", "runs", "ledger", "findings", "gates", "decisions"].map(name => [name, runTool.read(logbook, name)])),
+    readRunReport: name => { assert(/^reports\/R[1-9][0-9]*-[a-f0-9-]+\.md$/.test(name)); return readFileSync(join(logbook, name), "utf8"); },
+    config: config + receiptConfig, readRecoveryBaseline: () => JSON.parse(readFileSync(join(root, "recovery-baseline.json"), "utf8")), childEvidence(child) {
       const state = readAdmission(options.directory);
       const bindings = state.bindings.filter(row => row.child === child);
       assert.equal(bindings.length, 1);
