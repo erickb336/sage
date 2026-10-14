@@ -5036,3 +5036,32 @@ test('T55: recovered review completion checks the commit while interruption rema
     }
   }
 });
+
+test('T58: wrong-typed saved task IDs refuse without changing recorded state', async t => {
+  for (const kind of ['receipt', 'intent']) {
+    const f = await taskCreationFixture(t);
+    if (kind === 'intent') {
+      const restore = await stopTaskWrite(t, f, 'tasks');
+      assert.throws(() => f.create(), /Injected task write failure/);
+      restore();
+    } else f.create();
+    const folder = join(f.logbook, 'task-requests');
+    const pending = join(f.logbook, 'review-pending.json');
+    const file = kind === 'receipt' ? join(folder, readdirSync(folder)[0]) : pending;
+    const record = JSON.parse(readFileSync(file, 'utf8'));
+    const receipt = kind === 'receipt' ? record.value : record.value.receipt;
+    receipt.result.id = ['T1'];
+    record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    writeFileSync(file, JSON.stringify(record) + '\n');
+    const tables = readdirSync(f.logbook).filter(name => name.endsWith('.tsv'));
+    const before = Object.fromEntries(tables.map(name => [name, readFileSync(join(f.logbook, name), 'utf8')]));
+    const pendingBefore = existsSync(pending) ? readFileSync(pending, 'utf8') : undefined;
+    const readReceipts = () => Object.fromEntries((existsSync(folder) ? readdirSync(folder) : [])
+      .map(name => [name, readFileSync(join(folder, name), 'utf8')]));
+    const receiptsBefore = readReceipts();
+    assert.throws(() => f.create());
+    assert.deepEqual(Object.fromEntries(tables.map(name => [name, readFileSync(join(f.logbook, name), 'utf8')])), before, kind);
+    assert.equal(existsSync(pending) ? readFileSync(pending, 'utf8') : undefined, pendingBefore, kind);
+    assert.deepEqual(readReceipts(), receiptsBefore, kind);
+  }
+});
