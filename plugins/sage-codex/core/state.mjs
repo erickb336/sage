@@ -583,9 +583,9 @@ function runFrame(dir, task, role, branch, candidate, env) {
 /** Saved run facts survive later task/config changes; validate the record rather than recompute them. */
 function validateRunWrite({ reference, result: run }, tables) {
   const deny = () => refuse("The saved run update is damaged. No run table changed.");
-  if (!run || !/^R[1-9]\d*$/.test(run.id) || typeof run.round !== "string" || !/^(0|[1-9]\d*)$/.test(run.round)
+  if (!run || typeof run.id !== "string" || !/^R[1-9]\d*$/.test(run.id) || typeof run.round !== "string" || !/^(0|[1-9]\d*)$/.test(run.round)
     || !Number.isSafeInteger(Number(run.round)) || !RUN_ROLES.includes(run.role) || typeof run.model !== "string" || cell(run.model) !== run.model
-    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(run.started ?? "")
+    || typeof run.started !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(run.started)
     || !Number.isFinite(Date.parse(run.started)) || new Date(run.started).toISOString().replace(".000Z", "Z") !== run.started
     || JSON.stringify(run) !== JSON.stringify({ id: run.id, task: reference.task, role: reference.role, round: run.round,
       candidate: reference.candidate, branch: reference.branch, status: "running", started: run.started, model: run.model })) deny();

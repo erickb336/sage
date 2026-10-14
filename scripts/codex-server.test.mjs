@@ -3925,12 +3925,14 @@ for (const view of ['merge', 'logbook']) test(`T57: ${view} refuses a completed 
 });
 
 test('T57: malformed saved run result or delta refuses before any recovery publication', async t => {
-  for (const damage of ['null', 'round', 'model', 'time', 'role', 'after', 'receipt']) await t.test(damage, async t => {
+  for (const damage of ['null', 'array-id', 'round', 'model', 'time', 'array-time', 'role', 'after', 'receipt']) await t.test(damage, async t => {
     const f = await runCreationFixture(t);
     const restore = await stopTaskWrite(t, f, 'runs'); assert.throws(() => f.createRun()); restore();
     const pending = join(f.logbook, 'review-pending.json'), record = JSON.parse(readFileSync(pending, 'utf8'));
     const result = record.value.receipt.result;
     if (damage === 'null') record.value.receipt.result = null;
+    if (damage === 'array-id') result.id = [result.id];
+    if (damage === 'array-time') result.started = [result.started];
     if (damage === 'round') result.round = '9007199254740992';
     if (damage === 'model') result.model = 'line\nbreak';
     if (damage === 'time') result.started = '2026-02-30T00:00:00Z';
@@ -3964,4 +3966,23 @@ test('T57: core historical run receipts preserve the selected model after provid
   assert.deepEqual(tool.createRequestedRun(input, f.env), { ...first, decision: 'already-created' });
   assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
   assert.equal(tool.createRequestedRun({ ...input, request: turns[2] }, f.env).run.model, 'second-model');
+});
+
+
+test('T57: historical run receipts preserve a nonzero round and timestamp after clock advancement', async t => {
+  const f = await runCreationFixture(t);
+  for (const state of ['briefed', 'building', 'reviewing']) f.cli('task', 'T1', 'set', `state=${state}`);
+  f.cli('finding', 'add', 'T1', '--key', 'F-T1-1', '--source', 'code-review', '--severity', 'medium', '--summary', 'Repair fixture');
+  f.cli('finding', 'triage', 'T1', 'F-T1-1', 'fix');
+  f.cli('round', 'T1');
+  assert.equal(f.tool.read(f.logbook, 'tasks')[0].round, '1');
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-02T03:04:05Z') });
+  const first = f.createRun();
+  assert.equal(first.run.round, '1');
+  assert.equal(first.run.started, '2026-01-02T03:04:05Z');
+  f.cli('run', 'done', first.run.id, '--status', 'done');
+  const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
+  t.mock.timers.setTime(Date.parse('2026-02-03T04:05:06Z'));
+  assert.deepEqual(f.createRun(), { ...first, decision: 'already-created' });
+  assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
 });
