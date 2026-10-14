@@ -16,6 +16,25 @@ const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
 
+test("T51: builtin chains retain shell lookup while native wrappers retain argv identity", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const chains = ["command command git stash", "command builtin eval 'git stash'", "builtin command git stash", "command exec git stash", "time command builtin eval 'git stash'"];
+    for (const command of chains)
+      assert.ok(api.programsRun(command, f.dir, "").some(run => run.word === "git" && run.args[0] === "stash"), command);
+    for (const command of ["env command git stash", "exec command git stash", "env builtin eval 'git stash'", "command env eval 'git stash'"])
+      assert.ok(!api.programsRun(command, f.dir, "").some(run => run.word === "git"), command);
+    assert.ok(api.programsRun("command time git stash", f.dir, "", { contextEvidence: true }).programs.some(({ run, wrapper }) => run.word === "time" && wrapper), "time after command is an external wrapper");
+    if (provider === "claude") {
+      const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+      for (const command of chains) assert.match(hook.agentProblem(command, f.dir, "") ?? "", /never runs git stash/, command);
+      assert.equal(hook.agentProblem("command command git status", f.dir, ""), undefined);
+      assert.equal(hook.agentProblem("command builtin printf '%s' 'git stash'", f.dir, ""), undefined);
+    }
+  }
+});
+
 test("T51: Bash builtin spellings do not hide external executable identity", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
