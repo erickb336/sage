@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-receipt", "--sage-completion", "--sage-followup-recovery", "--sage-child-repeat-recovery", "--sage-child-recovery", "--sage-child-compaction", "--sage-child-sandbox", "--sage-child-message", "--sage-interruption", "--sage-followup-missed-callbacks", "--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-accept-review", "--sage-receipt", "--sage-completion", "--sage-followup-recovery", "--sage-child-repeat-recovery", "--sage-child-recovery", "--sage-child-compaction", "--sage-child-sandbox", "--sage-child-message", "--sage-interruption", "--sage-followup-missed-callbacks", "--sage-followup-failed-child", "--sage-followup-no-tool", "--sage-missed-stop", "--sage-followup", "--sage-unprepared-followup", "--sage-retargeted-run", "--sage-ended-run", "--sage-readonly-patch", "--sage-task-lifecycle", "--sage-create-run", "--sage-create-task", "--sage-off", "--deny-spawn", "--follow-up", "--nested", "--sage", "--sage-hook-outage", "--sage-report", "--sage-nested-report", "--sage-no-tool", "--sage-stop-block", "--sage-report-correction", "--sage-report-escape", "--sage-failed-spawn"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const followupRecovery = process.argv.includes("--sage-followup-recovery");
@@ -70,9 +70,11 @@ const noTool = process.argv.includes("--sage-no-tool") || blockStop || correctRe
 const nestedReport = process.argv.includes("--sage-nested-report");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
-const reportProbe = (process.argv.includes("--sage-report") || process.argv.includes("--sage-receipt")) || (noTool && !escapeReport);
+const acceptReview = process.argv.includes("--sage-accept-review");
+assert(!acceptReview || process.argv.slice(2).length === 1, "review_acceptance_is_a_separate_route");
+const reportProbe = acceptReview || (process.argv.includes("--sage-report") || process.argv.includes("--sage-receipt")) || (noTool && !escapeReport);
 const sage = childCompaction || childSandbox || childMessage || interruption || sageFollowup || unpreparedFollowup || retargetedRun || endedRun || readonlyPatch || createTask || process.argv.includes("--sage") || outage || reportProbe || nestedReport || noTool || failedSpawn;
-assert([failedSpawn, outage, (process.argv.includes("--sage-report") || process.argv.includes("--sage-receipt")), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
+assert([failedSpawn, outage, (acceptReview || process.argv.includes("--sage-report") || process.argv.includes("--sage-receipt")), nestedReport, noTool].filter(Boolean).length <= 1, "incompatible_probe_routes");
 assert([denySpawn, followUp, process.argv.includes("--nested"), sage].filter(Boolean).length <= 1, "incompatible_probe_routes");
 let denied = false;
 const MARKER = "sage-native-parent-ok";
@@ -156,7 +158,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let chiefContextVerified = false;
   const textValues = value => typeof value === "string" ? [value] : Array.isArray(value)
     ? value.flatMap(textValues) : value && typeof value === "object" ? Object.values(value).flatMap(textValues) : [];
-  let finishedRun, acceptedReview, prematureCompletions, beforeFinishJournal, finishedLogbook;
+  let finishedRun, acceptedReview, acceptedLogbook, prematureCompletions, beforeFinishJournal, finishedLogbook;
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
@@ -1089,11 +1091,16 @@ data: ${JSON.stringify(event)}
           && row.sha === integrated.reviewTarget.sha && row.kind === "review-clean", "review_acceptance_mismatch");
         check(["tasks", "findings", "gates", "decisions"].every(key =>
           JSON.stringify(logbook[key]) === JSON.stringify(initialLogbook[key])) && !integrated.mergeReady(), "review_approved_task_or_merge");
+        check(JSON.stringify(logbook.runs) === JSON.stringify(JSON.parse(finishedLogbook).runs)
+          && JSON.stringify(integrated.readJournal()) === beforeFinishJournal, "review_changed_finished_run_or_admission");
+        acceptedLogbook = JSON.stringify(logbook);
         check(info.acceptTools.length === 1, "review_accept_tool_missing");
         respond(res, { type: "function_call", ...info.acceptTools[0], call_id: calls.acceptRetry,
           arguments: JSON.stringify({ assignment: reportReceipt.assignment, reportHash: reportReceipt.reportHash }) });
       } else if (rootRequests === 14 && reportProbe) {
         check(JSON.stringify(info.outputs[calls.acceptRetry]) === JSON.stringify({ ...acceptedReview, decision: "already-accepted" })
+          && JSON.stringify(integrated.readLogbook()) === acceptedLogbook
+          && JSON.stringify(integrated.readJournal()) === beforeFinishJournal
           && integrated.readLogbook().ledger.length === 1 && !integrated.mergeReady(), "review_retry_changed_result");
         print({type:"review_acceptance_evidence",recordedVerdicts:1,actualBranchHead:true,retryCreatedDuplicate:false,
           taskAndGatesUnchanged:true,mergeReady:false,realReviewVerified:false,simulatedModel:true});

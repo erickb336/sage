@@ -51,7 +51,7 @@ export function finishRecordedRun(input, context, options) {
   return tool.finishReportedRun(work, env);
 }
 
-/** Only the chief accepts a completed review; the saved preparation supplies its immutable target. */
+/** Accept only the review target saved before this completed child was dispatched. */
 export function acceptRecordedReview(input, context, options) {
   const { tool, state, assigned, work, env } = recordedRun(input, context, options);
   const review = state.preparations.find(row => row.id === assigned.preparation)?.review;

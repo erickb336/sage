@@ -4,7 +4,6 @@ import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirS
 import { join, resolve } from "node:path";
 
 const PENDING = "review-pending.json";
-const REVIEW_NAME = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-[0-9a-f]{64}\.json$/;
 const MAX = 64 * 1024 * 1024;
 const fail = () => { throw Error("A recorded update is incomplete or damaged. Retry its original request before changing or merging this logbook."); };
 const json = value => JSON.stringify(value);
@@ -128,16 +127,4 @@ function commit(dir, receipt, after) {
 }
 
 return { readVersion, readReceipt, recover, commit };
-}
-
-const reviews = recordedWrites({ schema: 1, tables: ["tasks", "findings", "ledger", "decisions"], folder: "reviews",
-  name: REVIEW_NAME, receiptName: reference => `${reference.assignment}-${reference.reportHash}.json` });
-export const reviewReadVersion = reviews.readVersion;
-export const readReviewReceipt = reviews.readReceipt;
-export const recoverReviewWrite = reviews.recover;
-export const commitReviewWrite = reviews.commit;
-export function reviewReceiptName(reference) {
-  const name = `${reference.assignment}-${reference.reportHash}.json`;
-  if (!REVIEW_NAME.test(name)) fail();
-  return name;
 }

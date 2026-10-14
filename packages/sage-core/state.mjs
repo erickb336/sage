@@ -17,8 +17,8 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { BRANCH } from "./branch.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
-// Integration-only task-update and review consumers retain their existing writer until each has a domain validator.
-import { recordedWrites as legacyRecordedWrites, reviewReadVersion, readReviewReceipt, recoverReviewWrite, commitReviewWrite } from "./review-write.mjs";
+// Integration-only task updates retain their existing writer until they have a domain validator.
+import { recordedWrites as legacyRecordedWrites } from "./review-write.mjs";
 import { recordedWrites, assertNoPendingWrite } from "./recorded-write.mjs";
 import { ROLES } from "./roles.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
@@ -417,9 +417,9 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
 const check = (dir, skip = [], max = Infinity) => {
-  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir)]);
+  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir)]);
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
-  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir)]) !== version) refuse("A task or run was created while this logbook was read. Retry the read.");
+  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir)]) !== version) refuse("A task, run, or review receipt was created while this logbook was read. Retry the read.");
   return tables;
 };
 
@@ -772,7 +772,64 @@ function captureReviewTarget(input, env = process.env) {
   });
 }
 
-/** Accept one completed review. Pending writes block all further edits and merge checks until recovery. */
+const reviewWrites = recordedWrites({ schema: 4, tables: ["tasks", "findings", "ledger", "decisions"], folder: "reviews",
+  name: /^[0-9a-f-]{36}-[0-9a-f]{64}\.json$/, receiptName: reference => `${reference.assignment}-${reference.reportHash}.json`, validate: validateReviewWrite });
+// The outer merge guard also covers folders without a tasks table.
+const reviewReadVersion = reviewWrites.readVersion;
+
+function reviewResult(reference, claims, at) {
+  return { task: reference.task, run: reference.run, sha: reference.review.sha, cycle: reference.review.cycle,
+    kind: claims.kind, findings: claims.findings.map((_, index) => `F-${reference.task}-${reference.run}-${index + 1}`), at };
+}
+
+/** The same pure delta defines fresh publication and validates a saved recovery intent. */
+function reviewDelta({ reference, result }, claims, rows) {
+  const deny = () => refuse("The saved review update is damaged. No review tables changed.");
+  const { task: id, run, role, review } = reference;
+  const { tasks, findings, ledger, decisions } = structuredClone(rows);
+  const matches = tasks.filter(row => row.id === id);
+  if (matches.length !== 1) deny();
+  const task = matches[0];
+  if (!builds(task) || task.round !== String(review.round) || task.branch !== review.branch || task.state === "held"
+    || ledger.some(row => row.run === run && !["checks-pass", "checks-fail"].includes(row.kind))
+    || findings.some(row => result.findings.includes(row.key))) deny();
+  claims.findings.forEach((finding, index) => findings.push({ task: id, key: result.findings[index], round: task.round,
+    source: role, severity: finding.severity, summary: cell(finding.summary), triage: "", reason: "", status: "open" }));
+  ledger.push({ task: id, pr: task.pr, sha: review.sha, kind: claims.kind, cycle: String(review.cycle), run, at: result.at });
+  if (["verified", "pr-ready"].includes(task.state) && NOT_CLEAN.includes(claims.kind)) {
+    const before = task.state;
+    task.state = "reviewing";
+    decisions.push({ at: result.at, task: id, decision: `${before} → reviewing`, why: `${claims.kind} verdict on ${review.sha}` });
+  }
+  return Object.fromEntries(Object.entries({ tasks, findings, ledger, decisions }).map(([table, values]) => [table, tableText(table, values)]));
+}
+
+/** Validate authenticated report bytes and every saved after-image before publication. No current Git reads. */
+function validateReviewWrite({ reference, result }, tables) {
+  const deny = () => refuse("The saved review update is damaged. No review tables changed.");
+  const keys = ["task", "run", "role", "assignment", "reportHash", "review", "text"];
+  if (!reference || typeof reference !== "object" || Array.isArray(reference) || Object.keys(reference).length !== keys.length
+    || keys.some(key => !Object.hasOwn(reference, key)) || typeof reference.task !== "string" || !/^T[1-9]\d*$/.test(reference.task)
+    || typeof reference.run !== "string" || !/^R[1-9]\d*$/.test(reference.run)
+    || typeof reference.assignment !== "string" || !new RegExp(`^${UUID}$`).test(reference.assignment)
+    || typeof reference.reportHash !== "string" || !/^[0-9a-f]{64}$/.test(reference.reportHash)) deny();
+  const review = parseReviewTarget(reference.review);
+  const claims = parseReviewReport(parseReport(reference.text), reference.role, review);
+  if (createHash("sha256").update(reference.text).digest("hex") !== reference.reportHash
+    || !result || typeof result.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(result.at)
+    || !Number.isFinite(Date.parse(result.at)) || new Date(result.at).toISOString().replace(".000Z", "Z") !== result.at
+    || JSON.stringify(result) !== JSON.stringify(reviewResult(reference, claims, result.at))) deny();
+  if (!tables) return;
+  const rows = Object.fromEntries(Object.keys(tables).map(table => {
+    const { cols, lines } = sheetText(tables[table].before);
+    if (!TABLES[table].every(c => cols.includes(c) || ADDED[table]?.includes(c))
+      || cols.some(c => !TABLES[table].includes(c)) || new Set(cols).size !== cols.length) deny();
+    return [table, rowsOf({ cols, lines })];
+  }));
+  const expected = reviewDelta({ reference, result }, claims, rows);
+  if (Object.keys(expected).some(table => tables[table].after !== expected[table])) deny();
+}
+
 function acceptReportedReview(input, env = process.env) {
   const fields = ["project", "task", "run", "role", "assignment", "reportHash", "text", "review"];
   const deny = () => refuse("The review does not match its completed run, report, or current commit.");
@@ -786,27 +843,20 @@ function acceptReportedReview(input, env = process.env) {
   const report = parseReport(input.text);
   const claims = parseReviewReport(report, input.role, review);
   if (createHash("sha256").update(input.text).digest("hex") !== input.reportHash) deny();
-  const reference = { task: input.task, run: input.run, role: input.role, assignment: input.assignment, reportHash: input.reportHash, review };
-  const findingKeys = claims.findings.map((_, index) => `F-${input.task}-${input.run}-${index + 1}`);
-  const resultAt = at => ({ task: input.task, run: input.run, sha: review.sha, cycle: review.cycle,
-    kind: claims.kind, findings: findingKeys, at });
-  const checked = receipt => {
-    if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(receipt.result?.at)
-      || JSON.stringify(receipt.result) !== JSON.stringify(resultAt(receipt.result.at))) deny();
-    return receipt.result;
-  };
+  const reference = { task: input.task, run: input.run, role: input.role, assignment: input.assignment, reportHash: input.reportHash, review, text: input.text };
   const dir = storeDir(input.project, env);
   if (realpathSync(dir) !== resolve(dir)) deny();
   return withLock(dir, () => {
-    const recovered = recoverReviewWrite(dir, reference);
-    if (recovered) { const result = checked(recovered); status(dir, true); return { decision: "review-accepted", ...result }; }
-    const prior = readReviewReceipt(dir, reference);
-    if (prior) return { decision: "already-accepted", ...checked(prior) };
+    const recovered = reviewWrites.recover(dir, reference);
+    if (recovered) { const result = recovered.result; status(dir, true); return { decision: "review-accepted", ...result }; }
+    const prior = reviewWrites.readReceipt(dir, reference);
+    if (prior) return { decision: "already-accepted", ...prior.result };
     ready(dir);
     const tasks = read(dir, "tasks"), runs = read(dir, "runs");
     const matches = tasks.filter(row => row.id === input.task), assigned = runs.filter(row => row.id === input.run);
     if (matches.length !== 1 || assigned.length !== 1) deny();
     const task = matches[0], run = assigned[0];
+    notHeld(task, "review acceptance");
     const path = `reports/${input.run}-${input.assignment}-${input.reportHash}.md`;
     if (run.task !== task.id || run.role !== input.role || run.round !== String(review.round) || task.round !== run.round
       || run.status !== "done" || !run.ended || run.report !== path || task.branch !== review.branch
@@ -814,19 +864,9 @@ function acceptReportedReview(input, env = process.env) {
       || readRegular(join(dir, path), { link: false, max: 32 * 1024 }) !== input.text
       || reviewHead(input.project, branchOf(task.branch), env) !== review.sha) deny();
     const findings = read(dir, "findings"), ledger = read(dir, "ledger"), decisions = read(dir, "decisions");
-    if (ledger.some(row => row.run === input.run) || findings.some(row => findingKeys.includes(row.key))) deny();
-    const at = now();
-    claims.findings.forEach((finding, index) => findings.push({ task: task.id, key: findingKeys[index], round: task.round,
-      source: input.role, severity: finding.severity, summary: cell(finding.summary), triage: "", reason: "", status: "open" }));
-    ledger.push({ task: task.id, pr: task.pr, sha: review.sha, kind: claims.kind, cycle: String(review.cycle), run: run.id, at });
-    if (["verified", "pr-ready"].includes(task.state) && NOT_CLEAN.includes(claims.kind)) {
-      const before = task.state;
-      move(task, "reviewing");
-      decisions.push({ at, task: task.id, decision: `${before} → reviewing`, why: `${claims.kind} verdict on ${review.sha}` });
-    }
-    const receipt = { reference, result: resultAt(at) };
-    commitReviewWrite(dir, receipt, Object.fromEntries(Object.entries({ tasks, findings, ledger, decisions })
-      .map(([table, rows]) => [table, tableText(table, rows)])));
+    const receipt = { reference, result: reviewResult(reference, claims, now()) };
+    const after = reviewDelta(receipt, claims, { tasks, findings, ledger, decisions });
+    reviewWrites.commit(dir, receipt, after);
     status(dir, true);
     return { decision: "review-accepted", ...receipt.result };
   });
