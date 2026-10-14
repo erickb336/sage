@@ -31,7 +31,8 @@ let sandboxVerified = false, childCommandTool;
 const denySpawn = process.argv.includes("--deny-spawn");
 const repeatRecovery = process.argv.includes("--sage-child-repeat-recovery");
 const recoveryProbe = repeatRecovery || process.argv.includes("--sage-child-recovery");
-const receiptProbe = process.argv.includes("--sage-receipt") || recoveryProbe;
+const finishRun = process.argv.includes("--sage-report");
+const receiptProbe = finishRun || process.argv.includes("--sage-receipt") || recoveryProbe;
 const reportProbe = process.argv.includes("--sage-report") || receiptProbe;
 const failedSpawn = process.argv.includes("--sage-failed-spawn");
 const completion = leadOwnership || roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
@@ -69,6 +70,10 @@ const env = {
   LANG: "en_US.UTF-8",
   DO_NOT_TRACK: "1",
 };
+// Disable real machine-identity queries in this probe process and its native child.
+// Outside NODE_TEST_CONTEXT the fixed marker means unavailable identity, never trusted hardware evidence.
+process.env.SAGE_TEST_MACHINE_ID = "native-fixture";
+env.SAGE_TEST_MACHINE_ID = "native-fixture";
 const print = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const telemetryArgs = ["-c", "analytics.enabled=false", "-c", 'otel.exporter="none"', "-c", 'otel.metrics_exporter="none"', "-c", 'otel.trace_exporter="none"'];
 const launch = (args) => spawn(binary, [...telemetryArgs, ...args], { cwd: workspace, env, shell: false, stdio: ["pipe", "pipe", "pipe"] });
@@ -97,8 +102,9 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,finishRun,deadlineMs});
   let failureStage = 0;
+  let finishVerified = false, firstFinish, beforeFinishLogbook, finishedLogbook;
   let prepared = false, blockedStopVerified = false, reportVerified = false, receiptVerified = false, beforeReport, expectedReport, recordedState;
   let compactRequests = 0, recoveryRound = 0, recoveryPhase = "compact", recoveredRounds = 0;
   const texts = value => typeof value === "string" ? [value] : Array.isArray(value) ? value.flatMap(texts)
@@ -120,7 +126,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
   const pending = new Set();
-  const calls = { ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { finish: "probe_finish", finishRetry: "probe_finish_retry", ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -141,7 +147,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (!["function_call_output", "custom_tool_call_output"].includes(item.type) || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.ownerPrepare, calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.finish, calls.finishRetry, calls.ownerPrepare, calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
         if ((failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.ownerSpawn, calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
@@ -170,7 +176,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({namespace: tool.name, name: member.name}))
       : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{name: tool.name}] : []);
-    return { outputs, agentTools, childPromptSeen, commandTools, patchTools,
+    return { finishTools: mcpTools("sage_finish_run"), outputs, agentTools, childPromptSeen, commandTools, patchTools,
       chiefMessageDelivered: input.some(item => item.type === "agent_message" && item.author === "/root/probe_child"
         && item.recipient === "/root" && texts(item.content).includes("Fixed progress report")), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), assignmentTools: mcpTools("sage_read_assignment") };
   };
@@ -524,6 +530,34 @@ data: ${JSON.stringify(event)}
         receiptVerified = true;
         print({type: "report_receipt_evidence", receipts: 1, exactReport: true, transcriptRemoved: true,
           recoveryVerified: true, retryUnchanged: true, verdictsAccepted: 0, simulatedModel: true});
+        if (finishRun) {
+          check(info.finishTools.length === 1, "finish_tool_missing");
+          beforeFinishLogbook = integrated.readLogbook();
+          respond(res, {type: "function_call", ...info.finishTools[0], call_id: calls.finish,
+            arguments: JSON.stringify({assignment: expectedReport.assignment, reportHash: expectedReport.reportHash})});
+        } else respond(res, message(MARKER));
+      } else if (finishRun && rootRequests === 10) {
+        firstFinish = info.outputs[calls.finish];
+        check(firstFinish?.decision === "run-finished" && firstFinish.task === "T1" && firstFinish.run === "R1"
+          && firstFinish.status === "done", "run_finish_missing");
+        const after = integrated.readLogbook(), prior = beforeFinishLogbook;
+        check(JSON.stringify(after.runs[0]) === JSON.stringify({...prior.runs[0], status: "done", report: firstFinish.report, ended: firstFinish.ended})
+          && after.runs.length === 1 && integrated.readRunReport(firstFinish.report) === CHILD_MARKER, "run_evidence_changed");
+        for (const key of ["tasks", "ledger", "findings", "gates", "decisions"])
+          check(JSON.stringify(after[key]) === JSON.stringify(prior[key]), "finish_changed_" + key);
+        finishedLogbook = JSON.stringify(after);
+        check(JSON.stringify(integrated.readJournal()) === recordedState, "finish_changed_admission");
+        check(info.finishTools.length === 1, "finish_retry_tool_missing");
+        respond(res, {type: "function_call", ...info.finishTools[0], call_id: calls.finishRetry,
+          arguments: JSON.stringify({assignment: expectedReport.assignment, reportHash: expectedReport.reportHash})});
+      } else if (finishRun && rootRequests === 11) {
+        check(JSON.stringify(info.outputs[calls.finishRetry]) === JSON.stringify({...firstFinish, decision: "already-finished"}), "finish_retry_changed_result");
+        check(integrated.readRunReport(firstFinish.report) === CHILD_MARKER
+          && JSON.stringify(integrated.readJournal()) === recordedState
+          && JSON.stringify(integrated.readLogbook()) === finishedLogbook, "finish_retry_changed_evidence");
+        finishVerified = true;
+        print({type:"run_finish_evidence", exactReportBytes:true, finishedRuns:1, retryUnchanged:true,
+          tasksAndVerdictsUnchanged:true, admissionAndModeUnchanged:true, simulatedModel:true, automaticSage:false});
         respond(res, message(MARKER));
       } else {
         throw new Error("unexpected_extra_root_request");
@@ -599,7 +633,7 @@ data: ${JSON.stringify(event)}
         && ["spawn_agent", "wait"].includes(event.item.tool) && event.item.status === "completed") {
         // The native tool result in the next request supplies the stricter state assertion.
       } else if (completion && event.type === "item.completed" && event.item?.type === "mcp_tool_call"
-        && event.item.server === "sage_preparation" && ["sage_prepare_task", ...(reportProbe ? ["sage_read_report"] : []), ...(receiptProbe ? ["sage_record_report"] : [])].includes(event.item.tool) && event.item.status === "completed") {
+        && event.item.server === "sage_preparation" && ["sage_prepare_task", ...(reportProbe ? ["sage_read_report"] : []), ...(receiptProbe ? ["sage_record_report"] : []), ...(finishRun ? ["sage_finish_run"] : [])].includes(event.item.tool) && event.item.status === "completed") {
         // The prepared message and final journal verify this tool's result.
       } else if (event.type === "item.completed" && event.item?.type !== "reasoning") {
         unexpectedItems++;
@@ -625,7 +659,7 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (receiptProbe ? 9 : reportProbe ? 6 : 5) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+      : rootRequests === (finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
         && (!recoveryProbe || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
