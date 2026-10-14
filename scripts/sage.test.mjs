@@ -755,6 +755,184 @@ const UP_1S = uptimeIs("() => 1");
 /** The state tool of main before T151 (14c0d0c), so that a test can run an older sage against this one's lock. */
 const OLD_TOOL = fileURLToPath(new URL("fixtures/sage-14c0d0c/sage.mjs", import.meta.url));
 
+test("stable lock identity clears a dead renamed host and keeps a same-name foreign machine", () => {
+  const s = store(undefined, undefined, { SAGE_TEST_MACHINE_ID: "sample-machine-a" });
+  s.ok("task", "add", "--title", "sample", "--size", "small");
+  const pid = 424290; s.pids[pid] = null;
+  const ownerName = `${randomUUID()}.json`;
+  const owner = { pid, host: `${hostname()}-old-name`, machineId: "sample-machine-a", start: 1000, at: 0 };
+  const lock = plant(s.dir, ownerName, owner);
+  s.ok("task", "T1", "set", "branch=codex/t1-renamed");
+  assert.equal(existsSync(lock), false);
+  const foreign = { ...owner, host: hostname(), machineId: "sample-machine-b" };
+  plant(s.dir, ownerName, foreign);
+  const before = readFileSync(join(lock, ownerName), "utf8");
+  assert.match(s.no("task", "T1", "set", "branch=codex/t1-foreign"), /logbook is busy/);
+  assert.equal(readFileSync(join(lock, ownerName), "utf8"), before);
+  assert.equal(rows(s.dir, "tasks")[0].branch, "codex/t1-renamed");
+  writeFileSync(join(lock, ownerName), JSON.stringify({ ...owner, host: hostname(), machineId: undefined }));
+  s.ok("task", "T1", "set", "branch=codex/t1-legacy");
+  assert.equal(existsSync(lock), false, "legacy owners keep the host rule");
+});
+
+test("stable lock identity applies to waiter cleanup", () => {
+  const s = store(undefined, undefined, { SAGE_TEST_MACHINE_ID: "sample-machine-a" });
+  const make = (machineId, host) => {
+    const token = randomUUID(), name = `${token}.json`, pending = join(s.dir, `.lock.${token}`);
+    const owner = { pid: 424291, host, machineId, start: 1000, at: 0 };
+    renameSync(plant(s.dir, name, owner), pending);
+    return { pending, file: join(pending, name), original: JSON.stringify(owner) };
+  };
+  s.pids[424291] = null;
+  const local = make("sample-machine-a", `${hostname()}-renamed`);
+  const foreign = make("sample-machine-b", hostname());
+  s.ok("task", "add", "--title", "sample", "--size", "small");
+  assert.equal(existsSync(local.pending), false);
+  assert.equal(readFileSync(foreign.file, "utf8"), foreign.original);
+});
+
+
+test("stable machine identity is recorded only inside the test identity gates", async t => {
+  const { withLock } = await import(LIB);
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-machine-lock-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  withLock(dir, () => {
+    const lock = join(dir, ".lock"), names = readdirSync(lock);
+    assert.equal(names.length, 1);
+    const owner = JSON.parse(readFileSync(join(lock, names[0]), "utf8"));
+    assert.equal(owner.machineId, "test-machine");
+    assert.equal(owner.host, hostname());
+  });
+  assert.equal(existsSync(join(dir, ".lock")), false);
+  const otherTmp = mkdtempSync(join(realpathSync(tmpdir()), "sage-identity-other-tmp-"));
+  t.after(() => rmSync(otherTmp, { recursive: true, force: true }));
+  const queried = join(dir, "hardware-query");
+  // Trap both supported hardware sources before the state module loads. A caught error cannot hide a query.
+  const guard = `import fs from "node:fs"; import cp from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    const read = fs.readFileSync, exec = cp.execFileSync;
+    const refuse = () => { fs.writeFileSync(${JSON.stringify(queried)}, "queried"); throw new Error("hardware query in a test"); };
+    fs.readFileSync = (path, ...args) => String(path) === "/etc/machine-id" ? refuse() : read(path, ...args);
+    cp.execFileSync = (file, ...args) => String(file) === "/usr/sbin/ioreg" ? refuse() : exec(file, ...args);
+    syncBuiltinESMExports();`;
+  const inspect = `const { withLock } = await import(${JSON.stringify(LIB)});
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    withLock(${JSON.stringify(dir)}, () => {
+      const lock = join(${JSON.stringify(dir)}, ".lock");
+      console.log(readFileSync(join(lock, readdirSync(lock)[0]), "utf8"));
+    });`;
+  for (const [label, vars] of [
+    ["outside a node test", { NODE_TEST_CONTEXT: undefined }],
+    ["outside the canonical temporary root", { TMPDIR: otherTmp }],
+  ]) {
+    const r = spawnSync("node", ["--import", `data:text/javascript,${encodeURIComponent(guard)}`, "--input-type=module", "-e", inspect], {
+      encoding: "utf8", timeout, env: testEnv({ SAGE_TEST_MACHINE_ID: "must-not-be-used", ...vars }),
+    });
+    assert.equal(r.status, 0, `${label}: ${r.stderr}`);
+    assert.equal(JSON.parse(r.stdout).machineId, null, `${label}: reject the injected identity`);
+    assert.equal(existsSync(queried), false, `${label}: do not query hardware`);
+    assert.equal(existsSync(join(dir, ".lock")), false, `${label}: release the lock`);
+  }
+});
+
+test("unavailable machine identity never downgrades new owners to the legacy host rule", async t => {
+  const { withLock } = await import(LIB);
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-unknown-machine-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const previous = process.env.SAGE_TEST_MACHINE_ID;
+  let owner;
+  try {
+    process.env.SAGE_TEST_MACHINE_ID = "";
+    withLock(dir, () => {
+      const lock = join(dir, ".lock");
+      owner = JSON.parse(readFileSync(join(lock, readdirSync(lock)[0]), "utf8"));
+    });
+  } finally {
+    if (previous === undefined) delete process.env.SAGE_TEST_MACHINE_ID;
+    else process.env.SAGE_TEST_MACHINE_ID = previous;
+  }
+  const s = store();
+  s.ok("task", "add", "--title", "sample", "--size", "small");
+  owner.pid = 424292; owner.boot = 1; s.pids[owner.pid] = null;
+  const unknownOwnerFile = `${randomUUID()}.json`, lock = plant(s.dir, unknownOwnerFile, owner);
+  const before = readFileSync(join(lock, unknownOwnerFile), "utf8");
+  assert.match(s.no("task", "T1", "set", "branch=codex/t1-unknown"), /logbook is busy/);
+  assert.equal(readFileSync(join(lock, unknownOwnerFile), "utf8"), before);
+  assert.equal(owner.machineId, null, "new unavailable identities differ from legacy missing fields");
+  const pending = join(s.dir, `.lock.${randomUUID()}`);
+  renameSync(lock, pending);
+  s.ok("task", "T1", "set", "branch=codex/t1-free");
+  assert.equal(readFileSync(join(pending, unknownOwnerFile), "utf8"), before);
+  const unknownLocal = store(undefined, undefined, { SAGE_TEST_MACHINE_ID: "" });
+  t.after(() => {
+    for (const path of [unknownLocal.home, unknownLocal.project]) rmSync(path, { recursive: true, force: true });
+  });
+  unknownLocal.ok("task", "add", "--title", "sample", "--size", "small");
+  const known = { ...owner, machineId: "known-machine" };
+  unknownLocal.pids[known.pid] = null;
+  const knownName = `${randomUUID()}.json`, knownLock = plant(unknownLocal.dir, knownName, known);
+  const knownBefore = readFileSync(join(knownLock, knownName), "utf8");
+  assert.match(unknownLocal.no("task", "T1", "set", "branch=codex/t1-known"), /logbook is busy/);
+  assert.equal(readFileSync(join(knownLock, knownName), "utf8"), knownBefore, "unknown local identity keeps a known holder");
+  const knownPending = join(unknownLocal.dir, `.lock.${randomUUID()}`);
+  renameSync(knownLock, knownPending);
+  unknownLocal.ok("task", "T1", "set", "branch=codex/t1-local-free");
+  assert.equal(readFileSync(join(knownPending, knownName), "utf8"), knownBefore, "unknown local identity keeps a known waiter");
+});
+
+test("stable machine identity reads simulated platform sources and refuses invalid values", t => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-platform-identity-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const linuxId = "0123456789ABCDEF0123456789ABCDEF";
+  const macId = "01234567-89AB-CDEF-0123-456789ABCDEF";
+  const cases = [
+    ["linux", `${linuxId}\n`, linuxId.toLowerCase()],
+    ["linux", "not-a-machine-id", null],
+    ["linux", null, null],
+    ["darwin", `| |   "IOPlatformUUID" = "${macId}"\n`, macId.toLowerCase()],
+    ["darwin", '"IOPlatformUUID" = "------------------------------------"', null],
+    ["darwin", null, null],
+    ["unsupported", null, null],
+  ];
+  for (const [platform, value, expected] of cases) {
+    // Both system sources are replaced before the state module loads; no case queries this computer.
+    const guard = `import fs from "node:fs"; import cp from "node:child_process"; import os from "node:os";
+      import { syncBuiltinESMExports } from "node:module";
+      const read = fs.readFileSync, exec = cp.execFileSync;
+      globalThis.identityCalls = [];
+      const source = (kind, args) => {
+        globalThis.identityCalls.push({ kind, args });
+        const value = ${JSON.stringify(value)};
+        if (value === null) throw new Error("simulated unavailable source");
+        return value;
+      };
+      os.platform = () => ${JSON.stringify(platform)};
+      fs.readFileSync = (path, ...args) => String(path) === "/etc/machine-id" ? source("linux", args) : read(path, ...args);
+      cp.execFileSync = (file, ...args) => String(file) === "/usr/sbin/ioreg" ? source("darwin", args) : exec(file, ...args);
+      syncBuiltinESMExports();`;
+    const inspect = `const { withLock } = await import(${JSON.stringify(LIB)});
+      const { readFileSync, readdirSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      withLock(${JSON.stringify(dir)}, () => {
+        const lock = join(${JSON.stringify(dir)}, ".lock");
+        console.log(JSON.stringify({ owner: JSON.parse(readFileSync(join(lock, readdirSync(lock)[0]), "utf8")), calls: globalThis.identityCalls }));
+      });`;
+    const r = spawnSync("node", ["--import", `data:text/javascript,${encodeURIComponent(guard)}`, "--input-type=module", "-e", inspect], {
+      encoding: "utf8", timeout, env: testEnv({ NODE_TEST_CONTEXT: undefined, SAGE_TEST_MACHINE_ID: undefined }),
+    });
+    assert.equal(r.status, 0, `${platform}: ${r.stderr}`);
+    const result = JSON.parse(r.stdout);
+    assert.equal(result.owner.machineId, expected, `${platform}: ${value}`);
+    assert.deepEqual(result.calls.map(call => call.kind), platform === "unsupported" ? [] : [platform]);
+    if (platform === "darwin") {
+      assert.deepEqual(result.calls[0].args[0], ["-rd1", "-c", "IOPlatformExpertDevice"]);
+      assert.equal(result.calls[0].args[1].timeout, 5000, "bound the system query");
+    }
+    assert.equal(existsSync(join(dir, ".lock")), false);
+  }
+});
+
 test("T151: without uptime, as in the macOS sandbox, the tool works and the lock clears only a holder that is surely gone", () => {
   const fakes = fakePs();
   const kills = join(fakes, "kills");
@@ -775,7 +953,7 @@ test("T151: without uptime, as in the macOS sandbox, the tool works and the lock
   assert.equal(existsSync(lock), true, "a live pid keeps the lock");
   rmSync(lock, { recursive: true });
 
-  lock = crash(s, { host: "other-host" }); // another host, whose pid this machine cannot check
+  lock = crash(s, { host: "other-host", machineId: "other-machine" }); // another host, whose pid this machine cannot check
   r = s.run("task", "T1", "set", "branch=t1-other-host");
   assert.match(r.stderr, /^sage: the logbook is busy: pid \d+ on other-host has held /);
   assert.equal(existsSync(lock), true, "a holder on another host is never cleared on a guess");
@@ -812,7 +990,7 @@ test("T151-Q1: a lock taken without a boot time stays with its live holder, for 
   s.ok("task", "add", "--title", "t", "--size", "small");
   const lock = crash(s, {}, { NODE_OPTIONS: NO_UPTIME }); // taken in the sandbox
   const record = JSON.parse(readFileSync(join(lock, readdirSync(lock)[0]), "utf8"));
-  assert.deepEqual(Object.keys(record), ["pid", "host", "start", "at"], "an unknown boot time has no key");
+  assert.deepEqual(Object.keys(record), ["pid", "host", "machineId", "start", "at"], "an unknown boot time has no key");
   delete s.pids[record.pid]; // the holder is alive, start unknown
   const old = spawnSync("node", [OLD_TOOL, "task", "T1", "set", "branch=t1-old", "--project", s.project], { encoding: "utf8", env: testEnv({ ...vars, SAGE_HOME: s.home, SAGE_TEST_PIDS: JSON.stringify(s.pids) }), timeout });
   assert.match(old.stderr, /^sage: the logbook is busy: pid \d+ on /, "the older sage keeps the lock");
@@ -834,6 +1012,10 @@ test("T91-F1: SAGE_TEST_PIDS weakens no lock outside a node test run or outside 
   // tool ignores the map and asks the system: the kill spy answers "alive" and records the call, so the lock stays.
   const lock = crash(s);
   const holder = Object.keys(s.pids)[0];
+  // This test isolates PID probing with a legacy owner, independent of machine-id availability.
+  const owner = join(lock, readdirSync(lock)[0]);
+  const record = JSON.parse(readFileSync(owner, "utf8")); delete record.machineId;
+  writeFileSync(owner, JSON.stringify(record));
   for (const [i, vars] of [{ NODE_TEST_CONTEXT: undefined }, { TMPDIR: mkdtempSync(join(tmpdir(), "sage-other-tmp-")) }].entries()) {
     const kills = join(fakes, `kills-${i}`);
     const r = set({ ...vars, SAGE_TEST_PIDS: JSON.stringify(s.pids), SAGE_TEST_KILLS: kills });
@@ -877,7 +1059,7 @@ test("a holder that may be alive keeps the lock: a waiter waits for it, or refus
   assert.equal(rows(s.dir, "tasks")[0].branch, "t1-after-wait", "it took the lock when the holder let go");
   await h.exited;
 
-  const lock = crash(s, { host: "other-host", boot: 1 }); // this machine cannot check a process on another one
+  const lock = crash(s, { host: "other-host", machineId: "other-machine", boot: 1 }); // this machine cannot check a process on another one
   t0 = Date.now();
   r = s.run("task", "T1", "set", "branch=t1-other-host");
   assert.equal(r.status, 1);
