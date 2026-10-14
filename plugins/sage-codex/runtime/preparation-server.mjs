@@ -72,6 +72,18 @@ export function createPreparationServer(options = {}) {
       return { isError: true, content: [{ type: "text", text: "Sage could not finish this run. Check the chief identity, saved report, assigned run, and configured logbook." }] };
     }
   });
+  server.registerTool("sage_accept_review", {
+    description: "Chief only: accept a completed review from its recorded report and saved target. Exact retries preserve one result. This records findings and a verdict; it does not verify a task or authorize a merge.",
+    inputSchema: z.object({ assignment: z.string(), reportHash: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { acceptRecordedReview } = await import("./run-report.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(acceptRecordedReview(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not accept this review. Check the chief identity, saved report, assigned run, and configured logbook." }] };
+    }
+  });
   server.registerTool("sage_read_report", {
     description: "Read the validated final report for your completed named child. This does not mark a task successful or record a review verdict.",
     inputSchema: z.object({ name: z.string() }).strict(),

@@ -16,7 +16,7 @@ import { boardView } from "./board-view.mjs";
 import { createBoard } from "./board.mjs";
 import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
-import { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
+import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
@@ -422,9 +422,9 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
 const check = (dir, skip = [], max = Infinity) => {
-  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir)]);
+  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir)]);
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
-  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir)]) !== version) refuse("A task or run was created while this logbook was read. Retry the read.");
+  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir)]) !== version) refuse("A recorded update completed while this logbook was read. Retry the read.");
   return tables;
 };
 
@@ -595,6 +595,104 @@ function validateRunWrite({ reference, result: run }, tables) {
     || cols.some(c => !TABLES.runs.includes(c)) || new Set(cols).size !== cols.length) deny();
   const runs = rowsOf({ cols, lines });
   if (runs.some(row => row.id === run.id) || tables.runs.after !== tableText("runs", [...runs, run])) deny();
+}
+
+const reviewWrites = recordedWrites({ schema: 4, tables: ["tasks", "findings", "ledger", "decisions"], folder: "reviews",
+  name: /^[0-9a-f-]{36}-[0-9a-f]{64}\.json$/, receiptName: reference => `${reference.assignment}-${reference.reportHash}.json`, validate: validateReviewWrite });
+
+function reviewResult(reference, claims, at) {
+  return { task: reference.task, run: reference.run, sha: reference.review.sha, cycle: reference.review.cycle,
+    kind: claims.kind, findings: claims.findings.map((_, index) => `F-${reference.task}-${reference.run}-${index + 1}`), at };
+}
+
+/** The same pure delta defines fresh publication and validates a saved recovery intent. */
+function reviewDelta({ reference, result }, claims, rows) {
+  const deny = () => refuse("The saved review update is damaged. No review tables changed.");
+  const { task: id, run, role, review } = reference;
+  const { tasks, findings, ledger, decisions } = structuredClone(rows);
+  const matches = tasks.filter(row => row.id === id);
+  if (matches.length !== 1) deny();
+  const task = matches[0];
+  if (task.round !== String(review.round) || task.branch !== review.branch || task.state === "held"
+    || ledger.some(row => row.run === run && !["checks-pass", "checks-fail"].includes(row.kind))
+    || findings.some(row => result.findings.includes(row.key))) deny();
+  claims.findings.forEach((finding, index) => findings.push({ task: id, key: result.findings[index], round: task.round,
+    source: role, severity: finding.severity, summary: cell(finding.summary), triage: "", reason: "", status: "open" }));
+  ledger.push({ task: id, pr: task.pr, sha: review.sha, kind: claims.kind, cycle: String(review.cycle), run, at: result.at });
+  if (["verified", "pr-ready"].includes(task.state) && NOT_CLEAN.includes(claims.kind)) {
+    const before = task.state;
+    task.state = "reviewing";
+    decisions.push({ at: result.at, task: id, decision: `${before} → reviewing`, why: `${claims.kind} verdict on ${review.sha}` });
+  }
+  return Object.fromEntries(Object.entries({ tasks, findings, ledger, decisions }).map(([table, values]) => [table, tableText(table, values)]));
+}
+
+/** Validate authenticated report bytes and every saved after-image before publication. No current Git reads. */
+function validateReviewWrite({ reference, result }, tables) {
+  const deny = () => refuse("The saved review update is damaged. No review tables changed.");
+  const keys = ["task", "run", "role", "assignment", "reportHash", "review", "text"];
+  if (!reference || typeof reference !== "object" || Array.isArray(reference) || Object.keys(reference).length !== keys.length
+    || keys.some(key => !Object.hasOwn(reference, key)) || typeof reference.task !== "string" || !/^T[1-9]\d*$/.test(reference.task)
+    || typeof reference.run !== "string" || !/^R[1-9]\d*$/.test(reference.run)
+    || typeof reference.assignment !== "string" || !new RegExp(`^${UUID}$`).test(reference.assignment)
+    || typeof reference.reportHash !== "string" || !/^[0-9a-f]{64}$/.test(reference.reportHash)) deny();
+  const review = parseReviewTarget(reference.review);
+  const claims = parseReviewReport(parseReport(reference.text), reference.role, review);
+  if (createHash("sha256").update(reference.text).digest("hex") !== reference.reportHash
+    || !result || typeof result.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(result.at)
+    || !Number.isFinite(Date.parse(result.at)) || new Date(result.at).toISOString().replace(".000Z", "Z") !== result.at
+    || JSON.stringify(result) !== JSON.stringify(reviewResult(reference, claims, result.at))) deny();
+  if (!tables) return;
+  const rows = Object.fromEntries(Object.keys(tables).map(table => {
+    const { cols, lines } = sheetText(tables[table].before);
+    if (!TABLES[table].every(c => cols.includes(c) || ADDED[table]?.includes(c))
+      || cols.some(c => !TABLES[table].includes(c)) || new Set(cols).size !== cols.length) deny();
+    return [table, rowsOf({ cols, lines })];
+  }));
+  const expected = reviewDelta({ reference, result }, claims, rows);
+  if (Object.keys(expected).some(table => tables[table].after !== expected[table])) deny();
+}
+
+function acceptReportedReview(input, env = process.env) {
+  const fields = ["project", "task", "run", "role", "assignment", "reportHash", "text", "review"];
+  const deny = () => refuse("The review does not match its completed run, report, or current commit.");
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
+    || fields.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
+    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
+    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run)
+    || typeof input.assignment !== "string" || !new RegExp(`^${UUID}$`).test(input.assignment)
+    || typeof input.reportHash !== "string" || !/^[0-9a-f]{64}$/.test(input.reportHash)) deny();
+  const review = parseReviewTarget(input.review);
+  const report = parseReport(input.text);
+  const claims = parseReviewReport(report, input.role, review);
+  if (createHash("sha256").update(input.text).digest("hex") !== input.reportHash) deny();
+  const reference = { task: input.task, run: input.run, role: input.role, assignment: input.assignment, reportHash: input.reportHash, review, text: input.text };
+  const dir = storeDir(input.project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  return withLock(dir, () => {
+    const recovered = reviewWrites.recover(dir, reference);
+    if (recovered) { const result = recovered.result; status(dir, true); return { decision: "review-accepted", ...result }; }
+    const prior = reviewWrites.readReceipt(dir, reference);
+    if (prior) return { decision: "already-accepted", ...prior.result };
+    ready(dir);
+    const tasks = read(dir, "tasks"), runs = read(dir, "runs");
+    const matches = tasks.filter(row => row.id === input.task), assigned = runs.filter(row => row.id === input.run);
+    if (matches.length !== 1 || assigned.length !== 1) deny();
+    const task = matches[0], run = assigned[0];
+    notHeld(task, "review acceptance");
+    const path = `reports/${input.run}-${input.assignment}-${input.reportHash}.md`;
+    if (run.task !== task.id || run.role !== input.role || run.round !== String(review.round) || task.round !== run.round
+      || run.status !== "done" || !run.ended || run.report !== path || task.branch !== review.branch
+      || (run.branch && run.branch !== review.branch) || realpathSync(join(dir, "reports")) !== join(dir, "reports")
+      || readRegular(join(dir, path), { link: false, max: 32 * 1024 }) !== input.text
+      || reviewHead(input.project, branchOf(task.branch), env) !== review.sha) deny();
+    const findings = read(dir, "findings"), ledger = read(dir, "ledger"), decisions = read(dir, "decisions");
+    const receipt = { reference, result: reviewResult(reference, claims, now()) };
+    const after = reviewDelta(receipt, claims, { tasks, findings, ledger, decisions });
+    reviewWrites.commit(dir, receipt, after);
+    status(dir, true);
+    return { decision: "review-accepted", ...receipt.result };
+  });
 }
 
 /** Finish only a run from evidence already authenticated by the provider. This never records a verdict. */
@@ -1697,5 +1795,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, createRequestedTask, createRequestedRun, finishReportedRun, captureRunAssignment, captureReviewTarget, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, createRequestedTask, createRequestedRun, finishReportedRun, acceptReportedReview, captureRunAssignment, captureReviewTarget, withLock, board, answerPaths, runCli };
 }

@@ -67,7 +67,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -4014,4 +4014,307 @@ test('T58: wrong-typed saved task IDs refuse without changing recorded state', a
     assert.equal(existsSync(pending) ? readFileSync(pending, 'utf8') : undefined, pendingBefore, kind);
     assert.deepEqual(readReceipts(), receiptsBefore, kind);
   }
+});
+
+async function reviewAcceptanceFixture(t, { role = "code-reviewer", findings = [], overrides = {}, finish = true } = {}) {
+  const f = await reviewPreparationFixture(t, role);
+  const preparation = f.prepare();
+  const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
+  await f.evaluate(policy);
+  f.events.publish(join(f.options.observationsRoot, session), f.result);
+  const transcript = f.childTranscript();
+  await f.evaluate(policy, { ...patch(turns[1]), tool_name: "list_mcp_resources", tool_input: {}, transcript_path: transcript }, childActor);
+  const blocking = findings.some(row => row.severity !== "low");
+  const fields = { STATUS: "done", RESULT: role === "qa" ? blocking ? "FAIL" : "PASS" : blocking ? "FINDINGS" : "CLEAN",
+    EVIDENCE: JSON.stringify({ commit: preparation.review.sha, round: preparation.review.round, cycle: 1, summary: "Synthetic review evidence" }),
+    FINDINGS: JSON.stringify(findings), QUESTIONS: "none", "NOT VERIFIED": "A real review", BRANCH: preparation.review.branch, ...overrides };
+  const text = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n");
+  appendReport(f, text);
+  policy.completeChild({ hook_event_name: "SubagentStop", session_id: session, agent_id: childActor,
+    turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, "root.jsonl") }, f.native(childActor));
+  const reportApi = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
+  const runApi = await import(pathToFileURL(join(f.plugin, "runtime/run-report.mjs")));
+  assert.equal(typeof runApi.acceptRecordedReview, "function");
+  const receipt = reportApi.readChildReport({ name: f.input.name }, f.native(session), f.options);
+  reportApi.recordChildReport({ name: f.input.name, reportHash: receipt.reportHash }, f.native(session), f.options);
+  const input = { assignment: receipt.assignment, reportHash: receipt.reportHash };
+  if (finish) runApi.finishRecordedRun(input, f.native(session), f.options);
+  const accept = (request = input, actor = session) => runApi.acceptRecordedReview(request, f.native(actor), f.options);
+  return { ...f, preparation, receipt, accept, acceptInput: input, runApi, text };
+}
+const fixtureTaskField = (f, key, value) => {
+  const file = join(f.logbook, "tasks.tsv"), lines = readFileSync(file, "utf8").trimEnd().split("\n");
+  const columns = lines[0].split("\t"), row = lines[1].split("\t"); row[columns.indexOf(key)] = value;
+  writeFileSync(file, lines[0] + "\n" + row.join("\t") + "\n");
+};
+
+for (const [role, kind] of [["code-reviewer", "review-clean"], ["security-reviewer", "security-clean"], ["ux-reviewer", "ux-clean"], ["qa", "qa-pass"]]) {
+  test(`T59: review acceptance records ${role} evidence once without approving a task or merge`, async t => {
+    const f = await reviewAcceptanceFixture(t, { role });
+    const before = readFileSync(join(f.logbook, "tasks.tsv"), "utf8");
+    const first = f.accept();
+    assert.equal(first.decision, "review-accepted"); assert.equal(first.kind, kind);
+    const ledger = f.tool.read(f.logbook, "ledger");
+    assert.equal(ledger.length, 1); assert.equal(ledger[0].run, "R1"); assert.equal(ledger[0].sha, f.preparation.review.sha);
+    assert.deepEqual(f.accept(), { ...first, decision: "already-accepted" });
+    assert.equal(f.tool.read(f.logbook, "ledger").length, 1);
+    assert.equal(readFileSync(join(f.logbook, "tasks.tsv"), "utf8"), before);
+    assert.equal(f.tool.mergeCheck(first.sha, f.env).ok, false);
+    f.git("commit", "--quiet", "--allow-empty", "-m", "later head");
+    assert.deepEqual(f.accept(), { ...first, decision: "already-accepted" });
+    assert.equal(f.tool.read(f.logbook, "ledger")[0].sha, first.sha);
+  });
+}
+
+test("T59: review acceptance keeps low findings open and blocking findings return verified work to reviewing", async t => {
+  for (const state of ["verified", "pr-ready"]) {
+    const f = await reviewAcceptanceFixture(t, { findings: [{ severity: "low", summary: "A small issue" }, { severity: "high", summary: "An unsafe result" }] });
+    fixtureTaskField(f, "state", state);
+    const result = f.accept();
+    assert.equal(result.kind, "findings");
+    assert.equal(f.tool.read(f.logbook, "tasks")[0].state, "reviewing");
+    assert.equal(f.tool.read(f.logbook, "decisions").filter(row => row.decision === `${state} → reviewing`).length, 1);
+    const findings = f.tool.read(f.logbook, "findings");
+    assert.equal(findings.length, 2); assert(findings.every(row => row.status === "open" && row.source === "code-reviewer"));
+    assert.equal(f.tool.mergeCheck(result.sha, f.env).ok, false);
+    f.accept(); assert.equal(f.tool.read(f.logbook, "findings").length, 2);
+  }
+  const low = await reviewAcceptanceFixture(t, { findings: [{ severity: "low", summary: "Only a small issue" }] });
+  assert.equal(low.accept().kind, "review-clean");
+  assert.equal(low.tool.read(low.logbook, "findings")[0].status, "open");
+});
+
+test("T59: review acceptance rejects stale commits rounds unfinished runs foreign actors and conflicting report claims", async t => {
+  const f = await reviewAcceptanceFixture(t, { finish: false });
+  assert.throws(() => f.accept());
+  f.runApi.finishRecordedRun(f.acceptInput, f.native(session), f.options);
+  assert.throws(() => f.accept(f.acceptInput, childActor));
+  assert.throws(() => f.accept({ ...f.acceptInput, reportHash: "a".repeat(64) }));
+  assert.throws(() => f.accept({ ...f.acceptInput, kind: "review-clean" }));
+  fixtureTaskField(f, "round", "1"); assert.throws(() => f.accept());
+  fixtureTaskField(f, "round", "0");
+  f.git("commit", "--quiet", "--allow-empty", "-m", "changed head"); assert.throws(() => f.accept());
+  assert.equal(f.tool.read(f.logbook, "ledger").length, 0);
+  for (const overrides of [{ EVIDENCE: "unstructured" }, { FINDINGS: "none" }, { RESULT: "PASS" },
+    { RESULT: "FINDINGS" }, { QUESTIONS: "An unanswered product choice" }, { BRANCH: "another-branch" },
+    { FINDINGS: JSON.stringify([{ severity: "high", summary: "Contradicts a clean result" }]) }]) {
+    const bad = await reviewAcceptanceFixture(t, { overrides });
+    assert.throws(() => bad.accept());
+    assert.equal(bad.tool.read(bad.logbook, "ledger").length, 0);
+    assert.equal(existsSync(join(bad.logbook, "review-pending.json")), false);
+  }
+});
+
+async function stopReviewWrite(t, f, table) {
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = fs.renameSync;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === join(f.logbook, `${table}.tsv`)) throw Object.assign(Error("Injected review write failure"), { code: "EIO" });
+    return original(from, to);
+  });
+  syncBuiltinESMExports();
+  const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); };
+  t.after(restore);
+  return restore;
+}
+for (const table of ["tasks", "findings", "ledger", "decisions"]) test(`T59: review acceptance recovers a failed ${table} write and blocks merging while incomplete`, async t => {
+  const f = await reviewAcceptanceFixture(t, { findings: [{ severity: "high", summary: "Preserve this finding" }] });
+  fixtureTaskField(f, "state", "verified");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) f.cli("verdict", "T1", "--sha", f.preparation.review.sha, "--kind", kind);
+  assert.equal(f.tool.mergeCheck(f.preparation.review.sha, f.env).ok, true);
+  const restore = await stopReviewWrite(t, f, table);
+  assert.throws(() => f.accept(), /Injected review write failure/);
+  assert(existsSync(join(f.logbook, "review-pending.json")));
+  assert.match(f.tool.mergeCheck(f.preparation.review.sha, f.env).reason, /recorded update is incomplete/);
+  assert.throws(() => f.cli("log", "T1", "unrelated change", "--why", "must wait"), /recorded update is incomplete/);
+  restore();
+  // A changed Git head does not erase a write intent already validated for the older commit.
+  f.git("commit", "--quiet", "--allow-empty", "-m", "later head");
+  const result = f.accept();
+  assert.equal(result.decision, "review-accepted"); assert.equal(result.sha, f.preparation.review.sha);
+  assert.equal(existsSync(join(f.logbook, "review-pending.json")), false);
+  assert.equal(f.tool.read(f.logbook, "findings").length, 1);
+  assert.equal(f.tool.read(f.logbook, "ledger").filter(row => row.run === "R1").length, 1);
+  assert.equal(f.tool.read(f.logbook, "tasks")[0].state, "reviewing");
+  assert.deepEqual(f.accept(), { ...result, decision: "already-accepted" });
+});
+
+test("T59: review acceptance recovery preserves unexpected table changes and refuses damaged pending evidence", async t => {
+  const f = await reviewAcceptanceFixture(t, { findings: [{ severity: "medium", summary: "Retained issue" }] });
+  fixtureTaskField(f, "state", "verified");
+  const original = readFileSync(join(f.logbook, "tasks.tsv"), "utf8");
+  const restore = await stopReviewWrite(t, f, "tasks");
+  assert.throws(() => f.accept(), /Injected/); restore();
+  fixtureTaskField(f, "title", "Unexpected edit");
+  const edited = readFileSync(join(f.logbook, "tasks.tsv"), "utf8");
+  assert.throws(() => f.accept());
+  assert.equal(readFileSync(join(f.logbook, "tasks.tsv"), "utf8"), edited);
+  writeFileSync(join(f.logbook, "tasks.tsv"), original);
+  const file = join(f.logbook, "review-pending.json"), saved = readFileSync(file, "utf8");
+  writeFileSync(file, saved.replace("Retained issue", "Altered issue"));
+  assert.throws(() => f.accept());
+  assert.equal(f.tool.mergeCheck(f.preparation.review.sha, f.env).ok, false);
+  writeFileSync(file, saved);
+  assert.equal(f.accept().decision, "review-accepted");
+});
+
+test("T59: packaged review acceptance requires the chief and preserves one verdict after reconnect", async t => {
+  const f = await reviewAcceptanceFixture(t);
+  writeFileSync(f.entry, `import { servePreparations } from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
+  const client = await connect(t, f, "0.160.0", "", "sage_accept_review");
+  assert.match((await client.call(f.acceptInput, childActor)).error, /could not accept/);
+  assert.equal(f.tool.read(f.logbook, "ledger").length, 0);
+  const first = await client.call(f.acceptInput);
+  assert.equal(first.decision, "review-accepted"); await client.close();
+  const retry = await connect(t, f, "0.160.0", "", "sage_accept_review");
+  assert.deepEqual(await retry.call(f.acceptInput), { ...first, decision: "already-accepted" }); await retry.close();
+  assert.equal(f.tool.read(f.logbook, "ledger").length, 1);
+});
+
+
+test("T59: review acceptance during a merge read cannot hide a new open finding", async t => {
+  const f = await reviewAcceptanceFixture(t, { findings: [{ severity: "low", summary: "Needs explicit triage" }] });
+  fixtureTaskField(f, "state", "verified");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) f.cli("verdict", "T1", "--sha", f.preparation.review.sha, "--kind", kind);
+  assert.equal(f.tool.mergeCheck(f.preparation.review.sha, f.env).ok, true);
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = fs.openSync;
+  let accepted = false;
+  t.mock.method(fs, "openSync", (file, ...args) => {
+    if (!accepted && file === join(f.logbook, "ledger.tsv")) {
+      accepted = true;
+      assert.equal(f.accept().decision, "review-accepted");
+    }
+    return original(file, ...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = f.tool.mergeCheck(f.preparation.review.sha, f.env);
+  assert.equal(accepted, true);
+  assert.equal(result.ok, false);
+});
+
+
+test('T59: a held task refuses fresh review but preserves a historical acceptance', async t => {
+  const f = await reviewAcceptanceFixture(t);
+  fixtureTaskField(f, 'state', 'held');
+  const before = readFileSync(join(f.logbook, 'tasks.tsv'), 'utf8');
+  assert.throws(() => f.accept());
+  assert.equal(f.tool.read(f.logbook, 'ledger').length, 0);
+  assert.equal(readFileSync(join(f.logbook, 'tasks.tsv'), 'utf8'), before);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+  fixtureTaskField(f, 'state', 'reviewing');
+  const result = f.accept();
+  fixtureTaskField(f, 'state', 'held');
+  assert.deepEqual(f.accept(), {...result, decision:'already-accepted'});
+  assert.equal(f.tool.read(f.logbook, 'tasks')[0].state, 'held');
+});
+
+test('T59: checks evidence coexists with one review while a second review is refused', async t => {
+  for (const kind of ['checks-pass', 'checks-fail']) {
+    const f = await reviewAcceptanceFixture(t);
+    f.cli('verdict','T1','--sha',f.preparation.review.sha,'--kind',kind,'--run','R1');
+    assert.equal(f.accept().kind, 'review-clean');
+    assert.deepEqual(f.tool.read(f.logbook, 'ledger').map(row => row.kind), [kind, 'review-clean']);
+  }
+  const f = await reviewAcceptanceFixture(t);
+  f.cli('verdict','T1','--sha',f.preparation.review.sha,'--kind','review-clean','--run','R1');
+  const before = readFileSync(join(f.logbook,'ledger.tsv'),'utf8');
+  assert.throws(() => f.accept());
+  assert.equal(readFileSync(join(f.logbook,'ledger.tsv'),'utf8'), before);
+  assert.equal(existsSync(join(f.logbook,'review-pending.json')), false);
+});
+
+test('T59: QA failure preserves all findings and returns pr-ready work to reviewing', async t => {
+  const f = await reviewAcceptanceFixture(t, {role:'qa', findings:[{severity:'medium',summary:'A failed result'}]});
+  fixtureTaskField(f,'state','pr-ready');
+  assert.equal(f.accept().kind,'qa-fail');
+  assert.equal(f.tool.read(f.logbook,'tasks')[0].state,'reviewing');
+  assert.equal(f.tool.read(f.logbook,'findings')[0].source,'qa');
+  assert.equal(f.tool.read(f.logbook,'decisions').at(-1).decision,'pr-ready → reviewing');
+});
+
+const reviewTables = f => Object.fromEntries(['tasks','findings','ledger','decisions'].map(table => [table,readFileSync(join(f.logbook,`${table}.tsv`),'utf8')]));
+test('T59: checksum-valid malformed review records and deltas refuse before publication', async t => {
+  for (const damage of ['null','false','array-id','array-time','bad-time','extra-result','wrong-kind','missing-key','extra-key','tasks','findings','ledger','decisions','tasks-prior','findings-prior','ledger-prior','decisions-prior','receipt-conflict','receipt-alias']) await t.test(damage, async t => {
+    const f = await reviewAcceptanceFixture(t, {findings:[{severity:'high',summary:'Keep this finding'}]});
+    fixtureTaskField(f,'state','verified');
+    f.cli('task','add','--title','Keep prior task','--size','tiny');
+    f.cli('finding','add','T1','--source','code-reviewer','--severity','low','--summary','Keep prior finding');
+    f.cli('verdict','T1','--sha',f.preparation.review.sha,'--kind','checks-pass');
+    f.cli('log','T1','Keep prior decision','--why','Existing evidence');
+    const restore = await stopReviewWrite(t,f,'tasks');
+    assert.throws(() => f.accept(), /Injected/); restore();
+    const file=join(f.logbook,'review-pending.json'), record=JSON.parse(readFileSync(file,'utf8'));
+    const result=record.value.receipt.result;
+    if(damage==='null') record.value.receipt.result=null;
+    if(damage==='false') record.value.receipt.result=false;
+    if(damage==='array-id') result.task=['T1'];
+    if(damage==='array-time') result.at=[result.at];
+    if(damage==='extra-key') result.findings.push('F-extra');
+    if(damage.endsWith('-prior')) { const table=damage.slice(0,-6), lines=record.value.tables[table].after.split('\n'); lines[1]+='corrupted'; record.value.tables[table].after=lines.join('\n'); }
+    if(damage==='bad-time') result.at='2026-02-30T00:00:00Z';
+    if(damage==='extra-result') result.extra=true;
+    if(damage==='wrong-kind') result.kind='review-clean';
+    if(damage==='missing-key') result.findings=[];
+    if(['tasks','findings','ledger','decisions'].includes(damage)) record.value.tables[damage].after=record.value.tables[damage].before;
+    record.hash=createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    const bytes=JSON.stringify(record)+'\n'; writeFileSync(file,bytes);
+    const folder=join(f.logbook,'reviews');
+    if(damage==='receipt-alias') { const outside=join(f.dir,'redirected');mkdirSync(outside);if(existsSync(folder))rmSync(folder,{recursive:true});symlinkSync(outside,folder); }
+    if(damage==='receipt-conflict') { mkdirSync(folder,{recursive:true});writeFileSync(join(folder,`${f.acceptInput.assignment}-${f.acceptInput.reportHash}.json`),'conflict'); }
+    const before=reviewTables(f), receipts=existsSync(folder)?readdirSync(folder):[];
+    assert.throws(() => f.accept());
+    assert.deepEqual(reviewTables(f),before);assert.equal(readFileSync(file,'utf8'),bytes);
+    assert.deepEqual(existsSync(folder)?readdirSync(folder):[],receipts);
+  });
+});
+
+test('T59: present malformed review receipt values never republish tables', async t => {
+  for (const value of [null,false,0,[],{}]) await t.test(JSON.stringify(value), async t => {
+    const f=await reviewAcceptanceFixture(t);f.accept();
+    const file=join(f.logbook,'reviews',`${f.acceptInput.assignment}-${f.acceptInput.reportHash}.json`);
+    const bytes=JSON.stringify({value,hash:createHash('sha256').update(JSON.stringify(value)).digest('hex')})+'\n';writeFileSync(file,bytes);
+    const before=reviewTables(f);assert.throws(()=>f.accept());assert.deepEqual(reviewTables(f),before);
+    assert.equal(readFileSync(file,'utf8'),bytes);assert.equal(existsSync(join(f.logbook,'review-pending.json')),false);
+  });
+});
+
+test('T59: concurrent chief connections publish one review receipt', async t => {
+  const f=await reviewAcceptanceFixture(t);
+  writeFileSync(f.entry,`import { servePreparations } from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
+  const clients=await Promise.all([connect(t,f,'0.160.0','','sage_accept_review'),connect(t,f,'0.160.0','','sage_accept_review')]);
+  const results=await Promise.allSettled(clients.map(client=>client.call(f.acceptInput)));
+  await Promise.all(clients.map(client=>client.close()));
+  assert(results.every(result=>result.status==='fulfilled'));
+  assert.deepEqual(results.map(result=>result.value.decision).sort(),['already-accepted','review-accepted']);
+  assert.equal(f.tool.read(f.logbook,'ledger').length,1);
+  assert.equal(readdirSync(join(f.logbook,'reviews')).length,1);
+});
+
+for (const boundary of ['intent','receipt','cleanup']) test(`T59: review publication retries safely after ${boundary} failure`, async t => {
+  const f=await reviewAcceptanceFixture(t,{findings:[{severity:'medium',summary:'Retained finding'}]});
+  fixtureTaskField(f,'state','verified');
+  const fs=(await import('node:fs')).default, {syncBuiltinESMExports}=await import('node:module');
+  const method=boundary==='cleanup'?'unlinkSync':'linkSync', original=fs[method];
+  const destination=boundary==='receipt'?join(f.logbook,'reviews',`${f.acceptInput.assignment}-${f.acceptInput.reportHash}.json`):join(f.logbook,'review-pending.json');
+  t.mock.method(fs,method,(...args)=>{if(args[boundary==='cleanup'?0:1]===destination)throw Error('Injected publication boundary');return original(...args);});
+  syncBuiltinESMExports();
+  const restore=()=>{t.mock.restoreAll();syncBuiltinESMExports();};t.after(restore);
+  assert.throws(()=>f.accept(),/Injected publication boundary/);restore();
+  const result=f.accept(); assert.equal(result.decision,'review-accepted');
+  assert.equal(f.tool.read(f.logbook,'ledger').length,1);assert.equal(f.tool.read(f.logbook,'findings').length,1);
+  assert.equal(f.tool.read(f.logbook,'tasks')[0].state,'reviewing');assert.equal(existsSync(join(f.logbook,'review-pending.json')),false);
+  assert.deepEqual(f.accept(),{...result,decision:'already-accepted'});
+});
+
+test('T59: saved report recovery proof is required for review acceptance', async t => {
+  const f=await reviewAcceptanceFixture(t), directory=join(f.options.observationsRoot,session);
+  const proofs=readdirSync(directory).filter(name=>name.endsWith('.json')).map(name=>({path:join(directory,name),row:JSON.parse(readFileSync(join(directory,name),'utf8'))})).filter(item=>item.row.kind==='report-recovery-verified');
+  assert.equal(proofs.length,1);
+  rmSync(proofs[0].path);assert.throws(()=>f.accept());assert.equal(f.tool.read(f.logbook,'ledger').length,0);
+  f.events.publish(join(f.options.observationsRoot,session),proofs[0].row);
+  assert.equal(f.accept().decision,'review-accepted');
 });
