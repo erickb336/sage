@@ -188,3 +188,7 @@ This is a refusal for recognized shell commands, not complete merge enforcement.
 It does not cover GitHub MCP calls or prove unrecognized commands safe. Complete
 command, path, and workflow checks still need trusted effective execution context.
 It does not enable automatic Sage or change the owner's external merge authority.
+
+## Current child run
+
+With Sage on, a bound child needs its current saved run before evaluation and after an awaited evaluator. Ended, reported, held, terminal or retargeted work refuses. Recovery also validates saved review targets. Ordinary active tool checks do not independently recheck a review commit without recovery. These checks grant no review acceptance or installed activation.

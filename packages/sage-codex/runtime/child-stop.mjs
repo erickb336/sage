@@ -99,8 +99,7 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
   }
   const completed = readNativeCompletion(transcripts[0].transcript, { sessionsDir: options.sessionsDir, requireRecovery: true }, expected);
   const interrupted = completed ? null : readNativeInterruption(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
-  // A recorded completion is historical evidence. New success after compaction
-  // still needs the current run and review target; interruption grants no success.
+  // Historical completion and authoritative interruption do not grant a new success.
   if (recovery.compaction !== null && !interrupted
     && !state.completions?.some(row => row.assignment === bound.assignment)) {
     checkPreparedRunAssignment(options, assigned, state.preparations.find(row => row.id === assigned.preparation));
