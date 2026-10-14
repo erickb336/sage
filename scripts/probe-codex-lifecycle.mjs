@@ -54,7 +54,8 @@ const readonlyPatch = process.argv.includes("--sage-readonly-patch");
 assert(!readonlyPatch || process.argv.slice(2).length === 1, "readonly_patch_is_a_separate_route");
 const taskLifecycle = process.argv.includes("--sage-task-lifecycle");
 const createRun = taskLifecycle || process.argv.includes("--sage-create-run");
-const createTask = createRun || process.argv.includes("--sage-create-task");
+const taskOnly = process.argv.includes("--sage-create-task");
+const createTask = createRun || taskOnly;
 assert(!createTask || process.argv.slice(2).length === 1, "task_creation_is_a_separate_route");
 const sageOff = process.argv.includes("--sage-off");
 assert(!sageOff || process.argv.slice(2).length === 1, "sage_off_is_a_separate_route");
@@ -141,9 +142,9 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport || resumedFailure,nestedReview:nestedReport || resumedFailure,blockStop,captureFailure:failedSpawn,emptyLogbook:createRun,taskLifecycle,omitStop:missedStop,captureCompaction:childCompaction || followupRecovery,restoreCompaction:childCompaction || followupRecovery,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,sage:sage||sageOff,disconnectOnSpawn:outage,review:reportProbe || nestedReport || resumedFailure,nestedReview:nestedReport || resumedFailure,blockStop,captureFailure:failedSpawn,emptyLogbook:createTask,taskLifecycle,omitStop:missedStop,captureCompaction:childCompaction || followupRecovery,restoreCompaction:childCompaction || followupRecovery,deadlineMs});
   const initialLogbook = sage || sageOff ? integrated.readLogbook() : null;
-  if (createRun) { assert.equal(initialLogbook.tasks.length, 0); assert.equal(initialLogbook.runs.length, 0); }
+  if (createTask) { assert.equal(initialLogbook.tasks.length, 0); assert.equal(initialLogbook.runs.length, 0); }
   if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
     `EVIDENCE ${JSON.stringify({ commit: integrated.reviewTarget.sha, round: 0, cycle: 1, summary: "Fixed native fixture completed; simulated review only." })}`,
     "FINDINGS []", "QUESTIONS none", "NOT VERIFIED real model or real review", "BRANCH codex/t1-review"].join("\n");
@@ -180,7 +181,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   const pending = new Set();
   let taskStarted = false, taskTransitionsVerified = false, initialTask, briefedTask, buildingTask, reviewingTask, verifyingTask;
   const taskChange = (index, version, changes) => ({ request: `c1111111-2222-4333-8444-55555555555${index}`, task: "T1", version, changes });
-  let createdTask, createdTaskVerified = false, createdRun, createdRunVerified = false, finishedCreatedRun = false;
+  let createdTask, createdTaskLogbook, createdTaskVerified = false, createdRun, createdRunVerified = false, finishedCreatedRun = false;
   const runRequest = { request: "b1111111-2222-4333-8444-555555555555", task: "T1", role: "lead", branch: "", candidate: "" };
   const taskRequest = { request: "a1111111-2222-4333-8444-555555555555", title: "Native task creation", size: "small", risk: ["input"], add: ["ux-review"], why: "Check the fixed experience" };
   let prepared = false, reportReceipt, failedDispatchRecovered = false, childPatchTool, readonlyPatchVerified = false, endedRunVerified = false, retargetedRunVerified = false;
@@ -664,29 +665,37 @@ data: ${JSON.stringify(event)}
       rootThread ??= thread;
       check(thread === rootThread, "unexpected_root_thread_identity");
       if (childMessage && info.progressMessageSeen) chiefReceivedMessage = true;
+      if (taskOnly) rootRequests++;
       if (createTask && !createdTaskVerified) {
         check(info.createTools.length === 1, "task_creation_tool_missing");
         if (!Object.hasOwn(info.outputs, calls.create)) {
           respond(res, { type: "function_call", ...info.createTools[0], call_id: calls.create, arguments: JSON.stringify(taskRequest) }); return;
         }
         const receipt = info.outputs[calls.create];
-        check(receipt?.decision === "task-created" && receipt.task?.id === (createRun ? "T1" : "T2") && receipt.task.state === "framed"
+        check(receipt?.decision === "task-created" && receipt.task?.id === "T1" && receipt.task.state === "framed"
           && receipt.task.route === "build,code-review,security-review,ux-review,qa", "task_creation_receipt_invalid");
         createdTask = receipt.task;
+        createdTaskLogbook ??= JSON.stringify(integrated.readLogbook());
         if (!Object.hasOwn(info.outputs, calls.createRetry)) {
           respond(res, { type: "function_call", ...info.createTools[0], call_id: calls.createRetry, arguments: JSON.stringify(taskRequest) }); return;
         }
         const retried = info.outputs[calls.createRetry];
         check(retried?.decision === "already-created" && JSON.stringify(retried.task) === JSON.stringify(createdTask), "task_creation_retry_invalid");
         const logbook = integrated.readLogbook();
-        check(logbook.tasks.length === (createRun ? 1 : 2) && logbook.tasks.at(-1).title === taskRequest.title
+        check(logbook.tasks.length === 1 && logbook.tasks.at(-1).title === taskRequest.title
           && logbook.tasks.at(-1).route === createdTask.route && logbook.tasks.at(-1).state === "framed"
-          && logbook.runs.length === (createRun ? 0 : 1) && logbook.decisions.length === 1
+          && logbook.runs.length === 0 && logbook.decisions.length === 1
           && logbook.decisions[0].task === createdTask.id && logbook.decisions[0].why === taskRequest.why, "task_creation_logbook_mismatch");
-        check(integrated.readJournal().reservations.length === 0, "task_creation_reserved_capacity");
+        check(JSON.stringify(logbook) === createdTaskLogbook, "task_creation_retry_changed_logbook");
+        const saved = integrated.readJournal();
+        check(["preparations", "reservations", "bindings", "completions", "reports"].every(key => (saved[key]?.length ?? 0) === 0), "task_creation_created_dispatch");
         createdTaskVerified = true;
         print({ type: "task_creation_evidence", createdTasks: 1, retryReusedTask: true, addedBlockDecisions: 1,
-          noRunOrDispatchCreated: true, simulatedModel: true, preseededControlTask: !createRun });
+          noRunOrDispatchCreated: true, simulatedModel: true, preseededTasks: 0, preseededRuns: 0 });
+      }
+      if (taskOnly) {
+        check(rootRequests === 3 && createdTaskVerified, "task_only_request_sequence_invalid");
+        respond(res, message(MARKER)); return;
       }
       if (createRun && !createdRunVerified) {
         check(info.createRunTools.length === 1, "run_creation_tool_missing");
@@ -1205,8 +1214,10 @@ data: ${JSON.stringify(event)}
     if (pending.size) failFixture("native_root_exited_with_held_response");
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
-    const noChild = denySpawn || (outage && denied);
-    const routeVerified = noChild
+    const noChild = taskOnly || denySpawn || (outage && denied);
+    const routeVerified = taskOnly
+      ? createdTaskVerified && rootRequests === 3 && childRequests === 0 && grandchildRequests === 0
+      : noChild
       ? rootRequests === 2 && childRequests === 0 && denied
       : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (repeatChildRecovery ? 10 : childRecovery ? 6 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (followupRecovery ? 6 : resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
@@ -1245,7 +1256,14 @@ data: ${JSON.stringify(event)}
         .map(row => ({ event: row.hook_event_name, fields: row.inputKeys, childTranscriptFields: row.childTranscriptFields })),
         bindings: integrated.readJournal().bindings.length, completions: integrated.readJournal().completions?.length ?? 0 });
     }
-    if (sage && !outage) {
+    if (taskOnly) {
+      const saved = integrated.readJournal();
+      assert.equal(saved.sessions.length, 1); assert.equal(saved.modes.at(-1)?.sage, true);
+      for (const key of ["preparations", "reservations", "bindings", "completions", "reports"])
+        assert.equal(saved[key]?.length ?? 0, 0);
+      assert.equal(JSON.stringify(integrated.readLogbook()), createdTaskLogbook);
+    }
+    if (sage && !outage && !taskOnly) {
       const saved = integrated.readJournal();
       assert.equal(saved.sessions.length, 1); assert.equal(saved.modes.at(-1)?.sage, true);
       const count = nestedReport || sageFollowup ? 2 : 1;
@@ -1279,7 +1297,7 @@ data: ${JSON.stringify(event)}
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");
     const before=rows.filter(row=>row.hook_event_name==="PreToolUse"&&row.tool_name==="collaborationspawn_agent");
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
-    assert.equal(before.length,nested || failedSpawn || resumedFailure ? 2 : 1);
+    assert.equal(before.length,taskOnly ? 0 : nested || failedSpawn || resumedFailure ? 2 : 1);
     assert.equal(start.length, noChild ? 0 : nested ? 2 : 1);
     assert.equal(stop.length, noChild || interruption ? 0 : repeatChildRecovery ? 4 : childRecovery ? 3 : blockStop || correctReport || escapeReport || followUp || sageFollowup || nested ? 2 : 1);
     if (childRecovery) {

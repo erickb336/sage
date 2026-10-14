@@ -1,39 +1,13 @@
-# Native task creation
+# Record a native task request
 
-The prepared `sage_create_task` tool lets the current root owner create a task
-in the configured Codex logbook. It uses the shared state tool's size, risk, and
-route rules. It does not initialize a project, create a run, approve a design,
-start an agent, or change merge readiness. The installed manifest is unchanged.
+`sage_create_task` creates a task and its route decision in the configured logbook. It grants no run, child, review, or merge permission.
 
-The request has `request` (a UUID), `title`, `size`, `risk` (an array), `add`
-(an array of extra blocks), and `why`. Extra blocks need a nonempty reason;
-otherwise `why` must be empty. The server derives the owner scope from its
-native connection and the current saved owner epoch. Arguments cannot select
-an owner, project, or logbook. Children and unknown roots are refused.
+The authenticated chief supplies a UUID request and the task fields. The provider fixes the project, owner, and logbook location. Each owner has a separate request namespace. A retry with the same request and fields returns the original result. A changed request or a missing saved task is refused.
 
-A request UUID identifies one creation within that owner scope. After a lost
-response, repeat the same request and fields. A retry returns the original
-creation record, not the task's current state. Changed reuse is refused.
-Use a fresh UUID for a distinct task. Tasks remain visible in the shared project
-logbook. A recorded owner can create a manual task while Sage is off; this
-creates no admission or dispatch permission.
+The core holds the logbook lock while it saves an intent, both tables, and an immutable receipt. The intent uses `review-pending.json`, the shared marker for guarded recorded writes. After an interrupted write, only the exact request can finish the saved publication. Recovery refuses unrelated table edits. This does not protect older installations that lack the pending guard.
 
-The core writes the task, added-block decision, and immutable receipt under the
-logbook lock. Partial writes retain a recoverable intent. Other writes and merge
-checks refuse until the original request recovers it. Recovery refuses unrelated
-table changes. Task creation shares the existing pending marker. Earlier versions with the
-pending-review guard also refuse a partial creation, but cannot recover its
-newer schema. Versions before that guard are not safe concurrent writers.
-Use the same or a newer tool to retry the original request.
+Guarded snapshots compare receipt names before and after the table reads. They refuse pending writes and transactions that finish between those reads. Read-only aliases remain supported; mutation paths and receipt directories must be canonical. An empty logbook reader may return no task before a guarded snapshot. This grants no authority: a missing task cannot pass a merge check.
 
-The route keeps all shared requirements. A large or investigation task can be
-framed, but unsupported native roles still cannot run. Task creation does not
-establish full automatic coordination. Use the prepared `sage_create_run` tool to record a run; see `run-create.md`.
-Use `sage_read_task` and `sage_update_task` for versioned task changes; see
-`task-update.md`.
+The native probe uses a real CLI and a temporary logbook with simulated model responses. `--sage-create-task` checks one task, one decision, an exact retry, and no run or dispatch. It does not enable automatic Sage.
 
-Run `node scripts/probe-codex-lifecycle.mjs --sage-create-task` with fake process
-tools first on PATH. It creates one task and retries through the actual 0.160.0
-CLI. Direct reads verify one task, its risk and route, and one added-block
-decision. An existing task and run remain as the lifecycle control. This uses
-simulated responses in a temporary profile; it is not a real-project pilot.
+Integration-only run creation, task updates, and review acceptance still use the older recorded writer. They need separate domain validators before recovery publishes tables. Task creation uses the validated writer here. Run creation also needs the held-task guard tracked in #224. See `run-create.md` and `task-update.md` for those prepared APIs.

@@ -2195,6 +2195,20 @@ test('chief context refuses oversized rules and recovers all parts after repair'
   await client.close();
 });
 
+async function stopTaskWrite(t, f, table) {
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const original = fs.renameSync;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === join(f.logbook, `${table}.tsv`)) throw Object.assign(Error("Injected task write failure"), { code: "EIO" });
+    return original(from, to);
+  });
+  syncBuiltinESMExports();
+  const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); };
+  t.after(restore);
+  return restore;
+}
+
 async function taskCreationFixture(t) {
   const f = await composedPolicyFixture(t);
   const projectDirectory = join(f.dir, 'project'); mkdirSync(projectDirectory);
@@ -2250,7 +2264,7 @@ test('native task creation refuses foreign identity storage and invalid requests
 test('native task creation recovers partial publication and blocks unrelated writes until recovery', async t => {
   const f = await taskCreationFixture(t);
   const receipts = join(f.logbook, 'task-requests');
-  const restore = await stopReviewWrite(t, f, 'decisions');
+  const restore = await stopTaskWrite(t, f, 'decisions');
   assert.throws(() => f.create(), /Injected/);
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
   assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
@@ -2269,12 +2283,12 @@ test('native task creation recovers partial publication and blocks unrelated wri
 test('native task creation refuses recovery after an unrelated partial-table edit', async t => {
   const f = await taskCreationFixture(t);
   const receipts = join(f.logbook, 'task-requests');
-  const restore = await stopReviewWrite(t, f, 'decisions');
+  const restore = await stopTaskWrite(t, f, 'decisions');
   assert.throws(() => f.create(), /Injected/); restore();
   appendFileSync(join(f.logbook, 'decisions.tsv'), 'changed outside the tool\n');
   assert.throws(() => f.create());
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
-  assert.equal(existsSync(receipts), false);
+  assert.deepEqual(existsSync(receipts) ? readdirSync(receipts) : [], []);
 });
 
 test('native task creation allows manual off-mode records without dispatch and serializes concurrent retries', async t => {
@@ -2290,6 +2304,174 @@ test('native task creation allows manual off-mode records without dispatch and s
   assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
   await Promise.all(clients.map(client => client.close()));
+});
+
+
+for (const view of ['merge', 'logbook']) test(`T56: ${view} refuses a fully published transaction between snapshot table reads`, async t => {
+  const f = await taskCreationFixture(t), fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const sha = '1'.repeat(40);
+  f.cli('task', 'add', '--title', 'Reviewed existing task', '--size', 'tiny');
+  for (const kind of ['checks-pass', 'review-clean', 'qa-pass']) f.cli('verdict', 'T1', '--sha', sha, '--kind', kind);
+  assert.equal(f.tool.mergeCheck(sha, f.env).ok, true, 'the stable snapshot permits this reviewed merge');
+  const original = fs.openSync;
+  let armed = true, committed = false;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (armed && file === join(f.logbook, 'decisions.tsv')) {
+      armed = false;
+      f.create();
+      committed = true;
+      assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+    }
+    return original(file, ...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    if (view === 'merge') assert.equal(f.tool.mergeCheck(sha, f.env).ok, false);
+    else assert.throws(() => f.tool.logbookView(f.options.projectDirectory, f.env), /created while/);
+    assert.equal(committed, true);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.equal(f.tool.logbookView(f.options.projectDirectory, f.env).task('T2').title, f.input.title);
+  assert.equal(f.tool.mergeCheck(sha, f.env).ok, true, 'the new stable snapshot still permits the reviewed merge');
+});
+
+test('T56: task publication recovers every table receipt and pending-marker failure boundary', async t => {
+  for(const boundary of ['intent','tasks','decisions','receipt','clear']) {
+    const f=await taskCreationFixture(t),fs=(await import('node:fs')).default;
+    const {syncBuiltinESMExports}=await import('node:module');
+    const method=['intent','receipt'].includes(boundary)?'linkSync':boundary==='clear'?'unlinkSync':'renameSync';
+    const original=fs[method];let hit=false;
+    t.mock.method(fs,method,(...args)=>{
+      const to=String(args[method==='unlinkSync'?0:1]);
+      if((boundary==='intent' && to===join(f.logbook,'review-pending.json'))
+        || (boundary==='receipt' && to.startsWith(join(f.logbook,'task-requests')+'/'))
+        || (boundary==='clear' && to===join(f.logbook,'review-pending.json'))
+        || (['tasks','decisions'].includes(boundary) && to===join(f.logbook,`${boundary}.tsv`))) {
+        hit=true;throw Object.assign(Error('Injected task publication failure'),{code:'EIO'});
+      }
+      return original(...args);
+    });syncBuiltinESMExports();
+    try {assert.throws(()=>f.create(),/Injected/);assert.equal(hit,true);}
+    finally {t.mock.restoreAll();syncBuiltinESMExports();}
+    if(boundary!=='intent') assert.throws(()=>f.create({...f.input,title:'Different request'}));
+    assert.equal(f.create().decision,'task-created');assert.equal(f.create().decision,'already-created');
+    assert.equal(f.tool.read(f.logbook,'tasks').length,1);assert.equal(f.tool.read(f.logbook,'decisions').length,1);
+    assert.equal(existsSync(join(f.logbook,'review-pending.json')),false);
+  }
+});
+
+test('T56: malformed durable task records and deleted tasks cannot authorize duplicate creation', async t => {
+  for(const damage of ['intent','receipt','deleted']) {
+    const f=await taskCreationFixture(t);
+    if(damage==='intent') {
+      const restore=await stopTaskWrite(t,f,'decisions');assert.throws(()=>f.create());restore();
+      writeFileSync(join(f.logbook,'review-pending.json'),'{}');
+    } else {
+      f.create();
+      if(damage==='receipt') writeFileSync(join(f.logbook,'task-requests',readdirSync(join(f.logbook,'task-requests'))[0]),'{}');
+      else {const file=join(f.logbook,'tasks.tsv');writeFileSync(file,readFileSync(file,'utf8').split('\n')[0]+'\n');}
+    }
+    const before=Object.fromEntries(['tasks','decisions'].map(name=>[name,readFileSync(join(f.logbook,`${name}.tsv`),'utf8')]));
+    assert.throws(()=>f.create());assert.deepEqual(Object.fromEntries(Object.keys(before).map(name=>[name,readFileSync(join(f.logbook,`${name}.tsv`),'utf8')])),before);
+  }
+});
+
+test('T56: distinct owners keep separate task requests and exact retry preserves later edits', async t => {
+  const f=await taskCreationFixture(t),first=f.create();
+  f.core.activateAdmission(f.options.directory,{project:f.options.project,session:`codex:${turns[2]}`,activation:turns[0]});
+  const second=f.create(f.input,turns[2]);assert.equal(second.task.id,'T2');
+  f.cli('task','T1','set','title=Updated outside request');
+  const before=readFileSync(join(f.logbook,'tasks.tsv'),'utf8');
+  assert.deepEqual(f.create(),{...first,decision:'already-created'});
+  assert.equal(readFileSync(join(f.logbook,'tasks.tsv'),'utf8'),before);
+  assert.equal(f.tool.read(f.logbook,'tasks')[0].title,'Updated outside request');
+});
+
+test('T56: read-only aliases remain valid and missing task tables cannot approve a merge', async t => {
+  const f=await taskCreationFixture(t);f.create();
+  const alias=join(f.dir,'alias');symlinkSync(f.options.logbookRoot,alias,'dir');
+  const env={...f.env,SAGE_HOME:alias};
+  assert.equal(f.tool.logbookView(f.options.projectDirectory,env).task('T1').title,f.input.title);
+  assert.equal(f.tool.mergeCheck('1'.repeat(40),env).ok,false);
+  const file=join(f.logbook,'tasks.tsv');rmSync(file);
+  writeFileSync(join(f.logbook,'review-pending.json'),'{}');
+  assert.equal(f.tool.mergeCheck('1'.repeat(40),f.env).ok,false);
+  assert.throws(()=>f.tool.logbookView(f.options.projectDirectory,f.env));
+  const empty=await taskCreationFixture(t);rmSync(join(empty.logbook,'tasks.tsv'));
+  writeFileSync(join(empty.logbook,'review-pending.json'),'{}');
+  assert.equal(empty.tool.logbookView(empty.options.projectDirectory,empty.env).task('T1'),undefined);
+  assert.equal(empty.tool.mergeCheck('1'.repeat(40),empty.env).ok,false);
+  assert.throws(()=>empty.cli('init'),/incomplete/);
+});
+
+
+test('T56: checksum-valid malformed receipt values cannot publish another task', async t => {
+  for (const value of [null, false, 0, '', true, 1, [], {}]) await t.test(JSON.stringify(value), async t => {
+    const f = await taskCreationFixture(t);
+    f.create();
+    const folder = join(f.logbook, 'task-requests');
+    const receipt = join(folder, readdirSync(folder)[0]);
+    const damaged = JSON.stringify({ value, hash: createHash('sha256').update(JSON.stringify(value)).digest('hex') }) + '\n';
+    writeFileSync(receipt, damaged);
+    const before = Object.fromEntries(['tasks', 'decisions'].map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')]));
+    assert.throws(() => f.create());
+    assert.deepEqual(Object.fromEntries(Object.keys(before).map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')])), before);
+    assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+    assert.equal(readFileSync(receipt, 'utf8'), damaged);
+    assert.equal(readdirSync(folder).length, 1);
+  });
+});
+
+
+test('T56: malformed saved task results refuse before recovery publishes tables', async t => {
+  for (const result of [null, false, {}, { id: 'T1' }, { id: 'T999', title: 'changed' }]) await t.test(JSON.stringify(result), async t => {
+    const f = await taskCreationFixture(t);
+    const restore = await stopTaskWrite(t, f, 'tasks');
+    assert.throws(() => f.create());
+    restore();
+    const pending = join(f.logbook, 'review-pending.json');
+    const record = JSON.parse(readFileSync(pending, 'utf8'));
+    record.value.receipt.result = result;
+    record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    const damaged = JSON.stringify(record) + '\n';
+    writeFileSync(pending, damaged);
+    const before = Object.fromEntries(['tasks', 'decisions'].map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')]));
+    assert.throws(() => f.create());
+    assert.deepEqual(Object.fromEntries(Object.keys(before).map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')])), before);
+    assert.equal(readFileSync(pending, 'utf8'), damaged);
+    assert.deepEqual(existsSync(join(f.logbook, 'task-requests')) ? readdirSync(join(f.logbook, 'task-requests')) : [], []);
+  });
+});
+
+
+test('T56: recovery preflights table meaning and receipt destinations before publication', async t => {
+  for (const damage of ['task-after', 'decision-after', 'receipt-conflict', 'receipt-alias']) await t.test(damage, async t => {
+    const f = await taskCreationFixture(t);
+    f.cli('task', 'add', '--title', 'Keep this task', '--size', 'tiny');
+    const restore = await stopTaskWrite(t, f, 'tasks');
+    assert.throws(() => f.create());
+    restore();
+    const pending = join(f.logbook, 'review-pending.json');
+    const record = JSON.parse(readFileSync(pending, 'utf8'));
+    if (damage === 'task-after') record.value.tables.tasks.after = record.value.tables.tasks.after.replace('Keep this task', 'Unrelated rewrite');
+    if (damage === 'decision-after') record.value.tables.decisions.after = record.value.tables.decisions.before;
+    record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    const damaged = JSON.stringify(record) + '\n';
+    writeFileSync(pending, damaged);
+    const folder = join(f.logbook, 'task-requests');
+    if (damage === 'receipt-alias') { const elsewhere = join(f.dir, 'elsewhere'); mkdirSync(elsewhere); if (existsSync(folder)) { assert.deepEqual(readdirSync(folder), []); rmSync(folder, { recursive: true }); } symlinkSync(elsewhere, folder, 'dir'); }
+    if (damage === 'receipt-conflict') {
+      mkdirSync(folder, { recursive: true });
+      const { owner, request } = record.value.receipt.reference;
+      writeFileSync(join(folder, createHash('sha256').update(JSON.stringify([owner, request])).digest('hex') + '.json'), 'conflict');
+    }
+    const before = Object.fromEntries(['tasks', 'decisions'].map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')]));
+    const receipts = existsSync(folder) ? readdirSync(folder) : [];
+    assert.throws(() => f.create());
+    assert.deepEqual(Object.fromEntries(Object.keys(before).map(name => [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')])), before);
+    assert.equal(readFileSync(pending, 'utf8'), damaged);
+    assert.deepEqual(existsSync(folder) ? readdirSync(folder) : [], receipts);
+  });
 });
 
 async function runCreationFixture(t) {

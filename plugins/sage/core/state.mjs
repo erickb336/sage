@@ -17,7 +17,9 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { BRANCH } from "./branch.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
-import { recordedWrites, assertNoPendingReview, reviewReadVersion, readReviewReceipt, recoverReviewWrite, commitReviewWrite } from "./review-write.mjs";
+// Integration-only run, task-update, and review consumers retain their existing writer until each has a domain validator.
+import { recordedWrites as legacyRecordedWrites, reviewReadVersion, readReviewReceipt, recoverReviewWrite, commitReviewWrite } from "./review-write.mjs";
+import { recordedWrites, assertNoPendingWrite } from "./recorded-write.mjs";
 import { ROLES } from "./roles.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
@@ -391,11 +393,15 @@ function sheet(dir, table, also = [], max = Infinity) {
     refuse(`${file} cannot be read (${e.code}). ${fixIt(file, e.code)}`);
   }
   if (text === undefined) throw lost(dir, table, "is missing or is a link to nothing", also);
-  const [head, ...lines] = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
-  if (!head) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
-  const cols = head.split("\t");
+  const { cols, lines } = sheetText(text);
+  if (!cols.length) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
   if (!TABLES[table].every((c) => cols.includes(c) || ADDED[table]?.includes(c))) refuse(`the header of ${file} is damaged: its first line must be the column names ${TABLES[table].join(", ")}, separated by tabs. Ask the user to fix or add that line.`);
   return { cols, lines };
+}
+
+function sheetText(text) {
+  const [head, ...lines] = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
+  return { cols: head?.split("\t") ?? [], lines };
 }
 
 const rowsOf = ({ cols, lines }) =>
@@ -410,7 +416,12 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
  * file that it can read, is not empty, and has its header line. It refuses the first that fails and names its file. The
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
-const check = (dir, skip = [], max = Infinity) => Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
+const check = (dir, skip = [], max = Infinity) => {
+  const version = taskWrites.readVersion(dir);
+  const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
+  if (taskWrites.readVersion(dir) !== version) refuse("A task was created while this logbook was read. Retry the read.");
+  return tables;
+};
 
 /**
  * Refuses, before any change, a logbook that a command could not change whole: one that fails the integrity check, or a
@@ -422,7 +433,7 @@ const check = (dir, skip = [], max = Infinity) => Object.fromEntries(Object.keys
 const hasRows = (dir, max = Infinity) => Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`), { max }) ?? "").trim().split(/\r?\n/).length > 1);
 
 function ready(dir, skip = []) {
-  assertNoPendingReview(dir);
+  assertNoPendingWrite(dir);
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
   if (!skip.includes("tasks") && !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false })) {
     if (skip.length || hasRows(dir)) throw lost(dir, "tasks", "is missing", skip);
@@ -440,7 +451,32 @@ function reviewHead(project, branch, env) {
 }
 
 const taskWrites = recordedWrites({ schema: 2, tables: ["tasks", "decisions"], folder: "task-requests",
-  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json" });
+  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json",
+  validate: validateTaskWrite });
+
+/** Validate saved task publication as one pure update before any recovery write. */
+function validateTaskWrite({ reference, result }, tables) {
+  const deny = () => refuse("The saved task update is damaged. No task table changed.");
+  if (!result || !/^T[1-9]\d*$/.test(result.id)
+    || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, reference.title, reference.size, reference.risk, reference.add))) deny();
+  if (!tables) return;
+  const rows = (table, text) => {
+    const { cols, lines } = sheetText(text);
+    if (!TABLES[table].every(c => cols.includes(c) || ADDED[table]?.includes(c))
+      || cols.some(c => !TABLES[table].includes(c)) || new Set(cols).size !== cols.length) deny();
+    return rowsOf({ cols, lines });
+  };
+  const tasks = rows("tasks", tables.tasks.before), decisions = rows("decisions", tables.decisions.before);
+  if (tasks.some(task => task.id === result.id)
+    || tables.tasks.after !== tableText("tasks", [...tasks, result])) deny();
+  if (reference.add.length) {
+    const after = rows("decisions", tables.decisions.after), at = after.at(-1)?.at;
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(at ?? "")
+      || !Number.isFinite(Date.parse(at)) || new Date(at).toISOString().replace(".000Z", "Z") !== at) deny();
+    decisions.push({ at, task: result.id, decision: `added ${reference.add.join(",")}`, why: reference.why });
+  }
+  if (tables.decisions.after !== tableText("decisions", decisions)) deny();
+}
 
 /** Create one task for a durable caller request. The provider authenticates the opaque owner scope. */
 function createRequestedTask(input, env = process.env) {
@@ -464,7 +500,6 @@ function createRequestedTask(input, env = process.env) {
   if (realpathSync(dir) !== resolve(dir)) deny();
   const checked = receipt => {
     const result = receipt.result;
-    if (!result || !/^T[1-9]\d*$/.test(result.id) || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, input.title, input.size, input.risk, input.add))) deny();
     const matches = read(dir, "tasks").filter(row => row.id === result.id);
     if (matches.length !== 1) deny();
     return result;
@@ -484,7 +519,7 @@ function createRequestedTask(input, env = process.env) {
   });
 }
 
-const runWrites = recordedWrites({ schema: 3, tables: ["runs"], folder: "run-requests",
+const runWrites = legacyRecordedWrites({ schema: 3, tables: ["runs"], folder: "run-requests",
   name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json" });
 
 /** Record one run request using the same writer, branch, round and model rules as the CLI. */
@@ -592,7 +627,7 @@ function applyTaskFields(dir, task, fields, { proofFor, why = "task set" } = {})
   return decided;
 }
 
-const taskUpdates = recordedWrites({ schema: 4, tables: ["tasks", "decisions"], folder: "task-updates",
+const taskUpdates = legacyRecordedWrites({ schema: 4, tables: ["tasks", "decisions"], folder: "task-updates",
   name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json" });
 const taskVersion = task => createHash("sha256").update(JSON.stringify(task)).digest("hex");
 
