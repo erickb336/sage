@@ -67,8 +67,8 @@ export function prepareNativeTask(input, context, options) {
   if (hasPrevious) previous = completedRecipient(options, scope, native.actor, input.previous, input.task, input.role);
   const runTarget = captureNativeRunAssignment(options, input);
   const reviewRole = REVIEW_ROLES.includes(input.role);
-  if (hasCycle && (!reviewRole || !options.logbookRoot)) refuse();
-  const review = reviewRole && options.logbookRoot ? captureReview(options, input, input.reviewCycle) : undefined;
+  if (hasCycle && !reviewRole) refuse();
+  const review = reviewRole ? captureReview(options, input, input.reviewCycle) : undefined;
   const result = prepareAdmission(options.directory, scope,
     { task: input.task, run: input.run, issuer: native.actor, name: input.name },
     { issuerRole: role, role: input.role }, input.brief,
@@ -97,7 +97,7 @@ export function reservePreparedSpawn(input, context, options) {
   if (prepared.length !== 1 || prepared[0].continuation || message !== preparedTaskMessage(prepared[0])) refuse();
   if (role === "lead" && prepared[0].task !== task) refuse();
   checkNativeRunAssignment(options, { ...prepared[0], role: prepared[0].rolePlan.role }, prepared[0].runTarget);
-  if (REVIEW_ROLES.includes(prepared[0].rolePlan.role) && (options.logbookRoot || prepared[0].review)) {
+  if (REVIEW_ROLES.includes(prepared[0].rolePlan.role)) {
     if (!prepared[0].review) refuse();
     const current = captureReview(options, { ...prepared[0], role: prepared[0].rolePlan.role }, prepared[0].review.cycle);
     if (JSON.stringify(current) !== JSON.stringify(prepared[0].review)) refuse();

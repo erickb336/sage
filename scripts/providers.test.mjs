@@ -4834,6 +4834,9 @@ test('native lead preparation uses the unfinished continuation and original nati
   assert.equal(f.api.readAdmission(f.journal).bindings.length,2);
   f.api.completeAdmission(f.journal,bound);
   assert.throws(()=>f.prepare({run:'R5',name:'after_second_end'}));
+});
+
+test('native lead preparation refuses completed and interrupted leads with valid pending work', async t => {
   for(const outcome of ['complete','interrupt']) {
     const f=await leadPreparationFixture(t),saved=f.prepare();
     if(outcome==='complete') f.api.completeAdmission(f.journal,f.prior);

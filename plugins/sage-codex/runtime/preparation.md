@@ -244,7 +244,7 @@ Missing, ambiguous or inconsistent identity evidence refuses preparation.
 The adapter checks task scope both when it saves a brief and when it reserves a spawn.
 A foreign-task brief saved by an earlier runtime cannot bypass the dispatch check.
 Chief preparation remains separate and can select another task.
-These checks enforce admission ownership. Current logbook run and held-task checks remain separate work before automatic activation.
+These checks enforce admission ownership alongside the current logbook run and held-task checks described below.
 
 ## Finish a recorded run
 
@@ -259,3 +259,18 @@ It uses a fresh profile and simulated responses, records the verified report, fi
 Before the separate review-acceptance step, it checks exact report bytes and unchanged task, verdict, admission, and mode records.
 Focused tests also verify saved-report completion after child transcript loss.
 Run it with fake process tools first on PATH. It does not verify a real model or installed automatic activation.
+
+
+## Current recorded targets
+
+Native preparation requires version 3 fixed logbook configuration and one active run matching its task and role.
+It saves the task round, task branch, run branch, and candidate with the brief.
+Review roles also require `reviewCycle` from 1 to 10. Their saved target contains the current local branch commit.
+The tool derives this commit itself; a request cannot supply it or redirect Git through environment variables.
+
+Before an initial spawn reserves capacity, Sage checks the current records against the saved targets.
+This check runs after an awaited policy evaluator. A lead must also retain its own current run before it delegates.
+Missing, duplicate, ended, or changed records refuse. A held task cannot prepare or dispatch work until the chief resumes it. Old unpinned preparations remain readable but cannot dispatch.
+A changed target needs a new run and brief. This target-capture change covers preparation and initial dispatch.
+The integration runtime has separate checks for active child work, completion, continuation dispatch, and review acceptance.
+These checks do not enable installed automatic Sage.

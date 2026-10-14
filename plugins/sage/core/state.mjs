@@ -681,6 +681,7 @@ function captureRunAssignment(input, env = process.env) {
     const runs = read(dir, "runs").filter(row => row.id === input.run);
     if (tasks.length !== 1 || runs.length !== 1) deny();
     const task = tasks[0], run = runs[0];
+    notHeld(task, "assignment");
     if (!STATES.includes(task.state) || ["merged", "concluded", "abandoned"].includes(task.state)
       || run.task !== task.id || run.role !== input.role || run.round !== task.round || run.status !== "running"
       || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
@@ -711,6 +712,7 @@ function captureReviewTarget(input, env = process.env) {
     const runs = read(dir, "runs").filter(row => row.id === input.run);
     if (tasks.length !== 1 || runs.length !== 1) deny();
     const task = tasks[0], run = runs[0];
+    notHeld(task, "assignment");
     if (run.task !== task.id || run.role !== input.role || run.round !== task.round || run.status !== "running"
       || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
       || !Number.isSafeInteger(Number(task.round)) || (run.branch && run.branch !== task.branch)) deny();

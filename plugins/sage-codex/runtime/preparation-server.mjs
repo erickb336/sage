@@ -59,7 +59,7 @@ export function createPreparationServer(options = {}) {
     }
   });
   server.registerTool("sage_prepare_task", {
-    description: "Save a complete Sage task brief before spawning a named agent. Configured review roles also require reviewCycle and receive a fixed commit target. Preparation does not start the agent or reserve capacity. For an initial spawn, copy the returned name, message, and fork_turns unchanged. For a completed child, provide its previous assignment ID and a new run and logical name; copy the returned target and message into followup_task. Later-turn binding remains required before work can continue.",
+    description: "Save a complete Sage task brief for a current active logbook run before spawning a named agent. Review roles require reviewCycle and receive a fixed commit target. Preparation does not start the agent or reserve capacity. For an initial spawn, copy the returned name, message, and fork_turns unchanged. For a completed child, provide its previous assignment ID and a new run and logical name; copy the returned target and message into followup_task. Later-turn binding remains required before work can continue.",
     inputSchema: z.object({ task: z.string(), run: z.string(), name: z.string(), role: z.string(), previous: z.string().optional(), reviewCycle: z.number().int().min(1).max(10).optional(),
       brief: z.object({ GOAL: z.string(), SCOPE: z.string(), CONTEXT: z.string(), DECISIONS: z.string(),
         ACCEPTANCE: z.string(), VERIFY: z.string(), BUDGET: z.string(), FORBIDDEN: z.string(), REPORT: z.string(), STANDING: z.string() }).strict() }).strict(),
