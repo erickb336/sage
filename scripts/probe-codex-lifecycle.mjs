@@ -873,7 +873,9 @@ data: ${JSON.stringify(event)}
         simulatedModel: true, automaticSage: false, realModelConsumptionVerified: false});
     }
     if(interruption) {
-      const state=integrated.readJournal(),bound=state.bindings[0], {outcome,evidenceHash,...identity}=state.completions[0];
+      const state=integrated.readJournal();
+      assert.equal(state.completions?.length ?? 0,1,"interruption_not_recovered");
+      const bound=state.bindings[0], {outcome,evidenceHash,...identity}=state.completions[0];
       assert.equal(state.reservations.length,1);assert.equal(state.bindings.length,1);assert.equal(state.completions.length,1);
       assert.equal(outcome,"interrupted");assert.deepEqual(identity,bound);assert.match(evidenceHash,/^[a-f0-9]{64}$/);
       const {readNativeInterruption}=await import(new URL("../plugins/sage-codex/runtime/identity.mjs",import.meta.url));
