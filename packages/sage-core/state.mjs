@@ -76,9 +76,9 @@ const limit = (key) => LIMIT[key] ?? 50;
 const COUNTS = { max_agents: "no sage agent could start", "cycles.small": "a tiny or small task would merge with no review", "cycles.large": "a large task would merge with no review", "cycles.risk": "a task with a risk flag would merge with no review", max_rounds: "no repair round could start", arena: "an arena would have no candidates", cap_total: "no sage agent could start" };
 /** One project's own agent cap, cap.<project>, with the project's name as projectName gives it. Without one, max_agents is the project's cap. */
 const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
-/** An agent role's model (gate G17): model.<role>.<size> for one size of task, or model.<role> for every size. */
-const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate))?$/;
-const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model> or model.<role>=<model> for an agent role's model";
+/** Model choice by role, task size or risk flag; provider defaults supply the model names. */
+const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
+const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 const TABLES = {
   tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra"],
   runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
@@ -301,11 +301,12 @@ const cycleKeys = (task) => ["cycles.small", task.size === "large" && "cycles.la
 
 /**
  * The model to pass on a run's agent call, or "" for the agent's own model: an arena candidate's place in arena_models,
- * else model.<role>.<size>, else model.<role>. inherit at a level gives the next one.
+ * else model.<role>.risk for a risk flag, else model.<role>.<size>, else model.<role>. inherit at a level gives the next one.
  */
-function modelFor(role, size, candidate, c) {
+function modelFor(role, size, candidate, c, risk = "") {
   const arena = /^[1-9]\d*$/.test(candidate) ? list(c.arena_models)[(Number(candidate) - 1) % list(c.arena_models).length] : undefined;
-  return [arena ?? c[`model.${role}.${size}`], arena ?? c[`model.${role}`]].find((m) => m && m !== "inherit") ?? "";
+  if (arena !== undefined) return arena === "inherit" ? "" : arena;
+  return [risk && c[`model.${role}.risk`], c[`model.${role}.${size}`], c[`model.${role}`]].find((m) => m && m !== "inherit") ?? "";
 }
 
 /** The file that a write to file replaces: file, or the target of its link. Something there that is not a regular file refuses. */
@@ -544,7 +545,7 @@ function runFrame(dir, task, role, branch, candidate, env) {
     if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
   }
   return { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch,
-    status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env)) };
+    status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
 }
 
 function proveTask(dir, task, proof) {
