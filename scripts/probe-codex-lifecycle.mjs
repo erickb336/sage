@@ -11,10 +11,11 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-followup", "--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-followup-recovery", "--sage-followup", "--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
-const followup = process.argv.includes("--sage-followup");
+const followupRecovery = process.argv.includes("--sage-followup-recovery");
+const followup = followupRecovery || process.argv.includes("--sage-followup");
 assert(!followup || process.argv.slice(2).length === 1, "followup_is_a_separate_probe");
 const leadOwnership = process.argv.includes("--sage-lead-ownership");
 assert(!leadOwnership || process.argv.slice(2).length === 1, "ownership_is_a_separate_probe");
@@ -205,7 +206,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     }
     events.push(
       { type: "response.output_item.done", output_index: 0, item },
-      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: recoveryProbe && [calls.compact1, calls.compact2].includes(item.call_id) ? 200000 : 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: recoveryProbe && [calls.compact1, calls.compact2].includes(item.call_id) ? 200000 : 0 } } },
+      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: (recoveryProbe || followupRecovery) && [calls.compact1, calls.compact2].includes(item.call_id) ? 200000 : 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: (recoveryProbe || followupRecovery) && [calls.compact1, calls.compact2].includes(item.call_id) ? 200000 : 0 } } },
     );
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "close" });
     for (const event of events) res.write(`event: ${event.type}
@@ -237,13 +238,13 @@ data: ${JSON.stringify(event)}
       let request;
       try { request = JSON.parse(body); } catch { throw new Error("invalid_request_json"); }
       body = "";
-      if (recoveryProbe && texts(request.input).some(text => text.includes("SAGE_CHILD_COMPACT_REQUEST"))) {
+      if ((recoveryProbe || followupRecovery) && texts(request.input).some(text => text.includes("SAGE_CHILD_COMPACT_REQUEST"))) {
         responseRequests++;
         check(req.headers["thread-id"] === childThread, "compaction_wrong_child");
         check(++compactRequests <= (repeatRecovery ? 2 : 1), "unexpected_compaction_count");
         respond(res, message("SAGE_CHILD_COMPACT_SUMMARY: Continue the fixed child probe.")); return;
       }
-      const requestTexts = recoveryProbe ? texts(request.input) : [];
+      const requestTexts = recoveryProbe || followupRecovery ? texts(request.input) : [];
       const info = inspectRequest(request);
       request = null; // Retain only tool results, advertised names, and a fixed-task boolean.
       responseRequests++;
@@ -303,12 +304,12 @@ data: ${JSON.stringify(event)}
           print({type:"sandbox_evidence", deniedBeforeEvaluator:true, noPostToolExecution:true, simulatedModel:true});
           respond(res, message(CHILD_MARKER)); return;
         }
-        if (recoveryProbe && childRequests > 0) {
+        if ((recoveryProbe && childRequests > 0) || (followupRecovery && childRequests > 2)) {
           check(thread === childThread && childResponseSent, "wrong_recovery_child");
           childRequests++;
           const evidence = integrated.childEvidence(childThread), {state, bound, recovery} = evidence;
           check(JSON.stringify(state) === JSON.stringify(integrated.readRecoveryBaseline()), "recovery_changed_journal");
-          check(state.reservations.length === 1 && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
+          check(state.reservations.length === (followupRecovery ? 2 : 1) && state.bindings.length === (followupRecovery ? 2 : 1) && (state.completions?.length ?? 0) === (followupRecovery ? 1 : 0),
             "recovery_changed_admission");
           if (recoveryPhase === "compact") {
             recoveryRound++;
@@ -335,9 +336,9 @@ data: ${JSON.stringify(event)}
           }
           check(recoveryPhase === "read", "unexpected_recovery_phase");
           const result = info.outputs[calls[`recovery${recoveryRound}`]];
-          check(result?.decision === "current-assignment" && result.message === CHILD_PROMPT && result.child === childThread
-            && result.turn === bound.turn && result.assignment === bound.assignment && result.task === "T1" && result.run === "R1"
-            && result.taskHash === createHash("sha256").update(CHILD_PROMPT).digest("hex"), "assignment_recovery_changed_identity");
+          check(result?.decision === "current-assignment" && result.message === (followupRecovery ? followupPrepared.message : CHILD_PROMPT) && result.child === childThread
+            && result.turn === bound.turn && result.assignment === bound.assignment && result.task === "T1" && result.run === (followupRecovery ? "R2" : "R1")
+            && result.taskHash === createHash("sha256").update(followupRecovery ? followupPrepared.message : CHILD_PROMPT).digest("hex"), "assignment_recovery_changed_identity");
           check(!recovery.required && recovery.call === calls[`recovery${recoveryRound}`], "native_recovery_output_not_verified");
           recoveredRounds++;
           print({type:"child_recovery_evidence", round:recoveryRound, exactSavedAssignment:true, latestCompactionVerified:true,
@@ -522,7 +523,7 @@ data: ${JSON.stringify(event)}
         await followupReady;
         if (fixtureFailure) { reject(res); return; }
         respond(res, call(calls.followWait,"wait_agent",{}));
-        respond(followupResponse,message(CHILD_MARKER));
+        respond(followupResponse,followupRecovery ? {type:"function_call", name:"list_mcp_resources", call_id:calls.compact1, arguments:"{}"} : message(CHILD_MARKER));
       } else if (followup && rootRequests === 8) {
         check(info.outputs[calls.followWait]?.timed_out === false, "followup_wait_failed");
         respond(res,call(calls.followDone,"list_agents",{path_prefix:taskName}));
@@ -621,7 +622,7 @@ data: ${JSON.stringify(event)}
   } else {
     const args = ["exec", "--strict-config", "--skip-git-repo-check", "-C", workspace, "-s", roleEdit ? "workspace-write" : "read-only", "--json"];
     const config = {
-      ...(recoveryProbe ? {model_auto_compact_token_limit:100000, compact_prompt:"SAGE_CHILD_COMPACT_REQUEST"} : {}),
+      ...((recoveryProbe || followupRecovery) ? {model_auto_compact_token_limit:100000, compact_prompt:"SAGE_CHILD_COMPACT_REQUEST"} : {}),
       model_provider: "sage_native_lifecycle",
       model: "sage-native-parent",
       model_catalog_json: catalogPath,
@@ -702,8 +703,8 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (followup ? 9 : finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!followup || followupVerified) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (followup ? 3 : roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
-        && (!recoveryProbe || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
+      : rootRequests === (followup ? 9 : finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!followup || followupVerified) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (followupRecovery ? 7 : followup ? 3 : roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+        && (!(recoveryProbe || followupRecovery) || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && blockedStopVerified)) && rootThread !== childThread
         && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted;
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
@@ -721,7 +722,7 @@ data: ${JSON.stringify(event)}
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
     assert.equal(before.length,failedSpawn || leadOwnership ? 2 : 1);
     assert.equal(start.length,denySpawn ? 0 : 1);
-    assert.equal(stop.length,denySpawn ? 0 : followup ? 3 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
+    assert.equal(stop.length,denySpawn ? 0 : followupRecovery ? 4 : followup ? 3 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
     assert.equal(after.length,denySpawn ? 0 : 1);
     if (!denySpawn) {
     assert.equal(start[0].captureError,undefined);
@@ -740,8 +741,8 @@ data: ${JSON.stringify(event)}
       assert.deepEqual(state.completions[0], state.bindings[0]);
       assert.equal(state.bindings[0].child, childThread);
       assert.equal(state.reports?.length ?? 0, receiptProbe ? 1 : 0);
-      assert.equal(stops.length, followup ? 3 : recoveryProbe ? recoveredRounds + 1 : 2);
-      assert(stops.every((row, i) => row.decision === (recoveryProbe && i < recoveredRounds ? "recovery-required" : "stop-observed") && row.completions === (followup && i === 2 ? 1 : 0)));
+      assert.equal(stops.length, followupRecovery ? 4 : followup ? 3 : recoveryProbe ? recoveredRounds + 1 : 2);
+      assert(stops.every((row, i) => row.decision === ((recoveryProbe && i < recoveredRounds) || (followupRecovery && i === 2) ? "recovery-required" : "stop-observed") && row.completions === (followup && i >= 2 ? 1 : 0)));
       print({type: "completion_evidence", reservations: state.reservations.length, bindings: state.bindings.length, completions: state.completions.length,
         blockedStopRetainedCapacity: blockedStopVerified, stopCallbacksPrecedeTerminal: true,
         parentReconciledCompletion: true, reportsAccepted: 0, fullPolicyVerified: false,

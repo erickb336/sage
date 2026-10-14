@@ -1,6 +1,7 @@
 import { createCommandPolicy, commandWrites, roleEditDenied, readAdmission } from "sage-core";
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
 import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
+import { checkNativeRunAssignment } from "./run-assignment.mjs";
 import { join, sep } from "node:path";
 import { decodeEvent, observation, publish, readObservations, RUNTIME_VERSION } from "./events.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
@@ -51,6 +52,8 @@ export function createNativePolicy(options, evaluateTool) {
       if (child && !before.sage) bindPendingNativeChildTool(raw, native, fixed);
       const bound = before.sage && child ? bindNativeChildTool(raw, native, fixed) : undefined;
       const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
+      const assignment = bound ? { ...bound.assignment, role } : undefined;
+      const activeRun = assignment ? checkNativeRunAssignment(fixed, assignment, bound.runTarget) : undefined;
       const editDenied = roleEditDenied({ sage: before.sage, role });
       // A message can wake another child without a prepared dispatch or reserved slot.
       const trackedChild = child && (before.sage
@@ -128,6 +131,7 @@ export function createNativePolicy(options, evaluateTool) {
       if (before.sage && child) readChildTurn(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
         session: event.session_id, child: native.actor, turn: event.turn_id,
       }, { active: true });
+      if (assignment && JSON.stringify(checkNativeRunAssignment(fixed, assignment, bound.runTarget)) !== JSON.stringify(activeRun)) refuse();
       if (before.sage && observed?.kind === "spawn-request") {
         reconcileNativeFailures(raw, native, fixed);
         const reserved = reservePreparedSpawn(raw, native, fixed);

@@ -8,7 +8,7 @@ A no-tool child can supply its transcript through the authenticated stop callbac
 
 Sage off preserves pending assignments and permits their verified completion. An ordinary unassigned child can stop without acquiring a Sage claim. A managed child receives at most one report-field correction through the native stop retry flag. Every retry still requires identity checks.
 
-This component supports initial assignments. After compaction, a child must read its exact saved assignment before it can complete. The protected transcript must prove that recovery followed the latest compaction. Verified interruption remains available. Later assignments remain separate integration work. The installed hook manifest stays unchanged. Automatic activation and real-model behavior remain unverified.
+This component supports initial and prepared continuation assignments. After compaction, a child must read its exact saved assignment before it can complete. The protected transcript must prove that recovery followed the latest compaction. A new successful completion after compaction requires the current saved run and review targets. Historical completion retries and verified interruption remain available when targets change. They grant no new success. The installed hook manifest stays unchanged. Automatic activation and real-model behavior remain unverified.
 
 ## Native check
 

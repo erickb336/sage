@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { readAdmission, completeAdmission, interruptAdmission, REPORT_FIELDS, missingReportFields } from "../core/index.mjs";
+import { checkPreparedRunAssignment } from "./run-assignment.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { readChildTurn, readNativeCompletion, readNativeInterruption, readNativeRecovery } from "./identity.mjs";
 import { bindNativeChildTranscript, recoverNativeChildDeliveries } from "./child-tool.mjs";
@@ -98,6 +99,11 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
   }
   const completed = readNativeCompletion(transcripts[0].transcript, { sessionsDir: options.sessionsDir, requireRecovery: true }, expected);
   const interrupted = completed ? null : readNativeInterruption(transcripts[0].transcript, { sessionsDir: options.sessionsDir }, expected);
+  // Historical completion and authoritative interruption do not grant a new success.
+  if (recovery.compaction !== null && !interrupted
+    && !state.completions?.some(row => row.assignment === bound.assignment)) {
+    checkPreparedRunAssignment(options, assigned, state.preparations.find(row => row.id === assigned.preparation));
+  }
   return { directory, observations, completed, interrupted };
 }
 

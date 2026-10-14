@@ -5,6 +5,7 @@ import { nativeToolContext } from "./native-tool.mjs";
 import { readObservations } from "./events.mjs";
 import { readChildTurn, readAssignmentTurn, readNativeRecovery } from "./identity.mjs";
 import { preparedTaskMessage } from "./instructions.mjs";
+import { checkPreparedRunAssignment } from "./run-assignment.mjs";
 
 const refuse = () => { throw Error("Sage could not read this child's current assignment."); };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -38,9 +39,12 @@ export function readNativeChildAssignment(input, context, options) {
   readAssignmentTurn(transcript, { sessionsDir: options.sessionsDir }, {
     ...expected, parent: bound.issuer, path, author: path.slice(0, path.lastIndexOf("/")), taskHash,
   });
+  const checkTarget = () => checkPreparedRunAssignment(options, assigned, prepared);
+  checkTarget();
   // A read grants no permission. Refuse an observed concurrent lifecycle change.
   readChildTurn(transcript, { sessionsDir: options.sessionsDir }, expected, { active: true });
   if (JSON.stringify(readAdmission(options.directory)) !== JSON.stringify(state)) refuse();
+  checkTarget();
   return { decision: "current-assignment", assignment: bound.assignment, preparation: prepared.id,
     task: prepared.task, run: prepared.run, role: prepared.rolePlan.role, child: native.actor,
     turn: bound.turn, taskHash, message };
@@ -73,7 +77,7 @@ export function checkChildToolRecovery(event, native, options, prior) {
     path, author: path.slice(0, path.lastIndexOf("/")), taskHash: assigned.dispatch.taskHash,
   });
   // Uncompacted off-mode work keeps its existing behavior. Recovery itself requires
-  // the current saved assignment and an active native turn.
+  // the current saved task, active native turn, run target, and review target.
   if (recovery.compaction !== null) readNativeChildAssignment({}, native, options);
   return { assignment: bound.assignment, required: recovery.required };
 }
