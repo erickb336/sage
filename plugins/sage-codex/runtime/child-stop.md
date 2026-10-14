@@ -15,3 +15,18 @@ This component supports initial and prepared continuation assignments. After com
 Run `node scripts/probe-codex-lifecycle.mjs --sage-completion` with fake process tools first on PATH. The probe requires CLI 0.160.0 and uses a fresh temporary profile with simulated responses. It prepares and spawns one child through the packaged runtime. A separate hook blocks the first stop. The next native request must find the slot occupied. Parent reconciliation must later record one completion. Both stop receipts must precede terminal evidence. The probe also checks that no report was accepted and removes its temporary profile.
 
 This fixed route uses a narrow test tool policy. It does not verify the complete installed policy or real-model behavior. Deterministic packaged tests cover an early stop whose parent spawn result arrives later; that ordering is not forced by this native probe.
+
+## Native interruption check
+
+`node scripts/probe-codex-lifecycle.mjs --sage-interruption` verifies existing bound interruption recovery with the same temporary fixture and hardware guard.
+The probe holds a real child's response until a harmless read establishes its binding.
+The chief interrupts that exact child while its next response remains held.
+Parent reconciliation must match the native interrupted turn and evidence hash, without a stop callback.
+The original assignment stays in history. No report, verdict, task transition, or logbook run completion occurs.
+A fixture capacity check refuses a replacement before interruption, then admits one replacement and refuses a third reservation.
+That replacement is a synthetic admission check, not a second native child.
+The probe removes its temporary profile. It uses simulated responses and does not activate installed Sage.
+
+Packaged tests also cover interruption after Sage off, later assignments, stale evidence, conflicting terminal records, and exact retries.
+These tests pass on the preceding main because production interruption support already exists.
+Isolated mutations verify that the tests detect lost reconciliation, incorrect outcomes, conflicting evidence, stale bindings, and retained capacity.
