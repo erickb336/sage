@@ -9,7 +9,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir, hostname, tmpdir, uptime } from "node:os";
+import { homedir, hostname, platform, tmpdir, uptime } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { boardView } from "./board-view.mjs";
 import { createBoard } from "./board.mjs";
@@ -1298,11 +1298,13 @@ function bootTime() {
 
 /**
  * True only when the holder is surely gone: an earlier boot of this machine, no process under its pid, or a newer one.
- * A holder on another host is never gone by this machine's boot or process evidence. On this host, an unknown boot
- * time leaves only the pid and its start time to decide.
+ * Stable identities distinguish machines despite changed or shared hostnames. Only legacy records use the hostname.
+ * On the same machine, an unknown boot time leaves only the pid and its start time to decide.
  */
-function gone(h, boot, checkStart, probe) {
-  if (h.host !== hostname()) return false;
+function gone(h, boot, checkStart, probe, machineId) {
+  if (Object.hasOwn(h, "machineId")) {
+    if (!machineId || h.machineId !== machineId) return false;
+  } else if (h.host !== hostname()) return false;
   if (Number.isFinite(h.boot) && Number.isFinite(boot) && Math.abs(h.boot - boot) > 60_000) return true;
   if (!probe.alive(h.pid)) return true;
   return checkStart && probe.started(h.pid) > h.start + 2000; // the pid now names a process that started after the holder
@@ -1319,16 +1321,45 @@ function clear(folder, file) {
   }
 }
 
+/** A stable machine identity; an unavailable identity never clears a holder that has one. */
+function machineIdentity(dir) {
+  if (process.env.NODE_TEST_CONTEXT) {
+    // Every test uses an injected identity, never the real hardware or machine-id file.
+    try {
+      if (!realpathSync(dir).startsWith(realpathSync(tmpdir()) + sep)) return null;
+    } catch { return null; }
+    return /^[A-Za-z0-9-]{1,128}$/.test(process.env.SAGE_TEST_MACHINE_ID ?? "") ? process.env.SAGE_TEST_MACHINE_ID : null;
+  }
+  // An explicit test identity outside its allowed scope is unavailable, never a hardware query.
+  if (Object.hasOwn(process.env, "SAGE_TEST_MACHINE_ID")) return null;
+  try {
+    if (platform() === "linux") {
+      const id = readFileSync("/etc/machine-id", "utf8").trim();
+      return /^[a-fA-F0-9]{32}$/.test(id) ? id.toLowerCase() : null;
+    }
+    if (platform() === "darwin") {
+      // A hardware query, never a process-list query. Bound a stalled system command.
+      const text = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], {
+        encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "ignore"],
+      });
+      return /"IOPlatformUUID"\s*=\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"/.exec(text)?.[1]?.toLowerCase() ?? null;
+    }
+  } catch { /* Keep the legacy host rule only for legacy holders. */ }
+  return null;
+}
+
 /** Runs fn while this process holds the store's lock. Refuses, with nothing changed, when the store stays busy. */
 function withLock(dir, fn) {
   const probe = probeFor(dir);
   const boot = bootTime();
+  const machineId = machineIdentity(dir);
   const lock = join(dir, ".lock");
   const token = randomUUID();
   const tmp = `${lock}.${token}`;
   mkdirSync(tmp);
+  // A new unavailable identity is explicit; only old records use the hostname fallback.
   // An unknown boot time has no key: an older sage reads boot: null as 0, an earlier boot, and would clear a live lock.
-  writeFileSync(join(tmp, `${token}.json`), JSON.stringify({ pid: process.pid, host: hostname(), ...(boot === null ? {} : { boot }), start: START, at: Date.now() }));
+  writeFileSync(join(tmp, `${token}.json`), JSON.stringify({ pid: process.pid, host: hostname(), machineId, ...(boot === null ? {} : { boot }), start: START, at: Date.now() }));
   const t0 = Date.now();
   for (let checked = ""; ; ) {
     try {
@@ -1344,7 +1375,7 @@ function withLock(dir, fn) {
     const waited = Date.now() - t0;
     const checkStart = h && waited > 500 && checked !== h.file; // ps once per holder, and only for a slow one
     if (checkStart) checked = h.file;
-    if (h && gone(h, boot, checkStart, probe) && clear(lock, h.file)) continue; // if clear fails, another waiter was first
+    if (h && gone(h, boot, checkStart, probe, machineId) && clear(lock, h.file)) continue; // if clear fails, another waiter was first
     if (waited >= LOCK_WAIT_MS) {
       rmSync(tmp, { recursive: true, force: true });
       const who = h ? `pid ${cell(h.pid)} on ${cell(h.host)} has held ${lock}${Number.isFinite(h.at) ? ` for ${((Date.now() - h.at) / 1000).toFixed(1)} s` : ""}` : `${lock} has no valid owner file`;
@@ -1356,7 +1387,7 @@ function withLock(dir, fn) {
     // The temp folder of a waiter that was killed stays behind. Remove it by the lock's rules: owner surely gone, by name.
     for (const name of readdirSync(dir).filter((n) => new RegExp(`^\\.lock\\.${UUID}$`).test(n))) {
       const h = holder(join(dir, name));
-      if (h && gone(h, boot, false, probe)) clear(join(dir, name), h.file);
+      if (h && gone(h, boot, false, probe, machineId)) clear(join(dir, name), h.file);
     }
     return fn();
   } finally {
