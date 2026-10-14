@@ -67,7 +67,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_record_report"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -3731,6 +3731,261 @@ test('T56: recovery preflights table meaning and receipt destinations before pub
   });
 });
 
+async function runCreationFixture(t) {
+  const f = await taskCreationFixture(t); f.create();
+  const { createNativeRun } = await import(pathToFileURL(join(f.plugin, 'runtime/run-create.mjs')));
+  const input = { request: turns[1], task: 'T1', role: 'lead', branch: '', candidate: '' };
+  const createRun = (data = input, actor = session) => createNativeRun(data, f.native(actor), f.options);
+  const file = join(f.dir, 'run-create-config.json');
+  writeFileSync(file, JSON.stringify({ version: 3, mode: f.options }));
+  writeFileSync(f.entry, `import { serveConfiguredPreparations } from './plugin/runtime/configuration.mjs'; serveConfiguredPreparations(${JSON.stringify(file)});`);
+  return { ...f, input, createRun };
+}
+
+test('native run creation records one real task run and retries after reconnect without dispatch', async t => {
+  const f = await runCreationFixture(t), before = f.core.readAdmission(f.options.directory);
+  const client = await connect(t, f, '0.160.0', '', 'sage_create_run');
+  const first = await client.call(f.input);
+  assert.equal(first.decision, 'run-created'); assert.equal(first.run.id, 'R1');
+  assert.equal(first.run.task, 'T1'); assert.equal(first.run.role, 'lead');
+  assert.equal(first.run.round, '0'); assert.equal(first.run.status, 'running');
+  assert.equal(first.run.model, ''); assert.match(first.run.started, /^\d{4}-\d\d-\d\dT/);
+  await client.close();
+  const retry = await connect(t, f, '0.160.0', '', 'sage_create_run');
+  assert.deepEqual(await retry.call(f.input), { ...first, decision: 'already-created' });
+  assert.match((await retry.call({ ...f.input, role: 'qa' })).error, /could not create/);
+  assert.match((await retry.call(f.input, childActor)).error, /could not create/);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
+  assert.equal(f.tool.read(f.logbook, 'tasks')[0].state, 'framed');
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  await retry.close();
+});
+
+test('native run creation shares the CLI single-writer rule and never revives a completed run on retry', async t => {
+  const f = await runCreationFixture(t);
+  const input = { ...f.input, role: 'implementer', branch: 'codex/t1-build' };
+  f.cli('run', 'add', 'T1', '--role', 'designer', '--branch', input.branch);
+  assert.throws(() => f.createRun(input), /one writer/);
+  assert.throws(() => f.createRun({ ...input, branch: '' }), /needs --branch/);
+  f.cli('run', 'done', 'R1', '--status', 'done');
+  const first = f.createRun(input); assert.equal(first.run.id, 'R2');
+  assert.throws(() => f.cli('run', 'add', 'T1', '--role', 'implementer', '--branch', input.branch), /one writer/);
+  f.cli('run', 'done', 'R2', '--status', 'done');
+  assert.deepEqual(f.createRun(input), { ...first, decision: 'already-created' });
+  assert.equal(f.tool.read(f.logbook, 'runs')[1].status, 'done');
+  const next = f.createRun({ ...input, request: turns[2] }); assert.equal(next.run.id, 'R3');
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 3);
+});
+
+test('native run creation refuses missing tasks malformed fields and foreign owners without writes', async t => {
+  const f = await runCreationFixture(t);
+  for (const data of [{ ...f.input, task: 'T999' }, { ...f.input, task: '../other' }, { ...f.input, owner: session },
+    { ...f.input, project: f.options.projectDirectory }, { ...f.input, model: 'inherit' }, { ...f.input, request: 'invalid' },
+    { ...f.input, role: 'invalid role' }, { ...f.input, branch: 'invalid branch' }, { ...f.input, candidate: 'a\nb' },
+    { ...f.input, candidate: 1 }]) assert.throws(() => f.createRun(data));
+  assert.throws(() => f.createRun(f.input, childActor)); assert.throws(() => f.createRun(f.input, turns[2]));
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 0);
+  assert.deepEqual(existsSync(join(f.logbook, 'run-requests')) ? readdirSync(join(f.logbook, 'run-requests')) : [], []);
+});
+
+test('native run creation recovers a written run whose receipt publication failed', async t => {
+  const f = await runCreationFixture(t);
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = fs.linkSync;
+  t.mock.method(fs, 'linkSync', (from, to) => {
+    if (to.startsWith(join(f.logbook, 'run-requests') + '/')) throw Object.assign(Error('Injected run receipt failure'), { code: 'EIO' });
+    return original(from, to);
+  });
+  syncBuiltinESMExports();
+  const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); }; t.after(restore);
+  assert.throws(() => f.createRun(), /Injected/);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
+  assert.throws(() => f.cli('run', 'add', 'T1', '--role', 'qa'), /incomplete/);
+  assert.equal(f.tool.mergeCheck('1'.repeat(40), f.env).ok, false);
+  restore();
+  assert.throws(() => f.createRun({ ...f.input, request: turns[2] }));
+  assert.equal(f.createRun().decision, 'run-created'); assert.equal(f.createRun().decision, 'already-created');
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+});
+
+test('native run creation preserves unrelated table edits after an interrupted run write', async t => {
+  const f = await runCreationFixture(t);
+  const restore = await stopTaskWrite(t, f, 'runs');
+  assert.throws(() => f.createRun(), /Injected/); restore();
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 0);
+  appendFileSync(join(f.logbook, 'runs.tsv'), 'unrelated change\n');
+  assert.throws(() => f.createRun());
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
+  assert.deepEqual(existsSync(join(f.logbook, 'run-requests')) ? readdirSync(join(f.logbook, 'run-requests')) : [], []);
+});
+
+test('native run creation serializes competing writers while preserving manual off-mode records', async t => {
+  const f = await runCreationFixture(t);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const clients = await Promise.all([connect(t, f, '0.160.0', '', 'sage_create_run'), connect(t, f, '0.160.0', '', 'sage_create_run')]);
+  const input = { ...f.input, role: 'implementer', branch: 'codex/t1-build' };
+  const outputs = await Promise.all(clients.map((client, index) => client.call({ ...input, request: turns[index + 1] })));
+  assert.equal(outputs.filter(out => out.decision === 'run-created').length, 1);
+  assert.equal(outputs.filter(out => /could not create/.test(out.error)).length, 1);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+  await Promise.all(clients.map(client => client.close()));
+});
+
+test('native run creation retains merged lead uniqueness and project capacity', async t => {
+  const f = await runCreationFixture(t);
+  assert.equal(f.createRun().run.id, 'R1');
+  assert.throws(() => f.createRun({...f.input, request: turns[2]}), /one running lead/);
+  for (const task of ['T2', 'T3', 'T4']) f.cli('task', 'add', '--title', task, '--size', 'small');
+  f.cli('run', 'add', 'T2', '--role', 'lead');
+  f.cli('run', 'add', 'T3', '--role', 'lead');
+  const next = {...f.input, request: turns[2], task: 'T4'};
+  assert.throws(() => f.createRun(next), /3 running lead runs/);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 3);
+  f.cli('run', 'done', 'R1', '--status', 'done');
+  assert.equal(f.createRun(next).run.task, 'T4');
+  assert.equal(f.tool.read(f.logbook, 'runs').filter(run => run.status === 'running' && run.role === 'lead').length, 3);
+});
+
+test('native run creation retains merged role and lead task eligibility rules', async t => {
+  const f = await runCreationFixture(t);
+  assert.throws(() => f.createRun({...f.input, role: 'unknown-role'}), /not a role of a run/);
+  f.cli('task', 'add', '--title', 'investigation', '--size', 'investigate');
+  assert.throws(() => f.createRun({...f.input, task: 'T2'}), /investigation/);
+  f.cli('task', 'T1', 'set', 'state=abandoned');
+  assert.throws(() => f.createRun(), /task has ended/);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 0);
+  assert.equal(f.createRun({...f.input, task: 'T2', role: 'investigate'}).run.role, 'investigate');
+});
+
+
+test('T57: held tasks refuse new runs while exact historical retries remain unchanged', async t => {
+  const f = await runCreationFixture(t), first = f.createRun();
+  f.cli('run', 'done', 'R1', '--status', 'done');
+  for (const state of ['briefed', 'building', 'held']) f.cli('task', 'T1', 'set', `state=${state}`);
+  const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
+  const receipts = readdirSync(join(f.logbook, 'run-requests'));
+  assert.throws(() => f.createRun({ ...f.input, request: turns[2], role: 'qa' }));
+  assert.deepEqual(f.createRun(), { ...first, decision: 'already-created' });
+  assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
+  assert.deepEqual(readdirSync(join(f.logbook, 'run-requests')), receipts);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+});
+
+test('T57: run framing matches CLI normalization and preserves saved model round candidate and time', async t => {
+  const f = await runCreationFixture(t);
+  f.cli('config', 'cycles.small=2');
+  f.cli('run', 'add', 'T1', '--role', 'QA ', '--candidate', 'candidate-a');
+  const first = f.createRun({ ...f.input, role: 'qa', candidate: 'candidate-a' });
+  const cli = f.tool.read(f.logbook, 'runs')[0];
+  for (const key of ['task', 'role', 'round', 'candidate', 'branch', 'status', 'model']) assert.equal(first.run[key], cli[key]);
+  assert.equal(first.run.model, '');
+  f.cli('run', 'done', first.run.id, '--status', 'done');
+  f.cli('config', 'cycles.small=3');
+  const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
+  assert.deepEqual(f.createRun({ ...f.input, role: 'qa', candidate: 'candidate-a' }), { ...first, decision: 'already-created' });
+  assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
+});
+
+test('T57: separate owners and concurrent exact retries create only their own runs', async t => {
+  const f = await runCreationFixture(t), input = { ...f.input, role: 'qa' };
+  const clients = await Promise.all([connect(t, f, '0.160.0', '', 'sage_create_run'), connect(t, f, '0.160.0', '', 'sage_create_run')]);
+  const outputs = await Promise.all(clients.map(client => client.call(input)));
+  assert.deepEqual(outputs.map(row => row.decision).sort(), ['already-created', 'run-created']);
+  assert.deepEqual(outputs[0].run, outputs[1].run);
+  await Promise.all(clients.map(client => client.close()));
+  f.core.activateAdmission(f.options.directory, { project: f.options.project, session: `codex:${turns[2]}`, activation: turns[0] });
+  assert.equal(f.createRun(input, turns[2]).run.id, 'R2');
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 2);
+});
+
+for (const view of ['merge', 'logbook']) test(`T57: ${view} refuses a completed run transaction between table reads`, async t => {
+  const f = await runCreationFixture(t), sha = '1'.repeat(40);
+  for (const cycle of ['1', '2']) for (const kind of ['checks-pass', 'review-clean', 'security-clean', 'ux-clean', 'qa-pass'])
+    f.cli('verdict', 'T1', '--sha', sha, '--kind', kind, '--cycle', cycle);
+  assert.equal(f.tool.mergeCheck(sha, f.env).ok, true);
+  const fs = (await import('node:fs')).default, { syncBuiltinESMExports } = await import('node:module');
+  const original = fs.openSync; let armed = true, committed = false;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (armed && file === join(f.logbook, 'decisions.tsv')) {
+      armed = false; f.createRun({ ...f.input, role: 'qa' }); committed = true;
+      assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+    }
+    return original(file, ...args);
+  }); syncBuiltinESMExports();
+  try {
+    if (view === 'merge') assert.equal(f.tool.mergeCheck(sha, f.env).ok, false);
+    else assert.throws(() => f.tool.logbookView(f.options.projectDirectory, f.env));
+    assert.equal(committed, true);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.equal(f.tool.mergeCheck(sha, f.env).ok, true);
+});
+
+test('T57: malformed saved run result or delta refuses before any recovery publication', async t => {
+  for (const damage of ['null', 'array-id', 'round', 'model', 'time', 'array-time', 'role', 'after', 'receipt']) await t.test(damage, async t => {
+    const f = await runCreationFixture(t);
+    const restore = await stopTaskWrite(t, f, 'runs'); assert.throws(() => f.createRun()); restore();
+    const pending = join(f.logbook, 'review-pending.json'), record = JSON.parse(readFileSync(pending, 'utf8'));
+    const result = record.value.receipt.result;
+    if (damage === 'null') record.value.receipt.result = null;
+    if (damage === 'array-id') result.id = [result.id];
+    if (damage === 'array-time') result.started = [result.started];
+    if (damage === 'round') result.round = '9007199254740992';
+    if (damage === 'model') result.model = 'line\nbreak';
+    if (damage === 'time') result.started = '2026-02-30T00:00:00Z';
+    if (damage === 'role') result.role = 'qa';
+    if (damage === 'after') record.value.tables.runs.after += record.value.tables.runs.after.split('\n')[1] + '\n';
+    record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    const saved = JSON.stringify(record) + '\n'; writeFileSync(pending, saved);
+    const folder = join(f.logbook, 'run-requests');
+    if (damage === 'receipt') {
+      const { owner, request } = record.value.receipt.reference;
+      writeFileSync(join(folder, createHash('sha256').update(JSON.stringify([owner, request])).digest('hex') + '.json'), 'conflicting receipt');
+    }
+    const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), receipts = readdirSync(folder);
+    assert.throws(() => f.createRun());
+    assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
+    assert.equal(readFileSync(pending, 'utf8'), saved);
+    assert.deepEqual(readdirSync(folder), receipts);
+  });
+});
+
+
+test('T57: core historical run receipts preserve the selected model after provider settings change', async t => {
+  const f = await runCreationFixture(t);
+  const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); }, models: ['inherit', 'first-model', 'second-model'] });
+  const cli = (...args) => tool.sage([...args, '--project', f.options.projectDirectory], f.env);
+  cli('config', 'model.qa.small=first-model');
+  const input = { ...f.input, role: 'qa', project: f.options.projectDirectory, owner: 'test-owner' };
+  const first = tool.createRequestedRun(input, f.env); assert.equal(first.run.model, 'first-model');
+  cli('run', 'done', first.run.id, '--status', 'done'); cli('config', 'model.qa.small=second-model');
+  const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
+  assert.deepEqual(tool.createRequestedRun(input, f.env), { ...first, decision: 'already-created' });
+  assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
+  assert.equal(tool.createRequestedRun({ ...input, request: turns[2] }, f.env).run.model, 'second-model');
+});
+
+
+test('T57: historical run receipts preserve a nonzero round and timestamp after clock advancement', async t => {
+  const f = await runCreationFixture(t);
+  for (const state of ['briefed', 'building', 'reviewing']) f.cli('task', 'T1', 'set', `state=${state}`);
+  f.cli('finding', 'add', 'T1', '--key', 'F-T1-1', '--source', 'code-review', '--severity', 'medium', '--summary', 'Repair fixture');
+  f.cli('finding', 'triage', 'T1', 'F-T1-1', 'fix');
+  f.cli('round', 'T1');
+  assert.equal(f.tool.read(f.logbook, 'tasks')[0].round, '1');
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-02T03:04:05Z') });
+  const first = f.createRun();
+  assert.equal(first.run.round, '1');
+  assert.equal(first.run.started, '2026-01-02T03:04:05Z');
+  f.cli('run', 'done', first.run.id, '--status', 'done');
+  const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
+  t.mock.timers.setTime(Date.parse('2026-02-03T04:05:06Z'));
+  assert.deepEqual(f.createRun(), { ...first, decision: 'already-created' });
+  assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
+});
 
 test('T58: wrong-typed saved task IDs refuse without changing recorded state', async t => {
   for (const kind of ['receipt', 'intent']) {

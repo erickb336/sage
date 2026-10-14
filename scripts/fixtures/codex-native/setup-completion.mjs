@@ -5,7 +5,7 @@ import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, env = process.env } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, env = process.env } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
@@ -22,7 +22,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
   git("init", "--quiet", "-b", "codex/t1-native"); git("commit", "--quiet", "--allow-empty", "-m", "Native fixture");
   const cli = (...args) => runTool.sage([...args, "--project", options.projectDirectory], runEnv);
   cli("init");
-  if (!createTask) {
+  if (!createTask && !createRun) {
     cli("task", "add", "--title", "Native recorded run", "--size", "small");
     cli("task", "T1", "set", "branch=codex/t1-native");
     cli("run", "add", "T1", "--role", writer ? "implementer" : "lead", ...(writer ? ["--branch", "codex/t1-native"] : []));
@@ -49,7 +49,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     import { serveHooks } from './plugin/runtime/mcp-server.mjs';
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(options)};
-    const allowed = new Set([...(${JSON.stringify(createTask)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(followup)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
+    const allowed = new Set([...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
       'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
@@ -88,7 +88,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
   `);
   const config = [["sage_fixture", "completion-hooks.mjs"], ["sage_preparation", "completion-preparation.mjs"]]
     .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
-    + '[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
+    + '[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
   const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
   const { readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
   return { prepareFollowupRun() {
