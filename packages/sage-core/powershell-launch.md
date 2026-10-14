@@ -1,6 +1,6 @@
 # Literal PowerShell launches
 
-The command reader exposes the child of `Start-Process` and its `start` alias as ordinary program evidence. It never runs the command.
+The command reader exposes the child of `Start-Process` and its `start` alias as ordinary program evidence. It never runs the command. The child and its executable descendants carry `powerShellLaunch: true` evidence, so push checks do not repeat ordinary command checks.
 
 Direct callers opt into PowerShell with `programsRun`'s `powerShell: true` option. The reader also selects PowerShell inside `powershell` or `pwsh` command text. A Bash executable named `start` stays an ordinary executable.
 

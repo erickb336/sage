@@ -16,6 +16,28 @@ const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
 
+test("T51: Bash builtin spellings do not hide external executable identity", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const bin = join(f.dir, "bin"); mkdirSync(bin);
+    const gh = join(bin, "gh"); writeFileSync(gh, "#!/bin/sh\nexit 0\n"); chmodSync(gh, 0o755);
+    for (const name of ["COMMAND", "BUILTIN", "EXEC", "TIME", "NOGLOB", "NOcorrect", "command.exe"]) {
+      linkSync(gh, join(bin, name));
+      const evidence = api.programsRun(`${name} pr create`, f.dir, bin, { executableEvidence: true });
+      assert.ok(evidence.some(run => run.word === name && run.file === join(bin, name)), name);
+    }
+    for (const name of ["EVAL", "eval.exe", "/tools/eval"])
+      assert.deepEqual(api.programsRun(`${name} 'git stash'`, f.dir, bin).map(run => run.word), [name], name);
+    assert.deepEqual(api.programsRun("command git status", f.dir, bin).map(run => run.word), ["git"]);
+    assert.ok(api.programsRun("eval 'git stash'", f.dir, bin).some(run => run.word === "git"));
+    if (provider === "claude") {
+      const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+      assert.match(hook.agentProblem("COMMAND pr create", f.dir, bin) ?? "", /plain gh/, "the gh identity of an external alias stays visible");
+    }
+  }
+});
+
 test("T51: built hook normalizes agent stash, process, reader and writer executable names", async t => {
   const f = isolated(t, "claude"), logbook = join(f.dir, "logbook"); mkdirSync(logbook);
   const previous = process.env.SAGE_HOME; process.env.SAGE_HOME = logbook;
@@ -55,6 +77,14 @@ test("T51: PowerShell launcher evidence preserves literal arguments and reaches 
       assert.equal(runs.length, 1, command);
       assert.equal(runs[0].args[0], "push", "the launcher exposes the real child subcommand");
       assert.equal(api.programName(runs[0].word), "git");
+      assert.ok(policy.pushProblem(command, f.dir, options), command);
+    }
+    for (const command of [
+      `Start-Process env -ArgumentList 'git push origin main'`,
+      `Start-Process pwsh -ArgumentList '-Command "git push origin main"'`,
+      `Start-Process bash -ArgumentList '-c "git push origin main"'`,
+    ]) {
+      assert.ok(api.programsRun(command, f.dir, "", options).some(run => run.word === "git" && run.powerShellLaunch === true), command);
       assert.ok(policy.pushProblem(command, f.dir, options), command);
     }
     const comma = api.programsRun(`Start-Process -FilePath echo -ArgumentList 'literal,comma','"two words"'`, f.dir, "", options);

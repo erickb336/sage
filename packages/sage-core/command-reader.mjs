@@ -368,7 +368,7 @@ function shellLookup(exported) {
 function readPrograms(command, dir, path, depth, found, uncertainDirectory = false, lookup = shellLookup({
   ...(process.env.CDPATH === undefined ? {} : { cdpath: process.env.CDPATH }),
   ...(process.env.HOME === undefined ? {} : { home: process.env.HOME }),
-}), publicLeaves = true, powerShell = false) {
+}), publicLeaves = true, powerShell = false, powerShellLaunchOrigin = false) {
   if (powerShell && /\\"/.test(command) && /\b(?:git|gh)(?:\.exe)?\b/i.test(command)) throw Object.assign(new Error("PowerShell quoting is ambiguous for a protected command"), { code: "SAGE_POWERSHELL_LAUNCH" });
   const functionBodies = new Map(), functionIds = new WeakMap();
   const callSites = new WeakMap(), provisionalCalls = new Map(), provisionalDerived = new Map(), confirmedCalls = new Set();
@@ -387,10 +387,10 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
     } else if (site && shellFunction) confirmedCalls.add(site);
     if (emitLeaves) found.publicEntries.add(entry);
   };
-  const inner = (text, at, here, transformed = false, uncertain = false, nextLookup = lookup, nextPowerShell = powerShell) => {
+  const inner = (text, at, here, transformed = false, uncertain = false, nextLookup = lookup, nextPowerShell = powerShell, launchOrigin = powerShellLaunchOrigin) => {
     try {
       if (depth === 3) throw new Error("commands nested more than 3 levels deep");
-      readPrograms(text, at, here, depth + 1, found, uncertain, nextLookup, emitLeaves, nextPowerShell);
+      readPrograms(text, at, here, depth + 1, found, uncertain, nextLookup, emitLeaves, nextPowerShell, launchOrigin);
     } catch (error) {
       if (transformed) error.code = "SAGE_EXECUTABLE_EVIDENCE";
       throw error;
@@ -431,7 +431,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
     let launched = false;
     let here = path;
     let at = dir; // a wrapper chdir belongs to this command, not the following shell command
-    let viaExec = false, bypassFunctions = false;
+    let viaExec = false, bypassFunctions = false, powerShellLaunchChild = powerShellLaunchOrigin;
     let transformed = false;
     let argv = false; // external wrappers pass argv; shell modifiers retain assignment and keyword grammar
     let nextDir = dir, status, negate = false, nextUncertain = uncertain;
@@ -449,11 +449,11 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
       if (keyword && w === "function" && ++k) continue; // the function name is not a program
       launched = true;
       const file = program(w, at, here, uncertain);
-      const lexicalWrapper = !argv && !w.includes("/") && (/^(?:command|builtin|exec)$/.test(name) || (keyword && /^(?:time|noglob|nocorrect)$/.test(name)));
+      const lexicalWrapper = !argv && !w.includes("/") && (/^(?:command|builtin|exec)$/.test(w) || (keyword && /^(?:time|noglob|nocorrect)$/.test(w)));
       const functionId = !viaExec && !bypassFunctions && Object.hasOwn(functions, w) ? functions[w] : undefined;
       const wrapperNames = functionId ? [] : lexicalWrapper ? [name] : [file && programName(file), name].filter(Boolean);
       let wrapper = wrapperNames.flatMap(base => [`${base} ${words[k + 1]}`, base]).find(key =>
-        WRAPPER.has(key) && (key !== "npm" || words.slice(k + 1).some(word => /(?:^|=)(?:exec|x)$/.test(word))));
+        WRAPPER.has(key) && (lexicalWrapper || !/^(?:command|builtin|exec|noglob|nocorrect)$/.test(key)) && (key !== "npm" || words.slice(k + 1).some(word => /(?:^|=)(?:exec|x)$/.test(word))));
       if (powerShell && !viaExec && !functionId && /^(?:start-process|start)$/.test(name)) {
         const raw = COMMAND_CONTEXT.get(c).rawWords;
         const launch = interpret(siteFor(c, k), () => powerShellLaunch(words.length === c.words.length && c.words[k] === w ? raw.slice(k + 1) : undefined));
@@ -462,7 +462,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
         const launchDir = launch.directory === undefined ? at : resolve(at, launch.directory);
         // Replace only this dispatch's argv. The shell's later commands keep their own directory and syntax.
         words.splice(k, words.length - k, launch.program, ...launch.args);
-        at = launchDir; argv = true; viaExec = true; bypassFunctions = true;
+        at = launchDir; argv = true; viaExec = true; bypassFunctions = true; powerShellLaunchChild = true;
         k--;
         continue;
       }
@@ -473,8 +473,8 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
       if (npm?.ordinary) wrapper = undefined;
       else if (npm) words.splice(0, words.length, ...npmWords);
       if (wrapper) {
-        const modifier = keyword && !w.includes("/") && /^(?:time|noglob|nocorrect)$/.test(name);
-        const external = viaExec || w.includes("/") || (!modifier && !/^(?:command|builtin|exec)$/.test(name));
+        const modifier = lexicalWrapper && keyword && /^(?:time|noglob|nocorrect)$/.test(w);
+        const external = viaExec || !lexicalWrapper;
         if (external) emit({ word: w, file, args: originalArgs, dir: at, path: here, stdin: [], piped: false }, true, uncertain, false, siteFor(c, k));
         const dispatchSite = siteFor(c, k);
         derive(dispatchSite);
@@ -484,8 +484,8 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
           if (name === "time" && words[k + 1] === "--") k++;
           continue;
         }
-        viaExec ||= external || name === "exec";
-        bypassFunctions ||= !external && /^(?:command|builtin)$/.test(name);
+        viaExec ||= external || w === "exec";
+        bypassFunctions ||= !external && /^(?:command|builtin)$/.test(w);
         argv = true;
         if (external) {
           localCdpath = environment.cdpath === undefined ? "" : environment.cdpath;
@@ -495,7 +495,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
           const watched = interpret(dispatchSite, () => watchOptions(words, k + 1));
           if (!watched) break;
           if (watched.shellText) {
-            interpret(dispatchSite, () => inner(words.slice(watched.next).join(" "), at, here, transformed, uncertain, shellLookup(environment)));
+            interpret(dispatchSite, () => inner(words.slice(watched.next).join(" "), at, here, transformed, uncertain, shellLookup(environment), powerShell, powerShellLaunchChild));
             break;
           }
           k = watched.next - 1;
@@ -510,7 +510,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
           at = wrapped.dir;
           transformed ||= wrapped.split;
           if (wrapped.call) {
-            interpret(dispatchSite, () => inner(wrapped.call, at, here, true, uncertain, shellLookup(environment)));
+            interpret(dispatchSite, () => inner(wrapped.call, at, here, true, uncertain, shellLookup(environment), powerShell, powerShellLaunchChild));
             break;
           }
         }
@@ -565,17 +565,17 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
       }
       const pipes = commands.filter((p) => p.pipeTo === c);
       const stdin = [...bodies, ...pipes.map((p) => p.words.join(" "))];
-      emit({ word: w, file: w === "kill" && !viaExec ? undefined : file, args, dir: at, path: here, stdin, piped: pipes.length > 0 }, false, uncertain, functionId !== undefined, siteFor(c, k));
+      emit({ word: w, file: w === "kill" && !viaExec ? undefined : file, args, dir: at, path: here, stdin, piped: pipes.length > 0, ...(powerShellLaunchChild ? { powerShellLaunch: true } : {}) }, false, uncertain, functionId !== undefined, siteFor(c, k));
       if (!functionId) {
-        const texts = commandText(name, args, bodies);
+        const texts = name === "eval" && (w !== "eval" || viaExec) ? [] : commandText(name, args, bodies);
         if (texts.length) derive(siteFor(c, k));
         for (const text of texts) interpret(siteFor(c, k), () => inner(text, at, here, transformed, uncertain,
-          name === "eval" && !viaExec ? { cdpath: localCdpath, home: localHome, exported } : shellLookup(environment), /^(?:pwsh|powershell)$/.test(name)));
+          name === "eval" && !viaExec ? { cdpath: localCdpath, home: localHome, exported } : shellLookup(environment), /^(?:pwsh|powershell)$/.test(name), powerShellLaunchChild));
         const exec = [name, file && programName(file)].includes("find") ? args.findIndex((a) => /^-(?:exec|execdir|ok|okdir)$/.test(a)) : -1;
         if (exec >= 0 && args[exec + 1]) {
           derive(siteFor(c, k));
           const end = args.findIndex((a, j) => j > exec && /^[;+]$/.test(a));
-          emit({ word: args[exec + 1], file: program(args[exec + 1], at, here, uncertain), args: args.slice(exec + 2, end < 0 ? undefined : end), dir: at, path: here, stdin: [], piped: false }, false, uncertain);
+          emit({ word: args[exec + 1], file: program(args[exec + 1], at, here, uncertain), args: args.slice(exec + 2, end < 0 ? undefined : end), dir: at, path: here, stdin: [], piped: false, ...(powerShellLaunchChild ? { powerShellLaunch: true } : {}) }, false, uncertain);
         }
       }
       break;

@@ -34,9 +34,10 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       if (why) return refuse(why);
     }
     try {
-      // Use the shared reader for wrappers, their option values, and nested command text.
+      // Preserve the raw push path above. Only launcher descendants add new push evidence here;
+      // checking every git twice would read branches twice with different cd-failure semantics.
       for (const run of programsRun(command, cwd, undefined, options)) {
-        if (programName(run.word) === "git" && /^push$/i.test(gitSubcommand(run.args, 0))) {
+        if (run.powerShellLaunch && programName(run.word) === "git" && /^push$/i.test(gitSubcommand(run.args, 0))) {
           const why = pushForm([run.word, ...run.args], 0, run.dir);
           if (why) return refuse(why);
         }
