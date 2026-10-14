@@ -5,7 +5,7 @@ import { join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, env = process.env } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, env = process.env } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
@@ -46,7 +46,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     import { serveHooks } from './plugin/runtime/mcp-server.mjs';
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(options)};
-    const allowed = new Set(['collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
+    const allowed = new Set([...(${JSON.stringify(followup)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
       'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
