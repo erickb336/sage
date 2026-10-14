@@ -3274,3 +3274,180 @@ test('native follow-up preparation requires a completed predecessor owned by the
   assert.equal(f.api.prepareNativeTask(request,f.native(session),f.options).target,childActor);
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length,1);
 });
+
+test('native current run refuses child tools after assignment or lifecycle changes', async t => {
+  const f = await roleEditFixture(t, 'implementer'); let evaluated = 0;
+  const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: 'pass' }; });
+  assert.deepEqual(await f.evaluate(policy, f.editInput, childActor), { decision: 'pass' });
+  for (const [table, field, value] of [
+    ['runs', 'status', 'done'], ['runs', 'ended', '2026-01-01T00:00:00Z'],
+    ['runs', 'report', 'reports/saved.md'], ['runs', 'role', 'lead'], ['runs', 'task', 'T2'],
+    ['runs', 'round', '1'], ['runs', 'branch', 'codex/t1-other'],
+    ['tasks', 'state', 'held'], ['tasks', 'round', '1'], ['tasks', 'state', 'abandoned'], ['tasks', 'state', 'concluded'],
+  ]) {
+    const calls = evaluated;
+    const restore = editAssignmentRows(f, table, rows => rows.map(row => row.id === (table === 'runs' ? 'R4' : 'T1') ? { ...row, [field]: value } : row));
+    await assert.rejects(f.evaluate(policy, f.editInput, childActor), /active run|is held/, `${table}.${field}`);
+    await assert.rejects(f.evaluate(policy, { ...f.editInput, tool_name: 'list_mcp_resources', tool_input: {} }, childActor), /active run|is held/);
+    assert.equal(evaluated, calls, `${table}.${field} reached the evaluator`);
+    restore();
+  }
+  assert.deepEqual(await f.evaluate(policy, f.editInput, childActor), { decision: 'pass' });
+  editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, status: 'done' } : row));
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(await f.evaluate(policy, f.editInput, childActor), { decision: 'pass' });
+});
+
+test('native current run refuses permission when the assignment changes during evaluation', async t => {
+  for (const change of ['done', 'candidate', 'branch', 'round', 'held']) {
+    const f = await roleEditFixture(t, 'implementer'); let entered, release;
+    const pending = new Promise(resolve => { entered = resolve; });
+    const continueEvaluation = new Promise(resolve => { release = resolve; });
+    const policy = f.createNativePolicy(f.options, async () => { entered(); await continueEvaluation; return { decision: 'pass' }; });
+    const result = f.evaluate(policy, f.editInput, childActor);
+    await pending;
+    if (change === 'held') editAssignmentRows(f, 'tasks', rows => rows.map(row => row.id === 'T1' ? {...row,state:'held',hold:'Owner pause'} : row));
+    if (change === 'done') editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, status: 'done' } : row));
+    if (change === 'candidate') editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, candidate: 'changed' } : row));
+    if (change === 'branch' || change === 'round') {
+      const field = change, value = change === 'branch' ? 'codex/t1-other' : '1';
+      editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === 'R4' ? { ...row, [field]: value } : row));
+      editAssignmentRows(f, 'tasks', rows => rows.map(row => row.id === 'T1' ? { ...row, [field]: value } : row));
+    }
+    release();
+    await assert.rejects(result, /active run|could not evaluate|is held/, change);
+  }
+});
+
+
+test('native saved run target refuses a valid retarget before dispatch or child tools', async t => {
+  for (const afterDispatch of [false, true]) for (const change of ['branch', 'round', 'candidate']) {
+    const f = afterDispatch ? await roleEditFixture(t, 'implementer') : await preparationServerFixture(t);
+    if (!afterDispatch) f.api.prepareNativeTask(f.input, f.native(session), f.options);
+    const run = afterDispatch ? 'R4' : 'R1';
+    const value = change === 'branch' ? 'codex/t1-other' : change === 'round' ? '1' : 'other';
+    editAssignmentRows(f, 'runs', rows => rows.map(row => row.id === run ? { ...row, [change]: value } : row));
+    if (change !== 'candidate') editAssignmentRows(f, 'tasks', rows => rows.map(row => row.id === 'T1' ? { ...row, [change]: value } : row));
+    assert.equal(f.assignmentTool.captureRunAssignment({ project: f.options.projectDirectory, task: 'T1', run,
+      role: afterDispatch ? 'implementer' : 'lead' }, f.assignmentEnv).run, run, 'the changed records are otherwise valid');
+    if (afterDispatch) {
+      let calls = 0;
+      const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: 'pass' }; });
+      await assert.rejects(f.evaluate(policy, f.editInput, childActor), /saved run target changed/);
+      assert.equal(calls, 0);
+    } else {
+      assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options), /saved run target changed/);
+      assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
+    }
+  }
+});
+
+
+test('T55: recovery refuses ended held and retargeted runs without changing admission', async t => {
+  const f=await completionFixture(t),read=await assignmentReader(f),before=f.core.readAdmission(f.options.directory);
+  assert.equal(read().run,'R1');
+  for(const [table,field,value] of [['runs','status','done'],['tasks','state','held'],['runs','candidate','other']]) {
+    const restore=editAssignmentRows(f,table,rows=>rows.map(row=>row.id===(table==='runs'?'R1':'T1')?{...row,[field]:value}:row));
+    assert.throws(()=>read()); assert.deepEqual(f.core.readAdmission(f.options.directory),before); restore();
+  }
+  assert.equal(read().run,'R1');
+});
+
+test('T55: recovered reviewer instructions require the saved review commit and round', async t => {
+  const f=await reviewPreparationFixture(t); f.prepare();
+  const policy=f.createNativePolicy(f.options,()=>({decision:'pass'}));
+  await f.evaluate(policy); f.events.publish(join(f.options.observationsRoot,session),f.result);
+  await f.evaluate(policy,{...patch(turns[1]),tool_name:'list_mcp_resources',tool_input:{},transcript_path:f.childTranscript()},childActor);
+  const read=await assignmentReader(f),saved=read(); assert.match(saved.message,/Review cycle: 1/);
+  const sha=f.git('rev-parse','HEAD'); f.git('commit','--quiet','--allow-empty','-m','changed head');
+  assert.throws(()=>read()); f.git('update-ref','refs/heads/codex/t1-review',sha);
+  assert.deepEqual(read(),saved);
+  const fixture={...f,assignmentLogbook:f.logbook};
+  const undoTask=editAssignmentRows(fixture,'tasks',rows=>rows.map(row=>({...row,round:'1'})));
+  const undoRun=editAssignmentRows(fixture,'runs',rows=>rows.map(row=>({...row,round:'1'})));
+  assert.throws(()=>read()); undoRun();undoTask();assert.deepEqual(read(),saved);
+});
+
+test('T55: recovered completion refuses changed targets but preserves historical success and interruption', async t => {
+  for(const change of ['held','candidate']) {
+    const f=await completionFixture(t),read=await assignmentReader(f),transcript=f.childTranscript();
+    appendRecoveryCheckpoint(transcript);appendAssignmentRecovery(transcript,read());
+    f.policy.completeChild(f.stop,f.native(childActor));appendReport(f);
+    const {reconcileNativeCompletions}=await import(pathToFileURL(join(f.plugin,'runtime/child-stop.mjs')));
+    const reconcile=()=>reconcileNativeCompletions(f.native(session),session,f.options);
+    const restore=change==='held'?editAssignmentRows(f,'tasks',rows=>rows.map(row=>row.id==='T1'?{...row,state:'held'}:row))
+      :editAssignmentRows(f,'runs',rows=>rows.map(row=>row.id==='R1'?{...row,candidate:'other'}:row));
+    assert.throws(reconcile);assert.equal(f.core.readAdmission(f.options.directory).completions?.length??0,0);
+    restore();reconcile();const before=f.core.readAdmission(f.options.directory);
+    editAssignmentRows(f,'runs',rows=>rows.map(row=>row.id==='R1'?{...row,status:'done'}:row));
+    reconcile();assert.deepEqual(f.core.readAdmission(f.options.directory),before);
+  }
+  const f=await completionFixture(t),transcript=f.childTranscript();appendRecoveryCheckpoint(transcript);
+  f.policy.completeChild(f.stop,f.native(childActor));
+  editAssignmentRows(f,'tasks',rows=>rows.map(row=>row.id==='T1'?{...row,state:'held'}:row));
+  appendFileSync(transcript,JSON.stringify({type:'event_msg',payload:{type:'turn_aborted',turn_id:turns[1],reason:'interrupted'}})+'\n');
+  const {reconcileNativeCompletions}=await import(pathToFileURL(join(f.plugin,'runtime/child-stop.mjs')));
+  reconcileNativeCompletions(f.native(session),session,f.options);
+  assert.equal(f.core.readAdmission(f.options.directory).completions[0].outcome,'interrupted');
+});
+
+async function deliveredFollowupFixture(t) {
+  const f = await preparedFollowupFixture(t);
+  const transcript = f.childTranscript(); appendReport(f, reportText.replace('RESULT PASS', 'RESULT first'));
+  f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: '0.160.0', session,
+    kind: 'child-transcript', child: childActor, turn: turns[1], transcript });
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  assert.deepEqual(await f.evaluate(policy, f.followupInput), { decision: 'pass' });
+  const accepted = [...f.rows(), { type: 'response_item', metadata: { client_authored: false }, payload: {
+    type: 'function_call_output', id: 'fco_followup', call_id: 'followup-1', output: '',
+    internal_chat_message_metadata_passthrough: { turn_id: turns[0] } } }];
+  f.save(accepted);
+  const later = [
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: turns[2] } },
+    { type: 'turn_context', payload: { turn_id: turns[2] } },
+    { type: 'response_item', payload: { type: 'agent_message', id: 'amsg_later', author: '/root', recipient: '/root/fixture_lead',
+      content: [{ type: 'encrypted_content', encrypted_content: f.prepared.message }] } },
+  ];
+  const before = readFileSync(transcript, 'utf8');
+  const deliver = rows => writeFileSync(transcript, before + rows.map(row => JSON.stringify(row) + '\n').join(''));
+  deliver(later);
+  const input = { ...patch(turns[2]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path: transcript };
+  const stop = { hook_event_name: 'SubagentStop', session_id: session, agent_id: childActor,
+    turn_id: turns[2], transcript_path: f.followupInput.transcript_path, agent_transcript_path: transcript };
+  return { ...f, policy, transcript, later, accepted, deliver, tool: input, stop };
+}
+
+
+test('T55: continuation recovery uses the new target and preserves prior report evidence', async t => {
+  const f=await deliveredFollowupFixture(t);await f.evaluate(f.policy,f.tool,childActor);
+  const read=await assignmentReader(f),prior=readFileSync(f.transcript,'utf8');
+  const result=read();assert.equal(result.run,'R4');assert.equal(result.message,f.prepared.message);assert.equal(result.turn,turns[2]);
+  assert.ok(prior.includes('RESULT first'));
+  const restore=editAssignmentRows(f,'runs',rows=>rows.map(row=>row.id==='R4'?{...row,candidate:'changed'}:row));
+  assert.throws(()=>read());assert.equal(readFileSync(f.transcript,'utf8'),prior);restore();assert.deepEqual(read(),result);
+});
+
+test('T55: recovered review completion checks the commit while interruption remains authoritative', async t => {
+  for(const interrupted of [false,true]) {
+    const f=await reviewPreparationFixture(t);f.prepare();
+    const policy=f.createNativePolicy(f.options,()=>({decision:'pass'}));
+    await f.evaluate(policy);f.events.publish(join(f.options.observationsRoot,session),f.result);
+    const transcript=f.childTranscript();
+    await f.evaluate(policy,{...patch(turns[1]),tool_name:'list_mcp_resources',tool_input:{},transcript_path:transcript},childActor);
+    appendRecoveryCheckpoint(transcript);const read=await assignmentReader(f);appendAssignmentRecovery(transcript,read());
+    const stop={hook_event_name:'SubagentStop',session_id:session,agent_id:childActor,turn_id:turns[1],transcript_path:join(f.mode.sessionsDir,'root.jsonl')};
+    policy.completeChild(stop,f.native(childActor));
+    if(interrupted) appendFileSync(transcript,JSON.stringify({type:'event_msg',payload:{type:'turn_aborted',turn_id:turns[1],reason:'interrupted'}})+'\n');
+    else appendReport(f);
+    const sha=f.git('rev-parse','HEAD');f.git('commit','--quiet','--allow-empty','-m','Changed review head');
+    const {reconcileNativeCompletions}=await import(pathToFileURL(join(f.plugin,'runtime/child-stop.mjs')));
+    const reconcile=()=>reconcileNativeCompletions(f.native(session),session,f.options);
+    if(interrupted) {
+      reconcile();assert.equal(f.core.readAdmission(f.options.directory).completions[0].outcome,'interrupted');
+    } else {
+      assert.throws(reconcile);assert.equal(f.core.readAdmission(f.options.directory).completions?.length??0,0);
+      f.git('update-ref','refs/heads/codex/t1-review',sha);reconcile();
+      assert.equal(f.core.readAdmission(f.options.directory).completions.length,1);
+    }
+  }
+});

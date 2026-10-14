@@ -97,7 +97,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     readRunReport: name => { assert(/^reports\/R[1-9][0-9]*-[a-f0-9-]+\.md$/.test(name)); return readFileSync(join(logbook, name), "utf8"); },
     config: config + receiptConfig, readRecoveryBaseline: () => JSON.parse(readFileSync(join(root, "recovery-baseline.json"), "utf8")), childEvidence(child) {
       const state = readAdmission(options.directory);
-      const bindings = state.bindings.filter(row => row.child === child);
+      const bindings = state.bindings.filter(row => row.child === child && !state.completions?.some(done => done.assignment === row.assignment));
       assert.equal(bindings.length, 1);
       const bound = bindings[0], session = bound.session.slice(6);
       const rows = readObservations(join(options.observationsRoot, session));
