@@ -2974,7 +2974,7 @@ test('T53: native assignment dispatch rechecks records changed after preparation
 });
 
 
-async function reviewPreparationFixture(t, role = "code-reviewer") {
+async function reviewPreparationFixture(t, role = "code-reviewer", size = "small") {
   const f = await composedPolicyFixture(t);
   const projectDirectory = join(f.dir, "project"); mkdirSync(projectDirectory);
   const env = { ...process.env, SAGE_HOME: join(f.dir, "logbook") };
@@ -2984,7 +2984,7 @@ async function reviewPreparationFixture(t, role = "code-reviewer") {
   git("commit", "--quiet", "--allow-empty", "-m", "fixture");
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
   const cli = (...args) => tool.sage([...args, "--project", projectDirectory], env);
-  cli("init"); cli("task", "add", "--title", "Pinned review", "--size", "small");
+  cli("init"); cli("task", "add", "--title", "Pinned review", "--size", size);
   cli("task", "T1", "set", "branch=codex/t1-review");
   cli("run", "add", "T1", "--role", role);
   mkdirSync(f.options.observationsRoot, { recursive: true });
@@ -4016,8 +4016,8 @@ test('T58: wrong-typed saved task IDs refuse without changing recorded state', a
   }
 });
 
-async function reviewAcceptanceFixture(t, { role = "code-reviewer", findings = [], overrides = {}, finish = true } = {}) {
-  const f = await reviewPreparationFixture(t, role);
+async function reviewAcceptanceFixture(t, { role = "code-reviewer", findings = [], overrides = {}, finish = true, size = "small" } = {}) {
+  const f = await reviewPreparationFixture(t, role, size);
   const preparation = f.prepare();
   const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
   await f.evaluate(policy);
@@ -4317,4 +4317,38 @@ test('T59: saved report recovery proof is required for review acceptance', async
   rmSync(proofs[0].path);assert.throws(()=>f.accept());assert.equal(f.tool.read(f.logbook,'ledger').length,0);
   f.events.publish(join(f.options.observationsRoot,session),proofs[0].row);
   assert.equal(f.accept().decision,'review-accepted');
+});
+
+
+test('T59: investigation tasks refuse commit review verdicts without publication', async t => {
+  const f=await reviewAcceptanceFixture(t,{size:'investigate'});
+  const before=reviewTables(f);
+  assert.equal(f.tool.read(f.logbook,'runs')[0].status,'done');
+  assert.equal(f.tool.read(f.logbook,'tasks')[0].route.includes('build'),false);
+  assert.throws(()=>f.accept());
+  assert.deepEqual(reviewTables(f),before);
+  assert.equal(existsSync(join(f.logbook,'review-pending.json')),false);
+  assert.deepEqual(existsSync(join(f.logbook,'reviews'))?readdirSync(join(f.logbook,'reviews')):[],[]);
+});
+
+
+test('T59: recovery rejects a no-build preimage while historical receipts remain readable', async t => {
+  const f=await reviewAcceptanceFixture(t);
+  const restore=await stopReviewWrite(t,f,'ledger');assert.throws(()=>f.accept(),/Injected/);restore();
+  const file=join(f.logbook,'review-pending.json'),record=JSON.parse(readFileSync(file,'utf8'));
+  const investigation=text=>{
+    const lines=text.replace(/\n$/, '').split('\n'), keys=lines[0].split('\t');
+    const row=lines[1].split('\t');row[keys.indexOf('size')]='investigate';row[keys.indexOf('route')]='investigate,evidence-review';
+    lines[1]=row.join('\t');return lines.join('\n')+'\n';
+  };
+  record.value.tables.tasks.before=investigation(record.value.tables.tasks.before);
+  record.value.tables.tasks.after=investigation(record.value.tables.tasks.after);
+  writeFileSync(join(f.logbook,'tasks.tsv'),record.value.tables.tasks.before);
+  record.hash=createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+  const bytes=JSON.stringify(record)+'\n';writeFileSync(file,bytes);
+  const before=reviewTables(f);assert.throws(()=>f.accept());assert.deepEqual(reviewTables(f),before);
+  assert.equal(readFileSync(file,'utf8'),bytes);assert.deepEqual(readdirSync(join(f.logbook,'reviews')),[]);
+  const historical=await reviewAcceptanceFixture(t), accepted=historical.accept();
+  fixtureTaskField(historical,'route','investigate,evidence-review');
+  assert.deepEqual(historical.accept(),{...accepted,decision:'already-accepted'});
 });

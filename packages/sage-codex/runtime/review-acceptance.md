@@ -4,7 +4,7 @@ The chief calls `sage_accept_review` with `assignment` and `reportHash` after `s
 Sage derives the task, run, role, report, and review target from authenticated saved evidence.
 A caller cannot supply a verdict, path, commit, cycle, or findings.
 
-Fresh acceptance requires the current chief epoch, report recovery proof, a completed run, and an unheld task.
+Fresh acceptance requires the current chief epoch, report recovery proof, a completed run, and an unheld task with a build block.
 The saved report must match the run, task branch, round, review cycle, and current branch commit.
 Code, security, UX, and QA reports use the structured report format.
 Checks evidence may coexist with one review verdict on a run. A second review verdict is refused.

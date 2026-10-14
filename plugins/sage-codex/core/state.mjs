@@ -613,7 +613,7 @@ function reviewDelta({ reference, result }, claims, rows) {
   const matches = tasks.filter(row => row.id === id);
   if (matches.length !== 1) deny();
   const task = matches[0];
-  if (task.round !== String(review.round) || task.branch !== review.branch || task.state === "held"
+  if (!builds(task) || task.round !== String(review.round) || task.branch !== review.branch || task.state === "held"
     || ledger.some(row => row.run === run && !["checks-pass", "checks-fail"].includes(row.kind))
     || findings.some(row => result.findings.includes(row.key))) deny();
   claims.findings.forEach((finding, index) => findings.push({ task: id, key: result.findings[index], round: task.round,
