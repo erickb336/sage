@@ -12,6 +12,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
   mkdirSync(options.observationsRoot);
   let runTool, runEnv, logbook;
   if (finishRun) {
+    assert.equal(process.env.SAGE_TEST_MACHINE_ID, "native-fixture", "native state writes need the hardware-query guard");
     options.logbookRoot = join(root, "logbook");
     const { createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
     runTool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
@@ -68,7 +69,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     servePreparations(${JSON.stringify(options)});
   `);
   const config = [["sage_fixture", "completion-hooks.mjs"], ["sage_preparation", "completion-preparation.mjs"]]
-    .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\n`).join("")
+    .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
   const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
   const { readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));

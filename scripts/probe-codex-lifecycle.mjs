@@ -70,6 +70,10 @@ const env = {
   LANG: "en_US.UTF-8",
   DO_NOT_TRACK: "1",
 };
+// Disable real machine-identity queries in this probe process and its native child.
+// Outside NODE_TEST_CONTEXT the fixed marker means unavailable identity, never trusted hardware evidence.
+process.env.SAGE_TEST_MACHINE_ID = "native-fixture";
+env.SAGE_TEST_MACHINE_ID = "native-fixture";
 const print = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const telemetryArgs = ["-c", "analytics.enabled=false", "-c", 'otel.exporter="none"', "-c", 'otel.metrics_exporter="none"', "-c", 'otel.trace_exporter="none"'];
 const launch = (args) => spawn(binary, [...telemetryArgs, ...args], { cwd: workspace, env, shell: false, stdio: ["pipe", "pipe", "pipe"] });
