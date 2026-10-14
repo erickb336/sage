@@ -17,6 +17,72 @@ const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
 
+test("T49: built Claude hook protects the logbook from output writers while preserving reads and scratch output", async t => {
+  const f = isolated(t, "claude"), logbook = join(f.dir, "logbook"); mkdirSync(logbook);
+  const previous = process.env.SAGE_HOME; process.env.SAGE_HOME = logbook;
+  t.after(() => { if (previous === undefined) delete process.env.SAGE_HOME; else process.env.SAGE_HOME = previous; });
+  const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+  const forms = [
+    path => `curl -o ${path} https://example.invalid`,
+    path => `CURL.exe --output=${path} https://example.invalid`,
+    path => `env X=1 curl -sSo${path} https://example.invalid`,
+    path => `git diff --output=${path}`, path => `git show --output ${path}`,
+    path => `Git.exe log --output=${path}`,
+    path => `ditto source.txt ${path}`, path => `scp source.txt ${path}`,
+    path => `wget -O ${path} https://example.invalid`,
+    path => `openssl dgst -sha256 -out ${path} source.txt`,
+    path => `openssl dgst --out ${path} source.txt`,
+    path => `sqlite3 scratch.db '.output ${path}'`,
+    path => `tar -xf archive.tar -C ${path}`, path => `unzip archive.zip -d ${path}`,
+    path => `rsync source.txt ${path}`, path => `install source.txt ${path}`, path => `dd if=source.txt of=${path}`,
+  ];
+  for (const actor of [{}, { agent_id: "fixture-child", agent_type: "sage:implementer" }]) {
+    for (const form of forms) {
+      const command = form(`${logbook}/tasks.tsv`);
+      const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
+        tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
+      assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny", `${actor.agent_id ?? "chief"}: ${command}`);
+      assert.match(result.hookSpecificOutput.permissionDecisionReason, /logbook/);
+    }
+  }
+  assert.deepEqual(readdirSync(logbook), [], "sample commands are parsed, never executed");
+  const commands = [
+    "curl -o scratch.txt https://example.invalid", "CURL.exe --output=scratch.txt https://example.invalid",
+    "git diff --output=scratch.txt", "git show --output scratch.txt", "git log --output=scratch.txt",
+    "ditto source.txt scratch.txt", "scp source.txt scratch.txt", "wget -O scratch.txt https://example.invalid",
+    "openssl dgst -out scratch.txt source.txt", "sqlite3 scratch.db '.output scratch.txt'",
+    "tar -xf archive.tar -C scratch", "unzip archive.zip -d scratch", "rsync source.txt scratch.txt",
+    "install source.txt scratch.txt", "dd if=source.txt of=scratch.txt",
+    `cat ${logbook}/tasks.tsv`, `printf '%s' 'curl -o ${logbook}/tasks.tsv'`,
+    `git show --format='--output=${logbook}/tasks.tsv'`,
+    `curl --header '--output=${logbook}/tasks.tsv' https://example.invalid`,
+  ];
+  for (const actor of [{}, { agent_id: "fixture-child", agent_type: "sage:implementer" }]) {
+    for (const command of commands) {
+      const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
+        tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
+      assert.notEqual(result?.hookSpecificOutput?.permissionDecision, "deny", `${actor.agent_id ?? "chief"}: ${command}: ${JSON.stringify(result)}`);
+    }
+  }
+  const get = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
+    tool_input: { command: "gh api -X GET repos/o/r/contents/file -f ref=main" } }, { sage: true }, { touch() {} });
+  assert.notEqual(get?.hookSpecificOutput?.permissionDecision, "deny");
+  for (const broken of [false, true]) {
+    const f = isolated(t, "claude"), logbook = join(f.dir, "logbook"); mkdirSync(logbook);
+    const previous = process.env.SAGE_HOME; process.env.SAGE_HOME = logbook;
+    try {
+      if (broken) writeFileSync(join(f.plugin, "core/shell-write-policy.mjs"), 'throw new Error("fixture broken writer");\n');
+      const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
+      for (const actor of [{}, { agent_id: "fixture-child", agent_type: "sage:implementer" }]) {
+        const command = broken ? `curl -o ${logbook}/tasks.tsv https://example.invalid` : `curl -o ${logbook}/tasks.tsv 'open`;
+        const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
+          tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
+        assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny", `${broken}: ${JSON.stringify(result)}`);
+      }
+    } finally { if (previous === undefined) delete process.env.SAGE_HOME; else process.env.SAGE_HOME = previous; }
+  }
+});
+
 test("T45: executable spellings preserve shared writer and reader-option checks", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
