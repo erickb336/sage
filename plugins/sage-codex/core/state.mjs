@@ -424,7 +424,7 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
 const check = (dir, skip = [], max = Infinity) => {
   const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir)]);
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
-  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir)]) !== version) refuse("A recorded update completed while this logbook was read. Retry the read.");
+  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir)]) !== version) refuse("A task, run, or review receipt was created while this logbook was read. Retry the read.");
   return tables;
 };
 
