@@ -4359,3 +4359,133 @@ test('T47: build refuses the published SDK validator graph even without a root f
     assert.equal(existsSync(join(ROOT, 'plugins/sage-codex/licenses', name + '.txt')), false, 'removed dependencies must not have stale license-version claims');
   }
 });
+
+async function reportedRunFixture(t, status = "done") {
+  const { createHash } = await import("node:crypto");
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "sage-reported-run-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const project = join(root, "project");
+  mkdirSync(project);
+  const env = { ...process.env, SAGE_HOME: join(root, "logbook") };
+  const tool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+  const cli = (...args) => tool.sage([...args, "--project", project], env);
+  cli("init");
+  cli("task", "add", "--title", "Report lifecycle", "--size", "small");
+  cli("run", "add", "T1", "--role", "implementer", "--branch", "codex/t1-report");
+  const text = `STATUS: ${status}\nRESULT: complete\nEVIDENCE: synthetic fixture\nFINDINGS: none\nQUESTIONS: none\nNOT VERIFIED: real model\nBRANCH: arbitrary report text`;
+  const input = { project, task: "T1", run: "R1", role: "implementer",
+    assignment: "11111111-2222-4333-8444-555555555555", reportHash: createHash("sha256").update(text).digest("hex"), text };
+  const dir = tool.storeDir(project, env);
+  const finish = (data = input) => tool.finishReportedRun(data, env);
+  const tables = () => Object.fromEntries(["tasks", "ledger", "findings", "gates", "decisions"].map(name =>
+    [name, readFileSync(join(dir, `${name}.tsv`), "utf8")]));
+  return { tool, env, cli, dir, input, finish, tables };
+}
+
+for (const status of ["done", "blocked", "question"]) test(`reported run saves ${status} evidence without accepting task or review claims`, async t => {
+  const f = await reportedRunFixture(t, status);
+  const before = f.tables();
+  const running = f.tool.read(f.dir, "runs")[0];
+  const result = f.finish();
+  assert.equal(result.decision, "run-finished");
+  assert.equal(result.status, status);
+  assert.equal(readFileSync(join(f.dir, result.report), "utf8"), f.input.text);
+  const finished = f.tool.read(f.dir, "runs")[0];
+  assert.deepEqual(finished, { ...running, status, report: result.report, ended: result.ended });
+  assert.match(finished.ended, /^\d{4}-\d\d-\d\dT/);
+  assert.deepEqual(f.tables(), before);
+});
+
+test("reported run retries preserve the original result and refuse replacement evidence", async t => {
+  const f = await reportedRunFixture(t);
+  const first = f.finish();
+  const bytes = readFileSync(join(f.dir, "runs.tsv"), "utf8");
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 60000 });
+  assert.deepEqual(f.finish(), { ...first, decision: "already-finished" });
+  assert.equal(readFileSync(join(f.dir, "runs.tsv"), "utf8"), bytes);
+  assert.throws(() => f.finish({ ...f.input, assignment: "99999999-2222-4333-8444-555555555555" }));
+  writeFileSync(join(f.dir, first.report), "changed");
+  assert.throws(() => f.finish());
+  rmSync(join(f.dir, first.report));
+  assert.throws(() => f.finish());
+  assert.equal(readFileSync(join(f.dir, "runs.tsv"), "utf8"), bytes);
+});
+
+test("reported run refuses foreign task role run hash and manually finished work", async t => {
+  const f = await reportedRunFixture(t);
+  assert.equal(typeof f.tool.finishReportedRun, "function");
+  const before = readFileSync(join(f.dir, "runs.tsv"), "utf8");
+  for (const change of [{ task: "T2" }, { run: "R2" }, { role: "qa" }, { reportHash: "0".repeat(64) },
+    { text: "STATUS: done" }, { assignment: "../escape" }, { extra: "field" }]) assert.throws(() => f.finish({ ...f.input, ...change }));
+  assert.equal(readFileSync(join(f.dir, "runs.tsv"), "utf8"), before);
+  assert.deepEqual(readdirSync(join(f.dir, "reports")), []);
+  f.cli("run", "done", "R1", "--status", "failed", "--report", "manual.md");
+  assert.throws(() => f.finish());
+  assert.equal(f.tool.read(f.dir, "runs")[0].report, "manual.md");
+});
+
+test("reported run recovers after evidence publication but before the run write", async t => {
+  const f = await reportedRunFixture(t);
+  const blocker = join(f.dir, `runs.tsv.${process.pid}`);
+  mkdirSync(blocker);
+  assert.throws(() => f.finish(), /EISDIR/);
+  assert.equal(f.tool.read(f.dir, "runs")[0].status, "running");
+  const files = readdirSync(join(f.dir, "reports"));
+  assert.equal(files.length, 1);
+  assert.equal(readFileSync(join(f.dir, "reports", files[0]), "utf8"), f.input.text);
+  rmSync(blocker, { recursive: true });
+  assert.equal(f.finish().decision, "run-finished");
+  assert.deepEqual(readdirSync(join(f.dir, "reports")), files);
+});
+
+test("reported run refuses redirected evidence directories and newer table schemas", async t => {
+  const f = await reportedRunFixture(t);
+  assert.equal(typeof f.tool.finishReportedRun, "function");
+  const elsewhere = join(f.dir, "elsewhere");
+  mkdirSync(elsewhere);
+  rmSync(join(f.dir, "reports"), { recursive: true });
+  symlinkSync(elsewhere, join(f.dir, "reports"));
+  assert.throws(() => f.finish());
+  assert.deepEqual(readdirSync(elsewhere), []);
+  rmSync(join(f.dir, "reports"));
+  const runsFile = join(f.dir, "runs.tsv");
+  const newer = readFileSync(runsFile, "utf8").replace("\n", "\tfuture\n");
+  writeFileSync(runsFile, newer);
+  assert.throws(() => f.finish(), /newer/);
+  assert.equal(readFileSync(runsFile, "utf8"), newer);
+  assert.equal(existsSync(join(f.dir, "reports")), false);
+});
+
+test("reported run refuses a linked evidence file and ambiguous task or run rows", async t => {
+  const f = await reportedRunFixture(t);
+  assert.equal(typeof f.tool.finishReportedRun, "function");
+  const name = `${f.input.run}-${f.input.assignment}-${f.input.reportHash}.md`;
+  const external = join(f.dir, "other.md");
+  writeFileSync(external, f.input.text);
+  symlinkSync(external, join(f.dir, "reports", name));
+  assert.throws(() => f.finish());
+  assert.equal(readFileSync(external, "utf8"), f.input.text);
+  rmSync(join(f.dir, "reports", name));
+  for (const table of ["tasks", "runs"]) {
+    const file = join(f.dir, `${table}.tsv`);
+    const text = readFileSync(file, "utf8");
+    writeFileSync(file, text + text.split("\n")[1] + "\n");
+    assert.throws(() => f.finish());
+    assert.equal(f.tool.read(f.dir, "runs")[0].status, "running");
+    writeFileSync(file, text);
+  }
+  assert.deepEqual(readdirSync(join(f.dir, "reports")), []);
+});
+
+test("reported run recovers evidence linked before an interrupted temporary-file cleanup", async t => {
+  const { linkSync } = await import("node:fs");
+  const f = await reportedRunFixture(t);
+  const pending = join(f.dir, "reports", ".report-interrupted-fixture");
+  const published = join(f.dir, "reports", `${f.input.run}-${f.input.assignment}-${f.input.reportHash}.md`);
+  writeFileSync(pending, f.input.text, { flag: "wx" });
+  linkSync(pending, published);
+  const result = f.finish();
+  assert.equal(result.decision, "run-finished");
+  assert.equal(readFileSync(published, "utf8"), f.input.text);
+  assert.equal(f.finish().decision, "already-finished");
+});
