@@ -1595,13 +1595,13 @@ test("Codex bundles the MCP SDK with native identity and hidden tool metadata in
     });
   `);
   const child = spawn(process.execPath, [entry], { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
-  t.after(() => child.stdin.end());
   let stderr = '', sequence = 0;
   const pending = new Map();
   const closed = new Promise(resolve => child.once('close', (code, signal) => {
     for (const { reject } of pending.values()) reject(Error('MCP server closed before its response'));
     resolve({ code, signal });
   }));
+  child.once('error', error => { for (const { reject } of pending.values()) reject(error); });
   child.stderr.on('data', chunk => { stderr += chunk; });
   createInterface({ input: child.stdout }).on('line', line => {
     try {
@@ -1618,23 +1618,26 @@ test("Codex bundles the MCP SDK with native identity and hidden tool metadata in
     pending.set(id, { resolve, reject });
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
   });
-  const init = await request('initialize', {
-    protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex', version: '0.160.0' },
-  });
-  assert.equal(init.result.protocolVersion, '2025-06-18');
-  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-  const listed = await request('tools/list', {});
-  assert.equal(listed.result.tools.length, 1);
-  assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ['app']);
-  const actor = 'd72422c7-509c-43aa-8c42-827c556f8a57';
-  const input = { hook_event_name: 'PreToolUse', extra: { retained: true }, actor: 'forged', version: 'forged' };
-  const called = await request('tools/call', { name: 'sage_native_hook', arguments: input, _meta: { threadId: actor } });
-  assert.deepEqual(JSON.parse(called.result.content[0].text), { version: '0.160.0', actor, input });
-  const absent = await request('tools/call', { name: 'sage_native_hook', arguments: input });
-  assert.equal(Object.hasOwn(JSON.parse(absent.result.content[0].text), 'actor'), false);
-  child.stdin.end();
-  assert.deepEqual(await closed, { code: 0, signal: null });
-  assert.equal(stderr, '');
+  try {
+    const init = await request('initialize', {
+      protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'codex', version: '0.160.0' },
+    });
+    assert.equal(init.result.protocolVersion, '2025-06-18');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    const listed = await request('tools/list', {});
+    assert.equal(listed.result.tools.length, 1);
+    assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ['app']);
+    const actor = 'd72422c7-509c-43aa-8c42-827c556f8a57';
+    const input = { hook_event_name: 'PreToolUse', extra: { retained: true }, actor: 'forged', version: 'forged' };
+    const called = await request('tools/call', { name: 'sage_native_hook', arguments: input, _meta: { threadId: actor } });
+    assert.deepEqual(JSON.parse(called.result.content[0].text), { version: '0.160.0', actor, input });
+    const absent = await request('tools/call', { name: 'sage_native_hook', arguments: input });
+    assert.equal(Object.hasOwn(JSON.parse(absent.result.content[0].text), 'actor'), false);
+  } finally {
+    child.stdin.end();
+    assert.deepEqual(await closed, { code: 0, signal: null });
+    assert.equal(stderr, '');
+  }
 });
 
 test("Codex includes each bundled MCP dependency license", (t) => {
@@ -4088,13 +4091,13 @@ test('T47: packaged SDK keeps Zod tool validation and refuses unused JSON Schema
     });
   `);
   const child = spawn(process.execPath, [entry], { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
-  t.after(() => child.stdin.end());
   let stderr = '', next = 0, forms = 0;
   const pending = new Map();
   const closed = new Promise(resolve => child.once('close', (code, signal) => {
     for (const { reject } of pending.values()) reject(Error('fixture closed before response'));
     resolve({ code, signal });
   }));
+  child.once('error', error => { for (const { reject } of pending.values()) reject(error); });
   child.stderr.on('data', chunk => { stderr += chunk; });
   createInterface({ input: child.stdout }).on('line', line => {
     try {
@@ -4110,22 +4113,25 @@ test('T47: packaged SDK keeps Zod tool validation and refuses unused JSON Schema
     const id = ++next; pending.set(id, { resolve, reject });
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
   });
-  const initialized = await request('initialize', { protocolVersion: '2025-06-18',
-    capabilities: { elicitation: { form: {} } }, clientInfo: { name: 'fixed-fixture', version: '1.0.0' } });
-  assert.equal(initialized.result.protocolVersion, '2025-06-18');
-  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-  const good = await request('tools/call', { name: 'double', arguments: { value: 3 } });
-  assert.equal(good.result.isError, undefined);
-  assert.deepEqual(good.result.content, [{ type: 'text', text: '6' }]);
-  const invalid = await request('tools/call', { name: 'double', arguments: { value: '3' } });
-  assert.equal(invalid.result.isError, true);
-  const form = await request('tools/call', { name: 'form_fixture', arguments: {} });
-  assert.equal(forms, 1, 'the fixture supplies a valid accepted form through the real transport');
-  assert.equal(form.result.isError, true, 'unused JSON Schema validation must refuse, never silently accept');
-  assert.match(form.result.content[0].text, /Sage does not support JSON Schema elicitation validation\./);
-  child.stdin.end();
-  assert.deepEqual(await closed, { code: 0, signal: null });
-  assert.equal(stderr, '');
+  try {
+    const initialized = await request('initialize', { protocolVersion: '2025-06-18',
+      capabilities: { elicitation: { form: {} } }, clientInfo: { name: 'fixed-fixture', version: '1.0.0' } });
+    assert.equal(initialized.result.protocolVersion, '2025-06-18');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    const good = await request('tools/call', { name: 'double', arguments: { value: 3 } });
+    assert.equal(good.result.isError, undefined);
+    assert.deepEqual(good.result.content, [{ type: 'text', text: '6' }]);
+    const invalid = await request('tools/call', { name: 'double', arguments: { value: '3' } });
+    assert.equal(invalid.result.isError, true);
+    const form = await request('tools/call', { name: 'form_fixture', arguments: {} });
+    assert.equal(forms, 1, 'the fixture supplies a valid accepted form through the real transport');
+    assert.equal(form.result.isError, true, 'unused JSON Schema validation must refuse, never silently accept');
+    assert.match(form.result.content[0].text, /Sage does not support JSON Schema elicitation validation\./);
+  } finally {
+    child.stdin.end();
+    assert.deepEqual(await closed, { code: 0, signal: null });
+    assert.equal(stderr, '');
+  }
 });
 
 test('T47: build refuses the published SDK validator graph even without a root fast-uri pin', async () => {

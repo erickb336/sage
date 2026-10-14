@@ -26,12 +26,19 @@ The server still needs complete role rules, lifecycle recovery, and a project
 pilot before automatic Sage can ship. A transport error is not a policy denial;
 handlers must return explicit native denial JSON as successful MCP content.
 
-## Seen, not fixed
+## Excluded validator dependency
 
-The pinned `fast-uri` 3.1.0 has high-severity advisories, including
-[host confusion](https://github.com/advisories/GHSA-v2hh-gcrm-f6hx) and
-[path traversal](https://github.com/advisories/GHSA-q3j6-qgpj-74h6).
-`npm audit` reports a fix for the root dependency. The MCP SDK 2.3.1 also
-embeds fast-uri 3.1.0 in its published JavaScript. Updating the root dependency
-alone does not replace that embedded copy. This extraction preserves the
-existing pins and leaves the advisory unresolved. It does not enable the runtime.
+SDK 2.3.1 embeds fast-uri 3.1.0 in its default AJV provider. That version has
+known advisories. Changing a root dependency pin cannot replace that embedded copy.
+
+Sage instead excludes the unused provider through its pinned build shim. Zod tool
+validation and native Node stdio remain available. Default JSON Schema validation
+throws an explicit error. See [SDK validation boundary](sdk-shims.md) for the
+capability limit, upstream source, and dependency checks.
+
+The build checks its input graph before it accepts the bundle. Tests reject the
+original SDK graph even without a root fast-uri pin. The removed libraries no
+longer have dependency pins or generated license-version notices. This removes
+the affected code; it does not claim an upgrade of the embedded dependency.
+
+This fix does not activate automatic Sage or resolve the separate native hook gates.
