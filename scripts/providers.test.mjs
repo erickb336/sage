@@ -4262,7 +4262,8 @@ async function leadPreparationFixture(t) {
   cli('init');cli('task','add','--title','Lead fixture','--size','small');cli('task','T1','set','branch=codex/t1-fixture');
   cli('run','add','T1','--role','lead');cli('run','add','T1','--role','qa');
   cli('task','add','--title','Chief fixture','--size','small');cli('task','T2','set','branch=codex/t2-fixture');cli('run','add','T2','--role','qa');
-  const target=run=>runTool.captureRunAssignment({project:projectDirectory,task:'T1',run,role:'lead'},runEnv);
+  const target=(run,task='T1',role='lead')=>runTool.captureRunAssignment({project:projectDirectory,task,run,role},runEnv);
+  const review=(run,task)=>runTool.captureReviewTarget({project:projectDirectory,task,run,role:'qa',cycle:1},runEnv);
   const initial=f.api.prepareAdmission(f.journal,f.scope,{task:'T1',run:'R1',issuer:f.root,name:'agent_1'},
     {issuerRole:'chief-of-staff',role:'lead'},completeBrief('Lead this task.'),{runTarget:target('R1')}).preparation;
   const args=f.args(1,f.root,f.scope);args[3].name='agent_1';args[3].tool='collaborationspawn_agent';
@@ -4280,12 +4281,12 @@ async function leadPreparationFixture(t) {
   const spawnInput=saved=>({hook_event_name:'PreToolUse',session_id:f.root,turn_id:f.activation,
     tool_name:'collaborationspawn_agent',tool_use_id:'team-spawn',tool_input:{task_name:saved.name,message:saved.message,fork_turns:'none'}});
   const spawn=saved=>preparation.reservePreparedSpawn(spawnInput(saved),native,options);
-  return {...f,preparation,instructions,first,prior,options,native,input,prepare,spawn,cli,target};
+  return {...f,preparation,instructions,first,prior,options,native,input,prepare,spawn,cli,target,review};
 }
 
 test('native lead preparation refuses other tasks while preserving same-task and chief work', async t => {
   const f=await leadPreparationFixture(t),before=f.api.readAdmission(f.journal);
-  assert.throws(()=>f.prepare({task:'T2'}),/could not verify this task preparation/);
+  assert.throws(()=>f.prepare({task:'T2',run:'R3'}),/could not verify this task preparation/);
   assert.deepEqual(f.api.readAdmission(f.journal),before);
   const saved=f.prepare(); assert.equal(saved.task,'T1');
   assert.equal(f.spawn(saved).decision,'permit-once');
@@ -4296,8 +4297,8 @@ test('native lead preparation refuses other tasks while preserving same-task and
 
 test('native lead preparation blocks an older foreign-task preparation before dispatch', async t => {
   const f=await leadPreparationFixture(t);
-  const old=f.api.prepareAdmission(f.journal,f.scope,{task:'T2',run:'R2',issuer:f.lead,name:'foreign'},
-    {issuerRole:'lead',role:'qa'},f.input.brief).preparation;
+  const old=f.api.prepareAdmission(f.journal,f.scope,{task:'T2',run:'R3',issuer:f.lead,name:'foreign'},
+    {issuerRole:'lead',role:'qa'},f.input.brief,{runTarget:f.target('R3','T2','qa'),review:f.review('R3','T2')}).preparation;
   const before=f.api.readAdmission(f.journal);
   assert.throws(()=>f.spawn({name:old.name,message:f.instructions.preparedTaskMessage(old)}),/could not verify this task preparation/);
   assert.deepEqual(f.api.readAdmission(f.journal),before);
@@ -4316,16 +4317,19 @@ test('native lead preparation uses the unfinished continuation and original nati
   f.api.bindContinuationAdmission(f.journal,bound);
   const child=f.prepare({run:'R5',name:'next_reviewer'});
   assert.equal(child.task,'T1'); assert.equal(f.spawn(child).decision,'permit-once');
-  assert.throws(()=>f.prepare({task:'T2',run:'R5',name:'foreign_after_resume'}));
+  assert.throws(()=>f.prepare({task:'T2',run:'R3',name:'foreign_after_resume'}));
   assert.equal(f.api.readAdmission(f.journal).bindings.length,2);
   f.api.completeAdmission(f.journal,bound);
   assert.throws(()=>f.prepare({run:'R5',name:'after_second_end'}));
+});
+
+test('native lead preparation refuses completed and interrupted leads with valid pending work', async t => {
   for(const outcome of ['complete','interrupt']) {
     const f=await leadPreparationFixture(t),saved=f.prepare();
     if(outcome==='complete') f.api.completeAdmission(f.journal,f.prior);
     else f.api.interruptAdmission(f.journal,f.prior,'a'.repeat(64));
     const before=f.api.readAdmission(f.journal);
-    assert.throws(()=>f.prepare({run:'R3',name:'after_end'}));
+    assert.throws(()=>f.prepare({run:'R2',name:'after_end'}));
     assert.throws(()=>f.spawn(saved));
     assert.deepEqual(f.api.readAdmission(f.journal),before);
   }
