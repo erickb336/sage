@@ -5,7 +5,7 @@ import {spawn} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
-export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,sage=false,disconnectOnSpawn=false,review=false,nestedReview=false,blockStop=false,captureFailure=false,capacityFailure=false,denyCommand=false,emptyLogbook=false,taskLifecycle=false,omitStop=false,captureCompaction=false,restoreCompaction=false,interruption=false,readTask=false,deadlineMs=120_000}){
+export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,sage=false,disconnectOnSpawn=false,review=false,nestedReview=false,blockStop=false,captureFailure=false,capacityFailure=false,followupCapacity=false,denyCommand=false,emptyLogbook=false,taskLifecycle=false,omitStop=false,captureCompaction=false,restoreCompaction=false,interruption=false,readTask=false,deadlineMs=120_000}){
  assert(!restoreCompaction||(captureCompaction&&sage), "compaction_restore_needs_sage_capture");
  assert(/^[A-Za-z0-9/._-]+$/.test(realpathSync(root)), "unsafe_probe_root");
  assert.equal(realpathSync(codexHome),join(realpathSync(root),'codex'));
@@ -18,13 +18,13 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
  // Every caller uses the same hardware-isolated Sage fixture.
  process.env.SAGE_TEST_MACHINE_ID="native-fixture";
  env.SAGE_TEST_MACHINE_ID="native-fixture";
- const integrated=sage?await setupSage(root,{disconnectOnSpawn,review,nestedReview,capacity:capacityFailure?2:captureFailure||interruption?1:5,capacityFailure,denyCommand,emptyLogbook,taskLifecycle,omitStop,restoreCompaction,interruption,readTask}):null;
+ const integrated=sage?await setupSage(root,{disconnectOnSpawn,review,nestedReview,capacity:followupCapacity||capacityFailure?2:captureFailure||interruption?1:5,capacityFailure,followupCapacity,denyCommand,emptyLogbook,taskLifecycle,omitStop,restoreCompaction,interruption,readTask}):null;
  const baseConfig=integrated?.config??'';
  const blocker=join(root,'block-first-stop.mjs');
- if(blockStop||capacityFailure)writeFileSync(blocker,readFileSync(new URL('./block-first-stop.mjs',import.meta.url)));
+ if(blockStop||capacityFailure||followupCapacity)writeFileSync(blocker,readFileSync(new URL('./block-first-stop.mjs',import.meta.url)));
  const compactEvents=captureCompaction?['SessionStart','PreCompact','PostCompact']:[];
  const events=[...compactEvents,'PreToolUse','PostToolUse','SubagentStart','SubagentStop',...(captureFailure?['PostToolUseFailure']:[]),...(sage?['UserPromptSubmit']:[])];
- writeFileSync(join(codexHome,'hooks.json'),JSON.stringify({hooks:Object.fromEntries(events.map(event=>[event,[{hooks:[...(event==='UserPromptSubmit'?[]:[{type:'command',command,timeout:10}]),...((event==='PostToolUseFailure'||(compactEvents.includes(event)&&!(restoreCompaction&&event==='SessionStart')))?[]:integrated?.hook(event)??[]),...((blockStop||capacityFailure)&&event==='SubagentStop'?[{type:'command',command:`node ${JSON.stringify(blocker)}`,timeout:10}]:[])]}]]))}));
+ writeFileSync(join(codexHome,'hooks.json'),JSON.stringify({hooks:Object.fromEntries(events.map(event=>[event,[{hooks:[...(event==='UserPromptSubmit'?[]:[{type:'command',command,timeout:10}]),...((event==='PostToolUseFailure'||(compactEvents.includes(event)&&!(restoreCompaction&&event==='SessionStart')))?[]:integrated?.hook(event)??[]),...((blockStop||capacityFailure||followupCapacity)&&event==='SubagentStop'?[{type:'command',command:`node ${JSON.stringify(blocker)}`,timeout:10}]:[])]}]]))}));
  writeFileSync(join(codexHome,'config.toml'),baseConfig);
  const args=['-c','analytics.enabled=false','-c','otel.exporter="none"','-c','otel.metrics_exporter="none"','-c','otel.trace_exporter="none"','app-server','-c','model_provider="sage_capture_loopback"','-c','model_providers.sage_capture_loopback={name="Isolated hook capture",base_url="http://127.0.0.1:1/v1",wire_api="responses",requires_openai_auth=false}','-c','cli_auth_credentials_store="ephemeral"','-c','features.hooks=true','-c','features.plugins=false','-c','features.apps=false','-c','features.remote_plugin=false'];
  const child=spawn(binary,args,{cwd:workspace,env,stdio:['pipe','pipe','pipe'],shell:false});
@@ -36,8 +36,8 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
   const hs=r.data[0].hooks;
   const failures=hs.filter(h=>h.eventName==='postToolUseFailure');
   assert(failures.length<=1&&(!failures.length||captureFailure));failureHookAvailable=failures.length===1;
-  assert.equal(hs.length,(sage?9-(omitStop?1:0):4)+(blockStop||capacityFailure?1:0)+failures.length+compactEvents.length+(restoreCompaction?2:0));
-  assert.deepEqual(hs.map(h=>h.eventName).sort(),[...compactEvents.map(name=>name[0].toLowerCase()+name.slice(1)),...(restoreCompaction?['sessionStart','sessionStart']:[]),'preToolUse','postToolUse','subagentStart','subagentStop',...(sage?['preToolUse','postToolUse',...(omitStop?[]:['subagentStop']),'userPromptSubmit','userPromptSubmit']:[]),...(blockStop||capacityFailure?['subagentStop']:[]),...(failureHookAvailable?['postToolUseFailure']:[])].sort());
+  assert.equal(hs.length,(sage?9-(omitStop?1:0):4)+(blockStop||capacityFailure||followupCapacity?1:0)+failures.length+compactEvents.length+(restoreCompaction?2:0));
+  assert.deepEqual(hs.map(h=>h.eventName).sort(),[...compactEvents.map(name=>name[0].toLowerCase()+name.slice(1)),...(restoreCompaction?['sessionStart','sessionStart']:[]),'preToolUse','postToolUse','subagentStart','subagentStop',...(sage?['preToolUse','postToolUse',...(omitStop?[]:['subagentStop']),'userPromptSubmit','userPromptSubmit']:[]),...(blockStop||capacityFailure||followupCapacity?['subagentStop']:[]),...(failureHookAvailable?['postToolUseFailure']:[])].sort());
 
   assert(hs.every(h=>(sage||h.command===command)&&h.enabled&&h.sourcePath===join(codexHome,'hooks.json')));
   return hs;

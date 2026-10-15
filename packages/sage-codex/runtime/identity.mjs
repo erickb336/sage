@@ -314,13 +314,25 @@ export function readNativeCompletion(transcriptPath, options, expected) {
 /** Only captured 0.160.0 unknown-model or exact capacity preflight rejection proves this dispatch failed.
  * Other tool errors return null. This never releases admission by itself. */
 export function readNativeDispatchFailure(transcriptPath, options, expected) {
+  return readDispatchFailure(transcriptPath, options, expected, false);
+}
+
+/** Read the exact native restoration-capacity rejection before follow-up delivery. */
+export function readNativeFollowupFailure(transcriptPath, options, expected) {
+  return readDispatchFailure(transcriptPath, options, expected, true);
+}
+
+function readDispatchFailure(transcriptPath, options, expected, followup) {
   const unavailable = () => { throw Error("Codex dispatch failure evidence is unavailable"); };
   try {
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-    const keys = ["session", "actor", "parent", "path", "turn", "call", "argumentsHash"];
+    const keys = ["session", "actor", "parent", "path", "turn", "call", "argumentsHash", ...(followup ? ["previous", "target", "taskHash"] : [])];
     if (!record(expected) || Object.keys(expected).length !== keys.length || keys.some(key => !Object.hasOwn(expected, key))
       || !["session", "actor", "turn"].every(key => uuid.test(expected[key] ?? ""))
       || !/^[A-Za-z0-9_.:-]{1,256}$/.test(expected.call ?? "") || !/^[0-9a-f]{64}$/.test(expected.argumentsHash ?? "")) unavailable();
+    if (followup && (typeof expected.previous !== "string" || !uuid.test(expected.previous)
+      || typeof expected.target !== "string" || !uuid.test(expected.target)
+      || typeof expected.taskHash !== "string" || !/^[0-9a-f]{64}$/.test(expected.taskHash))) unavailable();
     const rows = readSessionRecords(transcriptPath, options, Infinity), meta = rows[0].payload;
     if (meta.id !== expected.actor || meta.session_id !== expected.session || meta.cli_version !== "0.160.0") unavailable();
     if (expected.actor === expected.session) {
@@ -348,9 +360,13 @@ export function readNativeDispatchFailure(transcriptPath, options, expected) {
       if (turn !== expected.turn || context !== turn || completed.has(turn) || p.internal_chat_message_metadata_passthrough?.turn_id !== turn
         || row.metadata?.client_authored !== false) unavailable();
       if (p.type === "function_call") {
-        if (request || result || p.name !== "spawn_agent" || p.namespace !== "collaboration" || typeof p.arguments !== "string") unavailable();
+        if (request || result || p.name !== (followup ? "followup_task" : "spawn_agent") || p.namespace !== "collaboration" || typeof p.arguments !== "string") unavailable();
         const args = JSON.parse(p.arguments);
         if (!record(args) || createHash("sha256").update(JSON.stringify(args)).digest("hex") !== expected.argumentsHash) unavailable();
+        if (followup && (Object.keys(args).length !== 2 || !Object.hasOwn(args, "target") || !Object.hasOwn(args, "message")
+          || args.target !== expected.target || typeof args.message !== "string" || args.message.includes("\0")
+          || Buffer.byteLength(args.message, "utf8") > 1024 * 1024 || Buffer.from(args.message).toString("utf8") !== args.message
+          || createHash("sha256").update(args.message).digest("hex") !== expected.taskHash)) unavailable();
         request = args;
       } else if (p.type === "function_call_output") {
         if (!request || result || typeof p.output !== "string" || typeof p.id !== "string" || !/^fco_[A-Za-z0-9_-]{1,256}$/.test(p.id)) unavailable();
@@ -359,7 +375,9 @@ export function readNativeDispatchFailure(transcriptPath, options, expected) {
     }
     if (!request || !result) return null;
     // Codex 0.160.0 checks execution capacity before creating a child. Inherited models are valid here.
-    if (result.output !== "collab spawn failed: agent thread limit reached") {
+    if (followup) {
+      if (result.output !== "collab tool failed: agent thread limit reached") return null;
+    } else if (result.output !== "collab spawn failed: agent thread limit reached") {
       if (typeof request.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(request.model)) return null;
       const prefix = `Unknown model \`${request.model}\` for spawn_agent. Available models: `;
       if (!result.output.startsWith(prefix) || result.output.length <= prefix.length || /\p{Cc}/u.test(result.output)) return null;

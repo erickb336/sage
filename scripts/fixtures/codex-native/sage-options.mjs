@@ -1,4 +1,5 @@
 import { appendFileSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { capturePolicyFailure } from "./policy-diagnostic.mjs";
 import { readAdmission } from "./plugin/core/index.mjs";
 // Copied into a fresh native test profile, never loaded from an installed plugin.
 import { patchEditDecision } from "./plugin/runtime/file-policy.mjs";
@@ -41,9 +42,13 @@ export function recordUnmanagedStop(input, context, result) {
 }
 
 export function recordCapacityStop(result) {
-  if (!fixtureModes.capacityFailure) return;
+  if (!fixtureModes.capacityFailure && !fixtureModes.followupCapacity) return;
   const state = readAdmission(options.directory);
   appendFileSync(join(root, "stop-receipts.jsonl"), JSON.stringify({ decision: result.decision,
     reservations: state.reservations.length, bindings: state.bindings.length,
     completions: state.completions?.length ?? 0 }) + "\n");
+}
+
+export function recordPolicyFailure(error) {
+  if (fixtureModes.followupCapacity) capturePolicyFailure(root,error);
 }

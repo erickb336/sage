@@ -4,13 +4,14 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** All files and the scoped tool approvals belong only to setupCapture's validated temporary root. */
-export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, capacityFailure = false, denyCommand = false, emptyLogbook = false, taskLifecycle = false, omitStop = false, restoreCompaction = false, interruption = false, readTask = false } = {}) {
+export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, capacityFailure = false, followupCapacity = false, denyCommand = false, emptyLogbook = false, taskLifecycle = false, omitStop = false, restoreCompaction = false, interruption = false, readTask = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
-  for (const file of ["fixture-interrupt.mjs", "sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
+  for (const file of ["policy-diagnostic.mjs", "fixture-interrupt.mjs", "sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
     writeFileSync(join(root, file), readFileSync(new URL(file, import.meta.url)));
   }
+  const { readObservations } = await import(pathToFileURL(join(root, "plugin/runtime/events.mjs")));
   const { configureAdmission, readAdmission, reserveRoleAdmission, createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
-  writeFileSync(join(root, "fixture-fault.json"), JSON.stringify({ disconnectOnSpawn, denyCommand, interruption, readTask, capacityFailure }));
+  writeFileSync(join(root, "fixture-fault.json"), JSON.stringify({ disconnectOnSpawn, denyCommand, interruption, readTask, capacityFailure, followupCapacity }));
   const directory = join(root, "admission");
   configureAdmission(directory, { total: capacity, projects: [{ project: "native-fixture", limit: capacity }] });
   const mode = { directory, project: "native-fixture", projectDirectory: join(root, "workspace"),
@@ -19,8 +20,8 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   const tool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
   const env = { ...process.env, SAGE_HOME: mode.logbookRoot, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   const git = (...args) => tool.git(["-C", mode.projectDirectory, ...args], env);
-  if (review || taskLifecycle) {
-    git("init", "--quiet", "-b", review ? "codex/t1-review" : "codex/t1-lifecycle");
+  if (review || taskLifecycle || followupCapacity) {
+    git("init", "--quiet", "-b", review ? "codex/t1-review" : followupCapacity ? "codex/t1-native" : "codex/t1-lifecycle");
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@users.noreply.github.com", "commit", "--quiet", "--allow-empty", "-m", "fixture");
   }
   const command = (...args) => tool.sage([...args, "--project", mode.projectDirectory], env);
@@ -28,10 +29,11 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   command("init");
   if (!emptyLogbook) { command("task", "add", "--title", readTask ? "Simulated task read fixture" : "Native report fixture", "--size", "small");
   if (review) command("task", "T1", "set", "branch=codex/t1-review");
+  if (followupCapacity) command("task", "T1", "set", "branch=codex/t1-native");
   if (!readTask) command("run", "add", "T1", "--role", review && !nestedReview ? "code-reviewer" : "lead");
   if (nestedReview) command("run", "add", "T1", "--role", "code-reviewer");
   }
-  if (capacityFailure) {
+  if (capacityFailure || followupCapacity) {
     command("task", "add", "--title", "Native capacity retry", "--size", "small");
     command("run", "add", "T2", "--role", "lead");
   }
@@ -47,7 +49,20 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   const servers = [["sage_fixture", "sage-hook-server.mjs"], ["sage_preparation", "sage-preparation-server.mjs"]];
   const config = servers.map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_update_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n';
-  return { readStops: () => readFileSync(join(root, "stop-receipts.jsonl"), "utf8").trim().split("\n").map(JSON.parse), checkInterruptionCapacity(released) {
+  return { prepareFollowupCapacityRun() {
+    command("run","done","R1","--status","done");command("run","add","T1","--role","lead");
+    assert.equal(tool.read(logbook,"runs").find(row=>row.id==="R3")?.task,"T1");
+  }, interruptionEvidence(child) {
+    const state=readAdmission(directory),bound=state.bindings.find(row=>row.child===child);
+    assert(bound);
+    const rows=readObservations(join(mode.observationsRoot,bound.session.slice(6)));
+    const paths=rows.filter(row=>row.kind==="child-transcript" && row.child===child && row.turn===bound.turn);
+    const starts=rows.filter(row=>row.kind==="child-start" && row.child===child);
+    assert.equal(paths.length,1);assert.equal(starts.length,1);
+    const assigned=state.reservations.find(row=>row.assignment.id===bound.assignment);
+    return {transcript:paths[0].transcript,expected:{session:bound.session.slice(6),child,parent:bound.issuer,
+      path:starts[0].path,author:"/root",turn:bound.turn,taskHash:assigned.dispatch.taskHash}};
+  }, readStops: () => readFileSync(join(root, "stop-receipts.jsonl"), "utf8").trim().split("\n").map(JSON.parse), checkInterruptionCapacity(released) {
     const state=readAdmission(directory), bound=state.bindings[0];
     assert(bound); const scope={project:bound.project,session:bound.session,epoch:bound.epoch};
     const reserve=call=>reserveRoleAdmission(directory,scope,{task:call==="replacement"?"T2":"T3",run:call==="replacement"?"R2":"R3",issuer:bound.issuer,call},
