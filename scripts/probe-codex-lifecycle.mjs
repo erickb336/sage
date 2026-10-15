@@ -656,7 +656,7 @@ data: ${JSON.stringify(event)}
           && state.bindings.every(row=>row.child===childThread) && state.bindings[0].turn!==state.bindings[1].turn, "followup_identity_changed");
         check(!resumedFailure||resumedFailureVerified,"resumed_failure_unverified");
         followupVerified=true;
-        print({type:"followup_evidence",sameChild:true,exactSavedMessage:true,reservations:2,completedTurns:2,simulatedModel:true,automaticSage:false});
+        print({type:"followup_evidence",sameChild:true,exactSavedMessage:true,reservations:state.reservations.length,completedTurns:state.completions.length,simulatedModel:true,automaticSage:false});
         respond(res,message(MARKER));
       } else if (reportProbe && rootRequests === 6) {
         const report = info.outputs[calls.report], state = integrated.readJournal();
