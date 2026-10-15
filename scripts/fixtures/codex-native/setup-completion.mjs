@@ -18,7 +18,7 @@ export function fixtureInterruptDecision(input, context, enabled) {
 }
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, readTask = false, env = process.env } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, readTask = false, resumedFailure = false, env = process.env } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
@@ -137,6 +137,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
   }, prepareFollowupRun() {
     cli("run", "done", "R1", "--status", "done");
     cli("run", "add", "T1", "--role", "lead");
+    if (resumedFailure) cli("run", "add", "T1", "--role", "code-reviewer");
     const rows = runTool.read(logbook, "runs");
     assert.equal(rows.filter(row => row.id === "R2" && row.task === "T1" && row.role === "lead" && row.status === "running").length, 1);
   }, readLogbook: () => Object.fromEntries(["tasks", "runs", "ledger", "findings", "gates", "decisions"].map(name => [name, runTool.read(logbook, name)])),
