@@ -1,8 +1,9 @@
 # Native task updates
 
-The prepared `sage_read_task` and `sage_update_task` tools let the current root
-owner read and update a task in the configured Codex logbook. Children and
-unknown roots cannot use them. The installed manifest is unchanged.
+The prepared `sage_update_task` tool lets the current root owner update a task
+in the configured Codex logbook. Children and unknown roots cannot use it.
+The separate [task reader](task-read.md), implemented by `task-read.mjs`, supplies
+`sage_read_task`. The installed manifest is unchanged.
 
 Read a task to get its stored fields and version. Submit that version with a
 fresh request UUID, the task ID, and changes to title, branch, PR, or state.
@@ -17,6 +18,11 @@ PR readiness also requires a PR number. A new branch commit invalidates earlier
 review evidence. Metadata edits cannot retain readiness with stale evidence.
 The native tool refuses merged state and direct repair state. Gate answers,
 repair rounds, and remote merge checks remain separate operations.
+
+Task updates alone still use the legacy recorded-write implementation in
+`review-write.mjs` until their writer migration. Task creation, run creation,
+and review acceptance use the validated `recorded-write.mjs` implementation.
+The read-only task adapter does not recover either writer.
 
 After a lost response, repeat the exact request. Its receipt returns the
 historical result; it does not reset a newer task or prove current readiness.
