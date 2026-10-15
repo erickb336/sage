@@ -438,6 +438,7 @@ data: ${JSON.stringify(event)}
         print({type: "failed_spawn_registry", onlyRoot: true, failures: 1, bindings: 0});
       }
       if (readTask) {
+        rootRequests++;
         check(info.taskReadTools.length === 1, "task_read_tool_missing");
         const snapshot = () => JSON.stringify({book:integrated.readLogbook(),admission:integrated.readJournal()});
         if (rootRequests === 1) {

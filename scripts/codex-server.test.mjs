@@ -4424,15 +4424,11 @@ test('T61: task reader rejects foreign identity, caller paths and malformed requ
   for (const input of [{project:f.options.projectDirectory,task:'T1',extra:true}, Object.assign(Object.create({project:f.options.projectDirectory}),{task:'T1',extra:true}), Object.assign(Object.create({task:'T1'}),{project:f.options.projectDirectory,extra:true})]) assert.throws(()=>coreRead(input));
 });
 
-test('T61: task reader refuses pending writes, duplicate IDs, corruption and receipt aliases without recovery', async t => {
+test('T61: task reader refuses duplicate IDs, corruption and receipt aliases without recovery', async t => {
   const f = await taskReadFixture(t), dir=f.assignmentLogbook;
   const snapshot = () => Object.fromEntries(readdirSync(dir).filter(name=>name.endsWith('.tsv') || name==='review-pending.json').map(name=>[name,readFileSync(join(dir,name),'utf8')]));
   const admission=f.core.readAdmission(f.options.directory), initial=snapshot(); assert.equal(f.readTask().task.id,'T1');
   assert.deepEqual(snapshot(),initial);
-  for (const schema of [2,3,4]) {
-    const file=join(dir,'review-pending.json'); writeFileSync(file,JSON.stringify({schema,receipt:{},tables:{}}));
-    const before=snapshot();assert.throws(()=>f.readTask());assert.deepEqual(snapshot(),before);rmSync(file);
-  }
   const file=join(dir,'tasks.tsv'), original=readFileSync(file,'utf8');
   for (const bytes of [original+original.split('\n')[1]+'\n','invalid header\n']) {
     writeFileSync(file,bytes);const before=snapshot();assert.throws(()=>f.readTask());assert.deepEqual(snapshot(),before);
@@ -4454,4 +4450,31 @@ test('T61: packaged task tool consumes authenticated reads and contains refusals
   assert.match((await client.call({task:'T999'})).error,/could not read/);
   assert.deepEqual(journalBytes(f),before);
   await client.close();
+});
+
+
+const taskReadDiskSnapshot = f => {
+  const dir = f.logbook ?? f.assignmentLogbook;
+  const tree = path => existsSync(path) ? readdirSync(path, {withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))
+    .map(entry => [entry.name, entry.isDirectory() ? tree(join(path,entry.name)) : readFileSync(join(path,entry.name),'utf8')]) : null;
+  return { tables: readdirSync(dir).filter(name=>name.endsWith('.tsv')).sort().map(name=>[name,readFileSync(join(dir,name),'utf8')]),
+    pending: existsSync(join(dir,'review-pending.json')) ? readFileSync(join(dir,'review-pending.json'),'utf8') : null,
+    receipts: ['task-requests','run-requests','reviews','reports'].map(name=>[name,tree(join(dir,name))]), admission: journalBytes(f) };
+};
+for (const writer of ['task','run','review']) test(`T61: task reader refuses a valid recoverable ${writer} intent without publishing or recovery`, async t => {
+  const f = writer === 'task' ? await taskCreationFixture(t) : writer === 'run' ? await runCreationFixture(t) : await reviewAcceptanceFixture(t);
+  if (writer === 'task') f.create();
+  const {readNativeTask} = await import(pathToFileURL(join(f.plugin,'runtime/task-read.mjs')));
+  const read = () => readNativeTask({task:'T1'},f.native(session),f.options);
+  const stable=taskReadDiskSnapshot(f), saved=read();assert.equal(saved.task.id,'T1');
+  assert.deepEqual(taskReadDiskSnapshot(f),stable);
+  const publish = writer === 'task' ? () => f.create({...f.input,request:turns[1],title:'Second recorded task'})
+    : writer === 'run' ? () => f.createRun() : () => f.accept();
+  const restore = await stopTaskWrite(t,f,writer === 'run' ? 'runs' : writer === 'review' ? 'ledger' : 'tasks');
+  assert.throws(publish,/Injected/);restore();
+  const pending=taskReadDiskSnapshot(f);assert.notEqual(pending.pending,null);
+  assert.throws(read);assert.deepEqual(taskReadDiskSnapshot(f),pending);
+  const result=publish();assert.equal(result.decision,writer === 'task' ? 'task-created' : writer === 'run' ? 'run-created' : 'review-accepted');
+  assert.equal(existsSync(join(f.logbook,'review-pending.json')),false,'the unchanged intent remains recoverable by its writer');
+  const completed=taskReadDiskSnapshot(f);assert.equal(read().task.id,'T1');assert.deepEqual(taskReadDiskSnapshot(f),completed);
 });
