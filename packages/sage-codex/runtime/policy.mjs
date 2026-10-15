@@ -8,7 +8,7 @@ import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readMode } from "./mode.mjs";
 import { reservePreparedSpawn, reservePreparedFollowup } from "./preparation.mjs";
 import { checkChildToolRecovery } from "./child-assignment.mjs";
-import { bindNativeChildTool, bindPendingNativeChildTool } from "./child-tool.mjs";
+import { bindNativeChildTool, bindPendingNativeChildTool, PendingNativeFollowup } from "./child-tool.mjs";
 import { decodeNativeCommand } from "./command-input.mjs";
 import { readInitialSession, readNativeCommand, readChildTurn } from "./identity.mjs";
 import { boundChildInstructions } from "./instructions.mjs";
@@ -49,8 +49,26 @@ export function createNativePolicy(options, evaluateTool) {
       const observed = decodeEvent(event, native);
       if (observed) record(observed); // Keep inactive and denied attempts; name reuse must stay visible.
       const before = mode(event.session_id);
-      if (child && !before.sage) bindPendingNativeChildTool(raw, native, fixed);
-      const bound = before.sage && child ? bindNativeChildTool(raw, native, fixed) : undefined;
+      let bound, pendingAssignment;
+      if (child) {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            const verified = before.sage || pendingAssignment
+              ? bindNativeChildTool(raw, native, fixed, pendingAssignment) : bindPendingNativeChildTool(raw, native, fixed);
+            if (pendingAssignment && verified?.assignment?.id !== pendingAssignment) refuse();
+            if (before.sage) bound = verified;
+            break;
+          } catch (error) {
+            if (!(error instanceof PendingNativeFollowup) || attempt === 40) throw error;
+            if (pendingAssignment && pendingAssignment !== error.assignment) refuse();
+            pendingAssignment = error.assignment;
+            // Native dispatch can publish its result while this child hook waits.
+            await new Promise(resolve => setTimeout(resolve, 25));
+            if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
+          }
+        }
+      }
+      if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
       const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
       const assignment = bound ? { ...bound.assignment, role } : undefined;
       const activeRun = assignment ? checkNativeRunAssignment(fixed, assignment, bound.runTarget) : undefined;
@@ -139,6 +157,7 @@ export function createNativePolicy(options, evaluateTool) {
           : { decision: "deny", reason: "Sage already reserved this native dispatch." };
       }
       if (before.sage && observed?.kind === "dispatch-request" && observed.mode === "task") {
+        reconcileNativeFailures(raw, native, fixed);
         const reserved = reservePreparedFollowup(raw, native, fixed);
         return reserved.decision === "permit-once" ? { decision: "pass" }
           : { decision: "deny", reason: "Sage already reserved this native follow-up." };
