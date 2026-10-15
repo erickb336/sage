@@ -16,12 +16,16 @@ The fixture creates a temporary branch and commit, task T1, lead run R1, and rev
 
 Tasks, findings, gates, and decisions remain unchanged. The task remains ineligible for merge. The fixture does not merge or push anything.
 
-Four helper tests check foreign ownership, substituted receipts and text, denied first tools, and unchanged acceptance retries. They use simulated API results, so they do not prove production execution. Four existing report and review boundary tests supplement them. The eight focused checks pass:
+Four helper tests check foreign ownership, substituted receipts and text, denied first tools, and unchanged acceptance retries. They use simulated API results, so they do not prove production execution. A fifth new test constructs the real fixture and verifies the configured inspection tool against the packaged MCP registry. It also validates the generated review text through the public review parser. Four existing report and review boundary tests supplement them. The nine focused checks pass:
 
 ```sh
 node --test --test-name-pattern='nested report probe|report inspection refuses|T43: recorded report proof|T59: review acceptance rejects' scripts/codex-server.test.mjs
 ```
 
-Removing the fixture's issuer check or exact receipt reference check makes the respective refusal test fail. Copying all four new test groups to detached main produces one missing-module load failure. This proves the helper is absent; it does not establish four historical production failures.
+Removing the fixture's issuer check or exact receipt reference check makes the respective refusal test fail. Copying all five new test groups to detached main produces missing-module failures: one for the four-group helper file and one for the public-contract test. This proves the helper is absent; it does not establish five historical production failures.
 
-Native execution and the final full suite remain pending. The native route preserves bounded local evidence even when it fails. Fixed responses cannot prove real-model review quality, all workflow routes, installed activation, or the real-project pilot required by #88.
+The native route passed on `b8058e4`: two child identities, two saved reports, two finished runs, one verdict, and an unchanged retry. It observed 12 chief workflow stages plus initial preparation, eight lead requests, and two reviewer requests. Protected transcript checks verified both saved briefs and parent identities. There were no rejected requests, malformed events, or unexpected completed items. The bounded capture completed and the isolated profile was removed.
+
+Two earlier runs failed fixture assertions, with complete local captures retained. The first used the wrong inspection tool name and compared a native message ID with brief text. The second used `FINDINGS none` where the review parser requires a JSON array, and assumed a nested hook's session ID was its immediate actor. The repaired fixture checks the actual public contracts and requires both the root session and immediate actor. No production behavior changed.
+
+The final frozen-head native rerun and full suite remain pending. The native route preserves bounded local evidence even when it fails. Fixed responses cannot prove real-model review quality, all workflow routes, installed activation, or the real-project pilot required by #88.
