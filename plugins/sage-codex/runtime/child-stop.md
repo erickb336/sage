@@ -22,11 +22,15 @@ This fixed route uses a narrow test tool policy. It does not verify the complete
 The probe holds a real child's response until a harmless read establishes its binding.
 The chief interrupts that exact child while its next response remains held.
 Parent reconciliation must match the native interrupted turn and evidence hash, without a stop callback.
-The original assignment stays in history. No report, verdict, task transition, or logbook run completion occurs.
+The original assignment stays in history. Reconciliation creates no report, verdict, task transition, or logbook run completion.
+The chief then calls `sage_finish_run` with that run ID and an explicit `blocked` status.
+The probe checks the exact run change, unchanged task and review state, and an identical retry.
+It then creates an eligible replacement run through `sage_create_run`. This does not start a replacement native child.
 A fixture capacity check refuses a replacement before interruption, then admits one replacement and refuses a third reservation.
 That replacement is a synthetic admission check, not a second native child.
 The probe removes its temporary profile. It uses simulated responses and does not activate installed Sage.
 
 Packaged tests also cover interruption after Sage off, later assignments, stale evidence, conflicting terminal records, and exact retries.
-These tests pass on the preceding main because production interruption support already exists.
+The earlier interruption-reconciliation tests pass on the preceding main because that support already exists.
+The T63 finish tests cover the separate [interrupted-run operation](interrupted-run.md).
 Isolated mutations verify that the tests detect lost reconciliation, incorrect outcomes, conflicting evidence, stale bindings, and retained capacity.

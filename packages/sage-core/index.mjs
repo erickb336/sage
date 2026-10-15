@@ -25,3 +25,5 @@ export { REPORT_FIELDS, missingReportFields, parseReport } from "./report.mjs";
 export { roleEditDenied } from "./role-policy.mjs";
 
 export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
+
+export { beginInterruptedRunFinish, endInterruptedRunFinish } from "./admission.mjs";
