@@ -4467,3 +4467,56 @@ test('T17: assignment recovery accepts the exact message byte limit and refuses 
     assert.deepEqual(f.core.readAdmission(f.options.directory), before);
   }
 });
+
+
+test('resumed lead failure recovery keeps assignment history and verifies the original identity', async t => {
+  for (const off of [false, true]) {
+    const f = await deliveredFollowupFixture(t);
+    await f.evaluate(f.policy, f.tool, childActor);
+    const request = { ...f.input, name: 'resumed_failed_qa', run: 'R2', role: 'qa', reviewCycle: 1 };
+    f.api.prepareNativeTask(request, f.native(childActor), f.options);
+    const spawn = { ...f.spawnInput(request.name, 'resumed-failed-qa'), turn_id: turns[2], transcript_path: f.transcript };
+    spawn.tool_input.model = 'missing-fixture-model';
+    f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options);
+    appendFileSync(f.transcript, failedCallRows(spawn).map(row => JSON.stringify(row) + '\n').join(''));
+    if (off) {
+      appendReport(f, reportText, childActor, turns[2]);
+      f.policy.completeChild(f.stop, f.native(childActor));
+      f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    }
+    const event = { ...postSpawn(), turn_id: turns[2], tool_name: 'collaborationwait_agent', tool_input: {}, tool_response: '', transcript_path: f.transcript };
+    // Synthetic reservations fill the remaining slots of the existing five-slot fixture.
+    if (!off) for (const id of [10,11,12]) f.core.reserveAdmission(f.options.directory,f.scope,
+      {task:`T${id}`,run:`R${id}`,issuer:session,call:`filler-${id}`},
+      {tool:'spawn_agent',turn:turns[0],name:`filler-${id}`,argumentsHash:'2'.repeat(64)});
+    const before = f.core.readAdmission(f.options.directory);
+    const reserve = () => f.core.reserveAdmission(f.options.directory, f.scope,
+      {task:'T2',run:'R9',issuer:session,call:'synthetic-replacement'},
+      {tool:'spawn_agent',turn:turns[0],name:'synthetic-replacement',argumentsHash:'1'.repeat(64)});
+    if (!off) assert.throws(reserve,/capacity/);
+    const configured = f.core.readAdmission(f.options.directory);
+    f.policy.reconcileCompletions(event, f.native(session));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), configured);
+    const original = readFileSync(f.transcript, 'utf8');
+    const changed = original.trimEnd().split('\n').map(JSON.parse);
+    changed[0].payload.parent_thread_id = 'a1111111-2222-4333-8444-555555555555';
+    writeFileSync(f.transcript, changed.map(row => JSON.stringify(row) + '\n').join(''));
+    assert.throws(() => f.policy.reconcileCompletions(event, f.native(childActor)));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), configured);
+    writeFileSync(f.transcript, original);
+    f.policy.reconcileCompletions(event, f.native(childActor));
+    const state = f.core.readAdmission(f.options.directory);
+    assert.equal(state.failures.length, 1); assert.equal(state.failures[0].issuer, childActor);
+    assert.equal(state.failures[0].assignment, state.reservations.find(row => row.assignment.run === 'R2').assignment.id);
+    assert.deepEqual(state.bindings, before.bindings); assert.deepEqual(state.completions, before.completions);
+    assert.deepEqual(state.reservations, before.reservations);
+    f.policy.reconcileCompletions(event, f.native(childActor));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+    if (!off) {
+      assert.equal(reserve().decision,'permit-once');assert.equal(reserve().decision,'already-reserved');
+      const replacement=f.core.readAdmission(f.options.directory);
+      assert.equal(replacement.reservations.length,state.reservations.length+1);
+      assert.deepEqual(replacement.bindings,state.bindings);assert.deepEqual(replacement.completions,state.completions);
+    }
+  }
+});
