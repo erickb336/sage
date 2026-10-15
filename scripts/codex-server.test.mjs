@@ -3630,15 +3630,24 @@ test('resumed lead failure recovery keeps assignment history and verifies the or
       f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
     }
     const event = { ...postSpawn(), turn_id: turns[2], tool_name: 'collaborationwait_agent', tool_input: {}, tool_response: '', transcript_path: f.transcript };
+    // Synthetic reservations fill the remaining slots of the existing five-slot fixture.
+    if (!off) for (const id of [10,11,12]) f.core.reserveAdmission(f.options.directory,f.scope,
+      {task:`T${id}`,run:`R${id}`,issuer:session,call:`filler-${id}`},
+      {tool:'spawn_agent',turn:turns[0],name:`filler-${id}`,argumentsHash:'2'.repeat(64)});
     const before = f.core.readAdmission(f.options.directory);
+    const reserve = () => f.core.reserveAdmission(f.options.directory, f.scope,
+      {task:'T2',run:'R9',issuer:session,call:'synthetic-replacement'},
+      {tool:'spawn_agent',turn:turns[0],name:'synthetic-replacement',argumentsHash:'1'.repeat(64)});
+    if (!off) assert.throws(reserve,/capacity/);
+    const configured = f.core.readAdmission(f.options.directory);
     f.policy.reconcileCompletions(event, f.native(session));
-    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), configured);
     const original = readFileSync(f.transcript, 'utf8');
     const changed = original.trimEnd().split('\n').map(JSON.parse);
     changed[0].payload.parent_thread_id = 'a1111111-2222-4333-8444-555555555555';
     writeFileSync(f.transcript, changed.map(row => JSON.stringify(row) + '\n').join(''));
     assert.throws(() => f.policy.reconcileCompletions(event, f.native(childActor)));
-    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), configured);
     writeFileSync(f.transcript, original);
     f.policy.reconcileCompletions(event, f.native(childActor));
     const state = f.core.readAdmission(f.options.directory);
@@ -3648,8 +3657,15 @@ test('resumed lead failure recovery keeps assignment history and verifies the or
     assert.deepEqual(state.reservations, before.reservations);
     f.policy.reconcileCompletions(event, f.native(childActor));
     assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+    if (!off) {
+      assert.equal(reserve().decision,'permit-once');assert.equal(reserve().decision,'already-reserved');
+      const replacement=f.core.readAdmission(f.options.directory);
+      assert.equal(replacement.reservations.length,state.reservations.length+1);
+      assert.deepEqual(replacement.bindings,state.bindings);assert.deepEqual(replacement.completions,state.completions);
+    }
   }
 });
+
 
 
 test('native unobserved follow-up recovery binds and completes exact work once even after Sage off', async t => {

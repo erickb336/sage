@@ -28,3 +28,7 @@ Its second assignment prepares a reviewer, receives the native unknown-model rej
 The probe checks one failure receipt, no extra child, and two preserved lead bindings and completions.
 The chief reads both lead reports and records the second. Responses are simulated.
 This route verifies failed-dispatch recovery, not a successful retry or review quality.
+
+Packaged tests also check off-mode recovery, foreign-parent evidence, another actor, unchanged retries, and capacity release.
+Capacity tests use labelled synthetic reservations through the public admission API; they do not launch replacement agents.
+Production recovery already exists on main. These checks do not establish real-model behavior or automatic Sage activation.

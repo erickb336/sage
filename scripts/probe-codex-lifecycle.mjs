@@ -45,7 +45,7 @@ const resumedFailure = process.argv.includes("--sage-followup-failed-child");
 const sageFollowup = followupRecovery || resumedFailure || followupNoTool || missedStop || process.argv.includes("--sage-followup");
 assert(!sageFollowup || process.argv.slice(2).length === 1, "sage_followup_is_a_separate_route");
 let sageFollowupVerified = false;
-let resumedFailureStep = 0, resumedFailureVerified = false;
+let resumedFailureStep = 0, resumedFailureVerified = false, resumedHistory;
 const unpreparedFollowup = process.argv.includes("--sage-unprepared-followup");
 assert(!unpreparedFollowup || process.argv.slice(2).length === 1, "unprepared_followup_is_a_separate_route");
 let unpreparedFollowupVerified = false;
@@ -526,6 +526,8 @@ data: ${JSON.stringify(event)}
               check(journal.failures?.length === 1 && journal.failures[0].assignment === failed?.assignment.id
                 && journal.failures[0].issuer === childThread && journal.bindings.length === 2
                 && journal.completions.length === 1, "resumed_failure_not_recovered");
+              check(JSON.stringify(journal.bindings)===JSON.stringify(resumedHistory.bindings)
+                && JSON.stringify(journal.completions)===JSON.stringify(resumedHistory.completions),"resumed_history_changed");
               resumedFailureStep++; resumedFailureVerified = true;
               respond(res, message(FOLLOWUP_MARKER));
             } else check(false, "resumed_failure_repeated");
@@ -537,6 +539,7 @@ data: ${JSON.stringify(event)}
             childRequests++;
             if (resumedFailure) {
               check(info.prepareTools.length === 1, "resumed_failure_prepare_tool_missing");
+              resumedHistory=integrated.readJournal();
               resumedFailureStep = 1;
               const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"]
                 .map(key => [key, "Review the fixed temporary commit. Simulated evidence only."]));
@@ -1443,6 +1446,7 @@ data: ${JSON.stringify(event)}
     }
     if (resumedFailure) {
       assert.equal(resumedFailureVerified, true);
+      const state=integrated.readJournal();assert.equal(state.failures.length,1);assert.equal(state.bindings.length,2);assert.equal(state.completions.length,2);
       print({ type: "resumed_lead_failure_evidence", sameNativeLead: true, assignments: 2,
         failedChildDispatches: 1, extraChildren: 0, preservedCompletions: 2, simulatedModel: true });
     }
