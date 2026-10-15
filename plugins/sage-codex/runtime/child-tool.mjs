@@ -26,8 +26,8 @@ export function bindPendingNativeChildTool(input, context, options) {
   const pending = state.reservations.filter(row => row.assignment.project === options.project
     && row.assignment.session === `codex:${event.session_id}`
     && !state.bindings.some(bound => bound.assignment === row.assignment.id)
-    && !state.completions?.some(done => done.assignment === row.assignment.id)
-    && !state.failures?.some(failed => failed.assignment === row.assignment.id));
+    && !(state.failures ?? []).some(failed => failed.assignment === row.assignment.id)
+    && !state.completions?.some(done => done.assignment === row.assignment.id));
   if (!pending.length) return;
   const initial = readInitialSession(event.transcript_path, { sessionsDir: options.sessionsDir });
   if (initial.metadata.cli_version !== RUNTIME_VERSION) refuse();
@@ -103,6 +103,7 @@ function bindLaterTurn(event, child, options, state, owner, started) {
   const candidates = state.reservations.filter(row => scope(row.assignment) && row.continuation
     && row.assignment.issuer === started.parent
     && state.bindings.some(bound => bound.assignment === row.continuation && bound.child === child)
+    && !(state.failures ?? []).some(failed => failed.assignment === row.assignment.id)
     && !state.completions?.some(done => done.assignment === row.assignment.id)
     && !state.bindings.some(bound => bound.assignment === row.assignment.id && bound.turn !== event.turn_id));
   if (candidates.length !== 1) refuse();
@@ -150,6 +151,7 @@ export function recoverNativeChildDeliveries(context, session, options, assignme
   const scope = row => row.project === options.project && row.session === owner.session && row.epoch === owner.epoch;
   const candidates = state.reservations.filter(row => scope(row.assignment) && row.assignment.issuer === native.actor
     && (assignment === undefined || row.assignment.id === assignment)
+    && !(state.failures ?? []).some(failed => failed.assignment === row.assignment.id)
     && !state.completions?.some(done => done.assignment === row.assignment.id));
   if (!candidates.length) return;
   const observations = readObservations(join(options.observationsRoot, session));

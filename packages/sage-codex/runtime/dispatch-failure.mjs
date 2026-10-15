@@ -1,8 +1,8 @@
 import { join } from "node:path";
-import { readAdmission, failAdmission } from "sage-core";
+import { readAdmission, failAdmission, failContinuationAdmission } from "sage-core";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readObservations } from "./events.mjs";
-import { readNativeDispatchFailure } from "./identity.mjs";
+import { readNativeDispatchFailure, readNativeFollowupFailure, readDeliveredAssignment } from "./identity.mjs";
 
 const refuse = () => { throw Error("Sage could not verify this dispatch failure."); };
 
@@ -11,7 +11,7 @@ export function reconcileNativeFailures(input, context, options) {
   const native = nativeToolContext(context);
   const event = nativeToolEvent(input, native, input?.hook_event_name);
   if (event.hook_event_name === "PreToolUse") {
-    if (event.tool_name !== "collaborationspawn_agent") refuse();
+    if (!["collaborationspawn_agent", "collaborationfollowup_task"].includes(event.tool_name)) refuse();
     if (!event.transcript_path) return; // No native transcript means no failure can be proved.
   } else if (!["collaborationlist_agents", "collaborationwait_agent"].includes(event.tool_name)) refuse();
   const state = readAdmission(options.directory), session = `codex:${event.session_id}`;
@@ -19,7 +19,7 @@ export function reconcileNativeFailures(input, context, options) {
   if (!owner) refuse();
   const candidates = state.reservations.filter(row => row.assignment.project === options.project
     && row.assignment.session === session && row.assignment.epoch === owner.epoch && row.assignment.issuer === native.actor
-    && row.dispatch.tool === "collaborationspawn_agent"
+    && ["collaborationspawn_agent", "collaborationfollowup_task"].includes(row.dispatch.tool)
     && !state.bindings.some(bound => bound.assignment === row.assignment.id)
     && !(state.failures ?? []).some(failed => failed.assignment === row.assignment.id));
   if (!candidates.length) return;
@@ -35,6 +35,10 @@ export function reconcileNativeFailures(input, context, options) {
     parent = start[0].parent; path = start[0].path;
   }
   for (const row of candidates) {
+    if (row.continuation) {
+      reconcileFollowup(row, state, observations, event, native, owner, parent, path, options);
+      continue;
+    }
     // Any result or child-start evidence keeps the slot; this path covers preflight rejection only.
     if (observations.some(item => (item.kind === "spawn-result" && item.actor === native.actor && item.call === row.assignment.call)
       || (item.kind === "child-start" && item.parent === native.actor && item.path === `${path}/${row.dispatch.name}`))) continue;
@@ -47,4 +51,38 @@ export function reconcileNativeFailures(input, context, options) {
     if (failure) failAdmission(options.directory, { project: options.project, session, epoch: owner.epoch,
       assignment: row.assignment.id, issuer: native.actor, call: row.assignment.call, evidenceHash: failure.evidenceHash });
   }
+}
+
+
+function reconcileFollowup(row, state, observations, event, native, owner, parent, path, options) {
+  const session = owner.session;
+  const predecessors = state.bindings.filter(bound => bound.assignment === row.continuation
+    && bound.project === options.project && bound.session === session && bound.epoch === owner.epoch
+    && bound.issuer === native.actor);
+  if (predecessors.length !== 1 || !state.completions?.some(done => done.assignment === row.continuation)) refuse();
+  const previous = predecessors[0], target = previous.child;
+  // A success receipt or actual child delivery conflicts with preflight-only failure.
+  if (observations.some(item => item.kind === "dispatch-result" && item.actor === native.actor && item.call === row.assignment.call)) return;
+  const requests = observations.filter(item => item.kind === "dispatch-request" && item.actor === native.actor && item.call === row.assignment.call);
+  const senders = observations.filter(item => item.kind === "followup-transcript" && item.actor === native.actor && item.call === row.assignment.call);
+  if (requests.length !== 1 || requests[0].turn !== row.dispatch.turn || requests[0].mode !== "task" || requests[0].target !== target
+    || senders.length !== 1 || senders[0].turn !== row.dispatch.turn || senders[0].target !== target
+    || senders[0].transcript !== event.transcript_path) refuse();
+  const failure = readNativeFollowupFailure(event.transcript_path, { sessionsDir: options.sessionsDir }, {
+    session: event.session_id, actor: native.actor, parent, path, turn: row.dispatch.turn,
+    call: row.assignment.call, argumentsHash: row.dispatch.argumentsHash,
+    previous: row.continuation, target, taskHash: row.dispatch.taskHash,
+  });
+  if (!failure) return;
+  const paths = observations.filter(item => item.kind === "child-transcript" && item.child === target && item.turn === previous.turn);
+  const starts = observations.filter(item => item.kind === "child-start" && item.child === target);
+  if (paths.length !== 1 || starts.length !== 1 || starts[0].parent !== native.actor) refuse();
+  if (readDeliveredAssignment(paths[0].transcript, { sessionsDir: options.sessionsDir }, {
+    session: event.session_id, child: target, parent: native.actor, path: starts[0].path,
+    author: starts[0].path.slice(0, starts[0].path.lastIndexOf("/")), taskHash: row.dispatch.taskHash,
+  })) return;
+  if (failure) failContinuationAdmission(options.directory, { project: options.project, session, epoch: owner.epoch,
+    assignment: row.assignment.id, issuer: native.actor, call: row.assignment.call,
+    previous: row.continuation, target, turn: row.dispatch.turn, argumentsHash: row.dispatch.argumentsHash,
+    taskHash: row.dispatch.taskHash, evidenceHash: failure.evidenceHash });
 }

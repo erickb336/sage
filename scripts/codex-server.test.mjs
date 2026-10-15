@@ -4903,3 +4903,113 @@ test('T65: next native spawn reconciles inherited-model capacity rejection befor
   assert.equal(state.reservations.length, 3); assert.equal(state.bindings.length, 1);
   assert.notEqual(state.reservations.at(-1).assignment.id, f.rejected.id);
 });
+
+async function failedFollowupFixture(t) {
+  const f = await preparedFollowupFixture(t);
+  const transcript = f.childTranscript(); appendReport(f);
+  f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: '0.160.0', session,
+    kind: 'child-transcript', child: childActor, turn: turns[1], transcript });
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  assert.deepEqual(await f.evaluate(policy, f.followupInput), { decision: 'pass' });
+  const rows = [...f.rows(), { type: 'response_item', metadata: { client_authored: false }, payload: {
+    type: 'function_call_output', id: 'fco_capacity_followup', call_id: 'followup-1',
+    output: 'collab tool failed: agent thread limit reached',
+    internal_chat_message_metadata_passthrough: { turn_id: turns[0] } } }];
+  f.save(rows);
+  const event = { ...postSpawn(), tool_name: 'collaborationlist_agents', tool_input: {}, tool_response: '{}',
+    transcript_path: f.followupInput.transcript_path };
+  return { ...f, policy, transcript, failedRows: rows, event };
+}
+
+test('T2 followup failure releases only exact attempt and allows a fresh original-predecessor retry', async t => {
+  for (const off of [false, true]) {
+    const f = await failedFollowupFixture(t), before = f.core.readAdmission(f.options.directory);
+    if (off) {
+      f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+      f.save([...f.failedRows, { type: 'event_msg', payload: { type: 'task_complete', turn_id: turns[0] } }]);
+    }
+    f.policy.reconcileCompletions(f.event, f.native(session));
+    const state = f.core.readAdmission(f.options.directory);
+    assert.equal(state.failures.length, 1); assert.equal(state.failures[0].assignment, before.reservations[1].assignment.id);
+    assert.equal(state.failures[0].previous, f.prior.assignment); assert.equal(state.failures[0].target, childActor);
+    assert.deepEqual(state.bindings, before.bindings); assert.deepEqual(state.completions, before.completions);
+    f.policy.reconcileCompletions(f.event, f.native(session)); assert.deepEqual(f.core.readAdmission(f.options.directory), state);
+    if (off) continue;
+    const fresh = f.api.prepareNativeTask({ ...f.request, name: 'retry_lead' }, f.native(session), f.options);
+    assert.equal(fresh.previous, f.prior.assignment);
+    const input = { ...f.followupInput, tool_use_id: 'retry-followup', tool_input: { target: childActor, message: fresh.message } };
+    const rows = f.rows(); rows[3].payload.call_id = input.tool_use_id; rows[3].payload.arguments = JSON.stringify(input.tool_input); f.save(rows);
+    assert.deepEqual(await f.evaluate(f.policy, input), { decision: 'pass' });
+    const retried = f.core.readAdmission(f.options.directory);
+    assert.equal(retried.reservations.length, 3); assert.equal(retried.reservations[2].continuation, f.prior.assignment);
+    assert.equal(retried.failures.length, 1);
+    f.save([...rows, { type: 'response_item', metadata: { client_authored: false }, payload: {
+      type: 'function_call_output', id: 'fco_retry', call_id: input.tool_use_id, output: '',
+      internal_chat_message_metadata_passthrough: { turn_id: turns[0] } } }]);
+    appendFileSync(f.transcript, [
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: turns[2] } },
+      { type: 'turn_context', payload: { turn_id: turns[2] } },
+      { type: 'response_item', payload: { type: 'agent_message', id: 'amsg_retry', author: '/root', recipient: '/root/fixture_lead',
+        content: [{ type: 'encrypted_content', encrypted_content: fresh.message }] } },
+    ].map(row => JSON.stringify(row) + '\n').join(''));
+    await f.evaluate(f.policy, { ...patch(turns[2]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path: f.transcript }, childActor);
+    const delivered = f.core.readAdmission(f.options.directory);
+    assert.equal(delivered.bindings.length, 2);
+    assert.equal(delivered.bindings[1].assignment, retried.reservations[2].assignment.id);
+    assert.deepEqual(delivered.failures, retried.failures);
+    const { failContinuationAdmission } = f.core;
+    assert.equal(failContinuationAdmission(f.options.directory, delivered.failures[0]).decision, 'already-failed');
+    assert.deepEqual(f.core.readAdmission(f.options.directory), delivered);
+  }
+});
+
+test('T2 followup failure retains unknown errors and rejects forged duplicate or mismatched records', async t => {
+  const f = await failedFollowupFixture(t), before = f.core.readAdmission(f.options.directory);
+  for (const output of ['', 'collab spawn failed: agent thread limit reached', 'collab tool failed: agent thread limit reached\n', 'other failure']) {
+    const rows = structuredClone(f.failedRows); rows.at(-1).payload.output = output; f.save(rows);
+    f.policy.reconcileCompletions(f.event, f.native(session)); assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+  for (const alter of [rows => rows.at(-1).metadata.client_authored = true, rows => rows.push(structuredClone(rows.at(-1))),
+    rows => rows[3].payload.arguments = JSON.stringify({ target: session, message: f.prepared.message }),
+    rows => rows.at(-1).payload.internal_chat_message_metadata_passthrough.turn_id = turns[2],
+    rows => rows[3].payload.name = 'spawn_agent']) {
+    const rows = structuredClone(f.failedRows); alter(rows); f.save(rows);
+    assert.throws(() => f.policy.reconcileCompletions(f.event, f.native(session)));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+});
+
+test('T2 followup failure cannot override delivered message or successful callback evidence', async t => {
+  for (const conflict of ['delivery', 'callback']) {
+    const f = await failedFollowupFixture(t), before = f.core.readAdmission(f.options.directory);
+    if (conflict === 'callback') f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: '0.160.0', session,
+      kind: 'dispatch-result', actor: session, call: 'followup-1', turn: turns[0], mode: 'task', target: childActor });
+    else appendFileSync(f.transcript, [
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: turns[2] } },
+      { type: 'turn_context', payload: { turn_id: turns[2] } },
+      { type: 'response_item', payload: { type: 'agent_message', id: 'amsg_conflict', author: '/root', recipient: '/root/fixture_lead',
+        content: [{ type: 'encrypted_content', encrypted_content: f.prepared.message }] } },
+    ].map(row => JSON.stringify(row) + '\n').join(''));
+    // Reconciliation can refuse contradictory evidence, but must never free its slot.
+    try { f.policy.reconcileCompletions(f.event, f.native(session)); } catch {}
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+});
+
+
+test('T2 followup failure refuses foreign sender identity without changing admission or runs', async t => {
+  const f = await failedFollowupFixture(t), before = f.core.readAdmission(f.options.directory);
+  const runFile = join(f.assignmentLogbook, 'runs.tsv'), beforeRuns = readFileSync(runFile, 'utf8');
+  for (const change of [rows => rows[0].payload.id = childActor,
+    rows => rows[0].payload.session_id = childActor,
+    rows => { rows[0].payload.parent_thread_id = childActor; rows[0].payload.agent_path = '/root/foreign'; }]) {
+    const rows = structuredClone(f.failedRows); change(rows); f.save(rows);
+    assert.throws(() => f.policy.reconcileCompletions(f.event, f.native(session)));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    assert.equal(readFileSync(runFile, 'utf8'), beforeRuns);
+  }
+  f.save(f.failedRows);
+  try { f.policy.reconcileCompletions(f.event, f.native(childActor)); } catch {}
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  assert.equal(readFileSync(runFile, 'utf8'), beforeRuns);
+});

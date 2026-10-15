@@ -4785,3 +4785,103 @@ test("native interruption fixture permits only the root's exact one-field child 
   ]) assert.equal(fixtureInterruptDecision(event, actor, enabled).decision, "deny");
   assert.equal(fixtureInterruptDecision({ ...input, tool_name: "list_mcp_resources" }, context, true), null);
 });
+
+async function continuationFailureFixture(t) {
+  const f = await interruptedFinishFixture(t, "qa", false);
+  f.api.completeAdmission(f.dir, f.binding);
+  const prepared = f.prepare(2, { previous: f.first.assignment.id });
+  const saved = f.reserve(prepared);
+  const { project, session, epoch, issuer, call, id: assignment } = saved.assignment;
+  const failure = { project, session, epoch, assignment, issuer, call,
+    previous: f.first.assignment.id, target: f.binding.child, turn: "parent-turn",
+    argumentsHash: "a".repeat(64), taskHash: "b".repeat(64), evidenceHash: "d".repeat(64) };
+  return { ...f, next: prepared, saved, failure };
+}
+
+test("continuation failure core validates immutable exact evidence and preserves initial failure separation", async t => {
+  const f = await continuationFailureFixture(t), { api, dir, failure } = f;
+  const before = api.readAdmission(dir);
+  for (const key of Object.keys(failure).filter(key => key !== "evidenceHash")) {
+    const changed = ["epoch", "assignment", "previous"].includes(key)
+      ? "00000000-0000-0000-0000-000000000001"
+      : key.endsWith("Hash") ? "e".repeat(64) : "foreign";
+    assert.throws(() => api.failContinuationAdmission(dir, { ...failure, [key]: changed }), key);
+  }
+  for (const input of [null, {}, { ...failure, extra: true }, { ...failure, evidenceHash: "bad" }])
+    assert.throws(() => api.failContinuationAdmission(dir, input));
+  const { previous, target, turn, argumentsHash, taskHash, ...initial } = failure;
+  assert.throws(() => api.failAdmission(dir, initial), /separate evidence/);
+  assert.throws(() => api.failContinuationAdmission(dir, { ...failure, assignment: f.first.assignment.id, call: f.first.assignment.call }));
+  assert.deepEqual(api.readAdmission(dir), before);
+  assert.equal(api.failContinuationAdmission(dir, failure).decision, "continuation-failed");
+  const failed = api.readAdmission(dir), files = readdirSync(dir);
+  assert.equal(api.failContinuationAdmission(dir, { ...failure }).decision, "already-failed");
+  assert.deepEqual(readdirSync(dir), files);
+  assert.throws(() => api.failContinuationAdmission(dir, { ...failure, evidenceHash: "e".repeat(64) }), /different failure evidence/);
+  assert.deepEqual(api.readAdmission(dir), failed);
+  assert.deepEqual(failed.failures, [failure]);
+  assert.equal(failed.reservations.length, 2);
+});
+
+test("continuation failure core allows one new prepared retry and retains failed history", async t => {
+  const f = await continuationFailureFixture(t), { api, dir, failure } = f;
+  assert.throws(() => f.prepare(3, { previous: failure.previous }), /already has later work/);
+  api.failContinuationAdmission(dir, failure);
+  const retry = f.prepare(3, { previous: failure.previous });
+  const competitor = f.prepare(4, { previous: failure.previous });
+  assert.throws(() => api.bindContinuationAdmission(dir, bindingFor(f.saved.assignment, failure.target, "turn-2")), /failed dispatch/);
+  const saved = f.reserve(retry);
+  assert.throws(() => f.reserve(competitor), /already has later work/);
+  assert.throws(() => f.prepare(5, { previous: failure.previous }), /already has later work/);
+  assert.equal(f.reserve(retry).decision, "already-reserved");
+  assert.equal(api.bindContinuationAdmission(dir, bindingFor(saved.assignment, failure.target, "turn-3")).decision, "bound");
+  const state = api.readAdmission(dir);
+  assert.equal(state.reservations.length, 3);
+  assert.deepEqual(state.failures, [failure]);
+  assert.equal(state.reservations[2].continuation, failure.previous);
+});
+
+test("continuation failure core resolves bind and failure in both atomic publication orders", async t => {
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  for (const winner of ["bind", "failure"]) {
+    const f = await continuationFailureFixture(t), { api, dir, failure } = f;
+    const binding = bindingFor(f.saved.assignment, failure.target, "turn-2");
+    const bind = () => api.bindContinuationAdmission(dir, binding);
+    const fail = () => api.failContinuationAdmission(dir, failure);
+    const original = fs.linkSync;
+    let raced = false;
+    fs.linkSync = (...args) => {
+      if (!raced) { raced = true; (winner === "bind" ? bind : fail)(); }
+      return original(...args);
+    };
+    syncBuiltinESMExports();
+    try {
+      assert.throws(winner === "bind" ? fail : bind, winner === "bind" ? /bound assignment/ : /failed dispatch/);
+    } finally { fs.linkSync = original; syncBuiltinESMExports(); }
+    assert.equal(raced, true);
+    const state = api.readAdmission(dir);
+    assert.equal(state.bindings.length, winner === "bind" ? 2 : 1);
+    assert.equal((state.failures ?? []).length, winner === "failure" ? 1 : 0);
+    assert.equal(readdirSync(dir).some(name => name.startsWith(".pending-")), false);
+  }
+});
+
+test("continuation failure core retries resolve competing reservations at atomic publication", async t => {
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const f = await continuationFailureFixture(t);
+  f.api.failContinuationAdmission(f.dir, f.failure);
+  const proposals = [3, 4].map(n => f.prepare(n, { previous: f.failure.previous }));
+  const original = fs.linkSync;
+  let raced = false;
+  fs.linkSync = (...args) => {
+    if (!raced) { raced = true; f.reserve(proposals[1]); }
+    return original(...args);
+  };
+  syncBuiltinESMExports();
+  try { assert.throws(() => f.reserve(proposals[0]), /already has later work/); }
+  finally { fs.linkSync = original; syncBuiltinESMExports(); }
+  assert.equal(raced, true);
+  assert.equal(f.api.readAdmission(f.dir).reservations.length, 3);
+});

@@ -139,6 +139,7 @@ export function createNativePolicy(options, evaluateTool) {
           : { decision: "deny", reason: "Sage already reserved this native dispatch." };
       }
       if (before.sage && observed?.kind === "dispatch-request" && observed.mode === "task") {
+        reconcileNativeFailures(raw, native, fixed);
         const reserved = reservePreparedFollowup(raw, native, fixed);
         return reserved.decision === "permit-once" ? { decision: "pass" }
           : { decision: "deny", reason: "Sage already reserved this native follow-up." };
