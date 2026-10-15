@@ -737,8 +737,11 @@ data: ${JSON.stringify(event)}
         respond(res,call(calls.capacityDone,"list_agents",{}));
       } else if(capacityFailure && rootRequests===9) {
         const registry=info.outputs[calls.capacityDone],state=integrated.readJournal();
-        check(registry?.agents?.length===3 && registry.agents.find(row=>row.agent_name==="/root/capacity_retry")?.agent_status?.completed===CHILD_MARKER
-          && childEntry(registry).agent_status?.completed===CHILD_MARKER,"capacity_retry_not_completed");
+        print({type:"capacity_retry_registry",registry,wait:info.outputs[calls.capacityWait],simulatedModel:true});
+        // Native cap one evicts the completed first child's resident thread. Its prior terminal result
+        // and exact saved Sage completion below remain the historical evidence.
+        check(registry?.agents?.length===2 && registry.agents.find(row=>row.agent_name==="/root/capacity_retry")?.agent_status?.completed===CHILD_MARKER
+          && registry.agents.find(row=>row.agent_name==="/root")?.agent_status==="running","capacity_retry_not_completed");
         check(state.reservations.length===3 && state.bindings.length===2 && state.completions.length===2 && state.failures.length===1
           && state.failures[0].assignment===state.reservations[1].assignment.id
           && state.completions[0].assignment===state.reservations[0].assignment.id
@@ -1032,7 +1035,7 @@ data: ${JSON.stringify(event)}
     assert.equal(start.length,createTask || readTask || denySpawn ? 0 : capacityFailure ? 2 : 1);
     assert.equal(stop.length,createTask || readTask || denySpawn || interruption ? 0 : capacityFailure ? 4 : followupRecovery ? 4 : followup ? 3 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
     assert.equal(after.length,createTask || readTask || denySpawn ? 0 : capacityFailure ? 2 : 1);
-    if (!denySpawn && !createTask && !readTask) {
+    if (!denySpawn && !createTask && !readTask && !capacityFailure) {
     assert.equal(start[0].captureError,undefined);
     if(!interruption) assert.equal(start[0].agent_id,stop[0].agent_id);
     assert.equal(start[0].metadata.id,start[0].agent_id);
@@ -1081,11 +1084,15 @@ data: ${JSON.stringify(event)}
         const starts=start.filter(row=>row.agent_id===child), stops=stop.filter(row=>row.agent_id===child);
         assert.equal(starts.length,1);assert.equal(stops.length,2);assert.equal(starts[0].captureError,undefined);
         assert.equal(starts[0].metadata.id,child);
+        assert.equal(starts[0].metadata.session_id,before[0].session_id);
         const result=after.filter(row=>row.resultTaskName===starts[0].metadata.agent_path);
-        assert.equal(result.length,1);assert.equal(before.filter(row=>row.tool_use_id===result[0].tool_use_id).length,1);
+        assert.equal(result.length,1);
+        const request=before.filter(row=>row.tool_use_id===result[0].tool_use_id);
+        assert.equal(request.length,1);
+        assert.equal(request[0].tool_use_id,child===childThread?calls.spawn:calls.capacityRetrySpawn);
       }
       print({type:"capacity_rejection_evidence",nativeLimit:1,sageLimit:2,reservations:3,failedDispatches:1,bindings:2,completedChildren:2,
-        firstChildPreserved:true,freshRetryCompleted:true,simulatedModel:true,automaticSage:false});
+        firstChildPreserved:true,firstCompletionRetainedAfterNativeEviction:true,freshRetryCompleted:true,simulatedModel:true,automaticSage:false});
     }
     if (failedSpawn) {
       const state = integrated.readJournal();

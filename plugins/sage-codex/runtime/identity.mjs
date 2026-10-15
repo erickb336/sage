@@ -455,7 +455,7 @@ export function readChildTurn(transcriptPath, options, expected, { active = fals
   } catch { unavailable(); }
 }
 
-/** Only the captured 0.160.0 unknown-model preflight rejection proves this dispatch failed.
+/** Only captured 0.160.0 unknown-model or exact capacity preflight rejection proves this dispatch failed.
  * Other tool errors return null. This never releases admission by itself. */
 export function readNativeDispatchFailure(transcriptPath, options, expected) {
   const unavailable = () => { throw Error("Codex dispatch failure evidence is unavailable"); };
