@@ -1,5 +1,11 @@
+import "./fixtures/codex-native/restart-child.test.mjs";
 import { createHash } from "node:crypto";
 import "./test-env.mjs";
+import "./fixtures/codex-native/restart-rpc.test.mjs";
+import "./fixtures/codex-native/restart-evidence.test.mjs";
+import "./fixtures/codex-native/restart-cleanup.test.mjs";
+import "./fixtures/codex-native/restart-result.test.mjs";
+import "./fixtures/codex-native/restart-binary.test.mjs";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
