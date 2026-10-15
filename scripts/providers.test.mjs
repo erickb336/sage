@@ -1055,6 +1055,224 @@ async function admissionFixture(t) {
   return { api, dir, owner, scope: admissionScope(owner) };
 }
 
+async function interruptedFinishFixture(t, role = "qa", interrupted = true) {
+  const api = await admissionApi(), dir = admissionTemp(t);
+  api.configureAdmission(dir, { total: 20, projects: [{ project: "one", limit: 20 }] });
+  const owner = api.activateAdmission(dir, admissionOwner), scope = admissionScope(owner);
+  const prepare = (n, options = {}) => {
+    const { issuer = owner.session, issuerRole = "chief-of-staff", task = "T1", previous,
+      role: nextRole = role } = options;
+    const runTarget = { task, run: `R${n}`, role: nextRole, round: 1,
+      taskBranch: "codex/fixture", runBranch: "codex/fixture", candidate: "fixture-candidate" };
+    return api.prepareAdmission(dir, scope, { task, run: runTarget.run, issuer, name: `work-${n}` },
+      { issuerRole, role: nextRole }, completeBrief("Finish the fixed task."),
+      { runTarget, ...(previous ? { continuation: previous } : {}) }).preparation;
+  };
+  const reserve = prepared => {
+    const request = { preparation: prepared.id, issuer: prepared.issuer, call: `call-${prepared.name}` };
+    const dispatch = { tool: prepared.continuation ? "followup" : "spawn", turn: "parent-turn",
+      name: prepared.name, argumentsHash: "a".repeat(64), taskHash: "b".repeat(64) };
+    return prepared.continuation
+      ? api.reservePreparedContinuation(dir, scope, { ...request, previous: prepared.continuation }, dispatch, prepared.rolePlan.issuerRole)
+      : api.reservePreparedAdmission(dir, scope, request, dispatch, prepared.rolePlan.issuerRole);
+  };
+  const prepared = prepare(1), first = reserve(prepared), binding = bindingFor(first.assignment, "worker", "turn-1");
+  api.bindAdmission(dir, binding);
+  const requestFor = (saved, bound, evidenceHash = "c".repeat(64)) => ({ binding: bound, task: saved.task,
+    run: saved.run, role: saved.rolePlan.role, status: "blocked", evidenceHash, runTarget: saved.runTarget });
+  const request = requestFor(prepared, binding);
+  if (interrupted) api.interruptAdmission(dir, binding, request.evidenceHash);
+  return { api, dir, owner, scope, prepared, first, binding, request, prepare, reserve, requestFor };
+}
+
+test("T63 admission finish requires exact interruption and saved run target evidence", async t => {
+  const f = await interruptedFinishFixture(t), { api, dir, request } = f;
+  assert.equal(typeof api.beginInterruptedRunFinish, "function");
+  const before = api.readAdmission(dir);
+  const inherited = Object.create(request);
+  const missing = { ...request }; delete missing.runTarget;
+  for (const input of [null, [], inherited, missing, { ...request, extra: true },
+    { ...request, task: ["T1"] }, { ...request, run: 1 }, { ...request, status: "done" },
+    { ...request, status: ["failed"] }, { ...request, evidenceHash: "short" },
+    { ...request, evidenceHash: "d".repeat(64) }, { ...request, run: "R2" },
+    { ...request, role: "lead" }, { ...request, binding: { ...request.binding, child: "foreign" } },
+    { ...request, binding: { ...request.binding, issuer: "foreign" } },
+    { ...request, binding: { ...request.binding, epoch: "33333333-3333-4333-8333-333333333333" } },
+    { ...request, runTarget: { ...request.runTarget, task: "T2" } },
+    { ...request, runTarget: { ...request.runTarget, candidate: "changed" } },
+    { ...request, runTarget: { ...request.runTarget, round: "1" } }]) {
+    assert.throws(() => api.beginInterruptedRunFinish(dir, input));
+    assert.deepEqual(api.readAdmission(dir), before);
+  }
+  assert.throws(() => api.endInterruptedRunFinish(dir, request, "e".repeat(64)), /no pending finish/);
+  assert.deepEqual(api.beginInterruptedRunFinish(dir, request), { request });
+  for (const outcome of ["running", "completed"]) {
+    const other = await interruptedFinishFixture(t, "qa", false);
+    if (outcome === "completed") other.api.completeAdmission(other.dir, other.binding);
+    assert.throws(() => other.api.beginInterruptedRunFinish(other.dir, other.request), /matching evidence/);
+    assert.equal(other.api.readAdmission(other.dir).interruptedFinishes, undefined);
+  }
+});
+
+test("T63 admission finish keeps off-mode retries durable and permits reuse only after acknowledgement", async t => {
+  const f = await interruptedFinishFixture(t), { api, dir, request } = f;
+  assert.equal(typeof api.beginInterruptedRunFinish, "function");
+  const next = f.prepare(2, { previous: f.first.assignment.id });
+  const off = "22222222-2222-4222-8222-222222222222", on = "33333333-3333-4333-8333-333333333333";
+  api.changeAdmissionMode(dir, { ...f.scope, after: f.owner.activation, turn: off, sage: false });
+  const pending = api.beginInterruptedRunFinish(dir, request), beforeRetry = readdirSync(dir);
+  assert.deepEqual(pending, { request });
+  pending.request.runTarget.candidate = "caller mutation";
+  assert.deepEqual(api.beginInterruptedRunFinish(dir, request), { request });
+  assert.deepEqual(readdirSync(dir), beforeRetry, "an exact retry must not append a journal transition");
+  api.changeAdmissionMode(dir, { ...f.scope, after: off, turn: on, sage: true });
+  assert.throws(() => f.reserve(next), /publication still owns/);
+  assert.throws(() => f.prepare(3, { previous: f.first.assignment.id }), /publication still owns/);
+  assert.equal(f.reserve(f.prepared).decision, "already-reserved", "an old reservation grants no second dispatch");
+  const unrelated = f.prepare(4, { task: "T2" });
+  assert.equal(f.reserve(unrelated).decision, "permit-once", "the chief can admit an unrelated child while publication is pending");
+  for (const changed of [{ ...request, status: "failed" }, { ...request, evidenceHash: "d".repeat(64) }]) {
+    assert.throws(() => api.beginInterruptedRunFinish(dir, changed), /different finish request/);
+    assert.throws(() => api.endInterruptedRunFinish(dir, changed, "e".repeat(64)), /different finish request/);
+  }
+  const finished = { request, receiptHash: "e".repeat(64) };
+  assert.deepEqual(api.endInterruptedRunFinish(dir, request, finished.receiptHash), finished);
+  const saved = f.reserve(next), nextBinding = bindingFor(saved.assignment, f.binding.child, "turn-2");
+  api.bindContinuationAdmission(dir, nextBinding);
+  const active = api.readAdmission(dir), files = readdirSync(dir);
+  assert.deepEqual(api.beginInterruptedRunFinish(dir, request), finished, "historical begin cannot reopen a finished fence");
+  assert.deepEqual(api.endInterruptedRunFinish(dir, request, finished.receiptHash), finished);
+  assert.throws(() => api.endInterruptedRunFinish(dir, request, "f".repeat(64)), /receipt differs/);
+  assert.deepEqual(api.readAdmission(dir), active);
+  assert.deepEqual(readdirSync(dir), files);
+  api.interruptAdmission(dir, nextBinding, "d".repeat(64));
+  const nextRequest = f.requestFor(next, nextBinding, "d".repeat(64));
+  api.beginInterruptedRunFinish(dir, nextRequest);
+  assert.deepEqual(api.endInterruptedRunFinish(dir, request, finished.receiptHash), finished);
+  assert.throws(() => f.prepare(5, { previous: saved.assignment.id }), /publication still owns/,
+    "an old acknowledgement cannot clear the later fence");
+  assert.deepEqual(api.readAdmission(dir).interruptedFinishes, [finished, { request: nextRequest }]);
+});
+
+test("T63 admission finish waits for bound and unbound work in the historical child team", async t => {
+  const f = await interruptedFinishFixture(t, "lead", false), { api, dir } = f;
+  assert.equal(typeof api.beginInterruptedRunFinish, "function");
+  const child = f.prepare(2, { issuer: f.binding.child, issuerRole: "lead", role: "qa" });
+  const childRun = f.reserve(child), childBinding = bindingFor(childRun.assignment, "reviewer", "review-turn");
+  api.bindAdmission(dir, childBinding);
+  const unbound = f.reserve(f.prepare(3, { issuer: f.binding.child, issuerRole: "lead", role: "qa" }));
+  api.interruptAdmission(dir, f.binding, f.request.evidenceHash);
+  let before = api.readAdmission(dir);
+  assert.throws(() => api.beginInterruptedRunFinish(dir, f.request), /team still has active work/);
+  assert.deepEqual(api.readAdmission(dir), before);
+  api.completeAdmission(dir, childBinding);
+  before = api.readAdmission(dir);
+  assert.throws(() => api.beginInterruptedRunFinish(dir, f.request), /team still has active work/);
+  assert.deepEqual(api.readAdmission(dir), before, "an unbound reservation still owns its slot");
+  const { project, session, epoch, id: assignment, issuer, call } = unbound.assignment;
+  api.failAdmission(dir, { project, session, epoch, assignment, issuer, call, evidenceHash: "d".repeat(64) });
+  assert.deepEqual(api.beginInterruptedRunFinish(dir, f.request), { request: f.request });
+  const settled = api.readAdmission(dir);
+  assert.equal(settled.bindings.length, 2);
+  assert.equal(settled.completions.length, 2);
+  assert.equal(settled.failures.length, 1);
+  assert.equal(settled.reservations.length, 3);
+});
+
+test("T63 admission finish and continuation resolve both CAS publication orders", async t => {
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  for (const winner of ["finish", "continuation"]) {
+    const f = await interruptedFinishFixture(t), { api, dir, request } = f;
+    assert.equal(typeof api.beginInterruptedRunFinish, "function");
+    const next = f.prepare(2, { previous: f.first.assignment.id });
+    const original = fs.linkSync;
+    let raced = false, won;
+    // Publish the competing complete journal record after the outer operation reads
+    // its snapshot, but before its compare-and-swap. No clock controls this order.
+    fs.linkSync = (...args) => {
+      if (!raced) {
+        raced = true;
+        won = winner === "finish" ? api.beginInterruptedRunFinish(dir, request) : f.reserve(next);
+      }
+      return original(...args);
+    };
+    syncBuiltinESMExports();
+    try {
+      if (winner === "finish") assert.throws(() => f.reserve(next), /publication still owns/);
+      else assert.throws(() => api.beginInterruptedRunFinish(dir, request), /team still has active work/);
+    } finally { fs.linkSync = original; syncBuiltinESMExports(); }
+    assert.equal(raced, true);
+    const state = api.readAdmission(dir);
+    assert.equal(readdirSync(dir).some(name => name.startsWith(".pending-")), false);
+    if (winner === "finish") {
+      assert.deepEqual(won, { request });
+      assert.equal(state.reservations.length, 1);
+      assert.deepEqual(state.interruptedFinishes, [{ request }]);
+    } else {
+      assert.equal(won.decision, "permit-once");
+      assert.equal(state.reservations.length, 2);
+      assert.equal(state.interruptedFinishes, undefined);
+      const nextBinding = bindingFor(won.assignment, f.binding.child, "turn-2");
+      api.bindContinuationAdmission(dir, nextBinding);
+      assert.throws(() => api.beginInterruptedRunFinish(dir, request), /team still has active work/);
+      api.completeAdmission(dir, nextBinding);
+      assert.deepEqual(api.beginInterruptedRunFinish(dir, request), { request });
+    }
+  }
+});
+
+test("T63 admission finish recovers a published barrier after a durability error", async t => {
+  const f = await interruptedFinishFixture(t), { api, dir, request } = f;
+  assert.equal(typeof api.beginInterruptedRunFinish, "function");
+  const next = f.prepare(2, { previous: f.first.assignment.id });
+  const fs = (await import("node:fs")).default;
+  const { syncBuiltinESMExports } = await import("node:module");
+  const link = fs.linkSync, sync = fs.fsyncSync;
+  let published = false, failed = false;
+  fs.linkSync = (...args) => { const result = link(...args); published = true; return result; };
+  fs.fsyncSync = fd => {
+    if (published && !failed) { failed = true; throw Error("fixed finish durability failure"); }
+    return sync(fd);
+  };
+  syncBuiltinESMExports();
+  try { assert.throws(() => api.beginInterruptedRunFinish(dir, request), /fixed finish durability failure/); }
+  finally { fs.linkSync = link; fs.fsyncSync = sync; syncBuiltinESMExports(); }
+  assert.equal(failed, true);
+  assert.deepEqual(api.readAdmission(dir).interruptedFinishes, [{ request }]);
+  assert.throws(() => f.reserve(next), /publication still owns/);
+  assert.deepEqual(api.beginInterruptedRunFinish(dir, request), { request });
+  const finished = { request, receiptHash: "e".repeat(64) };
+  assert.deepEqual(api.endInterruptedRunFinish(dir, request, finished.receiptHash), finished);
+  assert.equal(f.reserve(next).decision, "permit-once");
+  assert.deepEqual(api.readAdmission(dir).interruptedFinishes, [finished]);
+  assert.equal(readdirSync(dir).some(name => name.startsWith(".pending-")), false);
+});
+
+test("T63 admission finish rejects altered evidence and duplicate transitions during journal replay", async t => {
+  const { createHash } = await import("node:crypto");
+  for (const damage of ["target", "duplicate-begin", "orphan-end", "duplicate-end", "changed-end"]) {
+    const f = await interruptedFinishFixture(t), { api, dir, request } = f;
+    assert.equal(typeof api.beginInterruptedRunFinish, "function");
+    api.beginInterruptedRunFinish(dir, request);
+    if (damage.endsWith("end") && damage !== "orphan-end")
+      api.endInterruptedRunFinish(dir, request, "e".repeat(64));
+    assert.equal(api.readAdmission(dir).interruptedFinishes.length, 1);
+    const last = readdirSync(dir).sort().at(-1), record = JSON.parse(readFileSync(join(dir, last), "utf8"));
+    const data = structuredClone(record.data);
+    if (damage === "target") data.request.runTarget.candidate = "changed";
+    if (damage === "orphan-end") { data.kind = "end-interrupted-finish"; data.receiptHash = "e".repeat(64); }
+    if (damage === "changed-end") data.receiptHash = "f".repeat(64);
+    const append = damage.startsWith("duplicate-") || damage === "changed-end";
+    const body = { schema: 1, revision: record.revision + (append ? 1 : 0),
+      previous: append ? record.hash : record.previous, data };
+    const changed = { ...body, hash: createHash("sha256").update(JSON.stringify(body)).digest("hex") };
+    writeFileSync(join(dir, `${String(body.revision).padStart(8, "0")}.json`), JSON.stringify(changed) + "\n");
+    assert.throws(() => api.readAdmission(dir), /matching evidence|duplicate transition|no pending finish|receipt differs/, damage);
+    assert.throws(() => api.beginInterruptedRunFinish(dir, request), /matching evidence|duplicate transition|no pending finish|receipt differs/, damage);
+  }
+});
+
 test("admission initializes one immutable configuration and idempotent session ownership", async (t) => {
   const { api, dir, owner } = await admissionFixture(t);
   assert.deepEqual(api.configureAdmission(dir, { ...admissionConfig, projects: [...admissionConfig.projects].reverse() }), admissionConfig);

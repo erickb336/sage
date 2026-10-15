@@ -4611,3 +4611,194 @@ test('resumed lead failure recovery keeps assignment history and verifies the or
     }
   }
 });
+
+async function interruptedRunFixture(t, { terminal = true } = {}) {
+  const f = await completionFixture(t);
+  if (terminal) {
+    appendInterruption(f);
+    const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+    reconcileNativeCompletions(f.native(session), session, f.options);
+  }
+  const api = await import(pathToFileURL(join(f.plugin, 'runtime/run-report.mjs')));
+  const input = { outcome: 'interrupted', run: 'R1', status: 'blocked' };
+  const finish = (request = input, actor = session, options = f.options) => api.finishRecordedRun(request, f.native(actor), options);
+  return { ...f, input, finish, logbook: f.assignmentLogbook, tool: f.assignmentTool, cli: f.assignmentCli, env: f.assignmentEnv };
+}
+const interruptedTables = f => Object.fromEntries(['tasks', 'runs', 'ledger', 'findings', 'gates', 'decisions'].map(name =>
+  [name, readFileSync(join(f.logbook, `${name}.tsv`), 'utf8')]));
+
+test('T63: native interrupted run finishes only its row and preserves exact historical retries after later work', async t => {
+  for (const status of ['blocked', 'question', 'failed']) {
+    const f = await interruptedRunFixture(t), before = interruptedTables(f), state = f.core.readAdmission(f.options.directory);
+    const originalRuns = f.tool.read(f.logbook, 'runs');
+    const input = { ...f.input, status }, result = f.finish(input);
+    assert.deepEqual(result, { decision: 'run-finished', task: 'T1', run: 'R1', assignment: state.bindings[0].assignment, evidenceHash: state.completions[0].evidenceHash, status, report: '', ended: result.ended });
+    assert.match(result.ended, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    const after = interruptedTables(f); delete before.runs; delete after.runs; assert.deepEqual(after, before);
+    const runs = f.tool.read(f.logbook, 'runs'); assert.equal(runs[0].status, status); assert.equal(runs[0].report, '');
+    assert.deepEqual(runs.slice(1), originalRuns.slice(1));
+    const saved = f.core.readAdmission(f.options.directory);
+    for (const key of Object.keys(state)) assert.deepEqual(saved[key], state[key]);
+    assert.equal(saved.interruptedFinishes.length, 1); assert.match(saved.interruptedFinishes[0].receiptHash, /^[a-f0-9]{64}$/);
+    f.cli('run', 'add', 'T1', '--role', 'lead');
+    const later = interruptedTables(f), journal = f.core.readAdmission(f.options.directory);
+    assert.deepEqual(f.finish(input), { ...result, decision: 'already-finished' });
+    assert.deepEqual(interruptedTables(f), later); assert.deepEqual(f.core.readAdmission(f.options.directory), journal);
+    assert.throws(() => f.finish({ ...input, status: status === 'blocked' ? 'failed' : 'blocked' }));
+    assert.deepEqual(interruptedTables(f), later);
+  }
+});
+
+test('T63: native interrupted run refuses malformed requests foreign callers and absent terminal evidence before publication', async t => {
+  const f = await interruptedRunFixture(t), before = interruptedTables(f), journal = f.core.readAdmission(f.options.directory);
+  for (const request of [null, {}, [], { ...f.input, status: 'done' }, { ...f.input, run: ['R1'] }, { ...f.input, extra: true },
+    { ...f.input, run: 'R2' }, { ...f.input, assignment: journal.bindings[0].assignment }, Object.create(f.input)]) assert.throws(() => f.finish(request));
+  for (const actor of [childActor, turns[2]]) assert.throws(() => f.finish(f.input, actor));
+  assert.throws(() => f.finish(f.input, session, { ...f.options, project: 'foreign' }));
+  assert.deepEqual(interruptedTables(f), before); assert.deepEqual(f.core.readAdmission(f.options.directory), journal);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+  const unfinished = await interruptedRunFixture(t, { terminal: false }); assert.throws(() => unfinished.finish());
+  appendReport(unfinished); unfinished.policy.completeChild(unfinished.stop, unfinished.native(childActor));
+  assert.throws(() => unfinished.finish());
+  assert.equal(f.finish().status, 'blocked', 'the otherwise valid authenticated interruption must finish');
+});
+
+test('T63: native interrupted finish works after off and transcript loss and rejects changed saved run targets', async t => {
+  const f = await interruptedRunFixture(t);
+  f.cli('task', 'add', '--title', 'Valid other task', '--size', 'small');
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  rmSync(join(f.mode.sessionsDir, `${childActor}.jsonl`));
+  const file = join(f.logbook, 'runs.tsv'), original = readFileSync(file, 'utf8');
+  for (const [key, value] of [['round', '1'], ['branch', 'codex/other'], ['candidate', 'other'], ['task', 'T3'], ['role', 'qa']]) {
+    const lines = original.trimEnd().split('\n'), columns = lines[0].split('\t'), row = lines[1].split('\t');
+    row[columns.indexOf(key)] = value; lines[1] = row.join('\t'); writeFileSync(file, lines.join('\n') + '\n');
+    assert.equal(f.tool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T1' }, f.env).task.id, 'T1');
+    const before = interruptedTables(f); assert.throws(() => f.finish()); assert.deepEqual(interruptedTables(f), before);
+    assert.equal(f.core.readAdmission(f.options.directory).interruptedFinishes, undefined);
+    writeFileSync(file, original);
+  }
+  const mode = f.core.readAdmission(f.options.directory).modes;
+  assert.equal(f.finish().status, 'blocked'); assert.deepEqual(f.core.readAdmission(f.options.directory).modes, mode);
+});
+
+test('T63: interrupted finish retains its fence across failed publication and recovers exactly once', async t => {
+  const f = await interruptedRunFixture(t), before = interruptedTables(f);
+  const restore = await stopReviewWrite(t, f, 'runs');
+  assert.throws(() => f.finish(), /Injected/); restore();
+  assert.deepEqual(interruptedTables(f), before);
+  const pending = readFileSync(join(f.logbook, 'review-pending.json'), 'utf8');
+  assert.equal(f.core.readAdmission(f.options.directory).interruptedFinishes[0].receiptHash, undefined);
+  assert.throws(() => f.finish({ ...f.input, status: 'failed' }));
+  assert.equal(readFileSync(join(f.logbook, 'review-pending.json'), 'utf8'), pending);
+  const result = f.finish(); assert.equal(result.status, 'blocked');
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+  assert.deepEqual(f.finish(), { ...result, decision: 'already-finished' });
+});
+
+test('T63: malformed interrupted recovery intent cannot publish tables or clear its fence', async t => {
+  for (const damage of [r => { r.result = null; }, r => { r.result.status = 'done'; }, r => { r.result.ended = 'bad'; },
+    r => { r.reference.run = ['R1']; }, r => { r.result.extra = true; }, r => { r.result.report = 'invented.md'; }]) {
+    const f = await interruptedRunFixture(t), restore = await stopReviewWrite(t, f, 'runs');
+    assert.throws(() => f.finish(), /Injected/); restore();
+    const path = join(f.logbook, 'review-pending.json'), record = JSON.parse(readFileSync(path, 'utf8'));
+    damage(record.value.receipt); record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    const bytes = JSON.stringify(record) + '\n'; writeFileSync(path, bytes);
+    const before = interruptedTables(f), journal = f.core.readAdmission(f.options.directory);
+    assert.throws(() => f.finish()); assert.deepEqual(interruptedTables(f), before);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), journal); assert.equal(readFileSync(path, 'utf8'), bytes);
+    assert.deepEqual(readdirSync(join(f.logbook, 'interrupted-runs')), []);
+  }
+});
+
+test('T63: packaged finish tool accepts only exclusive report or interrupted inputs', async t => {
+  const f = await interruptedRunFixture(t), client = await connect(t, f, '0.160.0', '', 'sage_finish_run');
+  for (const request of [{ ...f.input, status: 'done' }, { ...f.input, assignment: turns[0], reportHash: '0'.repeat(64) },
+    { run: 'R1', status: 'blocked' }, { ...f.input, extra: true }]) assert.equal(typeof (await client.call(request)).error, 'string');
+  assert.equal(typeof (await client.call(f.input, childActor)).error, 'string');
+  const result = await client.call(f.input); assert.equal(result.status, 'blocked');
+  assert.deepEqual(await client.call(f.input), { ...result, decision: 'already-finished' });
+  await client.close();
+});
+
+test('T63: recovery refuses a missing subject and any changed or extra run-table delta before publication', async t => {
+  for (const damage of ['missing-task', 'other-row', 'remove-row', 'changed-started', 'changed-model', 'duplicate-row']) {
+    const f = await interruptedRunFixture(t), restore = await stopReviewWrite(t, f, 'runs');
+    assert.throws(() => f.finish(), /Injected/); restore();
+    const path = join(f.logbook, 'review-pending.json'), record = JSON.parse(readFileSync(path, 'utf8'));
+    if (damage === 'missing-task') {
+      const file = join(f.logbook, 'tasks.tsv'), lines = readFileSync(file, 'utf8').trimEnd().split('\n');
+      writeFileSync(file, lines.filter((line, index) => !index || !line.startsWith('T1\t')).join('\n') + '\n');
+    } else {
+      const lines = record.value.tables.runs.after.trimEnd().split('\n'), columns = lines[0].split('\t');
+      if (damage === 'remove-row') lines.pop();
+      else if (damage === 'duplicate-row') lines.push(lines[1]);
+      else {
+        const index = damage === 'other-row' ? 2 : 1, row = lines[index].split('\t');
+        const key = damage === 'changed-started' ? 'started' : 'model';
+        row[columns.indexOf(key)] = key === 'started' ? '2020-01-01T00:00:00Z' : 'changed';
+        lines[index] = row.join('\t');
+      }
+      record.value.tables.runs.after = lines.join('\n') + '\n';
+    }
+    record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    const bytes = JSON.stringify(record) + '\n'; writeFileSync(path, bytes);
+    const before = interruptedTables(f), journal = f.core.readAdmission(f.options.directory);
+    assert.throws(() => f.finish()); assert.deepEqual(interruptedTables(f), before);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), journal); assert.equal(readFileSync(path, 'utf8'), bytes);
+    assert.deepEqual(readdirSync(join(f.logbook, 'interrupted-runs')), []);
+  }
+});
+
+test('T63: a durable receipt recovers a failed fence acknowledgement without reopening or changing history', async t => {
+  const f = await interruptedRunFixture(t), state = f.core.readAdmission(f.options.directory);
+  const binding = state.bindings[0], preparation = state.preparations[0];
+  const work = { project: f.options.projectDirectory, binding, task: 'T1', run: 'R1', role: 'lead', status: 'blocked',
+    evidenceHash: state.completions[0].evidenceHash, runTarget: preparation.runTarget };
+  assert.throws(() => f.tool.finishInterruptedRun(work, f.env, {
+    begin: value => f.core.beginInterruptedRunFinish(f.options.directory, value),
+    end: () => { throw Error('Injected acknowledgement failure'); },
+  }), /Injected acknowledgement/);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+  assert.equal(readdirSync(join(f.logbook, 'interrupted-runs')).length, 1);
+  assert.equal(f.core.readAdmission(f.options.directory).interruptedFinishes[0].receiptHash, undefined);
+  const before = interruptedTables(f), receiptFile = join(f.logbook, 'interrupted-runs', `${binding.assignment}.json`);
+  const bytes = readFileSync(receiptFile, 'utf8');
+  const result = f.finish(); assert.equal(result.decision, 'already-finished');
+  assert.deepEqual(interruptedTables(f), before); assert.equal(readFileSync(receiptFile, 'utf8'), bytes);
+  assert.match(f.core.readAdmission(f.options.directory).interruptedFinishes[0].receiptHash, /^[a-f0-9]{64}$/);
+  rmSync(receiptFile); assert.throws(() => f.finish()); assert.deepEqual(interruptedTables(f), before);
+});
+
+test('T63: historical interrupted receipt refuses missing task and conflicting terminal row without changing later runs', async t => {
+  const f = await interruptedRunFixture(t); f.finish(); f.cli('run', 'add', 'T1', '--role', 'lead');
+  const runsFile = join(f.logbook, 'runs.tsv'), original = readFileSync(runsFile, 'utf8');
+  const lines = original.trimEnd().split('\n'), columns = lines[0].split('\t'), row = lines[1].split('\t');
+  row[columns.indexOf('status')] = 'failed'; lines[1] = row.join('\t'); writeFileSync(runsFile, lines.join('\n') + '\n');
+  const conflicting = interruptedTables(f); assert.throws(() => f.finish()); assert.deepEqual(interruptedTables(f), conflicting);
+  writeFileSync(runsFile, original);
+  const taskFile = join(f.logbook, 'tasks.tsv'), tasks = readFileSync(taskFile, 'utf8').trimEnd().split('\n');
+  writeFileSync(taskFile, tasks.filter((line, index) => !index || !line.startsWith('T1\t')).join('\n') + '\n');
+  const missing = interruptedTables(f); assert.throws(() => f.finish()); assert.deepEqual(interruptedTables(f), missing);
+});
+
+for (const window of ['before-receipt', 'before-pending-removal']) test(`T63: interrupted finish recovers ${window} without changing its saved end time`, async t => {
+  const f = await interruptedRunFixture(t), fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const method = window === 'before-receipt' ? 'linkSync' : 'unlinkSync', original = fs[method];
+  t.mock.method(fs, method, (...args) => {
+    const destination = method === 'linkSync' ? args[1] : args[0];
+    if (window === 'before-receipt' ? destination.startsWith(join(f.logbook, 'interrupted-runs') + '/')
+      : destination === join(f.logbook, 'review-pending.json')) throw Error('Injected finish boundary');
+    return original(...args);
+  });
+  syncBuiltinESMExports(); const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); }; t.after(restore);
+  assert.throws(() => f.finish(), /Injected finish boundary/); restore();
+  const record = JSON.parse(readFileSync(join(f.logbook, 'review-pending.json'), 'utf8'));
+  assert.equal(f.tool.read(f.logbook, 'runs')[0].status, 'blocked');
+  assert.equal(f.core.readAdmission(f.options.directory).interruptedFinishes[0].receiptHash, undefined);
+  assert.equal(readdirSync(join(f.logbook, 'interrupted-runs')).length, window === 'before-receipt' ? 0 : 1);
+  const before = interruptedTables(f), result = f.finish();
+  assert.equal(result.ended, record.value.receipt.result.ended); assert.deepEqual(interruptedTables(f), before);
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+  assert.deepEqual(f.finish(), { ...result, decision: 'already-finished' });
+});

@@ -73,8 +73,9 @@ export function createPreparationServer(options = {}) {
     }
   });
   server.registerTool("sage_finish_run", {
-    description: "Chief only: finish the assigned logbook run from an already recorded report and its exact hash. Retries preserve the first result. This does not accept a review verdict or change task state.",
-    inputSchema: z.object({ assignment: z.string(), reportHash: z.string() }).strict(),
+    description: "Chief only: finish the assigned logbook run from an already recorded report and its exact hash, or from saved interruption evidence with a non-success status. Retries preserve the first result. This does not accept a review verdict or change task state.",
+    inputSchema: z.union([z.object({ assignment: z.string(), reportHash: z.string() }).strict(),
+      z.object({ outcome: z.literal("interrupted"), run: z.string(), status: z.enum(["blocked", "question", "failed"]) }).strict()]),
   }, async (input, context) => {
     const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
     try {

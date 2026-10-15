@@ -63,7 +63,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(options)};
     const interruptDecision = ${fixtureInterruptDecision.toString()};
-    const allowed = new Set([...(${JSON.stringify(acceptReview)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
+    const allowed = new Set([...(${JSON.stringify(acceptReview)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun || interruption)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
       'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
