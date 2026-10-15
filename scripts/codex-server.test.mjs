@@ -1,3 +1,4 @@
+import "./fixtures/codex-native/nested-report.test.mjs";
 import "./fixtures/codex-native/restart-child.test.mjs";
 import { createHash } from "node:crypto";
 import "./test-env.mjs";

@@ -18,7 +18,7 @@ export function fixtureInterruptDecision(input, context, enabled) {
 }
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, followupCapacity = false, capacityFailure = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, readTask = false, resumedFailure = false, env = process.env } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, followupCapacity = false, capacityFailure = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, nestedReport = false, interruption = false, readTask = false, resumedFailure = false, env = process.env } = {}) {
   cpSync(new URL("./policy-diagnostic.mjs", import.meta.url), join(root, "policy-diagnostic.mjs"));
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
@@ -41,6 +41,8 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
     cli("task", "T1", "set", "branch=codex/t1-native");
     if (!readTask) cli("run", "add", "T1", "--role", acceptReview ? "code-reviewer" : writer ? "implementer" : "lead", ...(writer ? ["--branch", "codex/t1-native"] : []));
   }
+  if(nestedReport) cli("run","add","T1","--role","code-reviewer");
+  const reviewTarget=nestedReport ? {branch:"codex/t1-native",sha:git("rev-parse","HEAD").trim(),round:0,cycle:1} : undefined;
   if(followupCapacity) {
     cli("task","add","--title","Held capacity child","--size","small");
     cli("run","add","T2","--role","lead");
@@ -73,8 +75,8 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(options)};
     const interruptDecision = ${fixtureInterruptDecision.toString()};
-    const allowed = new Set([...(${JSON.stringify(acceptReview)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun || interruption)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup || followupCapacity)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
-      'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
+    const allowed = new Set([...(${JSON.stringify(acceptReview || nestedReport)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun || interruption)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup || followupCapacity)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
+      ...(${JSON.stringify(nestedReport)} ? ['mcp__sage_preparation__sage_inspect_report'] : []), 'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
         if (${JSON.stringify(readTask)}) return input.tool_name === 'mcp__sage_preparation__sage_read_task'
@@ -127,9 +129,19 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
   const config = [["sage_fixture", "completion-hooks.mjs"], ["sage_preparation", "completion-preparation.mjs"]]
     .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
-  const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
-  const { readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
-  return { prepareFollowupCapacityRun() {
+  const receiptConfig = (nestedReport ? '[mcp_servers.sage_preparation.tools.sage_inspect_report]\napproval_mode="approve"\n' : "") + '[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
+  const { readAssignmentTurn, readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
+  return { reviewTarget, verifyNestedAssignments(expected) {
+    const state=readAdmission(options.directory);
+    for(const {child,parent,path,message} of expected) {
+      const bound=state.bindings.find(row=>row.child===child);assert(bound);
+      const rows=readObservations(join(options.observationsRoot,bound.session.slice(6))).filter(row=>row.kind==="child-transcript"&&row.child===child&&row.turn===bound.turn);
+      assert.equal(rows.length,1);
+      const assigned=state.reservations.find(row=>row.assignment.id===bound.assignment);assert(assigned);
+      const found=readAssignmentTurn(rows[0].transcript,{sessionsDir:options.sessionsDir},{session:bound.session.slice(6),child,parent,path,author:path.slice(0,path.lastIndexOf("/")),turn:bound.turn,taskHash:assigned.dispatch.taskHash});
+      assert.equal(found.message,message);
+    }
+  }, mergeReady:()=>runTool.mergeCheck(reviewTarget.sha,runEnv,{readOnly:true,project:options.projectDirectory}).ok, prepareFollowupCapacityRun() {
     cli("run","done","R1","--status","done");cli("run","add","T1","--role","lead");
     assert.equal(runTool.read(logbook,"runs").find(row=>row.id==="R3")?.task,"T1");
   }, interruptionEvidence(child) {
