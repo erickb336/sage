@@ -11,7 +11,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-followup-failed-child", "--sage-read-task", "--sage-interruption", "--sage-accept-review", "--sage-create-run", "--sage-create-task", "--sage-followup-recovery", "--sage-followup", "--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
+assert(process.argv.slice(2).every(arg => ["--sage-capacity-rejection", "--sage-followup-failed-child", "--sage-read-task", "--sage-interruption", "--sage-accept-review", "--sage-create-run", "--sage-create-task", "--sage-followup-recovery", "--sage-followup", "--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
 const readTask = process.argv.includes("--sage-read-task");
@@ -51,8 +51,10 @@ const recoveryProbe = repeatRecovery || process.argv.includes("--sage-child-reco
 const finishRun = acceptReview || createRun || process.argv.includes("--sage-report");
 const receiptProbe = finishRun || process.argv.includes("--sage-receipt") || recoveryProbe;
 const reportProbe = process.argv.includes("--sage-report") || receiptProbe;
+const capacityFailure = process.argv.includes("--sage-capacity-rejection");
+assert(!capacityFailure || process.argv.slice(2).length===1,"capacity_failure_is_separate");
 const failedSpawn = process.argv.includes("--sage-failed-spawn");
-const completion = readTask || interruption || createTask || followup || leadOwnership || roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
+const completion = capacityFailure || readTask || interruption || createTask || followup || leadOwnership || roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
 assert(!(failedSpawn && (reportProbe || recoveryProbe)), "incompatible_failure_probe");
 assert(!(denySpawn && completion), "incompatible_probe_modes");
 let denied = false;
@@ -119,7 +121,8 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,writer,leadOwnership,followup,createTask,createRun,acceptReview,interruption,readTask,resumedFailure,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe,failedSpawn,capacityFailure,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,writer,leadOwnership,followup,createTask,createRun,acceptReview,interruption,readTask,resumedFailure,deadlineMs});
+  const capacityBook=capacityFailure ? JSON.stringify(integrated.readLogbook()) : null;
   const interruptionBook = interruption ? JSON.stringify(integrated.readLogbook()) : null;
   let beforeInterruption;
   let createdTask, createdBook, creationVerified=false;
@@ -127,6 +130,8 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   const nativeTaskInput={request:"77777777-7777-4777-8777-777777777777",title:"Native created task",size:"small",risk:[],add:[],why:""};
   const nativeRunInput={request:"88888888-8888-4888-8888-888888888888",task:"T1",role:"lead",branch:"",candidate:""};
   let failureStage = 0;
+  let capacityStage=0, capacityBefore, capacityFailed, capacityFirstCompleted, capacityVerified=false, replacementThread, replacementPrompt;
+  const capacityBrief=Object.fromEntries(["GOAL","SCOPE","CONTEXT","DECISIONS","ACCEPTANCE","VERIFY","BUDGET","FORBIDDEN","REPORT","STANDING"].map(key=>[key,"Complete the fixed native capacity fixture task."]));
   let followupPrepared, followupVerified = false, followupResponse, releaseFollowup;
   const followupReady = new Promise(resolve => { releaseFollowup = resolve; });
   let reviewVerified = false, acceptedReview, acceptedBook;
@@ -154,7 +159,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseBoundChild;
   const boundChild = new Promise(resolve => { releaseBoundChild = resolve; });
   const pending = new Set();
-  const calls = { resumedControl:"resumed_control",resumedPrepare:"resumed_prepare",resumedSpawn:"resumed_spawn",resumedList:"resumed_list", taskRead:"probe_task_read", taskReadAgain:"probe_task_read_again", interruptControl:"probe_interrupt_control", accept:"probe_accept_review", acceptRetry:"probe_accept_review_retry", createRun:"probe_create_run", runRetry:"probe_run_retry", runHistoricalRetry:"probe_run_historical_retry", create:"probe_create", createRetry:"probe_create_retry", followPrepare:"probe_follow_prepare", follow:"probe_follow", followWait:"probe_follow_wait", followDone:"probe_follow_done", finish: "probe_finish", finishRetry: "probe_finish_retry", ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { capacityPrepare:"capacity_prepare",capacitySpawn:"capacity_spawn",capacityList:"capacity_list",capacityRetryPrepare:"capacity_retry_prepare",capacityRetrySpawn:"capacity_retry_spawn",capacityWait:"capacity_wait",capacityDone:"capacity_done", resumedControl:"resumed_control",resumedPrepare:"resumed_prepare",resumedSpawn:"resumed_spawn",resumedList:"resumed_list", taskRead:"probe_task_read", taskReadAgain:"probe_task_read_again", interruptControl:"probe_interrupt_control", accept:"probe_accept_review", acceptRetry:"probe_accept_review_retry", createRun:"probe_create_run", runRetry:"probe_run_retry", runHistoricalRetry:"probe_run_historical_retry", create:"probe_create", createRetry:"probe_create_retry", followPrepare:"probe_follow_prepare", follow:"probe_follow", followWait:"probe_follow_wait", followDone:"probe_follow_done", finish: "probe_finish", finishRetry: "probe_finish_retry", ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set(Object.values(calls));
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -177,10 +182,10 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       if (!["function_call_output", "custom_tool_call_output"].includes(item.type) || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.resumedPrepare,calls.taskRead, calls.taskReadAgain, calls.accept, calls.acceptRetry, calls.createRun, calls.runRetry, calls.runHistoricalRetry, calls.create, calls.createRetry, calls.followPrepare, calls.finish, calls.finishRetry, calls.ownerPrepare, calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([calls.capacityPrepare,calls.capacityRetryPrepare,calls.resumedPrepare,calls.taskRead, calls.taskReadAgain, calls.accept, calls.acceptRetry, calls.createRun, calls.runRetry, calls.runHistoricalRetry, calls.create, calls.createRetry, calls.followPrepare, calls.finish, calls.finishRetry, calls.ownerPrepare, calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
-        if ((resumedFailure && item.call_id === calls.resumedSpawn) || (failedSpawn && item.call_id === calls.failureSpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.follow, calls.ownerSpawn, calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
+        if ((resumedFailure && item.call_id === calls.resumedSpawn) || (failedSpawn && item.call_id === calls.failureSpawn) || (capacityFailure && item.call_id === calls.capacitySpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.follow, calls.ownerSpawn, calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -198,10 +203,11 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       : tool.name === "apply_patch" ? [{name:tool.name}] : []);
     const tasks=input.filter(item=>item.type==="agent_message");
     const task=tasks[0];
-    const childPromptSeen=tasks.length===1 && task.author==="/root" && task.recipient==="/root/probe_child"
+    const expectedChildPath=capacityFailure && replacementPrompt ? "/root/capacity_retry" : "/root/probe_child";
+    const childPromptSeen=tasks.length===1 && task.author==="/root" && task.recipient===expectedChildPath
       && Array.isArray(task.content) && task.content.length===2
       && task.content[0].type==="input_text"
-      && task.content[0].text==="Message Type: NEW_TASK\nTask name: /root/probe_child\nSender: /root\nPayload:\n"
+      && task.content[0].text===`Message Type: NEW_TASK\nTask name: ${expectedChildPath}\nSender: /root\nPayload:\n`
       && task.content[1].type==="encrypted_content" && task.content[1].encrypted_content===CHILD_PROMPT;
     const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({namespace: tool.name, name: member.name}))
@@ -277,6 +283,22 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if(capacityFailure && childRequests===1) {
+          check(thread===childThread && integrated.readJournal().bindings.length===1,"capacity_control_not_bound");
+          childRequests++;childResponse=res;releaseBoundChild();return;
+        }
+        if(capacityFailure && childRequests>=3) {
+          check(capacityStage===4 && thread!==childThread && thread!==rootThread,"capacity_retry_wrong_child");
+          replacementThread??=thread;check(thread===replacementThread,"capacity_retry_extra_child");
+          check(childRequests<5,"capacity_retry_extra_request");
+          if(childRequests===3) check(info.childPromptSeen,"capacity_retry_missing_brief");
+          else {
+            const state=integrated.readJournal(),stops=integrated.readStops();
+            check(state.bindings.length===2 && state.completions.length===1 && stops.length===3
+              && stops[2].decision==="stop-observed","capacity_retry_stop_released_early");
+          }
+          childRequests++;respond(res,message(CHILD_MARKER));return;
+        }
         if(interruption && childRequests===1) {
           check(thread===childThread && childResponseSent,"wrong_interrupted_child");
           check(integrated.readJournal().bindings.length===1,"interrupted_child_not_bound");
@@ -407,10 +429,10 @@ data: ${JSON.stringify(event)}
           }
           recoveryPhase = "complete"; respond(res, message(CHILD_MARKER)); return;
         }
-        if (completion && childRequests === (roleEdit ? 2 : childMessage ? 4 : childSandbox ? 2 : 1)) {
+        if (completion && childRequests === (capacityFailure ? 2 : roleEdit ? 2 : childMessage ? 4 : childSandbox ? 2 : 1)) {
           check(thread === childThread && childResponseSent, "unexpected_stop_retry");
           const state = integrated.readJournal(), stops = integrated.readStops();
-          check(state.reservations.length === (failedSpawn ? 2 : 1) && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
+          check(state.reservations.length === (failedSpawn || capacityFailure ? 2 : 1) && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
             "blocked_stop_released_capacity");
           check(stops.length === 1 && stops[0].decision === "stop-observed" && stops[0].completions === 0,
             "stop_callback_was_not_observed");
@@ -570,6 +592,31 @@ data: ${JSON.stringify(event)}
         ownershipStage = 3;
         print({type:"lead_ownership_evidence",capacity:5,reservations:1,deniedSecondLead:true,nativeAgents:2,simulatedModel:true});
       }
+      if(capacityFailure && capacityStage>0 && capacityStage<4) {
+        if(capacityStage===1) {
+          const receipt=info.outputs[calls.capacityPrepare];
+          check(receipt?.decision==="prepared" && receipt.task==="T2" && receipt.run==="R2","capacity_preparation_missing");
+          capacityStage=2;respond(res,call(calls.capacitySpawn,"spawn_agent",{task_name:"capacity_rejected",message:receipt.message,fork_turns:"none"}));return;
+        }
+        if(capacityStage===2) {
+          check(info.outputs[calls.capacitySpawn]==="collab spawn failed: agent thread limit reached","capacity_wrong_native_error");
+          const state=integrated.readJournal();
+          check(state.config.total===2 && state.reservations.length===2 && state.bindings.length===1
+            && (state.failures?.length??0)===0 && state.completions.length===0 && childRequests===2,"capacity_released_before_reconciliation");
+          check(JSON.stringify(state.reservations[0])===JSON.stringify(capacityBefore.reservations[0])
+            && JSON.stringify(state.bindings)===JSON.stringify(capacityBefore.bindings),"capacity_failure_changed_first");
+          capacityFailed=state;capacityStage=3;respond(res,call(calls.capacityList,"list_agents",{}));return;
+        }
+        const state=integrated.readJournal(), registry=info.outputs[calls.capacityList];
+        check(registry?.agents?.length===2 && childEntry(registry).agent_status==="running","capacity_failure_created_child");
+        check(state.failures?.length===1 && state.failures[0].assignment===state.reservations[1].assignment.id
+          && JSON.stringify(state.reservations)===JSON.stringify(capacityFailed.reservations)
+          && JSON.stringify(state.bindings)===JSON.stringify(capacityFailed.bindings)
+          && state.completions.length===0 && childRequests===2,"capacity_failure_wrong_release");
+        capacityStage=4;
+        print({type:"native_capacity_rejection",nativeLimit:1,sageLimit:2,exactLimitError:true,onlySecondReservationFailed:true,firstChildUnchanged:true,simulatedModel:true});
+        respond(res,call(calls.wait,"wait_agent",{}));respond(childResponse,message(CHILD_MARKER));childResponseSent=true;return;
+      }
       rootRequests++;
       if (rootRequests === 1) {
         check(["spawn_agent", "list_agents", "wait_agent"].every((name) => info.agentTools.includes(name)), "required_native_tools_missing");
@@ -593,6 +640,15 @@ data: ${JSON.stringify(event)}
         check(agent.agent_status === "running" && childResponse && !childResponseSent, "native_child_not_running_while_response_held");
         nativeRunning = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
+        if(capacityFailure) {
+          respond(childResponse,{type:"function_call",name:"list_mcp_resources",call_id:calls.interruptControl,arguments:"{}"});
+          await boundChild;
+          if(fixtureFailure) { reject(res); return; }
+          capacityBefore=integrated.readJournal();
+          check(capacityBefore.bindings.length===1 && capacityBefore.reservations.length===1,"capacity_first_not_bound");
+          capacityStage=1;respond(res,{type:"function_call",...info.prepareTools[0],call_id:calls.capacityPrepare,
+            arguments:JSON.stringify({task:"T2",run:"R2",name:"capacity_rejected",role:"lead",brief:capacityBrief})});return;
+        }
         if(interruption) {
           check(info.agentTools.includes("interrupt_agent"),"native_interrupt_tool_missing");
           respond(childResponse,{type:"function_call",name:"list_mcp_resources",call_id:calls.interruptControl,arguments:"{}"});
@@ -644,7 +700,13 @@ data: ${JSON.stringify(event)}
         check(agent.agent_status?.completed === CHILD_MARKER, "native_child_completion_marker_mismatch");
         nativeCompleted = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "completed", agent_name: taskName, agent_status: { completed: CHILD_MARKER } });
-        if (followup) {
+        if(capacityFailure) {
+          const state=integrated.readJournal();
+          check(state.completions.length===1 && state.completions[0].assignment===state.reservations[0].assignment.id,"capacity_first_not_completed");
+          capacityFirstCompleted=state.completions[0];
+          respond(res,{type:"function_call",...info.prepareTools[0],call_id:calls.capacityRetryPrepare,
+            arguments:JSON.stringify({task:"T2",run:"R2",name:"capacity_retry",role:"lead",brief:capacityBrief})});
+        } else if (followup) {
           const state = integrated.readJournal();
           check(state.bindings.length === 1 && state.completions.length === 1, "followup_predecessor_not_completed");
           integrated.prepareFollowupRun();
@@ -657,6 +719,31 @@ data: ${JSON.stringify(event)}
           respond(res, {type: "function_call", ...info.reportTools[0], call_id: calls.report,
             arguments: JSON.stringify({name: "probe_child"})});
         } else respond(res, message(MARKER));
+      } else if(capacityFailure && rootRequests===6) {
+        const receipt=info.outputs[calls.capacityRetryPrepare];
+        check(receipt?.decision==="prepared" && receipt.task==="T2" && receipt.run==="R2","capacity_retry_preparation_missing");
+        replacementPrompt=receipt.message;CHILD_PROMPT=replacementPrompt;
+        respond(res,call(calls.capacityRetrySpawn,"spawn_agent",{task_name:"capacity_retry",message:replacementPrompt,fork_turns:"none"}));
+      } else if(capacityFailure && rootRequests===7) {
+        check(info.outputs[calls.capacityRetrySpawn]?.task_name==="/root/capacity_retry","capacity_retry_spawn_missing");
+        respond(res,call(calls.capacityWait,"wait_agent",{}));
+      } else if(capacityFailure && rootRequests===8) {
+        check(info.outputs[calls.capacityWait]?.timed_out===false,"capacity_retry_wait_failed");
+        respond(res,call(calls.capacityDone,"list_agents",{}));
+      } else if(capacityFailure && rootRequests===9) {
+        const registry=info.outputs[calls.capacityDone],state=integrated.readJournal();
+        check(registry?.agents?.length===3 && registry.agents.find(row=>row.agent_name==="/root/capacity_retry")?.agent_status?.completed===CHILD_MARKER
+          && childEntry(registry).agent_status?.completed===CHILD_MARKER,"capacity_retry_not_completed");
+        check(state.reservations.length===3 && state.bindings.length===2 && state.completions.length===2 && state.failures.length===1
+          && state.failures[0].assignment===state.reservations[1].assignment.id
+          && state.completions[0].assignment===state.reservations[0].assignment.id
+          && state.completions[1].assignment===state.reservations[2].assignment.id
+          && JSON.stringify(state.reservations[0])===JSON.stringify(capacityBefore.reservations[0])
+          && JSON.stringify(state.bindings[0])===JSON.stringify(capacityBefore.bindings[0]),"capacity_retry_wrong_history");
+        check(JSON.stringify(state.completions[0])===JSON.stringify(capacityFirstCompleted)
+          && state.bindings[1].child===replacementThread && (state.reports?.length??0)===0
+          && JSON.stringify(integrated.readLogbook())===capacityBook,"capacity_retry_changed_prior_evidence");
+        capacityVerified=true;respond(res,message(MARKER));
       } else if (followup && rootRequests === 6) {
         followupPrepared = info.outputs[calls.followPrepare];
         check(followupPrepared?.decision === "prepared" && followupPrepared.target === childThread
@@ -815,7 +902,7 @@ data: ${JSON.stringify(event)}
       "features.multi_agent": true,
       "features.multi_agent_v2": true,
       "agents.enabled": true,
-      "agents.max_concurrent_threads_per_session": 5,
+      "agents.max_concurrent_threads_per_session": capacityFailure ? 1 : 5,
       allow_login_shell: false,
     };
     for (const [key, value] of Object.entries(config)) args.push("-c", `${key}=${JSON.stringify(value)}`);
@@ -881,14 +968,14 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = readTask ? taskReadVerified && rootRequests===3 && childRequests===0 : createTask ? creationVerified && rootRequests===3 && childRequests===0 : denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (acceptReview ? 13 : createRun ? 12 : followup ? 9 : finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!followup || followupVerified) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!createRun || runCreationVerified) && (!acceptReview || reviewVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (resumedFailure ? 7 : followupRecovery ? 7 : followup ? 3 : roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+      : rootRequests === (capacityFailure ? 9 : acceptReview ? 13 : createRun ? 12 : followup ? 9 : finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!followup || followupVerified) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!createRun || runCreationVerified) && (!acceptReview || reviewVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (capacityFailure ? 5 : resumedFailure ? 7 : followupRecovery ? 7 : followup ? 3 : roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
         && (!(recoveryProbe || followupRecovery) || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && (interruption || blockedStopVerified))) && rootThread !== childThread
-        && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
+        && (!capacityFailure || capacityVerified) && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
     const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && malformedEvents === 0 && rejectedRequests === 0;
     if (childMessage) print({type:"message_evidence",messageVerified,chiefMessageDelivered,messageWaitCycles,simulatedModel:true});
-    print({ type: "result", ...result, responseRequests, rootRequests: rootRequests + 2 * messageWaitCycles + (leadOwnership ? 3 : 0), childRequests, childTaskSeen, childResponseSent,
+    print({ type: "result", ...result, responseRequests, rootRequests: rootRequests + 2 * messageWaitCycles + (leadOwnership ? 3 : 0) + (capacityFailure && capacityStage===4 ? 3 : 0), childRequests, childTaskSeen, childResponseSent,
       nativeRunning, nativeWait, nativeCompleted, exactMessages, otherMessages, completedTurns, failedTurns,
       unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
@@ -898,10 +985,10 @@ data: ${JSON.stringify(event)}
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");
     const before=rows.filter(row=>row.hook_event_name==="PreToolUse"&&row.tool_name==="collaborationspawn_agent");
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
-    assert.equal(before.length,createTask || readTask ? 0 : failedSpawn || leadOwnership || resumedFailure ? 2 : 1);
-    assert.equal(start.length,createTask || readTask || denySpawn ? 0 : 1);
-    assert.equal(stop.length,createTask || readTask || denySpawn || interruption ? 0 : followupRecovery ? 4 : followup ? 3 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
-    assert.equal(after.length,createTask || readTask || denySpawn ? 0 : 1);
+    assert.equal(before.length,createTask || readTask ? 0 : capacityFailure ? 3 : failedSpawn || leadOwnership || resumedFailure ? 2 : 1);
+    assert.equal(start.length,createTask || readTask || denySpawn ? 0 : capacityFailure ? 2 : 1);
+    assert.equal(stop.length,createTask || readTask || denySpawn || interruption ? 0 : capacityFailure ? 4 : followupRecovery ? 4 : followup ? 3 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
+    assert.equal(after.length,createTask || readTask || denySpawn ? 0 : capacityFailure ? 2 : 1);
     if (!denySpawn && !createTask && !readTask) {
     assert.equal(start[0].captureError,undefined);
     if(!interruption) assert.equal(start[0].agent_id,stop[0].agent_id);
@@ -912,7 +999,7 @@ data: ${JSON.stringify(event)}
     assert.equal(matched[0].tool_use_id, calls.spawn);
     assert.equal(after[0].resultTaskName,start[0].metadata.agent_path);
     }
-    if (completion && !readTask && !createTask && !interruption) {
+    if (completion && !readTask && !createTask && !interruption && !capacityFailure) {
       const state = integrated.readJournal(), stops = integrated.readStops();
       assert.equal(state.preparations.length, resumedFailure ? 3 : failedSpawn || leadOwnership || followup ? 2 : 1); assert.equal(state.reservations.length, resumedFailure ? 3 : failedSpawn || followup ? 2 : 1);
       assert.equal(state.bindings.length, followup ? 2 : 1); assert.equal(state.completions.length, followup ? 2 : 1);
@@ -943,6 +1030,19 @@ data: ${JSON.stringify(event)}
     if (resumedFailure) {
       const state=integrated.readJournal();assert.equal(state.failures.length,1);assert.equal(state.bindings.length,2);assert.equal(state.completions.length,2);
       print({type:"resumed_failure_evidence",exactFailedIssuer:true,failures:1,preservedLeadBindings:2,completedLeadAssignments:2,noSpecialistChild:true,simulatedModel:true,automaticSage:false});
+    }
+    if(capacityFailure) {
+      assert(capacityVerified);assert.equal(start.length,2);assert.equal(after.length,2);assert.equal(before.length,3);
+      assert.notEqual(childThread,replacementThread);
+      for(const child of [childThread,replacementThread]) {
+        const starts=start.filter(row=>row.agent_id===child), stops=stop.filter(row=>row.agent_id===child);
+        assert.equal(starts.length,1);assert.equal(stops.length,2);assert.equal(starts[0].captureError,undefined);
+        assert.equal(starts[0].metadata.id,child);
+        const result=after.filter(row=>row.resultTaskName===starts[0].metadata.agent_path);
+        assert.equal(result.length,1);assert.equal(before.filter(row=>row.tool_use_id===result[0].tool_use_id).length,1);
+      }
+      print({type:"capacity_rejection_evidence",nativeLimit:1,sageLimit:2,reservations:3,failedDispatches:1,bindings:2,completedChildren:2,
+        firstChildPreserved:true,freshRetryCompleted:true,simulatedModel:true,automaticSage:false});
     }
     if (failedSpawn) {
       const state = integrated.readJournal();

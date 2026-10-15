@@ -501,9 +501,13 @@ export function readNativeDispatchFailure(transcriptPath, options, expected) {
         result = { id: p.id, output: p.output };
       } else unavailable();
     }
-    if (!request || !result || typeof request.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(request.model)) return null;
-    const prefix = `Unknown model \`${request.model}\` for spawn_agent. Available models: `;
-    if (!result.output.startsWith(prefix) || result.output.length <= prefix.length || /\p{Cc}/u.test(result.output)) return null;
+    if (!request || !result) return null;
+    // Codex 0.160.0 checks execution capacity before creating a child. Inherited models are valid here.
+    if (result.output !== "collab spawn failed: agent thread limit reached") {
+      if (typeof request.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(request.model)) return null;
+      const prefix = `Unknown model \`${request.model}\` for spawn_agent. Available models: `;
+      if (!result.output.startsWith(prefix) || result.output.length <= prefix.length || /\p{Cc}/u.test(result.output)) return null;
+    }
     return { evidenceHash: createHash("sha256").update(JSON.stringify({ ...expected, result })).digest("hex") };
   } catch { unavailable(); }
 }
