@@ -1,6 +1,9 @@
 // Fixed simulated responses for a real native lead -> reviewer -> chief report route.
 import { freshControlCompletion } from "./fresh-control.mjs";
 import { createHash } from "node:crypto";
+export function nestedReviewerReport(target) {
+ return ["STATUS done","RESULT CLEAN",`EVIDENCE ${JSON.stringify({commit:target.sha,round:target.round,cycle:target.cycle,summary:"Simulated native review"})}`,"FINDINGS []","QUESTIONS none","NOT VERIFIED real review",`BRANCH ${target.branch}`].join("\n");
+}
 export const NESTED_INSPECT_TOOL="sage_read_recorded_report";
 export const NESTED_CALLS = Object.freeze(Object.fromEntries([
   "prepare", "spawn", "wait", "list", "read", "record", "control", "leadRead", "leadRecord", "leadFinish",

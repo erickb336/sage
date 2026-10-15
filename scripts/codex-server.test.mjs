@@ -5134,7 +5134,7 @@ test('T2 pending binding pins expected assignment before any publication', async
 
 test("nested report probe tool contract matches the packaged MCP registry",async t=>{
  const {setupCompletion}=await import("./fixtures/codex-native/setup-completion.mjs");
- const {NESTED_INSPECT_TOOL}=await import("./fixtures/codex-native/nested-report.mjs");
+ const {NESTED_INSPECT_TOOL,nestedReviewerReport}=await import("./fixtures/codex-native/nested-report.mjs");
  const root=mkdtempSync(join(realpathSync(tmpdir()),"sage-nested-contract-"));t.after(()=>rmSync(root,{recursive:true,force:true}));
  for(const name of ["workspace","codex","codex/sessions"])mkdirSync(join(root,name),{recursive:true});
  const integrated=await setupCompletion(root,{nestedReport:true,env:{...process.env,SAGE_TEST_MACHINE_ID:"native-fixture"}});
@@ -5142,5 +5142,9 @@ test("nested report probe tool contract matches the packaged MCP registry",async
  const client=await connect(t,{dir:root,entry:join(root,"completion-preparation.mjs")},"0.160.0","",NESTED_INSPECT_TOOL);
  assert.deepEqual(integrated.readLogbook().runs.map(row=>[row.id,row.task,row.role,row.status]),[["R1","T1","lead","running"],["R2","T1","code-reviewer","running"]]);
  assert.match(integrated.reviewTarget.sha,/^[a-f0-9]{40}$/);assert.equal(integrated.mergeReady(),false);
+ const {parseReviewReport,parseReport}=await import(pathToFileURL(join(root,"plugin/core/index.mjs")));
+ const text=nestedReviewerReport(integrated.reviewTarget);
+ assert.equal(parseReviewReport(parseReport(text),"code-reviewer",integrated.reviewTarget).kind,"review-clean");
+ assert.throws(()=>parseReviewReport(parseReport(text.replace("FINDINGS []","FINDINGS none")),"code-reviewer",integrated.reviewTarget),/findings/);
  await client.close();
 });

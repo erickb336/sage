@@ -1,4 +1,4 @@
-import { NESTED_INSPECT_TOOL, NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
+import { nestedReviewerReport, NESTED_INSPECT_TOOL, NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
 import { createHash } from "node:crypto";
 // Isolated native V2 transport check with simulated model responses; not a live Sage pilot.
 // A wide deadlock guard closes transport first, then stops an unresponsive owned child.
@@ -72,7 +72,7 @@ let CHILD_MARKER = completion ? ["STATUS done", "RESULT sage-native-child-ok", "
 let CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const binary = process.env.SAGE_CODEX_BIN ?? "codex";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-one-child-")));
-let evidenceVerified=false,evidenceFailure=null,evidenceResult=null;
+let evidenceVerified=false,evidenceFailure=null,evidenceObserverFailure=null,evidenceResult=null;
 try {
 assert(/^[A-Za-z0-9/._-]+$/.test(root), "unsafe_probe_root");
 const workspace = join(root, "workspace");
@@ -158,7 +158,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let rejectedRequests = 0;
   let rootRequests = 0;
   let childRequests = 0, grandchildRequests=0, grandchildThread, GRAND_PROMPT;
-  const GRAND_MARKER=nestedReport ? ["STATUS done","RESULT CLEAN",`EVIDENCE ${JSON.stringify({commit:integrated.reviewTarget.sha,round:0,cycle:1,summary:"Simulated native review"})}`,"FINDINGS none","QUESTIONS none","NOT VERIFIED real review",`BRANCH ${integrated.reviewTarget.branch}`].join("\n") : "";
+  const GRAND_MARKER=nestedReport ? nestedReviewerReport(integrated.reviewTarget) : "";
   let rootThread;
   let childThread;
   let taskName;
@@ -1176,7 +1176,7 @@ data: ${JSON.stringify(event)}
       unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
     if(followupCapacity || nestedReport) evidenceResult={...result,verified,fixtureFailure,responseRequests,rootRequests,childRequests};
-    if (!verified) process.exitCode = 1;
+    if (!verified) { process.exitCode = 1; if(nestedReport)evidenceFailure??=fixtureFailure??"native_route_not_verified"; }
     const rows=readdirSync(join(root,"events")).map(name=>JSON.parse(readFileSync(join(root,"events",name),"utf8")));
     const start=rows.filter(row=>row.hook_event_name==="SubagentStart");
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");
@@ -1206,7 +1206,7 @@ data: ${JSON.stringify(event)}
         assert.equal(starts.length,1);assert.equal(stops.length,1);assert.equal(starts[0].captureError,undefined);
         assert.equal(starts[0].metadata.id,id);assert.equal(starts[0].metadata.session_id,rootThread);assert.equal(starts[0].metadata.parent_thread_id,parent);assert.equal(starts[0].metadata.agent_path,path);
         const results=after.filter(row=>row.resultTaskName===path);assert.equal(results.length,1);
-        const requests=before.filter(row=>row.tool_use_id===results[0].tool_use_id);assert.equal(requests.length,1);assert.equal(requests[0].session_id,parent);
+        const requests=before.filter(row=>row.tool_use_id===results[0].tool_use_id);assert.equal(requests.length,1);assert.equal(requests[0].session_id,rootThread);assert.equal(requests[0].agent_id??requests[0].session_id,parent);
         const bound=state.bindings.filter(row=>row.child===id);assert.equal(bound.length,1);assert.equal(bound[0].issuer,parent);
         assert.deepEqual(state.completions.find(row=>row.assignment===bound[0].assignment),bound[0]);
       }
@@ -1288,11 +1288,12 @@ data: ${JSON.stringify(event)}
 }
 
 } catch(error) {
-  evidenceFailure=error.message;throw error;
+  if(evidenceFailure&&evidenceFailure!==error.message)evidenceObserverFailure=error.message;
+  evidenceFailure??=error.message;throw error;
 } finally {
   if(followupCapacity || nestedReport) {
     try {
-      const captured=(nestedReport ? preserveRestartEvidence : preserveFollowupCapacityEvidence)(root,{task:nestedReport?"T6":"T2",verified:evidenceVerified,failure:evidenceFailure,result:evidenceResult});
+      const captured=(nestedReport ? preserveRestartEvidence : preserveFollowupCapacityEvidence)(root,{task:nestedReport?"T6":"T2",verified:evidenceVerified,failure:evidenceFailure,observerFailure:evidenceObserverFailure,result:evidenceResult});
       if(nestedReport && !captured.complete)process.exitCode=1;
       process.stdout.write(JSON.stringify({type:"local_evidence_capture",...captured})+"\n");
     } catch(error) {
