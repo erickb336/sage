@@ -1,4 +1,4 @@
-import { NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
+import { NESTED_INSPECT_TOOL, NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
 import { createHash } from "node:crypto";
 // Isolated native V2 transport check with simulated model responses; not a live Sage pilot.
 // A wide deadlock guard closes transport first, then stops an unresponsive owned child.
@@ -236,7 +236,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
       && tasks.at(-1)?.content?.some(part=>part.type==="encrypted_content" && part.encrypted_content===freshReceipt?.message);
     const rejectedPromptSeen=tasks.some(item=>item.content?.some(part=>part.type==="encrypted_content" && part.encrypted_content===followupCapacityReceipt?.message));
     const grandchildPromptSeen=tasks.length===1 && task.author==="/root/probe_child" && task.recipient==="/root/probe_child/probe_grandchild" && task.content?.some(part=>part.type==="encrypted_content"&&part.encrypted_content===GRAND_PROMPT);
-    return { grandchildPromptSeen, inspectTools:mcpTools("sage_inspect_report"), freshPromptSeen,rejectedPromptSeen,heldPromptSeen, taskReadTools:mcpTools("sage_read_task"), acceptTools:mcpTools("sage_accept_review"), createRunTools:mcpTools("sage_create_run"), createTools:mcpTools("sage_create_task"), followupPromptSeen, finishTools: mcpTools("sage_finish_run"), outputs, agentTools, childPromptSeen, commandTools, patchTools,
+    return { grandchildPromptSeen, inspectTools:mcpTools(NESTED_INSPECT_TOOL), freshPromptSeen,rejectedPromptSeen,heldPromptSeen, taskReadTools:mcpTools("sage_read_task"), acceptTools:mcpTools("sage_accept_review"), createRunTools:mcpTools("sage_create_run"), createTools:mcpTools("sage_create_task"), followupPromptSeen, finishTools: mcpTools("sage_finish_run"), outputs, agentTools, childPromptSeen, commandTools, patchTools,
       chiefMessageDelivered: input.some(item => item.type === "agent_message" && item.author === "/root/probe_child"
         && item.recipient === "/root" && texts(item.content).includes("Fixed progress report")), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), assignmentTools: mcpTools("sage_read_assignment") };
   };
@@ -1138,7 +1138,7 @@ data: ${JSON.stringify(event)}
         && ["spawn_agent", "wait", ...(interruption ? ["interrupt_agent"] : [])].includes(event.item.tool) && event.item.status === "completed") {
         // The native tool result in the next request supplies the stricter state assertion.
       } else if (completion && event.type === "item.completed" && event.item?.type === "mcp_tool_call"
-        && event.item.server === "sage_preparation" && (readTask ? ["sage_read_task"] : ["sage_create_task", "sage_create_run", "sage_prepare_task", ...(reportProbe ? ["sage_read_report"] : []), ...(receiptProbe ? ["sage_record_report"] : []), ...(finishRun || interruption ? ["sage_finish_run"] : []), ...(acceptReview || nestedReport ? ["sage_accept_review"] : []),...(nestedReport ? ["sage_inspect_report","sage_read_report","sage_record_report","sage_finish_run"] : [])]).includes(event.item.tool) && event.item.status === "completed") {
+        && event.item.server === "sage_preparation" && (readTask ? ["sage_read_task"] : ["sage_create_task", "sage_create_run", "sage_prepare_task", ...(reportProbe ? ["sage_read_report"] : []), ...(receiptProbe ? ["sage_record_report"] : []), ...(finishRun || interruption ? ["sage_finish_run"] : []), ...(acceptReview || nestedReport ? ["sage_accept_review"] : []),...(nestedReport ? ["sage_read_recorded_report","sage_read_report","sage_record_report","sage_finish_run"] : [])]).includes(event.item.tool) && event.item.status === "completed") {
         // The prepared message and final journal verify this tool's result.
       } else if (event.type === "item.completed" && event.item?.type !== "reasoning") {
         unexpectedItems++;

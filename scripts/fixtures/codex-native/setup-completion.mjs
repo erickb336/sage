@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, writeFileSync, realpathSync, unlinkSync, existsSync } from "node:fs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -76,7 +77,7 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
     const options = ${JSON.stringify(options)};
     const interruptDecision = ${fixtureInterruptDecision.toString()};
     const allowed = new Set([...(${JSON.stringify(acceptReview || nestedReport)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun || interruption)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup || followupCapacity)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
-      ...(${JSON.stringify(nestedReport)} ? ['mcp__sage_preparation__sage_inspect_report'] : []), 'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
+      ...(${JSON.stringify(nestedReport)} ? ['mcp__sage_preparation__sage_read_recorded_report'] : []), 'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
         if (${JSON.stringify(readTask)}) return input.tool_name === 'mcp__sage_preparation__sage_read_task'
@@ -129,7 +130,7 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
   const config = [["sage_fixture", "completion-hooks.mjs"], ["sage_preparation", "completion-preparation.mjs"]]
     .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
-  const receiptConfig = (nestedReport ? '[mcp_servers.sage_preparation.tools.sage_inspect_report]\napproval_mode="approve"\n' : "") + '[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
+  const receiptConfig = (nestedReport ? '[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n' : "") + '[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
   const { readAssignmentTurn, readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
   return { reviewTarget, verifyNestedAssignments(expected) {
     const state=readAdmission(options.directory);
@@ -139,7 +140,7 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
       assert.equal(rows.length,1);
       const assigned=state.reservations.find(row=>row.assignment.id===bound.assignment);assert(assigned);
       const found=readAssignmentTurn(rows[0].transcript,{sessionsDir:options.sessionsDir},{session:bound.session.slice(6),child,parent,path,author:path.slice(0,path.lastIndexOf("/")),turn:bound.turn,taskHash:assigned.dispatch.taskHash});
-      assert.equal(found.message,message);
+      assert.equal(found.taskHash,createHash("sha256").update(message).digest("hex"));
     }
   }, mergeReady:()=>runTool.mergeCheck(reviewTarget.sha,runEnv,{readOnly:true,project:options.projectDirectory}).ok, prepareFollowupCapacityRun() {
     cli("run","done","R1","--status","done");cli("run","add","T1","--role","lead");

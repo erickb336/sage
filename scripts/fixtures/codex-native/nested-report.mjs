@@ -1,6 +1,7 @@
 // Fixed simulated responses for a real native lead -> reviewer -> chief report route.
 import { freshControlCompletion } from "./fresh-control.mjs";
 import { createHash } from "node:crypto";
+export const NESTED_INSPECT_TOOL="sage_read_recorded_report";
 export const NESTED_CALLS = Object.freeze(Object.fromEntries([
   "prepare", "spawn", "wait", "list", "read", "record", "control", "leadRead", "leadRecord", "leadFinish",
   "inspect", "finish", "accept", "retry",

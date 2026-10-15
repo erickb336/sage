@@ -5131,3 +5131,16 @@ test('T2 pending binding pins expected assignment before any publication', async
   const correct = before.reservations[1].assignment.id;
   assert.equal(bindNativeChildTool(f.tool, f.native(childActor), f.options, correct).assignment.id, correct);
 });
+
+test("nested report probe tool contract matches the packaged MCP registry",async t=>{
+ const {setupCompletion}=await import("./fixtures/codex-native/setup-completion.mjs");
+ const {NESTED_INSPECT_TOOL}=await import("./fixtures/codex-native/nested-report.mjs");
+ const root=mkdtempSync(join(realpathSync(tmpdir()),"sage-nested-contract-"));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ for(const name of ["workspace","codex","codex/sessions"])mkdirSync(join(root,name),{recursive:true});
+ const integrated=await setupCompletion(root,{nestedReport:true,env:{...process.env,SAGE_TEST_MACHINE_ID:"native-fixture"}});
+ assert(integrated.config.includes(`[mcp_servers.sage_preparation.tools.${NESTED_INSPECT_TOOL}]`));
+ const client=await connect(t,{dir:root,entry:join(root,"completion-preparation.mjs")},"0.160.0","",NESTED_INSPECT_TOOL);
+ assert.deepEqual(integrated.readLogbook().runs.map(row=>[row.id,row.task,row.role,row.status]),[["R1","T1","lead","running"],["R2","T1","code-reviewer","running"]]);
+ assert.match(integrated.reviewTarget.sha,/^[a-f0-9]{40}$/);assert.equal(integrated.mergeReady(),false);
+ await client.close();
+});
