@@ -81,4 +81,12 @@ SAGE_TEST_MACHINE_ID=native-fixture env -u NODE_TEST_CONTEXT node scripts/probe-
 
 Each command prints the local capture destination and cleanup result. Raw isolated evidence stays local. A `verified` observation means the required phases completed; it does not mean the child survived or recovered.
 
-The 11 focused helper tests pass. Copying only their five test files onto detached main `bdd7aa2` produces five missing-module failures. That establishes absent harness APIs, not a repaired production regression. A separate mutant that treated EOF as terminal failed the existing terminal-event assertion.
+The original 11 focused helper tests pass; the repaired candidate has 16 passing helper tests. Copying only their five test files onto detached main `bdd7aa2` produces five missing-module failures. That establishes absent harness APIs, not a repaired production regression. A separate mutant that treated EOF as terminal failed the existing terminal-event assertion.
+
+## Optional child-load observation
+
+`--abrupt-loss --load-child` preserves the base observation, then loads the recorded child through `thread/resume` after its immediate parent. It supplies no child input or configuration override. Only an exact saved turn reported as active permits `turn/interrupt`. Otherwise the fixture records the unmet condition. A displayed interrupted status is not a persisted terminal receipt. A second parent registry call reconciles only authenticated native evidence.
+
+This route does not start a child turn or send a follow-up. The protected transcript and admission snapshots remain the authority for any release observation. The direct-native route completed after source review. Loading appended only a `thread_settings_applied` event. The returned saved turn displayed `interrupted`, so the fixture did not request interruption. The second registry contained the root and the recorded child as `pending_init`. No child model request resumed, no terminal transcript record appeared, and no completion receipt released capacity.
+
+The capture completed and all tracked handles closed. This proves the bounded load observation, not child execution recovery. A timeout or transport error from an interrupt request is recorded as an unknown outcome, never an authoritative refusal.

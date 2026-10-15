@@ -13,7 +13,8 @@ export function preserveRestartEvidence(root, summary) {
    let cursor=base;for(const component of name.split("/")){cursor=join(cursor,component);if(lstatSync(cursor).isSymbolicLink())throw Error("restart_evidence_symlink");}
    const info=lstatSync(source);if(info.isSymbolicLink())throw Error("restart_evidence_symlink");
    if(info.isDirectory()){mkdirSync(target,{mode:0o700});for(const child of readdirSync(source))copy(join(source,child),join(target,child),depth+1);return;}
-   fd=openSync(source,constants.O_RDONLY|constants.O_NOFOLLOW);const stat=fstatSync(fd);
+   if(!info.isFile())throw Error("restart_evidence_not_regular");
+   fd=openSync(source,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);const stat=fstatSync(fd);
    if(!stat.isFile()||stat.size>16*1024*1024||files>=256||bytes+stat.size>64*1024*1024)throw Error("restart_evidence_size_bound");
    const content=readFileSync(fd);if(content.length!==stat.size)throw Error("restart_evidence_changed");
    writeFileSync(target,content,{flag:"wx",mode:0o600});files++;bytes+=content.length;

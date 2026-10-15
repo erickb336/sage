@@ -14,8 +14,10 @@ import { validateRestartRegistry, requireRestartReconciliation } from "./fixture
 import { preserveRestartEvidence } from "./fixtures/codex-native/restart-evidence.mjs";
 import { freshControlCompletion } from "./fixtures/codex-native/fresh-control.mjs";
 
+import { observeRestartChild } from "./fixtures/codex-native/restart-child.mjs";
 const mode=process.argv[2]?.slice(2);
-assert(process.argv.length===3 && ["clean-eof","abrupt-loss"].includes(mode),"Choose --clean-eof or --abrupt-loss");
+const loadChild=process.argv[3]==="--load-child";
+assert((process.argv.length===3 || (process.argv.length===4&&loadChild&&mode==="abrupt-loss")) && ["clean-eof","abrupt-loss"].includes(mode),"Choose --clean-eof or --abrupt-loss");
 const root=realpathSync(mkdtempSync(join(tmpdir(),"sage-active-child-restart-")));
 const handles=[],pending=new Set(),phases=[];
 let chiefParts;
@@ -109,7 +111,9 @@ try {
    }else {
     assert.equal(stage,"resume");
     if(rootRequests===5){const strings=textItems(request.input);save("resumed-instruction-counts",chiefParts.map(part=>strings.reduce((n,text)=>n+text.split(part).length-1,0)));respond(res,call("reconcile","list_agents",{}));}
-    else {assert.equal(rootRequests,6);resumedRegistry=validateRestartRegistry(output(request,"reconcile"));save("resumed-registry",resumedRegistry);snapshot("after-reconcile");respond(res,message("restart observation recorded; no child report or run completion asserted"));}
+    else if(rootRequests===6){resumedRegistry=validateRestartRegistry(output(request,"reconcile"));save("resumed-registry",resumedRegistry);snapshot("after-reconcile");respond(res,message("restart observation recorded; no child report or run completion asserted"));}
+    else if(loadChild&&rootRequests===7)respond(res,call("reconcile_loaded","list_agents",{}));
+    else {assert(loadChild&&rootRequests===8);save("loaded-registry",validateRestartRegistry(output(request,"reconcile_loaded")));snapshot("after-loaded-reconcile");respond(res,message("loaded child observation recorded without a new child turn"));}
    }
   }catch(error){failure??=error.message;rejectModel(error);if(!res.headersSent)res.writeHead(400);res.end("Fixed restart fixture failed");}
  });
@@ -141,6 +145,14 @@ try {
  const end=await wait(completed,"resume_observation_deadline");save("resume-turn",end);
  assert.equal(end.turn?.status,"completed");
  requireRestartReconciliation(rootRequests,resumedRegistry,phases);
+ if(loadChild) {
+  await observeRestartChild((method,params)=>wait(second.request(method,params),"child_observation_deadline"),childId,childTurn,save);
+  snapshot("after-child-load");
+  const loadedCompleted=new Promise(resolve=>{const listener=event=>{if(event.method==="turn/completed"&&event.params?.threadId===session){second.events.off("notification",listener);resolve(event.params);}};second.events.on("notification",listener);});
+  await wait(second.request("turn/start",{threadId:session,input:[{type:"text",text:"Observe the loaded child through the parent registry only.",text_elements:[]}]}),"loaded_parent_turn_deadline");
+  assert.equal((await wait(loadedCompleted,"loaded_reconciliation_deadline")).turn?.status,"completed");
+  assert.equal(rootRequests,8);assert(phases.includes("after-loaded-reconcile"));
+ }
  const final=snapshot("observed");assert.deepEqual(final.logbook,initial.logbook,"restart_changed_logbook");
  assert.deepEqual(final.state.reservations,initial.state.reservations,"restart_changed_assignments");
  assert.deepEqual(final.state.bindings,initial.state.bindings,"restart_changed_bindings");
@@ -161,13 +173,13 @@ try {
 }catch(error){failure??=error.message;print({type:"restart_failure",stage,reason:failure});process.exitCode=1;}
 finally {
  const cleanup=await cleanupRestart({handles,
-  capture:()=>preserveRestartEvidence(root,{task:"T4",mode,stage,verified,failure:failure??null,phases,terminal,simulatedModel:true,automaticSage:false}),
+  capture:()=>preserveRestartEvidence(root,{task:"T4",mode,loadChild,stage,verified,failure:failure??null,phases,terminal,simulatedModel:true,automaticSage:false}),
   closeResponses:()=>{const errors=[];for(const res of pending)try{res.destroy();}catch(error){errors.push(error.message);}try{server?.closeAllConnections();}catch(error){errors.push(error.message);}if(errors.length)throw Error(errors.join("; "));},
   closeServer:()=>server?new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve())):Promise.resolve(),
   removeRoot:()=>rmSync(root,{recursive:true,force:true}),
  });
  if(cleanup.evidence)print({type:"restart_evidence",...cleanup.evidence});
- if(cleanup.errors.length || !cleanup.ownedHandlesClosed)process.exitCode=1;
+ if(!cleanup.complete || existsSync(root))process.exitCode=1;
  print({type:"cleanup",temporaryRootRemoved:!existsSync(root),ownedHandlesClosed:cleanup.ownedHandlesClosed,
   errors:cleanup.errors,...(existsSync(root)?{retainedRoot:root}:{})});
 }

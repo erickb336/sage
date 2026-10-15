@@ -23,3 +23,12 @@ test("restart cleanup still closes server after a handle signal fails and keeps 
  assert.equal(healthy.closed,true);assert.equal(serverClosed,true);assert.equal(removed,false);assert.equal(result.ownedHandlesClosed,false);
  assert(result.errors.some(row=>row.message==="signal failed"));assert.equal(result.evidence.verified,false);
 });
+
+test("restart incomplete capture and failed root removal cannot report success",async()=>{
+ for(const captureComplete of [false,true]) {
+  let removed=false;const owned=handle();
+  const result=await cleanupRestart({capture:()=>({complete:captureComplete,verified:true}),handles:[owned],closeResponses:()=>{},closeServer:()=>{},removeRoot:()=>{removed=true;throw Error("remove failed");}});
+  assert.equal(result.complete,false);assert.equal(result.ownedHandlesClosed,true);
+  assert.equal(removed,captureComplete);assert(result.errors.some(row=>row.message===(captureComplete?"remove failed":"restart_capture_incomplete")));
+ }
+});

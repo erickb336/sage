@@ -2,9 +2,9 @@ import { deadline } from "./restart-rpc.mjs";
 
 // Capture and every cleanup action are independent. A broken recorder cannot strand another owner.
 export async function cleanupRestart({ capture, handles, closeResponses, closeServer, removeRoot, timeout=30000 }) {
- const errors=[];let evidence;
+ const errors=[];let evidence,rootRemoved=false;
  const attempt=async(phase,action)=>{try{return await action();}catch(error){errors.push({phase,message:String(error?.message??error)});}};
- await attempt("capture",async()=>{evidence=await capture();});
+ await attempt("capture",async()=>{evidence=await capture();if(evidence?.complete!==true)throw Error("restart_capture_incomplete");});
  await attempt("responses",closeResponses);
  for(const [index,handle]of handles.entries()) {
   if(handle.closed)continue;
@@ -21,6 +21,6 @@ export async function cleanupRestart({ capture, handles, closeResponses, closeSe
  await attempt("server",()=>deadline(Promise.resolve().then(closeServer),timeout,"cleanup_server_deadline"));
  const ownedHandlesClosed=handles.every(handle=>handle.closed);
  // Preserve the original profile if capture or teardown was incomplete.
- if(evidence?.complete && ownedHandlesClosed && !errors.length)await attempt("remove-root",removeRoot);
- return {evidence,errors,ownedHandlesClosed};
+ if(evidence?.complete && ownedHandlesClosed && !errors.length)await attempt("remove-root",async()=>{await removeRoot();rootRemoved=true;});
+ return {evidence,errors,ownedHandlesClosed,complete:evidence?.complete===true&&ownedHandlesClosed&&rootRemoved&&!errors.length};
 }
