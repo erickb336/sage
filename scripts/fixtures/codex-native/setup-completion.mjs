@@ -18,7 +18,7 @@ export function fixtureInterruptDecision(input, context, enabled) {
 }
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, readTask = false, resumedFailure = false, env = process.env } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, followupCapacity = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, readTask = false, resumedFailure = false, env = process.env } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
@@ -40,6 +40,10 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     cli("task", "T1", "set", "branch=codex/t1-native");
     if (!readTask) cli("run", "add", "T1", "--role", acceptReview ? "code-reviewer" : writer ? "implementer" : "lead", ...(writer ? ["--branch", "codex/t1-native"] : []));
   }
+  if(followupCapacity) {
+    cli("task","add","--title","Held capacity child","--size","small");
+    cli("run","add","T2","--role","lead");
+  }
   const logbook = runTool.storeDir(options.projectDirectory, runEnv);
   if (leadOwnership) {
     // Synthetic historical overlap: the CLI now prevents two active leads. Restore only the saved R1 row
@@ -55,7 +59,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
   }
   const { configureAdmission, readAdmission, reserveRoleAdmission } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
   const { readObservations } = await import(pathToFileURL(join(root, "plugin/runtime/events.mjs")));
-  configureAdmission(options.directory, { total: failedSpawn || interruption ? 1 : 5, projects: [{ project: options.project, limit: failedSpawn || interruption ? 1 : 5 }] });
+  configureAdmission(options.directory, { total: followupCapacity ? 2 : failedSpawn || interruption ? 1 : 5, projects: [{ project: options.project, limit: followupCapacity ? 2 : failedSpawn || interruption ? 1 : 5 }] });
   writeFileSync(join(root, "completion-hooks.mjs"), `
     import { appendFileSync, writeFileSync } from 'node:fs';
     import { readAdmission } from './plugin/core/index.mjs';
@@ -63,7 +67,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(options)};
     const interruptDecision = ${fixtureInterruptDecision.toString()};
-    const allowed = new Set([...(${JSON.stringify(acceptReview)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun || interruption)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
+    const allowed = new Set([...(${JSON.stringify(acceptReview)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun || interruption)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup || followupCapacity)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
       'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
@@ -111,7 +115,10 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
     + '[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
   const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
   const { readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
-  return { interruptionEvidence(child) {
+  return { prepareFollowupCapacityRun() {
+    cli("run","done","R1","--status","done");cli("run","add","T1","--role","lead");
+    assert.equal(runTool.read(logbook,"runs").find(row=>row.id==="R3")?.task,"T1");
+  }, interruptionEvidence(child) {
     const state = readAdmission(options.directory), bound = state.bindings.find(row => row.child === child);
     assert(bound);
     const rows = readObservations(join(options.observationsRoot, bound.session.slice(6)));
