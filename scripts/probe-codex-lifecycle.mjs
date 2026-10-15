@@ -5,7 +5,7 @@ import { NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/ne
 import {createHash} from "node:crypto";
 import assert from "node:assert/strict";
 import {existsSync,readdirSync,readFileSync,lstatSync} from "node:fs";
-import {freshControlCompletion} from "./fixtures/codex-native/fresh-control.mjs";
+import {freshControlCompletion,capacityChildPhase} from "./fixtures/codex-native/fresh-control.mjs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
 import {readNativeInterruption,readAssignmentTurn,readNativeFollowup,readNativeRecovery} from "../packages/sage-codex/runtime/identity.mjs";
 import {readObservations} from "../packages/sage-codex/runtime/events.mjs";
@@ -528,6 +528,16 @@ data: ${JSON.stringify(event)}
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
         if(followupCapacity && thread===childThread && childRequests>=2) {
+          const phase=capacityChildPhase({initialPrompt:info.childPromptSeen,freshPrompt:info.freshPromptSeen,freshDispatched});
+          if(phase==="initial") {
+            const state=integrated.readJournal(),stops=integrated.readStops();
+            check(childRequests===2 && rootRequests===3 && state.reservations.length===1 && state.bindings.length===1
+              && (state.completions?.length??0)===0,"blocked_stop_released_capacity");
+            check(stops.length===1 && stops[0].decision==="stop-observed" && stops[0].completions===0
+              && existsSync(join(root,`blocked-${childThread}.json`)),"initial_stop_not_blocked");
+            assert.deepEqual(info.outputs[calls.childControl],{resources:[]},"initial_control_not_successful");
+            childRequests++;respond(res,message(CHILD_MARKER));return;
+          }
           check(freshDispatched && freshRequests<2,"unrequested_A_followup");
           check(info.freshPromptSeen && !info.rejectedPromptSeen,"fresh_followup_wrong_assignment");
           freshRequests++;childRequests++;
@@ -1547,7 +1557,7 @@ data: ${JSON.stringify(event)}
       ? createdTaskVerified && rootRequests === 3 && childRequests === 0 && grandchildRequests === 0
       : noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : (childMessage ? rootRequests >= 5 : rootRequests === (followupCapacity ? 18 : capacityFailure ? 9 : interruption ? 8 : sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (followupCapacity ? 7 : capacityFailure ? 5 : repeatChildRecovery ? 10 : childRecovery ? 6 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (followupRecovery ? 6 : resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+      : (childMessage ? rootRequests >= 5 : rootRequests === (followupCapacity ? 18 : capacityFailure ? 9 : interruption ? 8 : sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (followupCapacity ? 8 : capacityFailure ? 5 : repeatChildRecovery ? 10 : childRecovery ? 6 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (followupRecovery ? 6 : resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
         && (!followupCapacity || followupCapacityVerified) && (!capacityFailure || capacityVerified) && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified && interruptedFinishVerified : nativeWait && nativeCompleted);
     const verified = (!followupRecovery || followupRecoveryVerified) && (!childRecovery || recoveryTargetVerified) && (!childCompaction || (childCompactionObserved && childCompactionReady)) && result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
       && (!childSandbox || childSandboxVerified) && (!childMessage || childMessageVerified) && (!resumedFailure || resumedFailureVerified) && (!unpreparedFollowup || unpreparedFollowupVerified) && (!sageFollowup || sageFollowupVerified)
