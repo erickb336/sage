@@ -1,8 +1,8 @@
 # Recover a rejected initial spawn
 
-An initial spawn reserves capacity before Codex tries to create the child. The runtime releases that slot only when the protected sender transcript proves the captured Codex 0.160.0 unknown-model rejection.
+An initial spawn reserves capacity before Codex tries to create the child. The runtime releases that slot only when the protected sender transcript proves one of two captured Codex 0.160.0 preflight rejections: an unknown model or the agent thread limit.
 
-The adapter checks the current actor, owner epoch, original request, call, turn, and argument hash. Native metadata must mark both records as server-authored. The error must name the dispatched model. A call or result after native turn completion or interruption refuses. Valid failure evidence recorded before the turn ends remains readable. Other errors retain capacity. A successful dispatch result, child-start record, or saved binding also retains capacity on this path.
+The adapter checks the current actor, owner epoch, original request, call, turn, and argument hash. Native metadata must mark both records as server-authored. An unknown-model error must name the dispatched model. The capacity error must equal `collab spawn failed: agent thread limit reached`; it also supports an inherited model. A call or result after native turn completion or interruption refuses. Valid failure evidence recorded before the turn ends remains readable. Other errors retain capacity. A successful dispatch result, child-start record, or saved binding also retains capacity on this path.
 
 Reconciliation runs before a new admitted spawn and after native list or wait callbacks. It can recover preserved work after Sage turns off. A lead, including a reused lead, can reconcile its own rejected child; another actor cannot release that reservation.
 
@@ -17,3 +17,11 @@ Its own list callback records the failure. The probe requires one failure, no re
 Responses are simulated. Packaged tests also check off-mode recovery, foreign-parent evidence, another actor, unchanged retries, and capacity release.
 Capacity tests use clearly labelled synthetic reservations through the public admission API; they do not launch replacement agents.
 The production recovery already exists on main. These checks do not establish real-model behavior or automatic Sage activation.
+
+
+The pinned [native capacity check](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/agent/control/spawn.rs) runs before child creation.
+The [error adapter](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/handlers/multi_agents_common.rs) supplies the observed error prefix.
+Only the exact captured result releases capacity; extra text, another error, or conflicting evidence cannot do so.
+Run `node scripts/probe-codex-lifecycle.mjs --sage-capacity-rejection` for native capacity rejection and retry.
+It uses native capacity one and Sage capacity two, holds one child, rejects another, then completes a fresh retry.
+Model responses are simulated; the check does not enable installed Sage or prove real-model behavior.

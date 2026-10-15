@@ -18,7 +18,7 @@ export function fixtureInterruptDecision(input, context, enabled) {
 }
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, followupCapacity = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, readTask = false, resumedFailure = false, env = process.env } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, followupCapacity = false, capacityFailure = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, readTask = false, resumedFailure = false, env = process.env } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
@@ -44,6 +44,10 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
     cli("task","add","--title","Held capacity child","--size","small");
     cli("run","add","T2","--role","lead");
   }
+  if (capacityFailure) {
+    cli("task", "add", "--title", "Native capacity retry", "--size", "small");
+    cli("run", "add", "T2", "--role", "lead");
+  }
   const logbook = runTool.storeDir(options.projectDirectory, runEnv);
   if (leadOwnership) {
     // Synthetic historical overlap: the CLI now prevents two active leads. Restore only the saved R1 row
@@ -59,7 +63,7 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
   }
   const { configureAdmission, readAdmission, reserveRoleAdmission } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
   const { readObservations } = await import(pathToFileURL(join(root, "plugin/runtime/events.mjs")));
-  configureAdmission(options.directory, { total: followupCapacity ? 2 : failedSpawn || interruption ? 1 : 5, projects: [{ project: options.project, limit: followupCapacity ? 2 : failedSpawn || interruption ? 1 : 5 }] });
+  configureAdmission(options.directory, { total: followupCapacity || capacityFailure ? 2 : failedSpawn || interruption ? 1 : 5, projects: [{ project: options.project, limit: followupCapacity || capacityFailure ? 2 : failedSpawn || interruption ? 1 : 5 }] });
   writeFileSync(join(root, "completion-hooks.mjs"), `
     import { appendFileSync, writeFileSync } from 'node:fs';
     import { readAdmission } from './plugin/core/index.mjs';
