@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   for (const file of ["policy-diagnostic.mjs", "fixture-interrupt.mjs", "sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
     writeFileSync(join(root, file), readFileSync(new URL(file, import.meta.url)));
   }
+  const { readAssignmentTurn } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
   const { readObservations } = await import(pathToFileURL(join(root, "plugin/runtime/events.mjs")));
   const { configureAdmission, readAdmission, reserveRoleAdmission, createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
   writeFileSync(join(root, "fixture-fault.json"), JSON.stringify({ disconnectOnSpawn, denyCommand, interruption, readTask, capacityFailure, followupCapacity }));
@@ -49,7 +51,17 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   const servers = [["sage_fixture", "sage-hook-server.mjs"], ["sage_preparation", "sage-preparation-server.mjs"]];
   const config = servers.map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_update_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n';
-  return { prepareFollowupCapacityRun() {
+  return { verifyNestedAssignments(expected) {
+    const state=readAdmission(directory);
+    for(const {child,parent,path,message} of expected) {
+      const bound=state.bindings.find(row=>row.child===child);assert(bound);
+      const rows=readObservations(join(mode.observationsRoot,bound.session.slice(6))).filter(row=>row.kind==="child-transcript"&&row.child===child&&row.turn===bound.turn);
+      assert.equal(rows.length,1);
+      const assigned=state.reservations.find(row=>row.assignment.id===bound.assignment);assert(assigned);
+      const found=readAssignmentTurn(rows[0].transcript,{sessionsDir:mode.sessionsDir},{session:bound.session.slice(6),child,parent,path,author:path.slice(0,path.lastIndexOf("/")),turn:bound.turn,taskHash:assigned.dispatch.taskHash});
+      assert.equal(found.taskHash,createHash("sha256").update(message).digest("hex"));
+    }
+  }, prepareFollowupCapacityRun() {
     command("run","done","R1","--status","done");command("run","add","T1","--role","lead");
     assert.equal(tool.read(logbook,"runs").find(row=>row.id==="R3")?.task,"T1");
   }, interruptionEvidence(child) {
@@ -75,7 +87,11 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
     assert.equal(after.reservations.length,state.reservations.length+1);
     assert.deepEqual(after.reservations[0],state.reservations[0]);
     assert.deepEqual(after.bindings,state.bindings);assert.deepEqual(after.completions,state.completions);
-  }, config, reviewTarget, readLogbook, endFixtureRun: () => command("run", "done", "R1", "--status", "done"), retargetFixtureRun, mergeReady: () => tool.mergeCheck(reviewTarget.sha, env).ok, readRunReport: () => readFileSync(join(logbook, tool.read(logbook, "runs")[0].report), "utf8"), readFault: () => JSON.parse(readFileSync(join(root, "hook-outage.json"), "utf8")), readJournal: () => readAdmission(directory), hook: event => {
+  }, config, reviewTarget, readLogbook, endFixtureRun: () => command("run", "done", "R1", "--status", "done"), retargetFixtureRun, mergeReady: () => tool.mergeCheck(reviewTarget.sha, env, {readOnly:true,project:mode.projectDirectory}).ok, readRunReport: name => {
+    const report=name??tool.read(logbook,"runs")[0].report;
+    assert(/^reports\/R[1-9][0-9]*-[a-f0-9-]+\.md$/.test(report));
+    return readFileSync(join(logbook,report),"utf8");
+  }, readFault: () => JSON.parse(readFileSync(join(root, "hook-outage.json"), "utf8")), readJournal: () => readAdmission(directory), hook: event => {
     // Deliberately omit MCP SubagentStart: the first tool must establish the child's binding.
     if (event === "SubagentStart" || (omitStop && event === "SubagentStop")) return [];
     const fields = event === "SessionStart" && restoreCompaction ? ["cwd", "hook_event_name", "model", "permission_mode", "session_id", "source", "transcript_path"]

@@ -1,12 +1,13 @@
-import "./test-env.mjs";
+import "./fixtures/codex-native/nested-report.test.mjs";
 import "./fixtures/codex-native/restart-child.test.mjs";
+import { createHash } from "node:crypto";
+import "./test-env.mjs";
 import "./fixtures/codex-native/restart-rpc.test.mjs";
 import "./fixtures/codex-native/restart-evidence.test.mjs";
 import "./fixtures/codex-native/restart-cleanup.test.mjs";
 import "./fixtures/codex-native/restart-result.test.mjs";
 import "./fixtures/codex-native/restart-binary.test.mjs";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6044,4 +6045,23 @@ test('T2 pending binding pins expected assignment before any publication', async
   assert.deepEqual(f.events.readObservations(join(f.options.observationsRoot, session)), observations);
   const correct = before.reservations[1].assignment.id;
   assert.equal(bindNativeChildTool(f.tool, f.native(childActor), f.options, correct).assignment.id, correct);
+});
+
+test("nested report probe tool contract matches the packaged MCP registry",async t=>{
+ const {setupSage}=await import("./fixtures/codex-native/setup-sage.mjs");
+ const {NESTED_INSPECT_TOOL,nestedReviewerReport}=await import("./fixtures/codex-native/nested-report.mjs");
+ const root=mkdtempSync(join(realpathSync(tmpdir()),"sage-nested-contract-"));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ for(const name of ["workspace","codex","codex/sessions"])mkdirSync(join(root,name),{recursive:true});
+ const priorMachine=process.env.SAGE_TEST_MACHINE_ID;process.env.SAGE_TEST_MACHINE_ID="native-fixture";
+ t.after(()=>{if(priorMachine===undefined)delete process.env.SAGE_TEST_MACHINE_ID;else process.env.SAGE_TEST_MACHINE_ID=priorMachine;});
+ const integrated=await setupSage(root,{review:true,nestedReview:true});
+ assert(integrated.config.includes(`[mcp_servers.sage_preparation.tools.${NESTED_INSPECT_TOOL}]`));
+ const client=await connect(t,{dir:root,entry:join(root,"sage-preparation-server.mjs")},"0.160.0","",NESTED_INSPECT_TOOL);
+ assert.deepEqual(integrated.readLogbook().runs.map(row=>[row.id,row.task,row.role,row.status]),[["R1","T1","lead","running"],["R2","T1","code-reviewer","running"]]);
+ assert.match(integrated.reviewTarget.sha,/^[a-f0-9]{40}$/);assert.equal(integrated.mergeReady(),false);
+ const {parseReviewReport,parseReport}=await import(pathToFileURL(join(root,"plugin/core/index.mjs")));
+ const text=nestedReviewerReport(integrated.reviewTarget);
+ assert.equal(parseReviewReport(parseReport(text),"code-reviewer",integrated.reviewTarget).kind,"review-clean");
+ assert.throws(()=>parseReviewReport(parseReport(text.replace("FINDINGS []","FINDINGS none")),"code-reviewer",integrated.reviewTarget),/findings/);
+ await client.close();
 });

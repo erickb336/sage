@@ -1,10 +1,11 @@
 // Isolated native V2 transport check with simulated model responses; not a live Sage pilot.
 // A wide deadlock guard closes transport first, then stops an unresponsive owned child.
 import http from "node:http";
-import { NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
+import { nestedReviewerReport, NESTED_INSPECT_TOOL, NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
 import {createHash} from "node:crypto";
 import assert from "node:assert/strict";
 import {existsSync,readdirSync,readFileSync,lstatSync} from "node:fs";
+import {preserveRestartEvidence} from "./fixtures/codex-native/restart-evidence.mjs";
 import {freshControlCompletion,capacityChildPhase} from "./fixtures/codex-native/fresh-control.mjs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
 import {readNativeInterruption,readAssignmentTurn,readNativeFollowup,readNativeRecovery} from "../packages/sage-codex/runtime/identity.mjs";
@@ -80,6 +81,7 @@ const escapeReport = process.argv.includes("--sage-report-escape");
 assert([correctReport, escapeReport, blockStop].filter(Boolean).length <= 1, "incompatible_stop_routes");
 const noTool = process.argv.includes("--sage-no-tool") || blockStop || correctReport || escapeReport;
 const nestedReport = process.argv.includes("--sage-nested-report");
+assert(!nestedReport || process.argv.length===3,"nested_report_is_separate");
 const nested = process.argv.includes("--nested") || nestedReport;
 const outage = process.argv.includes("--sage-hook-outage");
 const acceptReview = process.argv.includes("--sage-accept-review");
@@ -99,7 +101,7 @@ const FOLLOWUP_MARKER = sageFollowup ? CHILD_MARKER.replace("sage-native-child-o
 let FOLLOWUP_PROMPT = `Return exactly ${FOLLOWUP_MARKER}. Do not call any tool.`;
 const binary = process.env.SAGE_CODEX_BIN ?? "codex";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-one-child-")));
-let evidenceVerified=false,evidenceFailure=null,evidenceResult=null;
+let evidenceVerified=false,evidenceFailure=null,evidenceObserverFailure=null,evidenceResult=null;
 try {
 assert(/^[A-Za-z0-9/._-]+$/.test(root), "unsafe_probe_root");
 const workspace = join(root, "workspace");
@@ -107,6 +109,7 @@ const baselineHome = join(root, "home");
 const codexHome = join(root, "codex");
 const temporary = join(root, "tmp");
 for (const dir of [workspace, baselineHome, codexHome, temporary]) mkdirSync(dir);
+if(nestedReport)mkdirSync(join(root,"restart"));
 const catalogPath = join(root, "model-catalog.json");
 writeFileSync(catalogPath, JSON.stringify({ models: [{
   slug: "sage-native-parent", display_name: "Sage native lifecycle fixture",
@@ -170,9 +173,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   if (reportProbe) CHILD_MARKER = ["STATUS done", "RESULT CLEAN",
     `EVIDENCE ${JSON.stringify({ commit: integrated.reviewTarget.sha, round: 0, cycle: 1, summary: "Fixed native fixture completed; simulated review only." })}`,
     "FINDINGS []", "QUESTIONS none", "NOT VERIFIED real model or real review", "BRANCH codex/t1-review"].join("\n");
-  if (nestedReport) GRAND_MARKER = ["STATUS done", "RESULT CLEAN",
-    `EVIDENCE ${JSON.stringify({ commit: integrated.reviewTarget.sha, round: 0, cycle: 1, summary: "Fixed nested review; simulated evidence only." })}`,
-    "FINDINGS []", "QUESTIONS none", "NOT VERIFIED real model or real review", "BRANCH codex/t1-review"].join("\n");
+  if (nestedReport) GRAND_MARKER = nestedReviewerReport(integrated.reviewTarget);
   const chiefText = (sage || sageOff) ? readFileSync(join(root, "plugin/runtime/chief-instructions.md"), "utf8").split("\n---\n\n")[1].slice(0, -1) : null;
   const chiefParts = chiefText ? (await import(`file://${join(root, "plugin/runtime/chief-output.mjs")}`)).chiefInstructionParts() : [];
   let chiefContextVerified = false;
@@ -279,7 +280,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     return { freshPromptSeen,rejectedPromptSeen,heldPromptSeen, commandTools, progressMessageSeen, outputs, agentTools, childPromptSeen, followupPromptSeen, grandchildPromptSeen, patchTools,
       chiefCopies: chiefParts.map(part => textValues(input).reduce((count, text) => count + text.split(part).length - 1, 0)),
       chiefOrder: chiefParts.map(part => textValues(input).join("\n").indexOf(part)),
-      assignmentTools: mcpTools("sage_read_assignment"), readTaskTools: mcpTools("sage_read_task"), updateTaskTools: mcpTools("sage_update_task"), createRunTools: mcpTools("sage_create_run"), createTools: mcpTools("sage_create_task"), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review"), inspectTools: mcpTools("sage_read_recorded_report") };
+      assignmentTools: mcpTools("sage_read_assignment"), readTaskTools: mcpTools("sage_read_task"), updateTaskTools: mcpTools("sage_update_task"), createRunTools: mcpTools("sage_create_run"), createTools: mcpTools("sage_create_task"), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), finishTools: mcpTools("sage_finish_run"), acceptTools: mcpTools("sage_accept_review"), inspectTools: mcpTools(NESTED_INSPECT_TOOL) };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -1567,8 +1568,8 @@ data: ${JSON.stringify(event)}
       nativeRunning, nativeWait, nativeCompleted, exactMessages, otherMessages, completedTurns, failedTurns,
       unexpectedItems, refusedTaskUpdates, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
-    if(followupCapacity) evidenceResult={...result,verified,fixtureFailure,responseRequests,rootRequests,childRequests};
-    if (!verified) process.exitCode = 1;
+    if(followupCapacity || nestedReport) evidenceResult={...result,verified,fixtureFailure,responseRequests,rootRequests,childRequests};
+    if (!verified) { process.exitCode = 1; if(nestedReport)evidenceFailure??=fixtureFailure??"native_route_not_verified"; }
     if (childCompaction && childCompactionObserved && !childCompactionReady && result.code !== 0) throw Error("child_compaction_not_ready");
     if (sage || sageOff) assert(chiefContextVerified, "chief_context_not_observed");
     if (createTask) assert(createdTaskVerified, "task_creation_not_observed");
@@ -1639,6 +1640,21 @@ data: ${JSON.stringify(event)}
     assert.equal(before.length,taskOnly || readTask ? 0 : capacityFailure ? 3 : followupCapacity || nested || failedSpawn || resumedFailure ? 2 : 1);
     assert.equal(start.length, noChild ? 0 : followupCapacity || capacityFailure ? 2 : nested ? 2 : 1);
     assert.equal(stop.length, noChild || interruption ? 0 : followupCapacity ? 5 : capacityFailure ? 4 : repeatChildRecovery ? 4 : childRecovery ? 3 : blockStop || correctReport || escapeReport || followUp || sageFollowup || nested ? 2 : 1);
+    if(nestedReport) {
+      integrated.verifyNestedAssignments([{child:childThread,parent:rootThread,path:"/root/probe_child",message:CHILD_PROMPT},{child:grandchildThread,parent:childThread,path:"/root/probe_child/probe_grandchild",message:GRAND_PROMPT}]);
+      const state=integrated.readJournal();
+      assert.equal(state.preparations.length,2);assert.equal(state.reservations.length,2);
+      assert.equal(state.bindings.length,2);assert.equal(state.completions.length,2);assert.equal(state.reports.length,2);
+      for(const [id,parent,path] of [[childThread,rootThread,"/root/probe_child"],[grandchildThread,childThread,"/root/probe_child/probe_grandchild"]]) {
+        const starts=start.filter(row=>row.agent_id===id),stops=stop.filter(row=>row.agent_id===id);
+        assert.equal(starts.length,1);assert.equal(stops.length,1);assert.equal(starts[0].captureError,undefined);
+        assert.equal(starts[0].metadata.id,id);assert.equal(starts[0].metadata.session_id,rootThread);assert.equal(starts[0].metadata.parent_thread_id,parent);assert.equal(starts[0].metadata.agent_path,path);
+        const results=after.filter(row=>row.resultTaskName===path);assert.equal(results.length,1);
+        const requests=before.filter(row=>row.tool_use_id===results[0].tool_use_id);assert.equal(requests.length,1);assert.equal(requests[0].session_id,rootThread);assert.equal(requests[0].agent_id??requests[0].session_id,parent);
+        const bound=state.bindings.filter(row=>row.child===id);assert.equal(bound.length,1);assert.equal(bound[0].issuer,parent);
+        assert.deepEqual(state.completions.find(row=>row.assignment===bound[0].assignment),bound[0]);
+      }
+    }
     if(followupCapacity) {
       assert(followupCapacityVerified);
       for(const child of [childThread,heldThread]) {
@@ -1864,19 +1880,22 @@ data: ${JSON.stringify(event)}
         failClosed, readyForActivation: false, simulatedModel: true });
       if (!failClosed) process.exitCode = 1;
     }
-    if(followupCapacity) evidenceVerified=verified && followupCapacityVerified;
+    if(followupCapacity || nestedReport) evidenceVerified=verified && (!followupCapacity || followupCapacityVerified);
     print({type:"hook_evidence",spawnRequest:before.length,spawnResult:after.length,childStart:start.length,childStop:stop.length,exactIdentityJoin:!noChild,followupTurnVerified:followUp || sageFollowup,nestedTurnsVerified:nested,noChildStarted:noChild,simulatedModel:true,automaticSage:false,realModelConsumptionVerified:false});
   }
 }
 
 } catch(error) {
-  evidenceFailure=error.message;throw error;
+  if(evidenceFailure&&evidenceFailure!==error.message)evidenceObserverFailure=error.message;
+  evidenceFailure??=error.message;throw error;
 } finally {
-  if(followupCapacity) {
+  if(followupCapacity || nestedReport) {
     try {
-      const captured=preserveFollowupCapacityEvidence(root,{verified:evidenceVerified,failure:evidenceFailure,result:evidenceResult});
+      const captured=(nestedReport ? preserveRestartEvidence : preserveFollowupCapacityEvidence)(root,{task:nestedReport?"T6":"T2",verified:evidenceVerified,failure:evidenceFailure,observerFailure:evidenceObserverFailure,result:evidenceResult});
+      if(nestedReport && !captured.complete)process.exitCode=1;
       process.stdout.write(JSON.stringify({type:"local_evidence_capture",...captured})+"\n");
     } catch(error) {
+      if(nestedReport)process.exitCode=1;
       process.stdout.write(JSON.stringify({type:"local_evidence_capture",verified:false,complete:false,error:error.message})+"\n");
     }
   }
