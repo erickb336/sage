@@ -5,6 +5,18 @@ export function createPreparationServer(options = {}) {
   const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot, sessionsDir: options.sessionsDir,
     projectDirectory: options.projectDirectory, logbookRoot: options.logbookRoot });
   const server = new McpServer({ name: "sage-preparation", version: "0.1.0" });
+  server.registerTool("sage_read_task", {
+    description: "Chief only: read one recorded task and its task-metadata SHA-256 token. This token does not cover findings, runs, reviews or branch HEAD and grants no workflow permission.",
+    inputSchema: z.object({ task: z.string() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { readNativeTask } = await import("./task-read.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(readNativeTask(input, native, fixed)) }] };
+    } catch {
+      return { isError: true, content: [{ type: "text", text: "Sage could not read this task. Check the chief identity, configured logbook and task ID." }] };
+    }
+  });
   server.registerTool("sage_create_task", {
     description: "Chief only: create one framed task in the configured logbook. Reuse the same request UUID and identical fields after a lost response. Returns the original creation record on retry; it does not start a run, approve a route, dispatch an agent, or merge. Extra blocks require a reason. Unsupported routes remain unavailable for dispatch.",
     inputSchema: z.object({ request: z.string(), title: z.string(), size: z.string(), risk: z.array(z.string()),

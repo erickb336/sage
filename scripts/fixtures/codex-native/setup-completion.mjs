@@ -18,7 +18,7 @@ export function fixtureInterruptDecision(input, context, enabled) {
 }
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, resumedFailure = false, env = process.env } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, readTask = false, resumedFailure = false, env = process.env } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
@@ -36,9 +36,9 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
   const cli = (...args) => runTool.sage([...args, "--project", options.projectDirectory], runEnv);
   cli("init");
   if (!createTask && !createRun) {
-    cli("task", "add", "--title", "Native recorded run", "--size", "small");
+    cli("task", "add", "--title", readTask ? "Simulated task read fixture" : "Native recorded run", "--size", "small");
     cli("task", "T1", "set", "branch=codex/t1-native");
-    cli("run", "add", "T1", "--role", acceptReview ? "code-reviewer" : writer ? "implementer" : "lead", ...(writer ? ["--branch", "codex/t1-native"] : []));
+    if (!readTask) cli("run", "add", "T1", "--role", acceptReview ? "code-reviewer" : writer ? "implementer" : "lead", ...(writer ? ["--branch", "codex/t1-native"] : []));
   }
   const logbook = runTool.storeDir(options.projectDirectory, runEnv);
   if (leadOwnership) {
@@ -67,6 +67,10 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
       'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
+        if (${JSON.stringify(readTask)}) return input.tool_name === 'mcp__sage_preparation__sage_read_task'
+          && context.actor === input.session_id && !Object.hasOwn(input,'agent_id')
+          && Object.keys(input.tool_input).length === 1 && input.tool_input.task === 'T1'
+          ? {decision:'pass'} : {decision:'deny',reason:'Outside the fixed task read fixture.'};
         const interrupt = interruptDecision(input, context, ${JSON.stringify(interruption)});
         if (interrupt) return interrupt;
         if (${JSON.stringify(roleEditProbe)} && input.tool_name === 'apply_patch') {
@@ -104,7 +108,7 @@ export async function setupCompletion(root, { failedSpawn = false, commandProbe 
   `);
   const config = [["sage_fixture", "completion-hooks.mjs"], ["sage_preparation", "completion-preparation.mjs"]]
     .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
-    + '[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
+    + '[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
   const receiptConfig = '[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
   const { readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
   return { interruptionEvidence(child) {
