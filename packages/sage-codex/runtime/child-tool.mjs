@@ -7,6 +7,11 @@ import { bindNativeChild } from "./child-binding.mjs";
 
 const refuse = () => { throw Error("Sage could not verify this child's task."); };
 
+// Only an exact live parent call plus independently verified child delivery can wait.
+export class PendingNativeFollowup extends Error {
+  constructor() { super("The native follow-up result is still pending."); }
+}
+
 /** The first tool's native actor and transcript prove identity when the MCP start hook was unavailable. */
 export function bindNativeChildTool(input, context, options) {
   const native = nativeToolContext(context);
@@ -119,14 +124,14 @@ function bindLaterTurn(event, child, options, state, owner, started) {
     if (starts.length !== 1) refuse();
     sender = { parent: starts[0].parent, path: starts[0].path };
   }
-  if (!readNativeFollowup(receipts[0].transcript, { sessionsDir: options.sessionsDir }, {
-    session: event.session_id, actor: started.parent, ...sender, turn: assigned.dispatch.turn,
-    call: assigned.assignment.call, target: child, taskHash: assigned.dispatch.taskHash,
-  })) refuse();
   readAssignmentTurn(event.transcript_path, { sessionsDir: options.sessionsDir }, {
     session: event.session_id, child: child, parent: started.parent, path: started.path,
     author: started.path.slice(0, started.path.lastIndexOf("/")), turn: event.turn_id, taskHash: assigned.dispatch.taskHash,
   });
+  if (!readNativeFollowup(receipts[0].transcript, { sessionsDir: options.sessionsDir }, {
+    session: event.session_id, actor: started.parent, ...sender, turn: assigned.dispatch.turn,
+    call: assigned.assignment.call, target: child, taskHash: assigned.dispatch.taskHash,
+  })) throw new PendingNativeFollowup();
   const prior = observations.filter(row => row.kind === "child-transcript" && row.child === child);
   if (prior.some(row => row.transcript !== event.transcript_path)) refuse();
   publish(directory, started);

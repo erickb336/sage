@@ -42,3 +42,9 @@ List and wait callbacks can reconcile the exact failure after Sage turns off; th
 The pinned native [message handler](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs)
 uses the tool error prefix. Its [control API](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/agent/control/api.rs)
 loads the recipient before it submits the message. This covers the captured restoration preflight rejection, not arbitrary follow-up errors.
+
+The child can request its first tool before the parent's successful follow-up result reaches the transcript.
+For an exact live parent call and verified recipient delivery, the policy waits for that result before binding or evaluating the tool.
+It retries this pending evidence at most 40 times, with a 25 ms delay between reads.
+A mode change, interrupted child, malformed evidence, conflicting result, or exhausted wait refuses the tool.
+The wait grants no permission and does not replace either proof.
