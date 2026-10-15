@@ -603,7 +603,7 @@ data: ${JSON.stringify(event)}
           check(info.outputs[calls.capacitySpawn]==="collab spawn failed: agent thread limit reached","capacity_wrong_native_error");
           const state=integrated.readJournal();
           check(state.config.total===2 && state.reservations.length===2 && state.bindings.length===1
-            && (state.failures?.length??0)===0 && state.completions.length===0 && childRequests===2,"capacity_released_before_reconciliation");
+            && (state.failures?.length??0)===0 && (state.completions?.length??0)===0 && childRequests===2,"capacity_released_before_reconciliation");
           check(JSON.stringify(state.reservations[0])===JSON.stringify(capacityBefore.reservations[0])
             && JSON.stringify(state.bindings)===JSON.stringify(capacityBefore.bindings),"capacity_failure_changed_first");
           capacityFailed=state;capacityStage=3;respond(res,call(calls.capacityList,"list_agents",{}));return;
@@ -613,7 +613,7 @@ data: ${JSON.stringify(event)}
         check(state.failures?.length===1 && state.failures[0].assignment===state.reservations[1].assignment.id
           && JSON.stringify(state.reservations)===JSON.stringify(capacityFailed.reservations)
           && JSON.stringify(state.bindings)===JSON.stringify(capacityFailed.bindings)
-          && state.completions.length===0 && childRequests===2,"capacity_failure_wrong_release");
+          && (state.completions?.length??0)===0 && childRequests===2,"capacity_failure_wrong_release");
         capacityStage=4;
         print({type:"native_capacity_rejection",nativeLimit:1,sageLimit:2,exactLimitError:true,onlySecondReservationFailed:true,firstChildUnchanged:true,simulatedModel:true});
         respond(res,call(calls.wait,"wait_agent",{}));respond(childResponse,message(CHILD_MARKER));childResponseSent=true;return;
