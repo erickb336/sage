@@ -19,6 +19,7 @@ export function fixtureInterruptDecision(input, context, enabled) {
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
 export async function setupCompletion(root, { failedSpawn = false, followupCapacity = false, capacityFailure = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, interruption = false, readTask = false, resumedFailure = false, env = process.env } = {}) {
+  cpSync(new URL("./policy-diagnostic.mjs", import.meta.url), join(root, "policy-diagnostic.mjs"));
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
     projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
@@ -68,6 +69,7 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
     import { appendFileSync, writeFileSync } from 'node:fs';
     import { readAdmission } from './plugin/core/index.mjs';
     import { serveHooks } from './plugin/runtime/mcp-server.mjs';
+    import { capturePolicyFailure } from './policy-diagnostic.mjs';
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
     const options = ${JSON.stringify(options)};
     const interruptDecision = ${fixtureInterruptDecision.toString()};
@@ -100,7 +102,15 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
         }
         return allowed.has(input.tool_name) ? {decision: 'pass'} : {decision: 'deny', reason: 'Outside the fixed completion fixture.'};
       });
-      return {...policy, completeChild(input, context) {
+      return {...policy, async evaluate(input, context) {
+        try {return await policy.evaluate(input, context);}
+        catch(error) {
+          if (${JSON.stringify(followupCapacity)}) {
+            try {capturePolicyFailure(${JSON.stringify(root)}, error);} catch {}
+          }
+          throw error;
+        }
+      }, completeChild(input, context) {
         const result = policy.completeChild(input, context);
         const state = readAdmission(options.directory);
         appendFileSync(${JSON.stringify(join(root, "stop-receipts.jsonl"))}, JSON.stringify({decision: result.decision,

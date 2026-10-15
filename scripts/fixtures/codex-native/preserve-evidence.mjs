@@ -1,5 +1,5 @@
 // Preserve only bounded evidence from the disposable fixture, never installed config or credentials.
-import { constants, closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { constants, existsSync, closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -33,6 +33,7 @@ export function preserveFollowupCapacityEvidence(root, summary) {
   };
   for(const path of ["codex/sessions","admission","events","observations"])
     visit(join(base,path),join(destination,path));
+  if(existsSync(join(base,"diagnostics"))) visit(join(base,"diagnostics"),join(destination,"diagnostics"));
   const manifest={...summary,verified:summary.verified===true&&errors.length===0,complete:errors.length===0,files,bytes,errors,simulatedModel:true};
   writeFileSync(join(destination,"manifest.json"),JSON.stringify(manifest,null,2),{flag:"wx",mode:0o600});
   return {destination,...manifest};
