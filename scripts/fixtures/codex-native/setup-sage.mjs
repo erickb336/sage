@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** All files and the scoped tool approvals belong only to setupCapture's validated temporary root. */
-export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, denyCommand = false, emptyLogbook = false, taskLifecycle = false, omitStop = false, restoreCompaction = false, interruption = false, readTask = false } = {}) {
+export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, capacityFailure = false, denyCommand = false, emptyLogbook = false, taskLifecycle = false, omitStop = false, restoreCompaction = false, interruption = false, readTask = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   for (const file of ["fixture-interrupt.mjs", "sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
     writeFileSync(join(root, file), readFileSync(new URL(file, import.meta.url)));
   }
   const { configureAdmission, readAdmission, reserveRoleAdmission, createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
-  writeFileSync(join(root, "fixture-fault.json"), JSON.stringify({ disconnectOnSpawn, denyCommand, interruption, readTask }));
+  writeFileSync(join(root, "fixture-fault.json"), JSON.stringify({ disconnectOnSpawn, denyCommand, interruption, readTask, capacityFailure }));
   const directory = join(root, "admission");
   configureAdmission(directory, { total: capacity, projects: [{ project: "native-fixture", limit: capacity }] });
   const mode = { directory, project: "native-fixture", projectDirectory: join(root, "workspace"),
@@ -31,6 +31,10 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   if (!readTask) command("run", "add", "T1", "--role", review && !nestedReview ? "code-reviewer" : "lead");
   if (nestedReview) command("run", "add", "T1", "--role", "code-reviewer");
   }
+  if (capacityFailure) {
+    command("task", "add", "--title", "Native capacity retry", "--size", "small");
+    command("run", "add", "T2", "--role", "lead");
+  }
   const reviewTarget = review ? { branch: "codex/t1-review", sha: git("rev-parse", "--verify", "HEAD").trim(), round: 0, cycle: 1 } : undefined;
   const logbook = tool.storeDir(mode.projectDirectory, env);
   writeFileSync(join(root, "sage-config.json"), JSON.stringify({ version: 3, mode }));
@@ -43,7 +47,7 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   const servers = [["sage_fixture", "sage-hook-server.mjs"], ["sage_preparation", "sage-preparation-server.mjs"]];
   const config = servers.map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_update_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n';
-  return { checkInterruptionCapacity(released) {
+  return { readStops: () => readFileSync(join(root, "stop-receipts.jsonl"), "utf8").trim().split("\n").map(JSON.parse), checkInterruptionCapacity(released) {
     const state=readAdmission(directory), bound=state.bindings[0];
     assert(bound); const scope={project:bound.project,session:bound.session,epoch:bound.epoch};
     const reserve=call=>reserveRoleAdmission(directory,scope,{task:call==="replacement"?"T2":"T3",run:call==="replacement"?"R2":"R3",issuer:bound.issuer,call},

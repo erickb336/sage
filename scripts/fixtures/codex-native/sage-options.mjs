@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readAdmission } from "./plugin/core/index.mjs";
 // Copied into a fresh native test profile, never loaded from an installed plugin.
 import { patchEditDecision } from "./plugin/runtime/file-policy.mjs";
 import { dirname, join } from "node:path";
@@ -37,4 +38,12 @@ export function patchDecision(input, context) {
 export function recordUnmanagedStop(input, context, result) {
   writeFileSync(join(root, "unmanaged-stop-receipt.json"), JSON.stringify({ session: input.session_id,
     child: context.actor, turn: input.turn_id, decision: result.decision }), { flag: "wx" });
+}
+
+export function recordCapacityStop(result) {
+  if (!fixtureModes.capacityFailure) return;
+  const state = readAdmission(options.directory);
+  appendFileSync(join(root, "stop-receipts.jsonl"), JSON.stringify({ decision: result.decision,
+    reservations: state.reservations.length, bindings: state.bindings.length,
+    completions: state.completions?.length ?? 0 }) + "\n");
 }

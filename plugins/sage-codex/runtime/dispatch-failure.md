@@ -1,13 +1,14 @@
 # Native failed dispatch recovery
 
-Codex 0.160.0 records an unknown-model spawn rejection in the parent's protected transcript.
+Codex 0.160.0 records two captured preflight rejections in the parent's protected transcript: an unknown model or the agent thread limit.
 The isolated probe observed a pre-tool callback, no post-tool callback, no child, and an occupied Sage reservation.
 A configured `PostToolUseFailure` event did not appear in the native hook list or run.
 
 The adapter now reconciles this verified preflight rejection before a new spawn and after native list or wait tools.
 It requires the current transport actor, owner epoch, original request, exact call and turn, and matching argument hash.
 The transcript must identify that actor and session. The call must name native `collaboration.spawn_agent`.
-Native metadata must mark the output as not client-authored. The output must match the unknown-model error for the dispatched model.
+Native metadata must mark both records as not client-authored. An unknown-model error must name the dispatched model.
+The capacity error must equal `collab spawn failed: agent thread limit reached`; it also supports an inherited model.
 Linked files, conflicting calls, changed arguments, and forged metadata refuse. A call or result after native turn completion or interruption refuses. Valid failure evidence recorded before termination remains readable. Other errors retain capacity.
 Any successful dispatch result, child-start evidence, or saved binding also retains capacity on this path.
 
@@ -21,7 +22,7 @@ This does not infer failure from elapsed time, absent hooks, a model's claim, or
 Run `node scripts/probe-codex-lifecycle.mjs --sage-failed-spawn` with fake process tools first on PATH.
 The isolated native check sets the total cap to one, rejects an unknown model, then completes a new child in the freed slot.
 The journal must contain two reservations, one failure, one binding, and one completion.
-Responses are simulated. Other failure kinds, interruption, cross-session recovery, and installed automatic operation remain unverified.
+Responses are simulated. Unrecognized failure kinds, active-child process restart, cross-session transfer, and installed automatic operation remain separate work.
 
 Run `node scripts/probe-codex-lifecycle.mjs --sage-followup-failed-child` for a reused lead.
 Its second assignment prepares a reviewer, receives the native unknown-model rejection, and reconciles through its own list call.
@@ -32,3 +33,10 @@ This route verifies failed-dispatch recovery, not a successful retry or review q
 Packaged tests also check off-mode recovery, foreign-parent evidence, another actor, unchanged retries, and capacity release.
 Capacity tests use labelled synthetic reservations through the public admission API; they do not launch replacement agents.
 Production recovery already exists on main. These checks do not establish real-model behavior or automatic Sage activation.
+
+The pinned [native capacity check](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/agent/control/spawn.rs) runs before child creation.
+The [error adapter](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/handlers/multi_agents_common.rs) supplies the observed error prefix.
+Only the exact captured result releases capacity; extra text, another error, or conflicting evidence cannot do so.
+Run `node scripts/probe-codex-lifecycle.mjs --sage-capacity-rejection` for native capacity rejection and retry.
+It uses native capacity one and Sage capacity two, holds one child, rejects another, then completes a fresh retry.
+Model responses are simulated; the check does not enable installed Sage or prove real-model behavior.

@@ -2,7 +2,7 @@
 import { fixtureInterruptDecision } from "./fixture-interrupt.mjs";
 import { serveHooks } from "./plugin/runtime/mcp-server.mjs";
 import { createNativePolicy } from "./plugin/runtime/policy.mjs";
-import { options, fixtureModes, disconnectOnSpawn, recordOutage, outageRecorded, commandDecision, patchDecision, recordUnmanagedStop } from "./sage-options.mjs";
+import { options, fixtureModes, disconnectOnSpawn, recordOutage, outageRecorded, commandDecision, patchDecision, recordUnmanagedStop, recordCapacityStop } from "./sage-options.mjs";
 const allowed = new Set(["collaborationsend_message", "collaborationfollowup_task", "collaborationspawn_agent", "collaborationlist_agents", "collaborationwait_agent",
   "list_mcp_resources", "mcp__sage_preparation__sage_read_assignment", "mcp__sage_preparation__sage_read_task", "mcp__sage_preparation__sage_update_task", "mcp__sage_preparation__sage_create_run", "mcp__sage_preparation__sage_create_task", "mcp__sage_preparation__sage_prepare_task", "mcp__sage_preparation__sage_read_report", "mcp__sage_preparation__sage_record_report", "mcp__sage_preparation__sage_finish_run", "mcp__sage_preparation__sage_accept_review", "mcp__sage_preparation__sage_read_recorded_report"]);
 serveHooks({ mode: options, loadPolicy: async () => {
@@ -33,6 +33,7 @@ serveHooks({ mode: options, loadPolicy: async () => {
 });
   return { ...policy, completeChild(input, context) {
     const result = policy.completeChild(input, context);
+    recordCapacityStop(result);
     if (result.decision === "unmanaged") recordUnmanagedStop(input, context, result);
     return result;
   } };

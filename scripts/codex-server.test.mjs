@@ -5717,3 +5717,104 @@ for (const window of ['before-receipt', 'before-pending-removal']) test(`T63: in
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
   assert.deepEqual(f.finish(), { ...result, decision: 'already-finished' });
 });
+
+const capacityError = 'collab spawn failed: agent thread limit reached';
+async function capacityFailureFixture(t, model) {
+  const f = await completionFixture(t);
+  const request = { ...f.input, task: 'T2', run: 'R3', name: 'capacity_rejected' };
+  f.api.prepareNativeTask(request, f.native(session), f.options);
+  const spawn = f.spawnInput(request.name, 'capacity-call');
+  if (model !== undefined) spawn.tool_input.model = model;
+  const rejected = f.api.reservePreparedSpawn(spawn, f.native(session), f.options).assignment;
+  const transcript = join(f.mode.sessionsDir, 'root.jsonl');
+  const prefix = readFileSync(transcript, 'utf8') + [
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: spawn.turn_id } },
+    { type: 'turn_context', payload: { turn_id: spawn.turn_id } },
+  ].map(row => JSON.stringify(row) + '\n').join('');
+  const rows = failedCallRows(spawn); rows[1].payload.output = capacityError;
+  const write = (input = rows) => writeFileSync(transcript, prefix + input.map(row => JSON.stringify(row) + '\n').join(''));
+  write();
+  const event = { ...postSpawn(), tool_name: 'collaborationlist_agents', tool_input: {}, tool_response: '{}', transcript_path: transcript };
+  const reconcile = (actor = session, input = event) => f.policy.reconcileCompletions(input, f.native(actor));
+  return { ...f, request, spawn, rejected, transcript, prefix, rows, write, event, reconcile };
+}
+
+test('T65: exact native capacity rejection with inherited or explicit model releases only the rejected reservation', async t => {
+  for (const model of [undefined, 'gpt-6.1-sol']) {
+    const f = await capacityFailureFixture(t, model), before = f.core.readAdmission(f.options.directory);
+    assert.equal(Object.hasOwn(f.spawn.tool_input, 'model'), model !== undefined);
+    const retry = { ...f.request, name: 'capacity_retry' };
+    f.api.prepareNativeTask(retry, f.native(session), f.options);
+    assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput(retry.name, 'retry-call'), f.native(session), f.options));
+    f.reconcile();
+    const after = f.core.readAdmission(f.options.directory);
+    assert.equal((after.failures?.length ?? 0), 1); assert.equal(after.failures[0].assignment, f.rejected.id);
+    assert.deepEqual(after.bindings, before.bindings); assert.deepEqual(after.completions, before.completions);
+    assert.deepEqual(after.reservations, before.reservations); assert.deepEqual(after.reports, before.reports);
+    assert.deepEqual(after.modes, before.modes);
+    f.reconcile(); assert.deepEqual(f.core.readAdmission(f.options.directory), after);
+    assert.throws(() => f.core.bindAdmission(f.options.directory, { ...f.scope, assignment: f.rejected.id,
+      issuer: session, call: 'capacity-call', child: turns[2], turn: turns[1] }), /failed/);
+    const replacement = f.api.reservePreparedSpawn(f.spawnInput(retry.name, 'retry-call'), f.native(session), f.options);
+    assert.equal(replacement.decision, 'permit-once'); assert.notEqual(replacement.assignment.id, f.rejected.id);
+    assert.equal(f.core.readAdmission(f.options.directory).bindings[0].assignment, before.bindings[0].assignment);
+  }
+});
+
+test('T65: capacity rejection refuses text variants forged identity and duplicate or conflicting native results', async t => {
+  const f = await capacityFailureFixture(t);
+  for (const text of [`${capacityError}\n`, ` ${capacityError}`, `${capacityError}.`, `${capacityError}: 1`,
+    'collab spawn failed: child crashed', 'agent thread limit reached', 'Unknown model `undefined` for spawn_agent. Available models: fixture']) {
+    const rows = structuredClone(f.rows); rows[1].payload.output = text; f.write(rows); f.reconcile();
+    assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+  }
+  for (const change of [rows => { rows[0].metadata.client_authored = true; }, rows => { rows[1].metadata.client_authored = true; },
+    rows => { rows[0].payload.arguments = JSON.stringify({ ...f.spawn.tool_input, message: 'changed' }); },
+    rows => { rows[0].payload.namespace = 'other'; }, rows => { rows[1].payload.internal_chat_message_metadata_passthrough.turn_id = turns[2]; },
+    rows => { rows.push(structuredClone(rows[1])); }, rows => { rows.push({ ...structuredClone(rows[1]), payload: { ...rows[1].payload, output: '{}' } }); },
+    rows => { rows.reverse(); }, rows => { rows.splice(1, 0, { type: 'event_msg', payload: { type: 'turn_aborted', turn_id: turns[0] } }); }]) {
+    const rows = structuredClone(f.rows); change(rows); f.write(rows);
+    assert.throws(() => f.reconcile(), /failure evidence/);
+    assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+  }
+  f.write();
+  for (const actor of [childActor, turns[2]]) f.reconcile(actor);
+  assert.equal(f.core.readAdmission(f.options.directory).failures?.length ?? 0, 0);
+  const wrongSession = f.prefix.replaceAll(session, turns[2]);
+  writeFileSync(f.transcript, wrongSession + f.rows.map(row => JSON.stringify(row) + '\n').join(''));
+  assert.throws(() => f.reconcile(), /failure evidence/);
+  f.write(); f.reconcile(); assert.equal((f.core.readAdmission(f.options.directory).failures?.length ?? 0), 1);
+});
+
+test('T65: native capacity recovery preserves binding and success ambiguity and supports off-mode historical evidence', async t => {
+  for (const kind of ['result', 'start', 'binding']) {
+    const f = await capacityFailureFixture(t);
+    if (kind === 'binding') f.core.bindAdmission(f.options.directory, { ...f.scope, assignment: f.rejected.id,
+      issuer: session, call: 'capacity-call', child: turns[2], turn: turns[1] });
+    else f.events.publish(join(f.options.observationsRoot, session), kind === 'result'
+      ? { ...f.result, call: 'capacity-call', path: '/root/capacity_rejected' }
+      : { schema: 1, runtime: '0.160.0', kind: 'child-start', session, child: turns[2], parent: session,
+        turn: turns[1], path: '/root/capacity_rejected' });
+    const before = f.core.readAdmission(f.options.directory); f.reconcile();
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+  const f = await capacityFailureFixture(t);
+  f.write([...f.rows, { type: 'event_msg', payload: { type: 'task_complete', turn_id: turns[0] } }]);
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const before = f.core.readAdmission(f.options.directory); f.reconcile();
+  const after = f.core.readAdmission(f.options.directory);
+  assert.equal((after.failures?.length ?? 0), 1); assert.deepEqual(after.modes, before.modes);
+  assert.deepEqual(after.bindings, before.bindings); assert.deepEqual(after.reservations, before.reservations);
+  f.reconcile(); assert.deepEqual(f.core.readAdmission(f.options.directory), after);
+});
+
+test('T65: next native spawn reconciles inherited-model capacity rejection before admitting a fresh retry', async t => {
+  const f = await capacityFailureFixture(t), retry = { ...f.request, name: 'capacity_retry' };
+  f.api.prepareNativeTask(retry, f.native(session), f.options);
+  const spawn = { ...f.spawnInput(retry.name, 'capacity-retry'), transcript_path: f.transcript };
+  assert.deepEqual(await f.evaluate(f.policy, spawn), { decision: 'pass' });
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal((state.failures?.length ?? 0), 1); assert.equal(state.failures[0].assignment, f.rejected.id);
+  assert.equal(state.reservations.length, 3); assert.equal(state.bindings.length, 1);
+  assert.notEqual(state.reservations.at(-1).assignment.id, f.rejected.id);
+});
