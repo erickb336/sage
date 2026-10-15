@@ -8,6 +8,7 @@ export const options = { directory: join(root, "admission"), project: "native-fi
   projectDirectory: join(root, "workspace"), sessionsDir: join(root, "codex/sessions"),
   observationsRoot: join(root, "observations"), logbookRoot: join(root, "logbook") };
 
+export const fixtureModes = JSON.parse(readFileSync(join(root, "fixture-fault.json"), "utf8"));
 export const disconnectOnSpawn = JSON.parse(readFileSync(join(root, "fixture-fault.json"), "utf8")).disconnectOnSpawn;
 export function recordOutage(input) {
   const event = Object.fromEntries(["session_id", "turn_id", "tool_use_id", "tool_name"].map(key => [key, input[key]]));

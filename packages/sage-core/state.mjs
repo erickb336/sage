@@ -651,9 +651,10 @@ function taskSnapshot(dir, id) {
   return { task: matches[0], version: taskVersion(matches[0]) };
 }
 
-/** Read a current task and a precondition token; neither grants permission to change it. */
+/** Read a current task and a task-metadata token; neither grants workflow permission. */
 function readTaskSnapshot(input, env = process.env) {
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 2
+    || !Object.hasOwn(input, "project") || !Object.hasOwn(input, "task")
     || typeof input.project !== "string" || !input.project || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)) refuse("Invalid task read");
   const dir = storeDir(input.project, env);
   if (realpathSync(dir) !== resolve(dir)) refuse("Invalid logbook location");

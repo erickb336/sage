@@ -2889,7 +2889,8 @@ test('T57: historical run receipts preserve a nonzero round and timestamp after 
 async function taskUpdateFixture(t) {
   const f = await taskCreationFixture(t); f.create();
   const api = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
-  const read = (actor = session) => api.readNativeTask({ task: 'T1' }, f.native(actor), f.options);
+  const { readNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-read.mjs')));
+  const read = (actor = session) => readNativeTask({ task: 'T1' }, f.native(actor), f.options);
   const update = (input, actor = session) => api.updateNativeTask(input, f.native(actor), f.options);
   const request = (changes, id = turns[1], version = read().version) => ({ request: id, task: 'T1', version, changes });
   const file = join(f.dir, 'task-update-config.json');
@@ -5337,5 +5338,176 @@ test('T58: wrong-typed saved task IDs refuse without changing recorded state', a
     assert.deepEqual(Object.fromEntries(tables.map(name => [name, readFileSync(join(f.logbook, name), 'utf8')])), before, kind);
     assert.equal(existsSync(pending) ? readFileSync(pending, 'utf8') : undefined, pendingBefore, kind);
     assert.deepEqual(readReceipts(), receiptsBefore, kind);
+  }
+});
+
+async function taskReadFixture(t) {
+  const f = await preparationServerFixture(t);
+  const file = join(f.plugin, 'runtime/task-read.mjs');
+  assert.ok(existsSync(file), 'task reader adapter must ship');
+  const { readNativeTask } = await import(pathToFileURL(file));
+  return { ...f, readTask: (input = {task:'T1'}, actor = session, options = f.options) => readNativeTask(input, f.native(actor), options), readNativeTask };
+}
+
+test('T61: task reader returns exact metadata, stable tokens and off-mode reads without authority', async t => {
+  const f = await taskReadFixture(t), before = f.core.readAdmission(f.options.directory);
+  const row = f.assignmentTool.read(f.assignmentLogbook, 'tasks')[0], value = f.readTask();
+  assert.deepEqual(value, {task:row,version:createHash('sha256').update(JSON.stringify(row)).digest('hex')});
+  assert.deepEqual(f.readTask(), value);
+  f.assignmentCli('run','done','R1','--status','done');
+  assert.deepEqual(f.readTask(), value, 'run evidence is outside the task metadata token');
+  f.assignmentCli('task','T1','set','title=Changed recorded task');
+  const changed = f.readTask(); assert.notEqual(changed.version,value.version); assert.equal(changed.task.title,'Changed recorded task');
+  assert.deepEqual(f.core.readAdmission(f.options.directory),before);
+  f.core.changeAdmissionMode(f.options.directory,{...f.scope,after:turns[0],turn:turns[2],sage:false});
+  const off = f.core.readAdmission(f.options.directory); assert.deepEqual(f.readTask(),changed);
+  assert.deepEqual(f.core.readAdmission(f.options.directory),off);
+});
+
+test('T61: task reader rejects foreign identity, caller paths and malformed requests', async t => {
+  const f = await taskReadFixture(t); assert.equal(f.readTask().task.id,'T1');
+  for (const input of [null,[],{}, {task:'T1',project:f.options.projectDirectory}, {task:'T1',extra:true}, {task:[]}, {task:'T0'}, {task:'T999'}, Object.assign(Object.create({task:'T1'}),{extra:true})]) assert.throws(()=>f.readTask(input));
+  for (const actor of [childActor,turns[2],null]) assert.throws(()=>f.readTask({task:'T1'},actor));
+  assert.throws(()=>f.readNativeTask({task:'T1'},{version:'0.159.0',actor:session},f.options));
+  for (const patch of [{project:'other'},{logbookRoot:undefined},{projectDirectory:undefined}]) assert.throws(()=>f.readTask({task:'T1'},session,{...f.options,...patch}));
+  const alias=join(f.dir,'logbook-alias');symlinkSync(f.options.logbookRoot,alias);
+  assert.throws(()=>f.readTask({task:'T1'},session,{...f.options,logbookRoot:alias}));
+  const coreRead = input => f.assignmentTool.readTaskSnapshot(input,f.assignmentEnv);
+  assert.equal(coreRead({project:f.options.projectDirectory,task:'T1'}).task.id,'T1');
+  for (const input of [{project:f.options.projectDirectory,task:'T1',extra:true}, Object.assign(Object.create({project:f.options.projectDirectory}),{task:'T1',extra:true}), Object.assign(Object.create({task:'T1'}),{project:f.options.projectDirectory,extra:true})]) assert.throws(()=>coreRead(input));
+});
+
+test('T61: task reader refuses duplicate IDs, corruption and receipt aliases without recovery', async t => {
+  const f = await taskReadFixture(t), dir=f.assignmentLogbook;
+  const snapshot = () => Object.fromEntries(readdirSync(dir).filter(name=>name.endsWith('.tsv') || name==='review-pending.json').map(name=>[name,readFileSync(join(dir,name),'utf8')]));
+  const admission=f.core.readAdmission(f.options.directory), initial=snapshot(); assert.equal(f.readTask().task.id,'T1');
+  assert.deepEqual(snapshot(),initial);
+  const file=join(dir,'tasks.tsv'), original=readFileSync(file,'utf8');
+  for (const bytes of [original+original.split('\n')[1]+'\n','invalid header\n']) {
+    writeFileSync(file,bytes);const before=snapshot();assert.throws(()=>f.readTask());assert.deepEqual(snapshot(),before);
+  }
+  writeFileSync(file,original);
+  for (const name of ['task-requests','run-requests','reviews']) {
+    const target=join(f.dir,`alias-${name}`);mkdirSync(target);const alias=join(dir,name);symlinkSync(target,alias);
+    const before=snapshot();assert.throws(()=>f.readTask());assert.deepEqual(snapshot(),before);assert.deepEqual(readdirSync(target),[]);rmSync(alias);
+  }
+  assert.equal(f.readTask().task.id,'T1');assert.deepEqual(f.core.readAdmission(f.options.directory),admission);
+});
+
+test('T61: packaged task tool consumes authenticated reads and contains refusals', async t => {
+  const f=await taskReadFixture(t),expected=f.readTask();
+  const before=journalBytes(f);
+  const client=await connect(t,f,'0.160.0','','sage_read_task');
+  assert.deepEqual(await client.call({task:'T1'}),expected);assert.deepEqual(await client.call({task:'T1'}),expected);
+  assert.match((await client.call({task:'T1'},childActor)).error,/could not read/);
+  assert.match((await client.call({task:'T999'})).error,/could not read/);
+  assert.deepEqual(journalBytes(f),before);
+  await client.close();
+});
+
+
+const taskReadDiskSnapshot = f => {
+  const dir = f.logbook ?? f.assignmentLogbook;
+  const tree = path => existsSync(path) ? readdirSync(path, {withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))
+    .map(entry => [entry.name, entry.isDirectory() ? tree(join(path,entry.name)) : readFileSync(join(path,entry.name),'utf8')]) : null;
+  return { tables: readdirSync(dir).filter(name=>name.endsWith('.tsv')).sort().map(name=>[name,readFileSync(join(dir,name),'utf8')]),
+    pending: existsSync(join(dir,'review-pending.json')) ? readFileSync(join(dir,'review-pending.json'),'utf8') : null,
+    receipts: ['task-requests','run-requests','reviews','reports'].map(name=>[name,tree(join(dir,name))]), admission: journalBytes(f) };
+};
+for (const writer of ['task','run','review']) test(`T61: task reader refuses a valid recoverable ${writer} intent without publishing or recovery`, async t => {
+  const f = writer === 'task' ? await taskCreationFixture(t) : writer === 'run' ? await runCreationFixture(t) : await reviewAcceptanceFixture(t);
+  if (writer === 'task') f.create();
+  const {readNativeTask} = await import(pathToFileURL(join(f.plugin,'runtime/task-read.mjs')));
+  const read = () => readNativeTask({task:'T1'},f.native(session),f.options);
+  const stable=taskReadDiskSnapshot(f), saved=read();assert.equal(saved.task.id,'T1');
+  assert.deepEqual(taskReadDiskSnapshot(f),stable);
+  const publish = writer === 'task' ? () => f.create({...f.input,request:turns[1],title:'Second recorded task'})
+    : writer === 'run' ? () => f.createRun() : () => f.accept();
+  const restore = await stopTaskWrite(t,f,writer === 'run' ? 'runs' : writer === 'review' ? 'ledger' : 'tasks');
+  assert.throws(publish,/Injected/);restore();
+  const pending=taskReadDiskSnapshot(f);assert.notEqual(pending.pending,null);
+  assert.throws(read);assert.deepEqual(taskReadDiskSnapshot(f),pending);
+  const result=publish();assert.equal(result.decision,writer === 'task' ? 'task-created' : writer === 'run' ? 'run-created' : 'review-accepted');
+  assert.equal(existsSync(join(f.logbook,'review-pending.json')),false,'the unchanged intent remains recoverable by its writer');
+  const completed=taskReadDiskSnapshot(f);assert.equal(read().task.id,'T1');assert.deepEqual(taskReadDiskSnapshot(f),completed);
+});
+
+test('T17: assignment recovery refuses an interrupted turn before parent reconciliation', async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  const prepared = f.api.prepareNativeTask(f.input, f.native(session), f.options);
+  const before = f.core.readAdmission(f.options.directory), saved = read();
+  assert.equal(saved.message, prepared.message); assert.equal(saved.role, 'lead');
+  assert.equal(saved.task, 'T1'); assert.equal(saved.run, 'R1'); assert.equal(saved.turn, turns[1]);
+  assert.equal(saved.taskHash, createHash('sha256').update(prepared.message).digest('hex'));
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  appendInterruption(f);
+  assert.equal(f.core.readAdmission(f.options.directory).completions?.length ?? 0, 0);
+  assert.throws(() => read());
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
+
+test('T17: assignment recovery refuses two valid active bindings across owner sessions', async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  assert.equal(read().run, 'R1');
+  const owner = f.core.activateAdmission(f.options.directory, { project: f.options.project,
+    session: `codex:${turns[2]}`, activation: turns[0] });
+  const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
+  const reserved = f.core.reserveRoleAdmission(f.options.directory, scope,
+    { task: 'T2', run: 'R4', issuer: turns[2], call: 'second-owner' },
+    { tool: 'spawn_agent', turn: turns[0], name: 'second-owner', argumentsHash: '1'.repeat(64) },
+    { issuerRole: 'chief-of-staff', role: 'lead' });
+  f.core.bindAdmission(f.options.directory, { ...scope, assignment: reserved.assignment.id,
+    issuer: turns[2], call: 'second-owner', child: childActor, turn: turns[1] });
+  const valid = f.core.readAdmission(f.options.directory);
+  const active = valid.bindings.filter(row => row.child === childActor
+    && !valid.completions?.some(done => done.assignment === row.assignment));
+  assert.equal(active.length, 2); assert.equal(new Set(active.map(row => row.session)).size, 2);
+  assert.throws(() => read());
+  assert.deepEqual(f.core.readAdmission(f.options.directory), valid);
+});
+
+test('T17: owner activation retry preserves the exact recovered assignment and epoch', async t => {
+  const f = await completionFixture(t), read = await assignmentReader(f);
+  const before = f.core.readAdmission(f.options.directory), saved = read();
+  const owner = before.sessions.find(row => row.session === `codex:${session}`);
+  const request = { project: f.options.project, session: owner.session, activation: turns[0] };
+  assert.deepEqual(f.core.activateAdmission(f.options.directory, request), owner);
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  assert.deepEqual(read(), saved);
+  assert.throws(() => f.core.activateAdmission(f.options.directory, { ...request, activation: turns[2] }));
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  assert.deepEqual(read(), saved);
+});
+
+
+test('T17: assignment recovery accepts the exact message byte limit and refuses one extra byte', async t => {
+  for (const bytes of [1024 * 1024, 1024 * 1024 + 1]) {
+    const f = await preparationServerFixture(t);
+    const prepared = f.api.prepareNativeTask(f.input, f.native(session), f.options);
+    const saved = f.core.readAdmission(f.options.directory).preparations[0];
+    const { preparedTaskMessage } = await import(pathToFileURL(join(f.plugin, 'runtime/instructions.mjs')));
+    // Grow only this isolated package's instructions. Core admission remains valid; this
+    // tests the reader independently of the native dispatch adapter's own size refusal.
+    const file = join(f.plugin, 'core/roles/lead.md'), original = readFileSync(file, 'utf8').trim();
+    writeFileSync(file, original + 'x'.repeat(bytes - Buffer.byteLength(prepared.message)));
+    const message = preparedTaskMessage(saved), taskHash = createHash('sha256').update(message).digest('hex');
+    assert.equal(Buffer.byteLength(message), bytes);
+    const reserved = f.core.reservePreparedAdmission(f.options.directory, f.scope,
+      { preparation: saved.id, issuer: session, call: 'size-boundary' },
+      { tool: 'spawn_agent', turn: turns[0], name: f.input.name, argumentsHash: '1'.repeat(64), taskHash }, 'chief-of-staff');
+    f.core.bindAdmission(f.options.directory, { ...f.scope, assignment: reserved.assignment.id,
+      issuer: session, call: 'size-boundary', child: childActor, turn: turns[1] });
+    const transcript = f.childTranscript({ message });
+    const base = { schema: 1, runtime: '0.160.0', session };
+    f.events.publish(join(f.options.observationsRoot, session), { ...base, kind: 'child-start', child: childActor,
+      parent: session, path: '/root/fixture_lead', turn: turns[1] });
+    f.events.publish(join(f.options.observationsRoot, session), { ...base, kind: 'child-transcript', child: childActor,
+      turn: turns[1], transcript });
+    const before = f.core.readAdmission(f.options.directory), read = await assignmentReader(f);
+    if (bytes === 1024 * 1024) {
+      const result = read(); assert.equal(result.message, message); assert.equal(result.taskHash, taskHash);
+      assert.equal(result.preparation, saved.id); assert.equal(result.assignment, reserved.assignment.id);
+    } else assert.throws(() => read());
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
   }
 });

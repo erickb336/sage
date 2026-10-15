@@ -4934,3 +4934,18 @@ test('T47: build refuses the published SDK validator graph even without a root f
     assert.equal(existsSync(join(ROOT, 'plugins/sage-codex/licenses', name + '.txt')), false, 'removed dependencies must not have stale license-version claims');
   }
 });
+
+test("native interruption fixture permits only the root's exact one-field child target", async () => {
+  const { fixtureInterruptDecision } = await import("./fixtures/codex-native/fixture-interrupt.mjs");
+  const input = { tool_name: "collaborationinterrupt_agent", session_id: "root-session", tool_input: { target: "/root/probe_child" } };
+  const context = { actor: "root-session" };
+  assert.equal(fixtureInterruptDecision(input, context, true).decision, "pass");
+  for (const [event, actor, enabled] of [
+    [input, context, false], [input, { actor: "child-session" }, true],
+    [{ ...input, agent_id: "child-session" }, context, true],
+    [{ ...input, session_id: "" }, { actor: "" }, true],
+    ...[null, [], {}, { target: "/root/other" }, { target: "/root/probe_child", extra: true },
+      { agent_id: "/root/probe_child" }].map(tool_input => [{ ...input, tool_input }, context, true]),
+  ]) assert.equal(fixtureInterruptDecision(event, actor, enabled).decision, "deny");
+  assert.equal(fixtureInterruptDecision({ ...input, tool_name: "list_mcp_resources" }, context, true), null);
+});

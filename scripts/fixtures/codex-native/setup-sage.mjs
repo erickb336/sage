@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** All files and the scoped tool approvals belong only to setupCapture's validated temporary root. */
-export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, denyCommand = false, emptyLogbook = false, taskLifecycle = false, omitStop = false, restoreCompaction = false } = {}) {
+export async function setupSage(root, { disconnectOnSpawn = false, review = false, nestedReview = false, capacity = 5, denyCommand = false, emptyLogbook = false, taskLifecycle = false, omitStop = false, restoreCompaction = false, interruption = false, readTask = false } = {}) {
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
-  for (const file of ["sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
+  for (const file of ["fixture-interrupt.mjs", "sage-options.mjs", "sage-hook-server.mjs", "sage-preparation-server.mjs"]) {
     writeFileSync(join(root, file), readFileSync(new URL(file, import.meta.url)));
   }
-  const { configureAdmission, readAdmission, createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
-  writeFileSync(join(root, "fixture-fault.json"), JSON.stringify({ disconnectOnSpawn, denyCommand }));
+  const { configureAdmission, readAdmission, reserveRoleAdmission, createStateTool } = await import(pathToFileURL(join(root, "plugin/core/index.mjs")));
+  writeFileSync(join(root, "fixture-fault.json"), JSON.stringify({ disconnectOnSpawn, denyCommand, interruption, readTask }));
   const directory = join(root, "admission");
   configureAdmission(directory, { total: capacity, projects: [{ project: "native-fixture", limit: capacity }] });
   const mode = { directory, project: "native-fixture", projectDirectory: join(root, "workspace"),
@@ -26,9 +26,9 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   const command = (...args) => tool.sage([...args, "--project", mode.projectDirectory], env);
   assert.equal(process.env.SAGE_TEST_MACHINE_ID, "native-fixture", "native state writes need the hardware-query guard");
   command("init");
-  if (!emptyLogbook) { command("task", "add", "--title", "Native report fixture", "--size", "small");
+  if (!emptyLogbook) { command("task", "add", "--title", readTask ? "Simulated task read fixture" : "Native report fixture", "--size", "small");
   if (review) command("task", "T1", "set", "branch=codex/t1-review");
-  command("run", "add", "T1", "--role", review && !nestedReview ? "code-reviewer" : "lead");
+  if (!readTask) command("run", "add", "T1", "--role", review && !nestedReview ? "code-reviewer" : "lead");
   if (nestedReview) command("run", "add", "T1", "--role", "code-reviewer");
   }
   const reviewTarget = review ? { branch: "codex/t1-review", sha: git("rev-parse", "--verify", "HEAD").trim(), round: 0, cycle: 1 } : undefined;
@@ -43,7 +43,20 @@ export async function setupSage(root, { disconnectOnSpawn = false, review = fals
   const servers = [["sage_fixture", "sage-hook-server.mjs"], ["sage_preparation", "sage-preparation-server.mjs"]];
   const config = servers.map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_update_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n';
-  return { config, reviewTarget, readLogbook, endFixtureRun: () => command("run", "done", "R1", "--status", "done"), retargetFixtureRun, mergeReady: () => tool.mergeCheck(reviewTarget.sha, env).ok, readRunReport: () => readFileSync(join(logbook, tool.read(logbook, "runs")[0].report), "utf8"), readFault: () => JSON.parse(readFileSync(join(root, "hook-outage.json"), "utf8")), readJournal: () => readAdmission(directory), hook: event => {
+  return { checkInterruptionCapacity(released) {
+    const state=readAdmission(directory), bound=state.bindings[0];
+    assert(bound); const scope={project:bound.project,session:bound.session,epoch:bound.epoch};
+    const reserve=call=>reserveRoleAdmission(directory,scope,{task:call==="replacement"?"T2":"T3",run:call==="replacement"?"R2":"R3",issuer:bound.issuer,call},
+      {tool:"spawn_agent",turn:bound.turn,name:call,argumentsHash:"0".repeat(64)},{issuerRole:"chief-of-staff",role:"lead"});
+    if(!released) { assert.throws(()=>reserve("replacement"),/capacity/); return; }
+    assert.equal(reserve("replacement").decision,"permit-once");
+    assert.equal(reserve("replacement").decision,"already-reserved");
+    assert.throws(()=>reserve("third"),/capacity/);
+    const after=readAdmission(directory);
+    assert.equal(after.reservations.length,state.reservations.length+1);
+    assert.deepEqual(after.reservations[0],state.reservations[0]);
+    assert.deepEqual(after.bindings,state.bindings);assert.deepEqual(after.completions,state.completions);
+  }, config, reviewTarget, readLogbook, endFixtureRun: () => command("run", "done", "R1", "--status", "done"), retargetFixtureRun, mergeReady: () => tool.mergeCheck(reviewTarget.sha, env).ok, readRunReport: () => readFileSync(join(logbook, tool.read(logbook, "runs")[0].report), "utf8"), readFault: () => JSON.parse(readFileSync(join(root, "hook-outage.json"), "utf8")), readJournal: () => readAdmission(directory), hook: event => {
     // Deliberately omit MCP SubagentStart: the first tool must establish the child's binding.
     if (event === "SubagentStart" || (omitStop && event === "SubagentStop")) return [];
     const fields = event === "SessionStart" && restoreCompaction ? ["cwd", "hook_event_name", "model", "permission_mode", "session_id", "source", "transcript_path"]
