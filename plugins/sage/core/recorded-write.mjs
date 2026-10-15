@@ -90,7 +90,7 @@ function readReceipt(dir, reference) {
   return value;
 }
 /** Pending intent preserves all before/after bytes. Recovery refuses any unrelated table edit. */
-function recover(dir, reference) {
+function recover(dir, reference, beforePublish = () => {}) {
   canonical(dir);
   const pending = decode(join(dir, PENDING));
   if (pending === undefined) return undefined;
@@ -108,6 +108,7 @@ function recover(dir, reference) {
   const folder = receiptFolder(dir), receipt = encode(pending.receipt);
   const existing = regular(join(folder, recordName(reference)));
   if (existing !== undefined && existing !== receipt) fail();
+  beforePublish(pending.receipt);
   mkdirSync(folder, { recursive: true, mode: 0o700 }); canonical(folder); sync(dir);
   for (const table of TABLES) {
     const file = `${table}.tsv`, value = pending.tables[table];
@@ -117,7 +118,7 @@ function recover(dir, reference) {
   unlinkSync(join(dir, PENDING)); sync(dir);
   return pending.receipt;
 }
-function commit(dir, receipt, after) {
+function commit(dir, receipt, after, beforePublish = () => {}) {
   canonical(dir); assertNoPendingWrite(dir);
   if (!keys(after, TABLES)) fail();
   const tables = Object.fromEntries(TABLES.map(table => {
@@ -127,8 +128,12 @@ function commit(dir, receipt, after) {
   }));
   const bytes = encode({ schema, receipt, tables });
   if (Buffer.byteLength(bytes) > MAX) fail();
+  validate(receipt, tables);
+  const existing = regular(join(receiptFolder(dir), recordName(receipt.reference)));
+  if (existing !== undefined && existing !== encode(receipt)) fail();
+  beforePublish(receipt);
   atomic(dir, PENDING, bytes, true);
-  return recover(dir, receipt.reference);
+  return recover(dir, receipt.reference, beforePublish);
 }
 
 return { readVersion, readReceipt, recover, commit };

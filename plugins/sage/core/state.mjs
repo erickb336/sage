@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { parseRunTarget } from "./run-target.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
 // The store is plain TSV and Markdown under the configured root ($SAGE_HOME overrides it), and every
 // table has one writer: this tool. It holds the rules that prompts alone did not hold in Orchestrator: no dropped
@@ -417,9 +418,9 @@ const read = (dir, table) => rowsOf(sheet(dir, table));
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
 const check = (dir, skip = [], max = Infinity) => {
-  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir)]);
+  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir), interruptedWrites.readVersion(dir)]);
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
-  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir)]) !== version) refuse("A task, run, or review receipt was created while this logbook was read. Retry the read.");
+  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir), interruptedWrites.readVersion(dir)]) !== version) refuse("A task, run, or review receipt was created while this logbook was read. Retry the read.");
   return tables;
 };
 
@@ -870,6 +871,105 @@ function acceptReportedReview(input, env = process.env) {
     reviewWrites.commit(dir, receipt, after);
     status(dir, true);
     return { decision: "review-accepted", ...receipt.result };
+  });
+}
+
+const interruptedWrites = recordedWrites({ schema: 5, tables: ["runs"], folder: "interrupted-runs",
+  name: /^[0-9a-f-]{36}\.json$/, receiptName: reference => `${reference.binding.assignment}.json`, validate: validateInterruptedWrite });
+const interruptedKeys = ["binding", "task", "run", "role", "status", "evidenceHash", "runTarget"];
+function interruptedReference(value) {
+  const deny = () => refuse("The interrupted run reference is damaged.");
+  const exact = (object, keys) => object && typeof object === "object" && !Array.isArray(object)
+    && Object.keys(object).length === keys.length && keys.every(key => Object.hasOwn(object, key));
+  const bindingKeys = ["project", "session", "epoch", "assignment", "issuer", "call", "child", "turn"];
+  if (!exact(value, interruptedKeys) || !exact(value.binding, bindingKeys)
+    || bindingKeys.some(key => typeof value.binding[key] !== "string" || !/^[A-Za-z0-9_.:-]{1,256}$/.test(value.binding[key]))
+    || !new RegExp(`^${UUID}$`).test(value.binding.assignment) || !new RegExp(`^${UUID}$`).test(value.binding.epoch)
+    || typeof value.task !== "string" || !/^T[1-9]\d*$/.test(value.task)
+    || typeof value.run !== "string" || !/^R[1-9]\d*$/.test(value.run) || !RUN_ROLES.includes(value.role)
+    || !["blocked", "question", "failed"].includes(value.status)
+    || typeof value.evidenceHash !== "string" || !/^[0-9a-f]{64}$/.test(value.evidenceHash)) deny();
+  const runTarget = parseRunTarget(value.runTarget);
+  if (runTarget.task !== value.task || runTarget.run !== value.run || runTarget.role !== value.role) deny();
+  return { binding: Object.fromEntries(bindingKeys.map(key => [key, value.binding[key]])),
+    task: value.task, run: value.run, role: value.role, status: value.status, evidenceHash: value.evidenceHash, runTarget };
+}
+function interruptedResult(reference, ended) {
+  return { task: reference.task, run: reference.run, assignment: reference.binding.assignment, evidenceHash: reference.evidenceHash,
+    status: reference.status, report: "", ended };
+}
+function validateInterruptedWrite({ reference, result }, tables) {
+  const deny = () => refuse("The saved interrupted run update is damaged. No run table changed.");
+  const parsed = interruptedReference(reference);
+  if (JSON.stringify(reference) !== JSON.stringify(parsed) || !result || typeof result.ended !== "string"
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(result.ended)
+    || !Number.isFinite(Date.parse(result.ended)) || new Date(result.ended).toISOString().replace(".000Z", "Z") !== result.ended
+    || JSON.stringify(result) !== JSON.stringify(interruptedResult(reference, result.ended))) deny();
+  if (!tables) return;
+  const { cols, lines } = sheetText(tables.runs.before);
+  if (!TABLES.runs.every(c => cols.includes(c) || ADDED.runs?.includes(c))
+    || cols.some(c => !TABLES.runs.includes(c)) || new Set(cols).size !== cols.length) deny();
+  const rows = rowsOf({ cols, lines }), matches = rows.filter(row => row.id === reference.run);
+  if (matches.length !== 1 || matches[0].task !== reference.task || matches[0].role !== reference.role
+    || matches[0].round !== String(reference.runTarget.round) || matches[0].branch !== reference.runTarget.runBranch
+    || matches[0].candidate !== reference.runTarget.candidate
+    || matches[0].status !== "running" || matches[0].ended || matches[0].report) deny();
+  Object.assign(matches[0], { status: reference.status, ended: result.ended, report: "" });
+  if (tables.runs.after !== tableText("runs", rows)) deny();
+}
+
+/** Trusted provider callbacks acquire and acknowledge admission ownership under the logbook lock.
+ * They must be synchronous and must never acquire another logbook lock. */
+function finishInterruptedRun(input, env = process.env, fence) {
+  const deny = () => refuse("The interrupted run does not match its immutable finish evidence.");
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || Object.keys(input).length !== interruptedKeys.length + 1 || typeof input.project !== "string" || !input.project
+    || !Object.hasOwn(input, "project") || interruptedKeys.some(key => !Object.hasOwn(input, key))
+    || typeof fence?.begin !== "function" || typeof fence?.end !== "function") deny();
+  const reference = interruptedReference(Object.fromEntries(interruptedKeys.map(key => [key, input[key]])));
+  const dir = storeDir(input.project, env);
+  if (realpathSync(dir) !== resolve(dir)) deny();
+  return withLock(dir, () => {
+    const subject = () => {
+      const tasks = read(dir, "tasks").filter(row => row.id === reference.task);
+      const rows = read(dir, "runs").filter(row => row.id === reference.run);
+      if (tasks.length !== 1 || rows.length !== 1 || rows[0].task !== reference.task || rows[0].role !== reference.role
+        || rows[0].round !== String(reference.runTarget.round) || rows[0].branch !== reference.runTarget.runBranch
+        || rows[0].candidate !== reference.runTarget.candidate) deny();
+      return rows[0];
+    };
+    const begin = () => {
+      subject();
+      const claim = fence.begin(reference);
+      if (!claim || claim.then || JSON.stringify(claim.request) !== JSON.stringify(reference) || claim.receiptHash) deny();
+    };
+    const acknowledge = receipt => {
+      validateInterruptedWrite(receipt);
+      subject();
+      const rows = read(dir, "runs").filter(row => row.id === reference.run);
+      if (rows.length !== 1 || rows[0].task !== reference.task || rows[0].role !== reference.role
+        || rows[0].status !== receipt.result.status || rows[0].ended !== receipt.result.ended || rows[0].report) deny();
+      const receiptHash = createHash("sha256").update(JSON.stringify(receipt)).digest("hex");
+      const finished = fence.end(reference, receiptHash);
+      if (!finished || finished.then || JSON.stringify(finished.request) !== JSON.stringify(reference) || finished.receiptHash !== receiptHash) deny();
+      return receipt.result;
+    };
+    const recovered = interruptedWrites.recover(dir, reference, begin);
+    if (recovered) { const result = acknowledge(recovered); status(dir, true); return { decision: "run-finished", ...result }; }
+    const prior = interruptedWrites.readReceipt(dir, reference);
+    if (prior) return { decision: "already-finished", ...acknowledge(prior) };
+    ready(dir);
+    subject();
+    const tasks = read(dir, "tasks").filter(row => row.id === reference.task), rows = read(dir, "runs");
+    const matches = rows.filter(row => row.id === reference.run);
+    if (tasks.length !== 1 || matches.length !== 1 || matches[0].task !== reference.task || matches[0].role !== reference.role
+      || matches[0].status !== "running" || matches[0].ended || matches[0].report) deny();
+    const receipt = { reference, result: interruptedResult(reference, now()) };
+    Object.assign(matches[0], { status: reference.status, report: "", ended: receipt.result.ended });
+    interruptedWrites.commit(dir, receipt, { runs: tableText("runs", rows) }, begin);
+    const result = acknowledge(receipt);
+    status(dir, true);
+    return { decision: "run-finished", ...result };
   });
 }
 
@@ -1874,5 +1974,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, createRequestedTask, createRequestedRun, readTaskSnapshot, updateRequestedTask, captureRunAssignment, finishReportedRun, captureReviewTarget, acceptReportedReview, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, createRequestedTask, createRequestedRun, readTaskSnapshot, updateRequestedTask, captureRunAssignment, finishReportedRun, finishInterruptedRun, captureReviewTarget, acceptReportedReview, withLock, board, answerPaths, runCli };
 }

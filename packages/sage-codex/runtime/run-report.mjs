@@ -2,6 +2,7 @@ import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { createStateTool, readAdmission } from "sage-core";
 import { nativeToolContext } from "./native-tool.mjs";
+import { finishNativeInterruptedRun } from "./interrupted-run.mjs";
 import { hasReportRecovery } from "./report-recovery.mjs";
 
 const refuse = () => { throw Error("Sage could not finish this recorded run"); };
@@ -47,6 +48,7 @@ function recordedRun(input, context, options) {
 
 
 export function finishRecordedRun(input, context, options) {
+  if (Object.hasOwn(input ?? {}, "outcome")) return finishNativeInterruptedRun(input, context, options);
   const { tool, work, env } = recordedRun(input, context, options);
   return tool.finishReportedRun(work, env);
 }

@@ -63,6 +63,39 @@ function dispatchFailure(input) {
     issuer: word(input.issuer, "issuer"), call: word(input.call, "call"),
     evidenceHash: word(input.evidenceHash, "failure evidence hash", /^[0-9a-f]{64}$/) };
 }
+function interruptedFinish(input) {
+  fields(input, ["binding", "task", "run", "role", "status", "evidenceHash", "runTarget"]);
+  if (!["blocked", "question", "failed"].includes(input.status)) refuse("invalid interrupted run status");
+  const request = { binding: childBinding(input.binding), task: word(input.task, "task", /^T[1-9][0-9]*$/),
+    run: word(input.run, "run", /^R[1-9][0-9]*$/), role: word(input.role, "role"), status: input.status,
+    evidenceHash: word(input.evidenceHash, "interruption evidence hash", /^[0-9a-f]{64}$/),
+    runTarget: parseRunTarget(input.runTarget) };
+  if (["task", "run", "role"].some(key => request[key] !== request.runTarget[key])) refuse("finish target differs from its run");
+  return request;
+}
+// A historical child and all of its historical descendants form one protected team.
+function finishActors(state, binding) {
+  const actors = new Set([binding.child]);
+  let changed;
+  do {
+    changed = false;
+    for (const row of state.bindings) {
+      if (["project", "session", "epoch"].every(key => row[key] === binding[key])
+        && actors.has(row.issuer) && !actors.has(row.child)) { actors.add(row.child); changed = true; }
+    }
+  } while (changed);
+  return actors;
+}
+function touchesFinish(state, request, value, continuation) {
+  if (!["project", "session", "epoch"].every(key => value[key] === request.binding[key])) return false;
+  const actors = finishActors(state, request.binding);
+  const predecessor = continuation && state.bindings.find(row => row.assignment === continuation);
+  return actors.has(value.issuer) || actors.has(value.child) || (predecessor && actors.has(predecessor.child));
+}
+function refuseFencedWork(state, value, continuation) {
+  if ((state.interruptedFinishes ?? []).some(row => !row.receiptHash && touchesFinish(state, row.request, value, continuation)))
+    refuse("interrupted run publication still owns this child team");
+}
 function preparation(input) {
   const hasReview = Object.hasOwn(input ?? {}, "review");
   const hasRunTarget = Object.hasOwn(input ?? {}, "runTarget");
@@ -87,6 +120,12 @@ function reportRecord(input) {
   return report;
 }
 function action(input) {
+  if (["begin-interrupted-finish", "end-interrupted-finish"].includes(input?.kind)) {
+    const end = input.kind === "end-interrupted-finish";
+    fields(input, ["kind", "request", ...(end ? ["receiptHash"] : [])]);
+    return { kind: input.kind, request: interruptedFinish(input.request),
+      ...(end ? { receiptHash: word(input.receiptHash, "finish receipt hash", /^[0-9a-f]{64}$/) } : {}) };
+  }
   if (input?.kind === "configure") {
     fields(input, ["kind", "config"]);
     return { kind: "configure", config: configuration(input.config) };
@@ -157,7 +196,7 @@ function apply(state, event, replay = false) {
     return { state: copy, result: event.config, changed: true };
   }
   if (!copy.config) refuse("store is not configured");
-  const value = event.kind === "fail-dispatch" ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : ["bind-child", "bind-continuation"].includes(event.kind) ? event.binding : ["complete", "interrupt"].includes(event.kind) ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
+  const value = event.request ? event.request.binding : event.kind === "fail-dispatch" ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : ["bind-child", "bind-continuation"].includes(event.kind) ? event.binding : ["complete", "interrupt"].includes(event.kind) ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
   if (!copy.config.projects.some((p) => p.project === value.project)) refuse("project is not configured");
   const owner = copy.sessions.find((s) => s.project === value.project && s.session === value.session);
   if (event.kind === "activate") {
@@ -184,6 +223,39 @@ function apply(state, event, replay = false) {
     if (mode.turn !== value.after) refuse("mode changed; read the current mode before a new request");
     copy.modes.push(value);
     return { state: copy, result: { decision: "changed", mode: value }, changed: true };
+  }
+  if (event.request) {
+    const request = event.request;
+    const previous = (copy.interruptedFinishes ?? []).find(row => row.request.binding.assignment === value.assignment);
+    if (previous) {
+      if (json(previous.request) !== json(request)) refuse("interrupted run already has a different finish request");
+      if (event.kind === "begin-interrupted-finish") return { state, result: previous, changed: false };
+      if (previous.receiptHash) {
+        if (previous.receiptHash !== event.receiptHash) refuse("interrupted run receipt differs");
+        return { state, result: previous, changed: false };
+      }
+      previous.receiptHash = event.receiptHash;
+      return { state: copy, result: previous, changed: true };
+    }
+    if (event.kind !== "begin-interrupted-finish") refuse("interrupted run has no pending finish");
+    const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
+    const prepared = copy.preparations.find(row => row.id === reserved?.preparation);
+    const bound = copy.bindings.find(row => row.assignment === value.assignment);
+    const terminal = (copy.completions ?? []).find(row => row.assignment === value.assignment);
+    if (!reserved?.preparation || !bound || json(bound) !== json(value)
+      || reserved.assignment.task !== request.task || reserved.assignment.run !== request.run
+      || reserved.rolePlan?.role !== request.role
+      || !prepared?.runTarget || json(prepared.runTarget) !== json(request.runTarget)
+      || json(terminal) !== json({ ...value, outcome: "interrupted", evidenceHash: request.evidenceHash }))
+      refuse("interrupted run finish has no matching evidence");
+    const ended = new Set([...(copy.completions ?? []), ...(copy.failures ?? [])].map(row => row.assignment));
+    if (copy.reservations.some(row => !ended.has(row.assignment.id)
+      && (touchesFinish(copy, request, row.assignment, row.continuation)
+        || copy.bindings.some(binding => binding.assignment === row.assignment.id && touchesFinish(copy, request, binding)))))
+      refuse("interrupted child team still has active work");
+    const finish = { request };
+    copy.interruptedFinishes = [...(copy.interruptedFinishes ?? []), finish];
+    return { state: copy, result: finish, changed: true };
   }
   if (event.kind === "fail-dispatch") {
     const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
@@ -253,6 +325,7 @@ function apply(state, event, replay = false) {
         || json(prior.rolePlan) !== json(value.rolePlan)) refuse("continuation preparation requires its completed owner and target");
       if (copy.reservations.some(row => row.continuation === value.continuation)) refuse("continuation predecessor already has later work");
     }
+    refuseFencedWork(copy, value, value.continuation);
     // Preparation checks the role relationship. Dispatch checks occupied slots again.
     checkRoleReservation([], value, value.rolePlan);
     copy.preparations.push(value);
@@ -271,6 +344,7 @@ function apply(state, event, replay = false) {
       if (json(previous) !== json(value)) refuse("assignment already has a different child binding");
       return { state, result: { decision: "already-bound", binding: previous, role: reserved.rolePlan.role }, changed: false };
     }
+    refuseFencedWork(copy, value, reserved.continuation);
     if (copy.reservations.filter(row => row.assignment.project === value.project && row.assignment.session === value.session
       && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
       && row.dispatch.name === reserved.dispatch.name).length !== 1) refuse("child dispatch name is ambiguous");
@@ -289,6 +363,7 @@ function apply(state, event, replay = false) {
     if (["task", "run"].some((key) => prior.assignment[key] !== value[key]) || json(prior.dispatch) !== json(event.dispatch) || json(prior.rolePlan) !== json(event.rolePlan) || json(prior.brief) !== json(event.brief) || prior.preparation !== event.preparation || prior.continuation !== event.continuation) refuse("dispatch call already names different work");
     return { state, result: { decision: "already-reserved", assignment: prior.assignment }, changed: false };
   }
+  refuseFencedWork(copy, value, event.continuation);
   if (!mode.sage) refuse("Sage mode is off");
   if (event.preparation) {
     const prepared = copy.preparations.find(row => row.id === event.preparation);
@@ -491,3 +566,8 @@ export function readAdmission(dir) {
   if (!state.config) refuse("store is not configured");
   return state;
 }
+
+/** Trusted provider only: acquire publication ownership while holding the logbook lock. */
+export const beginInterruptedRunFinish = (dir, request) => commit(dir, { kind: "begin-interrupted-finish", request });
+/** A durable validated logbook receipt must precede this exact acknowledgement. */
+export const endInterruptedRunFinish = (dir, request, receiptHash) => commit(dir, { kind: "end-interrupted-finish", request, receiptHash });

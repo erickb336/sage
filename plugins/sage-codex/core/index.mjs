@@ -22,3 +22,4 @@ export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
 export { REPORT_FIELDS, missingReportFields, parseReport } from "./report.mjs";
 export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 export { roleEditDenied } from "./role-policy.mjs";
+export { beginInterruptedRunFinish, endInterruptedRunFinish } from "./admission.mjs";

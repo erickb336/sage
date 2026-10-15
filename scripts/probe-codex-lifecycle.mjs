@@ -37,7 +37,8 @@ assert(!readTask || process.argv.slice(2).length === 1, "task_read_is_a_separate
 let taskReadVerified = false, taskReadBaseline, taskReadValue, beforeInterruption;
 const interruption = process.argv.includes("--sage-interruption");
 assert(!interruption || process.argv.slice(2).length === 1, "interruption_is_a_separate_route");
-let interruptionVerified = false;
+let interruptionVerified = false, interruptedFinishVerified = false, interruptionRun;
+let interruptionBeforeFinish, interruptionJournal, interruptedRunResult, interruptedRunFinished = false;
 const unobservedFollowup = process.argv.includes("--sage-followup-missed-callbacks");
 const missedStop = unobservedFollowup || process.argv.includes("--sage-missed-stop");
 const followupNoTool = unobservedFollowup || process.argv.includes("--sage-followup-no-tool");
@@ -791,6 +792,7 @@ data: ${JSON.stringify(event)}
             && receipt.message.includes(`Commit: ${integrated.reviewTarget.sha}`), "review_target_not_delivered");
           print({type:"review_target_evidence",actualBranchHead:true,round:receipt.review.round,cycle:receipt.review.cycle,deliveredInTask:true,simulatedModel:true});
         }
+        if (interruption) { check(receipt.run === "R1", "interrupted_prepared_run_missing"); interruptionRun = receipt.run; }
         CHILD_PROMPT = receipt.message; prepared = true;
       }
       rootRequests++;
@@ -841,7 +843,52 @@ data: ${JSON.stringify(event)}
         const {completions,...unchanged}=journal, {completions:priorCompletions,...prior}=beforeInterruption;
         check(JSON.stringify(unchanged)===JSON.stringify(prior),"interruption_changed_prior_assignments");
         interruptionVerified = true;
-        respond(res, message(MARKER)); return;
+        interruptionBeforeFinish = logbook; interruptionJournal = JSON.stringify(journal);
+        check(info.finishTools.length === 1, "interrupted_finish_tool_missing");
+        respond(res, { type: "function_call", ...info.finishTools[0], call_id: calls.finish,
+          arguments: JSON.stringify({ outcome: "interrupted", run: interruptionRun, status: "blocked" }) }); return;
+      }
+      if (interruption && rootRequests > 5) {
+        if (rootRequests === 6) {
+          interruptedRunResult=info.outputs[calls.finish];
+          check(interruptedRunResult?.decision==="run-finished" && interruptedRunResult.task==="T1" && interruptedRunResult.run==="R1"
+            && interruptedRunResult.status==="blocked" && interruptedRunResult.report==="" && typeof interruptedRunResult.ended==="string" && interruptedRunResult.ended.length>0,"interrupted_finish_missing");
+          const book=integrated.readLogbook(), prior=interruptionBeforeFinish;
+          const terminal=JSON.parse(interruptionJournal).completions[0];
+          check(interruptedRunResult.assignment===terminal.assignment && interruptedRunResult.evidenceHash===terminal.evidenceHash,"interrupted_finish_wrong_terminal");
+          check(book.runs.length===1 && JSON.stringify(book.runs[0])===JSON.stringify({...prior.runs[0],status:"blocked",ended:interruptedRunResult.ended,report:""}),"interrupted_finish_changed_run");
+          for(const key of ["tasks","ledger","findings","gates","decisions"])
+            check(JSON.stringify(book[key])===JSON.stringify(prior[key]),"interrupted_finish_changed_"+key);
+          const {interruptedFinishes,...state}=integrated.readJournal();
+          check(JSON.stringify(state)===interruptionJournal && interruptedFinishes?.length===1
+            && /^[a-f0-9]{64}$/.test(interruptedFinishes[0].receiptHash),"interrupted_finish_changed_admission");
+          finishedLogbook=JSON.stringify(book); interruptionJournal=JSON.stringify(integrated.readJournal());
+          check(info.finishTools.length===1,"interrupted_finish_retry_tool_missing");
+          respond(res,{type:"function_call",...info.finishTools[0],call_id:calls.finishRetry,
+            arguments:JSON.stringify({outcome:"interrupted",run:interruptionRun,status:"blocked"})});
+        } else if (rootRequests === 7) {
+          check(JSON.stringify(info.outputs[calls.finishRetry])===JSON.stringify({...interruptedRunResult,decision:"already-finished"})
+            && JSON.stringify(integrated.readLogbook())===finishedLogbook
+            && JSON.stringify(integrated.readJournal())===interruptionJournal,"interrupted_finish_retry_changed");
+          interruptedRunFinished=true;
+          check(info.createRunTools.length===1,"interrupted_replacement_tool_missing");
+          respond(res,{type:"function_call",...info.createRunTools[0],call_id:calls.createRun,arguments:JSON.stringify(runRequest)});
+        } else if (rootRequests === 8) {
+          const result=info.outputs[calls.createRun],book=integrated.readLogbook(),prior=JSON.parse(finishedLogbook);
+          print({type:"interrupted_replacement_result",result,storedRun:book.runs.find(row=>row.id==="R2"),simulatedModel:true});
+          check(result?.decision==="run-created" && result.run?.id==="R2" && result.run.task==="T1" && result.run.role==="lead"
+            && result.run.status==="running" && !result.run.ended && !result.run.report
+            && book.runs.length===2 && JSON.stringify(book.runs[0])===JSON.stringify(prior.runs[0])
+            && JSON.stringify(book.runs[1])===JSON.stringify(Object.fromEntries(Object.keys(prior.runs[0]).map(key=>[key,result.run[key]??""]))),"interrupted_replacement_missing");
+          for(const key of ["tasks","ledger","findings","gates","decisions"])
+            check(JSON.stringify(book[key])===JSON.stringify(prior[key]),"interrupted_replacement_changed_"+key);
+          check(JSON.stringify(integrated.readJournal())===interruptionJournal,"interrupted_replacement_changed_admission");
+          interruptedFinishVerified=true;
+          print({type:"interrupted_run_finish_evidence",finishedRun:"R1",status:"blocked",retryUnchanged:true,stableEnded:true,
+            replacementRun:"R2",tasksUnchanged:true,savedReports:0,acceptedVerdicts:0,simulatedModel:true,automaticSage:false});
+          respond(res,message(MARKER));
+        } else check(false, "unexpected_interruption_stage");
+        return;
       }
       if (nestedReport && rootRequests > 5) { nestedFlow.chief(rootRequests - 5, info, res, CHILD_MARKER); return; }
       if (sageFollowup && rootRequests > 5) {
@@ -1260,8 +1307,8 @@ data: ${JSON.stringify(event)}
       ? createdTaskVerified && rootRequests === 3 && childRequests === 0 && grandchildRequests === 0
       : noChild
       ? rootRequests === 2 && childRequests === 0 && denied
-      : (childMessage ? rootRequests >= 5 : rootRequests === (sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (repeatChildRecovery ? 10 : childRecovery ? 6 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (followupRecovery ? 6 : resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
-        && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified : nativeWait && nativeCompleted);
+      : (childMessage ? rootRequests >= 5 : rootRequests === (interruption ? 8 : sageFollowup ? 16 : unpreparedFollowup ? 7 : taskLifecycle ? 12 : createRun ? 9 : followUp ? 8 : nestedReport ? 12 : reportProbe ? 14 : 5)) && childRequests === (repeatChildRecovery ? 10 : childRecovery ? 6 : childSandbox ? 3 : childMessage ? 4 : sageFollowup ? (followupRecovery ? 6 : resumedFailure ? 7 : followupNoTool ? 3 : 4) : nestedReport ? 8 : nested ? 4 : blockStop || correctReport || escapeReport || followUp || (sage && !noTool) ? 2 : 1) && grandchildRequests === (nestedReport ? 2 : nested ? 1 : 0) && rootThread !== childThread
+        && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified && interruptedFinishVerified : nativeWait && nativeCompleted);
     const verified = (!followupRecovery || followupRecoveryVerified) && (!childRecovery || recoveryTargetVerified) && (!childCompaction || (childCompactionObserved && childCompactionReady)) && result.code === 0 && !fixtureFailure && routeVerified && (!readonlyPatch || readonlyPatchVerified) && (!endedRun || endedRunVerified) && (!retargetedRun || retargetedRunVerified)
       && (!childSandbox || childSandboxVerified) && (!childMessage || childMessageVerified) && (!resumedFailure || resumedFailureVerified) && (!unpreparedFollowup || unpreparedFollowupVerified) && (!sageFollowup || sageFollowupVerified)
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
@@ -1425,7 +1472,9 @@ data: ${JSON.stringify(event)}
       assert.equal(receipt.evidenceHash, state.completions[0].evidenceHash);
       integrated.checkInterruptionCapacity(true);
       print({ type: "interruption_recovery_evidence", nativeInterrupted: true, exactTurn: true,
-        terminalOutcomes: 1, savedReports: 0, runStillOpen: true, stopCallbacks: 0, capacityReleasedOnce:true, syntheticReplacementReservation:true, simulatedModel: true });
+        terminalOutcomes: 1, savedReports: 0, acceptedVerdicts: 0, runOpenBeforeExplicitFinish: interruptionVerified,
+        runFinishedBlocked: interruptedRunFinished, replacementRunCreated: interruptedFinishVerified, stopCallbacks: 0,
+        capacityReleasedOnce: true, syntheticReplacementReservation: true, simulatedModel: true, automaticSage: false });
     } else if (!noChild) assert.equal(matchedTasks.size, expectedTasks.size);
     for (const started of start) {
       const result = after.find(row => row.resultTaskName === started.metadata.agent_path);
