@@ -450,6 +450,24 @@ function ready(dir, skip = []) {
   }
 }
 
+const taskVersion = task => createHash("sha256").update(JSON.stringify(task)).digest("hex");
+
+function taskSnapshot(dir, id) {
+  const matches = read(dir, "tasks").filter(row => row.id === id);
+  if (matches.length !== 1) refuse("The task is missing or ambiguous.");
+  return { task: matches[0], version: taskVersion(matches[0]) };
+}
+
+/** Read a current task and a task-metadata token; neither grants workflow permission. */
+function readTaskSnapshot(input, env = process.env) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 2
+    || !Object.hasOwn(input, "project") || !Object.hasOwn(input, "task")
+    || typeof input.project !== "string" || !input.project || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)) refuse("Invalid task read");
+  const dir = storeDir(input.project, env);
+  if (realpathSync(dir) !== resolve(dir)) refuse("Invalid logbook location");
+  return withLock(dir, () => { ready(dir); return taskSnapshot(dir, input.task); });
+}
+
 const taskWrites = recordedWrites({ schema: 2, tables: ["tasks", "decisions"], folder: "task-requests",
   name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json",
   validate: validateTaskWrite });
@@ -1795,5 +1813,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, createRequestedTask, createRequestedRun, finishReportedRun, acceptReportedReview, captureRunAssignment, captureReviewTarget, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, readTaskSnapshot, createRequestedTask, createRequestedRun, finishReportedRun, acceptReportedReview, captureRunAssignment, captureReviewTarget, withLock, board, answerPaths, runCli };
 }
