@@ -5073,3 +5073,54 @@ test('T2 pending parent wait never delays malformed sender or absent child deliv
     t.mock.restoreAll();
   }
 });
+
+test('T2 off-mode pending wait retains its original claim after concurrent failure', async t => {
+  for (const stop of ['failed', 'bound']) {
+  const f = await deliveredFollowupFixture(t); f.save(f.rows());
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  let calls = 0, settled = false;
+  const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: 'pass' }; });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = f.evaluate(policy, f.tool, childActor).then(value => { settled = true; return { value }; }, error => { settled = true; return { error }; });
+  await Promise.resolve(); await Promise.resolve(); assert.equal(settled, false);
+  const reserved = f.core.readAdmission(f.options.directory).reservations[1];
+  if (stop === 'failed') f.core.failContinuationAdmission(f.options.directory, { ...f.scope, assignment: reserved.assignment.id,
+    issuer: session, call: reserved.assignment.call, previous: f.prior.assignment, target: childActor,
+    turn: reserved.dispatch.turn, argumentsHash: reserved.dispatch.argumentsHash, taskHash: reserved.dispatch.taskHash,
+    evidenceHash: 'a'.repeat(64) });
+  if (stop === 'bound') f.core.bindContinuationAdmission(f.options.directory, { ...f.scope, assignment: reserved.assignment.id,
+    issuer: session, call: reserved.assignment.call, child: childActor, turn: turns[0] });
+  const failed = f.core.readAdmission(f.options.directory);
+  t.mock.timers.tick(25); const result = await pending;
+  assert.ok(result.error, 'failed tracked work cannot become unmanaged during the wait');
+  assert.equal(calls, 0); assert.deepEqual(f.core.readAdmission(f.options.directory), failed);
+  t.mock.timers.reset();
+  }
+});
+
+test('T2 off-mode pending wait binds the same claim after parent success without changing mode', async t => {
+  const f = await deliveredFollowupFixture(t); f.save(f.rows());
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  const contexts = [];
+  const policy = f.createNativePolicy(f.options, (_input, context) => { contexts.push(context); return { decision: 'pass' }; });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = f.evaluate(policy, f.tool, childActor);
+  await Promise.resolve(); await Promise.resolve(); assert.equal(contexts.length, 0);
+  f.save(f.accepted); t.mock.timers.tick(25);
+  assert.deepEqual(await pending, { decision: 'pass' });
+  assert.equal(contexts.length, 1); assert.equal(contexts[0].sage, false); assert.equal(contexts[0].role, null);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 2);
+});
+
+
+test('T2 pending binding pins expected assignment before any publication', async t => {
+  const f = await deliveredFollowupFixture(t);
+  const { bindNativeChildTool } = await import(pathToFileURL(join(f.plugin, 'runtime/child-tool.mjs')));
+  const before = f.core.readAdmission(f.options.directory);
+  const observations = f.events.readObservations(join(f.options.observationsRoot, session));
+  assert.throws(() => bindNativeChildTool(f.tool, f.native(childActor), f.options, f.prior.assignment));
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  assert.deepEqual(f.events.readObservations(join(f.options.observationsRoot, session)), observations);
+  const correct = before.reservations[1].assignment.id;
+  assert.equal(bindNativeChildTool(f.tool, f.native(childActor), f.options, correct).assignment.id, correct);
+});

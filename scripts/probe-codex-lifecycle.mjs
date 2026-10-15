@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import http from "node:http";
 import assert from "node:assert/strict";
 import {existsSync,readdirSync,readFileSync} from "node:fs";
+import {freshControlCompletion} from "./fixtures/codex-native/fresh-control.mjs";
 import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
 import {setupCapture} from "./fixtures/codex-native/setup-capture.mjs";
 import {preserveFollowupCapacityEvidence} from "./fixtures/codex-native/preserve-evidence.mjs";
@@ -302,7 +303,7 @@ data: ${JSON.stringify(event)}
           check(info.freshPromptSeen && !info.rejectedPromptSeen,"fresh_followup_wrong_assignment");
           freshRequests++;childRequests++;
           if(freshRequests===1) respond(res,{type:"function_call",name:"list_mcp_resources",call_id:calls.freshControl,arguments:"{}"});
-          else respond(res,message(CHILD_MARKER));
+          else respond(res,message(freshControlCompletion(info.outputs[calls.freshControl],CHILD_MARKER)));
           return;
         }
         if(followupCapacity && childRequests>=2) {

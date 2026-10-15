@@ -9,18 +9,18 @@ const refuse = () => { throw Error("Sage could not verify this child's task."); 
 
 // Only an exact live parent call plus independently verified child delivery can wait.
 export class PendingNativeFollowup extends Error {
-  constructor() { super("The native follow-up result is still pending."); }
+  constructor(assignment) { super("The native follow-up result is still pending."); this.assignment = assignment; }
 }
 
 /** The first tool's native actor and transcript prove identity when the MCP start hook was unavailable. */
-export function bindNativeChildTool(input, context, options) {
+export function bindNativeChildTool(input, context, options, expectedAssignment) {
   const native = nativeToolContext(context);
   const event = nativeToolEvent(input, native, "PreToolUse");
   if (native.actor === event.session_id || typeof event.transcript_path !== "string") refuse();
   readChildTurn(event.transcript_path, { sessionsDir: options.sessionsDir }, {
     session: event.session_id, child: native.actor, turn: event.turn_id,
   }, { active: true });
-  return bindNativeChildTranscript({ session: event.session_id, turn: event.turn_id, transcript: event.transcript_path }, native, options);
+  return bindObservedTranscript({ session: event.session_id, turn: event.turn_id, transcript: event.transcript_path }, native, options, expectedAssignment);
 }
 
 /** Sage off does not turn an already reserved task into an unmanaged child. */
@@ -51,7 +51,7 @@ export function bindNativeChildTranscript(input, context, options) {
 }
 
 // Recovery uses the previously observed child identity, not a fabricated native callback.
-function bindObservedTranscript(input, native, options) {
+function bindObservedTranscript(input, native, options, expectedAssignment) {
   const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 3
     || !["session", "turn", "transcript"].every(key => Object.hasOwn(input, key))
@@ -68,13 +68,14 @@ function bindObservedTranscript(input, native, options) {
   const session = `codex:${event.session_id}`;
   const owner = state.sessions.find(row => row.project === options.project && row.session === session);
   if (!owner) refuse();
-  if (initial.turn !== event.turn_id) return bindLaterTurn(event, native.actor, options, state, owner, started);
+  if (initial.turn !== event.turn_id) return bindLaterTurn(event, native.actor, options, state, owner, started, expectedAssignment);
   const name = started.path.slice(started.path.lastIndexOf("/") + 1);
   const candidates = state.reservations.filter(row => row.assignment.project === options.project
     && row.assignment.session === session && row.assignment.epoch === owner.epoch
     && row.assignment.issuer === started.parent && row.dispatch.name === name);
   if (candidates.length !== 1 || !candidates[0].dispatch.taskHash) refuse();
   const assigned = candidates[0];
+  if (expectedAssignment && assigned.assignment.id !== expectedAssignment) refuse();
   readAssignmentTurn(event.transcript_path, { sessionsDir: options.sessionsDir }, {
     session: event.session_id, child: native.actor, parent: started.parent, path: started.path,
     author: started.path.slice(0, started.path.lastIndexOf("/")), turn: initial.turn, taskHash: assigned.dispatch.taskHash,
@@ -98,7 +99,7 @@ function bindObservedTranscript(input, native, options) {
 }
 
 /** A later turn needs both successful parent dispatch and exact recipient delivery. */
-function bindLaterTurn(event, child, options, state, owner, started) {
+function bindLaterTurn(event, child, options, state, owner, started, expectedAssignment) {
   readChildTurn(event.transcript_path, { sessionsDir: options.sessionsDir }, {
     session: event.session_id, child: child, turn: event.turn_id,
   });
@@ -113,6 +114,7 @@ function bindLaterTurn(event, child, options, state, owner, started) {
     && !state.bindings.some(bound => bound.assignment === row.assignment.id && bound.turn !== event.turn_id));
   if (candidates.length !== 1) refuse();
   const assigned = candidates[0];
+  if (expectedAssignment && assigned.assignment.id !== expectedAssignment) refuse();
   const directory = join(options.observationsRoot, event.session_id);
   const observations = readObservations(directory);
   const receipts = observations.filter(row => row.kind === "followup-transcript"
@@ -131,7 +133,7 @@ function bindLaterTurn(event, child, options, state, owner, started) {
   if (!readNativeFollowup(receipts[0].transcript, { sessionsDir: options.sessionsDir }, {
     session: event.session_id, actor: started.parent, ...sender, turn: assigned.dispatch.turn,
     call: assigned.assignment.call, target: child, taskHash: assigned.dispatch.taskHash,
-  })) throw new PendingNativeFollowup();
+  })) throw new PendingNativeFollowup(assigned.assignment.id);
   const prior = observations.filter(row => row.kind === "child-transcript" && row.child === child);
   if (prior.some(row => row.transcript !== event.transcript_path)) refuse();
   publish(directory, started);

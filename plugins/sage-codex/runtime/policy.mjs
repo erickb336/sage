@@ -49,15 +49,19 @@ export function createNativePolicy(options, evaluateTool) {
       const observed = decodeEvent(event, native);
       if (observed) record(observed); // Keep inactive and denied attempts; name reuse must stay visible.
       const before = mode(event.session_id);
-      let bound;
+      let bound, pendingAssignment;
       if (child) {
         for (let attempt = 0; ; attempt++) {
           try {
-            if (before.sage) bound = bindNativeChildTool(raw, native, fixed);
-            else bindPendingNativeChildTool(raw, native, fixed);
+            const verified = before.sage || pendingAssignment
+              ? bindNativeChildTool(raw, native, fixed, pendingAssignment) : bindPendingNativeChildTool(raw, native, fixed);
+            if (pendingAssignment && verified?.assignment?.id !== pendingAssignment) refuse();
+            if (before.sage) bound = verified;
             break;
           } catch (error) {
             if (!(error instanceof PendingNativeFollowup) || attempt === 40) throw error;
+            if (pendingAssignment && pendingAssignment !== error.assignment) refuse();
+            pendingAssignment = error.assignment;
             // Native dispatch can publish its result while this child hook waits.
             await new Promise(resolve => setTimeout(resolve, 25));
             if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
