@@ -35,3 +35,16 @@ to the binding result. The snapshot is part of the same immutable reservation as
 the role. Legacy reservations return no brief. The delivery policy must refuse
 missing instructions when the task requires a brief; it must not fill the gap
 with unverified new input.
+
+## Saved targets in child instructions
+
+Prepared messages and verified child instructions include the saved run target and review target when present.
+The run section names the round, task branch, run branch, and candidate commit.
+The review section names the branch, commit, round, cycle, and required review report values.
+Only the preparation linked to the verified reservation supplies these values.
+A returned receipt cannot change the stored target. Ordinary briefs without targets keep their existing instruction format.
+
+These sections describe saved work. They do not check current Git or logbook truth or accept a review verdict.
+Native preparation must still capture and recheck those records before granting permission.
+Instruction changes alter the exact task-message hash. An old dispatch must not receive permission through a changed message.
+The installed runtime remains inactive; these checks do not establish complete native workflow support.

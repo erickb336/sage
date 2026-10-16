@@ -6,6 +6,11 @@ import {randomUUID} from 'node:crypto';
 const root=dirname(fileURLToPath(import.meta.url));
 const input=JSON.parse(readFileSync(0,'utf8'));
 const record=Object.fromEntries(['hook_event_name','session_id','agent_id','turn_id','tool_name','tool_use_id'].filter(k=>typeof input[k]==='string').map(k=>[k,input[k]]));
+if(input.hook_event_name==='SessionStart' && typeof input.source==='string')record.source=input.source;
+if(input.tool_name==='Bash') {
+ record.toolInputShape=Object.fromEntries(Object.entries(input.tool_input??{}).map(([key,value])=>[key,typeof value]));
+ record.fixedCommandMatched=input.tool_input?.command==='printf sage-native-command-ok; pwd';
+}
 if(typeof input.tool_input?.task_name==='string')record.inputTaskName=input.tool_input.task_name;
 if(input.hook_event_name==='PostToolUse'){
  const value=input.tool_response;
@@ -33,3 +38,7 @@ if(input.hook_event_name==='SubagentStart'){
  }catch(e){record.captureError=e.code??e.message;}
 }
 writeFileSync(join(root,'events',randomUUID()+'.json'),JSON.stringify(record),{flag:'wx'});
+
+if(process.argv[2] === "--deny-spawn" && input.hook_event_name === "PreToolUse" && input.tool_name === "collaborationspawn_agent") {
+ process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:"sage-native-denial-fixture"}}));
+}

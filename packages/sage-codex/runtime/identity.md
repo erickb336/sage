@@ -10,3 +10,15 @@ The native profile directory and its ancestors must remain controlled by the cal
 
 
 `readInitialSession` reads exactly the first two complete records within the same 256 KiB total limit. It requires session metadata followed by the native `event_msg` named `task_started`, with a UUID turn ID. It returns projected metadata and that initial turn. It never scans for a later replacement or claims that the initial turn is still current. Unknown ordering refuses the request.
+
+
+## Discover a delivered assignment
+
+`readDeliveredAssignment` accepts the verified child identity and exact saved task hash without a turn ID.
+It returns the matching message and current native turn, or null if that task is not present.
+A match in an earlier turn, duplicate matches, changed identity, or an invalid transcript refuses.
+It uses the same protected transcript checks as `readAssignmentTurn`.
+
+This reader does not reserve work, bind a child, accept a report, or grant tool permission.
+Later follow-up recovery must join this evidence to the saved dispatch and current assignment.
+Installed automatic Sage remains disabled.

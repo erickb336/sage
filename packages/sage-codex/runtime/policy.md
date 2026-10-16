@@ -27,3 +27,52 @@ including follow-up and message permissions. This composition does not invent
 those rules or authorize operations the callback rejects. It does not detect
 missing callbacks, accept reports, release slots, restore compacted context,
 or provide lifecycle recovery. Those remain required before activation.
+
+## Role-based edits
+
+The policy derives the role from the bound native assignment, not a supplied role name.
+With Sage on, the chief, lead, PE, reviewers, and QA cannot use `apply_patch` or known shell write forms.
+Implementers, designers, and arena judges retain the supplied evaluator's checks.
+With Sage off, ordinary evaluation resumes. The evaluator receives the verified role, or null when off.
+The shared command classifier detects known write forms; it does not prove arbitrary commands safe.
+Complete shell, path, and workflow checks remain required. This component does not enable installed Sage.
+
+## Child messages
+
+A Sage child can send a message only to the root chief, by `/root` or its session ID.
+This restriction remains after Sage off for a child bound to the current owner epoch.
+A message could otherwise wake another child without a prepared task or a reserved slot.
+Chief messages and unassigned off-mode children still use the supplied evaluator.
+A permitted target also needs current assignment recovery and the evaluator's permission.
+This matches Claude's message rule. It does not enable automatic Sage.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-child-message` with fake process tools first on PATH.
+The native CLI 0.160.0 probe uses simulated responses and a temporary profile.
+It checks peer refusal before evaluation, exact chief delivery, normal completion, and cleanup.
+The model catalog explicitly selects native multi-agent V2 for children.
+
+Run `node scripts/probe-codex-lifecycle.mjs --sage-role-edit` with fake process tools first on PATH.
+The simulated native lead receives a refusal before evaluation, and no file appears.
+Add `--writer` to prepare an implementer: the evaluator runs, and the fixed file contents must match.
+Both routes verify native completion and remove their temporary profiles.
+The fixture permits workspace writes so an external read-only sandbox cannot mask a missing Sage refusal.
+
+## Merge refusal
+
+This runtime keeps autopilot off. Before the supplied evaluator runs, the policy
+refuses merge commands recognized by the shared command classifier. It uses the
+original command recovered from the authenticated native transcript. Exact merge
+candidates and unsafe merge forms receive the same fixed public reason.
+
+The refusal applies to every actor with Sage on. It also applies after Sage off
+to children bound to the current owner epoch. Ordinary off-mode actors keep the
+supplied evaluator's checks. Harmless merge discussion still reaches that evaluator.
+
+This is a refusal for recognized shell commands, not complete merge enforcement.
+It does not cover GitHub MCP calls or prove unrecognized commands safe. Complete
+command, path, and workflow checks still need trusted effective execution context.
+It does not enable automatic Sage or change the owner's external merge authority.
+
+## Current child run
+
+With Sage on, a bound child needs its current saved run before evaluation and after an awaited evaluator. Ended, reported, held, terminal or retargeted work refuses. Recovery also validates saved review targets. Ordinary active tool checks do not independently recheck a review commit without recovery. These checks grant no review acceptance or installed activation.

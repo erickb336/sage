@@ -5,6 +5,10 @@ import { PR } from "./pull-request.mjs";
 const MERGE_FORM = "gh pr merge <n> --squash --delete-branch --match-head-commit <sha>";
 const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
 
+/** Recognize executable spellings across providers without changing arguments or merge authorization. */
+export { programName } from "./program-name.mjs";
+import { programName } from "./program-name.mjs";
+
 /**
  * Text that names a merge: the word gh and the word merge in any order (so also "$G pr merge" or "gh pr $(echo merge)"),
  * a merge path of the REST API, or a GraphQL merge mutation. Each test is one linear scan.
@@ -19,6 +23,25 @@ export const gitSubcommand = (words, k) => {
   return words[k] ?? "";
 };
 
+/** Conservative refusal candidates after an external command; never executable evidence or permission to run.
+ * Inspect only literal command operand chains. Do not evaluate text, infer directory changes, or expand words.
+ */
+export function* externalCommandOperands(command, cwd, options) {
+  const { programs } = programsRun(command, cwd, undefined, { ...options, contextEvidence: true });
+  for (const entry of programs) {
+    if (entry.wrapper || entry.shellFunction || entry.resolvedDeclaration) continue;
+    let { word, args } = entry.run;
+    while (word === "command") {
+      let next = 0;
+      while (args[next] === "-p") next++;
+      if (args[next] === "--") next++;
+      if (!args[next] || args[next].startsWith("-")) break; // queries and unknown options do not establish a command operand
+      [word, ...args] = args.slice(next);
+      yield { word, args };
+    }
+  }
+}
+
 /** Classify command text without executing it. The path is trusted provider configuration, never tool input.
  * A matching merge is only a candidate: role, mode and ledger approval are separate checks.
  */
@@ -27,19 +50,21 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     throw new TypeError("stateToolPath must be an absolute path without control characters");
   }
   /** Expansion in a command word can hide git, gh, push or merge. Arguments keep their ordinary braces and globs. */
-  function expansionProblem(command, cwd) {
+  function expansionProblem(command, cwd, options = {}) {
     const expansion = /[{[*?]/;
     const expands = (word) => !/^(?:[{}]|\[\[?)$/.test(word) && expansion.test(word); // literal groups and test commands
     const reason = "shell expansion can hide the command. Use literal program and git or gh subcommand words, without {, [, * or ?.";
     let runs;
     try {
-      runs = programsRun(command, cwd);
+      runs = programsRun(command, cwd, undefined, options);
+      if (runs.some(run => run.word === "command")) runs.push(...externalCommandOperands(command, cwd, options));
     } catch (e) {
+      if (e.code === "SAGE_POWERSHELL_LAUNCH") return e.message;
       return expansion.test(command) ? `${reason} The hook cannot read this command (${e.message}).` : undefined;
     }
     for (const { word, args, stdin, piped } of runs) {
       if (expands(word)) return reason;
-      const name = word.split("/").pop();
+      const name = programName(word);
       // A shell can run text from a pipe, including through filters. Its output is unknown: refuse expansion in that text.
       if (piped && commandText(name, args, stdin) === stdin && runnable(shellCommands(command)).some(({ words, bodies }) => [...words, ...bodies].some(expands))) return reason;
       if (name === "git" && expansion.test(gitSubcommand(args, 0))) return reason;

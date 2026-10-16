@@ -41,9 +41,12 @@ export function bindNativeChild({ directory, project, observationsDirectory }, i
   if (candidates.length !== 1 || !candidates[0].rolePlan || candidates[0].dispatch.tool !== "collaborationspawn_agent"
     || candidates[0].rolePlan.issuerRole !== parent.role) refuse();
   const row = candidates[0];
+  if ((snapshot.completions ?? []).some(done => done.assignment === row.assignment.id)) refuse();
   const requests = observations.filter(event => event.kind === "spawn-request" && event.actor === observed.actor && event.name === name);
   if (requests.length !== 1 || requests[0].call !== observed.call || row.dispatch.turn !== requests[0].turn) refuse();
   const result = bindAdmission(directory, { project, session, epoch: owner.epoch, assignment: row.assignment.id,
     issuer: identity.parent, call: row.assignment.call, child: identity.child, turn: identity.turn });
-  return { ...result, assignment: row.assignment, ...(row.brief ? { brief: row.brief } : {}) };
+  const prepared = snapshot.preparations.find(prepared => prepared.id === row.preparation);
+  const { review, runTarget } = prepared ?? {};
+  return { ...result, ...(review ? { review } : {}), ...(runTarget ? { runTarget } : {}), assignment: row.assignment, ...(row.brief ? { brief: row.brief } : {}) };
 }

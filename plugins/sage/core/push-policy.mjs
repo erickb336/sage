@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
-import { shellCommands } from "./command-reader.mjs";
-import { createCommandPolicy, GIT_VALUE, gitSubcommand } from "./command-policy.mjs";
+import { programsRun, shellCommands } from "./command-reader.mjs";
+import { createCommandPolicy, externalCommandOperands, GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
 
 /** Shared push rules. The provider supplies a synchronous reader of the checkout's current branch.
  * This module never executes a command or offers a first-upload exception.
@@ -9,7 +9,7 @@ import { createCommandPolicy, GIT_VALUE, gitSubcommand } from "./command-policy.
 export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work reaches main only through a pull request. Push the task's branch and open a pull request." } = {}) {
   if (typeof readBranch !== "function") throw new TypeError("readBranch must be a function");
   if (typeof mainReason !== "string" || !mainReason.trim() || mainReason.length > 2048 || /[\x00-\x1f\x7f]/.test(mainReason)) throw new TypeError("mainReason must be a bounded message without control characters");
-  const { runnable } = createCommandPolicy({ stateToolPath });
+  const { runnable, mergeIn } = createCommandPolicy({ stateToolPath });
   const PUSH_FORM = 'git [-C <dir>] push [-u] [--follow-tags] [-o <option>] origin <branch>, as a command of its own, with the literal name of the task\'s branch: not main or master, HEAD, @, a pattern, a variable, or a refspec with ":" or "+". To delete a branch: git push --delete origin <branch>';
   /** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
   const gitThen = (text, word) => new RegExp(`\\b${word}\\b`, "i").test(/\bgit\b([\s\S]*)/i.exec(text)?.[1] ?? "");
@@ -17,19 +17,38 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
   /** A command line without quotes, backslashes and line joins: the text that the rules test when the reader cannot read the line (fail closed). */
   const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
   const refuse = (why) => `${why} Push only with ${PUSH_FORM}.`;
-  function pushProblem(command, cwd) {
+  const unreadableGitHub = (command) => /\bgh(?:\.exe)?\b/i.test(bare(command))
+    ? mergeIn(command)?.problem ?? refuse("the hook cannot establish the GitHub API command's destination.") : undefined;
+  function pushProblem(command, cwd, options = {}) {
     let commands;
     try {
       commands = shellCommands(command);
     } catch (e) {
-      return pushText(bare(command)) ? refuse(`the hook cannot read this command (${e.message}), so it refuses it. Close each quote, substitution and heredoc.`) : undefined;
+      return pushText(bare(command)) ? refuse(`the hook cannot read this command (${e.message}), so it refuses it. Close each quote, substitution and heredoc.`) : unreadableGitHub(command);
     }
     let dir = cwd;
     for (const { cmd, words, bodies } of runnable(commands)) {
       if (cmd.words[0] === "cd" && cmd.words.length === 2) dir = resolve(dir, cmd.words[1]);
-      const git = words.findIndex((w, k) => /(?:^|\/)git$/.test(w) && /^push$/i.test(gitSubcommand(words, k + 1)));
-      const why = git >= 0 ? pushForm(words, git, dir) : ghApi(words) && words.some((w) => REFS_ENDPOINT.test(w)) && words.some((w) => MAIN_FIELD.test(w)) ? mainReason : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
+      const git = words.findIndex((w, k) => programName(w) === "git" && /^push$/i.test(gitSubcommand(words, k + 1)));
+      const why = git >= 0 ? pushForm(words, git, dir) : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
       if (why) return refuse(why);
+    }
+    try {
+      // Preserve the raw push path above. Only launcher descendants add new push evidence here;
+      // checking every git twice would read branches twice with different cd-failure semantics.
+      const runs = programsRun(command, cwd, undefined, options);
+      for (const run of runs) {
+        if (run.powerShellLaunch && programName(run.word) === "git" && /^push$/i.test(gitSubcommand(run.args, 0))) {
+          const why = pushForm([run.word, ...run.args], 0, run.dir);
+          if (why) return refuse(why);
+        }
+        if (apiWritesMain([run.word, ...run.args])) return mergeIn(command)?.problem ?? refuse(mainReason);
+      }
+      if (runs.some(run => run.word === "command") && [...externalCommandOperands(command, cwd, options)]
+        .some(({ word, args }) => apiWritesMain([word, ...args]))) return mergeIn(command)?.problem ?? refuse(mainReason);
+    } catch (error) {
+      if (error.code === "SAGE_POWERSHELL_LAUNCH") return refuse(error.message);
+      return pushText(bare(command)) ? refuse("the hook cannot establish the push command") : unreadableGitHub(command);
     }
     return undefined;
   }
@@ -85,17 +104,102 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     return branch && MAIN_REF.test(branch) ? `this checkout is on ${branch}. Push from the task's worktree, on the task's branch.` : undefined;
   }
 
-  /** Whether the command is gh api: gh as the command word, as gh or a path that ends in /gh, after any NAME=value, env and command. */
-  function ghApi(words) {
-    let k = 0;
-    while (/^(?:[A-Za-z_]\w*=|env$|command$)/.test(words[k] ?? "")) k++;
-    return /(?:^|\/)gh$/.test(words[k] ?? "") && words[k + 1] === "api";
+  /** Read request options, not display options or unrelated text, as branch evidence. Never open a supplied body file. */
+  function apiWritesMain(words) {
+    if (programName(words[0] ?? "") !== "gh") return false;
+    let method;
+    let endpoint;
+    let api = false;
+    let opaque = false;
+    const fields = [];
+    const args = words.slice(1);
+    for (let k = 0; k < args.length; k++) {
+      const word = args[k];
+      // Cobra permits flag bundles such as -iX PATCH and -ifbranch=main. A value flag owns the rest.
+      if (/^-[ih]./.test(word)) {
+        args.splice(k, 1, word.slice(0, 2), `-${word.slice(2)}`);
+        k--;
+        continue;
+      }
+      if (word === "-X" || word === "--method") method = args[++k];
+      else if (word.startsWith("--method=")) method = word.slice(9);
+      else if (/^-X./.test(word)) method = word.slice(2).replace(/^=/, "");
+      else if (/^(?:-[fF]|--(?:raw-)?field)$/.test(word)) fields.push({ value: args[++k] ?? "", typed: word === "-F" || word === "--field" });
+      else if (/^(?:-[fF].|--(?:raw-)?field=)/.test(word)) fields.push({
+        value: word.replace(/^(?:-[fF]=?|--(?:raw-)?field=)/, ""), typed: /^-F|^--field=/.test(word),
+      });
+      else if (word === "--input") { opaque = true; k++; }
+      else if (word.startsWith("--input=")) opaque = true;
+      else if (/^(?:--hostname|--cache|--header|-H|--jq|-q|--preview|-p|--template|-t)$/.test(word)) k++;
+      else if (!word.startsWith("-")) {
+        if (!api) { if (word !== "api") return false; api = true; }
+        else endpoint ??= word;
+      }
+    }
+    if (!api) return false;
+    const writes = (method ?? (fields.length || opaque ? "POST" : "GET")).toUpperCase() !== "GET";
+    // Only the two repository-name parts may contain known templates. Check before URL normalization.
+    const literalEndpoint = (endpoint ?? "").replace(
+      /^((?:https?:\/\/[^/?#{}]+\/)?\/?(?:api\/v3\/)?repos\/)([^/]+)\/([^/?#]+)/,
+      (_, prefix, owner, repo) => prefix + [owner, repo].map(part => part.replace(/\{(?:owner|repo)\}|:(?:owner|repo)\b/g, "template")).join("/"),
+    );
+    if (writes && /[$`\\*\[\]{}]|:(?:owner|repo|branch)\b/.test(literalEndpoint)) return true;
+    let path = (endpoint ?? "").split("#", 1)[0];
+    let search = "";
+    if (/^https?:\/\//i.test(path)) {
+      try {
+        const url = new URL(path);
+        path = url.pathname;
+        search = url.search;
+      } catch { return true; }
+    } else if (path.includes("?")) {
+      const split = path.indexOf("?");
+      search = path.slice(split);
+      path = path.slice(0, split);
+    }
+    try { path = decodeURIComponent(path).replace(/^\//, ""); } catch { return true; }
+    path = path.replace(/^api\/v3\//, "").replace(/^api\/graphql$/, "graphql");
+    const hasBodyFields = fields.length > 0;
+    for (const [key, value] of new URLSearchParams(search)) fields.push({ value: `${key}=${value}`, typed: false });
+    const values = fields.map(({ value, typed }) => {
+      const split = value.indexOf("=");
+      return { key: value.slice(0, split), value: value.slice(split + 1),
+        opaque: typed && /^(?:@)|\{(?:owner|repo|branch)\}|:(?:owner|repo|branch)\b/.test(value.slice(split + 1)) };
+    });
+    const bracketedFields = values.some(field => /[\[\]]/.test(field.key));
+    const protectedName = (text) => /(?:^|[\s/=:'"(])(?:refs\/)?(?:heads\/)?(?:main|master)(?=$|[\s/?&#:'"),}])/i.test(text);
+    if (path === "graphql") {
+      if (opaque || bracketedFields || values.some(field => field.opaque)) return true;
+      const query = values.filter(field => field.key === "query").map(field => field.value).join(" ");
+      // The shell reader does not retain which quote protected a dollar sign. Require literal query text.
+      if (/[$`]/.test(query)) return true;
+      // GraphQL ignores comments and commas. Strings are data, so their words cannot select an operation.
+      const operations = query.replace(/"""(?:\\[\s\S]|(?!""")[\s\S])*"""|"(?:\\[\s\S]|[^"\\])*"|#[^\r\n]*|,/g, " ");
+      if (!/\bmutation\b/.test(operations)) return false;
+      // Ref ids hide their branch name. A ref update or deletion must use the reviewed PR path.
+      if (/\b(?:updateRefs?|deleteRef|updatePullRequestBranch)\s*\(/.test(operations)) return true;
+      if (/\bcreateCommitOnBranch\s*\(/.test(operations) &&
+        (/\bbranch\s*:\s*\{[^{}]*\bid\s*:/.test(operations) || !/\bbranchName\s*:\s*"[^"\\]+"/.test(query))) return true;
+      return /\b(?:createCommitOnBranch|createRef|createLinkedBranch|mergeBranch)\s*\(/.test(operations) &&
+        (/\\/.test(query) || values.some(field => protectedName(field.value) ||
+          (field.key !== "query" && /[$`\\]/.test(field.value))));
+    }
+    if ((method ?? (hasBodyFields || opaque ? "POST" : "GET")).toUpperCase() === "GET") return false;
+    // Without quote provenance a question mark can be a shell glob, not an API query separator.
+    if (endpoint?.includes("?")) return true;
+    // Owner and repository templates each name one path part. Branch templates can insert a whole route.
+    const literalPath = path.replace(/^repos\/([^/]+)\/([^/]+)/, (prefix) => prefix.replace(/\{(?:owner|repo)\}|:(?:owner|repo)\b/g, "template"));
+    if (/[$`\\*\[\]{}]|:(?:owner|repo|branch)\b/.test(literalPath)) return true;
+    const route = /^(?:repos\/[^/]+\/[^/]+|repositories\/\d+)\/(git\/refs(?:\/.*)?|contents(?:\/.*)?|merges|merge-upstream|branches\/.*\/rename|pulls\/[^/]+\/update-branch)$/.exec(path)?.[1];
+    if (!route) return false;
+    if (bracketedFields) return true; // gh interprets bracketed keys as structured fields, including incomplete brackets.
+    if (/^pulls\//.test(route)) return true; // The PR id does not prove which branch this request changes.
+    if ((!route.startsWith("contents") && (protectedName(route) || !LITERAL.test(route))) || opaque) return true;
+    const destinations = values.filter(field => /^(?:ref|branch|base|new_name)$/.test(field.key));
+    if (destinations.some(field => field.opaque || !LITERAL.test(field.value) || MAIN_REF.test(field.value))) return true;
+    // The contents API defaults an omitted branch to the repository's default branch, which may be main.
+    return /^contents(?:\/|$)/.test(route) && !destinations.some(field => field.key === "branch");
   }
-
-  /** A gh api endpoint of git refs: repos/<o>/<r>/git/refs or repos/<o>/<r>/git/refs/<ref>. */
-  const REFS_ENDPOINT = /^\/?repos\/[^/]+\/[^/]+\/git\/refs(?:\/|$)/;
-  /** A gh api field that names main or master as the ref, such as -f ref=refs/heads/main. */
-  const MAIN_FIELD = /^(?:-[fF]|--(?:raw-)?field=)?ref=(?:refs\/)?(?:heads\/)?(?:main|master)$/i;
 
   return Object.freeze({ pushProblem });
 }

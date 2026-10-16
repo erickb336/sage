@@ -1,29 +1,92 @@
+import { nestedReviewerReport, NESTED_INSPECT_TOOL, NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
+import { createHash } from "node:crypto";
 // Isolated native V2 transport check with simulated model responses; not a live Sage pilot.
-// No timeout or process signal: retain the caller's tool session handle if the child stalls.
+// A wide deadlock guard closes transport first, then stops an unresponsive owned child.
 import http from "node:http";
 import assert from "node:assert/strict";
-import {readdirSync,readFileSync} from "node:fs";
+import {existsSync,readdirSync,readFileSync} from "node:fs";
+import {preserveRestartEvidence} from "./fixtures/codex-native/restart-evidence.mjs";
+import {freshControlCompletion} from "./fixtures/codex-native/fresh-control.mjs";
+import {waitNative} from "./fixtures/codex-native/wait-native.mjs";
 import {setupCapture} from "./fixtures/codex-native/setup-capture.mjs";
+import {preserveFollowupCapacityEvidence} from "./fixtures/codex-native/preserve-evidence.mjs";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
+assert(process.argv.slice(2).every(arg => ["--sage-nested-report", "--sage-capacity-rejection", "--sage-followup-capacity-recovery", "--sage-followup-failed-child", "--sage-read-task", "--sage-interruption", "--sage-accept-review", "--sage-create-run", "--sage-create-task", "--sage-followup-recovery", "--sage-followup", "--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
+const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
+  ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const nestedReport=process.argv.includes("--sage-nested-report");
+assert(!nestedReport || process.argv.length===3,"nested_report_is_separate");
+const readTask = process.argv.includes("--sage-read-task");
+assert(!readTask || process.argv.slice(2).length === 1, "task_read_is_a_separate_probe");
+let taskReadVerified = false, taskReadBaseline, taskReadValue;
+const interruption = process.argv.includes("--sage-interruption");
+assert(!interruption || process.argv.slice(2).length === 1, "interruption_is_a_separate_probe");
+let interruptionVerified = false, interruptedFinishVerified = false, interruptionRun;
+const acceptReview = process.argv.includes("--sage-accept-review");
+assert(!acceptReview || process.argv.slice(2).length === 1, "review_acceptance_is_a_separate_probe");
+const createRun = process.argv.includes("--sage-create-run");
+assert(!createRun || process.argv.slice(2).length === 1, "run_creation_is_a_separate_probe");
+const createTask = process.argv.includes("--sage-create-task");
+assert(!createTask || process.argv.slice(2).length === 1, "task_creation_is_a_separate_probe");
+const resumedFailure = process.argv.includes("--sage-followup-failed-child");
+let resumedFailureStep=0, resumedFailureVerified=false, resumedHistory;
+const followupRecovery = process.argv.includes("--sage-followup-recovery");
+const followup = resumedFailure || followupRecovery || process.argv.includes("--sage-followup");
+assert(!followup || process.argv.slice(2).length === 1, "followup_is_a_separate_probe");
+const leadOwnership = process.argv.includes("--sage-lead-ownership");
+assert(!leadOwnership || process.argv.slice(2).length === 1, "ownership_is_a_separate_probe");
+let ownershipStage = 0;
+const roleEdit = process.argv.includes("--sage-role-edit");
+const writer = process.argv.includes("--writer");
+assert(!writer || roleEdit, "writer_needs_role_probe");
+assert(!roleEdit || process.argv.slice(2).every(arg => ["--sage-role-edit","--writer"].includes(arg)), "role_edit_is_a_separate_probe");
+let roleEditVerified = false, childPatchTool;
+const childMessage = process.argv.includes("--sage-child-message");
+assert(!childMessage || process.argv.slice(2).length === 1, "message_is_a_separate_probe");
+let messageVerified = false, chiefMessageDelivered = false, messageWaitCycles = 0;
+const childSandbox = process.argv.includes("--sage-child-sandbox");
+assert(!childSandbox || process.argv.slice(2).length === 1, "sandbox_is_a_separate_probe");
+let sandboxVerified = false, childCommandTool;
+const denySpawn = process.argv.includes("--deny-spawn");
+const repeatRecovery = process.argv.includes("--sage-child-repeat-recovery");
+const recoveryProbe = repeatRecovery || process.argv.includes("--sage-child-recovery");
+const finishRun = acceptReview || createRun || process.argv.includes("--sage-report");
+const receiptProbe = finishRun || process.argv.includes("--sage-receipt") || recoveryProbe;
+// Historical unreconciled capture: commit 74966ae and its saved native log.
+const followupCapacity=process.argv.includes("--sage-followup-capacity-recovery");
+assert(!followupCapacity || process.argv.slice(2).length===1,"followup_capacity_is_separate");
+const reportProbe = followupCapacity || process.argv.includes("--sage-report") || receiptProbe;
+const capacityFailure = process.argv.includes("--sage-capacity-rejection");
+assert(!capacityFailure || process.argv.slice(2).length===1,"capacity_failure_is_separate");
+const failedSpawn = process.argv.includes("--sage-failed-spawn");
+const completion = nestedReport || capacityFailure || readTask || interruption || createTask || followup || leadOwnership || roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
+assert(!(failedSpawn && (reportProbe || recoveryProbe)), "incompatible_failure_probe");
+assert(!(denySpawn && completion), "incompatible_probe_modes");
+let denied = false;
 const MARKER = "sage-native-parent-ok";
-const CHILD_MARKER = "sage-native-child-ok";
-const CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
+let CHILD_MARKER = completion ? ["STATUS done", "RESULT sage-native-child-ok", "EVIDENCE simulated native fixture", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED real model", "BRANCH none"].join("\n") : "sage-native-child-ok";
+let CHILD_PROMPT = `Return exactly ${CHILD_MARKER}. Do not call any tool.`;
 const binary = process.env.SAGE_CODEX_BIN ?? "codex";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-one-child-")));
+let evidenceVerified=false,evidenceFailure=null,evidenceObserverFailure=null,evidenceResult=null;
+try {
+assert(/^[A-Za-z0-9/._-]+$/.test(root), "unsafe_probe_root");
 const workspace = join(root, "workspace");
 const baselineHome = join(root, "home");
 const codexHome = join(root, "codex");
 const temporary = join(root, "tmp");
 for (const dir of [workspace, baselineHome, codexHome, temporary]) mkdirSync(dir);
+if(nestedReport)mkdirSync(join(root,"restart"));
 const catalogPath = join(root, "model-catalog.json");
 writeFileSync(catalogPath, JSON.stringify({ models: [{
   slug: "sage-native-parent", display_name: "Sage native lifecycle fixture",
-  supported_reasoning_levels: [], shell_type: "disabled", visibility: "list",
-  supported_in_api: true, priority: 1, support_verbosity: false,
+  ...(roleEdit ? {apply_patch_tool_type:"freeform"} : {}),
+  supported_reasoning_levels: [], shell_type: childSandbox ? "unified_exec" : "disabled", visibility: "list",
+  supported_in_api: true, priority: 1, support_verbosity: false, multi_agent_version: "v2",
   truncation_policy: { mode: "bytes", limit: 10000 }, experimental_supported_tools: [], tool_mode: "direct",
   model_messages: { instructions_template: "Follow the fixed native-agent probe task. Do not use shell or external tools." },
 }] }));
@@ -35,9 +98,15 @@ const env = {
   CODEX_HOME: codexHome,
   TMPDIR: temporary,
   LANG: "en_US.UTF-8",
+  DO_NOT_TRACK: "1",
 };
+// Disable real machine-identity queries in this probe process and its native child.
+// Outside NODE_TEST_CONTEXT the fixed marker means unavailable identity, never trusted hardware evidence.
+process.env.SAGE_TEST_MACHINE_ID = "native-fixture";
+env.SAGE_TEST_MACHINE_ID = "native-fixture";
 const print = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
-const launch = (args) => spawn(binary, args, { cwd: workspace, env, shell: false, stdio: ["pipe", "pipe", "pipe"] });
+const telemetryArgs = ["-c", "analytics.enabled=false", "-c", 'otel.exporter="none"', "-c", 'otel.metrics_exporter="none"', "-c", 'otel.trace_exporter="none"'];
+const launch = (args) => spawn(binary, [...telemetryArgs, ...args], { cwd: workspace, env, shell: false, stdio: ["pipe", "pipe", "pipe"] });
 const binaryPaths = new Set();
 for (const candidate of isAbsolute(binary) ? [binary] : env.PATH.split(delimiter).map((dir) => join(dir, binary))) {
   try { binaryPaths.add(candidate); binaryPaths.add(realpathSync(candidate)); } catch { /* Not this PATH entry. */ }
@@ -56,21 +125,40 @@ versionChild.stdout.on("data", (data) => { versionText = (versionText + data).sl
 versionChild.stderr.on("data", (data) => { versionStderr = (versionStderr + data).slice(0, 4096); });
 versionChild.stdin.on("error", () => {});
 versionChild.stdin.end();
-const versionResult = await new Promise((resolve) => {
-  versionChild.once("error", () => resolve({ spawnFailed: true }));
-  versionChild.once("close", (code, signal) => resolve({ code, signal }));
-});
+const versionResult = await waitNative(versionChild, { deadlineMs });
 const version = /^codex-cli \d+\.\d+\.\d+(?:[-+.][A-Za-z0-9.-]+)?$/.test(versionText.trim()) ? versionText.trim() : null;
 if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
-  print({ type: "result", verified: false, reason: "version_check_failed", diagnostic: diagnostic(versionStderr) });
+  print({ type: "result", verified: false, reason: versionResult.timedOut ? "native_deadline" : "version_check_failed", diagnostic: diagnostic(versionStderr) });
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  await setupCapture({root,codexHome,workspace,env,binary});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe || nestedReport,failedSpawn,followupCapacity,capacityFailure,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,writer,leadOwnership,followup,createTask,createRun,acceptReview,nestedReport,interruption,readTask,resumedFailure,deadlineMs});
+  const capacityBook=capacityFailure ? JSON.stringify(integrated.readLogbook()) : null;
+  const interruptionBook = interruption ? JSON.stringify(integrated.readLogbook()) : null;
+  let beforeInterruption;
+  let createdTask, createdBook, creationVerified=false;
+  let runCreationStage=0, createdRun, runCreationVerified=false;
+  const nativeTaskInput={request:"77777777-7777-4777-8777-777777777777",title:"Native created task",size:"small",risk:[],add:[],why:""};
+  const nativeRunInput={request:"88888888-8888-4888-8888-888888888888",task:"T1",role:"lead",branch:"",candidate:""};
+  let failureStage = 0;
+  let freshReceipt,freshDispatched=false,freshRequests=0,capacityFailureReceipt,completedCapacityHistory;
+  let heldThread,heldResponse,heldPrompt,heldRequests=0,followupCapacityVerified=false,followupCapacityReceipt,followupCapacityHistory,followupCapacityBook,firstTranscript;
+  let releaseHeldBound;const heldBound=new Promise(resolve=>{releaseHeldBound=resolve;});
+  let capacityStage=0, capacityBefore, capacityFailed, capacityFirstCompleted, capacityVerified=false, replacementThread, replacementPrompt;
+  const capacityBrief=Object.fromEntries(["GOAL","SCOPE","CONTEXT","DECISIONS","ACCEPTANCE","VERIFY","BUDGET","FORBIDDEN","REPORT","STANDING"].map(key=>[key,"Complete the fixed native capacity fixture task."]));
+  let followupPrepared, followupVerified = false, followupResponse, releaseFollowup;
+  const followupReady = new Promise(resolve => { releaseFollowup = resolve; });
+  let reviewVerified = false, acceptedReview, acceptedBook;
+  let finishVerified = false, firstFinish, beforeFinishLogbook, finishedLogbook;
+  let prepared = false, blockedStopVerified = false, reportVerified = false, receiptVerified = false, beforeReport, expectedReport, recordedState;
+  let compactRequests = 0, recoveryRound = 0, recoveryPhase = "compact", recoveredRounds = 0;
+  const texts = value => typeof value === "string" ? [value] : Array.isArray(value) ? value.flatMap(texts)
+    : value && typeof value === "object" ? Object.values(value).flatMap(texts) : [];
   let responseRequests = 0;
   let rejectedRequests = 0;
   let rootRequests = 0;
-  let childRequests = 0;
+  let childRequests = 0, grandchildRequests=0, grandchildThread, GRAND_PROMPT;
+  const GRAND_MARKER=nestedReport ? nestedReviewerReport(integrated.reviewTarget) : "";
   let rootThread;
   let childThread;
   let taskName;
@@ -83,9 +171,11 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let fixtureFailure;
   let releaseChildReady;
   const childReady = new Promise((resolve) => { releaseChildReady = resolve; });
+  let releaseBoundChild;
+  const boundChild = new Promise(resolve => { releaseBoundChild = resolve; });
   const pending = new Set();
-  const calls = { spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
-  const knownCalls = new Set(Object.values(calls));
+  const calls = { freshPrepare:"fresh_prepare",freshFollow:"fresh_follow",freshControl:"fresh_control",freshWait:"fresh_wait",freshDone:"fresh_done", capacityPrepare:"capacity_prepare",capacitySpawn:"capacity_spawn",capacityList:"capacity_list",capacityRetryPrepare:"capacity_retry_prepare",capacityRetrySpawn:"capacity_retry_spawn",capacityWait:"capacity_wait",capacityDone:"capacity_done",  heldPrepare:"held_prepare",heldSpawn:"held_spawn",heldControl:"held_control",heldList:"held_list",capacityFollowPrepare:"capacity_follow_prepare",capacityFollow:"capacity_follow",capacityReconcile:"capacity_reconcile",heldWait:"held_wait",heldDone:"held_done", resumedControl:"resumed_control",resumedPrepare:"resumed_prepare",resumedSpawn:"resumed_spawn",resumedList:"resumed_list", taskRead:"probe_task_read", taskReadAgain:"probe_task_read_again", interruptControl:"probe_interrupt_control", accept:"probe_accept_review", acceptRetry:"probe_accept_review_retry", createRun:"probe_create_run", runRetry:"probe_run_retry", runHistoricalRetry:"probe_run_historical_retry", create:"probe_create", createRetry:"probe_create_retry", followPrepare:"probe_follow_prepare", follow:"probe_follow", followWait:"probe_follow_wait", followDone:"probe_follow_done", finish: "probe_finish", finishRetry: "probe_finish_retry", ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const knownCalls = new Set([...Object.values(calls),...Object.values(NESTED_CALLS),"probe_child_control"]);
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
     if (res.writableEnded) return;
@@ -95,19 +185,25 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   const failFixture = (reason) => {
     fixtureFailure ??= reason;
     print({ type: "fixture_failure", reason: fixtureFailure });
+    releaseHeldBound();
     releaseChildReady();
+    releaseBoundChild();
+    releaseFollowup();
     for (const response of pending) reject(response);
   };
   const inspectRequest = (request) => {
     const outputs = {};
     const input = Array.isArray(request.input) ? request.input : [];
     for (const item of input) {
-      if (item.type !== "function_call_output" || !knownCalls.has(item.call_id)) continue;
+      if (!["function_call_output", "custom_tool_call_output"].includes(item.type) || !knownCalls.has(item.call_id)) continue;
       check(!(item.call_id in outputs), "duplicate_native_tool_result");
       const output = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) && item.output.length === 1 && item.output[0]?.type === "input_text" ? item.output[0].text : null;
+        : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([...Object.values(NESTED_CALLS),calls.freshPrepare,calls.heldPrepare,calls.capacityFollowPrepare,calls.capacityPrepare,calls.capacityRetryPrepare,calls.resumedPrepare,calls.taskRead, calls.taskReadAgain, calls.accept, calls.acceptRetry, calls.createRun, calls.runRetry, calls.runHistoricalRetry, calls.create, calls.createRetry, calls.followPrepare, calls.finish, calls.finishRetry, calls.ownerPrepare, calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
-      try { outputs[item.call_id] = JSON.parse(output); } catch { throw new Error("native_tool_result_is_not_json"); }
+      try { outputs[item.call_id] = JSON.parse(output); } catch {
+        if ((resumedFailure && item.call_id === calls.resumedSpawn) || (failedSpawn && item.call_id === calls.failureSpawn) || (capacityFailure && item.call_id === calls.capacitySpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.freshFollow,calls.capacityFollow,calls.follow, calls.ownerSpawn, calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
+        else throw new Error("native_tool_result_is_not_json");
+      }
     }
     const agentTools = [];
     for (const tool of request.tools ?? []) {
@@ -115,14 +211,34 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
         for (const member of tool.tools ?? []) if (member.type === "function") agentTools.push(member.name);
       }
     }
+    const commandTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.type === "function" && member.name === "exec_command").map(member => ({namespace: tool.name, name: member.name}))
+      : tool.type === "function" && tool.name === "exec_command" ? [{name: tool.name}] : []);
+    const patchTools = (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.name === "apply_patch").map(member => ({namespace:tool.name, name:member.name}))
+      : tool.name === "apply_patch" ? [{name:tool.name}] : []);
     const tasks=input.filter(item=>item.type==="agent_message");
     const task=tasks[0];
-    const childPromptSeen=tasks.length===1 && task.author==="/root" && task.recipient==="/root/probe_child"
+    const expectedChildPath=capacityFailure && replacementPrompt ? "/root/capacity_retry" : "/root/probe_child";
+    const childPromptSeen=tasks.length===1 && task.author==="/root" && task.recipient===expectedChildPath
       && Array.isArray(task.content) && task.content.length===2
       && task.content[0].type==="input_text"
-      && task.content[0].text==="Message Type: NEW_TASK\nTask name: /root/probe_child\nSender: /root\nPayload:\n"
+      && task.content[0].text===`Message Type: NEW_TASK\nTask name: ${expectedChildPath}\nSender: /root\nPayload:\n`
       && task.content[1].type==="encrypted_content" && task.content[1].encrypted_content===CHILD_PROMPT;
-    return { outputs, agentTools, childPromptSeen };
+    const mcpTools = name => (request.tools ?? []).flatMap(tool => tool.type === "namespace"
+      ? (tool.tools ?? []).filter(member => member.name === name).map(member => ({namespace: tool.name, name: member.name}))
+      : tool.type === "function" && tool.name === `mcp__sage_preparation__${name}` ? [{name: tool.name}] : []);
+    const followupPromptSeen = tasks.at(-1)?.author === "/root" && tasks.at(-1)?.recipient === "/root/probe_child"
+      && tasks.at(-1)?.content?.some(part => part.type === "encrypted_content" && part.encrypted_content === followupPrepared?.message);
+    const heldPromptSeen=tasks.some(item=>item.author==="/root" && item.recipient==="/root/held_child"
+      && item.content?.some(part=>part.type==="encrypted_content" && part.encrypted_content===heldPrompt));
+    const freshPromptSeen=tasks.at(-1)?.author==="/root" && tasks.at(-1)?.recipient==="/root/probe_child"
+      && tasks.at(-1)?.content?.some(part=>part.type==="encrypted_content" && part.encrypted_content===freshReceipt?.message);
+    const rejectedPromptSeen=tasks.some(item=>item.content?.some(part=>part.type==="encrypted_content" && part.encrypted_content===followupCapacityReceipt?.message));
+    const grandchildPromptSeen=tasks.length===1 && task.author==="/root/probe_child" && task.recipient==="/root/probe_child/probe_grandchild" && task.content?.some(part=>part.type==="encrypted_content"&&part.encrypted_content===GRAND_PROMPT);
+    return { grandchildPromptSeen, inspectTools:mcpTools(NESTED_INSPECT_TOOL), freshPromptSeen,rejectedPromptSeen,heldPromptSeen, taskReadTools:mcpTools("sage_read_task"), acceptTools:mcpTools("sage_accept_review"), createRunTools:mcpTools("sage_create_run"), createTools:mcpTools("sage_create_task"), followupPromptSeen, finishTools: mcpTools("sage_finish_run"), outputs, agentTools, childPromptSeen, commandTools, patchTools,
+      chiefMessageDelivered: input.some(item => item.type === "agent_message" && item.author === "/root/probe_child"
+        && item.recipient === "/root" && texts(item.content).includes("Fixed progress report")), prepareTools: mcpTools("sage_prepare_task"), reportTools: mcpTools("sage_read_report"), recordTools: mcpTools("sage_record_report"), assignmentTools: mcpTools("sage_read_assignment") };
   };
   let responseId = 0;
   const respond = (res, item) => {
@@ -142,7 +258,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
     }
     events.push(
       { type: "response.output_item.done", output_index: 0, item },
-      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: 0 } } },
+      { type: "response.completed", response: { id, status: "completed", output: [item], usage: { input_tokens: (recoveryProbe || followupRecovery) && [calls.compact1, calls.compact2].includes(item.call_id) ? 200000 : 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: (recoveryProbe || followupRecovery) && [calls.compact1, calls.compact2].includes(item.call_id) ? 200000 : 0 } } },
     );
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "close" });
     for (const event of events) res.write(`event: ${event.type}
@@ -151,7 +267,7 @@ data: ${JSON.stringify(event)}
 `);
     res.end();
   };
-  const message = (text) => ({ id: `message_${text}`, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
+  const message = (text) => ({ id: `message_${responseId + 1}`, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
   // This separate namespace field matches the current Responses protocol and upstream fixtures.
   const call = (call_id, name, args) => ({ type: "function_call", namespace: "collaboration", name, call_id, arguments: JSON.stringify(args) });
   const childEntry = (result) => {
@@ -160,8 +276,12 @@ data: ${JSON.stringify(event)}
     check(matches.length === 1, "list_result_does_not_identify_exact_spawned_task");
     return matches[0];
   };
+  const nestedFlow=nestedReport && createNestedReportFlow({integrated,check,respond,message,call,print,
+    identities:()=>({lead:childThread,reviewer:grandchildThread}),reviewerReport:GRAND_MARKER,parentMarker:MARKER,
+    setReviewerTask:value=>{GRAND_PROMPT=value;},setLeadReport:value=>{CHILD_MARKER=value;}});
   const server = http.createServer(async (req, res) => {
     pending.add(res);
+    res.once("close", () => pending.delete(res));
     res.once("finish", () => pending.delete(res));
     try {
       if (fixtureFailure) { req.resume(); reject(res); return; }
@@ -174,6 +294,13 @@ data: ${JSON.stringify(event)}
       let request;
       try { request = JSON.parse(body); } catch { throw new Error("invalid_request_json"); }
       body = "";
+      if ((recoveryProbe || followupRecovery) && texts(request.input).some(text => text.includes("SAGE_CHILD_COMPACT_REQUEST"))) {
+        responseRequests++;
+        check(req.headers["thread-id"] === childThread, "compaction_wrong_child");
+        check(++compactRequests <= (repeatRecovery ? 2 : 1), "unexpected_compaction_count");
+        respond(res, message("SAGE_CHILD_COMPACT_SUMMARY: Continue the fixed child probe.")); return;
+      }
+      const requestTexts = recoveryProbe || followupRecovery ? texts(request.input) : [];
       const info = inspectRequest(request);
       request = null; // Retain only tool results, advertised names, and a fixed-task boolean.
       responseRequests++;
@@ -181,8 +308,195 @@ data: ${JSON.stringify(event)}
       const subagent = req.headers["x-openai-subagent"];
       check(typeof thread === "string" && thread.length > 0, "missing_native_thread_header");
       if (subagent === "collab_spawn") {
+        if(nestedReport && thread===childThread) {childRequests++;nestedFlow.lead(info,res);return;}
+        if(nestedReport && info.grandchildPromptSeen) {check(thread!==rootThread&&thread!==childThread,"nested_reviewer_identity_collision");grandchildThread??=thread;check(thread===grandchildThread,"nested_reviewer_changed");grandchildRequests++;nestedFlow.reviewer(info,res);return;}
+        if(followupCapacity && thread===childThread && childRequests>=2) {
+          check(freshDispatched && freshRequests<2,"unrequested_A_followup");
+          check(info.freshPromptSeen && !info.rejectedPromptSeen,"fresh_followup_wrong_assignment");
+          freshRequests++;childRequests++;
+          if(freshRequests===1) respond(res,{type:"function_call",name:"list_mcp_resources",call_id:calls.freshControl,arguments:"{}"});
+          else respond(res,message(freshControlCompletion(info.outputs[calls.freshControl],CHILD_MARKER)));
+          return;
+        }
+        if(followupCapacity && childRequests>=2) {
+          check(thread!==childThread && thread!==rootThread,"rejected_followup_delivered_to_A");
+          heldThread??=thread;check(thread===heldThread && heldRequests<3,"unexpected_capacity_child");
+          heldRequests++;childRequests++;
+          if(heldRequests===1) {
+            check(info.heldPromptSeen,"held_child_missing_assignment");
+            respond(res,{type:"function_call",name:"list_mcp_resources",call_id:calls.heldControl,arguments:"{}"});
+          } else if(heldRequests===2) {
+            check(integrated.readJournal().bindings.length===2,"held_child_not_bound");
+            heldResponse=res;releaseHeldBound();
+          } else {
+            const state=integrated.readJournal();
+            check(state.bindings.length===2 && state.completions.length===1,"held_stop_released_before_native_terminal");
+            respond(res,message(CHILD_MARKER));
+          }
+          return;
+        }
+        if(capacityFailure && childRequests===1) {
+          check(thread===childThread && integrated.readJournal().bindings.length===1,"capacity_control_not_bound");
+          childRequests++;childResponse=res;releaseBoundChild();return;
+        }
+        if(capacityFailure && childRequests>=3) {
+          check(capacityStage===4 && thread!==childThread && thread!==rootThread,"capacity_retry_wrong_child");
+          replacementThread??=thread;check(thread===replacementThread,"capacity_retry_extra_child");
+          check(childRequests<5,"capacity_retry_extra_request");
+          if(childRequests===3) check(info.childPromptSeen,"capacity_retry_missing_brief");
+          else {
+            const state=integrated.readJournal(),stops=integrated.readStops();
+            check(state.bindings.length===2 && state.completions.length===1 && stops.length===3
+              && stops[2].decision==="stop-observed","capacity_retry_stop_released_early");
+          }
+          childRequests++;respond(res,message(CHILD_MARKER));return;
+        }
+        if(interruption && childRequests===1) {
+          check(thread===childThread && childResponseSent,"wrong_interrupted_child");
+          check(integrated.readJournal().bindings.length===1,"interrupted_child_not_bound");
+          beforeInterruption=integrated.readJournal();
+          integrated.checkInterruptionCapacity(false);
+          childRequests++; releaseBoundChild(); return;
+        }
+        if (followup && childRequests === 2) {
+          check(thread === childThread && info.followupPromptSeen, "followup_child_or_message_changed");
+          childRequests++; followupResponse = res; releaseFollowup(); return;
+        }
+        if (resumedFailure && childRequests >= 3) {
+          check(thread===childThread && info.followupPromptSeen,"resumed_child_changed");childRequests++;
+          if (resumedFailureStep===0) {
+            check(Object.hasOwn(info.outputs,calls.resumedControl),"resumed_control_missing");
+            resumedHistory=integrated.readJournal();check(resumedHistory.bindings.length===2,"resumed_binding_missing");
+            check(info.prepareTools.length===1,"resumed_prepare_missing");
+            const brief=Object.fromEntries(["GOAL","SCOPE","CONTEXT","DECISIONS","ACCEPTANCE","VERIFY","BUDGET","FORBIDDEN","REPORT","STANDING"].map(key=>[key,"Review the fixed temporary commit. Simulated evidence only."]));
+            resumedFailureStep=1;respond(res,{type:"function_call",...info.prepareTools[0],call_id:calls.resumedPrepare,
+              arguments:JSON.stringify({task:"T1",run:"R3",name:"failed_reviewer",role:"code-reviewer",reviewCycle:1,brief})});
+          } else if (resumedFailureStep===1) {
+            const prepared=info.outputs[calls.resumedPrepare];check(prepared?.decision==="prepared"&&prepared.role==="code-reviewer","resumed_preparation_invalid");
+            resumedFailureStep=2;respond(res,call(calls.resumedSpawn,"spawn_agent",{task_name:prepared.name,message:prepared.message,fork_turns:prepared.fork_turns,model:"sage-fixture-nonexistent-model"}));
+          } else if (resumedFailureStep===2) {
+            check(info.outputs[calls.resumedSpawn]==="Unknown model `sage-fixture-nonexistent-model` for spawn_agent. Available models: sage-native-parent","resumed_failure_error_missing");
+            resumedFailureStep=3;respond(res,call(calls.resumedList,"list_agents",{}));
+          } else {
+            check(resumedFailureStep===3,"resumed_failure_repeated");
+            const state=integrated.readJournal(),agents=info.outputs[calls.resumedList]?.agents;
+            check(Array.isArray(agents)&&agents.length===2&&agents.every(row=>["/root",taskName].includes(row.agent_name)),"resumed_failure_created_child");
+            const failed=state.reservations.find(row=>row.assignment.run==="R3");
+            check(state.failures?.length===1&&state.failures[0].assignment===failed?.assignment.id&&state.failures[0].issuer===childThread,"resumed_failure_not_recovered");
+            check(JSON.stringify(state.bindings)===JSON.stringify(resumedHistory.bindings)&&JSON.stringify(state.completions)===JSON.stringify(resumedHistory.completions),"resumed_history_changed");
+            resumedFailureStep=4;resumedFailureVerified=true;respond(res,message(CHILD_MARKER));
+          }
+          return;
+        }
+        if (roleEdit && childRequests === 1) {
+          check(thread === childThread && childResponseSent, "wrong_edit_child");
+          const file = join(workspace,"role-edit-proof.txt");
+          if (writer) {
+            check(existsSync(file) && readFileSync(file,"utf8") === "fixed role edit proof\n", "writer_file_missing_or_changed");
+            const receipt = JSON.parse(readFileSync(join(root,"edit-evaluation.json"),"utf8"));
+            check(receipt.call === calls.edit && receipt.role === "implementer", "wrong_writer_evaluation");
+          } else {
+            check(typeof info.outputs[calls.edit] === "string" && info.outputs[calls.edit].includes("This Sage role cannot edit files"), "role_edit_denial_missing");
+            check(!existsSync(file) && !existsSync(join(root,"edit-evaluation.json")), "readonly_edit_reached_evaluator_or_file");
+          }
+          const events = readdirSync(join(root,"events")).map(name => JSON.parse(readFileSync(join(root,"events",name),"utf8")));
+          check(events.filter(row => row.hook_event_name === "PostToolUse" && row.tool_use_id === calls.edit).length === (writer ? 1 : 0), "edit_execution_event_mismatch");
+          roleEditVerified = true; childRequests++;
+          print({type:"role_edit_evidence",writer,roleEditVerified,fileWritten:writer,simulatedModel:true});
+          respond(res,message(CHILD_MARKER)); return;
+        }
+        if (childMessage && childRequests === 1) {
+          check(thread === childThread && Object.hasOwn(info.outputs,calls.messageControl), "message_control_missing");
+          check(info.agentTools.includes("send_message"), "child_message_tool_missing");
+          childRequests++; respond(res,call(calls.peerMessage,"send_message",{target:"/root/nonexistent_peer",message:"Fixed progress report"})); return;
+        }
+        if (childMessage && childRequests === 2) {
+          check(thread === childThread && childResponseSent, "wrong_message_child");
+          check(typeof info.outputs[calls.peerMessage] === "string" && info.outputs[calls.peerMessage].includes(
+            "A Sage child sends messages only to the chief"), "peer_message_not_denied");
+          check(!existsSync(join(root,"message-evaluations.jsonl")), "peer_message_reached_evaluator");
+          childRequests++; respond(res, call(calls.chiefMessage,"send_message",{target:"/root",message:"Fixed progress report"})); return;
+        }
+        if (childMessage && childRequests === 3) {
+          check(thread === childThread && info.outputs[calls.chiefMessage] === "", "chief_message_receipt_missing");
+          const receipts = readFileSync(join(root,"message-evaluations.jsonl"),"utf8").trim().split("\n").map(JSON.parse);
+          check(receipts.length === 1 && receipts[0].call === calls.chiefMessage && receipts[0].target === "/root", "wrong_message_evaluation");
+          const events = readdirSync(join(root,"events")).map(name => JSON.parse(readFileSync(join(root,"events",name),"utf8")));
+          check(!events.some(row => row.hook_event_name === "PostToolUse" && row.tool_use_id === calls.peerMessage), "peer_message_executed");
+          messageVerified = true; childRequests++; respond(res,message(CHILD_MARKER)); return;
+        }
+        if (childSandbox && childRequests === 1) {
+          check(thread === childThread && childResponseSent, "wrong_sandbox_child");
+          check(typeof info.outputs[calls.sandbox] === "string" && info.outputs[calls.sandbox].includes(
+            "A child cannot request broader sandbox permissions. Ask the chief to run this command."), "sandbox_denial_missing");
+          check(!existsSync(join(root, "command-policy-receipt.json")), "sandbox_reached_evaluator");
+          const events = readdirSync(join(root, "events")).map(name => JSON.parse(readFileSync(join(root, "events", name), "utf8")));
+          check(!events.some(row => row.hook_event_name === "PostToolUse" && row.tool_use_id === calls.sandbox), "sandbox_command_executed");
+          sandboxVerified = true; childRequests++;
+          print({type:"sandbox_evidence", deniedBeforeEvaluator:true, noPostToolExecution:true, simulatedModel:true});
+          respond(res, message(CHILD_MARKER)); return;
+        }
+        if ((recoveryProbe && childRequests > 0) || (followupRecovery && childRequests > 2)) {
+          check(thread === childThread && childResponseSent, "wrong_recovery_child");
+          childRequests++;
+          const evidence = integrated.childEvidence(childThread), {state, bound, recovery} = evidence;
+          check(JSON.stringify(state) === JSON.stringify(integrated.readRecoveryBaseline()), "recovery_changed_journal");
+          check(state.reservations.length === (followupRecovery ? 2 : 1) && state.bindings.length === (followupRecovery ? 2 : 1) && (state.completions?.length ?? 0) === (followupRecovery ? 1 : 0),
+            "recovery_changed_admission");
+          if (recoveryPhase === "compact") {
+            recoveryRound++;
+            check(evidence.compactions === recoveryRound && compactRequests === recoveryRound
+              && recovery.required && recovery.compaction && recovery.call === null, "compaction_did_not_invalidate_recovery");
+            check(requestTexts.some(text => text.includes("SAGE_CHILD_COMPACT_SUMMARY")), "missing_compaction_summary");
+            recoveryPhase = "denied";
+            respond(res, {type:"function_call", name:"list_mcp_resources", call_id: calls[`denied${recoveryRound}`], arguments:"{}"}); return;
+          }
+          if (recoveryPhase === "denied") {
+            check(typeof info.outputs[calls[`denied${recoveryRound}`]] === "string"
+              && info.outputs[calls[`denied${recoveryRound}`]].includes("Read your current assignment"), "unrecovered_work_ran");
+            const events = readdirSync(join(root,"events")).map(name=>JSON.parse(readFileSync(join(root,"events",name),"utf8")));
+            check(!events.some(row=>row.hook_event_name==="PostToolUse" && row.tool_use_id===calls[`denied${recoveryRound}`]), "denied_tool_executed");
+            recoveryPhase = "stop"; respond(res, message(CHILD_MARKER)); return;
+          }
+          if (recoveryPhase === "stop") {
+            check(requestTexts.some(text=>text.includes("sage_read_assignment before completing this task")), "unrecovered_stop_not_blocked");
+            check(integrated.readStops().at(-1)?.decision === "recovery-required", "missing_recovery_stop");
+            blockedStopVerified = true;
+            check(info.assignmentTools.length === 1, "assignment_reader_missing");
+            recoveryPhase = "read";
+            respond(res, {type:"function_call", ...info.assignmentTools[0], call_id:calls[`recovery${recoveryRound}`], arguments:"{}"}); return;
+          }
+          check(recoveryPhase === "read", "unexpected_recovery_phase");
+          const result = info.outputs[calls[`recovery${recoveryRound}`]];
+          check(result?.decision === "current-assignment" && result.message === (followupRecovery ? followupPrepared.message : CHILD_PROMPT) && result.child === childThread
+            && result.turn === bound.turn && result.assignment === bound.assignment && result.task === "T1" && result.run === (followupRecovery ? "R2" : "R1")
+            && result.taskHash === createHash("sha256").update(followupRecovery ? followupPrepared.message : CHILD_PROMPT).digest("hex"), "assignment_recovery_changed_identity");
+          check(!recovery.required && recovery.call === calls[`recovery${recoveryRound}`], "native_recovery_output_not_verified");
+          recoveredRounds++;
+          print({type:"child_recovery_evidence", round:recoveryRound, exactSavedAssignment:true, latestCompactionVerified:true,
+            toolAndStopHeld:true, unchangedAdmission:true, simulatedModel:true});
+          if (repeatRecovery && recoveryRound === 1) {
+            recoveryPhase = "compact";
+            respond(res, {type:"function_call", name:"list_mcp_resources", call_id:calls.compact2, arguments:"{}"}); return;
+          }
+          recoveryPhase = "complete"; respond(res, message(CHILD_MARKER)); return;
+        }
+        if (completion && childRequests === (capacityFailure ? 2 : roleEdit ? 2 : childMessage ? 4 : childSandbox ? 2 : 1)) {
+          check(thread === childThread && childResponseSent, "unexpected_stop_retry");
+          const state = integrated.readJournal(), stops = integrated.readStops();
+          check(state.reservations.length === (failedSpawn || capacityFailure ? 2 : 1) && state.bindings.length === 1 && (state.completions?.length ?? 0) === 0,
+            "blocked_stop_released_capacity");
+          check(stops.length === 1 && stops[0].decision === "stop-observed" && stops[0].completions === 0,
+            "stop_callback_was_not_observed");
+          check(existsSync(join(root, `blocked-${childThread}.json`)), "blocking_hook_did_not_run");
+          blockedStopVerified = true; childRequests++;
+          print({type: "blocked_stop_evidence", slotRetained: true, nextNativeRequestObserved: true});
+          respond(res, message(CHILD_MARKER)); return;
+        }
         check(rootThread && thread !== rootThread && childRequests === 0, "unexpected_child_request_identity");
         check(info.childPromptSeen, "child_did_not_receive_fixed_task");
+        if (roleEdit) { check(info.patchTools.length === 1, "patch_tool_missing"); childPatchTool = info.patchTools[0]; }
+        if (childSandbox) { check(info.commandTools.length === 1, "command_tool_missing"); childCommandTool = info.commandTools[0]; }
         childThread = thread;
         childRequests++;
         childTaskSeen = true;
@@ -192,14 +506,183 @@ data: ${JSON.stringify(event)}
         return;
       }
       check(!subagent, "unexpected_non_spawn_agent_request");
+      if (childMessage && info.chiefMessageDelivered) chiefMessageDelivered = true;
       rootThread ??= thread;
       check(thread === rootThread, "unexpected_root_thread_identity");
+      if (failedSpawn && failureStage < 4) {
+        check(info.prepareTools.length === 1, "failure_prepare_tool_missing");
+        if (failureStage === 0) {
+          failureStage = 1;
+          const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
+          respond(res, {type: "function_call", ...info.prepareTools[0], call_id: calls.failurePrepare,
+            arguments: JSON.stringify({task: "T1", run: "R1", name: "probe_failed", role: "lead", brief})}); return;
+        }
+        if (failureStage === 1) {
+          const receipt = info.outputs[calls.failurePrepare];
+          check(receipt?.decision === "prepared" && typeof receipt.message === "string", "failure_preparation_missing");
+          failureStage = 2;
+          respond(res, call(calls.failureSpawn, "spawn_agent", {task_name: "probe_failed", message: receipt.message,
+            fork_turns: "none", model: "sage-fixture-nonexistent-model"})); return;
+        }
+        if (failureStage === 2) {
+          check(info.outputs[calls.failureSpawn] === "Unknown model `sage-fixture-nonexistent-model` for spawn_agent. Available models: sage-native-parent", "unexpected_native_preflight_error");
+          const state = integrated.readJournal();
+          check(state.config.total === 1 && state.reservations.length === 1 && state.bindings.length === 0
+            && (state.failures?.length ?? 0) === 0 && childRequests === 0, "failure_released_before_reconciliation");
+          failureStage = 3;
+          respond(res, call(calls.failureList, "list_agents", {})); return;
+        }
+        const registry = info.outputs[calls.failureList], state = integrated.readJournal();
+        check(registry?.agents?.length === 1 && registry.agents[0].agent_name === "/root", "failed_dispatch_created_child");
+        check(state.failures?.length === 1 && state.bindings.length === 0 && childRequests === 0
+          && state.failures[0].assignment === state.reservations[0].assignment.id, "failed_dispatch_not_reconciled");
+        failureStage = 4;
+        print({type: "failed_spawn_registry", onlyRoot: true, failures: 1, bindings: 0});
+      }
+      if (readTask) {
+        rootRequests++;
+        check(info.taskReadTools.length === 1, "task_read_tool_missing");
+        const snapshot = () => JSON.stringify({book:integrated.readLogbook(),admission:integrated.readJournal()});
+        if (rootRequests === 1) {
+          taskReadBaseline=snapshot();
+          check(integrated.readLogbook().tasks.length===1 && integrated.readLogbook().runs.length===0,"task_read_fixture_shape");
+          respond(res,{type:"function_call",...info.taskReadTools[0],call_id:calls.taskRead,arguments:'{"task":"T1"}'});return;
+        }
+        if (rootRequests === 2) {
+          taskReadValue=info.outputs[calls.taskRead];const task=integrated.readLogbook().tasks[0];
+          check(JSON.stringify(taskReadValue)===JSON.stringify({task,version:createHash("sha256").update(JSON.stringify(task)).digest("hex")}),"task_read_wrong_snapshot");
+          check(snapshot()===taskReadBaseline,"task_read_changed_state");
+          respond(res,{type:"function_call",...info.taskReadTools[0],call_id:calls.taskReadAgain,arguments:'{"task":"T1"}'});return;
+        }
+        check(rootRequests===3 && JSON.stringify(info.outputs[calls.taskReadAgain])===JSON.stringify(taskReadValue)
+          && snapshot()===taskReadBaseline,"task_read_retry_changed");
+        const state=integrated.readJournal();check(state.reservations.length===0 && state.preparations.length===0 && state.bindings.length===0,"task_read_granted_dispatch");
+        taskReadVerified=true;
+        print({type:"task_read_evidence",reads:2,exactTask:true,stableMetadataToken:true,unchangedLogbook:true,unchangedAdmission:true,children:0,simulatedModel:true,automaticSage:false});
+        respond(res,message(MARKER));return;
+      }
+      if (createRun && runCreationStage < 4) {
+        check(info.createTools.length===1 && info.createRunTools.length===1,"creation_tools_missing");
+        if(runCreationStage===0) {
+          check(integrated.readLogbook().tasks.length===0 && integrated.readLogbook().runs.length===0,"run_fixture_not_empty");
+          runCreationStage=1;respond(res,{type:"function_call",...info.createTools[0],call_id:calls.create,arguments:JSON.stringify(nativeTaskInput)});return;
+        }
+        if(runCreationStage===1) {
+          createdTask=info.outputs[calls.create];check(createdTask?.decision==="task-created" && createdTask.task.id==="T1","task_creation_missing");
+          runCreationStage=2;respond(res,{type:"function_call",...info.createTools[0],call_id:calls.createRetry,arguments:JSON.stringify(nativeTaskInput)});return;
+        }
+        if(runCreationStage===2) {
+          check(JSON.stringify(info.outputs[calls.createRetry])===JSON.stringify({...createdTask,decision:"already-created"}),"task_retry_changed");
+          runCreationStage=3;respond(res,{type:"function_call",...info.createRunTools[0],call_id:calls.createRun,arguments:JSON.stringify(nativeRunInput)});return;
+        }
+        createdRun=info.outputs[calls.createRun];check(createdRun?.decision==="run-created" && createdRun.run.id==="R1" && integrated.readLogbook().runs.length===1,"run_creation_missing");
+        runCreationStage=4;respond(res,{type:"function_call",...info.createRunTools[0],call_id:calls.runRetry,arguments:JSON.stringify(nativeRunInput)});return;
+      }
+      if(createRun && !prepared) check(JSON.stringify(info.outputs[calls.runRetry])===JSON.stringify({...createdRun,decision:"already-created"}),"run_retry_changed");
+      if (createTask) {
+        rootRequests++;
+        const input={request:"77777777-7777-4777-8777-777777777777",title:"Native task creation fixture",size:"small",risk:["input"],add:["ux-review"],why:"Check the fixed experience"};
+        check(info.createTools.length===1,"task_create_tool_missing");
+        if(rootRequests===1) {
+          check(integrated.readLogbook().tasks.length===0,"task_fixture_not_empty");
+          respond(res,{type:"function_call",...info.createTools[0],call_id:calls.create,arguments:JSON.stringify(input)});return;
+        }
+        if(rootRequests===2) {
+          createdTask=info.outputs[calls.create];const book=integrated.readLogbook();
+          check(createdTask?.decision==="task-created" && createdTask.task.id==="T1"
+            && createdTask.task.route==="build,code-review,security-review,ux-review,qa"
+            && book.tasks.length===1 && book.tasks[0].title===input.title && book.decisions.length===1 && book.runs.length===0,"task_creation_missing_real_record");
+          createdBook=JSON.stringify(book);
+          respond(res,{type:"function_call",...info.createTools[0],call_id:calls.createRetry,arguments:JSON.stringify(input)});return;
+        }
+        check(rootRequests===3 && JSON.stringify(info.outputs[calls.createRetry])===JSON.stringify({...createdTask,decision:"already-created"})
+          && JSON.stringify(integrated.readLogbook())===createdBook,"task_creation_retry_changed_record");
+        const state=integrated.readJournal();check(state.reservations.length===0 && state.preparations.length===0,"task_creation_granted_dispatch");
+        creationVerified=true;print({type:"task_creation_evidence",tasks:1,decisions:1,runs:0,exactRetry:true,reservations:0,simulatedModel:true,automaticSage:false});
+        respond(res,message(MARKER));return;
+      }
+      if (completion && !prepared) {
+        if (!Object.hasOwn(info.outputs, calls.prepare)) {
+          check(info.prepareTools.length === 1, "preparation_tool_missing");
+          const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
+          respond(res, {type: "function_call", ...info.prepareTools[0], call_id: calls.prepare,
+            arguments: JSON.stringify({task: "T1", run: "R1", name: "probe_child", role: acceptReview ? "code-reviewer" : writer ? "implementer" : "lead", ...(acceptReview ? {reviewCycle:1} : {}), brief})}); return;
+        }
+        const receipt = info.outputs[calls.prepare];
+        check(receipt?.decision === "prepared" && typeof receipt.message === "string" && receipt.fork_turns === "none", "preparation_missing");
+        if (acceptReview) {
+          check(receipt.review?.cycle === 1 && receipt.review.round === 0, "review_target_missing");
+          CHILD_MARKER = ["STATUS done", "RESULT CLEAN", "EVIDENCE " + JSON.stringify({commit:receipt.review.sha,round:0,cycle:1,summary:"Simulated native review"}),
+            "FINDINGS []", "QUESTIONS none", "NOT VERIFIED real review", "BRANCH " + receipt.review.branch].join("\n");
+        }
+        if(interruption) { check(receipt.run==="R1","interrupted_prepared_run_missing"); interruptionRun=receipt.run; }
+        CHILD_PROMPT = receipt.message; prepared = true;
+      }
+      if (leadOwnership && rootRequests === 2 && ownershipStage < 3) {
+        if (ownershipStage === 0) {
+          check(childEntry(info.outputs[calls.running]).agent_status === "running" && !childResponseSent, "first_lead_not_held");
+          check(info.prepareTools.length === 1, "ownership_preparation_tool_missing");
+          ownershipStage = 1;
+          const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native fixture task."]));
+          respond(res, {type:"function_call", ...info.prepareTools[0], call_id:calls.ownerPrepare,
+            arguments:JSON.stringify({task:"T1",run:"R2",name:"second_lead",role:"lead",brief})}); return;
+        }
+        if (ownershipStage === 1) {
+          const receipt = info.outputs[calls.ownerPrepare];
+          check(receipt?.decision === "prepared" && typeof receipt.message === "string", "second_lead_not_prepared");
+          ownershipStage = 2;
+          respond(res, call(calls.ownerSpawn, "spawn_agent", {task_name:"second_lead",message:receipt.message,fork_turns:"none"})); return;
+        }
+        if (!Object.hasOwn(info.outputs, calls.ownerList)) {
+          check(typeof info.outputs[calls.ownerSpawn] === "string" && info.outputs[calls.ownerSpawn].includes("Sage could not verify this tool call."), "second_lead_not_denied");
+          const state = integrated.readJournal();
+          check(state.config.total === 5 && state.reservations.length === 1, "ownership_consumed_extra_capacity");
+          respond(res, call(calls.ownerList,"list_agents",{})); return;
+        }
+        const registry = info.outputs[calls.ownerList];
+        check(registry?.agents?.length === 2 && registry.agents.some(row => row.agent_name === "/root")
+          && registry.agents.some(row => row.agent_name === "/root/probe_child"), "ownership_started_extra_child");
+        ownershipStage = 3;
+        print({type:"lead_ownership_evidence",capacity:5,reservations:1,deniedSecondLead:true,nativeAgents:2,simulatedModel:true});
+      }
+      if(capacityFailure && capacityStage>0 && capacityStage<4) {
+        if(capacityStage===1) {
+          const receipt=info.outputs[calls.capacityPrepare];
+          check(receipt?.decision==="prepared" && receipt.task==="T2" && receipt.run==="R2","capacity_preparation_missing");
+          capacityStage=2;respond(res,call(calls.capacitySpawn,"spawn_agent",{task_name:"capacity_rejected",message:receipt.message,fork_turns:"none"}));return;
+        }
+        if(capacityStage===2) {
+          check(info.outputs[calls.capacitySpawn]==="collab spawn failed: agent thread limit reached","capacity_wrong_native_error");
+          const state=integrated.readJournal();
+          check(state.config.total===2 && state.reservations.length===2 && state.bindings.length===1
+            && (state.failures?.length??0)===0 && (state.completions?.length??0)===0 && childRequests===2,"capacity_released_before_reconciliation");
+          check(JSON.stringify(state.reservations[0])===JSON.stringify(capacityBefore.reservations[0])
+            && JSON.stringify(state.bindings)===JSON.stringify(capacityBefore.bindings),"capacity_failure_changed_first");
+          capacityFailed=state;capacityStage=3;respond(res,call(calls.capacityList,"list_agents",{}));return;
+        }
+        const state=integrated.readJournal(), registry=info.outputs[calls.capacityList];
+        check(registry?.agents?.length===2 && childEntry(registry).agent_status==="running","capacity_failure_created_child");
+        check(state.failures?.length===1 && state.failures[0].assignment===state.reservations[1].assignment.id
+          && JSON.stringify(state.reservations)===JSON.stringify(capacityFailed.reservations)
+          && JSON.stringify(state.bindings)===JSON.stringify(capacityFailed.bindings)
+          && (state.completions?.length??0)===0 && childRequests===2,"capacity_failure_wrong_release");
+        capacityStage=4;
+        print({type:"native_capacity_rejection",nativeLimit:1,sageLimit:2,exactLimitError:true,onlySecondReservationFailed:true,firstChildUnchanged:true,simulatedModel:true});
+        respond(res,call(calls.wait,"wait_agent",{}));respond(childResponse,message(CHILD_MARKER));childResponseSent=true;return;
+      }
       rootRequests++;
+      if(nestedReport && rootRequests>5){nestedFlow.chief(rootRequests-5,info,res,CHILD_MARKER);return;}
       if (rootRequests === 1) {
         check(["spawn_agent", "list_agents", "wait_agent"].every((name) => info.agentTools.includes(name)), "required_native_tools_missing");
         respond(res, call(calls.spawn, "spawn_agent", { task_name: "probe_child", message: CHILD_PROMPT, fork_turns: "none" }));
       } else if (rootRequests === 2) {
         const result = info.outputs[calls.spawn];
+        if (denySpawn) {
+          check(typeof result === "string" && result.includes("sage-native-denial-fixture"), "native_denial_reason_missing");
+          denied = true;
+          respond(res, message(MARKER));
+          return;
+        }
         check(typeof result?.task_name === "string" && result.task_name === "/root/probe_child", "native_spawn_result_missing_expected_task");
         taskName = result.task_name;
         print({ type: "native_tool_result", tool: "spawn_agent", task_name: taskName });
@@ -211,10 +694,38 @@ data: ${JSON.stringify(event)}
         check(agent.agent_status === "running" && childResponse && !childResponseSent, "native_child_not_running_while_response_held");
         nativeRunning = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "held", agent_name: taskName, agent_status: "running" });
+        if(capacityFailure) {
+          respond(childResponse,{type:"function_call",name:"list_mcp_resources",call_id:calls.interruptControl,arguments:"{}"});
+          await boundChild;
+          if(fixtureFailure) { reject(res); return; }
+          capacityBefore=integrated.readJournal();
+          check(capacityBefore.bindings.length===1 && capacityBefore.reservations.length===1,"capacity_first_not_bound");
+          capacityStage=1;respond(res,{type:"function_call",...info.prepareTools[0],call_id:calls.capacityPrepare,
+            arguments:JSON.stringify({task:"T2",run:"R2",name:"capacity_rejected",role:"lead",brief:capacityBrief})});return;
+        }
+        if(interruption) {
+          check(info.agentTools.includes("interrupt_agent"),"native_interrupt_tool_missing");
+          respond(childResponse,{type:"function_call",name:"list_mcp_resources",call_id:calls.interruptControl,arguments:"{}"});
+          childResponseSent=true; await boundChild;
+          if(fixtureFailure) { reject(res); return; }
+          respond(res,call(calls.wait,"interrupt_agent",{target:taskName})); return;
+        }
         respond(res, call(calls.wait, "wait_agent", {}));
-        respond(childResponse, message(CHILD_MARKER));
+        respond(childResponse, nestedReport ? {type:"function_call",name:"list_mcp_resources",call_id:"probe_child_control",arguments:"{}"} : roleEdit
+          ? {type:"custom_tool_call",...childPatchTool,call_id:calls.edit,input:"*** Begin Patch\n*** Add File: role-edit-proof.txt\n+fixed role edit proof\n*** End Patch"}
+          : childMessage
+          ? {type:"function_call",name:"list_mcp_resources",call_id:calls.messageControl,arguments:"{}"}
+          : childSandbox
+          ? {type:"function_call", ...childCommandTool, call_id:calls.sandbox, arguments:JSON.stringify({cmd:"printf sage-child-sandbox-control", shell:"/bin/sh", workdir:workspace, sandbox_permissions:"require_escalated", justification:"Fixed simulated sandbox refusal probe."})}
+          : recoveryProbe
+          ? {type:"function_call", name:"list_mcp_resources", call_id:calls.compact1, arguments:"{}"}
+          : message(CHILD_MARKER));
         childResponseSent = true;
       } else if (rootRequests === 4) {
+        if(interruption) {
+          check(info.outputs[calls.wait]?.previous_status==="running","interrupt_did_not_stop_running_child");
+          respond(res,call(calls.completed,"list_agents",{path_prefix:taskName})); return;
+        }
         const result = info.outputs[calls.wait];
         check(result?.timed_out === false && result.message === "Wait completed.", "native_wait_did_not_observe_mailbox_activity");
         nativeWait = true;
@@ -222,10 +733,337 @@ data: ${JSON.stringify(event)}
         respond(res, call(calls.completed, "list_agents", { path_prefix: taskName }));
       } else if (rootRequests === 5) {
         const agent = childEntry(info.outputs[calls.completed]);
+        if(interruption) {
+          check(agent.agent_status==="interrupted","native_child_not_interrupted");
+          const state=integrated.readJournal(),book=integrated.readLogbook();
+          check(state.completions?.length===1 && state.completions[0].outcome==="interrupted","interruption_not_recovered");
+          check((state.reports?.length??0)===0 && book.runs.length===1 && book.runs[0].status==="running" && !book.runs[0].ended && !book.runs[0].report
+            && book.ledger.length===0 && book.findings.length===0,"interruption_accepted_success");
+          check(JSON.stringify(book)===interruptionBook,"interruption_changed_logbook");
+          const {completions,...unchanged}=state, {completions:priorCompletions,...prior}=beforeInterruption;
+          check(JSON.stringify(unchanged)===JSON.stringify(prior),"interruption_changed_prior_assignments");
+          interruptionVerified=true;
+          beforeFinishLogbook=book; recordedState=JSON.stringify(state);
+          check(info.finishTools.length===1,"interrupted_finish_tool_missing");
+          respond(res,{type:"function_call",...info.finishTools[0],call_id:calls.finish,
+            arguments:JSON.stringify({outcome:"interrupted",run:interruptionRun,status:"blocked"})});return;
+        }
+        if (childMessage && agent.agent_status === "running") {
+          messageWaitCycles++; rootRequests = 3;
+          calls.wait = `probe_message_wait_${messageWaitCycles}`;
+          calls.completed = `probe_message_list_${messageWaitCycles}`;
+          knownCalls.add(calls.wait); knownCalls.add(calls.completed);
+          respond(res,call(calls.wait,"wait_agent",{})); return;
+        }
         check(agent.agent_status?.completed === CHILD_MARKER, "native_child_completion_marker_mismatch");
         nativeCompleted = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "completed", agent_name: taskName, agent_status: { completed: CHILD_MARKER } });
-        respond(res, message(MARKER));
+        if(capacityFailure) {
+          const state=integrated.readJournal();
+          check(state.completions.length===1 && state.completions[0].assignment===state.reservations[0].assignment.id,"capacity_first_not_completed");
+          capacityFirstCompleted=state.completions[0];
+          respond(res,{type:"function_call",...info.prepareTools[0],call_id:calls.capacityRetryPrepare,
+            arguments:JSON.stringify({task:"T2",run:"R2",name:"capacity_retry",role:"lead",brief:capacityBrief})});
+        } else if (followup) {
+          const state = integrated.readJournal();
+          check(state.bindings.length === 1 && state.completions.length === 1, "followup_predecessor_not_completed");
+          integrated.prepareFollowupRun();
+          const brief = Object.fromEntries(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map(key => [key, "Complete the fixed native follow-up fixture task."]));
+          respond(res, {type:"function_call", ...info.prepareTools[0], call_id:calls.followPrepare,
+            arguments:JSON.stringify({task:"T1",run:"R2",name:"continued_child",role:"lead",previous:state.bindings[0].assignment,brief})});
+        } else if(nestedReport){nestedFlow.chief(0,info,res,CHILD_MARKER);
+        } else if (reportProbe) {
+          check(info.reportTools.length === 1, "report_tool_missing");
+          beforeReport = JSON.stringify(integrated.readJournal());
+          respond(res, {type: "function_call", ...info.reportTools[0], call_id: calls.report,
+            arguments: JSON.stringify({name: "probe_child"})});
+        } else respond(res, message(MARKER));
+      } else if(capacityFailure && rootRequests===6) {
+        const receipt=info.outputs[calls.capacityRetryPrepare];
+        check(receipt?.decision==="prepared" && receipt.task==="T2" && receipt.run==="R2","capacity_retry_preparation_missing");
+        replacementPrompt=receipt.message;CHILD_PROMPT=replacementPrompt;
+        respond(res,call(calls.capacityRetrySpawn,"spawn_agent",{task_name:"capacity_retry",message:replacementPrompt,fork_turns:"none"}));
+      } else if(capacityFailure && rootRequests===7) {
+        check(info.outputs[calls.capacityRetrySpawn]?.task_name==="/root/capacity_retry","capacity_retry_spawn_missing");
+        respond(res,call(calls.capacityWait,"wait_agent",{}));
+      } else if(capacityFailure && rootRequests===8) {
+        check(info.outputs[calls.capacityWait]?.timed_out===false,"capacity_retry_wait_failed");
+        respond(res,call(calls.capacityDone,"list_agents",{}));
+      } else if(capacityFailure && rootRequests===9) {
+        const registry=info.outputs[calls.capacityDone],state=integrated.readJournal();
+        print({type:"capacity_retry_registry",registry,wait:info.outputs[calls.capacityWait],simulatedModel:true});
+        // Native cap one evicts the completed first child's resident thread. Its prior terminal result
+        // and exact saved Sage completion below remain the historical evidence.
+        check(registry?.agents?.length===2 && registry.agents.find(row=>row.agent_name==="/root/capacity_retry")?.agent_status?.completed===CHILD_MARKER
+          && registry.agents.find(row=>row.agent_name==="/root")?.agent_status==="running","capacity_retry_not_completed");
+        check(state.reservations.length===3 && state.bindings.length===2 && state.completions.length===2 && state.failures.length===1
+          && state.failures[0].assignment===state.reservations[1].assignment.id
+          && state.completions[0].assignment===state.reservations[0].assignment.id
+          && state.completions[1].assignment===state.reservations[2].assignment.id
+          && JSON.stringify(state.reservations[0])===JSON.stringify(capacityBefore.reservations[0])
+          && JSON.stringify(state.bindings[0])===JSON.stringify(capacityBefore.bindings[0]),"capacity_retry_wrong_history");
+        check(JSON.stringify(state.completions[0])===JSON.stringify(capacityFirstCompleted)
+          && state.bindings[1].child===replacementThread && (state.reports?.length??0)===0
+          && JSON.stringify(integrated.readLogbook())===capacityBook,"capacity_retry_changed_prior_evidence");
+        capacityVerified=true;respond(res,message(MARKER));
+      } else if (interruption && rootRequests === 6) {
+        firstFinish=info.outputs[calls.finish];
+        check(firstFinish?.decision==="run-finished" && firstFinish.task==="T1" && firstFinish.run==="R1"
+          && firstFinish.status==="blocked" && firstFinish.report==="" && typeof firstFinish.ended==="string" && firstFinish.ended.length>0,"interrupted_finish_missing");
+        const book=integrated.readLogbook(), prior=beforeFinishLogbook;
+        const terminal=JSON.parse(recordedState).completions[0];
+        check(firstFinish.assignment===terminal.assignment && firstFinish.evidenceHash===terminal.evidenceHash,"interrupted_finish_wrong_terminal");
+        check(book.runs.length===1 && JSON.stringify(book.runs[0])===JSON.stringify({...prior.runs[0],status:"blocked",ended:firstFinish.ended,report:""}),"interrupted_finish_changed_run");
+        for(const key of ["tasks","ledger","findings","gates","decisions"])
+          check(JSON.stringify(book[key])===JSON.stringify(prior[key]),"interrupted_finish_changed_"+key);
+        const {interruptedFinishes,...state}=integrated.readJournal();
+        check(JSON.stringify(state)===recordedState && interruptedFinishes?.length===1
+          && /^[a-f0-9]{64}$/.test(interruptedFinishes[0].receiptHash),"interrupted_finish_changed_admission");
+        finishedLogbook=JSON.stringify(book); recordedState=JSON.stringify(integrated.readJournal());
+        check(info.finishTools.length===1,"interrupted_finish_retry_tool_missing");
+        respond(res,{type:"function_call",...info.finishTools[0],call_id:calls.finishRetry,
+          arguments:JSON.stringify({outcome:"interrupted",run:interruptionRun,status:"blocked"})});
+      } else if (interruption && rootRequests === 7) {
+        check(JSON.stringify(info.outputs[calls.finishRetry])===JSON.stringify({...firstFinish,decision:"already-finished"})
+          && JSON.stringify(integrated.readLogbook())===finishedLogbook
+          && JSON.stringify(integrated.readJournal())===recordedState,"interrupted_finish_retry_changed");
+        finishVerified=true;
+        check(info.createRunTools.length===1,"interrupted_replacement_tool_missing");
+        respond(res,{type:"function_call",...info.createRunTools[0],call_id:calls.createRun,arguments:JSON.stringify(nativeRunInput)});
+      } else if (interruption && rootRequests === 8) {
+        const result=info.outputs[calls.createRun],book=integrated.readLogbook(),prior=JSON.parse(finishedLogbook);
+        print({type:"interrupted_replacement_result",result,storedRun:book.runs.find(row=>row.id==="R2"),simulatedModel:true});
+        check(result?.decision==="run-created" && result.run?.id==="R2" && result.run.task==="T1" && result.run.role==="lead"
+          && result.run.status==="running" && !result.run.ended && !result.run.report
+          && book.runs.length===2 && JSON.stringify(book.runs[0])===JSON.stringify(prior.runs[0])
+          && JSON.stringify(book.runs[1])===JSON.stringify(Object.fromEntries(Object.keys(prior.runs[0]).map(key=>[key,result.run[key]??""]))),"interrupted_replacement_missing");
+        for(const key of ["tasks","ledger","findings","gates","decisions"])
+          check(JSON.stringify(book[key])===JSON.stringify(prior[key]),"interrupted_replacement_changed_"+key);
+        check(JSON.stringify(integrated.readJournal())===recordedState,"interrupted_replacement_changed_admission");
+        interruptedFinishVerified=true;
+        print({type:"interrupted_run_finish_evidence",finishedRun:"R1",status:"blocked",retryUnchanged:true,stableEnded:true,
+          replacementRun:"R2",tasksUnchanged:true,savedReports:0,acceptedVerdicts:0,simulatedModel:true,automaticSage:false});
+        respond(res,message(MARKER));
+      } else if (followup && rootRequests === 6) {
+        followupPrepared = info.outputs[calls.followPrepare];
+        check(followupPrepared?.decision === "prepared" && followupPrepared.target === childThread
+          && typeof followupPrepared.message === "string" && !Object.hasOwn(followupPrepared,"fork_turns"), "followup_preparation_invalid");
+        respond(res, call(calls.follow,"followup_task",{target:followupPrepared.target,message:followupPrepared.message}));
+      } else if (followup && rootRequests === 7) {
+        check(info.outputs[calls.follow] === "", "followup_not_accepted");
+        const state = integrated.readJournal();
+        check(state.reservations.length === 2 && state.reservations[1].continuation === state.bindings[0].assignment,
+          "followup_reservation_missing");
+        await followupReady;
+        if (fixtureFailure) { reject(res); return; }
+        respond(res, call(calls.followWait,"wait_agent",{}));
+        respond(followupResponse,resumedFailure ? {type:"function_call",name:"list_mcp_resources",call_id:calls.resumedControl,arguments:"{}"} : followupRecovery ? {type:"function_call", name:"list_mcp_resources", call_id:calls.compact1, arguments:"{}"} : message(CHILD_MARKER));
+      } else if (followup && rootRequests === 8) {
+        check(info.outputs[calls.followWait]?.timed_out === false, "followup_wait_failed");
+        respond(res,call(calls.followDone,"list_agents",{path_prefix:taskName}));
+      } else if (followup && rootRequests === 9) {
+        check(childEntry(info.outputs[calls.followDone]).agent_status?.completed === CHILD_MARKER, "followup_completion_missing");
+        const state=integrated.readJournal();
+        check(state.reservations.length===(resumedFailure?3:2) && state.bindings.length===2 && state.completions.length===2
+          && state.bindings.every(row=>row.child===childThread) && state.bindings[0].turn!==state.bindings[1].turn, "followup_identity_changed");
+        check(!resumedFailure||resumedFailureVerified,"resumed_failure_unverified");
+        followupVerified=true;
+        print({type:"followup_evidence",sameChild:true,exactSavedMessage:true,reservations:state.reservations.length,completedTurns:state.completions.length,simulatedModel:true,automaticSage:false});
+        respond(res,message(MARKER));
+      } else if(followupCapacity && rootRequests===6) {
+        const report=info.outputs[calls.report];
+        check(report?.decision==="report-ready" && report.task==="T1" && report.run==="R1"
+          && report.reportHash===createHash("sha256").update(CHILD_MARKER).digest("hex"),"completed_A_report_missing");
+        expectedReport=report;reportVerified=true;integrated.prepareFollowupCapacityRun();
+        const brief=Object.fromEntries(["GOAL","SCOPE","CONTEXT","DECISIONS","ACCEPTANCE","VERIFY","BUDGET","FORBIDDEN","REPORT","STANDING"].map(key=>[key,"Fixed follow-up capacity evidence fixture."]));
+        respond(res,{type:"function_call",...info.prepareTools[0],call_id:calls.heldPrepare,
+          arguments:JSON.stringify({task:"T2",run:"R2",name:"held_child",role:"lead",brief})});
+      } else if(followupCapacity && rootRequests===7) {
+        const prepared=info.outputs[calls.heldPrepare];
+        check(prepared?.decision==="prepared" && prepared.run==="R2","held_preparation_missing");heldPrompt=prepared.message;
+        respond(res,call(calls.heldSpawn,"spawn_agent",{task_name:"held_child",message:heldPrompt,fork_turns:"none"}));
+      } else if(followupCapacity && rootRequests===8) {
+        check(info.outputs[calls.heldSpawn]?.task_name==="/root/held_child","held_spawn_missing");
+        await heldBound;if(fixtureFailure){reject(res);return;}
+        respond(res,call(calls.heldList,"list_agents",{}));
+      } else if(followupCapacity && rootRequests===9) {
+        const registry=info.outputs[calls.heldList];
+        check(registry?.agents?.length===2 && registry.agents.some(row=>row.agent_name==="/root/held_child"&&row.agent_status==="running"),"held_capacity_registry_wrong");
+        firstTranscript=readFileSync(integrated.interruptionEvidence(childThread).transcript,"utf8");
+        followupCapacityHistory=integrated.readJournal();followupCapacityBook=JSON.stringify(integrated.readLogbook());
+        const brief=Object.fromEntries(["GOAL","SCOPE","CONTEXT","DECISIONS","ACCEPTANCE","VERIFY","BUDGET","FORBIDDEN","REPORT","STANDING"].map(key=>[key,"REJECTED_FOLLOWUP_MUST_NOT_ARRIVE: fixed capacity evidence."]));
+        respond(res,{type:"function_call",...info.prepareTools[0],call_id:calls.capacityFollowPrepare,
+          arguments:JSON.stringify({task:"T1",run:"R3",name:"rejected_followup",role:"lead",previous:expectedReport.assignment,brief})});
+      } else if(followupCapacity && rootRequests===10) {
+        followupCapacityReceipt=info.outputs[calls.capacityFollowPrepare];
+        check(followupCapacityReceipt?.decision==="prepared" && followupCapacityReceipt.run==="R3"
+          && followupCapacityReceipt.previous===expectedReport.assignment && followupCapacityReceipt.target===childThread,
+          "followup_capacity_preparation_missing");
+        respond(res,call(calls.capacityFollow,"followup_task",{target:followupCapacityReceipt.target,message:followupCapacityReceipt.message}));
+      } else if(followupCapacity && rootRequests===11) {
+        print({type:"followup_capacity_native_result",call:calls.capacityFollow,target:followupCapacityReceipt.target,output:info.outputs[calls.capacityFollow],simulatedModel:true});
+        check(info.outputs[calls.capacityFollow]==="collab tool failed: agent thread limit reached","unexpected_followup_capacity_error");
+        check(readFileSync(integrated.interruptionEvidence(childThread).transcript,"utf8")===firstTranscript,"rejection_changed_A_transcript");
+        respond(res,call(calls.capacityReconcile,"list_agents",{}));
+      } else if(followupCapacity && rootRequests===12) {
+        const state=integrated.readJournal(),registry=info.outputs[calls.capacityReconcile];
+        check(state.reservations.length===3 && state.reservations[2].continuation===expectedReport.assignment
+          && (state.failures?.length??0)===1 && JSON.stringify(state.bindings)===JSON.stringify(followupCapacityHistory.bindings)
+          && JSON.stringify(state.completions)===JSON.stringify(followupCapacityHistory.completions),"rejected_followup_history_changed");
+        {
+          const failed=state.failures[0],reserved=state.reservations[2];
+          check(failed.assignment===reserved.assignment.id && failed.previous===expectedReport.assignment
+            && failed.target===childThread && failed.call===calls.capacityFollow
+            && ["project","session","epoch","issuer"].every(key=>failed[key]===reserved.assignment[key])
+            && ["turn","argumentsHash","taskHash"].every(key=>failed[key]===reserved.dispatch[key])
+            && /^[a-f0-9]{64}$/.test(failed.evidenceHash),"followup_failure_identity_wrong");
+          capacityFailureReceipt=JSON.stringify(failed);
+        }
+        check(readFileSync(integrated.interruptionEvidence(childThread).transcript,"utf8")===firstTranscript,"reconciliation_changed_A_transcript");
+        check(registry?.agents?.length===2 && registry.agents.some(row=>row.agent_name==="/root/held_child"&&row.agent_status==="running"),"rejection_changed_held_B");
+        respond(res,call(calls.heldWait,"wait_agent",{}));respond(heldResponse,message(CHILD_MARKER));
+      } else if(followupCapacity && rootRequests===13) {
+        check(info.outputs[calls.heldWait]?.timed_out===false,"held_child_wait_failed");
+        respond(res,call(calls.heldDone,"list_agents",{}));
+      } else if(followupCapacity && rootRequests===14) {
+        const state=integrated.readJournal(),registry=info.outputs[calls.heldDone];
+        check(registry.agents.find(row=>row.agent_name==="/root/held_child")?.agent_status?.completed===CHILD_MARKER,"held_child_not_completed");
+        check(state.reservations.length===3 && state.bindings.length===2 && state.completions.length===2
+          && state.completions[1].child===heldThread && JSON.stringify(state.completions[0])===JSON.stringify(followupCapacityHistory.completions[0])
+          && (state.failures?.length??0)===1 && (state.reports?.length??0)===0
+          && JSON.stringify(integrated.readLogbook())===followupCapacityBook,"followup_capacity_final_state_changed");
+        check(readFileSync(integrated.interruptionEvidence(childThread).transcript,"utf8")===firstTranscript,"rejected_followup_late_delivery");
+        {
+          check(JSON.stringify(state.failures[0])===capacityFailureReceipt,"failure_receipt_changed");
+          completedCapacityHistory=state;
+          const brief=Object.fromEntries(["GOAL","SCOPE","CONTEXT","DECISIONS","ACCEPTANCE","VERIFY","BUDGET","FORBIDDEN","REPORT","STANDING"].map(key=>[key,"FRESH_RETRY_AFTER_CAPACITY: fixed recovery fixture."]));
+          respond(res,{type:"function_call",...info.prepareTools[0],call_id:calls.freshPrepare,
+            arguments:JSON.stringify({task:"T1",run:"R3",name:"fresh_followup",role:"lead",previous:expectedReport.assignment,brief})});
+        }
+      } else if(followupCapacity && rootRequests===15) {
+        freshReceipt=info.outputs[calls.freshPrepare];
+        check(freshReceipt?.decision==="prepared" && freshReceipt.run==="R3" && freshReceipt.previous===expectedReport.assignment
+          && freshReceipt.target===childThread && freshReceipt.message!==followupCapacityReceipt.message,"fresh_preparation_wrong");
+        freshDispatched=true;
+        respond(res,call(calls.freshFollow,"followup_task",{target:freshReceipt.target,message:freshReceipt.message}));
+      } else if(followupCapacity && rootRequests===16) {
+        check(info.outputs[calls.freshFollow]==="","fresh_followup_not_accepted");
+        respond(res,call(calls.freshWait,"wait_agent",{}));
+      } else if(followupCapacity && rootRequests===17) {
+        check(info.outputs[calls.freshWait]?.timed_out===false,"fresh_followup_wait_failed");
+        respond(res,call(calls.freshDone,"list_agents",{}));
+      } else if(followupCapacity && rootRequests===18) {
+        const state=integrated.readJournal(),registry=info.outputs[calls.freshDone];
+        check(registry?.agents?.find(row=>row.agent_name==="/root/probe_child")?.agent_status?.completed===CHILD_MARKER,"fresh_A_not_completed");
+        check(state.reservations.length===4 && state.bindings.length===3 && state.completions.length===3
+          && state.failures.length===1 && JSON.stringify(state.failures[0])===capacityFailureReceipt
+          && JSON.stringify(state.reservations.slice(0,3))===JSON.stringify(completedCapacityHistory.reservations)
+          && JSON.stringify(state.bindings.slice(0,2))===JSON.stringify(completedCapacityHistory.bindings)
+          && JSON.stringify(state.completions.slice(0,2))===JSON.stringify(completedCapacityHistory.completions)
+          && state.reservations[3].continuation===expectedReport.assignment
+          && state.bindings[2].assignment===state.reservations[3].assignment.id && state.bindings[2].child===childThread
+          && state.completions[2].assignment===state.bindings[2].assignment && state.completions[2].child===childThread
+          && state.bindings.every(row=>row.assignment!==state.failures[0].assignment)
+          && (state.reports?.length??0)===0 && JSON.stringify(integrated.readLogbook())===followupCapacityBook,"fresh_recovery_history_wrong");
+        followupCapacityVerified=true;respond(res,message(MARKER));
+      } else if (reportProbe && rootRequests === 6) {
+        const report = info.outputs[calls.report], state = integrated.readJournal();
+        check(report?.decision === "report-ready" && report.assignment === state.bindings[0].assignment
+          && report.child === childThread && report.turn === state.bindings[0].turn && report.task === "T1" && report.run === "R1"
+          && report.reportHash === createHash("sha256").update(CHILD_MARKER).digest("hex")
+          && report.report.STATUS === "done" && report.report.RESULT === (acceptReview ? "CLEAN" : "sage-native-child-ok"), "report_identity_or_text_changed");
+        check(JSON.stringify(state) === beforeReport, "report_read_changed_admission");
+        reportVerified = true;
+        print({type: "report_read_evidence", exactAssignment: true, exactTextHash: true, unchangedAdmission: true,
+          reportsAccepted: 0, simulatedModel: true, realModelConsumptionVerified: false});
+        if (receiptProbe) {
+          expectedReport = report;
+          check(info.recordTools.length === 1, "record_tool_missing");
+          respond(res, {type: "function_call", ...info.recordTools[0], call_id: calls.record,
+            arguments: JSON.stringify({name: "probe_child", reportHash: report.reportHash})});
+        } else respond(res, message(MARKER));
+      } else if (receiptProbe && rootRequests === 7) {
+        const receipt = info.outputs[calls.record], state = integrated.readJournal();
+        check(JSON.stringify(receipt) === JSON.stringify({...expectedReport, decision: "report-recorded"}), "recorded_report_changed");
+        check(state.reports?.length === 1 && state.reports[0].text === CHILD_MARKER, "receipt_not_saved");
+        const {reports, ...unchanged} = state;
+        check(JSON.stringify(unchanged) === beforeReport, "receipt_changed_other_admission_state");
+        recordedState = JSON.stringify(state);
+        integrated.removeChildTranscript(childThread);
+        check(info.reportTools.length === 1, "reread_tool_missing");
+        respond(res, {type: "function_call", ...info.reportTools[0], call_id: calls.reread,
+          arguments: JSON.stringify({name: "probe_child"})});
+      } else if (receiptProbe && rootRequests === 8) {
+        check(JSON.stringify(info.outputs[calls.reread]) === JSON.stringify(expectedReport), "lost_transcript_recovery_changed_report");
+        check(JSON.stringify(integrated.readJournal()) === recordedState, "reread_changed_receipt");
+        check(info.recordTools.length === 1, "retry_tool_missing");
+        respond(res, {type: "function_call", ...info.recordTools[0], call_id: calls.retry,
+          arguments: JSON.stringify({name: "probe_child", reportHash: expectedReport.reportHash})});
+      } else if (receiptProbe && rootRequests === 9) {
+        check(JSON.stringify(info.outputs[calls.retry]) === JSON.stringify({...expectedReport, decision: "already-recorded"}), "receipt_retry_changed_report");
+        check(JSON.stringify(integrated.readJournal()) === recordedState, "receipt_retry_changed_admission");
+        receiptVerified = true;
+        print({type: "report_receipt_evidence", receipts: 1, exactReport: true, transcriptRemoved: true,
+          recoveryVerified: true, retryUnchanged: true, verdictsAccepted: 0, simulatedModel: true});
+        if (finishRun) {
+          check(info.finishTools.length === 1, "finish_tool_missing");
+          beforeFinishLogbook = integrated.readLogbook();
+          respond(res, {type: "function_call", ...info.finishTools[0], call_id: calls.finish,
+            arguments: JSON.stringify({assignment: expectedReport.assignment, reportHash: expectedReport.reportHash})});
+        } else respond(res, message(MARKER));
+      } else if (finishRun && rootRequests === 10) {
+        firstFinish = info.outputs[calls.finish];
+        check(firstFinish?.decision === "run-finished" && firstFinish.task === "T1" && firstFinish.run === "R1"
+          && firstFinish.status === "done", "run_finish_missing");
+        const after = integrated.readLogbook(), prior = beforeFinishLogbook;
+        check(JSON.stringify(after.runs[0]) === JSON.stringify({...prior.runs[0], status: "done", report: firstFinish.report, ended: firstFinish.ended})
+          && after.runs.length === 1 && integrated.readRunReport(firstFinish.report) === CHILD_MARKER, "run_evidence_changed");
+        for (const key of ["tasks", "ledger", "findings", "gates", "decisions"])
+          check(JSON.stringify(after[key]) === JSON.stringify(prior[key]), "finish_changed_" + key);
+        finishedLogbook = JSON.stringify(after);
+        check(JSON.stringify(integrated.readJournal()) === recordedState, "finish_changed_admission");
+        check(info.finishTools.length === 1, "finish_retry_tool_missing");
+        respond(res, {type: "function_call", ...info.finishTools[0], call_id: calls.finishRetry,
+          arguments: JSON.stringify({assignment: expectedReport.assignment, reportHash: expectedReport.reportHash})});
+      } else if (finishRun && rootRequests === 11) {
+        check(JSON.stringify(info.outputs[calls.finishRetry]) === JSON.stringify({...firstFinish, decision: "already-finished"}), "finish_retry_changed_result");
+        check(integrated.readRunReport(firstFinish.report) === CHILD_MARKER
+          && JSON.stringify(integrated.readJournal()) === recordedState
+          && JSON.stringify(integrated.readLogbook()) === finishedLogbook, "finish_retry_changed_evidence");
+        finishVerified = true;
+        print({type:"run_finish_evidence", exactReportBytes:true, finishedRuns:1, retryUnchanged:true,
+          tasksAndVerdictsUnchanged:true, admissionAndModeUnchanged:true, simulatedModel:true, automaticSage:false});
+        if(acceptReview) { check(info.acceptTools.length===1,"review_tool_missing"); respond(res,{type:"function_call",...info.acceptTools[0],call_id:calls.accept,arguments:JSON.stringify({assignment:expectedReport.assignment,reportHash:expectedReport.reportHash})}); }
+        else if(createRun) respond(res,{type:"function_call",...info.createRunTools[0],call_id:calls.runHistoricalRetry,arguments:JSON.stringify(nativeRunInput)});
+        else respond(res, message(MARKER));
+      } else if(acceptReview && rootRequests===12) {
+        acceptedReview=info.outputs[calls.accept];
+        const book=integrated.readLogbook(), prior=JSON.parse(finishedLogbook);
+        check(acceptedReview?.decision==="review-accepted" && acceptedReview.kind==="review-clean" && acceptedReview.run==="R1"
+          && acceptedReview.sha===JSON.parse(expectedReport.report.EVIDENCE).commit && acceptedReview.cycle===1
+          && book.ledger.length===1 && book.ledger[0].sha===acceptedReview.sha && book.ledger[0].run==="R1","review_acceptance_missing");
+        for(const key of ["tasks","runs","findings","gates","decisions"]) check(JSON.stringify(book[key])===JSON.stringify(prior[key]),"review_changed_"+key);
+        check(JSON.stringify(integrated.readJournal())===recordedState,"review_changed_admission");
+        acceptedBook=JSON.stringify(book);
+        respond(res,{type:"function_call",...info.acceptTools[0],call_id:calls.acceptRetry,arguments:JSON.stringify({assignment:expectedReport.assignment,reportHash:expectedReport.reportHash})});
+      } else if(acceptReview && rootRequests===13) {
+        check(JSON.stringify(info.outputs[calls.acceptRetry])===JSON.stringify({...acceptedReview,decision:"already-accepted"})
+          && JSON.stringify(integrated.readLogbook())===acceptedBook,"review_retry_changed");
+        const state=integrated.readJournal();
+        check(state.bindings.length===1 && state.completions.length===1 && state.reports.length===1,"review_lifecycle_counts");
+        reviewVerified=true;
+        print({type:"review_acceptance_evidence",finishedRuns:1,acceptedVerdicts:1,bindings:1,completions:1,reports:1,exactRetry:true,taskStateUnchanged:true,simulatedModel:true,automaticSage:false});
+        respond(res,message(MARKER));
+      } else if(createRun && rootRequests===12) {
+        check(JSON.stringify(info.outputs[calls.runHistoricalRetry])===JSON.stringify({...createdRun,decision:"already-created"})
+          && JSON.stringify(integrated.readLogbook())===finishedLogbook,"creation_retry_reopened_run");
+        const state=integrated.readJournal(),book=integrated.readLogbook();
+        check(book.tasks.length===1 && book.tasks[0].state==="framed" && book.runs.length===1 && book.runs[0].status==="done"
+          && book.ledger.length===0 && state.reservations.length===1 && state.bindings.length===1 && state.completions.length===1
+          && state.reports.length===1,"created_run_lifecycle_counts");
+        runCreationVerified=true;
+        print({type:"run_creation_evidence",tasks:1,runs:1,reservations:1,bindings:1,reports:1,completions:1,acceptedVerdicts:0,taskState:"framed",historicalRetryUnchanged:true,simulatedModel:true,automaticSage:false});
+        respond(res,message(MARKER));
       } else {
         throw new Error("unexpected_extra_root_request");
       }
@@ -243,8 +1081,9 @@ data: ${JSON.stringify(event)}
     print({ type: "result", verified: false, reason: "loopback_listener_failed" });
     process.exitCode = 1;
   } else {
-    const args = ["exec", "--strict-config", "--skip-git-repo-check", "-C", workspace, "-s", "read-only", "--json"];
+    const args = ["exec", "--strict-config", "--skip-git-repo-check", "-C", workspace, "-s", roleEdit ? "workspace-write" : "read-only", "--json"];
     const config = {
+      ...((recoveryProbe || followupRecovery) ? {model_auto_compact_token_limit:100000, compact_prompt:"SAGE_CHILD_COMPACT_REQUEST"} : {}),
       model_provider: "sage_native_lifecycle",
       model: "sage-native-parent",
       model_catalog_json: catalogPath,
@@ -254,12 +1093,12 @@ data: ${JSON.stringify(event)}
       "features.remote_plugin": false,
       "features.apps": false,
       "features.shell_snapshot": false,
-      "features.shell_tool": false,
+      "features.shell_tool": childSandbox,
       "features.enable_request_compression": false,
       "features.multi_agent": true,
       "features.multi_agent_v2": true,
       "agents.enabled": true,
-      "agents.max_concurrent_threads_per_session": 5,
+      "agents.max_concurrent_threads_per_session": followupCapacity || capacityFailure ? 1 : 5,
       allow_login_shell: false,
     };
     for (const [key, value] of Object.entries(config)) args.push("-c", `${key}=${JSON.stringify(value)}`);
@@ -296,8 +1135,11 @@ data: ${JSON.stringify(event)}
         if (event.item.text === MARKER) exactMessages++;
         else otherMessages++;
       } else if (event.type === "item.completed" && event.item?.type === "collab_tool_call"
-        && ["spawn_agent", "wait"].includes(event.item.tool) && event.item.status === "completed") {
+        && ["spawn_agent", "wait", ...(interruption ? ["interrupt_agent"] : [])].includes(event.item.tool) && event.item.status === "completed") {
         // The native tool result in the next request supplies the stricter state assertion.
+      } else if (completion && event.type === "item.completed" && event.item?.type === "mcp_tool_call"
+        && event.item.server === "sage_preparation" && (readTask ? ["sage_read_task"] : ["sage_create_task", "sage_create_run", "sage_prepare_task", ...(reportProbe ? ["sage_read_report"] : []), ...(receiptProbe ? ["sage_record_report"] : []), ...(finishRun || interruption ? ["sage_finish_run"] : []), ...(acceptReview || nestedReport ? ["sage_accept_review"] : []),...(nestedReport ? ["sage_read_recorded_report","sage_read_report","sage_record_report","sage_finish_run"] : [])]).includes(event.item.tool) && event.item.status === "completed") {
+        // The prepared message and final journal verify this tool's result.
       } else if (event.type === "item.completed" && event.item?.type !== "reasoning") {
         unexpectedItems++;
       }
@@ -313,36 +1155,153 @@ data: ${JSON.stringify(event)}
     });
     child.stderr.on("data", (data) => { stderrBytes += data.length; stderrText = (stderrText + data).slice(0, 4096); });
     child.stdin.on("error", () => {});
-    child.stdin.end(`Run the fixed one-child native lifecycle probe. Finish with exactly ${MARKER}. Do not use shell tools.\n`);
+    child.stdin.end(completion ? "sage mode\n" : `Run the fixed one-child native lifecycle probe. Finish with exactly ${MARKER}. Do not use shell tools.\n`);
     print({ type: "event", event: "baseline_started" });
-    const result = await new Promise((resolve) => {
-      child.once("error", () => resolve({ spawnFailed: true }));
-      child.once("close", (code, signal) => resolve({ code, signaled: signal !== null }));
-    });
+    const result = await waitNative(child, { deadlineMs, onTimeout: () => failFixture("native_root_deadline") });
     acceptLine(buffer);
     if (pending.size) failFixture("native_root_exited_with_held_response");
+    server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
-    const verified = result.code === 0 && !fixtureFailure && rootRequests === 5 && childRequests === 1
-      && rootThread !== childThread && childTaskSeen && childResponseSent && nativeRunning && nativeWait && nativeCompleted
+    const routeVerified = readTask ? taskReadVerified && rootRequests===3 && childRequests===0 : createTask ? creationVerified && rootRequests===3 && childRequests===0 : denySpawn
+      ? rootRequests === 2 && childRequests === 0 && denied
+      : rootRequests === (nestedReport ? 12 : capacityFailure ? 9 : followupCapacity ? 18 : interruption ? 8 : acceptReview ? 13 : createRun ? 12 : followup ? 9 : finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!followup || followupVerified) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!createRun || runCreationVerified) && (!acceptReview || reviewVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (nestedReport ? 8 : capacityFailure ? 5 : followupCapacity ? 7 : resumedFailure ? 7 : followupRecovery ? 7 : followup ? 3 : roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+        && (!(recoveryProbe || followupRecovery) || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && (nestedReport || interruption || blockedStopVerified))) && rootThread !== childThread
+        && (!nestedReport || grandchildRequests===2) && (!capacityFailure || capacityVerified) && (!followupCapacity || followupCapacityVerified) && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified && interruptedFinishVerified : nativeWait && nativeCompleted);
+    const verified = result.code === 0 && !fixtureFailure && routeVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && malformedEvents === 0 && rejectedRequests === 0;
-    print({ type: "result", ...result, responseRequests, rootRequests, childRequests, childTaskSeen, childResponseSent,
+    if (childMessage) print({type:"message_evidence",messageVerified,chiefMessageDelivered,messageWaitCycles,simulatedModel:true});
+    print({ type: "result", ...result, responseRequests, rootRequests: rootRequests + 2 * messageWaitCycles + (leadOwnership ? 3 : 0) + (capacityFailure && capacityStage===4 ? 3 : 0), childRequests, childTaskSeen, childResponseSent,
       nativeRunning, nativeWait, nativeCompleted, exactMessages, otherMessages, completedTurns, failedTurns,
       unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
       ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
-    if (!verified) process.exitCode = 1;
+    if(followupCapacity || nestedReport) evidenceResult={...result,verified,fixtureFailure,responseRequests,rootRequests,childRequests};
+    if (!verified) { process.exitCode = 1; if(nestedReport)evidenceFailure??=fixtureFailure??"native_route_not_verified"; }
     const rows=readdirSync(join(root,"events")).map(name=>JSON.parse(readFileSync(join(root,"events",name),"utf8")));
     const start=rows.filter(row=>row.hook_event_name==="SubagentStart");
     const stop=rows.filter(row=>row.hook_event_name==="SubagentStop");
     const before=rows.filter(row=>row.hook_event_name==="PreToolUse"&&row.tool_name==="collaborationspawn_agent");
     const after=rows.filter(row=>row.hook_event_name==="PostToolUse"&&row.tool_name==="collaborationspawn_agent");
-    assert.equal(start.length,1);assert.equal(stop.length,1);assert.equal(before.length,1);assert.equal(after.length,1);
+    assert.equal(before.length,createTask || readTask ? 0 : nestedReport ? 2 : capacityFailure ? 3 : followupCapacity || failedSpawn || leadOwnership || resumedFailure ? 2 : 1);
+    assert.equal(start.length,createTask || readTask || denySpawn ? 0 : nestedReport || followupCapacity || capacityFailure ? 2 : 1);
+    assert.equal(stop.length,createTask || readTask || denySpawn || interruption ? 0 : nestedReport ? 2 : followupCapacity ? 5 : capacityFailure ? 4 : followupRecovery ? 4 : followup ? 3 : recoveryProbe ? (repeatRecovery ? 3 : 2) : completion ? 2 : 1);
+    assert.equal(after.length,createTask || readTask || denySpawn ? 0 : nestedReport || followupCapacity || capacityFailure ? 2 : 1);
+    if (!denySpawn && !createTask && !readTask && !followupCapacity && !capacityFailure && !nestedReport) {
     assert.equal(start[0].captureError,undefined);
-    assert.equal(start[0].agent_id,stop[0].agent_id);
+    if(!interruption) assert.equal(start[0].agent_id,stop[0].agent_id);
     assert.equal(start[0].metadata.id,start[0].agent_id);
     assert.equal(start[0].metadata.session_id,before[0].session_id);
-    assert.equal(before[0].tool_use_id,after[0].tool_use_id);
+    const matched = before.filter(row => row.tool_use_id === after[0].tool_use_id);
+    assert.equal(matched.length, 1);
+    assert.equal(matched[0].tool_use_id, calls.spawn);
     assert.equal(after[0].resultTaskName,start[0].metadata.agent_path);
-    print({type:"hook_evidence",spawnRequest:before.length,spawnResult:after.length,childStart:start.length,childStop:stop.length,exactIdentityJoin:true,simulatedModel:true,automaticSage:false,realModelConsumptionVerified:false});
+    }
+    if(nestedReport) {
+      integrated.verifyNestedAssignments([{child:childThread,parent:rootThread,path:"/root/probe_child",message:CHILD_PROMPT},{child:grandchildThread,parent:childThread,path:"/root/probe_child/probe_grandchild",message:GRAND_PROMPT}]);
+      const state=integrated.readJournal();
+      assert.equal(state.preparations.length,2);assert.equal(state.reservations.length,2);
+      assert.equal(state.bindings.length,2);assert.equal(state.completions.length,2);assert.equal(state.reports.length,2);
+      for(const [id,parent,path] of [[childThread,rootThread,"/root/probe_child"],[grandchildThread,childThread,"/root/probe_child/probe_grandchild"]]) {
+        const starts=start.filter(row=>row.agent_id===id),stops=stop.filter(row=>row.agent_id===id);
+        assert.equal(starts.length,1);assert.equal(stops.length,1);assert.equal(starts[0].captureError,undefined);
+        assert.equal(starts[0].metadata.id,id);assert.equal(starts[0].metadata.session_id,rootThread);assert.equal(starts[0].metadata.parent_thread_id,parent);assert.equal(starts[0].metadata.agent_path,path);
+        const results=after.filter(row=>row.resultTaskName===path);assert.equal(results.length,1);
+        const requests=before.filter(row=>row.tool_use_id===results[0].tool_use_id);assert.equal(requests.length,1);assert.equal(requests[0].session_id,rootThread);assert.equal(requests[0].agent_id??requests[0].session_id,parent);
+        const bound=state.bindings.filter(row=>row.child===id);assert.equal(bound.length,1);assert.equal(bound[0].issuer,parent);
+        assert.deepEqual(state.completions.find(row=>row.assignment===bound[0].assignment),bound[0]);
+      }
+    }
+    if (completion && !readTask && !createTask && !interruption && !followupCapacity && !capacityFailure && !nestedReport) {
+      const state = integrated.readJournal(), stops = integrated.readStops();
+      assert.equal(state.preparations.length, resumedFailure ? 3 : failedSpawn || leadOwnership || followup ? 2 : 1); assert.equal(state.reservations.length, resumedFailure ? 3 : failedSpawn || followup ? 2 : 1);
+      assert.equal(state.bindings.length, followup ? 2 : 1); assert.equal(state.completions.length, followup ? 2 : 1);
+      assert.deepEqual(state.completions[0], state.bindings[0]);
+      assert.equal(state.bindings[0].child, childThread);
+      assert.equal(state.reports?.length ?? 0, receiptProbe ? 1 : 0);
+      assert.equal(stops.length, followupRecovery ? 4 : followup ? 3 : recoveryProbe ? recoveredRounds + 1 : 2);
+      assert(stops.every((row, i) => row.decision === ((recoveryProbe && i < recoveredRounds) || (followupRecovery && i === 2) ? "recovery-required" : "stop-observed") && row.completions === (followup && i >= 2 ? 1 : 0)));
+      print({type: "completion_evidence", reservations: state.reservations.length, bindings: state.bindings.length, completions: state.completions.length,
+        blockedStopRetainedCapacity: blockedStopVerified, stopCallbacksPrecedeTerminal: true,
+        parentReconciledCompletion: true, reportsAccepted: acceptReview ? 1 : 0, fullPolicyVerified: false,
+        simulatedModel: true, automaticSage: false, realModelConsumptionVerified: false});
+    }
+    if(followupCapacity) {
+      assert(followupCapacityVerified);
+      for(const child of [childThread,heldThread]) {
+        const starts=start.filter(row=>row.agent_id===child),stops=stop.filter(row=>row.agent_id===child);
+        assert.equal(starts.length,1);assert.equal(stops.length,followupCapacity && child===childThread?3:2);assert.equal(starts[0].captureError,undefined);
+        assert.equal(starts[0].metadata.id,child);
+        const result=after.filter(row=>row.resultTaskName===starts[0].metadata.agent_path);
+        assert.equal(result.length,1);assert.equal(before.filter(row=>row.tool_use_id===result[0].tool_use_id).length,1);
+      }
+      print({type:"followup_capacity_evidence",nativeLimit:1,sageLimit:2,exactRejection:true,firstTranscriptUnchangedThroughRejection:true,
+        noRejectedFollowupModelRequest:true,failedReservationRetainedInHistory:true,freshRetryCompleted:true,heldChildCompleted:true,simulatedModel:true,automaticSage:false});
+    }
+    if(interruption) {
+      const state=integrated.readJournal();
+      assert.equal(state.completions?.length ?? 0,1,"interruption_not_recovered");
+      const bound=state.bindings[0], {outcome,evidenceHash,...identity}=state.completions[0];
+      assert.equal(state.reservations.length,1);assert.equal(state.bindings.length,1);assert.equal(state.completions.length,1);
+      assert.equal(outcome,"interrupted");assert.deepEqual(identity,bound);assert.match(evidenceHash,/^[a-f0-9]{64}$/);
+      const {readNativeInterruption}=await import(new URL("../plugins/sage-codex/runtime/identity.mjs",import.meta.url));
+      const evidence=integrated.interruptionEvidence(childThread);
+      const receipt=readNativeInterruption(evidence.transcript,{sessionsDir:join(codexHome,"sessions")},evidence.expected);
+      assert.equal(receipt.evidenceHash,evidenceHash);assert.equal(stop.length,0);
+      integrated.checkInterruptionCapacity(true);
+      print({type:"interruption_recovery_evidence",nativeInterrupted:true,exactBinding:true,exactEvidenceHash:true,terminalOutcomes:1,
+        savedReports:0,acceptedVerdicts:0,runOpenBeforeExplicitFinish:interruptionVerified,runFinishedBlocked:finishVerified,replacementRunCreated:interruptedFinishVerified,stopCallbacks:0,capacityReleasedOnce:true,syntheticReplacementReservation:true,simulatedModel:true,automaticSage:false});
+    }
+    if (resumedFailure) {
+      const state=integrated.readJournal();assert.equal(state.failures.length,1);assert.equal(state.bindings.length,2);assert.equal(state.completions.length,2);
+      print({type:"resumed_failure_evidence",exactFailedIssuer:true,failures:1,preservedLeadBindings:2,completedLeadAssignments:2,noSpecialistChild:true,simulatedModel:true,automaticSage:false});
+    }
+    if(capacityFailure) {
+      assert(capacityVerified);assert.equal(start.length,2);assert.equal(after.length,2);assert.equal(before.length,3);
+      assert.notEqual(childThread,replacementThread);
+      for(const child of [childThread,replacementThread]) {
+        const starts=start.filter(row=>row.agent_id===child), stops=stop.filter(row=>row.agent_id===child);
+        assert.equal(starts.length,1);assert.equal(stops.length,2);assert.equal(starts[0].captureError,undefined);
+        assert.equal(starts[0].metadata.id,child);
+        assert.equal(starts[0].metadata.session_id,before[0].session_id);
+        const result=after.filter(row=>row.resultTaskName===starts[0].metadata.agent_path);
+        assert.equal(result.length,1);
+        const request=before.filter(row=>row.tool_use_id===result[0].tool_use_id);
+        assert.equal(request.length,1);
+        assert.equal(request[0].tool_use_id,child===childThread?calls.spawn:calls.capacityRetrySpawn);
+      }
+      print({type:"capacity_rejection_evidence",nativeLimit:1,sageLimit:2,reservations:3,failedDispatches:1,bindings:2,completedChildren:2,
+        firstChildPreserved:true,firstCompletionRetainedAfterNativeEviction:true,freshRetryCompleted:true,simulatedModel:true,automaticSage:false});
+    }
+    if (failedSpawn) {
+      const state = integrated.readJournal();
+      assert.equal(failureStage, 4); assert.equal(state.config.total, 1);
+      assert.equal(state.failures.length, 1);
+      assert.equal(state.failures[0].assignment, state.reservations[0].assignment.id);
+      assert.equal(state.completions[0].assignment, state.reservations[1].assignment.id);
+      print({type: "failed_spawn_evidence", capacity: 1, reservations: 2, failedDispatches: 1,
+        bindings: 1, completedChildren: 1, retryUsedReleasedSlot: true, simulatedModel: true,
+        otherFailureKindsVerified: false});
+    }
+    print({type:"hook_evidence",spawnRequest:before.length,spawnResult:after.length,childStart:start.length,childStop:stop.length,exactIdentityJoin:!denySpawn && !createTask && !readTask,noChildStarted:denySpawn || createTask || readTask,simulatedModel:true,automaticSage:false,realModelConsumptionVerified:false});
+    if(followupCapacity || nestedReport) evidenceVerified=verified && (!followupCapacity || followupCapacityVerified);
   }
+}
+
+} catch(error) {
+  if(evidenceFailure&&evidenceFailure!==error.message)evidenceObserverFailure=error.message;
+  evidenceFailure??=error.message;throw error;
+} finally {
+  if(followupCapacity || nestedReport) {
+    try {
+      const captured=(nestedReport ? preserveRestartEvidence : preserveFollowupCapacityEvidence)(root,{task:nestedReport?"T6":"T2",verified:evidenceVerified,failure:evidenceFailure,observerFailure:evidenceObserverFailure,result:evidenceResult});
+      if(nestedReport && !captured.complete)process.exitCode=1;
+      process.stdout.write(JSON.stringify({type:"local_evidence_capture",...captured})+"\n");
+    } catch(error) {
+      if(nestedReport)process.exitCode=1;
+      process.stdout.write(JSON.stringify({type:"local_evidence_capture",verified:false,complete:false,error:error.message})+"\n");
+    }
+  }
+  rmSync(root, { recursive: true, force: true });
+  assert.equal(existsSync(root), false);
+  process.stdout.write(JSON.stringify({ type: "cleanup", temporaryRootRemoved: true }) + "\n");
 }

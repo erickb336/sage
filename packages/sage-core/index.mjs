@@ -2,13 +2,16 @@
 export { createStateTool } from "./state.mjs";
 export { applyPrinciples, MOMENTS, fingerprint } from "./principles.mjs";
 export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
-export { createCommandPolicy, mentionsMerge, gitSubcommand } from "./command-policy.mjs";
+export { createCommandPolicy, mentionsMerge, gitSubcommand, programName } from "./command-policy.mjs";
 export { createPushPolicy } from "./push-policy.mjs";
 export { PR } from "./pull-request.mjs";
+export { fileWriteOutsideRoots } from "./protected-paths.mjs";
+export { commandWrites } from "./shell-write-policy.mjs";
+export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";
 export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp } from "./mode-policy.mjs";
 export { createAssignment, correlateReport } from "./assignments.mjs";
-export { configureAdmission, activateAdmission, changeAdmissionMode, reserveAdmission, reserveRoleAdmission, reserveBriefAdmission, prepareAdmission, reservePreparedAdmission, bindAdmission, readAdmission } from "./admission.mjs";
+export { configureAdmission, activateAdmission, changeAdmissionMode, reserveAdmission, reserveRoleAdmission, reserveBriefAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, bindAdmission, bindContinuationAdmission, completeAdmission, recordReportAdmission, interruptAdmission, failAdmission, failContinuationAdmission, readAdmission } from "./admission.mjs";
 export { BRIEF_FIELDS, parseBrief, renderBrief } from "./brief.mjs";
 export { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "./roles.mjs";
 export { readBoardSources } from "./board-reader.mjs";
@@ -16,3 +19,11 @@ export { buildBoardModel } from "./board-model.mjs";
 export { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
 export { boardView } from "./board-view.mjs";
 export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
+
+export { REPORT_FIELDS, missingReportFields, parseReport } from "./report.mjs";
+
+export { roleEditDenied } from "./role-policy.mjs";
+
+export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
+
+export { beginInterruptedRunFinish, endInterruptedRunFinish } from "./admission.mjs";

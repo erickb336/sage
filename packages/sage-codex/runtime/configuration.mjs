@@ -3,6 +3,7 @@ import { isAbsolute, resolve, dirname, relative, sep } from "node:path";
 import { TextDecoder } from "node:util";
 import { readAdmission } from "sage-core";
 import { serveHooks } from "./mcp-server.mjs";
+import { validateLogbookLocation } from "./run-report.mjs";
 import { servePreparations } from "./preparation-server.mjs";
 
 const LIMIT = 64 * 1024;
@@ -42,15 +43,16 @@ export function readHookConfiguration(file) {
     }
     if (used > LIMIT) refuse();
     const config = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, used)));
-    if (!fields(config, ["version", "mode"]) || ![1, 2].includes(config.version)
+    if (!fields(config, ["version", "mode"]) || ![1, 2, 3].includes(config.version)
       || !fields(config.mode, ["directory", "project", "projectDirectory", "sessionsDir",
-        ...(config.version === 2 ? ["observationsRoot"] : [])])) refuse();
+        ...(config.version >= 2 ? ["observationsRoot"] : []), ...(config.version === 3 ? ["logbookRoot"] : [])])) refuse();
     const mode = config.mode;
-    for (const key of ["directory", "projectDirectory", ...(config.version === 2 ? ["observationsRoot"] : [])]) {
+    for (const key of ["directory", "projectDirectory", ...(config.version >= 2 ? ["observationsRoot"] : [])]) {
       if (!canonical(mode[key]) || !statSync(mode[key]).isDirectory()) refuse();
     }
+    if (config.version === 3) validateLogbookLocation(mode);
     if (!nativeSessions(mode.sessionsDir)) refuse();
-    if (config.version === 2 && (contains(mode.directory, mode.observationsRoot)
+    if (config.version >= 2 && (contains(mode.directory, mode.observationsRoot)
       || contains(mode.observationsRoot, mode.directory))) refuse();
     if (typeof mode.project !== "string" || !/^[A-Za-z0-9_.:-]{1,256}$/.test(mode.project)) refuse();
     const journal = readAdmission(mode.directory);

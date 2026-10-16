@@ -48,7 +48,7 @@ export function decodeEvent(input, { version, metadata } = {}) {
   return observation({ ...base, kind: "spawn-result", actor, call, turn, path: value(result, "task_name", TASK) });
 }
 
-/** A canonical record has no prompt, transcript, tool command, timestamp, or arbitrary extra field. */
+/** A canonical record has no prompt, transcript content, tool command, timestamp, or arbitrary extra field. */
 export function observation(input) {
   if (!input || typeof input !== "object" || Array.isArray(input) || input.schema !== 1 || input.runtime !== RUNTIME_VERSION) refuse("unsupported observation");
   const out = { schema: 1, runtime: RUNTIME_VERSION, session: value(input, "session", UUID), kind: input.kind };
@@ -57,6 +57,10 @@ export function observation(input) {
     "spawn-result": { actor: UUID, call: ID, turn: ID, path: TASK },
     "child-start": { child: UUID, parent: UUID, path: TASK, turn: ID },
     "child-stop": { child: UUID, turn: ID },
+    "followup-transcript": { actor: UUID, call: ID, turn: UUID, target: UUID, transcript: /^\/[^\p{Cc}]{1,4095}$/u },
+    "child-transcript": { child: UUID, turn: UUID, transcript: /^\/[^\p{Cc}]{1,4095}$/u },
+    "report-recovery-verified": { assignment: UUID, child: UUID, turn: UUID, receiptHash: /^[0-9a-f]{64}$/ },
+    "initial-child-transcript": { child: UUID, turn: UUID, transcript: /^\/[^\p{Cc}]{1,4095}$/u },
     "dispatch-request": { actor: UUID, call: ID, turn: ID, mode: /^(message|task)$/, target: TARGET },
     "dispatch-result": { actor: UUID, call: ID, turn: ID, mode: /^(message|task)$/, target: TARGET },
   };

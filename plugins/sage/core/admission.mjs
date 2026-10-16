@@ -1,10 +1,13 @@
-// Atomic admission journal. Unknown work stays reserved until a later verified completion protocol.
+// Atomic admission journal. Unknown work stays reserved until an exact verified completion.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, parse, resolve, sep } from "node:path";
 import { createAssignment, parseAssignment } from "./assignments.mjs";
-import { parseRolePlan, checkRoleReservation } from "./role-policy.mjs";
+import { parseRolePlan, checkRoleReservation, checkLeadOwnership } from "./role-policy.mjs";
 import { parseBrief } from "./brief.mjs";
+import { parseReport } from "./report.mjs";
+import { parseRunTarget } from "./run-target.mjs";
+import { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
 
 const KEY = /^[A-Za-z0-9_.:-]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -40,9 +43,11 @@ function modeChange(input) {
     turn: word(input.turn, "mode turn", UUID), sage: input.sage };
 }
 function dispatchIdentity(input) {
-  fields(input, ["tool", "turn", "name", "argumentsHash"]);
+  const hasTaskHash = Object.hasOwn(input ?? {}, "taskHash");
+  fields(input, ["tool", "turn", "name", "argumentsHash", ...(hasTaskHash ? ["taskHash"] : [])]);
   return { tool: word(input.tool, "tool"), turn: word(input.turn, "turn"), name: word(input.name, "name"),
-    argumentsHash: word(input.argumentsHash, "argumentsHash", /^[0-9a-f]{64}$/) };
+    argumentsHash: word(input.argumentsHash, "argumentsHash", /^[0-9a-f]{64}$/),
+    ...(hasTaskHash ? { taskHash: word(input.taskHash, "taskHash", /^[0-9a-f]{64}$/) } : {}) };
 }
 function childBinding(input) {
   fields(input, ["project", "session", "epoch", "assignment", "issuer", "call", "child", "turn"]);
@@ -51,13 +56,84 @@ function childBinding(input) {
     issuer: word(input.issuer, "issuer"), call: word(input.call, "call"),
     child: word(input.child, "child"), turn: word(input.turn, "turn") };
 }
+function dispatchFailure(input) {
+  fields(input, ["project", "session", "epoch", "assignment", "issuer", "call", "evidenceHash"]);
+  return { project: word(input.project, "project"), session: word(input.session, "session"),
+    epoch: word(input.epoch, "epoch", UUID), assignment: word(input.assignment, "assignment", UUID),
+    issuer: word(input.issuer, "issuer"), call: word(input.call, "call"),
+    evidenceHash: word(input.evidenceHash, "failure evidence hash", /^[0-9a-f]{64}$/) };
+}
+function continuationFailure(input) {
+  fields(input, ["project", "session", "epoch", "assignment", "issuer", "call", "previous", "target", "turn", "argumentsHash", "taskHash", "evidenceHash"]);
+  const { previous, target, turn, argumentsHash, taskHash, ...identity } = input;
+  return { ...dispatchFailure(identity), previous: word(previous, "prior assignment", UUID),
+    target: word(target, "continuation target"), turn: word(turn, "dispatch turn"),
+    argumentsHash: word(argumentsHash, "arguments hash", /^[0-9a-f]{64}$/),
+    taskHash: word(taskHash, "task hash", /^[0-9a-f]{64}$/) };
+}
+function interruptedFinish(input) {
+  fields(input, ["binding", "task", "run", "role", "status", "evidenceHash", "runTarget"]);
+  if (!["blocked", "question", "failed"].includes(input.status)) refuse("invalid interrupted run status");
+  const request = { binding: childBinding(input.binding), task: word(input.task, "task", /^T[1-9][0-9]*$/),
+    run: word(input.run, "run", /^R[1-9][0-9]*$/), role: word(input.role, "role"), status: input.status,
+    evidenceHash: word(input.evidenceHash, "interruption evidence hash", /^[0-9a-f]{64}$/),
+    runTarget: parseRunTarget(input.runTarget) };
+  if (["task", "run", "role"].some(key => request[key] !== request.runTarget[key])) refuse("finish target differs from its run");
+  return request;
+}
+// A historical child and all of its historical descendants form one protected team.
+function finishActors(state, binding) {
+  const actors = new Set([binding.child]);
+  let changed;
+  do {
+    changed = false;
+    for (const row of state.bindings) {
+      if (["project", "session", "epoch"].every(key => row[key] === binding[key])
+        && actors.has(row.issuer) && !actors.has(row.child)) { actors.add(row.child); changed = true; }
+    }
+  } while (changed);
+  return actors;
+}
+function touchesFinish(state, request, value, continuation) {
+  if (!["project", "session", "epoch"].every(key => value[key] === request.binding[key])) return false;
+  const actors = finishActors(state, request.binding);
+  const predecessor = continuation && state.bindings.find(row => row.assignment === continuation);
+  return actors.has(value.issuer) || actors.has(value.child) || (predecessor && actors.has(predecessor.child));
+}
+function refuseFencedWork(state, value, continuation) {
+  if ((state.interruptedFinishes ?? []).some(row => !row.receiptHash && touchesFinish(state, row.request, value, continuation)))
+    refuse("interrupted run publication still owns this child team");
+}
 function preparation(input) {
-  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief"]);
-  const { name, rolePlan, brief, ...identity } = input;
+  const hasReview = Object.hasOwn(input ?? {}, "review");
+  const hasRunTarget = Object.hasOwn(input ?? {}, "runTarget");
+  const hasContinuation = Object.hasOwn(input ?? {}, "continuation");
+  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief", ...(hasReview ? ["review"] : []), ...(hasRunTarget ? ["runTarget"] : []), ...(hasContinuation ? ["continuation"] : [])]);
+  const { name, rolePlan, brief, review, runTarget, continuation, ...identity } = input;
+  if (hasReview && !REVIEW_ROLES.includes(rolePlan?.role)) refuse("only a review role can carry a review target");
   const { call, ...parsed } = parseAssignment({ ...identity, call: name });
-  return { ...parsed, name: call, rolePlan: parseRolePlan(rolePlan), brief: parseBrief(brief) };
+  const target = hasRunTarget ? parseRunTarget(runTarget) : undefined;
+  if (target && (target.task !== parsed.task || target.run !== parsed.run || target.role !== rolePlan.role)) refuse("run target differs from its preparation");
+  return { ...parsed, name: call, rolePlan: parseRolePlan(rolePlan), brief: parseBrief(brief),
+    ...(hasReview ? { review: parseReviewTarget(review) } : {}), ...(target ? { runTarget: target } : {}),
+    ...(hasContinuation ? { continuation: word(continuation, "prior assignment", UUID) } : {}) };
+}
+function reportRecord(input) {
+  fields(input, ["binding", "task", "run", "reportMessage", "reportHash", "text"]);
+  parseReport(input.text);
+  const report = { binding: childBinding(input.binding), task: word(input.task, "task", /^T[1-9][0-9]*$/),
+    run: word(input.run, "run", /^R[1-9][0-9]*$/), reportMessage: word(input.reportMessage, "report message"),
+    reportHash: word(input.reportHash, "report hash", /^[0-9a-f]{64}$/), text: input.text };
+  if (hash(report.text) !== report.reportHash) refuse("report content differs from its hash");
+  return report;
 }
 function action(input) {
+  if (["begin-interrupted-finish", "end-interrupted-finish"].includes(input?.kind)) {
+    const end = input.kind === "end-interrupted-finish";
+    fields(input, ["kind", "request", ...(end ? ["receiptHash"] : [])]);
+    return { kind: input.kind, request: interruptedFinish(input.request),
+      ...(end ? { receiptHash: word(input.receiptHash, "finish receipt hash", /^[0-9a-f]{64}$/) } : {}) };
+  }
   if (input?.kind === "configure") {
     fields(input, ["kind", "config"]);
     return { kind: "configure", config: configuration(input.config) };
@@ -83,21 +159,41 @@ function action(input) {
     const uniqueName = Object.hasOwn(input, "uniqueName");
     const hasBrief = Object.hasOwn(input, "brief");
     const hasPreparation = Object.hasOwn(input, "preparation");
-    fields(input, ["kind", "assignment", "dispatch", ...(hasRole ? ["rolePlan"] : []), ...(uniqueName ? ["uniqueName"] : []), ...(hasBrief ? ["brief"] : []), ...(hasPreparation ? ["preparation"] : [])]);
+    const hasContinuation = Object.hasOwn(input, "continuation");
+    fields(input, ["kind", "assignment", "dispatch", ...(hasRole ? ["rolePlan"] : []), ...(uniqueName ? ["uniqueName"] : []), ...(hasBrief ? ["brief"] : []), ...(hasPreparation ? ["preparation"] : []), ...(hasContinuation ? ["continuation"] : [])]);
     if (uniqueName && (!hasRole || input.uniqueName !== true)) refuse("invalid unique-name rule");
     if (hasBrief && (!hasRole || !uniqueName)) refuse("a brief requires a role and unique child name");
     if (hasPreparation && !hasBrief) refuse("prepared dispatch requires its saved brief");
+    if (hasContinuation && !hasPreparation) refuse("a continuation requires prepared work");
     return { kind: "reserve", assignment: parseAssignment(input.assignment), dispatch: dispatchIdentity(input.dispatch),
       ...(hasRole ? { rolePlan: parseRolePlan(input.rolePlan) } : {}), ...(uniqueName ? { uniqueName: true } : {}), ...(hasBrief ? { brief: parseBrief(input.brief) } : {}),
-      ...(hasPreparation ? { preparation: word(input.preparation, "preparation", UUID) } : {}) };
+      ...(hasPreparation ? { preparation: word(input.preparation, "preparation", UUID) } : {}),
+      ...(hasContinuation ? { continuation: word(input.continuation, "prior assignment", UUID) } : {}) };
   }
-  if (input?.kind === "bind-child") {
+  if (input?.kind === "record-report") {
+    fields(input, ["kind", "report"]);
+    return { kind: "record-report", report: reportRecord(input.report) };
+  }
+  if (["fail-dispatch", "fail-continuation"].includes(input?.kind)) {
+    fields(input, ["kind", "failure"]);
+    return { kind: input.kind, failure: input.kind === "fail-continuation" ? continuationFailure(input.failure) : dispatchFailure(input.failure) };
+  }
+  if (input?.kind === "interrupt") {
+    fields(input, ["kind", "completion", "evidenceHash"]);
+    return { kind: "interrupt", completion: childBinding(input.completion),
+      evidenceHash: word(input.evidenceHash, "interruption evidence hash", /^[0-9a-f]{64}$/) };
+  }
+  if (input?.kind === "complete") {
+    fields(input, ["kind", "completion"]);
+    return { kind: "complete", completion: childBinding(input.completion) };
+  }
+  if (["bind-child", "bind-continuation"].includes(input?.kind)) {
     fields(input, ["kind", "binding"]);
-    return { kind: "bind-child", binding: childBinding(input.binding) };
+    return { kind: input.kind, binding: childBinding(input.binding) };
   }
   return refuse("unknown action");
 }
-function apply(state, event) {
+function apply(state, event, replay = false) {
   const copy = structuredClone(state);
   if (event.kind === "configure") {
     if (copy.config) {
@@ -108,7 +204,7 @@ function apply(state, event) {
     return { state: copy, result: event.config, changed: true };
   }
   if (!copy.config) refuse("store is not configured");
-  const value = event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : event.kind === "bind-child" ? event.binding : event.kind === "prepare" ? event.preparation : event.assignment;
+  const value = event.request ? event.request.binding : ["fail-dispatch", "fail-continuation"].includes(event.kind) ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : ["bind-child", "bind-continuation"].includes(event.kind) ? event.binding : ["complete", "interrupt"].includes(event.kind) ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
   if (!copy.config.projects.some((p) => p.project === value.project)) refuse("project is not configured");
   const owner = copy.sessions.find((s) => s.project === value.project && s.session === value.session);
   if (event.kind === "activate") {
@@ -136,6 +232,104 @@ function apply(state, event) {
     copy.modes.push(value);
     return { state: copy, result: { decision: "changed", mode: value }, changed: true };
   }
+  if (event.request) {
+    const request = event.request;
+    const previous = (copy.interruptedFinishes ?? []).find(row => row.request.binding.assignment === value.assignment);
+    if (previous) {
+      if (json(previous.request) !== json(request)) refuse("interrupted run already has a different finish request");
+      if (event.kind === "begin-interrupted-finish") return { state, result: previous, changed: false };
+      if (previous.receiptHash) {
+        if (previous.receiptHash !== event.receiptHash) refuse("interrupted run receipt differs");
+        return { state, result: previous, changed: false };
+      }
+      previous.receiptHash = event.receiptHash;
+      return { state: copy, result: previous, changed: true };
+    }
+    if (event.kind !== "begin-interrupted-finish") refuse("interrupted run has no pending finish");
+    const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
+    const prepared = copy.preparations.find(row => row.id === reserved?.preparation);
+    const bound = copy.bindings.find(row => row.assignment === value.assignment);
+    const terminal = (copy.completions ?? []).find(row => row.assignment === value.assignment);
+    if (!reserved?.preparation || !bound || json(bound) !== json(value)
+      || reserved.assignment.task !== request.task || reserved.assignment.run !== request.run
+      || reserved.rolePlan?.role !== request.role
+      || !prepared?.runTarget || json(prepared.runTarget) !== json(request.runTarget)
+      || json(terminal) !== json({ ...value, outcome: "interrupted", evidenceHash: request.evidenceHash }))
+      refuse("interrupted run finish has no matching evidence");
+    const ended = new Set([...(copy.completions ?? []), ...(copy.failures ?? [])].map(row => row.assignment));
+    if (copy.reservations.some(row => !ended.has(row.assignment.id)
+      && (touchesFinish(copy, request, row.assignment, row.continuation)
+        || copy.bindings.some(binding => binding.assignment === row.assignment.id && touchesFinish(copy, request, binding)))))
+      refuse("interrupted child team still has active work");
+    const finish = { request };
+    copy.interruptedFinishes = [...(copy.interruptedFinishes ?? []), finish];
+    return { state: copy, result: finish, changed: true };
+  }
+  if (["fail-dispatch", "fail-continuation"].includes(event.kind)) {
+    const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
+    if (!reserved || ["project", "session", "epoch", "issuer", "call"].some(key => reserved.assignment[key] !== value[key])) refuse("failure has no matching reservation");
+    if (event.kind === "fail-dispatch" && reserved.continuation) refuse("continuation failure requires separate evidence");
+    if (event.kind === "fail-continuation") {
+      const prior = copy.reservations.find(row => row.assignment.id === value.previous);
+      const bound = copy.bindings.find(row => row.assignment === value.previous);
+      const prepared = copy.preparations.find(row => row.id === reserved.preparation);
+      if (reserved.continuation !== value.previous || !prior || !bound || !prepared?.runTarget
+        || !(copy.completions ?? []).some(row => row.assignment === value.previous)
+        || ["project", "session", "epoch", "issuer", "task"].some(key => prior.assignment[key] !== reserved.assignment[key])
+        || ["project", "session", "epoch", "issuer"].some(key => bound[key] !== value[key])
+        || bound.child !== value.target || json(prior.rolePlan) !== json(reserved.rolePlan)
+        || ["project", "session", "epoch", "issuer", "task", "run"].some(key => prepared[key] !== reserved.assignment[key])
+        || json(prepared.rolePlan) !== json(reserved.rolePlan) || json(prepared.brief) !== json(reserved.brief)
+        || prepared.name !== reserved.dispatch.name
+        || (prepared.continuation && prepared.continuation !== value.previous)
+        || ["turn", "argumentsHash", "taskHash"].some(key => reserved.dispatch[key] !== value[key]))
+        refuse("continuation failure differs from its prepared dispatch and completed owner");
+    }
+    if (copy.bindings.some(row => row.assignment === value.assignment)) refuse("a bound assignment cannot fail dispatch");
+    const previous = (copy.failures ?? []).find(row => row.assignment === value.assignment);
+    if (previous) {
+      if (json(previous) !== json(value)) refuse("dispatch already has different failure evidence");
+      return { state, result: { decision: "already-failed", failure: previous }, changed: false };
+    }
+    copy.failures = [...(copy.failures ?? []), value];
+    return { state: copy, result: { decision: event.kind === "fail-continuation" ? "continuation-failed" : "dispatch-failed", failure: value }, changed: true };
+  }
+  if (["complete", "interrupt"].includes(event.kind)) {
+    const bound = copy.bindings.find(row => row.assignment === value.assignment);
+    if (!bound || json(bound) !== json(value)) refuse("completion has no matching child binding");
+    const terminal = event.kind === "interrupt" ? { ...value, outcome: "interrupted", evidenceHash: event.evidenceHash } : value;
+    const previous = (copy.completions ?? []).find(row => row.assignment === value.assignment);
+    if (previous) {
+      if (json(previous) !== json(terminal)) refuse("assignment already has different terminal evidence");
+      return { state, result: { decision: "already-completed", completion: previous }, changed: false };
+    }
+    copy.completions = [...(copy.completions ?? []), terminal];
+    return { state: copy, result: { decision: "completed", completion: terminal }, changed: true };
+  }
+  if (event.kind === "record-report") {
+    const bound = copy.bindings.find(row => row.assignment === value.assignment);
+    const completed = (copy.completions ?? []).find(row => row.assignment === value.assignment);
+    const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
+    if (!bound || !completed || json(bound) !== json(value) || json(completed) !== json(value)
+      || reserved?.assignment.task !== event.report.task || reserved?.assignment.run !== event.report.run) {
+      refuse("report has no matching completed assignment");
+    }
+    const previous = (copy.reports ?? []).find(row => row.binding.assignment === value.assignment);
+    if (previous) {
+      if (json(previous) !== json(event.report)) refuse("assignment already has a different recorded report");
+      return { state, result: { decision: "already-recorded", report: previous }, changed: false };
+    }
+    copy.reports = [...(copy.reports ?? []), event.report];
+    return { state: copy, result: { decision: "report-recorded", report: event.report }, changed: true };
+  }
+  const completed = new Set((copy.completions ?? []).map(row => row.assignment));
+  const failed = new Set((copy.failures ?? []).map(row => row.assignment));
+  const failedContinuations = new Set((copy.failures ?? []).filter(row => row.previous).map(row => row.assignment));
+  const active = copy.reservations.filter(row => !completed.has(row.assignment.id) && !failed.has(row.assignment.id));
+  const issuerBindings = copy.bindings.filter(row => row.project === value.project
+    && row.session === value.session && row.epoch === value.epoch && row.child === value.issuer);
+  if (["prepare", "reserve"].includes(event.kind) && issuerBindings.length
+    && issuerBindings.every(row => completed.has(row.assignment))) refuse("completed issuer cannot admit new work");
   if (event.kind === "prepare") {
     const previous = copy.preparations.find(row => ["project", "session", "epoch", "issuer", "name"].every(key => row[key] === value[key]));
     if (previous) {
@@ -148,53 +342,92 @@ function apply(state, event) {
     if (copy.preparations.some(row => row.id === value.id)) refuse("preparation ID already exists");
     if (copy.reservations.some(row => ["project", "session", "epoch", "issuer"].every(key => row.assignment[key] === value[key])
       && row.dispatch.name === value.name)) refuse("child dispatch name is already reserved");
+    if (value.continuation) {
+      const prior = copy.reservations.find(row => row.assignment.id === value.continuation);
+      const bound = copy.bindings.find(row => row.assignment === value.continuation);
+      if (!prior || !bound || !completed.has(value.continuation) || !value.runTarget
+        || ["project", "session", "epoch", "issuer", "task"].some(key => prior.assignment[key] !== value[key])
+        || json(prior.rolePlan) !== json(value.rolePlan)) refuse("continuation preparation requires its completed owner and target");
+      if (copy.reservations.some(row => row.continuation === value.continuation && !failedContinuations.has(row.assignment.id))) refuse("continuation predecessor already has later work");
+    }
+    refuseFencedWork(copy, value, value.continuation);
     // Preparation checks the role relationship. Dispatch checks occupied slots again.
     checkRoleReservation([], value, value.rolePlan);
     copy.preparations.push(value);
     return { state: copy, result: { decision: "prepared", preparation: value }, changed: true };
   }
-  if (event.kind === "bind-child") {
+  if (["bind-child", "bind-continuation"].includes(event.kind)) {
+    if (failed.has(value.assignment)) refuse("a failed dispatch cannot bind a child");
     const reserved = copy.reservations.find(row => row.assignment.id === value.assignment);
     if (!reserved || ["project", "session", "epoch", "issuer", "call"].some(key => reserved.assignment[key] !== value[key])) refuse("child binding has no matching reservation");
     if (!reserved.rolePlan) refuse("child binding requires a recorded role");
+    if (Boolean(reserved.continuation) !== (event.kind === "bind-continuation")) refuse("binding requires its matching assignment kind");
+    if (completed.has(value.assignment)) refuse("completed assignment cannot bind");
     if (value.child === value.issuer) refuse("issuer cannot bind itself as a child");
     const previous = copy.bindings.find(row => row.assignment === value.assignment);
     if (previous) {
       if (json(previous) !== json(value)) refuse("assignment already has a different child binding");
       return { state, result: { decision: "already-bound", binding: previous, role: reserved.rolePlan.role }, changed: false };
     }
+    refuseFencedWork(copy, value, reserved.continuation);
     if (copy.reservations.filter(row => row.assignment.project === value.project && row.assignment.session === value.session
       && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
       && row.dispatch.name === reserved.dispatch.name).length !== 1) refuse("child dispatch name is ambiguous");
-    if (copy.bindings.some(row => row.session === value.session && row.child === value.child)) refuse("child already belongs to another assignment");
+    if (reserved.continuation) {
+      const prior = copy.bindings.find(row => row.assignment === reserved.continuation);
+      if (!prior || !completed.has(prior.assignment) || value.child !== prior.child) refuse("continuation child differs from its completed predecessor");
+      if (copy.bindings.some(row => row.session === value.session && row.child === value.child
+        && (row.turn === value.turn || !completed.has(row.assignment)))) refuse("continuation child turn is occupied");
+    } else if (copy.bindings.some(row => row.session === value.session && row.child === value.child)) refuse("child already belongs to another assignment");
     copy.bindings.push(value);
     return { state: copy, result: { decision: "bound", binding: value, role: reserved.rolePlan.role }, changed: true };
   }
   const prior = copy.reservations.find(({ assignment: a }) => a.project === value.project && a.session === value.session
     && a.epoch === value.epoch && a.issuer === value.issuer && a.call === value.call);
   if (prior) {
-    if (["task", "run"].some((key) => prior.assignment[key] !== value[key]) || json(prior.dispatch) !== json(event.dispatch) || json(prior.rolePlan) !== json(event.rolePlan) || json(prior.brief) !== json(event.brief) || prior.preparation !== event.preparation) refuse("dispatch call already names different work");
+    if (["task", "run"].some((key) => prior.assignment[key] !== value[key]) || json(prior.dispatch) !== json(event.dispatch) || json(prior.rolePlan) !== json(event.rolePlan) || json(prior.brief) !== json(event.brief) || prior.preparation !== event.preparation || prior.continuation !== event.continuation) refuse("dispatch call already names different work");
     return { state, result: { decision: "already-reserved", assignment: prior.assignment }, changed: false };
   }
+  refuseFencedWork(copy, value, event.continuation);
   if (!mode.sage) refuse("Sage mode is off");
   if (event.preparation) {
     const prepared = copy.preparations.find(row => row.id === event.preparation);
     if (!prepared || ["project", "session", "epoch", "task", "run", "issuer"].some(key => prepared[key] !== value[key])
       || prepared.name !== event.dispatch.name || json(prepared.rolePlan) !== json(event.rolePlan)
-      || json(prepared.brief) !== json(event.brief)) refuse("dispatch differs from its preparation");
+      || json(prepared.brief) !== json(event.brief)
+      || (prepared.continuation && prepared.continuation !== event.continuation)) refuse("dispatch differs from its preparation");
     if (copy.reservations.some(row => row.preparation === event.preparation)) refuse("preparation already has a dispatch");
   }
-  if (copy.reservations.some(({ assignment: a }) => a.id === value.id)) refuse("assignment ID already exists");
-  if (event.rolePlan) {
-    if (event.uniqueName && copy.reservations.some(row => row.assignment.project === value.project && row.assignment.session === value.session
-      && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
-      && row.dispatch.name === event.dispatch.name)) refuse("child dispatch name is already reserved");
-    checkRoleReservation(copy.reservations, value, event.rolePlan);
+  let continuingLead;
+  if (event.continuation) {
+    const prior = copy.reservations.find(row => row.assignment.id === event.continuation);
+    const bound = copy.bindings.find(row => row.assignment === event.continuation);
+    const prepared = copy.preparations.find(row => row.id === event.preparation);
+    if (!prior || !bound || !completed.has(event.continuation)
+      || ["project", "session", "epoch", "issuer", "task"].some(key => prior.assignment[key] !== value[key])
+      || json(prior.rolePlan) !== json(event.rolePlan)) refuse("continuation requires the same completed task and role owner");
+    if (!prepared.runTarget || !event.dispatch.taskHash) refuse("continuation requires a saved run target and task hash");
+    if (copy.reservations.some(row => row.continuation === event.continuation && !failedContinuations.has(row.assignment.id))) refuse("continuation predecessor already has later work");
+    if (copy.bindings.some(row => row.session === bound.session && row.child === bound.child && !completed.has(row.assignment)))
+      refuse("continuation child is still active");
+    if (event.rolePlan.role === "lead") continuingLead = bound.child;
   }
-  if (copy.reservations.length >= copy.config.total) refuse("total capacity is occupied");
+  if (copy.reservations.some(({ assignment: a }) => a.id === value.id)) refuse("assignment ID already exists");
+  if (event.rolePlan && event.uniqueName && copy.reservations.some(row => row.assignment.project === value.project && row.assignment.session === value.session
+    && row.assignment.epoch === value.epoch && row.assignment.issuer === value.issuer
+    && row.dispatch.name === event.dispatch.name)) refuse("child dispatch name is already reserved");
+  // A run names one execution. Preserve initial records written before this rule;
+  // continuation records already required a new run. Failed starts may retry.
+  if ((!replay || event.continuation) && copy.reservations.some(row => row.assignment.project === value.project
+    && row.assignment.run === value.run && !failed.has(row.assignment.id))) refuse("run already has a dispatch; record a new run");
+  if (event.rolePlan) {
+    checkRoleReservation(active, value, event.rolePlan);
+    if (!replay) checkLeadOwnership(copy, active, value, event.rolePlan, continuingLead);
+  }
+  if (active.length >= copy.config.total) refuse("total capacity is occupied");
   const projectLimit = copy.config.projects.find((p) => p.project === value.project).limit;
-  if (copy.reservations.filter(({ assignment: a }) => a.project === value.project).length >= projectLimit) refuse("project capacity is occupied");
-  copy.reservations.push({ assignment: value, dispatch: event.dispatch, ...(event.rolePlan ? { rolePlan: event.rolePlan } : {}), ...(event.brief ? { brief: event.brief } : {}), ...(event.preparation ? { preparation: event.preparation } : {}) });
+  if (active.filter(({ assignment: a }) => a.project === value.project).length >= projectLimit) refuse("project capacity is occupied");
+  copy.reservations.push({ assignment: value, dispatch: event.dispatch, ...(event.rolePlan ? { rolePlan: event.rolePlan } : {}), ...(event.brief ? { brief: event.brief } : {}), ...(event.preparation ? { preparation: event.preparation } : {}), ...(event.continuation ? { continuation: event.continuation } : {}) });
   return { state: copy, result: { decision: "permit-once", assignment: value }, changed: true };
 }
 function syncDirectory(path) {
@@ -262,7 +495,7 @@ function read(dir) {
     const event = action(record.data);
     const expected = envelope(revision, previous, event);
     if (json(expected) + "\n" !== bytes) refuse("journal chain or record differs");
-    const next = apply(state, event);
+    const next = apply(state, event, true);
     if (!next.changed) refuse("journal contains a duplicate transition");
     state = next.state;
     previous = expected.hash;
@@ -310,25 +543,58 @@ export const reserveRoleAdmission = (dir, scope, request, dispatch, rolePlan) =>
 export const reserveBriefAdmission = (dir, scope, request, dispatch, rolePlan, brief) => commit(dir,
   { kind: "reserve", assignment: createAssignment(scope, request), dispatch, rolePlan: parseRolePlan(rolePlan), uniqueName: true, brief: parseBrief(brief) });
 /** Save instructions before the native dispatch call exists. No capacity or permission is granted. */
-export function prepareAdmission(dir, scope, request, rolePlan, brief) {
+export function prepareAdmission(dir, scope, request, rolePlan, brief, options = {}) {
+  const keys = ["review", "runTarget", "continuation"].filter(key => Object.hasOwn(options ?? {}, key));
+  fields(options, keys);
+  const { review, runTarget, continuation } = options;
   fields(request, ["task", "run", "issuer", "name"]);
   const { call, ...identity } = createAssignment(scope, { task: request.task, run: request.run, issuer: request.issuer, call: request.name });
-  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief } });
+  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief, ...(review === undefined ? {} : { review }), ...(runTarget === undefined ? {} : { runTarget }), ...(continuation === undefined ? {} : { continuation }) } });
 }
 /** The adapter verifies the current issuer and role, then supplies the actual native call and dispatch. */
 export function reservePreparedAdmission(dir, scope, request, dispatch, issuerRole) {
   fields(request, ["preparation", "issuer", "call"]);
+  return reservePrepared(dir, scope, request, dispatch, issuerRole);
+}
+/** Reuse only a completed child from the same task, role, and owner. The adapter verifies native evidence. */
+export function reservePreparedContinuation(dir, scope, request, dispatch, issuerRole) {
+  fields(request, ["preparation", "issuer", "call", "previous"]);
+  const { previous, ...work } = request;
+  word(previous, "prior assignment", UUID);
+  return reservePrepared(dir, scope, work, dispatch, issuerRole, previous);
+}
+function reservePrepared(dir, scope, request, dispatch, issuerRole, continuation) {
   word(request.preparation, "preparation", UUID);
   const prepared = readAdmission(dir).preparations.find(row => row.id === request.preparation);
   if (!prepared) refuse("preparation is unavailable");
   return commit(dir, { kind: "reserve", assignment: createAssignment(scope,
     { task: prepared.task, run: prepared.run, issuer: request.issuer, call: request.call }), dispatch,
-    rolePlan: { issuerRole, role: prepared.rolePlan.role }, uniqueName: true, brief: prepared.brief, preparation: prepared.id });
+    rolePlan: { issuerRole, role: prepared.rolePlan.role }, uniqueName: true, brief: prepared.brief, preparation: prepared.id,
+    ...(continuation ? { continuation } : {}) });
 }
 /** Record a verified initial child identity. This neither permits dispatch nor releases capacity. */
 export const bindAdmission = (dir, binding) => commit(dir, { kind: "bind-child", binding });
+/** Bind a separately admitted later turn; an initial binding can never substitute for it. */
+export const bindContinuationAdmission = (dir, binding) => commit(dir, { kind: "bind-continuation", binding });
+/** The trusted adapter proves dispatch failed before a child existed. Late bindings cannot revive it. */
+export const failAdmission = (dir, failure) => commit(dir, { kind: "fail-dispatch", failure });
+/** The trusted adapter proves this exact later dispatch failed before a new child turn bound. */
+export const failContinuationAdmission = (dir, failure) => commit(dir, { kind: "fail-continuation", failure });
+/** Only a trusted adapter may submit authoritative terminal evidence for this exact binding.
+ * Completion releases capacity; task success and report acceptance remain separate. */
+export const completeAdmission = (dir, completion) => commit(dir, { kind: "complete", completion });
+/** Verified interruption ends capacity ownership, not the task or its report gates. */
+export const interruptAdmission = (dir, completion, evidenceHash) => commit(dir, { kind: "interrupt", completion, evidenceHash });
+/** The trusted adapter verifies report provenance and parent identity before recording it.
+ * This stores evidence only; it does not accept claims, write verdicts, or change task state. */
+export const recordReportAdmission = (dir, report) => commit(dir, { kind: "record-report", report });
 export function readAdmission(dir) {
   const { state } = read(dir);
   if (!state.config) refuse("store is not configured");
   return state;
 }
+
+/** Trusted provider only: acquire publication ownership while holding the logbook lock. */
+export const beginInterruptedRunFinish = (dir, request) => commit(dir, { kind: "begin-interrupted-finish", request });
+/** A durable validated logbook receipt must precede this exact acknowledgement. */
+export const endInterruptedRunFinish = (dir, request, receiptHash) => commit(dir, { kind: "end-interrupted-finish", request, receiptHash });

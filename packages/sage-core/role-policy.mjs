@@ -27,3 +27,31 @@ export function checkRoleReservation(reservations, assignment, input) {
   }
   return plan;
 }
+
+/** Providers supply verified mode and role. Null names an unmanaged actor. */
+export function roleEditDenied({ sage, role }) {
+  if (typeof sage !== "boolean" || (role !== null && !ROLES.has(role)) || (sage && role === null))
+    throw Error("Invalid role edit context");
+  return sage && !["implementer", "designer", "arena-judge"].includes(role);
+}
+
+/** New reservations enforce ownership; historical records retain their original rules. */
+export function checkLeadOwnership(state, active, assignment, plan, continuingLead) {
+  if (plan.role !== "lead") return;
+  // Admission supplies this identity only after checking a completed predecessor.
+  const ownTeam = row => continuingLead && row.rolePlan?.issuerRole === "lead"
+    && row.assignment.issuer === continuingLead && row.assignment.session === assignment.session
+    && row.assignment.epoch === assignment.epoch;
+  const occupied = active.filter(row => row.assignment.project === assignment.project).some(row => {
+    if (ownTeam(row)) return false;
+    if (row.assignment.task === assignment.task
+      && (!row.rolePlan || row.rolePlan.role === "lead" || row.rolePlan.issuerRole === "lead")) return true;
+    if (row.rolePlan?.issuerRole !== "lead") return false;
+    return state.bindings.some(binding => binding.project === row.assignment.project
+      && binding.session === row.assignment.session && binding.epoch === row.assignment.epoch
+      && binding.child === row.assignment.issuer && state.reservations.some(lead =>
+        lead.assignment.id === binding.assignment && lead.rolePlan?.role === "lead"
+        && lead.assignment.task === assignment.task));
+  });
+  if (occupied) throw Error("The task already has an active lead or team");
+}

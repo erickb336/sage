@@ -3,7 +3,7 @@ import { McpServer, serveStdio, z } from "./mcp-sdk.mjs";
 const reason = "Sage could not verify this hook request.";
 const denied = event => event === "PreToolUse" ? {
   hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
-} : { decision: "block", reason };
+} : event === "SessionStart" ? { continue: false, stopReason: reason } : { decision: "block", reason };
 const result = output => ({ content: [{ type: "text", text: JSON.stringify(output) }] });
 
 /** Configuration and policy loaders come from the server launcher, never tool arguments. */
@@ -30,14 +30,23 @@ export function createHookServer({ mode, loadPolicy } = {}) {
         const { postToolOutput } = await import("./post-tool.mjs");
         return result(await postToolOutput(input, native, loadPolicy));
       }
+      if (input.hook_event_name === "SubagentStop") {
+        const { childStopOutput } = await import("./child-stop.mjs");
+        return result(await childStopOutput(input, native, loadPolicy));
+      }
       if (input.hook_event_name === "SubagentStart") {
         const { childStartOutput } = await import("./child-start.mjs");
         return result(await childStartOutput(input, native, configuredMode, loadPolicy));
       }
+      if (input.hook_event_name === "SessionStart") {
+        const { ownerSessionStartOutput } = await import("./chief-output.mjs");
+        const { instruction_part = 0, ...started } = input;
+        return result(ownerSessionStartOutput(started, native, configuredMode, instruction_part));
+      }
       if (input.hook_event_name === "UserPromptSubmit") {
-        const { updateOwnerMode } = await import("./mode.mjs");
-        const updated = updateOwnerMode(input, native, configuredMode);
-        return result(updated ? {} : denied(input.hook_event_name));
+        const { ownerPromptOutput } = await import("./chief-output.mjs");
+        const { instruction_part = 0, ...prompt } = input;
+        return result(ownerPromptOutput(prompt, native, configuredMode, instruction_part));
       }
     } catch {
       // Errors may contain private input or paths. A successful MCP result must carry the denial.

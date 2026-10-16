@@ -27,7 +27,7 @@ const BOOT = (() => {
  */
 const timeout = 60_000;
 /** The model keys that sage config prints by default, after the numbers. */
-const MODEL_DEFAULTS = "model.code-reviewer.tiny=fable model.code-reviewer.small=fable model.security-reviewer.tiny=fable model.security-reviewer.small=fable model.ux-reviewer.tiny=fable model.ux-reviewer.small=fable model.qa.tiny=fable model.qa.small=fable";
+const MODEL_DEFAULTS = "model.pe=opus model.designer=opus model.implementer=opus model.code-reviewer=opus model.security-reviewer=opus model.ux-reviewer=sonnet model.qa=opus model.arena-judge=opus model.implementer.tiny=sonnet model.code-reviewer.tiny=sonnet model.qa.tiny=sonnet model.qa.small=sonnet";
 /** Every line that the tool printed in this file's tests: the last test reads them. */
 const said = [];
 
@@ -195,7 +195,7 @@ test("one writer per branch", () => {
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "small");
   assert.match(s.no("run", "add", "T1", "--role", "implementer"), /needs --branch/);
-  assert.equal(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), "R1 running · implementer on T1 · claude/t1");
+  assert.equal(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), "R1 running · implementer on T1 · claude/t1 · model opus");
   assert.match(s.no("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), /R1 \(implementer\) still writes claude\/t1/);
   assert.match(s.ok("run", "add", "T1", "--role", "code-reviewer", "--branch", "claude/t1"), /R2 running/, "readers do not count");
   s.ok("run", "done", "R1", "--status", "done", "--tokens", "52000");
@@ -266,7 +266,7 @@ test("F-T266-3: run add takes the role as the table stores it, in lower case, so
     assert.equal(s.no("run", "add", "T1", "--role", role), "sage: R1 is the running lead run of T1, and a task has one running lead. Finish R1 first (sage run done R1 --status done, blocked, question or failed).", `${JSON.stringify(role)} is lead`);
   }
   assert.equal(s.ok("run", "add", "T2", "--role", "Lead "), "R2 running · lead on T2");
-  assert.equal(s.ok("run", "add", "T2", "--role", "QA"), "R3 running · qa on T2 · model fable", "QA is qa, with qa's model for a small task");
+  assert.equal(s.ok("run", "add", "T2", "--role", "QA"), "R3 running · qa on T2 · model sonnet", "QA is qa, with qa's model for a small task");
   assert.deepEqual(rows(s.dir, "runs").map((r) => r.role), ["lead", "lead", "qa"]);
   assert.equal(s.no("run", "add", "T2", "--role", "builder"), 'sage: "builder" is not a role of a run. Roles: lead, implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate, evidence-review.');
   assert.match(s.no("run", "add", "T2", "--role", "ｌｅａｄ"), /^sage: "ｌｅａｄ" is not a role of a run\./, "a look-alike is no role");
@@ -755,6 +755,184 @@ const UP_1S = uptimeIs("() => 1");
 /** The state tool of main before T151 (14c0d0c), so that a test can run an older sage against this one's lock. */
 const OLD_TOOL = fileURLToPath(new URL("fixtures/sage-14c0d0c/sage.mjs", import.meta.url));
 
+test("stable lock identity clears a dead renamed host and keeps a same-name foreign machine", () => {
+  const s = store(undefined, undefined, { SAGE_TEST_MACHINE_ID: "sample-machine-a" });
+  s.ok("task", "add", "--title", "sample", "--size", "small");
+  const pid = 424290; s.pids[pid] = null;
+  const ownerName = `${randomUUID()}.json`;
+  const owner = { pid, host: `${hostname()}-old-name`, machineId: "sample-machine-a", start: 1000, at: 0 };
+  const lock = plant(s.dir, ownerName, owner);
+  s.ok("task", "T1", "set", "branch=codex/t1-renamed");
+  assert.equal(existsSync(lock), false);
+  const foreign = { ...owner, host: hostname(), machineId: "sample-machine-b" };
+  plant(s.dir, ownerName, foreign);
+  const before = readFileSync(join(lock, ownerName), "utf8");
+  assert.match(s.no("task", "T1", "set", "branch=codex/t1-foreign"), /logbook is busy/);
+  assert.equal(readFileSync(join(lock, ownerName), "utf8"), before);
+  assert.equal(rows(s.dir, "tasks")[0].branch, "codex/t1-renamed");
+  writeFileSync(join(lock, ownerName), JSON.stringify({ ...owner, host: hostname(), machineId: undefined }));
+  s.ok("task", "T1", "set", "branch=codex/t1-legacy");
+  assert.equal(existsSync(lock), false, "legacy owners keep the host rule");
+});
+
+test("stable lock identity applies to waiter cleanup", () => {
+  const s = store(undefined, undefined, { SAGE_TEST_MACHINE_ID: "sample-machine-a" });
+  const make = (machineId, host) => {
+    const token = randomUUID(), name = `${token}.json`, pending = join(s.dir, `.lock.${token}`);
+    const owner = { pid: 424291, host, machineId, start: 1000, at: 0 };
+    renameSync(plant(s.dir, name, owner), pending);
+    return { pending, file: join(pending, name), original: JSON.stringify(owner) };
+  };
+  s.pids[424291] = null;
+  const local = make("sample-machine-a", `${hostname()}-renamed`);
+  const foreign = make("sample-machine-b", hostname());
+  s.ok("task", "add", "--title", "sample", "--size", "small");
+  assert.equal(existsSync(local.pending), false);
+  assert.equal(readFileSync(foreign.file, "utf8"), foreign.original);
+});
+
+
+test("stable machine identity is recorded only inside the test identity gates", async t => {
+  const { withLock } = await import(LIB);
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-machine-lock-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  withLock(dir, () => {
+    const lock = join(dir, ".lock"), names = readdirSync(lock);
+    assert.equal(names.length, 1);
+    const owner = JSON.parse(readFileSync(join(lock, names[0]), "utf8"));
+    assert.equal(owner.machineId, "test-machine");
+    assert.equal(owner.host, hostname());
+  });
+  assert.equal(existsSync(join(dir, ".lock")), false);
+  const otherTmp = mkdtempSync(join(realpathSync(tmpdir()), "sage-identity-other-tmp-"));
+  t.after(() => rmSync(otherTmp, { recursive: true, force: true }));
+  const queried = join(dir, "hardware-query");
+  // Trap both supported hardware sources before the state module loads. A caught error cannot hide a query.
+  const guard = `import fs from "node:fs"; import cp from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    const read = fs.readFileSync, exec = cp.execFileSync;
+    const refuse = () => { fs.writeFileSync(${JSON.stringify(queried)}, "queried"); throw new Error("hardware query in a test"); };
+    fs.readFileSync = (path, ...args) => String(path) === "/etc/machine-id" ? refuse() : read(path, ...args);
+    cp.execFileSync = (file, ...args) => String(file) === "/usr/sbin/ioreg" ? refuse() : exec(file, ...args);
+    syncBuiltinESMExports();`;
+  const inspect = `const { withLock } = await import(${JSON.stringify(LIB)});
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    withLock(${JSON.stringify(dir)}, () => {
+      const lock = join(${JSON.stringify(dir)}, ".lock");
+      console.log(readFileSync(join(lock, readdirSync(lock)[0]), "utf8"));
+    });`;
+  for (const [label, vars] of [
+    ["outside a node test", { NODE_TEST_CONTEXT: undefined }],
+    ["outside the canonical temporary root", { TMPDIR: otherTmp }],
+  ]) {
+    const r = spawnSync("node", ["--import", `data:text/javascript,${encodeURIComponent(guard)}`, "--input-type=module", "-e", inspect], {
+      encoding: "utf8", timeout, env: testEnv({ SAGE_TEST_MACHINE_ID: "must-not-be-used", ...vars }),
+    });
+    assert.equal(r.status, 0, `${label}: ${r.stderr}`);
+    assert.equal(JSON.parse(r.stdout).machineId, null, `${label}: reject the injected identity`);
+    assert.equal(existsSync(queried), false, `${label}: do not query hardware`);
+    assert.equal(existsSync(join(dir, ".lock")), false, `${label}: release the lock`);
+  }
+});
+
+test("unavailable machine identity never downgrades new owners to the legacy host rule", async t => {
+  const { withLock } = await import(LIB);
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-unknown-machine-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const previous = process.env.SAGE_TEST_MACHINE_ID;
+  let owner;
+  try {
+    process.env.SAGE_TEST_MACHINE_ID = "";
+    withLock(dir, () => {
+      const lock = join(dir, ".lock");
+      owner = JSON.parse(readFileSync(join(lock, readdirSync(lock)[0]), "utf8"));
+    });
+  } finally {
+    if (previous === undefined) delete process.env.SAGE_TEST_MACHINE_ID;
+    else process.env.SAGE_TEST_MACHINE_ID = previous;
+  }
+  const s = store();
+  s.ok("task", "add", "--title", "sample", "--size", "small");
+  owner.pid = 424292; owner.boot = 1; s.pids[owner.pid] = null;
+  const unknownOwnerFile = `${randomUUID()}.json`, lock = plant(s.dir, unknownOwnerFile, owner);
+  const before = readFileSync(join(lock, unknownOwnerFile), "utf8");
+  assert.match(s.no("task", "T1", "set", "branch=codex/t1-unknown"), /logbook is busy/);
+  assert.equal(readFileSync(join(lock, unknownOwnerFile), "utf8"), before);
+  assert.equal(owner.machineId, null, "new unavailable identities differ from legacy missing fields");
+  const pending = join(s.dir, `.lock.${randomUUID()}`);
+  renameSync(lock, pending);
+  s.ok("task", "T1", "set", "branch=codex/t1-free");
+  assert.equal(readFileSync(join(pending, unknownOwnerFile), "utf8"), before);
+  const unknownLocal = store(undefined, undefined, { SAGE_TEST_MACHINE_ID: "" });
+  t.after(() => {
+    for (const path of [unknownLocal.home, unknownLocal.project]) rmSync(path, { recursive: true, force: true });
+  });
+  unknownLocal.ok("task", "add", "--title", "sample", "--size", "small");
+  const known = { ...owner, machineId: "known-machine" };
+  unknownLocal.pids[known.pid] = null;
+  const knownName = `${randomUUID()}.json`, knownLock = plant(unknownLocal.dir, knownName, known);
+  const knownBefore = readFileSync(join(knownLock, knownName), "utf8");
+  assert.match(unknownLocal.no("task", "T1", "set", "branch=codex/t1-known"), /logbook is busy/);
+  assert.equal(readFileSync(join(knownLock, knownName), "utf8"), knownBefore, "unknown local identity keeps a known holder");
+  const knownPending = join(unknownLocal.dir, `.lock.${randomUUID()}`);
+  renameSync(knownLock, knownPending);
+  unknownLocal.ok("task", "T1", "set", "branch=codex/t1-local-free");
+  assert.equal(readFileSync(join(knownPending, knownName), "utf8"), knownBefore, "unknown local identity keeps a known waiter");
+});
+
+test("stable machine identity reads simulated platform sources and refuses invalid values", t => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-platform-identity-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const linuxId = "0123456789ABCDEF0123456789ABCDEF";
+  const macId = "01234567-89AB-CDEF-0123-456789ABCDEF";
+  const cases = [
+    ["linux", `${linuxId}\n`, linuxId.toLowerCase()],
+    ["linux", "not-a-machine-id", null],
+    ["linux", null, null],
+    ["darwin", `| |   "IOPlatformUUID" = "${macId}"\n`, macId.toLowerCase()],
+    ["darwin", '"IOPlatformUUID" = "------------------------------------"', null],
+    ["darwin", null, null],
+    ["unsupported", null, null],
+  ];
+  for (const [platform, value, expected] of cases) {
+    // Both system sources are replaced before the state module loads; no case queries this computer.
+    const guard = `import fs from "node:fs"; import cp from "node:child_process"; import os from "node:os";
+      import { syncBuiltinESMExports } from "node:module";
+      const read = fs.readFileSync, exec = cp.execFileSync;
+      globalThis.identityCalls = [];
+      const source = (kind, args) => {
+        globalThis.identityCalls.push({ kind, args });
+        const value = ${JSON.stringify(value)};
+        if (value === null) throw new Error("simulated unavailable source");
+        return value;
+      };
+      os.platform = () => ${JSON.stringify(platform)};
+      fs.readFileSync = (path, ...args) => String(path) === "/etc/machine-id" ? source("linux", args) : read(path, ...args);
+      cp.execFileSync = (file, ...args) => String(file) === "/usr/sbin/ioreg" ? source("darwin", args) : exec(file, ...args);
+      syncBuiltinESMExports();`;
+    const inspect = `const { withLock } = await import(${JSON.stringify(LIB)});
+      const { readFileSync, readdirSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      withLock(${JSON.stringify(dir)}, () => {
+        const lock = join(${JSON.stringify(dir)}, ".lock");
+        console.log(JSON.stringify({ owner: JSON.parse(readFileSync(join(lock, readdirSync(lock)[0]), "utf8")), calls: globalThis.identityCalls }));
+      });`;
+    const r = spawnSync("node", ["--import", `data:text/javascript,${encodeURIComponent(guard)}`, "--input-type=module", "-e", inspect], {
+      encoding: "utf8", timeout, env: testEnv({ NODE_TEST_CONTEXT: undefined, SAGE_TEST_MACHINE_ID: undefined }),
+    });
+    assert.equal(r.status, 0, `${platform}: ${r.stderr}`);
+    const result = JSON.parse(r.stdout);
+    assert.equal(result.owner.machineId, expected, `${platform}: ${value}`);
+    assert.deepEqual(result.calls.map(call => call.kind), platform === "unsupported" ? [] : [platform]);
+    if (platform === "darwin") {
+      assert.deepEqual(result.calls[0].args[0], ["-rd1", "-c", "IOPlatformExpertDevice"]);
+      assert.equal(result.calls[0].args[1].timeout, 5000, "bound the system query");
+    }
+    assert.equal(existsSync(join(dir, ".lock")), false);
+  }
+});
+
 test("T151: without uptime, as in the macOS sandbox, the tool works and the lock clears only a holder that is surely gone", () => {
   const fakes = fakePs();
   const kills = join(fakes, "kills");
@@ -775,7 +953,7 @@ test("T151: without uptime, as in the macOS sandbox, the tool works and the lock
   assert.equal(existsSync(lock), true, "a live pid keeps the lock");
   rmSync(lock, { recursive: true });
 
-  lock = crash(s, { host: "other-host" }); // another host, whose pid this machine cannot check
+  lock = crash(s, { host: "other-host", machineId: "other-machine" }); // another host, whose pid this machine cannot check
   r = s.run("task", "T1", "set", "branch=t1-other-host");
   assert.match(r.stderr, /^sage: the logbook is busy: pid \d+ on other-host has held /);
   assert.equal(existsSync(lock), true, "a holder on another host is never cleared on a guess");
@@ -812,7 +990,7 @@ test("T151-Q1: a lock taken without a boot time stays with its live holder, for 
   s.ok("task", "add", "--title", "t", "--size", "small");
   const lock = crash(s, {}, { NODE_OPTIONS: NO_UPTIME }); // taken in the sandbox
   const record = JSON.parse(readFileSync(join(lock, readdirSync(lock)[0]), "utf8"));
-  assert.deepEqual(Object.keys(record), ["pid", "host", "start", "at"], "an unknown boot time has no key");
+  assert.deepEqual(Object.keys(record), ["pid", "host", "machineId", "start", "at"], "an unknown boot time has no key");
   delete s.pids[record.pid]; // the holder is alive, start unknown
   const old = spawnSync("node", [OLD_TOOL, "task", "T1", "set", "branch=t1-old", "--project", s.project], { encoding: "utf8", env: testEnv({ ...vars, SAGE_HOME: s.home, SAGE_TEST_PIDS: JSON.stringify(s.pids) }), timeout });
   assert.match(old.stderr, /^sage: the logbook is busy: pid \d+ on /, "the older sage keeps the lock");
@@ -834,6 +1012,10 @@ test("T91-F1: SAGE_TEST_PIDS weakens no lock outside a node test run or outside 
   // tool ignores the map and asks the system: the kill spy answers "alive" and records the call, so the lock stays.
   const lock = crash(s);
   const holder = Object.keys(s.pids)[0];
+  // This test isolates PID probing with a legacy owner, independent of machine-id availability.
+  const owner = join(lock, readdirSync(lock)[0]);
+  const record = JSON.parse(readFileSync(owner, "utf8")); delete record.machineId;
+  writeFileSync(owner, JSON.stringify(record));
   for (const [i, vars] of [{ NODE_TEST_CONTEXT: undefined }, { TMPDIR: mkdtempSync(join(tmpdir(), "sage-other-tmp-")) }].entries()) {
     const kills = join(fakes, `kills-${i}`);
     const r = set({ ...vars, SAGE_TEST_PIDS: JSON.stringify(s.pids), SAGE_TEST_KILLS: kills });
@@ -877,7 +1059,7 @@ test("a holder that may be alive keeps the lock: a waiter waits for it, or refus
   assert.equal(rows(s.dir, "tasks")[0].branch, "t1-after-wait", "it took the lock when the holder let go");
   await h.exited;
 
-  const lock = crash(s, { host: "other-host", boot: 1 }); // this machine cannot check a process on another one
+  const lock = crash(s, { host: "other-host", machineId: "other-machine", boot: 1 }); // this machine cannot check a process on another one
   t0 = Date.now();
   r = s.run("task", "T1", "set", "branch=t1-other-host");
   assert.equal(r.status, 1);
@@ -2160,22 +2342,60 @@ test("F-T42-2: a config write never lands on a link's target, also when a link r
   assert.deepEqual(readdirSync(s.home).filter((n) => n.startsWith("config.json.") && !/\.(l|r)$/.test(n)), [], "no temp file is left");
 });
 
+
+
+test("Balanced defaults cover every role and size without a config file", () => {
+  const s = store();
+  const roles = ["pe", "designer", "implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "arena-judge"];
+  for (const size of ["tiny", "small", "large", "investigate"]) {
+    const task = s.ok("task", "add", "--title", size, "--size", size).split(" ")[0];
+    for (const role of roles) {
+      const expected = role === "ux-reviewer" || (role === "qa" && ["tiny", "small"].includes(size))
+        || (["implementer", "code-reviewer"].includes(role) && size === "tiny") ? "sonnet" : "opus";
+      const args = ["run", "add", task, "--role", role];
+      if (["implementer", "designer"].includes(role)) args.push("--branch", `sample/${task}-${role}`);
+      assert.ok(s.ok(...args).endsWith(` · model ${expected}`), `${role} on ${size}`);
+    }
+  }
+});
+
+test("risk model overrides size, inherit restores size, and arena candidates retain their selected model", async () => {
+  const s = store();
+  s.ok("task", "add", "--title", "plain", "--size", "small");
+  s.ok("task", "add", "--title", "flagged", "--size", "small", "--risk", "auth");
+  assert.match(s.ok("config", "model.qa.small=sonnet", "model.qa.risk=opus"), /model\.qa\.risk=opus/);
+  assert.ok(s.ok("run", "add", "T1", "--role", "qa").endsWith(" · model sonnet"));
+  assert.ok(s.ok("run", "add", "T2", "--role", "qa").endsWith(" · model opus"));
+  s.ok("config", "model.qa.risk=inherit");
+  assert.ok(s.ok("run", "add", "T2", "--role", "qa").endsWith(" · model sonnet"));
+  s.ok("config", "model.qa.risk=opus", "arena_models=sonnet,opus");
+  assert.ok(s.ok("run", "add", "T2", "--role", "qa", "--candidate", "1").endsWith(" · model sonnet"));
+  s.ok("config", "arena_models=inherit,sonnet");
+  assert.ok(s.ok("run", "add", "T2", "--role", "qa", "--candidate", "1").endsWith(" · candidate 1"), "an inherited arena choice does not fall through to risk");
+  const { modelFor } = await import(LIB);
+  assert.equal(modelFor("qa", "small", "", { "model.qa.small": "sonnet", "model.qa.risk": "opus" }), "sonnet", "four-argument callers retain size selection");
+  const { tool } = await import(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
+  assert.equal(tool.modelFor("qa", "small", "", tool.DEFAULTS, "auth"), "", "Codex still inherits its selected model");
+});
+
 test("T40: each agent role gets its model by task size; run add prints it and records it; an old runs.tsv gets the column at its next write", () => {
   const s = store();
   const out = s.ok("config");
   assert.ok(out.startsWith("max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 model."), out);
   assert.equal(out.slice(out.indexOf(" model.") + 1), MODEL_DEFAULTS, "the model keys print after the numbers");
   for (const size of ["tiny", "small", "large", "investigate"]) s.ok("task", "add", "--title", size, "--size", size);
-  const fable = (t) => (["T1", "T2"].includes(t) ? " · model fable" : "");
+  const selected = (t, role) => role === "ux-reviewer" || (role === "qa" && ["T1", "T2"].includes(t)) || (role === "code-reviewer" && t === "T1") ? "sonnet" : "opus";
   let r = 0;
   for (const t of ["T1", "T2", "T3", "T4"]) {
-    for (const role of ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"]) assert.equal(s.ok("run", "add", t, "--role", role), `R${++r} running · ${role} on ${t}${fable(t)}`);
-    assert.equal(s.ok("run", "add", t, "--role", "implementer", "--branch", `b/${t}`), `R${++r} running · implementer on ${t} · b/${t}`, "the implementer keeps its own model");
+    for (const role of ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"]) assert.equal(s.ok("run", "add", t, "--role", role), `R${++r} running · ${role} on ${t} · model ${selected(t, role)}`);
+    assert.equal(s.ok("run", "add", t, "--role", "implementer", "--branch", `b/${t}`), `R${++r} running · implementer on ${t} · b/${t} · model ${t === "T1" ? "sonnet" : "opus"}`, "the implementer uses the Balanced default");
   }
-  assert.deepEqual(rows(s.dir, "runs").map((x) => x.model), ["fable", "fable", "fable", "fable", "", "fable", "fable", "fable", "fable", "", "", "", "", "", "", "", "", "", "", ""]);
+  assert.deepEqual(rows(s.dir, "runs").map((x) => x.model), ["sonnet", "opus", "sonnet", "sonnet", "sonnet", "opus", "opus", "sonnet", "sonnet", "opus", "opus", "opus", "sonnet", "opus", "opus", "opus", "opus", "sonnet", "opus", "opus"]);
 
   // One size, then the role; inherit clears a key, so the next level (or the agent's own model) counts.
-  assert.match(s.ok("config", "model.qa.small=sonnet", "model.qa=opus"), / model\.qa\.small=sonnet .*model\.qa=opus$/);
+  const configured = s.ok("config", "model.qa.small=sonnet", "model.qa=opus");
+  assert.match(configured, / model\.qa\.small=sonnet(?: |$)/);
+  assert.match(configured, / model\.qa=opus(?: |$)/);
   assert.equal(s.ok("run", "add", "T2", "--role", "qa"), "R21 running · qa on T2 · model sonnet");
   assert.equal(s.ok("run", "add", "T3", "--role", "qa"), "R22 running · qa on T3 · model opus");
   s.ok("config", "model.qa.small=inherit");
@@ -2190,8 +2410,9 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   for (const key of ["model.qa.huge", "model.chief.small", "model"]) assert.match(s.no("config", `${key}=opus`), /config takes .*model\.<role>\.<size>=<model>/);
   writeFileSync(join(s.home, "config.json"), '{"model.code-reviewer.tiny": "gpt-5", "model.qa": 3, "model.pe": "haiku", "model.pe.huge": "opus"}');
   const read = s.ok("config");
-  assert.match(read, / model\.code-reviewer\.tiny=fable /, "a bad value in config.json reads as the default");
-  assert.ok(read.endsWith(" model.qa.small=fable model.pe=haiku"), read);
+  assert.match(read, / model\.code-reviewer\.tiny=sonnet /, "a bad value in config.json reads as the default");
+  assert.match(read, /model\.qa\.small=sonnet/);
+  assert.match(read, /model\.pe=haiku/);
   assert.equal(s.ok("run", "add", "T3", "--role", "pe"), "R25 running · pe on T3 · model haiku");
 
   // An arena candidate takes its place in arena_models.
@@ -2205,11 +2426,11 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   const file = join(o.dir, "runs.tsv");
   writeFileSync(file, "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\nR1\tT1\timplementer\t0\t\tb/1\tdone\t900\t\t2026-10-01T00:00:00Z\t2026-10-01T01:00:00Z\n");
   assert.match(o.ok("status"), /agents  1 runs · 0 running · about 1k tokens/);
-  assert.equal(o.ok("run", "add", "T1", "--role", "qa"), "R2 running · qa on T1 · model fable");
+  assert.equal(o.ok("run", "add", "T1", "--role", "qa"), "R2 running · qa on T1 · model sonnet");
   const [head, ...lines] = readFileSync(file, "utf8").trim().split("\n");
   assert.equal(head, "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel");
   assert.equal(lines[0], "R1\tT1\timplementer\t0\t\tb/1\tdone\t900\t\t2026-10-01T00:00:00Z\t2026-10-01T01:00:00Z\t");
-  assert.match(lines[1], /^R2\tT1\tqa\t0\t\t\trunning\t\t\t\S+\t\tfable$/);
+  assert.match(lines[1], /^R2\tT1\tqa\t0\t\t\trunning\t\t\t\S+\t\tsonnet$/);
   assert.equal(o.ok("run", "done", "R1", "--status", "done"), "R1 done");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) o.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.match(o.no("merge-check", "--sha", SHA), /T1 has a review or QA run that still runs: R2 \(qa\)/, "R2's QA still runs (F-T289-18)");

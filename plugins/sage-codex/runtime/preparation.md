@@ -16,14 +16,20 @@ child binding, plus matching request, result, and start observations. Ambiguous
 path reuse refuses the request. Specialists cannot prepare children.
 
 The tool saves the instructions through core and returns a preparation receipt.
-It starts no agent and occupies no capacity. The returned name selects the work
-for a later native spawn by the same actor in the same project and owner epoch.
+It starts no agent and occupies no capacity. The receipt includes the complete
+saved role, report rules and brief as `message`, plus `fork_turns: "none"`. Pass
+these exact values and the returned name to the later native spawn. The actor,
+project and owner epoch must still match.
 Retries cannot replace instructions. A receipt is not spawn permission.
 
 `reservePreparedSpawn(rawInput, nativeContext, options)` handles the actual
 native PreToolUse spawn. Pass the raw payload before adding a derived `agent_id`.
 It records the request, including rejected or inactive attempts, then checks the
-actor and consumes the matching preparation through core. Only `permit-once`
+actor, the exact prepared message and the fresh-context setting. Changed,
+missing, invalid UTF-8 or oversized messages are refused before capacity changes.
+The admitted dispatch stores the message SHA-256 as `taskHash`. Earlier dispatch
+records without that field remain readable; later delivery checks still need
+exact evidence. Only `permit-once`
 can pass the spawn. An `already-reserved` result must not grant another dispatch.
 The command hook must retain its normal native permission checks.
 
@@ -53,3 +59,60 @@ nested check caught that fixture error. Codex's pinned
 [tool-selection source](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/core/src/tools/spec_plan.rs)
 requires this capability for a V2 child's collaboration tools. Installation must
 verify the selected model's capabilities too.
+
+## Extraction checks
+
+The prepared-message extraction checks the packaged tool and admission policy.
+It verifies complete instructions, exact-byte refusals, fresh context, stable
+retries and saved message hashes. It does not establish child delivery through
+the native transport, report completion or installed automatic operation.
+
+## A lead's current task
+
+A native lead can prepare and dispatch children only for its unfinished saved assignment's task.
+The adapter selects one unfinished binding. Completed and interrupted assignments grant no preparation authority.
+A reused lead keeps its original native spawn identity, but its unfinished continuation supplies the current task.
+Missing, ambiguous or inconsistent identity evidence refuses preparation.
+
+The adapter checks task scope both when it saves a brief and when it reserves a spawn.
+A foreign-task brief saved by an earlier runtime cannot bypass the dispatch check.
+Chief preparation remains separate and can select another task.
+These checks enforce admission ownership. Current logbook run and held-task checks remain separate work before automatic activation.
+
+## Finish a recorded run
+
+`sage_finish_run` accepts an assignment ID and exact saved report hash from the current chief.
+The launcher supplies configuration version 3 with a fixed external `logbookRoot`.
+The tool requires a saved receipt and recovery proof, writes exact report bytes, and finishes only its matching run.
+Identical retries preserve the original result; an interrupted publication can resume without rewriting evidence.
+Tasks, verdicts, admission, and mode remain unchanged. This does not enable installed automatic Sage.
+
+The consumed native check is `node scripts/probe-codex-lifecycle.mjs --sage-report`.
+It uses a fresh profile and simulated responses, records the verified report, removes its child transcript,
+finishes the run, and retries. It checks exact saved report bytes and unchanged task, verdict, admission, and mode records.
+Run it with fake process tools first on PATH. It does not verify a real model or installed automatic activation.
+
+
+## Current recorded targets
+
+Native preparation requires version 3 fixed logbook configuration and one active run matching its task and role.
+It saves the task round, task branch, run branch, and candidate with the brief.
+Review roles also require `reviewCycle` from 1 to 10. Their saved target contains the current local branch commit.
+The tool derives this commit itself; a request cannot supply it or redirect Git through environment variables.
+
+Before an initial spawn reserves capacity, Sage checks the current records against the saved targets.
+This check runs after an awaited policy evaluator. A lead must also retain its own current run before it delegates.
+Missing, duplicate, ended, or changed records refuse. A held task cannot prepare or dispatch work until the chief resumes it. Old unpinned preparations remain readable but cannot dispatch.
+A changed target needs a new run and brief. This component does not validate active child work, completion,
+continuation dispatch, or review acceptance. It does not enable installed automatic Sage.
+
+## Prepared follow-ups
+
+Supply `previous` with a completed assignment ID to prepare another assignment for the same child.
+Use a new run and logical name, with the same task, role, owner and epoch.
+The response contains the saved child UUID as `target` and the complete `message`.
+Copy both fields unchanged to `followup_task`. A follow-up preparation cannot authorize an initial spawn.
+
+Native policy requires an authenticated pending call and current run and review targets after evaluator approval.
+The atomic reservation consumes capacity once. Repeating that dispatch does not grant another permission.
+Binding the child's later turn remains a separate check. This does not enable installed automatic Sage.
