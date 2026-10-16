@@ -5,7 +5,7 @@ import { GENERATED, ROOT, outputs, filesUnder, parseSource } from "./build.mjs";
 import { checkWords, flaggedWords, yamlText } from "./dictionary.mjs";
 import { MOMENTS } from "../plugins/sage/hooks/principles-hook.mjs";
 import { BRIEF_FIELDS as CORE_BRIEF_FIELDS } from "../packages/sage-core/index.mjs";
-import { BRIEF_FIELDS, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
+import { BRIEF_FIELDS, FINDING_FORM, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
 import { fingerprint, overrides } from "./sync-pstack.mjs";
 import { files as graphics } from "./graphics.mjs";
 import { packageBoundaryProblems } from "./package-boundaries.mjs";
@@ -77,6 +77,13 @@ if (briefFields.join(" ") !== BRIEF_FIELDS.join(" ")) problems.push(`agents/chie
 const report = /```\n([\s\S]*?)```/.exec(readFileSync(join(skillsDir, "report/SKILL.md"), "utf8"))?.[1] ?? "";
 const reportFields = report.split("\n").map((l) => l.split(/\s{2,}/)[0].trim()).filter(Boolean);
 if (reportFields.join("|") !== REPORT_FIELDS.join("|")) problems.push(`skills/report: the template has ${reportFields.join(", ")}, the hook checks ${REPORT_FIELDS.join(", ")}`);
+// The hook reads a helper's findings only in its one line form (F-T289-11): the template's FINDINGS line gives that form.
+if (!/^FINDINGS\s.*$/m.exec(report)?.[0].includes(FINDING_FORM)) problems.push(`skills/report: the FINDINGS line does not give the hook's finding form ${FINDING_FORM}`);
+// The hook's reader takes a finding's detail only on indented lines under its line (F-T289-29): the report skill, and each
+// agent that asks for detail for each finding, say where it goes.
+for (const [name, text] of [["skills/report", readFileSync(join(skillsDir, "report/SKILL.md"), "utf8")], ...agents.map((f) => [`agents/${f}`, readFileSync(join(PLUGIN, "agents", f), "utf8")])]) {
+  if ((name === "skills/report" || /For each finding, the/.test(text)) && !text.includes("on indented lines under")) problems.push(`${name}: a finding's detail must go on indented lines under the finding's line, the one form that the hook reads`);
+}
 // Every hook command runs a script that exists, in the shared hooks and in Claude's own.
 for (const cfg of ["hooks.json", "claude.json"]) {
   for (const [event, groups] of Object.entries(JSON.parse(readFileSync(join(PLUGIN, "hooks", cfg), "utf8")).hooks)) for (const g of groups) for (const h of g.hooks) {
@@ -158,7 +165,11 @@ if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${B
 const CLOCK = String.raw`(?:(?:Date\.now|performance\.now|process\.hrtime(?:\.bigint)?)\(\)|process\.cpuUsage\([^)]*\))`;
 const FIX = 'assert CPU time (process.cpuUsage) as a ratio between two sizes with a generous bound, an order of events or a flag (for example: the lock holder still holds when the command returns), or a count. If none can, end the line with "// timing-ok: <reason>"';
 let timingOk = 0;
-for (const f of readdirSync(join(ROOT, "scripts")).filter((f) => f.endsWith(".test.mjs"))) {
+// Every test source: each test file and each file of scripts/ that a test file imports, such as sage-hook-tests.mjs,
+// which the six sage-hook-<n>.test.mjs parts run (F-T289-61).
+const testFiles = readdirSync(join(ROOT, "scripts")).filter((f) => f.endsWith(".test.mjs"));
+const imported = testFiles.flatMap((f) => [...readFileSync(join(ROOT, "scripts", f), "utf8").matchAll(/["']\.\/([\w.-]+\.mjs)["']/g)].map((m) => m[1]));
+for (const f of [...new Set([...testFiles, ...imported])].filter((f) => existsSync(join(ROOT, "scripts", f)))) {
   const lines = readFileSync(join(ROOT, "scripts", f), "utf8").split("\n").map((l) => l.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '""').replace(/(^|\s)\/\/(?! timing-ok:).*$/, "$1")); // no strings, no comments
   const clocked = new Set();
   const takes = (text) => new RegExp(`${CLOCK}${clocked.size ? `|(?<![\\w$.])(?:${[...clocked].join("|")})(?![\\w$])` : ""}`).test(text);

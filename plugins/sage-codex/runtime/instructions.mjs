@@ -9,6 +9,7 @@ function taskInstructions(roleName, brief, heading, review, runTarget) {
   const run = runTarget ? `# Saved run target\n\nTask round: ${runTarget.round}\nTask branch: ${runTarget.taskBranch || "none"}\nRun branch: ${runTarget.runBranch || "none"}\nCandidate: ${runTarget.candidate || "none"}\n\nWork only on this saved target. A changed target needs a new run and brief.` : "";
   const target = review ? `# Review target\n\nBranch: ${review.branch}\nCommit: ${review.sha}\nTask round: ${review.round}\nReview cycle: ${review.cycle}\n\nReview this exact commit. Name it in the report. A changed branch needs a new review assignment.` : "";
   const reviewReport = review ? ["# Review report values",
+    "For this review, these EVIDENCE and FINDINGS formats replace the general report values above. Use [] for empty FINDINGS; use none only for other empty fields.",
     `Use STATUS done only for a finished review. RESULT is ${roleName === "qa" ? "PASS or FAIL" : "CLEAN or FINDINGS"}.`,
     `Set BRANCH to ${review.branch} and QUESTIONS to none. If a question blocks the review, use STATUS question.`,
     `EVIDENCE must be a JSON object with exactly these fields: ${JSON.stringify({ commit: review.sha, round: review.round, cycle: review.cycle, summary: "Describe what you checked, with evidence references." })}`,

@@ -46,6 +46,8 @@ const WRITERS = ["implementer", "designer"];
 const LEADS = 3;
 /** The roles of a run: sage's child roles (roles.mjs), and the steps of an investigation, whose runs the board reads by the step's name. */
 const RUN_ROLES = [...ROLES, "investigate", "evidence-review"];
+/** The roles of the runs whose reports give a review or QA verdict: none may still run when a task merges (F-T289-18). */
+const CHECKERS = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa", "evidence-review"];
 /** A task's states and the moves between them (docs/design/sage-mode.html, "A task's life"). Any state may go to abandoned. */
 const NEXT = {
   framed: ["designing", "briefed"],
@@ -1026,6 +1028,9 @@ const shell = (word) => (/^[\w./-]+$/.test(word) ? word : `'${word.replaceAll("'
  */
 const notHeld = (task, what) => task.state === "held" && refuse(`${task.id} is held, so it takes no ${what}: only the sage moves a held task (sage task ${task.id} set state=building or briefed), then ${what} again.`);
 
+/** The extra rounds of a task's holds by round: a whole number, and 0 for any other cell, so a hand-written cell never gives NaN (F-T286-2). */
+const extraOf = (task) => (/^\d{1,3}$/.test(task.extra ?? "") ? Number(task.extra) : 0);
+
 /** Refuses an id that the logbook does not have, and names the latest ids that it has, to pick from. */
 const missing = (what, ids) => refuse(`no ${what}. ${ids.length ? `The latest: ${ids.slice(-10).join(", ")}.` : "There is none yet."}`);
 
@@ -1225,16 +1230,21 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       const rows = ledger.filter((r) => r.sha === sha);
       if (!rows.length) return [];
       if (!listed.has(basename(dir))) return strangers.push(dir), [];
-      const [tasks, findings, decisions] = book ? [rowsOf(book.tasks), rowsOf(book.findings), rowsOf(book.decisions)] : [[], [], []];
+      const [tasks, findings, decisions, runs] = book ? [rowsOf(book.tasks), rowsOf(book.findings), rowsOf(book.decisions), rowsOf(book.runs)] : [[], [], [], []];
       const repaired = decisions.some((d) => d.decision.startsWith("tasks.tsv started again without rows"));
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
-      const [byId, ownOf, findingsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings)];
+      const [byId, ownOf, findingsOf, runsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs)];
       return [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
         // A held task never merges until the sage moves it (F-T273-12).
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
-        return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...judge(dir, task, findingsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr), ...held };
+        const verdict = judge(dir, task, findingsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr);
+        // A review or QA run that still runs may hold a finding that no verdict shows yet (F-T289-18). It refuses a task that
+        // would pass, so a refusal still names an open finding first.
+        const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
+        const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
+        return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...verdict, ...busy, ...held };
       });
     });
     const one = strangers.length === 1;
@@ -1301,8 +1311,29 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     },
     leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
     findings: (task) => rows("findings").filter((f) => f.task === task),
+    /**
+     * The row of a finding key now, in any status: its own row, or after finding move (once or more), the row that the
+     * moves gave it. A move counts only as the decision that finding move writes: on the key's task, in the form "<key>
+     * moved to <task> as <new key on that task>: <summary>", where the summary is the one of the row at the end
+     * (F-T289-44, F-T289-49). Undefined when a key on the way is on no row and in no one such move, or on two rows.
+     */
+    traced(key) {
+      const said = [];
+      for (let k = key, seen = new Set(); !seen.has(k); ) {
+        seen.add(k);
+        const now = rows("findings").filter((f) => f.key === k);
+        if (now.length) return said.every((s) => s === now[0].summary) ? one(now) : undefined;
+        const moves = rows("decisions").filter((d) => d.task === /^F-(T[1-9]\d*)-[1-9]\d*$/.exec(k)?.[1] && subjects(d.decision)[0] === k && /^F-T[1-9]\d*-[1-9]\d*$/.test(subjects(d.decision)[2] ?? ""));
+        const [, to, next] = moves.length === 1 ? subjects(moves[0].decision) : [];
+        if (!next?.startsWith(`F-${to}-`)) return undefined;
+        said.push(moves[0].decision.slice(`${k} moved to ${to} as ${next}: `.length));
+        k = next;
+      }
+      return undefined;
+    },
     shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
-    verdictRuns: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.run).map((r) => r.run)),
+    verdicts: (task) => rows("ledger").filter((r) => r.task === task),
+    endedLeadRuns: () => rows("runs").filter((r) => r.role === "lead" && r.status !== "running"),
     prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),
   };
 }
@@ -1483,6 +1514,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const { tasks, task } = taskOf(dir, need(sub, "the task id")); // task <T> [set key=value ...]
       if (id === "set") {
         const decided = [];
+        let runs; // the runs, when a re-plan ends a lead run
         for (const kv of more) {
           const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
           if (k === "state") {
@@ -1491,13 +1523,23 @@ function act(cmd, pos, opt, dir, env, skip, project) {
             // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
             const was = task.state;
             move(task, v); // the design's states first; the table is written only if every check below passes
-            if (was === "held" && task.hold === "round") {
-              task.extra = String(Number(task.extra || 0) + 1);
+            // A move to abandoned gives no round: the task ends (F-T286-3).
+            if (was === "held" && task.hold === "round" && v !== "abandoned") {
+              task.extra = String(extraOf(task) + 1);
               decided.push({ at: now(), task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
             }
             if (was === "held" || v === "held") task.hold = "";
             // A new premise starts its own count: the round keys of the old plan go when the task leaves replan (F-T284-19).
             if (was === "replan") task.keys = "";
+            // A re-plan (held or replan back to briefed) ends the running lead run: the old lead works to the old brief, so
+            // its writes and helper starts stop here, and the chief starts a new lead with the new brief (F-T289-9).
+            if (v === "briefed" && ["held", "replan"].includes(was)) {
+              runs = read(dir, "runs");
+              for (const r of runs.filter((r) => r.task === task.id && r.role === "lead" && r.status === "running")) {
+                Object.assign(r, { status: "blocked", ended: now() });
+                decided.push({ at: now(), task: task.id, decision: `${r.id} blocked: ${task.id} went back to briefed`, why: "a re-plan: a new lead starts with the new brief" });
+              }
+            }
             const build = builds(task);
             if ((v === "verified" && !build) || (v === "concluded" && build)) refuse(`${task.id} ${build ? "has a build block, so it ends at verified" : "has no build block, so it ends at concluded"}`);
             if (v === "verifying" || v === "concluded") {
@@ -1520,6 +1562,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           else refuse(`task set takes state=, branch=, pr= or title=`);
         }
         if (decided.length) write(dir, "decisions", [...read(dir, "decisions"), ...decided]);
+        if (runs) write(dir, "runs", runs);
         write(dir, "tasks", tasks);
       }
       return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}`;
@@ -1532,7 +1575,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (!keys) refuse(`${task.id} has no open findings marked fix`);
       if (fix.every((f) => f.severity === "low")) refuse(`${task.id}: only low findings are marked fix (${keys}). A repair round needs a medium or high finding. Dismiss the low ones with a reason, or let them join the next round.`);
       const round = Number(task.round) + 1;
-      const limit = config(env).max_rounds + Number(task.extra || 0); // the extra rounds of earlier holds by round (F-T284-14)
+      const limit = config(env).max_rounds + extraOf(task); // the extra rounds of earlier holds by round (F-T284-14)
       if (round > limit) {
         Object.assign(task, { state: "held", hold: "round" });
         write(dir, "tasks", tasks);
@@ -1638,6 +1681,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (builds(task) && !opt.sha) refuse(`${task.id} has a build block, so each verdict names its commit: add --sha with the full 40-character SHA (git rev-parse <branch>)`);
       if (!builds(task) && opt.sha) refuse(`${task.id} has no build block, so its verdicts name no commit: leave out --sha`);
       if (opt.sha && notFull(opt.sha)) refuse(notFull(opt.sha));
+      // A run backs one review or QA verdict of its task (F-T289-2): the hook's own check and this write can race. A check
+      // verdict needs no run, so the chief may still name a run on checks-pass beside its review or QA verdict.
+      const check = (k) => k.startsWith("checks-");
+      const backed = opt.run && !check(kind) && read(dir, "ledger").find((r) => r.task === task.id && r.run === opt.run && !check(r.kind));
+      if (backed) refuse(`${opt.run} already backs the ${backed.kind} verdict of ${task.id} on ${backed.sha.slice(0, 7) || "its task"}: one run backs one review or QA verdict. Run the review again under a new run.`);
       const sha = opt.sha?.toLowerCase() ?? ""; // as git prints it
       const decided = opt.pr ? setPr(task, opt.pr, "verdict --pr") : [];
       const beforeReview = task.state;

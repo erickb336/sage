@@ -3918,7 +3918,7 @@ for (const view of ['merge', 'logbook']) test(`T57: ${view} refuses a completed 
   const original = fs.openSync; let armed = true, committed = false;
   t.mock.method(fs, 'openSync', (file, ...args) => {
     if (armed && file === join(f.logbook, 'decisions.tsv')) {
-      armed = false; f.createRun({ ...f.input, role: 'qa' }); committed = true;
+      armed = false; f.createRun(); committed = true;
       assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
     }
     return original(file, ...args);
