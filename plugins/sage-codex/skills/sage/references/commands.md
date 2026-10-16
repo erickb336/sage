@@ -29,6 +29,8 @@ node "$SAGE_CLI" run done R1 --status done --report /absolute/report.md --projec
 node "$SAGE_CLI" task T7 set state=reviewing --project "$PROJECT"
 ```
 
+For a confirmed interruption of a manual run, use `run done R1 --status blocked --report /absolute/stop-report.md`. Verify the whole owned team has settled before recording its interrupted runs. Read the resulting records again. This records unfinished work; it grants no authority to restart, replace an agent or finish a protected native run.
+
 The no-argument command lists commands. These are syntax examples, not a script to run blindly. Follow the returned route and actual lifecycle. A logbook run row does not start an agent or authenticate a native assignment. Record the real host agent identity separately in the brief/report; never substitute a logbook ID for a host target.
 
 Sizes are `tiny`, `small`, `large`, `investigate`. Risk flags `auth,data,schema,money,secrets,input` add security review to build routes. Use `--risk auth,input` when applicable. Added blocks need `--add <block-list> --why "reason"`. Read the framed route; do not omit its least required blocks.
