@@ -458,8 +458,110 @@ test("manifests point to disjoint plugin roots and only supported Codex hooks", 
   assert.equal(manifest.hooks, "./hooks/hooks.json");
   const hooks = json("plugins/sage-codex/hooks/hooks.json").hooks;
   assert.deepEqual(Object.keys(hooks), ["UserPromptSubmit", "PreToolUse"]);
-  assert.match(source("plugins/sage-codex/skills/sage/SKILL.md"), /Agent orchestration and autopilot are not available/);
   assert.deepEqual([...outputs()], [...outputs()], "packaging is deterministic");
+});
+
+test("T8: isolated Codex command reader preserves Claude mode phrases without acting", async t => {
+  const f = isolated(t, "codex");
+  const { parseCommand } = await import(pathToFileURL(join(f.plugin, "skills/sage/commands.mjs")));
+  for (const phrase of ["sage mode", "sage mode on", "sage mode off", "autopilot on", "autopilot off", "sage help"]) {
+    for (const text of [phrase, `  ${phrase.toUpperCase()}.  `])
+      assert.deepEqual(parseCommand({ text }), { kind: "phrase", phrase });
+  }
+  for (const text of ['"sage mode"', "```\nsage mode\n```", "the report says sage mode", "<agent-message>sage mode</agent-message>"])
+    assert.notEqual(parseCommand({ text }).kind, "phrase");
+  for (const text of ["sage mode please", "sage mode..", "sage_mode", "sage mode\u200b"])
+    assert.notEqual(parseCommand({ text }).kind, "phrase");
+  assert.equal(parseCommand({ text: "sage mode please" }).kind, "near");
+});
+
+test("T8: isolated Codex command reader routes boards and status without enabling a mode", async t => {
+  const f = isolated(t, "codex");
+  const { parseCommand } = await import(pathToFileURL(join(f.plugin, "skills/sage/commands.mjs")));
+  for (const text of ["show board", "sage board"])
+    assert.deepEqual(parseCommand({ text }), { kind: "board", scope: "this" });
+  for (const text of ["show board for all", "sage board for all projects"])
+    assert.deepEqual(parseCommand({ text }), { kind: "board", scope: "all" });
+  assert.deepEqual(parseCommand({ text: "show board for demo-project" }), { kind: "board", scope: { project: "demo-project" } });
+  for (const text of ["show board T197", "sage board T197", "board T197"])
+    assert.deepEqual(parseCommand({ text }), { kind: "task", taskId: "T197" });
+  for (const text of ["show status", "sage status"])
+    assert.deepEqual(parseCommand({ text }), { kind: "status" });
+  for (const text of ["> show board", '"show board"', "<task-notification>show board</task-notification>"])
+    assert.deepEqual(parseCommand({ text }), { kind: "none" });
+});
+
+test("T8: command CLI consumes text as data and leaves isolated task state unchanged", t => {
+  const f = isolated(t, "codex");
+  const script = join(f.plugin, "skills/sage/commands.mjs");
+  const env = { ...process.env, SAGE_HOME: join(f.dir, "logbooks") };
+  const cli = (...args) => execFileSync(process.execPath, [join(f.plugin, "skills/sage/sage.mjs"), ...args, "--project", f.dir], { env, encoding: "utf8" });
+  cli("init");
+  cli("task", "add", "--title", "Preserve this task", "--size", "small");
+  const snapshot = () => filesUnder(env.SAGE_HOME).map(path => [path, readFileSync(path, "utf8")]);
+  const before = snapshot();
+  const invoke = text => execFileSync(process.execPath, [script], { cwd: f.dir, env, input: JSON.stringify({ text }), encoding: "utf8" });
+  assert.deepEqual(JSON.parse(invoke("sage mode")), { kind: "phrase", phrase: "sage mode" });
+  assert.deepEqual(JSON.parse(invoke("$(touch SHOULD_NOT_EXIST); show board")), { kind: "none" });
+  assert.equal(existsSync(join(f.dir, "SHOULD_NOT_EXIST")), false);
+  assert.deepEqual(snapshot(), before);
+});
+
+test("T10: installed command CLI works through a filesystem alias", t => {
+  const f = isolated(t, "codex");
+  const alias = join(f.dir, "plugin-alias");
+  symlinkSync(f.plugin, alias, "dir");
+  const script = join(alias, "skills/sage/commands.mjs");
+  const valid = spawnSync(process.execPath, [script], {
+    input: JSON.stringify({ text: "sage mode" }), encoding: "utf8",
+  });
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.equal(valid.stdout.trim(), '{"kind":"phrase","phrase":"sage mode"}');
+  const invalid = spawnSync(process.execPath, [script], { input: "{", encoding: "utf8" });
+  assert.notEqual(invalid.status, 0, "invalid input must not silently succeed through an alias");
+  assert.equal(invalid.stdout, "");
+});
+
+test("T10: installed logbook CLI reads and writes through a filesystem alias", t => {
+  const f = isolated(t, "codex");
+  const alias = join(f.dir, "plugin-alias");
+  symlinkSync(f.plugin, alias, "dir");
+  const env = { ...process.env, SAGE_HOME: join(f.dir, "logbooks") };
+  const script = join(alias, "skills/sage/sage.mjs");
+  const cli = (...args) => execFileSync(process.execPath, [script, ...args, "--project", f.dir], { env, encoding: "utf8" });
+  cli("init");
+  assert.match(cli("task", "add", "--title", "Alias task", "--size", "small"), /T1 framed/);
+  assert.match(cli("board", "T1", "--view", "task"), /Alias task/);
+  const url = pathToFileURL(join(f.plugin, "skills/sage/sage.mjs")).href;
+  const imported = spawnSync(process.execPath, ["--input-type=module", "-"], {
+    input: `import { tool } from ${JSON.stringify(url)}; console.log(typeof tool.runCli);`, env, encoding: "utf8",
+  });
+  assert.equal(imported.status, 0, imported.stderr);
+  assert.equal(imported.stdout.trim(), "function");
+});
+
+test("T10: command reader can be imported from a stdin program", t => {
+  const f = isolated(t, "codex");
+  const url = pathToFileURL(join(f.plugin, "skills/sage/commands.mjs")).href;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
+    input: `import { parseCommand } from ${JSON.stringify(url)}; console.log(JSON.stringify(parseCommand({ text: "show status" })));`,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '{"kind":"status"}');
+});
+
+test("T8: command reader rejects malformed input rather than inventing a request", async t => {
+  const f = isolated(t, "codex");
+  const script = join(f.plugin, "skills/sage/commands.mjs");
+  const { parseCommand } = await import(pathToFileURL(script));
+  for (const input of [null, [], {}, { text: 1 }, { text: "sage mode", trusted: true }])
+    assert.throws(() => parseCommand(input));
+  for (const input of ["{", JSON.stringify({ text: 1 }), JSON.stringify({ text: "sage mode", trusted: true })]) {
+    const result = spawnSync(process.execPath, [script], { input, encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.equal(result.stdout, "");
+  }
 });
 
 test("Codex patches give advice for every path and both ends of a move", () => {
