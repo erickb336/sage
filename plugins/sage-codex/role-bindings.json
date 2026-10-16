@@ -14,7 +14,9 @@
   "ux-reviewer": {},
   "qa": {},
   "report": {
-    "REPORT_GATE": "Start each required field on its own line. The chief reviews the report before it accepts the result."
+    "REPORT_GATE": "Start each required field on its own line. The chief reviews the report before it accepts the result.",
+    "REPORT_FINDINGS": "for each problem: a key, high, medium or low, the location, and the steps that show it",
+    "REPORT_FINDING_RULES": "Give each field once, at the start of a line. When the assignment includes Review report values, those values define the EVIDENCE and FINDINGS formats, including their empty values."
   },
   "lead": {},
   "common": {

@@ -4358,6 +4358,22 @@ test('target instructions use only the linked preparation despite changed receip
   assert.equal(f.api.readAdmission(f.journal).bindings.length,1);
 });
 
+test('T289: native reviewer instructions deliver one parseable findings contract', async t => {
+  const f = await targetedNativeFixture(t, 'qa');
+  const text = f.instructions.boundChildInstructions(f.options, f.identity()).brief;
+  assert.doesNotMatch(text, /Under FINDINGS, write `none` alone|The hook reads the report of a review/);
+  assert.match(text, /these EVIDENCE and FINDINGS formats replace the general report values above/);
+  assert.match(text, /FINDINGS must be a JSON array/);
+  const evidence = JSON.parse(/EVIDENCE must be a JSON object with exactly these fields: (\{[^\n]+\})/.exec(text)[1]);
+  const report = { STATUS: 'done', RESULT: 'PASS', EVIDENCE: JSON.stringify(evidence),
+    FINDINGS: '[]', QUESTIONS: 'none', 'NOT VERIFIED': 'Live deployment', BRANCH: f.review.branch };
+  assert.equal(f.api.parseReviewReport(report, 'qa', f.review).kind, 'qa-pass');
+  const problem = { severity: 'high', summary: 'An empty input loses the saved row; reproduced by the review.' };
+  const failed = f.api.parseReviewReport({ ...report, RESULT: 'FAIL', FINDINGS: JSON.stringify([problem]) }, 'qa', f.review);
+  assert.equal(failed.kind, 'qa-fail');
+  assert.deepEqual(failed.findings, [problem]);
+});
+
 test('target instructions include writer scope without introducing reviewer report rules', async t => {
   const f = await roleAdmissionFixture(t);
   const instructions = await import(new URL('../runtime/instructions.mjs',f.url));
