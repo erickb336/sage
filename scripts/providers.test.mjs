@@ -4616,7 +4616,7 @@ async function leadPreparationFixture(t) {
   const prepare=(changes={})=>preparation.prepareNativeTask({...input,...changes},native,options);
   const spawnInput=saved=>({hook_event_name:'PreToolUse',session_id:f.root,turn_id:f.activation,
     tool_name:'collaborationspawn_agent',tool_use_id:'team-spawn',tool_input:{task_name:saved.name,message:saved.message,fork_turns:'none'}});
-  const spawn=saved=>preparation.reservePreparedSpawn(spawnInput(saved),native,options);
+  const spawn=(saved,turn=f.activation)=>preparation.reservePreparedSpawn({...spawnInput(saved),turn_id:turn},native,options);
   return {...f,preparation,instructions,first,prior,options,native,input,prepare,spawn,cli,target,review};
 }
 
@@ -4652,7 +4652,7 @@ test('native lead preparation uses the unfinished continuation and original nati
   const bound={...f.scope,assignment:saved.assignment.id,issuer:f.root,call:'lead-followup',child:f.lead,turn:'44444444-4444-4444-8444-444444444444'};
   f.api.bindContinuationAdmission(f.journal,bound);
   const child=f.prepare({run:'R5',name:'next_reviewer'});
-  assert.equal(child.task,'T1'); assert.equal(f.spawn(child).decision,'permit-once');
+  assert.equal(child.task,'T1'); assert.equal(f.spawn(child,bound.turn).decision,'permit-once');
   assert.throws(()=>f.prepare({task:'T2',run:'R3',name:'foreign_after_resume'}));
   assert.equal(f.api.readAdmission(f.journal).bindings.length,2);
   f.api.completeAdmission(f.journal,bound);

@@ -5317,7 +5317,7 @@ test('T14: unbound stale child interruption recovers delivery and releases only 
   assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R4').status, 'running');
 });
 
-test('T14: nested continuation delivery refuses revoked lead authority and preserves terminal cleanup', async t => {
+async function nestedDescendantContinuationFixture(t) {
   const f = await descendantAuthorityFixture(t);
   appendReport(f, reportText, f.worker, turns[2]);
   f.policy.completeChild({ ...f.stop, agent_id: f.worker, turn_id: turns[2] }, f.native(f.worker));
@@ -5342,6 +5342,11 @@ test('T14: nested continuation delivery refuses revoked lead authority and prese
     { type: 'turn_context', payload: { turn_id: turn } },
     { type: 'response_item', payload: { type: 'agent_message', id: 'amsg_worker_later', author: '/root/fixture_lead', recipient: '/root/fixture_lead/worker', content: [{ type: 'encrypted_content', encrypted_content: prepared.message }] } },
   ].map(row => JSON.stringify(row) + '\n').join(''));
+  return { ...f, turn };
+}
+
+test('T14: nested continuation delivery refuses revoked lead authority and preserves terminal cleanup', async t => {
+  const f = await nestedDescendantContinuationFixture(t), { turn } = f;
   f.rebrief();
   await assert.rejects(f.evaluate(f.policy, { ...f.input, turn_id: turn }, f.worker), /run|lead/);
   assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 2);
@@ -5353,4 +5358,25 @@ test('T14: nested continuation delivery refuses revoked lead authority and prese
   assert.equal(state.completions[1].turn, turn);
   assert.equal(state.completions[1].outcome, 'interrupted');
   assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R5').status, 'running');
+});
+
+for (const continued of [false, true]) test(`T14: recovered ${continued ? 'continued' : 'initial'} child completion survives parent rebrief`, async t => {
+  const f = continued ? await nestedDescendantContinuationFixture(t) : await descendantAuthorityFixture(t);
+  const turn = continued ? f.turn : turns[2], run = continued ? 'R5' : 'R4';
+  if (continued) assert.deepEqual(await f.evaluate(f.policy, { ...f.input, turn_id: turn }, f.worker), { decision: 'pass' });
+  appendRecoveryCheckpoint(f.transcript, 1, turn);
+  const { readNativeChildAssignment } = await import(pathToFileURL(join(f.plugin, 'runtime/child-assignment.mjs')));
+  appendAssignmentRecovery(f.transcript, readNativeChildAssignment({}, f.native(f.worker), f.options));
+  f.rebrief();
+  assert.throws(() => readNativeChildAssignment({}, f.native(f.worker), f.options), /run|lead/);
+  await assert.rejects(f.evaluate(f.policy, { ...f.input, turn_id: turn }, f.worker), /run|lead/);
+  appendReport(f, reportText, f.worker, turn);
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  reconcileNativeCompletions(f.native(childActor), session, f.options);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, continued ? 2 : 1);
+  assert.equal(state.completions.at(-1).child, f.worker);
+  assert.equal(state.completions.at(-1).turn, turn);
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === run).status, 'running');
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'tasks').find(row => row.id === 'T1').state, 'briefed');
 });

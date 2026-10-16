@@ -18,13 +18,12 @@ export function checkNativeRunAssignment(options, input, target) {
 }
 
 
-/** Recovery and completion must use the same immutable preparation and current target. */
-export function checkPreparedRunAssignment(options, assigned, prepared) {
+/** Terminal evidence still needs the immutable preparation and its current own target. */
+export function checkPreparedRunTarget(options, assigned, prepared) {
   const refuse = () => { throw Error("Sage could not verify this assignment target."); };
   if (!prepared || assigned.preparation !== prepared.id
     || ["project", "session", "epoch", "issuer", "task", "run"].some(key => assigned.assignment[key] !== prepared[key])
     || assigned.rolePlan.role !== prepared.rolePlan.role) refuse();
-  checkPreparationIssuer(options, prepared);
   const current = checkNativeRunAssignment(options, { ...assigned.assignment, role: prepared.rolePlan.role }, prepared.runTarget);
   if (REVIEW_ROLES.includes(prepared.rolePlan.role)) {
     if (!prepared.review) refuse();
@@ -33,6 +32,13 @@ export function checkPreparedRunAssignment(options, assigned, prepared) {
       role: prepared.rolePlan.role, cycle: prepared.review.cycle }, { ...process.env, SAGE_HOME: options.logbookRoot });
     if (JSON.stringify(review) !== JSON.stringify(prepared.review)) refuse();
   }
+  return current;
+}
+
+/** New authority requires both the child target and the original issuing lead. */
+export function checkPreparedRunAssignment(options, assigned, prepared) {
+  const current = checkPreparedRunTarget(options, assigned, prepared);
+  checkPreparationIssuer(options, prepared);
   return current;
 }
 
