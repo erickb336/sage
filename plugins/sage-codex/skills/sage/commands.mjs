@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { exactPhrase, parseBoardIntent, phrasesNear } from "../../core/index.mjs";
 
@@ -16,7 +16,13 @@ export function parseCommand(input) {
   return near ? { kind: "near", ...near } : { kind: "none" };
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+let entryPath;
+try {
+  if (process.argv[1]) entryPath = realpathSync(process.argv[1]);
+} catch {
+  // Imports from stdin or virtual entry points have no filesystem entry path.
+}
+if (entryPath === fileURLToPath(import.meta.url)) {
   try {
     process.stdout.write(`${JSON.stringify(parseCommand(JSON.parse(readFileSync(0, "utf8"))))}\n`);
   } catch (error) {

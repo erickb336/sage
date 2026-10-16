@@ -507,6 +507,50 @@ test("T8: command CLI consumes text as data and leaves isolated task state uncha
   assert.deepEqual(snapshot(), before);
 });
 
+test("T10: installed command CLI works through a filesystem alias", t => {
+  const f = isolated(t, "codex");
+  const alias = join(f.dir, "plugin-alias");
+  symlinkSync(f.plugin, alias, "dir");
+  const script = join(alias, "skills/sage/commands.mjs");
+  const valid = spawnSync(process.execPath, [script], {
+    input: JSON.stringify({ text: "sage mode" }), encoding: "utf8",
+  });
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.equal(valid.stdout.trim(), '{"kind":"phrase","phrase":"sage mode"}');
+  const invalid = spawnSync(process.execPath, [script], { input: "{", encoding: "utf8" });
+  assert.notEqual(invalid.status, 0, "invalid input must not silently succeed through an alias");
+  assert.equal(invalid.stdout, "");
+});
+
+test("T10: installed logbook CLI reads and writes through a filesystem alias", t => {
+  const f = isolated(t, "codex");
+  const alias = join(f.dir, "plugin-alias");
+  symlinkSync(f.plugin, alias, "dir");
+  const env = { ...process.env, SAGE_HOME: join(f.dir, "logbooks") };
+  const script = join(alias, "skills/sage/sage.mjs");
+  const cli = (...args) => execFileSync(process.execPath, [script, ...args, "--project", f.dir], { env, encoding: "utf8" });
+  cli("init");
+  assert.match(cli("task", "add", "--title", "Alias task", "--size", "small"), /T1 framed/);
+  assert.match(cli("board", "T1", "--view", "task"), /Alias task/);
+  const url = pathToFileURL(join(f.plugin, "skills/sage/sage.mjs")).href;
+  const imported = spawnSync(process.execPath, ["--input-type=module", "-"], {
+    input: `import { tool } from ${JSON.stringify(url)}; console.log(typeof tool.runCli);`, env, encoding: "utf8",
+  });
+  assert.equal(imported.status, 0, imported.stderr);
+  assert.equal(imported.stdout.trim(), "function");
+});
+
+test("T10: command reader can be imported from a stdin program", t => {
+  const f = isolated(t, "codex");
+  const url = pathToFileURL(join(f.plugin, "skills/sage/commands.mjs")).href;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
+    input: `import { parseCommand } from ${JSON.stringify(url)}; console.log(JSON.stringify(parseCommand({ text: "show status" })));`,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '{"kind":"status"}');
+});
+
 test("T8: command reader rejects malformed input rather than inventing a request", async t => {
   const f = isolated(t, "codex");
   const script = join(f.plugin, "skills/sage/commands.mjs");
