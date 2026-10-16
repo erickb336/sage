@@ -7,7 +7,7 @@ import { bindings, decodeEvent, publish, readObservations } from "./events.mjs";
 import { readNativeFollowup } from "./identity.mjs";
 import { preparedTaskMessage } from "./instructions.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
-import { captureNativeRunAssignment, checkNativeRunAssignment } from "./run-assignment.mjs";
+import { captureNativeRunAssignment, checkNativeRunAssignment, checkPreparationIssuer } from "./run-assignment.mjs";
 
 const NAME = /^(?!root$)[a-z0-9_]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -43,7 +43,7 @@ function actorScope(options, native) {
     || !observations.some(row => row.kind === "child-start" && row.child === native.actor && row.turn === origin.turn)) refuse();
   const prepared = state.preparations.find(row => row.id === reservation.preparation);
   checkNativeRunAssignment(options, { ...reservation.assignment, role: "lead" }, prepared?.runTarget);
-  return { scope: { project: owner.project, session: owner.session, epoch: owner.epoch }, role: "lead", task: reservation.assignment.task };
+  return { scope: { project: owner.project, session: owner.session, epoch: owner.epoch }, role: "lead", task: reservation.assignment.task, issuerAssignment: bound.assignment, issuerTurn: bound.turn };
 }
 
 function captureReview(options, input, cycle) {
@@ -61,7 +61,7 @@ export function prepareNativeTask(input, context, options) {
   const keys = ["task", "run", "name", "role", "brief", ...(hasCycle ? ["reviewCycle"] : []), ...(hasPrevious ? ["previous"] : [])];
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
     || keys.some(key => !Object.hasOwn(input, key)) || typeof input.name !== "string" || !NAME.test(input.name)) refuse();
-  const { scope, role, task } = actorScope(options, native);
+  const { scope, role, task, issuerAssignment } = actorScope(options, native);
   if (role === "lead" && input.task !== task) refuse();
   const previous = hasPrevious ? completedRecipient(options, scope, native.actor, input.previous, input.task, input.role) : undefined;
   const runTarget = captureNativeRunAssignment(options, input);
@@ -70,7 +70,7 @@ export function prepareNativeTask(input, context, options) {
   const review = reviewRole ? captureReview(options, input, input.reviewCycle) : undefined;
   const result = prepareAdmission(options.directory, scope,
     { task: input.task, run: input.run, issuer: native.actor, name: input.name },
-    { issuerRole: role, role: input.role }, input.brief, { review, runTarget, ...(hasPrevious ? { continuation: input.previous } : {}) });
+    { issuerRole: role, role: input.role }, input.brief, { review, runTarget, ...(issuerAssignment ? { issuerAssignment } : {}), ...(hasPrevious ? { continuation: input.previous } : {}) });
   const saved = result.preparation;
   return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role, message: preparedTaskMessage(saved), ...(previous ? { target: previous.child, previous: input.previous } : { fork_turns: "none" }), ...(saved.review ? { review: saved.review } : {}) };
 }
@@ -88,12 +88,13 @@ export function reservePreparedSpawn(input, context, options) {
   if (typeof message !== "string" || !message || Buffer.byteLength(message, "utf8") > 1024 * 1024
     || Buffer.from(message, "utf8").toString("utf8") !== message) refuse();
   const taskHash = createHash("sha256").update(message).digest("hex");
-  const { scope, role, task } = actorScope(options, native);
-  if (scope.session !== `codex:${observed.session}`) refuse();
+  const { scope, role, task, issuerAssignment, issuerTurn } = actorScope(options, native);
+  if (scope.session !== `codex:${observed.session}` || (issuerTurn && issuerTurn !== observed.turn)) refuse();
   const prepared = readAdmission(options.directory).preparations.filter(row => row.project === scope.project
     && row.session === scope.session && row.epoch === scope.epoch && row.issuer === native.actor && row.name === observed.name);
   if (prepared.length !== 1 || prepared[0].continuation || message !== preparedTaskMessage(prepared[0])) refuse();
   if (role === "lead" && prepared[0].task !== task) refuse();
+  checkPreparationIssuer(options, prepared[0], issuerAssignment);
   checkNativeRunAssignment(options, { ...prepared[0], role: prepared[0].rolePlan.role }, prepared[0].runTarget);
   if (REVIEW_ROLES.includes(prepared[0].rolePlan.role)) {
     if (!prepared[0].review) refuse();
@@ -127,8 +128,8 @@ export function reservePreparedFollowup(input, context, options) {
   if (observed?.kind !== "dispatch-request" || observed.mode !== "task"
     || Object.keys(event.tool_input).length !== 2 || !Object.hasOwn(event.tool_input, "target")
     || !Object.hasOwn(event.tool_input, "message") || !UUID.test(event.tool_input.target ?? "")) refuse();
-  const { scope, role, task } = actorScope(options, native);
-  if (scope.session !== `codex:${event.session_id}`) refuse();
+  const { scope, role, task, issuerAssignment, issuerTurn } = actorScope(options, native);
+  if (scope.session !== `codex:${event.session_id}` || (issuerTurn && issuerTurn !== event.turn_id)) refuse();
   const message = event.tool_input.message;
   if (typeof message !== "string" || Buffer.byteLength(message) > 1024 * 1024) refuse();
   // The header locates a candidate; only complete saved bytes can authorize it.
@@ -142,6 +143,7 @@ export function reservePreparedFollowup(input, context, options) {
   if (role === "lead" && saved.task !== task) refuse();
   const previous = completedRecipient(options, scope, native.actor, saved.continuation, saved.task, saved.rolePlan.role);
   if (event.tool_input.target !== previous.child) refuse();
+  checkPreparationIssuer(options, saved, issuerAssignment);
   checkNativeRunAssignment(options, { ...saved, role: saved.rolePlan.role }, saved.runTarget);
   if (REVIEW_ROLES.includes(saved.rolePlan.role)) {
     if (!saved.review || JSON.stringify(captureReview(options, { ...saved, role: saved.rolePlan.role }, saved.review.cycle)) !== JSON.stringify(saved.review)) refuse();

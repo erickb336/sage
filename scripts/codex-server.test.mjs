@@ -3148,11 +3148,12 @@ test("T53: held tasks refuse new preparation and saved dispatch without ending t
   }
 });
 
-async function preparedFollowupFixture(t, role = "lead") {
+async function preparedFollowupFixture(t, role = "lead", beforeComplete) {
   const f = await composedPolicyFixture(t);
   if (role === "qa") Object.assign(f.input, { role, run: "R2", reviewCycle: 1 });
   f.bindLead();
   const prior = f.core.readAdmission(f.options.directory).bindings[0];
+  if (beforeComplete) await beforeComplete(f);
   f.core.completeAdmission(f.options.directory, prior);
   f.assignmentCli('run', 'done', f.input.run, '--status', 'done');
   f.assignmentCli('run', 'add', 'T1', '--role', role);
@@ -3398,8 +3399,8 @@ test('T55: recovered completion refuses changed targets but preserves historical
   assert.equal(f.core.readAdmission(f.options.directory).completions[0].outcome,'interrupted');
 });
 
-async function deliveredFollowupFixture(t) {
-  const f = await preparedFollowupFixture(t);
+async function deliveredFollowupFixture(t, beforeComplete) {
+  const f = await preparedFollowupFixture(t, "lead", beforeComplete);
   const transcript = f.childTranscript(); appendReport(f, reportText.replace('RESULT PASS', 'RESULT first'));
   f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: '0.160.0', session,
     kind: 'child-transcript', child: childActor, turn: turns[1], transcript });
@@ -5147,4 +5148,209 @@ test("nested report probe tool contract matches the packaged MCP registry",async
  assert.equal(parseReviewReport(parseReport(text),"code-reviewer",integrated.reviewTarget).kind,"review-clean");
  assert.throws(()=>parseReviewReport(parseReport(text.replace("FINDINGS []","FINDINGS none")),"code-reviewer",integrated.reviewTarget),/findings/);
  await client.close();
+});
+
+async function descendantAuthorityFixture(t, { reserve = true, bind = true } = {}) {
+  const f = await completionFixture(t);
+  const worker = 'a22422c7-509c-43aa-8c42-827c556f8a59', path = '/root/fixture_lead/worker';
+  f.assignmentCli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-fixture');
+  const request = { task: 'T1', run: 'R4', name: 'worker', role: 'implementer', brief: f.input.brief };
+  f.api.prepareNativeTask(request, f.native(childActor), f.options);
+  const spawn = { ...f.spawnInput('worker', 'spawn-worker'), turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, `${childActor}.jsonl`) };
+  if (reserve) f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options);
+  f.events.publish(join(f.options.observationsRoot, session), { ...f.result, actor: childActor, call: 'spawn-worker', turn: turns[1], path });
+  const transcript = f.childTranscript({ child: worker, parent: childActor, path, turn: turns[2] });
+  const input = { ...patch(turns[2]), transcript_path: transcript };
+  if (bind) assert.deepEqual(await f.evaluate(f.policy, input, worker), { decision: 'pass' });
+  const rebrief = () => {
+    for (const state of ['briefed', 'building', 'held', 'briefed']) f.assignmentCli('task', 'T1', 'set', `state=${state}`);
+  };
+  return { ...f, worker, input, spawn, transcript, rebrief };
+}
+
+test('T14: a rebrief never restores the old descendant write or recovery authority', async t => {
+  const f = await descendantAuthorityFixture(t);
+  f.rebrief();
+  const before = f.core.readAdmission(f.options.directory);
+  let calls = 0;
+  const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: 'pass' }; });
+  await assert.rejects(f.evaluate(policy, f.input, f.worker), /run|lead/);
+  assert.equal(calls, 0);
+  const { readNativeChildAssignment } = await import(pathToFileURL(join(f.plugin, 'runtime/child-assignment.mjs')));
+  assert.throws(() => readNativeChildAssignment({}, f.native(f.worker), f.options), /run|lead/);
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R4').status, 'running');
+  assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
+
+test('T14: ancestor revocation during the evaluator refuses its earlier permission', async t => {
+  const f = await descendantAuthorityFixture(t);
+  let calls = 0;
+  const policy = f.createNativePolicy(f.options, async () => { calls++; f.rebrief(); return { decision: 'pass' }; });
+  await assert.rejects(f.evaluate(policy, f.input, f.worker), /run|lead/);
+  assert.equal(calls, 1);
+});
+
+test('T14: prepared child cannot dispatch after its issuing lead is revoked', async t => {
+  const f = await descendantAuthorityFixture(t, { reserve: false, bind: false });
+  f.rebrief();
+  assert.throws(() => f.api.reservePreparedSpawn(f.spawn, f.native(childActor), f.options), /run|lead/);
+  assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 1);
+});
+
+test('T14: delivered stale child cannot bind for tools but authentic completion settles its slot', async t => {
+  const f = await descendantAuthorityFixture(t, { bind: false });
+  f.rebrief();
+  await assert.rejects(f.evaluate(f.policy, f.input, f.worker), /run|lead/);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
+  appendReport(f, reportText, f.worker, turns[2]);
+  const stop = { ...f.stop, agent_id: f.worker, turn_id: turns[2], agent_transcript_path: f.transcript };
+  assert.deepEqual(f.policy.completeChild(stop, f.native(f.worker)), { decision: 'completed' });
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 1);
+  assert.equal(state.completions[0].child, f.worker);
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R4').status, 'running');
+});
+
+test('T14: reused lead cannot inherit earlier preparations but can issue fresh work', async t => {
+  const f = await deliveredFollowupFixture(t, prior => {
+    prior.api.prepareNativeTask({ task: 'T1', run: 'R2', name: 'old_qa', role: 'qa', reviewCycle: 1, brief: prior.input.brief }, prior.native(childActor), prior.options);
+  });
+  assert.deepEqual(await f.evaluate(f.policy, f.tool, childActor), { decision: 'pass' });
+  const old = { ...f.spawnInput('old_qa', 'old-qa'), turn_id: turns[2], transcript_path: f.transcript };
+  assert.throws(() => f.api.reservePreparedSpawn(old, f.native(childActor), f.options), /issuing lead/);
+  f.assignmentCli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-fixture');
+  const request = { task: 'T1', run: 'R5', name: 'fresh_worker', role: 'implementer', brief: f.input.brief };
+  assert.equal(f.api.prepareNativeTask(request, f.native(childActor), f.options).decision, 'prepared');
+  const fresh = { ...f.spawnInput('fresh_worker', 'fresh-worker'), turn_id: turns[2], transcript_path: f.transcript };
+  assert.throws(() => f.api.reservePreparedSpawn({ ...fresh, turn_id: turns[1] }, f.native(childActor), f.options), /preparation/);
+  assert.equal(f.api.reservePreparedSpawn(fresh, f.native(childActor), f.options).decision, 'permit-once');
+});
+
+test('T14: stale descendant interruption retains terminal evidence without certifying its run', async t => {
+  const f = await descendantAuthorityFixture(t);
+  f.rebrief();
+  appendFileSync(f.transcript, JSON.stringify({ type: 'event_msg', payload: { type: 'turn_aborted', turn_id: turns[2], reason: 'interrupted' } }) + '\n');
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  reconcileNativeCompletions(f.native(childActor), session, f.options);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 1);
+  assert.equal(state.completions[0].child, f.worker);
+  assert.equal(state.completions[0].outcome, 'interrupted');
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R4').status, 'running');
+});
+
+test('T14: legacy nested preparation remains readable but cannot grant tool authority', async t => {
+  const f = await completionFixture(t);
+  f.assignmentCli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-fixture');
+  const target = f.assignmentTool.captureRunAssignment({ project: f.options.projectDirectory, task: 'T1', run: 'R4', role: 'implementer' }, f.assignmentEnv);
+  const prepared = f.core.prepareAdmission(f.options.directory, f.scope, { task: 'T1', run: 'R4', issuer: childActor, name: 'legacy_worker' },
+    { issuerRole: 'lead', role: 'implementer' }, f.input.brief, { runTarget: target });
+  assert.equal(prepared.decision, 'prepared');
+  assert.equal(f.core.readAdmission(f.options.directory).preparations.length, 2);
+  const spawn = { ...f.spawnInput('legacy_worker', 'legacy'), turn_id: turns[1], transcript_path: join(f.mode.sessionsDir, `${childActor}.jsonl`) };
+  assert.throws(() => f.api.reservePreparedSpawn(spawn, f.native(childActor), f.options), /issuing lead/);
+});
+
+test('T14: core rejects invalid issuing references without losing valid prepared work', async t => {
+  const f = await completionFixture(t);
+  const parent = f.core.readAdmission(f.options.directory).bindings[0].assignment;
+  const request = { task: 'T1', run: 'R2', issuer: childActor, name: 'checked_qa' };
+  const role = { issuerRole: 'lead', role: 'qa' };
+  const before = f.core.readAdmission(f.options.directory);
+  for (const issuerAssignment of [null, 42, {}, [], 'not-an-id', session]) {
+    assert.throws(() => f.core.prepareAdmission(f.options.directory, f.scope, request, role, f.input.brief, { issuerAssignment }), /issuer assignment|issuer/);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+  for (const [scope, changed, changedRole] of [
+    [{ ...f.scope, project: 'elsewhere' }, request, role],
+    [f.scope, { ...request, issuer: session }, role],
+    [f.scope, { ...request, task: 'T2' }, role],
+    [f.scope, request, { issuerRole: 'chief-of-staff', role: 'qa' }],
+  ]) {
+    assert.throws(() => f.core.prepareAdmission(f.options.directory, scope, changed, changedRole, f.input.brief, { issuerAssignment: parent }));
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+  }
+  assert.equal(f.core.prepareAdmission(f.options.directory, f.scope, request, role, f.input.brief, { issuerAssignment: parent }).decision, 'prepared');
+});
+
+test('T14: ordinary off-mode descendant tools retain their existing scope', async t => {
+  const f = await descendantAuthorityFixture(t);
+  f.rebrief();
+  f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  assert.deepEqual(await f.evaluate(f.policy, f.input, f.worker), { decision: 'pass' });
+});
+
+test('T14: a new assignment for the same lead actor cannot rescue its old bound child', async t => {
+  const worker = 'a22422c7-509c-43aa-8c42-827c556f8a59';
+  let workerInput;
+  const f = await deliveredFollowupFixture(t, async prior => {
+    prior.api.prepareNativeTask({ task: 'T1', run: 'R2', name: 'old_checker', role: 'qa', reviewCycle: 1, brief: prior.input.brief }, prior.native(childActor), prior.options);
+    const spawn = { ...prior.spawnInput('old_checker', 'old-checker'), turn_id: turns[1] };
+    prior.api.reservePreparedSpawn(spawn, prior.native(childActor), prior.options);
+    prior.events.publish(join(prior.options.observationsRoot, session), { ...prior.result, actor: childActor, call: 'old-checker', turn: turns[1], path: '/root/fixture_lead/old_checker' });
+    const transcript_path = prior.childTranscript({ child: worker, parent: childActor, path: '/root/fixture_lead/old_checker', turn: turns[2] });
+    workerInput = { ...patch(turns[2]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path };
+    const policy = prior.createNativePolicy(prior.options, () => ({ decision: 'pass' }));
+    assert.deepEqual(await prior.evaluate(policy, workerInput, worker), { decision: 'pass' });
+  });
+  assert.deepEqual(await f.evaluate(f.policy, f.tool, childActor), { decision: 'pass' });
+  await assert.rejects(f.evaluate(f.policy, workerInput, worker), /issuing lead/);
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R2').status, 'running');
+});
+
+test('T14: unbound stale child interruption recovers delivery and releases only its native slot', async t => {
+  const f = await descendantAuthorityFixture(t, { bind: false });
+  // Record independently verified delivery before the parent dispatch result is available.
+  // This is the same evidence retained by first-tool delivery when its result is pending.
+  f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: '0.160.0', session,
+    kind: 'child-start', child: f.worker, parent: childActor, path: '/root/fixture_lead/worker', turn: turns[2] });
+  f.events.publish(join(f.options.observationsRoot, session), { schema: 1, runtime: '0.160.0', session,
+    kind: 'initial-child-transcript', child: f.worker, turn: turns[2], transcript: f.transcript });
+  f.rebrief();
+  appendFileSync(f.transcript, JSON.stringify({ type: 'event_msg', payload: { type: 'turn_aborted', turn_id: turns[2], reason: 'interrupted' } }) + '\n');
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  reconcileNativeCompletions(f.native(childActor), session, f.options);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 1);
+  assert.equal(state.completions[0].child, f.worker);
+  assert.equal(state.completions[0].outcome, 'interrupted');
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R4').status, 'running');
+});
+
+test('T14: nested continuation delivery refuses revoked lead authority and preserves terminal cleanup', async t => {
+  const f = await descendantAuthorityFixture(t);
+  appendReport(f, reportText, f.worker, turns[2]);
+  f.policy.completeChild({ ...f.stop, agent_id: f.worker, turn_id: turns[2] }, f.native(f.worker));
+  f.assignmentCli('run', 'done', 'R4', '--status', 'done');
+  f.assignmentCli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-fixture');
+  const previous = f.core.readAdmission(f.options.directory).bindings.find(row => row.child === f.worker).assignment;
+  const prepared = f.api.prepareNativeTask({ task: 'T1', run: 'R5', name: 'continued_worker', role: 'implementer',
+    brief: f.core.readAdmission(f.options.directory).preparations[1].brief, previous }, f.native(childActor), f.options);
+  const transcript = join(f.mode.sessionsDir, `${childActor}.jsonl`);
+  const input = { hook_event_name: 'PreToolUse', session_id: session, turn_id: turns[1],
+    tool_name: 'collaborationfollowup_task', tool_use_id: 'worker-followup', transcript_path: transcript,
+    tool_input: { target: f.worker, message: prepared.message } };
+  const response = payload => JSON.stringify({ type: 'response_item', metadata: { client_authored: false },
+    payload: { ...payload, internal_chat_message_metadata_passthrough: { turn_id: turns[1] } } }) + '\n';
+  appendFileSync(transcript, response({ type: 'function_call', namespace: 'collaboration', name: 'followup_task',
+    call_id: input.tool_use_id, arguments: JSON.stringify(input.tool_input) }));
+  assert.equal(f.api.reservePreparedFollowup(input, f.native(childActor), f.options).decision, 'permit-once');
+  appendFileSync(transcript, response({ type: 'function_call_output', id: 'fco_worker_followup', call_id: input.tool_use_id, output: '' }));
+  const turn = 'b22422c7-509c-43aa-8c42-827c556f8a59';
+  appendFileSync(f.transcript, [
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: turn } },
+    { type: 'turn_context', payload: { turn_id: turn } },
+    { type: 'response_item', payload: { type: 'agent_message', id: 'amsg_worker_later', author: '/root/fixture_lead', recipient: '/root/fixture_lead/worker', content: [{ type: 'encrypted_content', encrypted_content: prepared.message }] } },
+  ].map(row => JSON.stringify(row) + '\n').join(''));
+  f.rebrief();
+  await assert.rejects(f.evaluate(f.policy, { ...f.input, turn_id: turn }, f.worker), /run|lead/);
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 2);
+  appendFileSync(f.transcript, JSON.stringify({ type: 'event_msg', payload: { type: 'turn_aborted', turn_id: turn, reason: 'interrupted' } }) + '\n');
+  const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+  reconcileNativeCompletions(f.native(childActor), session, f.options);
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.completions.length, 2);
+  assert.equal(state.completions[1].turn, turn);
+  assert.equal(state.completions[1].outcome, 'interrupted');
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R5').status, 'running');
 });

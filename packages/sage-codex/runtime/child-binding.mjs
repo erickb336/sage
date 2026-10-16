@@ -6,7 +6,7 @@ const PATH = /^\/root(?:\/(?!root(?:\/|$))[a-z0-9_]+)+$/;
 const refuse = () => { throw Error("Sage could not bind this native child."); };
 
 /** identity must come from nativeChildStart on the current trusted hook connection. */
-export function bindNativeChild({ directory, project, observationsDirectory }, identity) {
+export function bindNativeChild({ directory, project, observationsDirectory, checkAuthority }, identity) {
   if (!identity || typeof identity !== "object" || Array.isArray(identity)
     || Object.keys(identity).length !== 5 || !["session", "child", "parent", "turn"].every(key => typeof identity[key] === "string" && UUID.test(identity[key]))
     || typeof identity.path !== "string" || !PATH.test(identity.path) || identity.child === identity.session
@@ -44,6 +44,7 @@ export function bindNativeChild({ directory, project, observationsDirectory }, i
   if ((snapshot.completions ?? []).some(done => done.assignment === row.assignment.id)) refuse();
   const requests = observations.filter(event => event.kind === "spawn-request" && event.actor === observed.actor && event.name === name);
   if (requests.length !== 1 || requests[0].call !== observed.call || row.dispatch.turn !== requests[0].turn) refuse();
+  if (checkAuthority) checkAuthority(snapshot.preparations.find(prepared => prepared.id === row.preparation));
   const result = bindAdmission(directory, { project, session, epoch: owner.epoch, assignment: row.assignment.id,
     issuer: identity.parent, call: row.assignment.call, child: identity.child, turn: identity.turn });
   const prepared = snapshot.preparations.find(prepared => prepared.id === row.preparation);

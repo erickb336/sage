@@ -108,15 +108,17 @@ function preparation(input) {
   const hasReview = Object.hasOwn(input ?? {}, "review");
   const hasRunTarget = Object.hasOwn(input ?? {}, "runTarget");
   const hasContinuation = Object.hasOwn(input ?? {}, "continuation");
-  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief", ...(hasReview ? ["review"] : []), ...(hasRunTarget ? ["runTarget"] : []), ...(hasContinuation ? ["continuation"] : [])]);
-  const { name, rolePlan, brief, review, runTarget, continuation, ...identity } = input;
+  const hasIssuerAssignment = Object.hasOwn(input ?? {}, "issuerAssignment");
+  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief", ...(hasReview ? ["review"] : []), ...(hasRunTarget ? ["runTarget"] : []), ...(hasContinuation ? ["continuation"] : []), ...(hasIssuerAssignment ? ["issuerAssignment"] : [])]);
+  const { name, rolePlan, brief, review, runTarget, continuation, issuerAssignment, ...identity } = input;
   if (hasReview && !REVIEW_ROLES.includes(rolePlan?.role)) refuse("only a review role can carry a review target");
   const { call, ...parsed } = parseAssignment({ ...identity, call: name });
   const target = hasRunTarget ? parseRunTarget(runTarget) : undefined;
   if (target && (target.task !== parsed.task || target.run !== parsed.run || target.role !== rolePlan.role)) refuse("run target differs from its preparation");
   return { ...parsed, name: call, rolePlan: parseRolePlan(rolePlan), brief: parseBrief(brief),
     ...(hasReview ? { review: parseReviewTarget(review) } : {}), ...(target ? { runTarget: target } : {}),
-    ...(hasContinuation ? { continuation: word(continuation, "prior assignment", UUID) } : {}) };
+    ...(hasContinuation ? { continuation: word(continuation, "prior assignment", UUID) } : {}),
+    ...(hasIssuerAssignment ? { issuerAssignment: word(issuerAssignment, "issuer assignment", UUID) } : {}) };
 }
 function reportRecord(input) {
   fields(input, ["binding", "task", "run", "reportMessage", "reportHash", "text"]);
@@ -350,6 +352,13 @@ function apply(state, event, replay = false) {
         || json(prior.rolePlan) !== json(value.rolePlan)) refuse("continuation preparation requires its completed owner and target");
       if (copy.reservations.some(row => row.continuation === value.continuation && !failedContinuations.has(row.assignment.id))) refuse("continuation predecessor already has later work");
     }
+    if (value.issuerAssignment) {
+      const parents = issuerBindings.filter(row => row.assignment === value.issuerAssignment && !completed.has(row.assignment));
+      const parent = copy.reservations.find(row => row.assignment.id === value.issuerAssignment);
+      if (parents.length !== 1 || !parent || parent.rolePlan?.role !== "lead"
+        || parent.rolePlan.issuerRole !== "chief-of-staff" || value.rolePlan.issuerRole !== "lead"
+        || parent.assignment.task !== value.task) refuse("preparation issuer assignment is not its active lead");
+    }
     refuseFencedWork(copy, value, value.continuation);
     // Preparation checks the role relationship. Dispatch checks occupied slots again.
     checkRoleReservation([], value, value.rolePlan);
@@ -544,12 +553,12 @@ export const reserveBriefAdmission = (dir, scope, request, dispatch, rolePlan, b
   { kind: "reserve", assignment: createAssignment(scope, request), dispatch, rolePlan: parseRolePlan(rolePlan), uniqueName: true, brief: parseBrief(brief) });
 /** Save instructions before the native dispatch call exists. No capacity or permission is granted. */
 export function prepareAdmission(dir, scope, request, rolePlan, brief, options = {}) {
-  const keys = ["review", "runTarget", "continuation"].filter(key => Object.hasOwn(options ?? {}, key));
+  const keys = ["review", "runTarget", "continuation", "issuerAssignment"].filter(key => Object.hasOwn(options ?? {}, key));
   fields(options, keys);
-  const { review, runTarget, continuation } = options;
+  const { review, runTarget, continuation, issuerAssignment } = options;
   fields(request, ["task", "run", "issuer", "name"]);
   const { call, ...identity } = createAssignment(scope, { task: request.task, run: request.run, issuer: request.issuer, call: request.name });
-  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief, ...(review === undefined ? {} : { review }), ...(runTarget === undefined ? {} : { runTarget }), ...(continuation === undefined ? {} : { continuation }) } });
+  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief, ...(review === undefined ? {} : { review }), ...(runTarget === undefined ? {} : { runTarget }), ...(continuation === undefined ? {} : { continuation }), ...(issuerAssignment === undefined ? {} : { issuerAssignment }) } });
 }
 /** The adapter verifies the current issuer and role, then supplies the actual native call and dispatch. */
 export function reservePreparedAdmission(dir, scope, request, dispatch, issuerRole) {

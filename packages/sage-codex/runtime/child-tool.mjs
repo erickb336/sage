@@ -3,6 +3,8 @@ import { readAdmission, bindContinuationAdmission } from "sage-core";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { readInitialSession, readAssignmentTurn, readNativeFollowup, readChildTurn, readDeliveredAssignment } from "./identity.mjs";
 import { RUNTIME_VERSION, decodeEvent, publish, readObservations } from "./events.mjs";
+import { checkPreparationIssuer } from "./run-assignment.mjs";
+import { readMode } from "./mode.mjs";
 import { bindNativeChild } from "./child-binding.mjs";
 
 const refuse = () => { throw Error("Sage could not verify this child's task."); };
@@ -20,7 +22,7 @@ export function bindNativeChildTool(input, context, options, expectedAssignment)
   readChildTurn(event.transcript_path, { sessionsDir: options.sessionsDir }, {
     session: event.session_id, child: native.actor, turn: event.turn_id,
   }, { active: true });
-  return bindObservedTranscript({ session: event.session_id, turn: event.turn_id, transcript: event.transcript_path }, native, options, expectedAssignment);
+  return bindObservedTranscript({ session: event.session_id, turn: event.turn_id, transcript: event.transcript_path }, native, options, expectedAssignment, readMode(options.directory, options.project, event.session_id).sage);
 }
 
 /** Sage off does not turn an already reserved task into an unmanaged child. */
@@ -45,13 +47,14 @@ export function bindPendingNativeChildTool(input, context, options) {
   if (claimed) bindNativeChildTool(input, native, options);
 }
 
-/** A native callback can verify initial task delivery without inventing a tool call. */
+/** Terminal ingestion verifies delivery without granting tool authority. */
 export function bindNativeChildTranscript(input, context, options) {
   return bindObservedTranscript(input, nativeToolContext(context), options);
 }
 
-// Recovery uses the previously observed child identity, not a fabricated native callback.
-function bindObservedTranscript(input, native, options, expectedAssignment) {
+// Terminal recovery may retain a stale assignment binding as evidence. Only an
+// active tool or start path requests authority; later policy checks remain required.
+function bindObservedTranscript(input, native, options, expectedAssignment, authority = false) {
   const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 3
     || !["session", "turn", "transcript"].every(key => Object.hasOwn(input, key))
@@ -68,7 +71,7 @@ function bindObservedTranscript(input, native, options, expectedAssignment) {
   const session = `codex:${event.session_id}`;
   const owner = state.sessions.find(row => row.project === options.project && row.session === session);
   if (!owner) refuse();
-  if (initial.turn !== event.turn_id) return bindLaterTurn(event, native.actor, options, state, owner, started, expectedAssignment);
+  if (initial.turn !== event.turn_id) return bindLaterTurn(event, native.actor, options, state, owner, started, expectedAssignment, authority);
   const name = started.path.slice(started.path.lastIndexOf("/") + 1);
   const candidates = state.reservations.filter(row => row.assignment.project === options.project
     && row.assignment.session === session && row.assignment.epoch === owner.epoch
@@ -92,14 +95,14 @@ function bindObservedTranscript(input, native, options, expectedAssignment) {
       child: native.actor, turn: initial.turn, transcript: event.transcript_path });
   }
   const { schema, runtime, kind, ...identity } = started;
-  const result = bindNativeChild({ directory: options.directory, project: options.project, observationsDirectory: directory }, identity);
+  const result = bindNativeChild({ directory: options.directory, project: options.project, observationsDirectory: directory, ...(authority ? { checkAuthority: prepared => checkPreparationIssuer(options, prepared) } : {}) }, identity);
   publish(directory, { schema: 1, runtime: RUNTIME_VERSION, session: event.session_id, kind: "child-transcript",
     child: native.actor, turn: initial.turn, transcript: event.transcript_path });
   return result;
 }
 
 /** A later turn needs both successful parent dispatch and exact recipient delivery. */
-function bindLaterTurn(event, child, options, state, owner, started, expectedAssignment) {
+function bindLaterTurn(event, child, options, state, owner, started, expectedAssignment, authority = false) {
   readChildTurn(event.transcript_path, { sessionsDir: options.sessionsDir }, {
     session: event.session_id, child: child, turn: event.turn_id,
   });
@@ -137,6 +140,7 @@ function bindLaterTurn(event, child, options, state, owner, started, expectedAss
   const prior = observations.filter(row => row.kind === "child-transcript" && row.child === child);
   if (prior.some(row => row.transcript !== event.transcript_path)) refuse();
   publish(directory, started);
+  if (authority) checkPreparationIssuer(options, state.preparations.find(row => row.id === assigned.preparation));
   const result = bindContinuationAdmission(options.directory, { project: options.project, session: owner.session,
     epoch: owner.epoch, assignment: assigned.assignment.id, issuer: started.parent,
     call: assigned.assignment.call, child: child, turn: event.turn_id });
