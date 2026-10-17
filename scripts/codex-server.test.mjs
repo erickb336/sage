@@ -5564,7 +5564,7 @@ for (const boundary of ['intent', 'tasks', 'runs', 'decisions', 'receipt', 'clea
       }
       return original(...args);
     }); syncBuiltinESMExports();
-    try { assert.throws(() => f.update(request), /Injected/); assert.equal(hit, true); }
+    try { assert.throws(() => f.update(request), error => error.code === "uncertain-outcome"); assert.equal(hit, true); }
     finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
     const result = f.update(request);
     assert.equal(result.task.state, 'briefed');
@@ -5834,3 +5834,234 @@ test('T13: legacy optional task columns update to a current readable version', a
   assert.deepEqual({ task: result.task, version: result.version }, f.snapshot());
   assert.equal(f.snapshot().task.title, 'Updated legacy task');
 });
+
+const updateTableBytes = f => Object.fromEntries(['tasks', 'runs', 'decisions'].map(table => [table,
+  readFileSync(join(f.assignmentLogbook ?? f.logbook, `${table}.tsv`), 'utf8')]));
+
+test('UX-T13-1: MCP stale and invalid requests give safe corrective guidance without changes', async t => {
+  const f = await nativeTaskUpdateFixture(t), stale = f.request({ title: 'Stale title' });
+  f.update(f.request({ title: 'Winning title' }, 'c1111111-1111-4111-8111-111111111111'));
+  const client = await connect(t, f, '0.160.0', '', 'sage_update_task'), before = updateTableBytes(f);
+  const response = await client.call(stale);
+  assert.match(response.error, /\[stale-version\].*Read it again.*new request UUID/);
+  assert.doesNotMatch(response.error, /Retry the original/);
+  const invalid = await client.call({ ...stale, version: f.snapshot().version, changes: { state: 'merged' } });
+  assert.match(invalid.error, /\[invalid-request\]/);
+  assert.doesNotMatch(response.error + invalid.error, new RegExp(f.dir));
+  assert.deepEqual(updateTableBytes(f), before); await client.close();
+});
+
+test('UX-T13-1: MCP distinguishes pending original request old owner and corrupt proof', async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Pending title' });
+  const another = { ...request, request: 'c2222222-2222-4222-8222-222222222222' };
+  const { run, coordination } = await taskUpdateCoordinator(f, request);
+  assert.throws(() => run({ ...coordination, decide() { throw Error('private uncertainty detail'); } }));
+  const client = await connect(t, f, '0.160.0', '', 'sage_update_task'), before = updateTableBytes(f);
+  const pending = await client.call(another);
+  assert.match(pending.error, /\[pending-request\].*original request UUID and identical contents/);
+  f.core.activateAdmission(f.options.directory, { project: f.options.project, session: `codex:${turns[2]}`, activation: turns[0] });
+  const owner = await client.call(another, turns[2]);
+  assert.match(owner.error, /\[old-owner\].*original owner connection/);
+  const file = join(f.assignmentLogbook, 'review-pending.json'), original = readFileSync(file, 'utf8');
+  writeFileSync(file, '{}');
+  const corrupt = await client.call(request);
+  assert.match(corrupt.error, /\[invalid-state\].*Preserve/);
+  for (const error of [pending.error, owner.error, corrupt.error]) {
+    assert.doesNotMatch(error, new RegExp(f.dir)); assert.doesNotMatch(error, /private uncertainty detail|codex:/);
+  }
+  assert.deepEqual(updateTableBytes(f), before);
+  writeFileSync(file, original);
+  assert.equal((await client.call(request)).decision, 'task-updated'); await client.close();
+});
+
+test('UX-T13-1: actual MCP unknown publication response requires exact retry without leaking exception text', async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Recovered over MCP' });
+  const entry = readFileSync(f.entry, 'utf8'), destination = join(f.assignmentLogbook, 'tasks.tsv');
+  writeFileSync(f.entry, `import fs from 'node:fs'; import {syncBuiltinESMExports} from 'node:module';
+    const original=fs.renameSync; let armed=true;
+    fs.renameSync=(from,to,...args)=>{ if(armed&&to===${JSON.stringify(destination)}){armed=false;throw Error('private loader detail /hidden/local/path');} return original(from,to,...args);};
+    syncBuiltinESMExports();\n` + entry);
+  const client = await connect(t, f, '0.160.0', '', 'sage_update_task'), before = updateTableBytes(f);
+  const failed = await client.call(request);
+  assert.match(failed.error, /\[uncertain-outcome\].*original request UUID and identical contents/);
+  assert.doesNotMatch(failed.error, /private loader|hidden\/local/);
+  assert.deepEqual(updateTableBytes(f), before);
+  assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), true);
+  assert.equal((await client.call(request)).decision, 'task-updated');
+  assert.equal(f.snapshot().task.title, 'Recovered over MCP'); await client.close();
+});
+
+for (const cause of ['gate', 'reviewer', 'head', 'configuration', 'finding']) test(`UX-T13-1: MCP names the ${cause} readiness prerequisite safely`, async t => {
+  const f = await taskUpdateReadinessFixture(t);
+  if (cause === 'finding') f.cli('finding', 'add', 'T1', '--key', 'F-T1-R1-1', '--source', 'code-review', '--severity', 'medium', '--summary', 'Private finding /hidden/local/path');
+  if (cause === 'gate') f.cli('gate', 'add', 'T1', '--question', 'Private question /hidden/local/path', '--options', 'yes|no', '--recommend', 'no');
+  if (cause === 'reviewer') f.cli('run', 'add', 'T1', '--role', 'qa');
+  if (cause === 'head') f.git('commit', '--quiet', '--allow-empty', '-m', 'Changed candidate');
+  if (cause === 'configuration') writeFileSync(join(f.env.SAGE_HOME, 'config.json'), JSON.stringify({ 'cycles.small': 'private bad value' }));
+  writeFileSync(f.entry, `import {servePreparations} from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
+  const client = await connect(t, f, '0.160.0', '', 'sage_update_task'), before = updateTableBytes(f);
+  const response = await client.call(f.request);
+  assert.match(response.error, { finding: /readiness-findings.*F-T1-R1-1/, gate: /readiness-gates.*G1/, reviewer: /readiness-runs.*R2/, head: /\[readiness\].*current commit/, configuration: /readiness-config.*configuration/ }[cause]);
+  assert.doesNotMatch(response.error, /hidden\/local|private bad value|Private question/);
+  assert.deepEqual(updateTableBytes(f), before); await client.close();
+});
+
+for (const kind of ['initial', 'continuation', 'foreign']) for (const winner of ['reservation', 'update']) {
+  test(`QA-T13-1: real journal CAS loss recomputes ${kind} with ${winner} winner`, async t => {
+    const f = await nativeTaskUpdateFixture(t);
+    appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+    f.assignmentCli('run', 'done', 'R1', '--status', 'done');
+    f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
+    const state = f.core.readAdmission(f.options.directory), previous = state.bindings[0].assignment;
+    const name = `cas_${kind}`, dispatch = { ...state.reservations[0].dispatch, name };
+    let reserve;
+    if (kind === 'foreign') {
+      const owner = f.core.activateAdmission(f.options.directory, { project: f.options.project, session: `codex:${turns[2]}`, activation: turns[0] });
+      const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
+      const prepared = f.core.prepareAdmission(f.options.directory, scope, { task: 'T1', run: 'R4', issuer: turns[2], name },
+        { issuerRole: 'chief-of-staff', role: 'lead' }, f.input.brief, { generation: 0 });
+      reserve = () => f.core.reservePreparedAdmission(f.options.directory, scope, { preparation: prepared.preparation.id, issuer: turns[2], call: 'cas-foreign' }, dispatch, 'chief-of-staff');
+    } else {
+      const prepared = f.api.prepareNativeTask({ ...f.input, run: 'R4', name, ...(kind === 'continuation' ? { previous } : {}) }, f.native(session), f.options);
+      const request = { preparation: prepared.preparation, issuer: session, call: `cas-${kind}` };
+      reserve = () => kind === 'continuation'
+        ? f.core.reservePreparedContinuation(f.options.directory, f.scope, { ...request, previous }, dispatch, 'chief-of-staff')
+        : f.core.reservePreparedAdmission(f.options.directory, f.scope, request, dispatch, 'chief-of-staff');
+    }
+    const request = f.request({ state: 'briefed' }), before = updateTableBytes(f);
+    const fs = (await import('node:fs')).default, { syncBuiltinESMExports } = await import('node:module');
+    const original = fs.linkSync; let hit = false, lost = false, result, reservation;
+    t.mock.method(fs, 'linkSync', (from, to, ...args) => {
+      if (!hit && String(to).startsWith(f.options.directory + '/') && String(from).includes('/.pending-')) {
+        const event = JSON.parse(readFileSync(from, 'utf8')).data;
+        if (event.kind === (winner === 'reservation' ? 'decide-task-update' : 'reserve')) {
+          hit = true;
+          if (winner === 'reservation') reservation = reserve(); else result = f.update(request);
+          try { return original(from, to, ...args); }
+          catch (error) { lost = error.code === 'EEXIST'; throw error; }
+        }
+      }
+      return original(from, to, ...args);
+    }); syncBuiltinESMExports();
+    try {
+      if (winner === 'reservation') result = f.update(request);
+      else assert.throws(reserve, /generation|fenced/);
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+    assert.equal(hit, true); assert.equal(lost, true, 'the outer operation lost an actual immutable journal publication');
+    const final = f.core.readAdmission(f.options.directory);
+    assert.equal(final.taskUpdates.length, 1); assert.equal(final.taskUpdates[0].released, winner === 'update' ? true : undefined);
+    assert.equal(final.taskUpdates[0].accepted, winner === 'update');
+    assert.equal(final.reservations.length, winner === 'reservation' ? 2 : 1);
+    assert.equal(final.bindings.length, 1); assert.equal(final.completions.length, 1);
+    assert.equal(f.core.assertTaskAdmissionOpen(f.options.directory, f.options.project, 'T1'), winner === 'update' ? 1 : 0);
+    if (winner === 'reservation') {
+      assert.equal(result.decision, 'task-update-rejected'); assert.ok(result.reason.includes(reservation.assignment.id));
+      assert.deepEqual(updateTableBytes(f), before);
+    } else assert.equal(result.task.state, 'briefed');
+  });
+}
+
+async function mixedUpdateFixture(t, continued) {
+  const f = continued ? await deliveredFollowupFixture(t) : await nativeTaskUpdateFixture(t);
+  if (continued) await f.evaluate(f.policy, f.tool, childActor);
+  const turn = continued ? turns[2] : turns[1], transcript = continued ? f.transcript : f.childTranscript();
+  const { updateNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
+  const snapshot = () => f.assignmentTool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T1' }, f.assignmentEnv);
+  const request = changes => ({ request: 'd1111111-1111-4111-8111-111111111111', task: 'T1', version: snapshot().version, changes });
+  const update = input => updateNativeTask(input, f.native(session), f.options);
+  for (const state of ['briefed', 'building']) f.assignmentCli('task', 'T1', 'set', `state=${state}`);
+  appendRecoveryCheckpoint(transcript, 1, turn);
+  const read = await assignmentReader(f); appendAssignmentRecovery(transcript, read());
+  return { ...f, request, update, turn, transcript, read, name: continued ? f.request.name : f.input.name, run: continued ? 'R4' : 'R1' };
+}
+
+async function interruptTablePublication(t, f, request, boundary, after) {
+  const fs = (await import('node:fs')).default, { syncBuiltinESMExports } = await import('node:module');
+  const original = fs.renameSync; let hit = false;
+  t.mock.method(fs, 'renameSync', (from, to, ...args) => {
+    if (!hit && to === join(f.assignmentLogbook, `${boundary}.tsv`)) {
+      hit = true; if (after) original(from, to, ...args); throw Error('injected table publication stop');
+    }
+    return original(from, to, ...args);
+  }); syncBuiltinESMExports();
+  try { assert.throws(() => f.update(request), error => error.code === 'uncertain-outcome'); assert.equal(hit, true); }
+  finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  const file = join(f.assignmentLogbook, 'review-pending.json');
+  const bytes = readFileSync(file, 'utf8'), intent = JSON.parse(bytes).value;
+  const tables = updateTableBytes(f), order = ['tasks', 'runs', 'decisions'];
+  for (const table of order) {
+    const published = order.indexOf(table) < order.indexOf(boundary) || (table === boundary && after);
+    assert.equal(tables[table], intent.tables[table][published ? 'after' : 'before'], `${table} actual publication bytes`);
+  }
+  return { file, bytes, intent, tables };
+}
+
+for (const continued of [false, true]) for (const boundary of ['tasks', 'decisions']) for (const after of [false, true]) {
+  test(`QA-T13-2: ${continued ? 'continued' : 'initial'} first terminal at ${after ? 'after' : 'before'} ${boundary} metadata publication`, async t => {
+    const f = await mixedUpdateFixture(t, continued), request = f.request({ title: 'Pending metadata', pr: '17', state: 'held' });
+    const pending = await interruptTablePublication(t, f, request, boundary, after);
+    assert.notEqual(pending.intent.tables.tasks.before, pending.intent.tables.tasks.after);
+    assert.notEqual(pending.intent.tables.decisions.before, pending.intent.tables.decisions.after);
+    assert.equal(pending.intent.tables.runs.before, pending.intent.tables.runs.after, 'non-disruptive work does not retire an active child');
+    const before = (f.core.readAdmission(f.options.directory).completions ?? []).length;
+    assert.throws(f.read);
+    await assert.rejects(f.evaluate(f.policy, { ...patch(f.turn), transcript_path: f.transcript, tool_name: 'list_mcp_resources', tool_input: {} }, childActor));
+    appendReport(f, reportText, childActor, f.turn);
+    // A malformed intent blocks this first completion, proving this path validates the snapshot.
+    writeFileSync(pending.file, '{}');
+    assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+    assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, before);
+    writeFileSync(pending.file, pending.bytes);
+    assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'completed');
+    assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'already-completed');
+    assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, before + 1);
+    const intake = await import(pathToFileURL(join(f.plugin, 'runtime/report-intake.mjs')));
+    const receipt = intake.readChildReport({ name: f.name }, f.native(session), f.options);
+    intake.recordChildReport({ name: f.name, reportHash: receipt.reportHash }, f.native(session), f.options);
+    assert.equal(f.core.readAdmission(f.options.directory).reports.at(-1).text, reportText);
+    const api = await import(pathToFileURL(join(f.plugin, 'runtime/run-report.mjs')));
+    assert.throws(() => api.finishRecordedRun({ assignment: receipt.assignment, reportHash: receipt.reportHash }, f.native(session), f.options), /incomplete/);
+    assert.throws(() => f.assignmentCli('verdict', 'T1', '--kind', 'checks-pass', '--sha', 'a'.repeat(40)), /incomplete/);
+    assert.deepEqual(updateTableBytes(f), pending.tables);
+    assert.equal(f.update(request).task.state, 'held');
+    assert.equal(f.update(request).decision, 'task-update-history');
+    assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === f.run).status, 'running');
+    assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.length, 1);
+  });
+}
+
+for (const continued of [false, true]) for (const boundary of ['tasks', 'runs', 'decisions']) for (const after of [false, true]) {
+  test(`QA-T13-2: ${continued ? 'continued' : 'initial'} settled replay and late report at ${after ? 'after' : 'before'} ${boundary} disruptive publication`, async t => {
+    const f = await mixedUpdateFixture(t, continued);
+    // A disruptive transaction cannot publish while this reservation is unsettled.
+    const refused = f.update(f.request({ branch: 'codex/t1-unsettled' }));
+    assert.equal(refused.decision, 'task-update-rejected');
+    assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, continued ? 1 : 0);
+    appendReport(f, reportText, childActor, f.turn);
+    assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'completed');
+    f.assignmentCli('task', 'T1', 'set', 'state=held');
+    const request = { ...f.request({ state: 'briefed' }), request: 'd2222222-2222-4222-8222-222222222222' };
+    const pending = await interruptTablePublication(t, f, request, boundary, after);
+    for (const table of ['tasks', 'runs', 'decisions']) assert.notEqual(pending.intent.tables[table].before, pending.intent.tables[table].after);
+    const before = (f.core.readAdmission(f.options.directory).completions ?? []).length;
+    assert.throws(f.read);
+    await assert.rejects(f.evaluate(f.policy, { ...patch(f.turn), transcript_path: f.transcript, tool_name: 'list_mcp_resources', tool_input: {} }, childActor));
+    // Completed replay proves no duplicate settlement, not snapshot-validation traversal.
+    assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'already-completed');
+    const intake = await import(pathToFileURL(join(f.plugin, 'runtime/report-intake.mjs')));
+    const receipt = intake.readChildReport({ name: f.name }, f.native(session), f.options);
+    const input = { name: f.name, reportHash: receipt.reportHash };
+    assert.equal(intake.recordChildReport(input, f.native(session), f.options).decision, 'report-recorded');
+    assert.equal(intake.recordChildReport(input, f.native(session), f.options).decision, 'already-recorded');
+    assert.equal(f.core.readAdmission(f.options.directory).reports.at(-1).text, reportText);
+    const api = await import(pathToFileURL(join(f.plugin, 'runtime/run-report.mjs')));
+    assert.throws(() => api.finishRecordedRun({ assignment: receipt.assignment, reportHash: receipt.reportHash }, f.native(session), f.options), /incomplete/);
+    assert.throws(() => f.assignmentCli('verdict', 'T1', '--kind', 'checks-pass', '--sha', 'a'.repeat(40)), /incomplete/);
+    assert.deepEqual(updateTableBytes(f), pending.tables);
+    assert.equal(f.update(request).task.state, 'briefed');
+    assert.equal(f.update(request).decision, 'task-update-history');
+    assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, before);
+    assert.equal(f.core.readAdmission(f.options.directory).reports.length, 1);
+    assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === f.run).status, 'blocked');
+  });
+}

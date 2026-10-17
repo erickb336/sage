@@ -17,6 +17,14 @@ A fresh success returns `task-updated`. An identical successful retry returns
 `task-update-history`, with the original task and version. That result is not a
 current snapshot. Read the task again for its current state.
 
+Errors include a safe reason code and a next step. A `stale-version` refusal
+needs a fresh read and a new request UUID. `pending-request` and
+`uncertain-outcome` require the original UUID and identical contents.
+`old-owner` requires recovery through the original owner connection; automatic
+takeover is unavailable. `invalid-state` requires preserved-state inspection or
+repair. Readiness errors name the missing prerequisite and bounded task, gate,
+run or finding IDs. They do not include private exception text or finding summaries.
+
 After an uncertain error, retry the identical request. Do not replace its UUID.
 A durable `task-update-rejected` result keeps its reason. Reconcile or interrupt
 the listed assignments, then read the current task and submit a new UUID.

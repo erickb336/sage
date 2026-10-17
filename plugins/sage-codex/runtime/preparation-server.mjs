@@ -1,3 +1,4 @@
+import { taskUpdateErrorMessage } from "../core/index.mjs";
 import { McpServer, serveStdio, z } from "./mcp-sdk.mjs";
 
 /** Keep visible tools off the hidden hook server so native children start their hooks eagerly. */
@@ -28,7 +29,7 @@ export function createPreparationServer(options = {}) {
       const { updateNativeTask } = await import("./task-update.mjs");
       return { content: [{ type: "text", text: JSON.stringify(updateNativeTask(input, native, fixed)) }] };
     } catch (error) {
-      return { isError: true, content: [{ type: "text", text: `Sage could not update this task. Retry the original request after checking ownership and unresolved work.` }] };
+      return { isError: true, content: [{ type: "text", text: taskUpdateErrorMessage(error) }] };
     }
   });
   server.registerTool("sage_create_task", {

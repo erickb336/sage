@@ -5,7 +5,8 @@ import { join, resolve } from "node:path";
 
 const PENDING = "review-pending.json";
 const MAX = 64 * 1024 * 1024;
-const fail = () => { throw Error("A recorded update is incomplete or damaged. Retry its original request before changing or merging this logbook."); };
+export class RecordedWriteError extends Error {}
+const fail = () => { throw new RecordedWriteError("A recorded update is incomplete or damaged. Retry its original request before changing or merging this logbook."); };
 const json = value => JSON.stringify(value);
 const hash = text => createHash("sha256").update(text).digest("hex");
 const keys = (value, names) => value && typeof value === "object" && !Array.isArray(value)

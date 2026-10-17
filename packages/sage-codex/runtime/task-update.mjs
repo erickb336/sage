@@ -1,12 +1,14 @@
-import { decideTaskUpdate, acknowledgeTaskUpdate, releaseTaskUpdate, readAdmission } from "sage-core";
+import { decideTaskUpdate, acknowledgeTaskUpdate, releaseTaskUpdate, readAdmission, TaskUpdateError } from "sage-core";
 import { chiefLogbook } from "./logbook-owner.mjs";
 
 /** Fixed authenticated ownership supplies coordination; model arguments contain only the requested change. */
 export function updateNativeTask(input, context, options) {
   const fields = ["request", "task", "version", "changes"];
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
-    || fields.some(key => !Object.hasOwn(input, key))) throw Error("Invalid task update");
-  const { tool, project, owner, env } = chiefLogbook(context, options);
+    || fields.some(key => !Object.hasOwn(input, key))) throw new TaskUpdateError("invalid-request");
+  let fixed;
+  try { fixed = chiefLogbook(context, options); } catch { throw new TaskUpdateError("owner-required"); }
+  const { tool, project, owner, env } = fixed;
   const [journalProject, session, epoch] = JSON.parse(owner);
   const update = (digest, disruptive) => ({ project: journalProject, session, epoch, request: input.request,
     task: input.task, digest, disruptive });

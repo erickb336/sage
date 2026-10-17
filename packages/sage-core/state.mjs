@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseRunTarget } from "./run-target.mjs";
-import { recordedWrites, coordinatedWrites, assertNoPendingWrite } from "./recorded-write.mjs";
+import { TaskUpdateError } from "./task-update-error.mjs";
+import { recordedWrites, coordinatedWrites, assertNoPendingWrite, RecordedWriteError } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
 // The store is plain TSV and Markdown under the configured root ($SAGE_HOME overrides it), and every
 // table has one writer: this tool. It holds the rules that prompts alone did not hold in Orchestrator: no dropped
@@ -473,7 +474,7 @@ function readTaskSnapshot(input, env = process.env) {
 
 const updateKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
-const updateDeny = () => refuse("Task update data is invalid or unresolved. Retry the original request; no new authority is granted.");
+const updateDeny = () => { throw new TaskUpdateError("invalid-request"); };
 function updateReference(input) {
   if (!updateKeys(input, ["owner", "request", "task", "version", "changes"])
     || typeof input.owner !== "string" || !input.owner || input.owner.length > 1024 || /\p{Cc}/u.test(input.owner)
@@ -522,14 +523,17 @@ function planNativeTaskUpdate(before, reference, at, facts) {
   planned.task = planned.tasks.find(row => row.id === reference.task);
   const task = planned.task, needsReady = ["verified", "pr-ready"].includes(task.state);
   if (needsReady) {
-    if (!facts.readiness || !task.branch || (task.state === "pr-ready" && !task.pr)) updateDeny();
+    if (!facts.readiness || !task.branch) throw new TaskUpdateError("readiness-branch");
+    if (task.state === "pr-ready" && !task.pr) throw new TaskUpdateError("readiness-pr");
+    const blocking = facts.findings.filter(row => row.task === task.id && row.status === "open");
+    if (blocking.length) throw new TaskUpdateError("readiness-findings", blocking.map(row => row.key));
     const gate = facts.gates.find(row => row.task === task.id && !row.answer);
-    if (gate) refuse(`${task.id} has an unanswered gate: ${gate.id}`);
+    if (gate) throw new TaskUpdateError("readiness-gates", [gate.id]);
     const live = planned.runs.filter(row => row.task === task.id && row.status === "running" && CHECKERS.includes(row.role));
-    if (live.length) refuse(`${task.id} has running reviewers: ${live.map(row => row.id).join(", ")}`);
+    if (live.length) throw new TaskUpdateError("readiness-runs", live.map(row => row.id));
     const verdict = judge("", task, facts.findings, task.id, facts.ledger.filter(row => row.task === task.id
       && row.sha === facts.readiness.head), facts.readiness.cycles, false, {});
-    if (!verdict.ok) refuse(verdict.reason);
+    if (!verdict.ok) throw new TaskUpdateError("readiness");
     if (facts.readiness.branch !== branchOf(task.branch)
       || facts.readiness.cycles !== cyclesFor(task, facts.readiness.config)) updateDeny();
   } else if (facts.readiness !== null) updateDeny();
@@ -538,7 +542,7 @@ function planNativeTaskUpdate(before, reference, at, facts) {
       && (["held", "replan"].includes(old[0].state) || ["briefed", "verified", "pr-ready", "concluded", "abandoned"].includes(task.state)));
   return { ...planned, disruptive };
 }
-function validateTaskUpdate(intent) {
+function validateTaskUpdateData(intent) {
   const reference = updateReference(intent.reference), proposal = intent.proposal;
   if (JSON.stringify(reference) !== JSON.stringify(intent.reference)
     || !updateKeys(proposal, ["at", "facts", "task", "version", "disruptive"])
@@ -550,6 +554,9 @@ function validateTaskUpdate(intent) {
     || proposal.disruptive !== planned.disruptive) updateDeny();
   for (const table of ["tasks", "runs", "decisions"]) if (intent.tables[table].after !== tableText(table, planned[table])) updateDeny();
 }
+function validateTaskUpdate(intent) {
+  try { validateTaskUpdateData(intent); } catch { throw new TaskUpdateError("invalid-state"); }
+}
 const taskUpdates = coordinatedWrites({ schema: 6, tables: ["tasks", "runs", "decisions"], folder: "task-updates", validate: validateTaskUpdate });
 
 /** Native task updates require a trusted durable admission decision, never a model-supplied proof. */
@@ -558,30 +565,48 @@ function updateRequestedTask(input, env, coordination) {
     || ["decide", "acknowledge", "release"].some(key => typeof coordination[key] !== "function")) updateDeny();
   const { project, ...request } = input, reference = updateReference(request), dir = storeDir(project, env);
   if (realpathSync(dir) !== resolve(dir)) updateDeny();
-  return withLock(dir, () => {
+  let phase = "state";
+  try { return withLock(dir, () => {
     const prior = taskUpdates.readReceipt(dir, reference);
-    if (!prior && !taskUpdates.pending(dir)) {
+    const pending = !prior && taskUpdates.pending(dir);
+    if (pending && pending.reference.owner !== reference.owner) throw new TaskUpdateError("old-owner");
+    if (pending && JSON.stringify(pending.reference) !== JSON.stringify(reference)) throw new TaskUpdateError("pending-request");
+    if (!prior && !pending) {
       ready(dir);
       const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, read(dir, table)]));
+      const current = before.tasks.filter(row => row.id === reference.task);
+      if (current.length !== 1) throw new TaskUpdateError("invalid-state");
+      if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
       const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates"].map(table => [table, read(dir, table)])), null);
+      const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
+      phase = needsReady ? "readiness" : "plan";
+      const openFindings = facts.findings.filter(row => row.task === reference.task && row.status === "open");
+      if (needsReady && openFindings.length) throw new TaskUpdateError("readiness-findings", openFindings.map(row => row.key));
       const at = now();
       const preliminary = planTaskChanges(before, reference.task, Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`), at, facts);
       if (["verified", "pr-ready"].includes(preliminary.task.state)) {
         const cfg = config(env);
-        if (Object.values(cfg).includes("invalid")) updateDeny();
+        if (Object.values(cfg).includes("invalid")) throw new TaskUpdateError("readiness-config");
         const branch = branchOf(preliminary.task.branch);
-        const head = reviewHead(project, branch, env);
+        let head;
+        try { head = reviewHead(project, branch, env); } catch { throw new TaskUpdateError("readiness-branch"); }
         facts.readiness = { head, branch, cycles: cyclesFor(preliminary.task, cfg),
           config: Object.fromEntries(["cycles.small", "cycles.large", "cycles.risk"].map(key => [key, cfg[key]])) };
       }
       const planned = planNativeTaskUpdate(before, reference, at, facts);
+      phase = "publish";
       taskUpdates.prepare(dir, reference, { at, facts, task: planned.task, version: taskVersion(planned.task), disruptive: planned.disruptive },
         Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, tableText(table, planned[table])])));
     }
+    phase = "publish";
     const receipt = taskUpdates.recover(dir, reference, coordination);
     return receipt.outcome.accepted ? { decision: prior ? "task-update-history" : "task-updated", task: receipt.intent.proposal.task, version: receipt.intent.proposal.version }
       : { decision: "task-update-rejected", reason: receipt.outcome.reason };
-  });
+  }); } catch (error) {
+    if (error instanceof TaskUpdateError) throw error;
+    throw new TaskUpdateError(error instanceof RecordedWriteError || phase === "state" ? "invalid-state"
+      : phase === "publish" ? "uncertain-outcome" : phase === "readiness" ? "readiness" : "invalid-change");
+  }
 }
 
 /** Transaction integrity is independent of the provider's Sage on/off policy. */
