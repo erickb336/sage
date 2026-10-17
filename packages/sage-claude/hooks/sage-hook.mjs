@@ -1066,9 +1066,11 @@ const findingsLine = (line) => FINDINGS_AT.test(line.trimStart().replace(/^(?:[-
  * RESULT_WORDS; when FINDINGS is empty, has none and findings, or none with RESULT FINDINGS or FAIL (F-T289-48); or when
  * a line under FINDINGS is longer than LINE_MAX, or is not none, a finding or detail: an unindented line, an indented
  * one with no finding above it (F-T289-25), or an indented line that is severe (F-T289-46, F-T289-54).
- * The one global rule (F-T289-60, F-T289-62, F-T289-63): it is unreadable too when any line of FINDINGS, a finding,
- * detail or prose, has a severity word (levelIn) above the highest finding that the reader counted. So an honest detail
- * line such as "a high row count" under a low finding blocks once, and the helper writes it again.
+ * The severity rule (F-T289-60, F-T289-62, F-T289-63, F-T298-1): it is unreadable too when a line of FINDINGS has a
+ * severity word (levelIn) above the severity of its own finding: a finding line and the lines under it compare with
+ * that finding, and a line above the first finding with the highest finding that the reader counted. So a raised word
+ * under a low finding counts also when a high finding is in the report, and an honest detail line such as "a high row
+ * count" under a low finding blocks once, and the helper writes it again. A lower word under a higher finding is detail.
  */
 function reportOf(text) {
   const fields = fieldsOf(text, REPORT_FIELDS), of = (name) => fields.filter((f) => f.name === name);
@@ -1077,7 +1079,7 @@ function reportOf(text) {
   const twice = REPORT_FIELDS.find((name) => of(name).length > 1) ?? (another === undefined ? undefined : "FINDINGS");
   const said = r && [r.rest, ...r.lines].map((line) => line.trimStart().slice(0, LINE_MAX).trim()).find(Boolean);
   const result = (/^[^A-Za-z]*([A-Za-z]+)/.exec(said ?? "")?.[1] ?? "").toUpperCase();
-  const severities = [];
+  const severities = [], owned = []; // owned: each line with the level of the finding that it belongs to, if any
   let none = false, long = false, odd;
   for (const line of f ? [f.rest, ...f.lines] : []) {
     if (line.length > LINE_MAX) { long = true; continue; }
@@ -1086,14 +1088,15 @@ function reportOf(text) {
     if (severity && !indented) severities.push(severity);
     else if (NONE_LINE.test(text)) none = true;
     else if (!(indented && severities.length && !severity && !severe)) odd ??= text;
+    owned.push([text, severities.length ? LEVEL[severities.at(-1)] : undefined]);
   }
-  const read = Math.max(0, ...severities.map((v) => LEVEL[v])), seen = f && [f.rest, ...f.lines].map((line) => [line, levelIn(line)]).find(([, level]) => level > read);
+  const read = Math.max(0, ...severities.map((v) => LEVEL[v])), seen = owned.find(([text, own]) => levelIn(text) > (own ?? read));
   const problem = twice ? `${twice} is given twice, the second time in the line ${JSON.stringify((of(twice)[1]?.line ?? another).trim().slice(0, 80))}` : !r ? "it has no RESULT" : !f ? "it has no FINDINGS" :
     !RESULT_WORDS.includes(result) ? `RESULT starts with ${JSON.stringify((said ?? "").slice(0, 80))}, not with one of ${RESULT_WORDS.join(", ")}` :
     long ? `a line under FINDINGS is longer than ${LINE_MAX} characters` : odd !== undefined ? `a line under FINDINGS is not none alone and not a finding in the form ${FINDING_FORM}: ${JSON.stringify(odd.slice(0, 80))}` :
     none && severities.length ? "FINDINGS has none and findings" : !none && !severities.length ? "FINDINGS is empty" :
     none && ["FINDINGS", "FAIL"].includes(result) ? `RESULT is ${result}, but FINDINGS is none` :
-    seen ? `the line ${JSON.stringify(seen[0].trim().slice(0, 80))} under FINDINGS has a severity word above ${severities.length ? `the highest finding that the hook read (${LEVELS[read]})` : "none"}: write that finding as its own line ${FINDING_FORM}` : undefined;
+    seen ? `the line ${JSON.stringify(seen[0].slice(0, 80))} under FINDINGS has a severity word above ${seen[1] !== undefined ? `the severity of its finding (${LEVELS[seen[1]]})` : severities.length ? `the highest finding that the hook read (${LEVELS[read]})` : "none"}: write that finding as its own line ${FINDING_FORM}` : undefined;
   return { result, severities, unreadable: Boolean(problem), ...(problem && { problem }) };
 }
 /**
