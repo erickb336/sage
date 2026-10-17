@@ -1,3 +1,4 @@
+import { checkManagedTaskUpdate } from "./task-authority.mjs";
 import { createCommandPolicy, commandWrites, roleEditDenied, readAdmission } from "sage-core";
 import { reconcileNativeFailures } from "./dispatch-failure.mjs";
 import { completeNativeChild, reconcileNativeCompletions } from "./child-stop.mjs";
@@ -69,6 +70,7 @@ export function createNativePolicy(options, evaluateTool) {
         }
       }
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
+      checkManagedTaskUpdate(event, native, fixed);
       const role = before.sage ? (child ? bound.role : "chief-of-staff") : null;
       const assignment = bound ? { ...bound.assignment, role } : undefined;
       const activeRun = assignment ? checkBoundRunAssignment(fixed, assignment, bound.runTarget) : undefined;
@@ -142,6 +144,7 @@ export function createNativePolicy(options, evaluateTool) {
       const checked = decision(await evaluateTool(structuredClone(event), Object.freeze({ ...native, sage: before.sage, role, ...(command ? { command: structuredClone(command) } : {}) })));
       // A concurrent mode change cannot turn an earlier decision into current permission.
       if (modeStamp(before) !== modeStamp(mode(event.session_id))) refuse();
+      checkManagedTaskUpdate(event, native, fixed);
       if (checked.decision === "deny") return checked;
       if (readCommand && JSON.stringify(readCommand()) !== JSON.stringify(command)) refuse();
       const recovered = child ? checkChildToolRecovery(event, native, fixed, recovery?.assignment) : null;
@@ -184,6 +187,7 @@ export function createNativePolicy(options, evaluateTool) {
     startChild(identity) {
       // nativeChildStart has already authenticated this identity against the current connection.
       record({ schema: 1, runtime: RUNTIME_VERSION, kind: "child-start", ...identity });
+      checkManagedTaskUpdate({ session_id: identity.session, turn_id: identity.turn }, { actor: identity.child }, fixed);
       if (!mode(identity.session).sage) return { decision: "pass" };
       return boundChildInstructions({ directory: fixed.directory, project: fixed.project,
         observationsDirectory: join(fixed.observationsRoot, identity.session),

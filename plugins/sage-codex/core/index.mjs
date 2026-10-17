@@ -11,7 +11,7 @@ export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";
 export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp } from "./mode-policy.mjs";
 export { createAssignment, correlateReport } from "./assignments.mjs";
-export { configureAdmission, activateAdmission, changeAdmissionMode, reserveAdmission, reserveRoleAdmission, reserveBriefAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, bindAdmission, bindContinuationAdmission, completeAdmission, recordReportAdmission, interruptAdmission, failAdmission, failContinuationAdmission, readAdmission } from "./admission.mjs";
+export { AdmissionError, configureAdmission, activateAdmission, changeAdmissionMode, reserveAdmission, reserveRoleAdmission, reserveBriefAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, bindAdmission, bindContinuationAdmission, completeAdmission, recordReportAdmission, interruptAdmission, failAdmission, failContinuationAdmission, readAdmission } from "./admission.mjs";
 export { BRIEF_FIELDS, parseBrief, renderBrief } from "./brief.mjs";
 export { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "./roles.mjs";
 export { readBoardSources } from "./board-reader.mjs";
@@ -27,3 +27,7 @@ export { roleEditDenied } from "./role-policy.mjs";
 export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 
 export { beginInterruptedRunFinish, endInterruptedRunFinish } from "./admission.mjs";
+
+export { decideTaskUpdate, acknowledgeTaskUpdate, releaseTaskUpdate, assertTaskAdmissionOpen } from "./admission.mjs";
+
+export { TaskUpdateError, taskUpdateErrorMessage } from "./task-update-error.mjs";
