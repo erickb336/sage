@@ -6285,3 +6285,51 @@ for (const acknowledged of [false, true]) for (const corruption of ['none', 'pen
     }
   });
 }
+
+for (const sage of [true, false]) for (const terminal of ['task_complete', 'turn_aborted']) for (const timing of ['before', 'during']) {
+  test(`T16: Sage ${sage ? 'on' : 'off'} refuses ${terminal} ${timing} evaluator without settlement`, async t => {
+    const f = await completionFixture(t);
+    if (!sage) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+    const input = { ...patch(turns[1]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path: f.childTranscript() };
+    let calls = 0;
+    const active = f.createNativePolicy(f.options, () => { calls++; return { decision: 'pass' }; });
+    assert.deepEqual(await f.evaluate(active, input, childActor), { decision: 'pass' });
+    assert.equal(calls, 1, 'active tracked work reaches the evaluator in its selected mode');
+    const before = f.core.readAdmission(f.options.directory);
+    const end = () => terminal === 'task_complete' ? appendReport(f) : appendInterruption(f);
+    if (timing === 'before') {
+      end();
+      await assert.rejects(f.evaluate(active, input, childActor), /child turn evidence is unavailable/);
+      assert.equal(calls, 1);
+    } else {
+      let entered, resume;
+      const waiting = new Promise(resolve => { entered = resolve; }), release = new Promise(resolve => { resume = resolve; });
+      const delayed = f.createNativePolicy(f.options, async () => { entered(); await release; return { decision: 'pass' }; });
+      const result = f.evaluate(delayed, input, childActor);
+      await Promise.race([waiting, result.then(() => { throw Error('The evaluator did not wait'); })]);
+      end(); resume();
+      await assert.rejects(result, /child turn evidence is unavailable/);
+    }
+    assert.deepEqual(f.core.readAdmission(f.options.directory), before, 'tool refusal neither settles nor releases the reservation');
+    if (terminal === 'task_complete') assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'completed');
+    else {
+      const { reconcileNativeCompletions } = await import(pathToFileURL(join(f.plugin, 'runtime/child-stop.mjs')));
+      assert.deepEqual(reconcileNativeCompletions(f.native(session), session, f.options), { decision: 'reconciled' });
+    }
+    const after = f.core.readAdmission(f.options.directory);
+    assert.equal(after.completions.length, 1);
+    if (terminal === 'turn_aborted') assert.equal(after.completions[0].outcome, 'interrupted');
+    assert.deepEqual(after.reservations, before.reservations);
+    await assert.rejects(f.evaluate(active, input, childActor), /child turn evidence is unavailable/);
+    assert.deepEqual(f.core.readAdmission(f.options.directory), after, 'completed bindings remain tracked without another settlement');
+    assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R1').status, 'running');
+  });
+}
+
+test('T16: an untracked off-mode child remains unmanaged by terminal authority policy', async t => {
+  const f = await unmanagedStopFixture(t), before = f.core.readAdmission(f.options.directory); let calls = 0;
+  const policy = f.createNativePolicy(f.options, () => { calls++; return { decision: 'pass' }; });
+  const input = { ...patch(turns[1]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path: f.transcript };
+  assert.deepEqual(await f.evaluate(policy, input, childActor), { decision: 'pass' });
+  assert.equal(calls, 1); assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+});
