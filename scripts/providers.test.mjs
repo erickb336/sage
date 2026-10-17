@@ -2451,7 +2451,9 @@ test("shared chief Codex instructions keep unsupported routes and automatic merg
   const text = api.renderChiefInstructions(bindings);
   const prepared = readFileSync(join(f.plugin, "runtime/chief-instructions.md"), "utf8");
   assert(prepared.endsWith(text + "\n"));
-  assert.match(prepared, /not loaded by the installed manual preview or the current mode hook/);
+  assert.match(prepared, /prepared native adapter renders these shared rules on verified owner\s+activation and restores them after supported native compaction/);
+  assert.match(prepared, /installed manual preview does not load this automatic chief role/);
+  assert.match(prepared, /Full automatic Sage remains disabled/);
   assert.match(text, /the chief starts a lead, and the lead starts its permitted team/);
   assert.match(text, /a tiny task goes through a lead to an implementer/);
   assert.match(text, /Wait for a successful preparation receipt before the native spawn call/);
