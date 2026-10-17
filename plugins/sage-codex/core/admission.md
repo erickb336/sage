@@ -289,3 +289,21 @@ Code, security, and UX reviews use CLEAN or FINDINGS. QA uses PASS or FAIL.
 A medium or high finding requires the failure result. Low-only findings can accompany a clean result.
 The returned kind describes the claim, not an accepted verdict. This function changes no state.
 The caller must still verify current assignment, report identity, Git commit, and logbook before acceptance.
+
+### Issuing assignment for nested native work
+
+A preparation can carry `issuerAssignment`, an immutable assignment UUID. Core
+checks that it names a bound, uncompleted lead in the same project, session,
+epoch and task. The preparation's issuer must be that lead's child actor.
+Chief-issued preparations do not use this field.
+
+The Codex adapter requires this reference for new nested preparations. Before
+Sage-on dispatch, binding or tool permission, it checks the original lead's saved
+run target. It never substitutes the actor's latest assignment. Recovery that
+grants authority uses the same check. Legacy preparations remain readable, but
+nested preparations without this reference cannot grant new authority.
+
+Verified terminal delivery remains ingestible after the lead loses authority.
+Recording completion or interruption settles the native slot; it does not certify
+the logbook task or run. Permission refusal alone does not stop the native child.
+This check does not provide atomic task updates or whole-team settlement.

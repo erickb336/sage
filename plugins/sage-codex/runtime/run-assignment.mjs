@@ -1,4 +1,4 @@
-import { createStateTool, REVIEW_ROLES } from "../core/index.mjs";
+import { createStateTool, REVIEW_ROLES, readAdmission } from "../core/index.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
 
 /** Fixed launcher storage and a verified binding identify the current logbook run. */
@@ -18,8 +18,8 @@ export function checkNativeRunAssignment(options, input, target) {
 }
 
 
-/** Recovery and completion must use the same immutable preparation and current target. */
-export function checkPreparedRunAssignment(options, assigned, prepared) {
+/** Terminal evidence still needs the immutable preparation and its current own target. */
+export function checkPreparedRunTarget(options, assigned, prepared) {
   const refuse = () => { throw Error("Sage could not verify this assignment target."); };
   if (!prepared || assigned.preparation !== prepared.id
     || ["project", "session", "epoch", "issuer", "task", "run"].some(key => assigned.assignment[key] !== prepared[key])
@@ -33,4 +33,41 @@ export function checkPreparedRunAssignment(options, assigned, prepared) {
     if (JSON.stringify(review) !== JSON.stringify(prepared.review)) refuse();
   }
   return current;
+}
+
+/** New authority requires both the child target and the original issuing lead. */
+export function checkPreparedRunAssignment(options, assigned, prepared) {
+  const current = checkPreparedRunTarget(options, assigned, prepared);
+  checkPreparationIssuer(options, prepared);
+  return current;
+}
+
+/** Nested authority belongs to the issuing assignment, never the actor's latest work. */
+export function checkPreparationIssuer(options, prepared, expectedAssignment) {
+  const refuse = () => { throw Error("Sage could not verify the original issuing lead assignment."); };
+  if (!prepared) refuse();
+  if (prepared.rolePlan.issuerRole === "chief-of-staff") {
+    if (prepared.issuerAssignment || expectedAssignment || prepared.session !== `codex:${prepared.issuer}`) refuse();
+    return;
+  }
+  if (prepared.rolePlan.issuerRole !== "lead" || !prepared.issuerAssignment
+    || (expectedAssignment && expectedAssignment !== prepared.issuerAssignment)) refuse();
+  const state = readAdmission(options.directory);
+  const parents = state.bindings.filter(row => row.assignment === prepared.issuerAssignment
+    && row.child === prepared.issuer && ["project", "session", "epoch"].every(key => row[key] === prepared[key]));
+  const parent = state.reservations.find(row => row.assignment.id === prepared.issuerAssignment);
+  const target = state.preparations.find(row => row.id === parent?.preparation);
+  if (parents.length !== 1 || !parent || !target || parent.rolePlan?.role !== "lead"
+    || parent.rolePlan.issuerRole !== "chief-of-staff" || parent.assignment.task !== prepared.task
+    || state.completions?.some(row => row.assignment === prepared.issuerAssignment)
+    || state.failures?.some(row => row.assignment === prepared.issuerAssignment)) refuse();
+  checkPreparedRunAssignment(options, parent, target);
+}
+
+export function checkBoundRunAssignment(options, assignment, target) {
+  const state = readAdmission(options.directory);
+  const assigned = state.reservations.find(row => row.assignment.id === assignment.id);
+  const prepared = state.preparations.find(row => row.id === assigned?.preparation);
+  checkPreparationIssuer(options, prepared);
+  return checkNativeRunAssignment(options, assignment, target);
 }
