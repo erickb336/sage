@@ -104,13 +104,26 @@ function refuseFencedWork(state, value, continuation) {
   if ((state.interruptedFinishes ?? []).some(row => !row.receiptHash && touchesFinish(state, row.request, value, continuation)))
     refuse("interrupted run publication still owns this child team");
 }
+const taskGeneration = (state, project, task) => (state.taskUpdates ?? []).filter(row => row.update.project === project
+  && row.update.task === task && row.accepted && row.update.disruptive).length;
+const taskFence = (state, project, task) => (state.taskUpdates ?? []).find(row => row.update.project === project
+  && row.update.task === task && row.accepted && !row.released);
+function taskUpdateRequest(input) {
+  fields(input, ["project", "session", "epoch", "request", "task", "digest", "disruptive"]);
+  if (typeof input.disruptive !== "boolean") refuse("invalid update settlement rule");
+  return { project: word(input.project, "project"), session: word(input.session, "session"),
+    epoch: word(input.epoch, "epoch", UUID), request: word(input.request, "request", UUID),
+    task: word(input.task, "task", /^T[1-9]\d*$/), digest: word(input.digest, "intent digest", /^[0-9a-f]{64}$/), disruptive: input.disruptive };
+}
 function preparation(input) {
   const hasReview = Object.hasOwn(input ?? {}, "review");
   const hasRunTarget = Object.hasOwn(input ?? {}, "runTarget");
   const hasContinuation = Object.hasOwn(input ?? {}, "continuation");
   const hasIssuerAssignment = Object.hasOwn(input ?? {}, "issuerAssignment");
-  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief", ...(hasReview ? ["review"] : []), ...(hasRunTarget ? ["runTarget"] : []), ...(hasContinuation ? ["continuation"] : []), ...(hasIssuerAssignment ? ["issuerAssignment"] : [])]);
-  const { name, rolePlan, brief, review, runTarget, continuation, issuerAssignment, ...identity } = input;
+  const hasGeneration = Object.hasOwn(input ?? {}, "generation");
+  if (hasGeneration && (!Number.isSafeInteger(input.generation) || input.generation < 0)) refuse("invalid task generation");
+  fields(input, ["project", "session", "epoch", "id", "task", "run", "issuer", "name", "rolePlan", "brief", ...(hasReview ? ["review"] : []), ...(hasRunTarget ? ["runTarget"] : []), ...(hasContinuation ? ["continuation"] : []), ...(hasIssuerAssignment ? ["issuerAssignment"] : []), ...(hasGeneration ? ["generation"] : [])]);
+  const { name, rolePlan, brief, review, runTarget, continuation, issuerAssignment, generation, ...identity } = input;
   if (hasReview && !REVIEW_ROLES.includes(rolePlan?.role)) refuse("only a review role can carry a review target");
   const { call, ...parsed } = parseAssignment({ ...identity, call: name });
   const target = hasRunTarget ? parseRunTarget(runTarget) : undefined;
@@ -118,7 +131,8 @@ function preparation(input) {
   return { ...parsed, name: call, rolePlan: parseRolePlan(rolePlan), brief: parseBrief(brief),
     ...(hasReview ? { review: parseReviewTarget(review) } : {}), ...(target ? { runTarget: target } : {}),
     ...(hasContinuation ? { continuation: word(continuation, "prior assignment", UUID) } : {}),
-    ...(hasIssuerAssignment ? { issuerAssignment: word(issuerAssignment, "issuer assignment", UUID) } : {}) };
+    ...(hasIssuerAssignment ? { issuerAssignment: word(issuerAssignment, "issuer assignment", UUID) } : {}),
+    ...(hasGeneration ? { generation } : {}) };
 }
 function reportRecord(input) {
   fields(input, ["binding", "task", "run", "reportMessage", "reportHash", "text"]);
@@ -135,6 +149,12 @@ function action(input) {
     fields(input, ["kind", "request", ...(end ? ["receiptHash"] : [])]);
     return { kind: input.kind, request: interruptedFinish(input.request),
       ...(end ? { receiptHash: word(input.receiptHash, "finish receipt hash", /^[0-9a-f]{64}$/) } : {}) };
+  }
+  if (["decide-task-update", "acknowledge-task-update", "release-task-update"].includes(input?.kind)) {
+    const receipt = input.kind !== "decide-task-update";
+    fields(input, ["kind", "update", ...(receipt ? ["receiptHash"] : [])]);
+    return { kind: input.kind, update: taskUpdateRequest(input.update),
+      ...(receipt ? { receiptHash: word(input.receiptHash, "receipt hash", /^[0-9a-f]{64}$/) } : {}) };
   }
   if (input?.kind === "configure") {
     fields(input, ["kind", "config"]);
@@ -206,7 +226,7 @@ function apply(state, event, replay = false) {
     return { state: copy, result: event.config, changed: true };
   }
   if (!copy.config) refuse("store is not configured");
-  const value = event.request ? event.request.binding : ["fail-dispatch", "fail-continuation"].includes(event.kind) ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : ["bind-child", "bind-continuation"].includes(event.kind) ? event.binding : ["complete", "interrupt"].includes(event.kind) ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment;
+  const value = event.update ?? (event.request ? event.request.binding : ["fail-dispatch", "fail-continuation"].includes(event.kind) ? event.failure : event.kind === "record-report" ? event.report.binding : event.kind === "activate" ? event.owner : event.kind === "mode" ? event.change : ["bind-child", "bind-continuation"].includes(event.kind) ? event.binding : ["complete", "interrupt"].includes(event.kind) ? event.completion : event.kind === "prepare" ? event.preparation : event.assignment);
   if (!copy.config.projects.some((p) => p.project === value.project)) refuse("project is not configured");
   const owner = copy.sessions.find((s) => s.project === value.project && s.session === value.session);
   if (event.kind === "activate") {
@@ -222,6 +242,30 @@ function apply(state, event, replay = false) {
     return { state: copy, result: value, changed: true };
   }
   if (!owner || owner.epoch !== value.epoch) refuse("assignment has no current session owner");
+  if (event.update) {
+    const prior = (copy.taskUpdates ?? []).find(row => ["project", "session", "epoch", "request"].every(key => row.update[key] === value[key]));
+    if (prior) {
+      if (json(prior.update) !== json(value)) refuse("task update request changed");
+      if (event.kind === "decide-task-update") return { state, result: prior, changed: false };
+      if (!prior.accepted) refuse("a rejected task update cannot be acknowledged or released");
+      if (prior.receiptHash && prior.receiptHash !== event.receiptHash) refuse("task update receipt changed");
+      if (event.kind === "release-task-update" && !prior.receiptHash) refuse("task update needs receipt acknowledgement before release");
+      const next = { ...prior, receiptHash: event.receiptHash, ...(event.kind === "release-task-update" ? { released: true } : {}) };
+      if (json(prior) === json(next)) return { state, result: prior, changed: false };
+      Object.assign(prior, next);
+      return { state: copy, result: prior, changed: true };
+    }
+    if (event.kind !== "decide-task-update") refuse("task update has no saved decision");
+    const ended = new Set([...(copy.completions ?? []), ...(copy.failures ?? [])].map(row => row.assignment));
+    const live = copy.reservations.filter(row => row.assignment.project === value.project && row.assignment.task === value.task
+      && !ended.has(row.assignment.id));
+    const conflict = taskFence(copy, value.project, value.task);
+    const reason = conflict ? "Another task update is unresolved. Retry its original request."
+      : value.disruptive && live.length ? `Reconcile or interrupt these assignments first: ${live.map(row => row.assignment.id).join(", ")}` : "";
+    const decision = { update: value, accepted: !reason, reason };
+    copy.taskUpdates = [...(copy.taskUpdates ?? []), decision];
+    return { state: copy, result: decision, changed: true };
+  }
   const modes = copy.modes.filter(m => m.project === value.project && m.session === value.session && m.epoch === value.epoch);
   const mode = modes.at(-1);
   if (event.kind === "mode") {
@@ -323,6 +367,11 @@ function apply(state, event, replay = false) {
     }
     copy.reports = [...(copy.reports ?? []), event.report];
     return { state: copy, result: { decision: "report-recorded", report: event.report }, changed: true };
+  }
+  if (["prepare", "reserve"].includes(event.kind)) {
+    if (taskFence(copy, value.project, value.task)) refuse("task update is unresolved; new work is fenced");
+    const prepared = event.kind === "prepare" ? value : copy.preparations.find(row => row.id === event.preparation);
+    if (prepared && (prepared.generation ?? 0) !== taskGeneration(copy, value.project, value.task)) refuse("preparation belongs to a retired task generation");
   }
   const completed = new Set((copy.completions ?? []).map(row => row.assignment));
   const failed = new Set((copy.failures ?? []).map(row => row.assignment));
@@ -553,12 +602,12 @@ export const reserveBriefAdmission = (dir, scope, request, dispatch, rolePlan, b
   { kind: "reserve", assignment: createAssignment(scope, request), dispatch, rolePlan: parseRolePlan(rolePlan), uniqueName: true, brief: parseBrief(brief) });
 /** Save instructions before the native dispatch call exists. No capacity or permission is granted. */
 export function prepareAdmission(dir, scope, request, rolePlan, brief, options = {}) {
-  const keys = ["review", "runTarget", "continuation", "issuerAssignment"].filter(key => Object.hasOwn(options ?? {}, key));
+  const keys = ["review", "runTarget", "continuation", "issuerAssignment", "generation"].filter(key => Object.hasOwn(options ?? {}, key));
   fields(options, keys);
-  const { review, runTarget, continuation, issuerAssignment } = options;
+  const { review, runTarget, continuation, issuerAssignment, generation } = options;
   fields(request, ["task", "run", "issuer", "name"]);
   const { call, ...identity } = createAssignment(scope, { task: request.task, run: request.run, issuer: request.issuer, call: request.name });
-  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief, ...(review === undefined ? {} : { review }), ...(runTarget === undefined ? {} : { runTarget }), ...(continuation === undefined ? {} : { continuation }), ...(issuerAssignment === undefined ? {} : { issuerAssignment }) } });
+  return commit(dir, { kind: "prepare", preparation: { ...identity, name: call, rolePlan, brief, generation: generation ?? taskGeneration(readAdmission(dir), identity.project, identity.task), ...(review === undefined ? {} : { review }), ...(runTarget === undefined ? {} : { runTarget }), ...(continuation === undefined ? {} : { continuation }), ...(issuerAssignment === undefined ? {} : { issuerAssignment }) } });
 }
 /** The adapter verifies the current issuer and role, then supplies the actual native call and dispatch. */
 export function reservePreparedAdmission(dir, scope, request, dispatch, issuerRole) {
@@ -607,3 +656,18 @@ export function readAdmission(dir) {
 export const beginInterruptedRunFinish = (dir, request) => commit(dir, { kind: "begin-interrupted-finish", request });
 /** A durable validated logbook receipt must precede this exact acknowledgement. */
 export const endInterruptedRunFinish = (dir, request, receiptHash) => commit(dir, { kind: "end-interrupted-finish", request, receiptHash });
+
+/** Atomic task decision, receipt acknowledgement, and release are separate journal events. */
+export const decideTaskUpdate = (directory, update) => commit(directory, { kind: "decide-task-update", update });
+export const acknowledgeTaskUpdate = (directory, update, receiptHash) => commit(directory, { kind: "acknowledge-task-update", update, receiptHash });
+export const releaseTaskUpdate = (directory, update, receiptHash) => commit(directory, { kind: "release-task-update", update, receiptHash });
+export function assertTaskAdmissionOpen(directory, project, task, preparationId) {
+  const state = readAdmission(directory);
+  if (taskFence(state, project, task)) refuse("task update is unresolved; authority is fenced");
+  if (preparationId) {
+    const prepared = state.preparations.find(row => row.id === preparationId);
+    if (!prepared || prepared.project !== project || prepared.task !== task
+      || (prepared.generation ?? 0) !== taskGeneration(state, project, task)) refuse("assignment belongs to a retired task generation");
+  }
+  return taskGeneration(state, project, task);
+}

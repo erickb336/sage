@@ -27,3 +27,5 @@ export { roleEditDenied } from "./role-policy.mjs";
 export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 
 export { beginInterruptedRunFinish, endInterruptedRunFinish } from "./admission.mjs";
+
+export { decideTaskUpdate, acknowledgeTaskUpdate, releaseTaskUpdate, assertTaskAdmissionOpen } from "./admission.mjs";

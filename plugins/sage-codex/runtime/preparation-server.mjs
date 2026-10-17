@@ -17,6 +17,20 @@ export function createPreparationServer(options = {}) {
       return { isError: true, content: [{ type: "text", text: "Sage could not read this task. Check the chief identity, configured logbook and task ID." }] };
     }
   });
+  server.registerTool("sage_update_task", {
+    description: "Chief only: update title, branch, PR or state using the version from sage_read_task. Changes use title, branch, PR, state order. Reuse the identical request UUID after an uncertain result. A recorded rejection needs a new UUID after settlement. This grants no dispatch or merge permission.",
+    inputSchema: z.object({ request: z.string(), task: z.string(), version: z.string(), changes: z.object({
+      title: z.string().optional(), branch: z.string().optional(), pr: z.string().optional(), state: z.string().optional(),
+    }).strict() }).strict(),
+  }, async (input, context) => {
+    const native = { version: server.server.getClientVersion()?.version, actor: context.mcpReq._meta?.threadId };
+    try {
+      const { updateNativeTask } = await import("./task-update.mjs");
+      return { content: [{ type: "text", text: JSON.stringify(updateNativeTask(input, native, fixed)) }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: "text", text: `Sage could not update this task. Retry the original request after checking ownership and unresolved work.` }] };
+    }
+  });
   server.registerTool("sage_create_task", {
     description: "Chief only: create one framed task in the configured logbook. Reuse the same request UUID and identical fields after a lost response. Returns the original creation record on retry; it does not start a run, approve a route, dispatch an agent, or merge. Extra blocks require a reason. Unsupported routes remain unavailable for dispatch.",
     inputSchema: z.object({ request: z.string(), title: z.string(), size: z.string(), risk: z.array(z.string()),

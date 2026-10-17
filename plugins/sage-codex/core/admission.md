@@ -307,3 +307,49 @@ Verified terminal delivery remains ingestible after the lead loses authority.
 Recording completion or interruption settles the native slot; it does not certify
 the logbook task or run. Permission refusal alone does not stop the native child.
 This check does not provide atomic task updates or whole-team settlement.
+
+## Task update transactions
+
+The state tool's `updateRequestedTask` takes a fixed project and owner, a request
+UUID, a task version, and title, branch, PR or state changes. Native changes use
+that order. The CLI keeps its supplied order. Both paths use the same pure plan.
+The native path refuses merged and direct repairing states.
+
+A schema 6 intent saves exact before and after tables for tasks, runs and
+decisions. It also saves the plan's timestamp, findings, ledger, gates and any
+readiness facts. Readiness facts include the branch, actual head and normalized
+review-cycle configuration. Recovery reconstructs the plan from these saved
+facts. It does not use today's Git head or configuration to change an old plan.
+
+The coordinated writer uses the common pending marker. It publishes this marker
+before admission decides the update. `decideTaskUpdate` records an immutable
+accepted or rejected decision for the exact owner, request and intent digest.
+An unknown result retains the marker. A known rejection preserves the before
+images and records a rejection receipt. The same UUID cannot later succeed.
+
+Acceptance fences new work. After table publication and the durable receipt,
+`acknowledgeTaskUpdate` saves its exact hash while keeping that fence. The writer
+checks all after images, durably removes the marker, then calls
+`releaseTaskUpdate`. Each callback must return its matching synchronous result.
+A retry finishes this sequence. An old receipt returns historical data without
+restoring old tables or clearing another update's fence.
+
+Disruptive changes require every reservation for that project and task to have
+authentic completion, interruption or failed-dispatch evidence. This includes
+other owner sessions, unbound children and continuation reservations. Such an
+accepted update advances the task generation. A rejection does not advance it.
+
+`assertTaskAdmissionOpen` checks the fence and any supplied preparation, then
+returns the current generation. A provider must pin this value before it captures
+run or review data. Pass it as the optional `generation` preparation option.
+Admission compares it again when it saves the preparation and reserves work.
+Legacy preparations remain readable; a missing generation means zero.
+
+`validateTerminalAssignment` grants no authority and writes no task data. During
+an interrupted publication, it validates the whole intent and reads its coherent
+before image. Outside that publication, exact accepted history can explain a
+retired target. Unchanged review targets still need the current branch head.
+The provider supplies the exact owner, request and digest of the first disruptive
+update after the preparation's saved generation. Core checks that receipt and its
+coherent history. An explained retired target keeps its original candidate for
+terminal evidence only. It cannot authorize tools, accept a review, or certify task success.

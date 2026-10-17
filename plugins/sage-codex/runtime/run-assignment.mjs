@@ -1,3 +1,4 @@
+import { assertNativeTaskOpen } from "./task-authority.mjs";
 import { createStateTool, REVIEW_ROLES, readAdmission } from "../core/index.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
 
@@ -24,20 +25,21 @@ export function checkPreparedRunTarget(options, assigned, prepared) {
   if (!prepared || assigned.preparation !== prepared.id
     || ["project", "session", "epoch", "issuer", "task", "run"].some(key => assigned.assignment[key] !== prepared[key])
     || assigned.rolePlan.role !== prepared.rolePlan.role) refuse();
-  const current = checkNativeRunAssignment(options, { ...assigned.assignment, role: prepared.rolePlan.role }, prepared.runTarget);
-  if (REVIEW_ROLES.includes(prepared.rolePlan.role)) {
-    if (!prepared.review) refuse();
-    const tool = createStateTool({ defaultRoot: refuse });
-    const review = tool.captureReviewTarget({ project: options.projectDirectory, task: prepared.task, run: prepared.run,
-      role: prepared.rolePlan.role, cycle: prepared.review.cycle }, { ...process.env, SAGE_HOME: options.logbookRoot });
-    if (JSON.stringify(review) !== JSON.stringify(prepared.review)) refuse();
-  }
-  return current;
+  validateLogbookLocation(options);
+  const tool = createStateTool({ defaultRoot: refuse });
+  const updates = readAdmission(options.directory).taskUpdates?.filter(row => row.accepted && row.update.disruptive
+    && row.update.project === prepared.project && row.update.task === prepared.task) ?? [];
+  const retired = updates[prepared.generation ?? 0]?.update;
+  const retirement = retired ? { owner: JSON.stringify([retired.project, retired.session, retired.epoch]),
+    request: retired.request, digest: retired.digest } : null;
+  return tool.validateTerminalAssignment({ project: options.projectDirectory, target: prepared.runTarget,
+    review: prepared.review ?? null, retirement }, { ...process.env, SAGE_HOME: options.logbookRoot });
 }
 
 /** New authority requires both the child target and the original issuing lead. */
 export function checkPreparedRunAssignment(options, assigned, prepared) {
   const current = checkPreparedRunTarget(options, assigned, prepared);
+  checkNativeRunAssignment(options, { ...assigned.assignment, role: prepared.rolePlan.role }, prepared.runTarget);
   checkPreparationIssuer(options, prepared);
   return current;
 }
@@ -46,6 +48,7 @@ export function checkPreparedRunAssignment(options, assigned, prepared) {
 export function checkPreparationIssuer(options, prepared, expectedAssignment) {
   const refuse = () => { throw Error("Sage could not verify the original issuing lead assignment."); };
   if (!prepared) refuse();
+  assertNativeTaskOpen(options, prepared.task, prepared.id);
   if (prepared.rolePlan.issuerRole === "chief-of-staff") {
     if (prepared.issuerAssignment || expectedAssignment || prepared.session !== `codex:${prepared.issuer}`) refuse();
     return;

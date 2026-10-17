@@ -1,3 +1,4 @@
+import { assertNativeTaskOpen } from "./task-authority.mjs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { readAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, createStateTool, REVIEW_ROLES } from "../core/index.mjs";
@@ -63,6 +64,7 @@ export function prepareNativeTask(input, context, options) {
     || keys.some(key => !Object.hasOwn(input, key)) || typeof input.name !== "string" || !NAME.test(input.name)) refuse();
   const { scope, role, task, issuerAssignment } = actorScope(options, native);
   if (role === "lead" && input.task !== task) refuse();
+  const generation = assertNativeTaskOpen(options, input.task);
   const previous = hasPrevious ? completedRecipient(options, scope, native.actor, input.previous, input.task, input.role) : undefined;
   const runTarget = captureNativeRunAssignment(options, input);
   const reviewRole = REVIEW_ROLES.includes(input.role);
@@ -70,7 +72,7 @@ export function prepareNativeTask(input, context, options) {
   const review = reviewRole ? captureReview(options, input, input.reviewCycle) : undefined;
   const result = prepareAdmission(options.directory, scope,
     { task: input.task, run: input.run, issuer: native.actor, name: input.name },
-    { issuerRole: role, role: input.role }, input.brief, { review, runTarget, ...(issuerAssignment ? { issuerAssignment } : {}), ...(hasPrevious ? { continuation: input.previous } : {}) });
+    { issuerRole: role, role: input.role }, input.brief, { review, runTarget, generation, ...(issuerAssignment ? { issuerAssignment } : {}), ...(hasPrevious ? { continuation: input.previous } : {}) });
   const saved = result.preparation;
   return { decision: result.decision, preparation: saved.id, task: saved.task, run: saved.run, name: saved.name, role: saved.rolePlan.role, message: preparedTaskMessage(saved), ...(previous ? { target: previous.child, previous: input.previous } : { fork_turns: "none" }), ...(saved.review ? { review: saved.review } : {}) };
 }

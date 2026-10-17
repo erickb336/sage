@@ -74,7 +74,7 @@ async function connect(t, fixture, version = "0.160.0", expectedStderr = "", too
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name).sort(), toolName === "sage_native_hook"
-    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_read_task", "sage_record_report"]);
+    ? ["sage_native_hook"] : ["sage_accept_review", "sage_create_run", "sage_create_task", "sage_finish_run", "sage_prepare_task", "sage_read_assignment", "sage_read_recorded_report", "sage_read_report", "sage_read_task", "sage_record_report", "sage_update_task"]);
   assert(listed.result.tools.some(tool => tool.name === toolName));
   if (toolName === "sage_native_hook") assert.deepEqual(listed.result.tools[0]._meta.ui.visibility, ["app"]);
   else assert.equal(listed.result.tools[0]._meta?.ui?.visibility, undefined);
@@ -5379,4 +5379,458 @@ for (const continued of [false, true]) test(`T14: recovered ${continued ? 'conti
   assert.equal(state.completions.at(-1).turn, turn);
   assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === run).status, 'running');
   assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'tasks').find(row => row.id === 'T1').state, 'briefed');
+});
+
+test('T13: ordered CLI task changes accumulate lead retirements across repeated rebriefs', async t => {
+  const f = await completionFixture(t);
+  for (const state of ['briefed', 'building', 'held']) f.assignmentCli('task', 'T1', 'set', `state=${state}`);
+  const unrelated = f.assignmentTool.read(f.assignmentLogbook, 'runs').filter(row => row.id !== 'R1');
+  f.assignmentCli('task', 'T1', 'set', 'state=briefed', 'state=building', 'state=held', 'state=briefed', 'title=Replanned twice');
+  const runs = f.assignmentTool.read(f.assignmentLogbook, 'runs');
+  assert.equal(runs.find(row => row.id === 'R1').status, 'blocked');
+  assert.deepEqual(runs.filter(row => row.id !== 'R1'), unrelated);
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'decisions').filter(row => row.decision === 'R1 blocked: T1 went back to briefed').length, 1);
+  const task = f.assignmentTool.read(f.assignmentLogbook, 'tasks').find(row => row.id === 'T1');
+  assert.equal(task.state, 'briefed'); assert.equal(task.title, 'Replanned twice');
+});
+
+async function nativeTaskUpdateFixture(t) {
+  const f = await completionFixture(t);
+  const { updateNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
+  const snapshot = () => f.assignmentTool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T1' }, f.assignmentEnv);
+  const request = (changes, id = 'a1111111-1111-4111-8111-111111111111') => ({ request: id, task: 'T1', version: snapshot().version, changes });
+  const update = input => updateNativeTask(input, f.native(session), f.options);
+  return { ...f, snapshot, request, update };
+}
+
+test('T13: authenticated metadata update and historical retry preserve later task data', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  const first = f.request({ title: 'First title' });
+  const result = f.update(first);
+  assert.equal(result.decision, 'task-updated'); assert.equal(result.task.title, 'First title');
+  assert.equal(f.snapshot().task.title, 'First title');
+  f.update(f.request({ title: 'Second title' }, 'a2222222-2222-4222-8222-222222222222'));
+  assert.deepEqual(f.update(first), { ...result, decision: 'task-update-history' });
+  assert.equal(f.snapshot().task.title, 'Second title');
+  assert.throws(() => f.update({ ...first, changes: { title: 'Changed retry' } }));
+  const state = f.core.readAdmission(f.options.directory);
+  assert.equal(state.taskUpdates.length, 2); assert.ok(state.taskUpdates.every(row => row.released));
+});
+
+test('T13: disruptive task update records immutable rejection for unresolved native work', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  const request = f.request({ state: 'briefed' });
+  const result = f.update(request);
+  assert.equal(result.decision, 'task-update-rejected'); assert.match(result.reason, /Reconcile or interrupt/);
+  assert.equal(f.snapshot().task.state, 'framed');
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  assert.deepEqual(f.update(request), result);
+  const accepted = f.update(f.request({ state: 'briefed' }, 'a3333333-3333-4333-8333-333333333333'));
+  assert.equal(accepted.task.state, 'briefed');
+  assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.length, 2);
+});
+
+async function taskUpdateCoordinator(f, request) {
+  const { chiefLogbook } = await import(pathToFileURL(join(f.plugin, 'runtime/logbook-owner.mjs')));
+  const context = chiefLogbook(f.native(session), f.options);
+  const [project, ownerSession, epoch] = JSON.parse(context.owner);
+  let update;
+  const coordination = {
+    decide(digest, proposal) {
+      update = { project, session: ownerSession, epoch, request: request.request, task: request.task, digest, disruptive: proposal.disruptive };
+      const row = f.core.decideTaskUpdate(f.options.directory, update);
+      return { digest, accepted: row.accepted, reason: row.reason };
+    },
+    acknowledge(digest, receiptHash) {
+      const row = f.core.acknowledgeTaskUpdate(f.options.directory, update, receiptHash);
+      return { digest: row.update.digest, receiptHash: row.receiptHash };
+    },
+    release(digest, receiptHash) {
+      const row = f.core.releaseTaskUpdate(f.options.directory, update, receiptHash);
+      return { digest: row.update.digest, receiptHash: row.receiptHash };
+    },
+  };
+  const run = callbacks => context.tool.updateRequestedTask({ ...request, project: context.project, owner: context.owner }, context.env, callbacks);
+  return { run, coordination };
+}
+
+for (const fault of ['unknown-decision', 'promise-ack', 'empty-ack', 'wrong-ack', 'reverted-after', 'release-crash']) {
+  test(`T13: ${fault} retains transaction protection and recovers exact update`, async t => {
+    const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Durable title' });
+    const before = readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8');
+    const { run, coordination } = await taskUpdateCoordinator(f, request);
+    const callbacks = { ...coordination };
+    if (fault === 'unknown-decision') callbacks.decide = () => { throw Error('injected unknown result'); };
+    if (fault === 'promise-ack') callbacks.acknowledge = () => Promise.resolve({});
+    if (fault === 'empty-ack') callbacks.acknowledge = () => undefined;
+    if (fault === 'wrong-ack') callbacks.acknowledge = (digest, receiptHash) => ({ digest: '0'.repeat(64), receiptHash });
+    if (fault === 'reverted-after') callbacks.acknowledge = (digest, receiptHash) => {
+      const receipt = coordination.acknowledge(digest, receiptHash);
+      writeFileSync(join(f.assignmentLogbook, 'tasks.tsv'), before);
+      return receipt;
+    };
+    if (fault === 'release-crash') callbacks.release = () => { throw Error('injected release failure'); };
+    assert.throws(() => run(callbacks));
+    const pending = existsSync(join(f.assignmentLogbook, 'review-pending.json'));
+    assert.equal(pending, fault !== 'release-crash');
+    if (pending) assert.throws(() => f.snapshot());
+    else assert.throws(() => f.core.assertTaskAdmissionOpen(f.options.directory, f.options.project, 'T1'));
+    const recovered = f.update(request);
+    assert.equal(recovered.task.title, 'Durable title');
+    assert.equal(f.snapshot().task.title, 'Durable title');
+    assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), false);
+    assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.at(-1).released, true);
+  });
+}
+
+for (const pending of [false, true]) test(`T13: recovered child terminal evidence survives ${pending ? 'pending publication' : 'held task'} without authority`, async t => {
+  const f = await nativeTaskUpdateFixture(t), transcript = f.childTranscript();
+  if (!pending) for (const state of ['briefed', 'building']) f.assignmentCli('task', 'T1', 'set', `state=${state}`);
+  appendRecoveryCheckpoint(transcript);
+  const { readNativeChildAssignment } = await import(pathToFileURL(join(f.plugin, 'runtime/child-assignment.mjs')));
+  appendAssignmentRecovery(transcript, readNativeChildAssignment({}, f.native(childActor), f.options));
+  const request = f.request(pending ? { title: 'Pending title' } : { state: 'held' });
+  if (pending) {
+    const { run, coordination } = await taskUpdateCoordinator(f, request);
+    assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected acknowledgement outage'); } }));
+  } else f.update(request);
+  assert.throws(() => readNativeChildAssignment({}, f.native(childActor), f.options));
+  await assert.rejects(f.evaluate(f.policy, { ...patch(turns[1]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path: transcript }, childActor));
+  appendReport(f);
+  assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'completed');
+  assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R1').status, 'running');
+  if (pending) {
+    assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), true);
+    f.update(request);
+  } else assert.equal(f.snapshot().task.state, 'held');
+});
+
+test('T13: historical success does not validate or clear a later pending update', async t => {
+  const f = await nativeTaskUpdateFixture(t), first = f.request({ title: 'First accepted title' });
+  f.update(first);
+  const second = f.request({ title: 'Later pending title' }, 'a4444444-4444-4444-8444-444444444444');
+  const { run, coordination } = await taskUpdateCoordinator(f, second);
+  assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected outage'); } }));
+  appendFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'unrelated damaged row\n');
+  const before = readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8');
+  assert.equal(f.update(first).decision, 'task-update-history');
+  assert.equal(readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8'), before);
+  assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), true);
+  assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.at(-1).released, undefined);
+});
+
+for (const sage of [true, false]) test(`T13: managed ${sage ? 'on' : 'off'} tool refuses a transaction begun during evaluation`, async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  if (!sage) f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  const policy = f.createNativePolicy(f.options, async () => { entered(); await waiting; return { decision: 'pass' }; });
+  const input = { ...patch(turns[1]), tool_name: 'list_mcp_resources', tool_input: {}, transcript_path: f.childTranscript() };
+  const evaluation = f.evaluate(policy, input, childActor);
+  const denied = assert.rejects(evaluation, /incomplete|unresolved|fenced/);
+  await started;
+  const request = f.request({ title: 'Awaited update' });
+  const { run, coordination } = await taskUpdateCoordinator(f, request);
+  assert.throws(() => run({ ...coordination, decide() { throw Error('injected unknown decision'); } }));
+  release(); await denied;
+  let calls = 0;
+  const next = f.createNativePolicy(f.options, () => { calls++; return { decision: 'pass' }; });
+  await assert.rejects(f.evaluate(next, input, childActor));
+  assert.equal(calls, 0);
+  f.update(request);
+  assert.deepEqual(await f.evaluate(next, input, childActor), { decision: 'pass' });
+});
+
+for (const boundary of ['intent', 'tasks', 'runs', 'decisions', 'receipt', 'clear']) for (const after of [false, true]) {
+  test(`T13: publication recovers ${after ? 'after' : 'before'} ${boundary}`, async t => {
+    const f = await nativeTaskUpdateFixture(t);
+    for (const state of ['briefed', 'building', 'held']) f.assignmentCli('task', 'T1', 'set', `state=${state}`);
+    appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+    const request = f.request({ state: 'briefed' });
+    const fs = (await import('node:fs')).default;
+    const { syncBuiltinESMExports } = await import('node:module');
+    const method = ['intent', 'receipt'].includes(boundary) ? 'linkSync' : boundary === 'clear' ? 'unlinkSync' : 'renameSync';
+    const original = fs[method]; let hit = false;
+    t.mock.method(fs, method, (...args) => {
+      const to = String(args[method === 'unlinkSync' ? 0 : 1]);
+      const matches = boundary === 'receipt' ? to.startsWith(join(f.assignmentLogbook, 'task-updates') + '/')
+        : to === join(f.assignmentLogbook, ['intent', 'clear'].includes(boundary) ? 'review-pending.json' : `${boundary}.tsv`);
+      if (!hit && matches) {
+        hit = true;
+        if (after) original(...args);
+        throw Object.assign(Error('Injected task update publication failure'), { code: 'EIO' });
+      }
+      return original(...args);
+    }); syncBuiltinESMExports();
+    try { assert.throws(() => f.update(request), /Injected/); assert.equal(hit, true); }
+    finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+    const result = f.update(request);
+    assert.equal(result.task.state, 'briefed');
+    assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R1').status, 'blocked');
+    assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'decisions').filter(row => row.decision === 'R1 blocked: T1 went back to briefed').length, 1);
+    assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), false);
+    assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.length, 1);
+    assert.equal(f.core.readAdmission(f.options.directory).taskUpdates[0].released, true);
+  });
+}
+
+test('T13: disruptive update retires unreserved preparations and permits fresh task generation', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  f.assignmentCli('run', 'done', 'R1', '--status', 'done');
+  f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
+  f.api.prepareNativeTask({ ...f.input, run: 'R4', name: 'not_yet_started' }, f.native(session), f.options);
+  const old = f.core.readAdmission(f.options.directory).preparations.find(row => row.name === 'not_yet_started');
+  f.update(f.request({ state: 'briefed' }));
+  assert.throws(() => f.core.assertTaskAdmissionOpen(f.options.directory, f.options.project, 'T1', old.id), /generation/);
+  assert.throws(() => f.api.reservePreparedSpawn(f.spawnInput('not_yet_started', 'old-prepared-call'), f.native(session), f.options), /generation/);
+  const fresh = f.api.prepareNativeTask({ ...f.input, run: 'R4', name: 'fresh_generation' }, f.native(session), f.options);
+  assert.equal(f.core.readAdmission(f.options.directory).preparations.find(row => row.id === fresh.preparation).generation, 1);
+  assert.equal(f.api.reservePreparedSpawn(f.spawnInput('fresh_generation', 'fresh-prepared-call'), f.native(session), f.options).decision, 'permit-once');
+});
+
+test('T13: disruptive update sees unresolved unbound work from another owner session', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  const other = turns[2];
+  const owner = f.core.activateAdmission(f.options.directory, { project: f.options.project, session: `codex:${other}`, activation: turns[0] });
+  const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
+  const previous = f.core.readAdmission(f.options.directory).reservations[0];
+  const reserved = f.core.reserveAdmission(f.options.directory, scope, { task: 'T1', run: 'R4', issuer: other, call: 'other-unbound' },
+    { ...previous.dispatch, name: 'other_unbound' });
+  const request = f.request({ state: 'briefed' });
+  const result = f.update(request);
+  assert.equal(result.decision, 'task-update-rejected');
+  assert.ok(result.reason.includes(reserved.assignment.id));
+  assert.equal(f.snapshot().task.state, 'framed');
+  assert.equal(f.core.readAdmission(f.options.directory).bindings.length, 1);
+});
+
+test('T13: preparation pins task generation before capture across branch away and back', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  f.assignmentCli('run', 'done', 'R1', '--status', 'done');
+  f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
+  f.assignmentCli('task', 'T1', 'set', 'branch=codex/t1-original');
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = fs.rmdirSync; let captured = false;
+  t.mock.method(fs, 'rmdirSync', (path, ...args) => {
+    const result = original(path, ...args);
+    if (!captured && path === join(f.assignmentLogbook, '.lock')) {
+      captured = true;
+      f.update(f.request({ branch: 'codex/t1-away' }));
+      f.update(f.request({ branch: 'codex/t1-original' }, 'a5555555-5555-4555-8555-555555555555'));
+    }
+    return result;
+  }); syncBuiltinESMExports();
+  try {
+    assert.throws(() => f.api.prepareNativeTask({ ...f.input, run: 'R4', name: 'capture_race' }, f.native(session), f.options), /generation/);
+    assert.equal(captured, true);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.equal(f.snapshot().task.branch, 'codex/t1-original');
+  assert.equal(f.core.readAdmission(f.options.directory).preparations.some(row => row.name === 'capture_race'), false);
+});
+
+test('T13: preparation server exposes authenticated task updates and historical replies', async t => {
+  const f = await nativeTaskUpdateFixture(t), client = await connect(t, f, '0.160.0', '', 'sage_update_task');
+  const request = f.request({ title: 'Updated through MCP' });
+  const before = f.snapshot();
+  assert.match((await client.call(request, childActor)).error, /could not update/);
+  assert.match((await client.call(request, turns[2])).error, /could not update/);
+  assert.deepEqual(f.snapshot(), before);
+  assert.equal((await client.call(request)).decision, 'task-updated');
+  assert.equal((await client.call(request)).decision, 'task-update-history');
+  assert.equal(f.snapshot().task.title, 'Updated through MCP');
+  await client.close();
+});
+
+async function taskUpdateReadinessFixture(t) {
+  const f = await reviewPreparationFixture(t);
+  f.cli('run', 'done', 'R1', '--status', 'done');
+  for (const state of ['briefed', 'building', 'reviewing', 'verifying']) f.cli('task', 'T1', 'set', `state=${state}`);
+  const head = f.git('rev-parse', 'HEAD');
+  for (const kind of ['checks-pass', 'review-clean', 'qa-pass']) f.cli('verdict', 'T1', '--sha', head, '--kind', kind);
+  const { updateNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
+  const snapshot = () => f.tool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T1' }, f.env);
+  const request = { request: 'a6666666-6666-4666-8666-666666666666', task: 'T1', version: snapshot().version, changes: { state: 'verified' } };
+  return { ...f, head, snapshot, request, update: () => updateNativeTask(request, f.native(session), f.options) };
+}
+
+for (const obstacle of ['none', 'old-head', 'configured-cycles', 'gate', 'running-checker']) test(`T13: readiness checks ${obstacle}`, async t => {
+  const f = await taskUpdateReadinessFixture(t);
+  if (obstacle === 'old-head') f.git('commit', '--quiet', '--allow-empty', '-m', 'New candidate');
+  if (obstacle === 'configured-cycles') writeFileSync(join(f.env.SAGE_HOME, 'config.json'), JSON.stringify({ 'cycles.small': 2 }));
+  if (obstacle === 'gate') f.cli('gate', 'add', 'T1', '--question', 'Choose scope', '--options', 'yes|no', '--recommend', 'no');
+  if (obstacle === 'running-checker') f.cli('run', 'add', 'T1', '--role', 'qa');
+  if (obstacle !== 'none') {
+    assert.throws(() => f.update());
+    assert.equal(f.snapshot().task.state, 'verifying');
+    assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+    assert.equal(f.core.readAdmission(f.options.directory).taskUpdates?.length ?? 0, 0);
+  } else {
+    assert.equal(f.update().task.state, 'verified');
+    const files = readdirSync(join(f.logbook, 'task-updates'));
+    const receipt = JSON.parse(readFileSync(join(f.logbook, 'task-updates', files[0]), 'utf8'));
+    assert.ok(JSON.stringify(receipt).includes(f.head));
+    assert.ok(JSON.stringify(receipt).includes('cycles.small'));
+    f.git('commit', '--quiet', '--allow-empty', '-m', 'Later candidate');
+    writeFileSync(join(f.env.SAGE_HOME, 'config.json'), JSON.stringify({ 'cycles.small': 3 }));
+    assert.equal(f.update().decision, 'task-update-history');
+  }
+});
+
+for (const corruption of ['task-delta', 'run-delta', 'decision-delta', 'timestamp', 'identity']) test(`T13: valid checksum cannot authorize corrupted ${corruption}`, async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Legal title' });
+  const { run, coordination } = await taskUpdateCoordinator(f, request);
+  assert.throws(() => run({ ...coordination, decide() { throw Error('injected unknown outcome'); } }));
+  const file = join(f.assignmentLogbook, 'review-pending.json'), envelope = JSON.parse(readFileSync(file, 'utf8'));
+  const intent = envelope.value;
+  if (corruption === 'task-delta') intent.tables.tasks.after = intent.tables.tasks.after.replace('Legal title', 'Unrequested title');
+  if (corruption === 'run-delta') intent.tables.runs.after += 'forged run\n';
+  if (corruption === 'decision-delta') intent.tables.decisions.after += 'forged decision\n';
+  if (corruption === 'timestamp') intent.proposal.at = '2026-99-99T00:00:00Z';
+  if (corruption === 'identity') intent.reference.owner = 'different-owner';
+  envelope.hash = createHash('sha256').update(JSON.stringify(intent)).digest('hex');
+  writeFileSync(file, JSON.stringify(envelope) + '\n');
+  const before = Object.fromEntries(['tasks', 'runs', 'decisions'].map(table => [table, readFileSync(join(f.assignmentLogbook, `${table}.tsv`), 'utf8')]));
+  assert.throws(() => f.update(request));
+  assert.deepEqual(Object.fromEntries(Object.keys(before).map(table => [table, readFileSync(join(f.assignmentLogbook, `${table}.tsv`), 'utf8')])), before);
+  assert.equal(f.core.readAdmission(f.options.directory).taskUpdates?.length ?? 0, 0);
+  assert.equal(existsSync(file), true);
+});
+
+for (const view of ['merge', 'logbook']) test(`T13: ${view} refuses a task update between table reads`, async t => {
+  const f = await taskUpdateReadinessFixture(t), fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = fs.openSync; let armed = true, committed = false;
+  t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (armed && file === join(f.logbook, 'decisions.tsv')) {
+      armed = false; f.update(); committed = true;
+    }
+    return original(file, ...args);
+  }); syncBuiltinESMExports();
+  try {
+    if (view === 'merge') assert.equal(f.tool.mergeCheck(f.head, f.env).ok, false);
+    else assert.throws(() => f.tool.logbookView(f.options.projectDirectory, f.env), /created while/);
+    assert.equal(committed, true);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.equal(f.tool.logbookView(f.options.projectDirectory, f.env).task('T1').state, 'verified');
+});
+
+test('T13: retired review terminal evidence uses exact candidate and coherent history including pre-run updates', async t => {
+  const f = await reviewPreparationFixture(t);
+  const { updateNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
+  const update = (changes, request) => updateNativeTask({ request, task: 'T1', changes,
+    version: f.tool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T1' }, f.env).version }, f.native(session), f.options);
+  update({ title: 'Before new review run' }, 'a7777777-7777-4777-8777-777777777777');
+  f.cli('run', 'done', 'R1', '--status', 'done'); f.cli('run', 'add', 'T1', '--role', 'code-reviewer');
+  const prepared = f.prepare({ ...f.input, run: 'R2', name: 'later_review' });
+  const row = f.core.readAdmission(f.options.directory).preparations.find(value => value.id === prepared.preparation);
+  const input = { project: f.options.projectDirectory, target: row.runTarget, review: row.review };
+  assert.deepEqual(f.tool.validateTerminalAssignment(input, f.env), row.runTarget);
+  f.git('commit', '--quiet', '--allow-empty', '-m', 'Advanced original branch');
+  assert.throws(() => f.tool.validateTerminalAssignment(input, f.env), /terminal assignment/);
+  f.git('branch', 'codex/t1-new-candidate');
+  update({ branch: 'codex/t1-new-candidate' }, 'a8888888-8888-4888-8888-888888888888');
+  const retired = f.core.readAdmission(f.options.directory).taskUpdates.find(value => value.update.disruptive).update;
+  input.retirement = { owner: JSON.stringify([retired.project, retired.session, retired.epoch]), request: retired.request, digest: retired.digest };
+  assert.deepEqual(f.tool.validateTerminalAssignment(input, f.env), row.runTarget);
+  update({ branch: 'codex/t1-review' }, 'a9999999-9999-4999-8999-999999999998');
+  assert.deepEqual(f.tool.validateTerminalAssignment(input, f.env), row.runTarget);
+  const fresh = f.prepare({ ...f.input, run: 'R2', name: 'after_away_back' });
+  const freshRow = f.core.readAdmission(f.options.directory).preparations.find(value => value.id === fresh.preparation);
+  assert.equal(freshRow.generation, 2);
+  f.git('commit', '--quiet', '--allow-empty', '-m', 'Unrelated new drift');
+  const { checkPreparedRunTarget } = await import(pathToFileURL(join(f.plugin, 'runtime/run-assignment.mjs')));
+  const reservation = preparation => ({ preparation: preparation.id, assignment: Object.fromEntries(['project', 'session', 'epoch', 'issuer', 'task', 'run'].map(key => [key, preparation[key]])), rolePlan: preparation.rolePlan });
+  assert.throws(() => checkPreparedRunTarget(f.options, reservation(freshRow), freshRow), /terminal assignment/);
+  assert.deepEqual(checkPreparedRunTarget(f.options, reservation(row), row), row.runTarget);
+  assert.throws(() => f.tool.validateTerminalAssignment({ ...input, target: { ...row.runTarget, candidate: '2' } }, f.env));
+  assert.throws(() => f.core.assertTaskAdmissionOpen(f.options.directory, f.options.project, 'T1', row.id), /generation/);
+  const folder = join(f.logbook, 'task-updates');
+  const file = readdirSync(folder).map(name => join(folder, name)).find(file => JSON.parse(readFileSync(file, 'utf8')).value.intent.reference.changes.branch);
+  const envelope = JSON.parse(readFileSync(file, 'utf8'));
+  envelope.value.intent.tables.runs.after += 'unexplained retirement\n';
+  envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
+  writeFileSync(file, JSON.stringify(envelope) + '\n');
+  assert.throws(() => f.tool.validateTerminalAssignment(input, f.env));
+});
+
+test('T13: verified and pr-ready metadata retains fresh readiness and PR requirements', async t => {
+  const f = await taskUpdateReadinessFixture(t);
+  f.update();
+  const { updateNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
+  let serial = 1;
+  const update = changes => updateNativeTask({ request: `b0000000-0000-4000-8000-${String(serial++).padStart(12, '0')}`,
+    task: 'T1', version: f.snapshot().version, changes }, f.native(session), f.options);
+  assert.throws(() => update({ state: 'pr-ready' }));
+  assert.throws(() => update({ pr: 'invalid', state: 'pr-ready' }));
+  assert.equal(update({ title: 'Verified title' }).task.state, 'verified');
+  assert.equal(update({ pr: '17', state: 'pr-ready' }).task.pr, '17');
+  assert.equal(update({ title: 'Ready title' }).task.state, 'pr-ready');
+  assert.throws(() => update({ pr: '' }));
+  f.git('commit', '--quiet', '--allow-empty', '-m', 'Unreviewed candidate');
+  assert.throws(() => update({ title: 'Not yet ready' }));
+  assert.equal(f.snapshot().task.title, 'Ready title');
+});
+
+test('T13: acknowledgement keeps initial continuation and preparation work fenced until separate release', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  f.assignmentCli('run', 'done', 'R1', '--status', 'done'); f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
+  const previous = f.core.readAdmission(f.options.directory).bindings[0].assignment;
+  const initial = f.api.prepareNativeTask({ ...f.input, run: 'R4', name: 'reserved_after_release' }, f.native(session), f.options);
+  const continuation = f.api.prepareNativeTask({ ...f.input, run: 'R4', name: 'continued_after_release', previous }, f.native(session), f.options);
+  const request = f.request({ title: 'Metadata fence' }), { run, coordination } = await taskUpdateCoordinator(f, request);
+  const dispatch = f.core.readAdmission(f.options.directory).reservations[0].dispatch;
+  let checkedAck = false, checkedRelease = false;
+  const refuseWork = () => {
+    assert.throws(() => f.core.prepareAdmission(f.options.directory, f.scope, { task: 'T1', run: 'R4', issuer: session, name: 'during_update' },
+      { issuerRole: 'chief-of-staff', role: 'lead' }, f.input.brief, { generation: 0 }), /fenced/);
+    assert.throws(() => f.core.reservePreparedAdmission(f.options.directory, f.scope, { preparation: initial.preparation, issuer: session, call: 'during-initial' },
+      { ...dispatch, name: 'reserved_after_release' }, 'chief-of-staff'), /fenced/);
+    assert.throws(() => f.core.reservePreparedContinuation(f.options.directory, f.scope, { preparation: continuation.preparation, issuer: session, call: 'during-continuation', previous },
+      { ...dispatch, name: 'continued_after_release' }, 'chief-of-staff'), /fenced/);
+  };
+  run({ ...coordination,
+    acknowledge(digest, receiptHash) {
+      const result = coordination.acknowledge(digest, receiptHash);
+      assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), true);
+      refuseWork(); checkedAck = true; return result;
+    },
+    release(digest, receiptHash) {
+      assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), false);
+      refuseWork(); checkedRelease = true; return coordination.release(digest, receiptHash);
+    },
+  });
+  assert.equal(checkedAck && checkedRelease, true);
+  assert.equal(f.api.reservePreparedSpawn(f.spawnInput('reserved_after_release', 'after-release'), f.native(session), f.options).decision, 'permit-once');
+});
+
+test('T13: disruptive update refuses an unresolved continuation even when its initial turn is complete', async t => {
+  const f = await preparedFollowupFixture(t);
+  const policy = f.createNativePolicy(f.options, () => ({ decision: 'pass' }));
+  assert.deepEqual(await f.evaluate(policy, f.followupInput), { decision: 'pass' });
+  const { updateNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
+  const snapshot = f.assignmentTool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T1' }, f.assignmentEnv);
+  const result = updateNativeTask({ request: 'b1111111-1111-4111-8111-111111111111', task: 'T1', version: snapshot.version,
+    changes: { state: 'briefed' } }, f.native(session), f.options);
+  assert.equal(result.decision, 'task-update-rejected');
+  const state = f.core.readAdmission(f.options.directory);
+  assert.ok(result.reason.includes(state.reservations.find(row => row.continuation).assignment.id));
+  assert.equal(state.completions.length, 1);
+  assert.equal(state.bindings.length, 1);
+});
+
+test('T13: legacy optional task columns update to a current readable version', async t => {
+  const f = await nativeTaskUpdateFixture(t), file = join(f.assignmentLogbook, 'tasks.tsv');
+  const lines = readFileSync(file, 'utf8').trimEnd().split('\n').map(line => line.split('\t'));
+  const keep = lines[0].map((name, index) => ['hold', 'extra'].includes(name) ? -1 : index).filter(index => index >= 0);
+  writeFileSync(file, lines.map(row => keep.map(index => row[index]).join('\t')).join('\n') + '\n');
+  const result = f.update(f.request({ title: 'Updated legacy task' }));
+  assert.deepEqual({ task: result.task, version: result.version }, f.snapshot());
+  assert.equal(f.snapshot().task.title, 'Updated legacy task');
 });
