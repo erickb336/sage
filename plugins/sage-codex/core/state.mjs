@@ -1102,8 +1102,18 @@ function validateTerminalAssignment(input, env = process.env, historyProof) {
     let proven = immutable(current) && active(current) && !retired;
     if (!proven) {
       const receipts = taskUpdates.history(dir).filter(row => row.intent.reference.task === target.task);
-      for (const receipt of receipts) taskUpdates.authenticate(receipt, historyProof);
-      const history = receipts.filter(row => row.outcome.accepted)
+      const completed = [];
+      for (const receipt of receipts) {
+        if (pending && receipt.intent.reference.owner === pending.reference.owner
+          && receipt.intent.reference.request === pending.reference.request) {
+          taskUpdates.authenticatePending(receipt, pending, historyProof);
+        } else {
+          taskUpdates.authenticate(receipt, historyProof);
+          completed.push(receipt);
+        }
+      }
+      // The pending receipt is not a completed transition, even after acknowledgement.
+      const history = completed.filter(row => row.outcome.accepted)
         .map(row => ({ retires: row.intent.proposal.disruptive && retires(row.intent), before: pair(Object.fromEntries(["tasks", "runs"].map(table => [table, updateRows(table, row.intent.tables[table].before)])), true),
           after: pair(Object.fromEntries(["tasks", "runs"].map(table => [table, updateRows(table, row.intent.tables[table].after)])), true) })).filter(row => row.before && row.after);
       // Follow exact coherent task/run pairs; a gap cannot explain a changed target.

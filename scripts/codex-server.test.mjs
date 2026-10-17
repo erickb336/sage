@@ -6222,3 +6222,66 @@ test('SEC-T13-1: valid historical coordination callback returns original success
   assert.deepEqual(result, { ...original, decision: 'task-update-history' });
   assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
 });
+
+async function heldRecoveredChild(t) {
+  const f = await nativeTaskUpdateFixture(t), transcript = f.childTranscript();
+  for (const state of ['briefed', 'building']) f.assignmentCli('task', 'T1', 'set', `state=${state}`);
+  appendRecoveryCheckpoint(transcript);
+  const read = await assignmentReader(f); appendAssignmentRecovery(transcript, read());
+  f.update(f.request({ state: 'held' }));
+  return { ...f, transcript, read };
+}
+
+test('CODE-T13-1: held recovered child without later pending receipt completes', async t => {
+  const f = await heldRecoveredChild(t);
+  appendReport(f);
+  assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'completed');
+  assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R1').status, 'running');
+});
+
+for (const acknowledged of [false, true]) for (const corruption of ['none', 'pending-outcome', 'pending-intent', 'marker', 'prior-history', ...(acknowledged ? ['ack-hash'] : [])]) {
+  test(`CODE-T13-1: held terminal ${acknowledged ? 'after' : 'before'} acknowledgement with ${corruption}`, async t => {
+    const f = await heldRecoveredChild(t), request = f.request({ title: 'Held pending metadata' }, 'f3333333-3333-4333-8333-333333333333');
+    const { run, coordination } = await taskUpdateCoordinator(f, request);
+    assert.throws(() => run({ ...coordination, acknowledge(digest, hash) {
+      if (acknowledged) coordination.acknowledge(digest, corruption === 'ack-hash' ? '0'.repeat(64) : hash);
+      throw Error('injected acknowledgement boundary');
+    } }));
+    const folder = join(f.assignmentLogbook, 'task-updates'), marker = join(f.assignmentLogbook, 'review-pending.json');
+    const restore = [];
+    if (corruption === 'marker') { restore.push([marker, readFileSync(marker, 'utf8')]); writeFileSync(marker, '{}\n'); }
+    else if (!['none', 'ack-hash'].includes(corruption)) {
+      const file = readdirSync(folder).map(name => join(folder, name)).find(file =>
+        (JSON.parse(readFileSync(file, 'utf8')).value.intent.reference.request === request.request) !== (corruption === 'prior-history'));
+      restore.push([file, readFileSync(file, 'utf8')]);
+      const envelope = JSON.parse(readFileSync(file, 'utf8'));
+      if (corruption === 'pending-intent') envelope.value.intent.proposal.facts.gates.push({ id: 'G99', task: 'T99', question: 'Unrelated',
+        options: 'yes|no', recommendation: 'no', default: '', answer: '', at: '2025-01-01T00:00:00Z' });
+      else envelope.value.outcome = { accepted: false, reason: 'forged outcome' };
+      envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
+      writeFileSync(file, JSON.stringify(envelope) + '\n');
+    }
+    const tables = updateTableBytes(f), pendingBytes = readFileSync(marker, 'utf8'), before = f.core.readAdmission(f.options.directory);
+    assert.equal(Boolean(before.taskUpdates.at(-1).receiptHash), acknowledged);
+    assert.throws(f.read);
+    await assert.rejects(f.evaluate(f.policy, { ...patch(turns[1]), transcript_path: f.transcript, tool_name: 'list_mcp_resources', tool_input: {} }, childActor));
+    appendReport(f);
+    if (corruption === 'none') {
+      assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'completed');
+      assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'already-completed');
+      assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+      assert.deepEqual(f.core.readAdmission(f.options.directory).taskUpdates, before.taskUpdates);
+    } else {
+      assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+      assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+    }
+    assert.deepEqual(updateTableBytes(f), tables); assert.equal(readFileSync(marker, 'utf8'), pendingBytes);
+    assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R1').status, 'running');
+    if (restore.length) {
+      for (const [file, bytes] of restore) writeFileSync(file, bytes);
+      assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'completed');
+      assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
+      assert.deepEqual(updateTableBytes(f), tables);
+    }
+  });
+}

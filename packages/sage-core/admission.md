@@ -367,3 +367,10 @@ accepted transition, and an altered rejection cannot hide a real transition.
 The pending coherent-before-image path does not require a prior acknowledgement.
 Stable snapshot version reads track receipt names; they do not authorize an
 outcome or terminal transition.
+
+When terminal validation uses a pending before-image, its exact pending receipt
+is separate from completed transition history. Core compares the entire intent
+and checks its durable journal outcome. Before acknowledgement, that exact
+pending receipt may lack a hash. After acknowledgement, its hash must match.
+The pending receipt never supplies a completed transition edge. Every other
+receipt retains full historical authentication, including its acknowledged hash.

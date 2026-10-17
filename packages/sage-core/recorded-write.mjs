@@ -201,13 +201,24 @@ export function coordinatedWrites({ schema, tables: TABLES, folder: FOLDER, vali
   const confirmed = (value, digest, receiptHash) => {
     if (!keys(value, ["digest", "receiptHash"]) || value.digest !== digest || value.receiptHash !== receiptHash) fail();
   };
-  function authenticate(receipt, history) {
+  function historyProof(receipt, history) {
     if (typeof history !== "function") fail();
-    const digest = hash(json(receipt.intent)), receiptHash = hash(json(receipt));
+    const digest = hash(json(receipt.intent));
     const proof = history(digest, receipt.intent.proposal, receipt.intent.reference);
     if (typeof proof?.then === "function" || !keys(proof, ["digest", "accepted", "reason", "receiptHash"])
-      || proof.digest !== digest || proof.accepted !== receipt.outcome.accepted || proof.reason !== receipt.outcome.reason
-      || proof.receiptHash !== (receipt.outcome.accepted ? receiptHash : null)) fail();
+      || proof.digest !== digest || proof.accepted !== receipt.outcome.accepted || proof.reason !== receipt.outcome.reason) fail();
+    return proof;
+  }
+  function authenticate(receipt, history) {
+    const proof = historyProof(receipt, history);
+    if (proof.receiptHash !== (receipt.outcome.accepted ? hash(json(receipt)) : null)) fail();
+  }
+  function authenticatePending(receipt, intent, history) {
+    checkIntent(intent); checkReceipt(receipt);
+    if (json(receipt.intent) !== json(intent)) fail();
+    const proof = historyProof(receipt, history);
+    // This exact intent still owns the pending marker. Its acknowledgement may not exist yet.
+    if (proof.receiptHash !== null && (!receipt.outcome.accepted || proof.receiptHash !== hash(json(receipt)))) fail();
   }
   function recover(dir, reference, coordination) {
     const old = readReceipt(dir, reference);
@@ -260,5 +271,5 @@ export function coordinatedWrites({ schema, tables: TABLES, folder: FOLDER, vali
     assertNoPendingWrite(dir);
     return json(version);
   }
-  return { prepare, recover, pending, readReceipt, history, readVersion, authenticate };
+  return { prepare, recover, pending, readReceipt, history, readVersion, authenticate, authenticatePending };
 }
