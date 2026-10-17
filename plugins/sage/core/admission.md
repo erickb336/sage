@@ -353,3 +353,17 @@ The provider supplies the exact owner, request and digest of the first disruptiv
 update after the preparation's saved generation. Core checks that receipt and its
 coherent history. An explained retired target keeps its original candidate for
 terminal evidence only. It cannot authorize tools, accept a review, or certify task success.
+
+Historical task-update receipts require a synchronous, read-only proof callback.
+It matches the exact owner, request, task, intent digest, disruptive flag and
+durable outcome. Accepted history also requires its acknowledged receipt hash.
+Missing proof refuses; history never creates a decision. An accepted retry may
+release only its own acknowledged fence after this check.
+
+Terminal history uses the same callback as a separate trusted argument to
+`validateTerminalAssignment`. Core authenticates all receipts for the target task
+before selecting accepted transitions. A rejected receipt cannot become an
+accepted transition, and an altered rejection cannot hide a real transition.
+The pending coherent-before-image path does not require a prior acknowledgement.
+Stable snapshot version reads track receipt names; they do not authorize an
+outcome or terminal transition.

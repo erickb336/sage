@@ -201,11 +201,20 @@ export function coordinatedWrites({ schema, tables: TABLES, folder: FOLDER, vali
   const confirmed = (value, digest, receiptHash) => {
     if (!keys(value, ["digest", "receiptHash"]) || value.digest !== digest || value.receiptHash !== receiptHash) fail();
   };
+  function authenticate(receipt, history) {
+    if (typeof history !== "function") fail();
+    const digest = hash(json(receipt.intent)), receiptHash = hash(json(receipt));
+    const proof = history(digest, receipt.intent.proposal, receipt.intent.reference);
+    if (typeof proof?.then === "function" || !keys(proof, ["digest", "accepted", "reason", "receiptHash"])
+      || proof.digest !== digest || proof.accepted !== receipt.outcome.accepted || proof.reason !== receipt.outcome.reason
+      || proof.receiptHash !== (receipt.outcome.accepted ? receiptHash : null)) fail();
+  }
   function recover(dir, reference, coordination) {
     const old = readReceipt(dir, reference);
     const saved = decode(join(dir, PENDING));
     if (old && (!saved || json(saved.reference) !== json(reference))) {
-      // A historical retry never inspects or restores current tables.
+      // Authenticate either historical outcome without creating a decision or inspecting current tables.
+      authenticate(old, coordination.history);
       if (old.outcome.accepted) confirmed(coordination.release(hash(json(old.intent)), hash(json(old))), hash(json(old.intent)), hash(json(old)));
       return old;
     }
@@ -251,5 +260,5 @@ export function coordinatedWrites({ schema, tables: TABLES, folder: FOLDER, vali
     assertNoPendingWrite(dir);
     return json(version);
   }
-  return { prepare, recover, pending, readReceipt, history, readVersion };
+  return { prepare, recover, pending, readReceipt, history, readVersion, authenticate };
 }

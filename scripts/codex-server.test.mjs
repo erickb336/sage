@@ -5435,18 +5435,33 @@ async function taskUpdateCoordinator(f, request) {
   const context = chiefLogbook(f.native(session), f.options);
   const [project, ownerSession, epoch] = JSON.parse(context.owner);
   let update;
+  const saved = digest => {
+    if (update?.digest === digest) return update;
+    const rows = f.core.readAdmission(f.options.directory).taskUpdates?.filter(row =>
+      Object.entries({ project, session: ownerSession, epoch, request: request.request, task: request.task, digest })
+        .every(([key, value]) => row.update[key] === value)) ?? [];
+    assert.equal(rows.length, 1, 'historical coordination requires the exact saved update');
+    return rows[0].update;
+  };
   const coordination = {
+    history(digest, proposal) {
+      const row = f.core.readAdmission(f.options.directory).taskUpdates?.find(row =>
+        Object.entries({ project, session: ownerSession, epoch, request: request.request, task: request.task, digest, disruptive: proposal.disruptive })
+          .every(([key, value]) => row.update[key] === value));
+      if (!row) throw Error('Missing history');
+      return { digest, accepted: row.accepted, reason: row.reason, receiptHash: row.receiptHash ?? null };
+    },
     decide(digest, proposal) {
       update = { project, session: ownerSession, epoch, request: request.request, task: request.task, digest, disruptive: proposal.disruptive };
       const row = f.core.decideTaskUpdate(f.options.directory, update);
       return { digest, accepted: row.accepted, reason: row.reason };
     },
     acknowledge(digest, receiptHash) {
-      const row = f.core.acknowledgeTaskUpdate(f.options.directory, update, receiptHash);
+      const row = f.core.acknowledgeTaskUpdate(f.options.directory, saved(digest), receiptHash);
       return { digest: row.update.digest, receiptHash: row.receiptHash };
     },
     release(digest, receiptHash) {
-      const row = f.core.releaseTaskUpdate(f.options.directory, update, receiptHash);
+      const row = f.core.releaseTaskUpdate(f.options.directory, saved(digest), receiptHash);
       return { digest: row.update.digest, receiptHash: row.receiptHash };
     },
   };
@@ -5729,17 +5744,19 @@ test('T13: retired review terminal evidence uses exact candidate and coherent hi
   f.cli('run', 'done', 'R1', '--status', 'done'); f.cli('run', 'add', 'T1', '--role', 'code-reviewer');
   const prepared = f.prepare({ ...f.input, run: 'R2', name: 'later_review' });
   const row = f.core.readAdmission(f.options.directory).preparations.find(value => value.id === prepared.preparation);
+  const { taskUpdateHistory } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update-history.mjs')));
+  const history = taskUpdateHistory(f.options);
   const input = { project: f.options.projectDirectory, target: row.runTarget, review: row.review };
-  assert.deepEqual(f.tool.validateTerminalAssignment(input, f.env), row.runTarget);
+  assert.deepEqual(f.tool.validateTerminalAssignment(input, f.env, history), row.runTarget);
   f.git('commit', '--quiet', '--allow-empty', '-m', 'Advanced original branch');
-  assert.throws(() => f.tool.validateTerminalAssignment(input, f.env), /terminal assignment/);
+  assert.throws(() => f.tool.validateTerminalAssignment(input, f.env, history), /terminal assignment/);
   f.git('branch', 'codex/t1-new-candidate');
   update({ branch: 'codex/t1-new-candidate' }, 'a8888888-8888-4888-8888-888888888888');
   const retired = f.core.readAdmission(f.options.directory).taskUpdates.find(value => value.update.disruptive).update;
   input.retirement = { owner: JSON.stringify([retired.project, retired.session, retired.epoch]), request: retired.request, digest: retired.digest };
-  assert.deepEqual(f.tool.validateTerminalAssignment(input, f.env), row.runTarget);
+  assert.deepEqual(f.tool.validateTerminalAssignment(input, f.env, history), row.runTarget);
   update({ branch: 'codex/t1-review' }, 'a9999999-9999-4999-8999-999999999998');
-  assert.deepEqual(f.tool.validateTerminalAssignment(input, f.env), row.runTarget);
+  assert.deepEqual(f.tool.validateTerminalAssignment(input, f.env, history), row.runTarget);
   const fresh = f.prepare({ ...f.input, run: 'R2', name: 'after_away_back' });
   const freshRow = f.core.readAdmission(f.options.directory).preparations.find(value => value.id === fresh.preparation);
   assert.equal(freshRow.generation, 2);
@@ -5748,7 +5765,7 @@ test('T13: retired review terminal evidence uses exact candidate and coherent hi
   const reservation = preparation => ({ preparation: preparation.id, assignment: Object.fromEntries(['project', 'session', 'epoch', 'issuer', 'task', 'run'].map(key => [key, preparation[key]])), rolePlan: preparation.rolePlan });
   assert.throws(() => checkPreparedRunTarget(f.options, reservation(freshRow), freshRow), /terminal assignment/);
   assert.deepEqual(checkPreparedRunTarget(f.options, reservation(row), row), row.runTarget);
-  assert.throws(() => f.tool.validateTerminalAssignment({ ...input, target: { ...row.runTarget, candidate: '2' } }, f.env));
+  assert.throws(() => f.tool.validateTerminalAssignment({ ...input, target: { ...row.runTarget, candidate: '2' } }, f.env, history));
   assert.throws(() => f.core.assertTaskAdmissionOpen(f.options.directory, f.options.project, 'T1', row.id), /generation/);
   const folder = join(f.logbook, 'task-updates');
   const file = readdirSync(folder).map(name => join(folder, name)).find(file => JSON.parse(readFileSync(file, 'utf8')).value.intent.reference.changes.branch);
@@ -5756,7 +5773,7 @@ test('T13: retired review terminal evidence uses exact candidate and coherent hi
   envelope.value.intent.tables.runs.after += 'unexplained retirement\n';
   envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
   writeFileSync(file, JSON.stringify(envelope) + '\n');
-  assert.throws(() => f.tool.validateTerminalAssignment(input, f.env));
+  assert.throws(() => f.tool.validateTerminalAssignment(input, f.env, history));
 });
 
 test('T13: verified and pr-ready metadata retains fresh readiness and PR requirements', async t => {
@@ -6065,3 +6082,143 @@ for (const continued of [false, true]) for (const boundary of ['tasks', 'runs', 
     assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === f.run).status, 'blocked');
   });
 }
+
+for (const alteration of ['accepted-to-rejected', 'rejection-reason', 'rejected-to-accepted', 'missing-decision', 'intent-digest']) {
+  test(`SEC-T13-1: historical receipt refuses ${alteration} without changing either store`, async t => {
+    const f = await nativeTaskUpdateFixture(t), rejected = alteration !== 'accepted-to-rejected';
+    let request = f.request(rejected ? { state: 'briefed' } : { title: 'Accepted title' });
+    const result = f.update(request);
+    assert.equal(result.decision, rejected ? 'task-update-rejected' : 'task-updated');
+    const folder = join(f.assignmentLogbook, 'task-updates'), file = join(folder, readdirSync(folder)[0]);
+    const envelope = JSON.parse(readFileSync(file, 'utf8'));
+    if (alteration === 'accepted-to-rejected') envelope.value.outcome = { accepted: false, reason: 'private forged rejection /hidden/path' };
+    if (alteration === 'rejection-reason') envelope.value.outcome.reason = 'private forged rejection /hidden/path';
+    if (alteration === 'rejected-to-accepted') envelope.value.outcome = { accepted: true, reason: '' };
+    if (alteration === 'missing-decision') {
+      request = { ...request, request: 'e1111111-1111-4111-8111-111111111111' };
+      envelope.value.intent.reference.request = request.request;
+    }
+    if (alteration === 'intent-digest') {
+      // An unrelated gate is valid saved data and leaves this task's calculated delta unchanged.
+      envelope.value.intent.proposal.facts.gates.push({ id: 'G99', task: 'T99', question: 'Unrelated gate',
+        options: 'yes|no', recommendation: 'no', default: '', answer: '', at: '2025-01-01T00:00:00Z' });
+    }
+    envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
+    const name = createHash('sha256').update(JSON.stringify([envelope.value.intent.reference.owner, request.request])).digest('hex') + '.json';
+    writeFileSync(join(folder, name), JSON.stringify(envelope) + '\n');
+    const before = updateTableBytes(f), journal = journalBytes(f);
+    let historyReached = false;
+    if (alteration === 'intent-digest') {
+      const { run, coordination } = await taskUpdateCoordinator(f, request);
+      assert.throws(() => run({ ...coordination, history(...args) { historyReached = true; return coordination.history(...args); } }));
+      assert.equal(historyReached, true, 'the changed intent is valid domain data; refusal needs independent journal proof');
+    } else assert.throws(() => f.update(request));
+    assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
+  });
+}
+
+for (const rejected of [false, true]) test(`SEC-T13-1: actual MCP refuses a forged ${rejected ? 'rejected' : 'accepted'} historical reason and preserves a later pending update`, async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request(rejected ? { state: 'briefed' } : { title: 'Historical title' });
+  f.update(request);
+  const folder = join(f.assignmentLogbook, 'task-updates'), file = join(folder, readdirSync(folder)[0]);
+  const envelope = JSON.parse(readFileSync(file, 'utf8'));
+  envelope.value.outcome = { accepted: false, reason: 'private forged rejection /hidden/path' };
+  envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
+  writeFileSync(file, JSON.stringify(envelope) + '\n');
+  const later = f.request({ title: 'Later pending' }, 'e2222222-2222-4222-8222-222222222222');
+  const { run, coordination } = await taskUpdateCoordinator(f, later);
+  assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected ack outage'); } }));
+  const pending = join(f.assignmentLogbook, 'review-pending.json'), pendingBytes = readFileSync(pending, 'utf8');
+  const before = updateTableBytes(f), journal = journalBytes(f), client = await connect(t, f, '0.160.0', '', 'sage_update_task');
+  const response = await client.call(request);
+  assert.match(response.error ?? '', /\[invalid-state\]/);
+  assert.doesNotMatch(JSON.stringify(response), /private forged|hidden\/path/);
+  assert.equal(readFileSync(pending, 'utf8'), pendingBytes);
+  assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
+  await client.close();
+});
+
+test('SEC-T13-1: native recovered terminal refuses a rejected receipt forged into transition history', async t => {
+  const f = await nativeTaskUpdateFixture(t), transcript = f.childTranscript();
+  appendRecoveryCheckpoint(transcript);
+  const read = await assignmentReader(f); appendAssignmentRecovery(transcript, read());
+  const request = f.request({ branch: 'codex/t1-forged-history' });
+  assert.equal(f.update(request).decision, 'task-update-rejected');
+  const folder = join(f.assignmentLogbook, 'task-updates'), file = join(folder, readdirSync(folder)[0]);
+  const envelope = JSON.parse(readFileSync(file, 'utf8'));
+  envelope.value.outcome = { accepted: true, reason: '' };
+  envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
+  writeFileSync(file, JSON.stringify(envelope) + '\n');
+  for (const [table, pair] of Object.entries(envelope.value.intent.tables)) writeFileSync(join(f.assignmentLogbook, `${table}.tsv`), pair.after);
+  appendReport(f);
+  const journal = journalBytes(f), tables = updateTableBytes(f);
+  assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
+  assert.deepEqual(journalBytes(f), journal); assert.deepEqual(updateTableBytes(f), tables);
+});
+
+for (const fault of ['promise', 'thenable', 'missing-key', 'wrong-hash']) test(`SEC-T13-1: historical callback refuses ${fault} proof without journal writes`, async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Saved title' });
+  f.update(request);
+  const { run, coordination } = await taskUpdateCoordinator(f, request);
+  const before = updateTableBytes(f), journal = journalBytes(f);
+  let historyReached = false;
+  assert.throws(() => run({ ...coordination, history(...args) {
+    historyReached = true;
+    const proof = coordination.history(...args);
+    if (fault === 'promise') return Promise.resolve(proof);
+    if (fault === 'thenable') return Object.defineProperty(proof, 'then', { value() {} });
+    if (fault === 'missing-key') { delete proof.reason; return proof; }
+    return { ...proof, receiptHash: '0'.repeat(64) };
+  } }), error => error.code === 'invalid-state');
+  assert.equal(historyReached, true);
+  assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
+});
+
+for (const rejected of [false, true]) test(`SEC-T13-1: legitimate ${rejected ? 'rejected' : 'accepted'} history preserves later pending bytes`, async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request(rejected ? { state: 'briefed' } : { title: 'Original title' });
+  const first = f.update(request);
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  const later = f.request({ title: 'Later title' }, 'e3333333-3333-4333-8333-333333333333');
+  const { run, coordination } = await taskUpdateCoordinator(f, later);
+  assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected acknowledgement outage'); } }));
+  const pending = join(f.assignmentLogbook, 'review-pending.json'), marker = readFileSync(pending, 'utf8');
+  const before = updateTableBytes(f), journal = journalBytes(f);
+  assert.deepEqual(f.update(request), rejected ? first : { ...first, decision: 'task-update-history' });
+  assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
+  assert.equal(readFileSync(pending, 'utf8'), marker);
+  assert.equal(f.update(later).task.title, 'Later title');
+});
+
+test('SEC-T13-1: historical accepted receipt without acknowledgement refuses without creating proof', async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Published but unacknowledged' });
+  const { run, coordination } = await taskUpdateCoordinator(f, request);
+  assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected acknowledgement outage'); } }));
+  // Removing the marker before acknowledgement is corruption, not a supported crash state.
+  rmSync(join(f.assignmentLogbook, 'review-pending.json'));
+  const before = updateTableBytes(f), journal = journalBytes(f);
+  assert.throws(() => f.update(request), error => error.code === 'invalid-state');
+  assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
+  assert.equal(f.core.readAdmission(f.options.directory).taskUpdates[0].receiptHash, undefined);
+});
+
+test('SEC-T13-1: MCP reports structurally corrupt journal as invalid saved state', async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Saved title' });
+  f.update(request);
+  const file = join(f.options.directory, readdirSync(f.options.directory).sort().at(-1));
+  writeFileSync(file, '{}\n');
+  const before = updateTableBytes(f), journal = journalBytes(f), client = await connect(t, f, '0.160.0', '', 'sage_update_task');
+  const response = await client.call(request);
+  assert.match(response.error ?? '', /\[invalid-state\]/);
+  assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal); await client.close();
+});
+
+
+test('SEC-T13-1: valid historical coordination callback returns original success without mutation', async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Valid historical callback' });
+  const original = f.update(request), { run, coordination } = await taskUpdateCoordinator(f, request);
+  const before = updateTableBytes(f), journal = journalBytes(f); let historyReached = false;
+  const result = run({ ...coordination, history(...args) { historyReached = true; return coordination.history(...args); } });
+  assert.equal(historyReached, true);
+  assert.deepEqual(result, { ...original, decision: 'task-update-history' });
+  assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
+});

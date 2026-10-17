@@ -12,7 +12,8 @@ import { REVIEW_ROLES, parseReviewTarget } from "./review.mjs";
 const KEY = /^[A-Za-z0-9_.:-]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_RECORDS = 4096, MAX_BYTES = 64 * 1024;
-const refuse = (reason) => { throw new Error(`Admission: ${reason}`); };
+export class AdmissionError extends Error {}
+const refuse = (reason) => { throw new AdmissionError(`Admission: ${reason}`); };
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 const json = (value) => JSON.stringify(value);
 const fields = (value, keys) => {

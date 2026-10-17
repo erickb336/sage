@@ -562,7 +562,7 @@ const taskUpdates = coordinatedWrites({ schema: 6, tables: ["tasks", "runs", "de
 /** Native task updates require a trusted durable admission decision, never a model-supplied proof. */
 function updateRequestedTask(input, env, coordination) {
   if (!input || typeof input.project !== "string" || !input.project || !coordination
-    || ["decide", "acknowledge", "release"].some(key => typeof coordination[key] !== "function")) updateDeny();
+    || ["decide", "acknowledge", "release", "history"].some(key => typeof coordination[key] !== "function")) updateDeny();
   const { project, ...request } = input, reference = updateReference(request), dir = storeDir(project, env);
   if (realpathSync(dir) !== resolve(dir)) updateDeny();
   let phase = "state";
@@ -1068,7 +1068,7 @@ function captureRunAssignment(input, env = process.env) {
 }
 
 /** Read terminal evidence against a coherent snapshot. This never grants run authority. */
-function validateTerminalAssignment(input, env = process.env) {
+function validateTerminalAssignment(input, env = process.env, historyProof) {
   const deny = () => refuse("The terminal assignment has no coherent task and run evidence.");
   if (!updateKeys(input, ["project", "target", "review", ...(Object.hasOwn(input ?? {}, "retirement") ? ["retirement"] : [])]) || typeof input.project !== "string" || !input.project
     || !updateKeys(input.target, ["task", "run", "role", "round", "taskBranch", "runBranch", "candidate"])) deny();
@@ -1101,7 +1101,9 @@ function validateTerminalAssignment(input, env = process.env) {
     const retired = retirement !== null && !(pending && retires(pending));
     let proven = immutable(current) && active(current) && !retired;
     if (!proven) {
-      const history = taskUpdates.history(dir).filter(row => row.outcome.accepted && row.intent.reference.task === target.task)
+      const receipts = taskUpdates.history(dir).filter(row => row.intent.reference.task === target.task);
+      for (const receipt of receipts) taskUpdates.authenticate(receipt, historyProof);
+      const history = receipts.filter(row => row.outcome.accepted)
         .map(row => ({ retires: row.intent.proposal.disruptive && retires(row.intent), before: pair(Object.fromEntries(["tasks", "runs"].map(table => [table, updateRows(table, row.intent.tables[table].before)])), true),
           after: pair(Object.fromEntries(["tasks", "runs"].map(table => [table, updateRows(table, row.intent.tables[table].after)])), true) })).filter(row => row.before && row.after);
       // Follow exact coherent task/run pairs; a gap cannot explain a changed target.

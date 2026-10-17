@@ -1,3 +1,4 @@
+import { taskUpdateHistory } from "./task-update-history.mjs";
 import { assertNativeTaskOpen } from "./task-authority.mjs";
 import { createStateTool, REVIEW_ROLES, readAdmission } from "sage-core";
 import { validateLogbookLocation } from "./run-report.mjs";
@@ -33,7 +34,7 @@ export function checkPreparedRunTarget(options, assigned, prepared) {
   const retirement = retired ? { owner: JSON.stringify([retired.project, retired.session, retired.epoch]),
     request: retired.request, digest: retired.digest } : null;
   return tool.validateTerminalAssignment({ project: options.projectDirectory, target: prepared.runTarget,
-    review: prepared.review ?? null, retirement }, { ...process.env, SAGE_HOME: options.logbookRoot });
+    review: prepared.review ?? null, retirement }, { ...process.env, SAGE_HOME: options.logbookRoot }, taskUpdateHistory(options));
 }
 
 /** New authority requires both the child target and the original issuing lead. */
