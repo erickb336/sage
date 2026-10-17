@@ -79,6 +79,10 @@ export function createNativePolicy(options, evaluateTool) {
       const trackedChild = child && (before.sage
         || (before.owner && readAdmission(fixed.directory).bindings.some(row => row.project === fixed.project
           && row.session === `codex:${event.session_id}` && row.epoch === before.owner.epoch && row.child === native.actor)));
+      // Sage off changes orchestration rules, not whether a tracked native turn is still active.
+      if (trackedChild) readChildTurn(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
+        session: event.session_id, child: native.actor, turn: event.turn_id,
+      }, { active: true });
       const trackedMessage = trackedChild && event.tool_name === "collaborationsend_message";
       if (trackedMessage) {
         const message = event.tool_input;
@@ -149,7 +153,7 @@ export function createNativePolicy(options, evaluateTool) {
       if (readCommand && JSON.stringify(readCommand()) !== JSON.stringify(command)) refuse();
       const recovered = child ? checkChildToolRecovery(event, native, fixed, recovery?.assignment) : null;
       if (recovered?.required && !recoveryReader) return recoveryDenied;
-      if (before.sage && child) readChildTurn(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
+      if (trackedChild) readChildTurn(event.transcript_path, { sessionsDir: fixed.sessionsDir }, {
         session: event.session_id, child: native.actor, turn: event.turn_id,
       }, { active: true });
       if (assignment && JSON.stringify(checkBoundRunAssignment(fixed, assignment, bound.runTarget)) !== JSON.stringify(activeRun)) refuse();
