@@ -2611,7 +2611,7 @@ test('native Sage child messages reach only the chief even when the supplied eva
 test('native Sage child message restriction survives off while ordinary children and the chief retain evaluator access', async t => {
   const f = await completionFixture(t);
   f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
-  const event = { ...patch(turns[1]), tool_name: 'collaborationsend_message', tool_use_id: 'off-message', tool_input: { target: '/root/peer', message: 'Fixed progress report' } };
+  const event = { ...patch(turns[1]), tool_name: 'collaborationsend_message', tool_use_id: 'off-message', tool_input: { target: '/root/peer', message: 'Fixed progress report' }, transcript_path: join(f.mode.sessionsDir, `${childActor}.jsonl`) };
   assert.equal((await f.evaluate(f.policy, event, childActor)).decision, 'deny');
   for (const actor of [session, 'a1111111-2222-4333-8444-555555555555']) {
     assert.deepEqual(await f.evaluate(f.policy, { ...event, tool_use_id: `ordinary-${actor}` }, actor), { decision: 'pass' });
