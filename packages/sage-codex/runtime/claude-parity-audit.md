@@ -1,74 +1,59 @@
 # Claude parity audit for issue #88
 
-This audit compares repository behavior with the prepared Codex runtime. It is a source audit, not a live Claude or installed Codex pilot.
+Prepared Codex components now support owner activation, context restoration, assignment delivery, report intake and exact-target review operations. Full automatic Sage remains disabled. This audit describes repository contracts and bounded diagnostic evidence, not a live Claude comparison or installed Codex pilot.
 
-| Area | Claude baseline | Codex gap and required result |
+The installed skill-led workflow uses explicit instructions and manual coordination. It does not supply persistent automatic enforcement. Prepared components require isolated configuration and verified native identities; their existence does not make the installed workflow automatic.
+
+| Area | Claude baseline | Prepared Codex capability and remaining limit |
 | --- | --- | --- |
-| Owner activation | Hook checks owner text, toggles Sage, delivers chief instructions once | Prepared owner identity/mode adapter is not installed; wire verified activation and instruction delivery |
-| Off | Mode hook clears Sage, instruction-given and autopilot flags; direct chief edits resume | Match this transition; do not add native interruption to mode-off |
-| Compaction | PostCompact clears instruction-given; next prompt restores chief instructions | Add native compaction restoration without a second owner activation |
-| Chief authority | Chief delegates file edits; only state tool writes logbook | Prepared patch check alone is incomplete; cover all supported write and command paths |
-| Routes | Shared chief names least routes by size and added risk reviews | Use the same shared routes, task states and product gates; complete installed chief workflow |
-| Brief | Ten fields required before spawn | Immutable prepared briefs exist; join every admitted native dispatch to its exact saved brief |
-| Roles and limits | Chief starts leads; leads start permitted children; project/total/lead/child caps | Shared admission exists but installed enforcement and complete lifecycle release are missing |
-| Native start/result | Hook binds slots and handles spawn results/failures | Prepared event joins require verified result and child identity; establish delivery order through actual transport |
-| Report stop | First incomplete report blocks; second stop proceeds to avoid an endless loop | Preserve bounded correction behavior; terminal completion is not acceptance of an incomplete report |
-| Slot release | Subagent stop, failed dispatch and registry reconciliation; lease expiry also exists | Native stop/result evidence must identify the exact assignment; no stale event can release a newer slot |
-| Reports/verdicts | Chief records run result, findings and exact-head verdicts using state commands | Add verified report intake and durable records; child claims do not directly write the logbook |
-| Reviews/repairs | Shared rounds, held/replan and clean cycles; a new head restarts cycles | Use shared state/merge-check behavior, including blocking verdict regression |
-| Manual merging | Autopilot starts off; verified work waits for owner merge | First delivery step matches this behavior |
-| Autopilot | Explicit owner on; chief merges only after checks for the exact commit; children never merge | Prepared Codex adapter always false; a separate step is required for full parity |
-| Board/status | Shared rich board and status dispatch, source-qualified questions | Model is shared; installed Codex phrase delivery remains unverified |
-| Arena/models | Shared chief describes candidate/judge workflow; provider binds model settings | Preserve arena workflow, use Codex model names and supported native configuration |
+| Owner activation | The hook checks owner text, changes mode and delivers chief instructions | [Owner mode](mode.md) and [instruction delivery](chief-output.md) exist. Native ordinary/on/off/on delivery is verified with simulated responses; installed automatic activation remains disabled. |
+| Off | The mode hook clears Sage, instruction-given and autopilot flags; direct chief edits resume | Off stops new chief instruction delivery and ordinary role restrictions. It does not interrupt agents. Tracked terminal turns still cannot use tools; terminal evidence remains readable. |
+| Compaction | PostCompact clears instruction-given; the next prompt restores chief instructions | [Prepared restoration](compaction.md) exists for supported local native compaction. Other recovery contexts and installed use remain unverified. |
+| Chief authority | The chief delegates file edits; the state tool writes the logbook | Role restrictions and [patch checks](patch-policy.md) exist. The full evaluator, all write paths and trusted execution context remain incomplete. |
+| Routes | Shared chief rules choose routes by size and add risk reviews | Shared routes, task states and product gates remain the target. All routes and unanswered-gate handling still need complete workflow enforcement. |
+| Brief and assignment | Ten brief fields precede dispatch | [Preparation](preparation.md), saved instructions and exact dispatch/delivery joins exist. A receipt alone grants no dispatch authority or proof of model application. |
+| Roles and limits | Chiefs start leads; leads start permitted children within shared limits | Shared admission and prepared native role checks exist. Installed enforcement and full lifecycle recovery remain incomplete. |
+| Native start and continuation | Hooks bind slots and handle results and failures | [Child binding](child-binding.md) and [continuation binding](native-followup.md) join exact saved identities. Transport diagnostics establish selected routes, not every race or installed operation. |
+| Report stop | One incomplete report blocks; the next stop avoids an endless loop | [Completion](child-stop.md) keeps bounded correction separate from report acceptance. A terminal result does not validate an incomplete report. |
+| Slot release | Stop, failed dispatch and registry reconciliation release slots; leases also exist | Exact native terminal and failed-start evidence can settle assignments. [Interrupted-run closure](interrupted-run.md) records an explicit non-success ending. Abrupt loss remains #246. |
+| Reports and verdicts | The chief records reports, findings and exact-head verdicts | [Report intake](report-intake.md), durable receipts, run finishing and [review acceptance](review-acceptance.md) exist. Claims do not directly certify task success. |
+| Reviews and repairs | Shared rounds, holds and clean cycles apply; a new head restarts cycles | Shared state checks and [authenticated task updates](task-update.md) exist. Full required-cycle workflows and real-model review quality remain unverified. |
+| Manual merging | Autopilot starts off; verified work waits for owner merge | Manual merging remains the first automatic-workflow target. Prepared Codex policy does not authorize merges. |
+| Autopilot | Explicit owner activation enables exact-commit merge checks; children never merge | Prepared Codex autopilot stays false. A separate verified delivery step is required for parity. |
+| Board and status | Shared board and status routes show source-qualified questions | The board model and manual skill routes exist. Installed automatic phrase delivery remains unverified. |
+| Arena and models | Shared chief rules describe candidates and judges; the provider binds model settings | Preserve the shared workflow with Codex model settings. A complete real-model arena pilot remains unverified. |
 
-## Interpretation boundaries
+## Evidence and its limits
 
-Parity means the same owner experience, task routes and shared rules through each provider's supported transport. It does not mean copying Claude-specific metadata, tool names or process leases into Codex.
+The prepared handlers in `chief-output.mjs` render the shared rules. `mcp-server.mjs` consumes verified owner prompts and supported compaction events. The [restoration contract](compaction.md) distinguishes local manual and automatic compaction from remote, child and cross-session recovery.
 
-The report hook's second-stop escape prevents a continuation loop. It does not provide evidence that missing report fields became valid. Separate report acceptance from the native terminal result and capacity accounting.
+These merged units provide bounded evidence. Their original reports retain their own execution results; this audit adds no new test counts or native runs.
 
-Claude's lease expiry and registry cleanup cannot be assumed to map to Codex. Issue #88 explicitly requires authoritative lifecycle evidence and protection against stale releases. Verify the Codex-native mechanism while preserving the owner's limits and visible task behavior.
+- [PR #261](https://github.com/erickb336/sage/pull/261): four resumed owner turns observe both exact instruction parts. Off retains earlier context without another injection. One owner epoch remains stable after activation.
+- [PR #263](https://github.com/erickb336/sage/pull/263): three native patch trials verify an ordinary off-mode write, a protected-path refusal and a chief-role refusal. The fixture supplies a fixed local working directory and protected logbook root. The protected target also lies outside the writable workspace; exact Sage denial evidence distinguishes the observed refusal from file absence alone.
+- [PR #257](https://github.com/erickb336/sage/pull/257): authenticated task updates coordinate logbook publication with admission decisions, recovery and task generations. Historical retries do not restore old state or certify current readiness.
+- [PR #259](https://github.com/erickb336/sage/pull/259): tracked terminal child turns cannot regain tool authority after Sage off. Permission refusal does not fabricate completion or release capacity.
+- [PR #249](https://github.com/erickb336/sage/pull/249): prepared nested report transfer supports the lead-to-reviewer route. Report transport does not prove independent review quality or a complete review cycle.
 
-## First implementation unit
+Native diagnostics use CLI 0.160.0, temporary profiles and fixed simulated responses. Exact request bytes, hook identities, tool results and artifacts support their stated claims. Instruction delivery is not model application. Report inspection, run completion, review acceptance and task verification are separate operations.
 
-Produce a reproducible isolated native transport probe for the supported installed runtime. Record matching dispatch/result/start/stop identities and running/completed states. Check owner prompt identity, race ordering and compaction in later units. Do not activate the automatic workflow until those boundaries and the complete tool policy pass.
+## Remaining activation requirements
 
-Current local CLI reports version 0.160.0, matching the prepared adapter's exact version. Generated native schemas expose turn interruption keyed by both thread and turn, and a separate turn-completed notification. Schema presence is not proof that an active child stopped.
+[Issue #88](https://github.com/erickb336/sage/issues/88) still requires the complete evaluator, all task routes, unanswered product gates, full review/repair cycles and real-model and installed pilots. The [automatic workflow design](automatic-workflow-design.md) remains the target, with manual merging first and gated autopilot later.
 
-## Baseline source pointers
+These specific gaps remain open:
 
-- `packages/sage-claude/hooks/sage-hook.mjs`: mode switching, compaction, brief/report validation and slot lifecycle.
-- `packages/sage-core/roles/chief-of-staff.md`: routes, reports, repairs, cycles, owner gates and arena.
-- `packages/sage-claude/chief-bindings.json`: provider dispatch and autopilot behavior.
-- `packages/sage-codex/runtime/mode.mjs`, `policy.mjs`, `events.mjs`: prepared native integration and current omissions.
+- [#239](https://github.com/erickb336/sage/issues/239): project-wide PR ownership.
+- [#243](https://github.com/erickb336/sage/issues/243): trusted effective execution context. Fixed local patch fixtures do not supply a general native producer.
+- [#246](https://github.com/erickb336/sage/issues/246): authoritative settlement after abrupt process loss. A timeout, lease or signal alone is not completion evidence.
+- [openai/codex#41979](https://github.com/openai/codex/issues/41979): required-hook failure handling. The prepared policy cannot enforce a rule when the required hook does not run. Disconnection evidence does not establish every absent, untrusted, timed-out, malformed or reload case.
 
-## Native transport result
+## Interpretation and cleanup
 
-The isolated 0.160.0 probe observed one spawn request, matching successful result, child start and child stop. It verified the same child/session/path identities, a running child while its model response was held, and the exact terminal completion marker. No real model or owner logbook participated.
+Parity means the same owner experience, routes and shared rules through each provider's supported transport. It does not mean copying Claude metadata, tool names or process leases into Codex. Claude source descriptions here are not live Claude verification.
 
-The native task arrived as an `agent_message` with an opaque payload. The fixture compares exact transport bytes; it cannot prove real-model consumption. Earlier fixture failures came from a noncanonical temporary path and an incorrect user-message assertion. Both were corrected before the successful result.
+The second report-stop escape prevents a loop; it does not validate missing fields. Native stop evidence and capacity accounting do not accept a report's claims. Mode-off and explicit cancellation remain distinct.
 
-Run `node scripts/probe-codex-lifecycle.mjs` with fake process tools first on PATH. It requires Codex 0.160.0 and a loopback listener. It creates an isolated temporary profile and trusts only the test observer there. It does not trust or change hooks in the owner's profile.
+Run diagnostics only with fake process tools first on PATH. They use isolated profiles and do not change trust in the owner's profile. Use the owning diagnostic's instructions and preserve evidence when a check fails.
 
-Run the same probe with `--deny-spawn` to check a fixed pre-tool denial. The native parent receives the exact denial reason and finishes. The observer must record one spawn attempt, no successful spawn result, no child start and no child stop. The simulated response server must receive no child request.
-
-Both saved variants passed locally on Codex 0.160.0. This proves the denial boundary for this native spawn path. It does not prove complete Sage command policy or coverage of other tools.
-
-Event ordering under races, compaction, subsequent child tasks and real-model consumption remain separate checks. These results do not activate Sage.
-
-## Probe cleanup
-
-The probe removes its temporary profile after the native process closes.
-Its two-minute timeout ends the transport and gives the native process 30 seconds to close.
-If needed, it sends SIGTERM through its owned child handle, then SIGKILL after another 30 seconds.
-It never selects a process from a PID file or the system process list.
-A signal is not proof of exit: the probe waits for actual closure before it reports cleanup.
-A spawn error also waits for closure. If the operating system cannot stop the child, cleanup remains unverified.
-The final cleanup record confirms that the temporary folder is absent.
-
-Older probes can leave folders named `sage-codex-one-child-` followed by random
-characters. To find the temporary directory, run `node -p 'require("node:os").tmpdir()'`.
-After your probe exits, inspect each matching folder in your file manager.
-Remove only old probe folders that contain the test profile, scripts, and captured
-events. Keep any folder used by a probe that is still running. Do not delete the
-whole temporary directory or unrelated Sage folders.
+Current owner-turn and patch probes track version and execution processes from launch; their setup helper owns and awaits its setup process. Cleanup waits for actual closure and closes response transports and servers. It preserves failed evidence and reports incomplete cleanup. A timeout or signal alone never proves exit. These helper guarantees do not establish abrupt-loss recovery for installed Sage.
