@@ -19,7 +19,7 @@ export function fixtureInterruptDecision(input, context, enabled) {
 }
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, followupCapacity = false, capacityFailure = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, nestedReport = false, interruption = false, readTask = false, updateTask = false, resumedFailure = false, env = process.env } = {}) {
+export async function setupCompletion(root, { failedSpawn = false, followupCapacity = false, capacityFailure = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, patchProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, nestedReport = false, interruption = false, readTask = false, updateTask = false, resumedFailure = false, env = process.env } = {}) {
   cpSync(new URL("./policy-diagnostic.mjs", import.meta.url), join(root, "policy-diagnostic.mjs"));
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
@@ -74,6 +74,7 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
     import { serveHooks } from './plugin/runtime/mcp-server.mjs';
     import { capturePolicyFailure } from './policy-diagnostic.mjs';
     import { createNativePolicy } from './plugin/runtime/policy.mjs';
+    import { patchEditDecision } from './plugin/runtime/file-policy.mjs';
     const options = ${JSON.stringify(options)};
     const interruptDecision = ${fixtureInterruptDecision.toString()};
     const allowed = new Set([...(${JSON.stringify(acceptReview || nestedReport)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun || interruption)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup || followupCapacity)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
@@ -93,6 +94,13 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
         }
         const interrupt = interruptDecision(input, context, ${JSON.stringify(interruption)});
         if (interrupt) return interrupt;
+        if (${JSON.stringify(patchProbe)} && input.tool_name === 'apply_patch') {
+          // LOCAL fixture only: native policy authenticates actor/mode; this test fixes cwd and roots.
+          const result = patchEditDecision(input, {sage: context.sage, chief: context.actor === input.session_id}, {cwd: options.projectDirectory, roots: [options.logbookRoot]});
+          writeFileSync(${JSON.stringify(join(root, "patch-policy-receipt.json"))}, JSON.stringify({
+            session:input.session_id,turn:input.turn_id,call:input.tool_use_id,sage:context.sage,role:context.role,result}), {flag:'wx'});
+          return result;
+        }
         if (${JSON.stringify(roleEditProbe)} && input.tool_name === 'apply_patch') {
           writeFileSync(${JSON.stringify(join(root, "edit-evaluation.json"))}, JSON.stringify({call:input.tool_use_id,role:context.role}), {flag:'wx'});
           return {decision:'pass'};
