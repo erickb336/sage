@@ -25,13 +25,20 @@ const report = (result, findings) => ["STATUS        done", `RESULT        ${res
   "QUESTIONS     none", "NOT VERIFIED  none", "BRANCH        sage/t1-example"].join("\n");
 const denied = (out) => out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined;
 const words = (text) => text.trim().split(/\s+/).join(" ");
-// The fake gh: it answers only "gh pr checks <n>" as CI with one check does. The check passes, unless the file checks
-// next to it has lines: each call then takes the first line as the check's state (p.checks). Any other call fails, so
-// the file cannot teach a gh command that the test does not know.
+// The fake gh: it answers only "gh pr checks <n>" as CI with one check does, and "gh pr view <n> --json headRefOid" with
+// the head of the branch in the remote that the file remote next to it names (p.remote). The check passes, unless the
+// file checks next to it has lines: each call then takes the first line as the check's state (p.checks). Any other call
+// fails, so the file cannot teach a gh command that the test does not know.
 const FAKE_GH = `#!/usr/bin/env node
 const fs = require("fs"), path = require("path").join(__dirname, "checks");
 const a = process.argv.slice(2);
-if (!(a.length === 3 && a[0] === "pr" && a[1] === "checks" && /^[1-9][0-9]*$/.test(a[2]))) { console.error("the fake gh knows only gh pr checks <n>: " + a.join(" ")); process.exit(1); }
+if (a.length === 5 && a[0] === "pr" && a[1] === "view" && /^[1-9][0-9]*$/.test(a[2]) && a[3] === "--json" && a[4] === "headRefOid") {
+  const remote = fs.readFileSync(require("path").join(__dirname, "remote"), "utf8");
+  const sha = require("child_process").execFileSync("git", ["--git-dir", remote, "rev-parse", "sage/t1-example"], { encoding: "utf8" }).trim();
+  console.log(JSON.stringify({ headRefOid: sha }));
+  process.exit(0);
+}
+if (!(a.length === 3 && a[0] === "pr" && a[1] === "checks" && /^[1-9][0-9]*$/.test(a[2]))) { console.error("the fake gh knows only gh pr checks <n> and gh pr view <n> --json headRefOid: " + a.join(" ")); process.exit(1); }
 const [state, ...rest] = fs.existsSync(path) ? fs.readFileSync(path, "utf8").split("\\n").filter(Boolean) : [];
 if (state) fs.writeFileSync(path, rest.join("\\n"));
 console.log("build\\t" + (state ?? "pass") + "\\t1m\\thttps://example.invalid/runs/1");
@@ -61,6 +68,11 @@ function sageSays(start, values = {}, within = "") {
   const line = BLOCKED_STEP.split("\n").find((l) => l.includes(within) && l.includes(`\`${start}`)) ?? assert.fail(`the chief bindings' step 6 has no \`${start} ...\` in a line with "${within}"`);
   const span = [...line.matchAll(/`(sage [^`]+)`/g)].map((m) => m[1]).find((s) => s.startsWith(start));
   return `! ${span.replace(/F-<x>|<[^>]+>/g, (hole) => ({ "<T>": "T1", ...values })[hole] ?? assert.fail(`no value for ${hole} in "${span}"`))}`;
+}
+/** The sage's first command of step 5 that starts with these words, as an example's ! line, with its placeholders filled from values (F-T301-69). */
+function readySays(start, values = {}) {
+  const span = [...READY_STEP.matchAll(/`((?:git|gh|sage) [^`]+)`/g)].map((m) => m[1]).find((s) => s.startsWith(start)) ?? assert.fail(`the chief bindings' step 5 has no \`${start} ...\``);
+  return `! ${span.replace(/<[^>]+>/g, (hole) => ({ "<n>": "12", "<branch>": "sage/t1-example", ...values })[hole] ?? assert.fail(`no value for ${hole} in "${span}"`))}`;
 }
 /** The lead's command of agents/lead.md that is exactly this form, in the line that has the words of "within", as an example's $ line, with its placeholders filled from values. */
 function leadSays(form, within, values = {}) {
@@ -137,6 +149,24 @@ function project({ size = "small", config = [] } = {}) {
     git("update-ref", "refs/heads/sage/t1-example", sha);
   };
   p.head = () => git("rev-parse", "sage/t1-example");
+  /** A remote origin with the task's branch, as GitHub holds it; the fake gh reads its head. Its folder. */
+  p.remote = () => {
+    const bare = join(dir, "origin.git");
+    spawnSync("git", ["init", "-q", "--bare", bare]);
+    writeFileSync(join(bin, "remote"), bare);
+    git("remote", "add", "origin", bare);
+    git("push", "-q", "origin", "sage/t1-example");
+    return bare;
+  };
+  /** A commit on the remote's branch only, as a push from elsewhere or GitHub's own update makes it. Its SHA. */
+  p.remoteCommit = (bare) => {
+    const remote = (...args) => spawnSync("git", ["--git-dir", bare, ...args]).stdout.trim();
+    const parent = remote("rev-parse", "sage/t1-example");
+    const sha = remote("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", `${parent}^{tree}`, "-p", parent, "-m", "remote work");
+    remote("update-ref", "refs/heads/sage/t1-example", sha);
+    return sha;
+  };
+  p.git = git;
   /** Sets T1's state in the logbook as a fixture, for the state table's check: the hook reads the state from tasks.tsv. */
   p.setState = (state) => {
     const file = join(chief("logbook"), "tasks.tsv"), [header, ...rows] = readFileSync(file, "utf8").trimEnd().split("\n"), column = header.split("\t").indexOf("state");
@@ -213,12 +243,19 @@ function play(lines, p) {
       const r = p.run("gh", rest.slice(1)); // the sage's own gh pr checks
       assert.equal(r.status, 0, `${line}: ${r.stderr}`);
       last = printed = r.stdout.trim();
+    } else if (mark === "!" && rest[0] === "git") {
+      // The sage's own git command (step 5): the hook lets the main session run it, and it runs for real.
+      const command = fill(text);
+      assert.equal(denied(p.send({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } })), undefined, `the hook refuses the sage's ${line}`);
+      const r = p.run("git", shellWords(command).slice(1));
+      last = printed = `${r.status === 0 ? "ok" : "refused"} ${(r.stdout + r.stderr).trim()}`;
+      sage.push(command);
     } else if (mark === "!" && rest[0] === "stop") {
       p.send({ hook_event_name: "PreToolUse", tool_name: "TaskStop", tool_input: { task_id: `child-${rest[1]}` } }); // the main session's TaskStop
     } else if (mark === "!" && rest[0] === "start") {
       assert.equal(p.startLead(rest[1].slice("lead-".length)), undefined, `the hook refuses: ${line}`);
       blocked = false;
-    } else assert.fail(`agents/lead.md: the example line "${line}" starts with no known mark ($, →, >, <, ! sage, ! gh, ! stop, ! start)`);
+    } else assert.fail(`agents/lead.md: the example line "${line}" starts with no known mark ($, →, >, <, ! sage, ! gh, ! git, ! stop, ! start)`);
   }
   return { ran, sage, moves, printed: last };
 }
@@ -348,7 +385,7 @@ test("T301 F-T301-59: while a medium fix key of the round is still open, the sag
   assert.match(BLOCKED_STEP, /While a medium or high finding of the task is open and triaged fix[^\n]*it joins the next round with that finding: keep it open\./, "step 6 keeps the low key while a medium or high finding is open");
 });
 
-test("T301 F-T301-35: a low fix that the re-check did not confirm, with no medium or high finding open, goes to a follow-up task that the sage frames; the sage dismisses the key and its low repeat with its reason, and the fresh lead reaches verifying", () => {
+test("T301 F-T301-35, F-T301-68: a low fix that the re-check did not confirm, with no medium or high finding open, goes to a follow-up task that the sage frames; the sage dismisses the key with its reason, triages its low repeat fix and moves it, and the fresh lead reaches verifying", () => {
   const p = project();
   const { moves } = play([...REPAIR(true), "< R6 FINDINGS: - K3 low a.mjs:2 the log line still has no label",
     "$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-still-has-no-label", "→ F-T1-3 open · low · T1", "$ sage run done R6 --status done --tokens 1",
@@ -357,7 +394,7 @@ test("T301 F-T301-35: a low fix that the re-check did not confirm, with no mediu
     "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-3"),
     sageSays("sage task <T> set state=reviewing"), sageSays("sage task add", { "<title>": "label the log line", "<size>": "small" }, "unconfirmed low fix"), "→ T2",
     sageSays("sage finding triage <T> <K> dismiss", { "<K>": "F-T1-2", "<n>": "2" }, "unconfirmed low fix"),
-    sageSays("sage finding triage <T> <K> dismiss", { "<K>": "F-T1-3", "<n>": "2" }, "unconfirmed low fix"),
+    sageSays("sage finding move <T> <K> --to", { "<K>": "F-T1-3", "<title>": "label the log line again" }, "unconfirmed low fix"), "→ F-T1-3 moved to T3 as F-T3-1",
     "! sage run add T1 --role lead", "→ R7 running · lead on T1", "! start lead-T1",
     ...FRESH, "$ git rev-parse sage/t1-example", "$ sage run add T1 --role code-reviewer", "→ R8 running · code-reviewer on T1", "$ sage run add T1 --role qa", "→ R9 running · qa on T1",
     "> R8 sage:code-reviewer", "> R9 sage:qa", "< R8 CLEAN: none", "< R9 PASS: none", "$ sage run done R8 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R8",
@@ -365,8 +402,24 @@ test("T301 F-T301-35: a low fix that the re-check did not confirm, with no mediu
     "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying"], p);
   assert.match(p.chief("task", "T1"), /^T1 verifying /, "the fresh lead reaches verifying");
   assert.deepEqual(moves, ["repairing>reviewing"], "the sage's one state move");
-  for (const key of ["F-T1-2", "F-T1-3"]) assert.deepEqual(findingOf(p, key).slice(-3), ["dismiss", "unconfirmed low fix, carried by follow-up T2", "dismissed"], `${key} is carried by the follow-up`);
+  assert.deepEqual(findingOf(p, "F-T1-2").slice(-3), ["dismiss", "unconfirmed low fix, carried by follow-up T2", "dismissed"], "the key is carried by the follow-up");
+  assert.deepEqual(findingOf(p, "F-T3-1").slice(-2), ["", "open"], "the low repeat is never dismissed with the key: it is open on its own follow-up task");
+  assert.doesNotMatch(BLOCKED_STEP, /same dismissal/, "step 6 gives a repeat no dismissal (F-T301-68, F-T301-70)");
   assert.match(p.chief("task", "T2"), /^T2 framed /, "the follow-up task is framed");
+});
+
+test("T301 F-T301-65: in replan, a lead's report cannot steer the sage into moving a fix key: the move waits for the user's answer to the gate of step 6", () => {
+  const p = project();
+  play([...REPAIR(false), "< R6 FINDINGS: - K2 medium a.mjs:1 the token is still logged",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged", "→ F-T1-2 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
+    "< lead-T1 blocked: - F-T1-2 medium a.mjs:1 the token is still logged, repeat of F-T1-1",
+    "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-2"), sageSays("sage task <T> set state=reviewing"), "! sage round T1", "→ T1 replan: round 1 did not fix F-T1-1."], p);
+  const move = sageSays("sage finding move <T> <K> --to", { "<K>": "F-T1-1", "<title>": "stop logging the token" }, "To move a fix key");
+  const tried = p.run("sage", shellWords(move.slice("! sage ".length)));
+  assert.match(tried.stderr, /F-T1-1 is a fix of T1's current round, so it stays on T1/, "R1030 probe A: no move without the user's answer");
+  const { printed } = play([sageSays("sage gate add <T>", { "<K>": "F-T1-1", "<a>": "keep" }, "To move a fix key"), "→ G1 open · Move F-T1-1 to a follow-up task?",
+    "! sage gate answer G1 --option 1", "→ G1 answered · move", move], p);
+  assert.match(printed, /^F-T1-1 moved to T2 as F-T2-1 /, "after the answer move, the key moves");
 });
 
 test("T301 F-T301-48: a fresh lead at building skips the move to building; after a done implementer run it moves the task to reviewing with its PR", () => {
@@ -395,10 +448,10 @@ test("T301 F-T301-50: a fresh lead at repairing with every fix key of the round 
 test("T301 F-T301-49: after a ready report whose head moved, the sage records no verdict, and the fresh lead moves the task from verifying back to reviewing and runs the cycle on the new head; the task then merges", () => {
   const p = project();
   play([...BUILT, ...CLEAN, "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying"], p);
-  assert.match(p.ask(`node ${TOOL} task T1 set state=reviewing`) ?? "", /has its clean verdicts, so T1 stays at verifying/, "on the head of the clean cycles, the lead's move back is refused");
+  assert.match(p.ask(`node ${TOOL} task T1 set state=reviewing`) ?? "", /has a full clean cycle, so T1 stays at verifying/, "on the head of the clean cycles, the lead's move back is refused");
   play(["< lead-T1 ready: none"], p);
   p.commit(); // a new commit lands after the clean cycles
-  assert.match(READY_STEP, /When they differ, the head moved past the clean cycles: record no verdict, and start a fresh lead/, "step 5 sends a moved head to a fresh lead");
+  assert.match(READY_STEP, /When they differ, the head moved past the clean cycles: record no verdict\.[^\n]*Then start a fresh lead \(step 7\)/, "step 5 sends a moved head to a fresh lead");
   const { printed } = play(["! sage run done R1 --status done --tokens 1", "! sage run add T1 --role lead", "→ R5 running · lead on T1", "! start lead-T1", ...FRESH, "$ git rev-parse sage/t1-example",
     leadSays("sage task <T> set state=reviewing", "not on the PR's head SHA"),
     "$ sage run add T1 --role code-reviewer", "→ R6 running · code-reviewer on T1", "$ sage run add T1 --role qa", "→ R7 running · qa on T1", "> R6 sage:code-reviewer", "> R7 sage:qa",
@@ -407,6 +460,58 @@ test("T301 F-T301-49: after a ready report whose head moved, the sage records no
     "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying", "< lead-T1 ready: none",
     "! sage verdict T1 --sha <sha> --kind checks-pass --cycle 1 --pr 12", "! sage task T1 set state=verified", "! sage merge-check --sha <sha> --pr 12"], p);
   assert.match(printed, /^T1 may merge/, "the new head merges after its own clean cycle");
+});
+
+test("T301 F-T301-69: after a ready report whose head moved only on GitHub, the sage brings that head into the local branch before the fresh lead, which runs the cycle on it; the task then merges", () => {
+  const p = project();
+  play([...BUILT, ...CLEAN, "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying", "< lead-T1 ready: none"], p);
+  const bare = p.remote(), old = p.head(), moved = p.remoteCommit(bare);
+  assert.notEqual(moved, old, "the head moved on GitHub only");
+  play(["! sage run done R1 --status done --tokens 1", readySays("gh pr view"), `→ {"headRefOid":"${moved}"}`,
+    readySays("git fetch origin <branch>"), "→ ok", readySays("git fetch origin <branch>:"), "→ ok"], p);
+  assert.equal(p.head(), moved, "the local branch has GitHub's head before the fresh lead starts");
+  const { printed } = play(["! sage run add T1 --role lead", "→ R5 running · lead on T1", "! start lead-T1", ...FRESH, "$ git rev-parse sage/t1-example", `→ ${moved}`,
+    leadSays("sage task <T> set state=reviewing", "not on the PR's head SHA"),
+    "$ sage run add T1 --role code-reviewer", "→ R6 running · code-reviewer on T1", "$ sage run add T1 --role qa", "→ R7 running · qa on T1", "> R6 sage:code-reviewer", "> R7 sage:qa",
+    "< R6 CLEAN: none", "< R7 PASS: none", "$ sage run done R6 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R6",
+    "$ sage run done R7 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R7",
+    "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying", "< lead-T1 ready: none",
+    "! sage verdict T1 --sha <sha> --kind checks-pass --cycle 1 --pr 12", "! sage task T1 set state=verified", "! sage merge-check --sha <sha> --pr 12"], p);
+  assert.match(printed, /^T1 may merge/, "GitHub's head merges after its own clean cycle");
+});
+
+test("T301 F-T301-69: a branch in a worktree fast-forwards there; when the local branch has other commits, git refuses, and the sage asks the user", () => {
+  const p = project();
+  play([...BUILT, ...CLEAN, "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying", "< lead-T1 ready: none", "! sage run done R1 --status done --tokens 1"], p);
+  const bare = p.remote(), wt = join(p.folder, "..", "worktree");
+  p.git("worktree", "add", "-q", wt, "sage/t1-example");
+  const moved = p.remoteCommit(bare);
+  play([readySays("git fetch origin <branch>"), "→ ok", readySays("git -C", { "<folder>": wt }), "→ ok"], p);
+  assert.equal(p.head(), moved, "the worktree's branch has GitHub's head");
+  spawnSync("git", ["-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "local only"]);
+  p.remoteCommit(bare);
+  const { printed } = play([readySays("git fetch origin <branch>"), "→ ok", readySays("git -C", { "<folder>": wt })], p);
+  assert.match(printed, /^refused /, "git refuses a merge that is no fast-forward");
+  assert.match(READY_STEP, /When git refuses \(the local branch has other commits, or the folder has changes\), ask the user with `sage gate add`, and start no lead until the answer\./, "step 5 sends it to the user");
+});
+
+test("T301 F-T301-67, F-T301-75: a lead moves the task from verifying or verified back to reviewing only when the head has no full clean cycle of the route; a head that cannot be read stays", () => {
+  const p = project();
+  p.chief("task", "T1", "set", "branch=sage/t1-example");
+  p.commit();
+  const STATES = ["verifying", "verified"];
+  const back = (state) => (p.setState(state), p.ask(`node ${TOOL} task T1 set state=reviewing`));
+  const verdict = (kind, cycle, sha = p.head()) => p.chief("verdict", "T1", "--sha", sha, "--kind", kind, "--cycle", cycle);
+  for (const state of STATES) assert.equal(back(state), undefined, `${state}: no verdict on the head`);
+  verdict("qa-pass", "1");
+  verdict("review-clean", "2");
+  for (const state of STATES) assert.equal(back(state), undefined, `${state}: QA in cycle 1 and the review in cycle 2 are no full clean cycle (F-T301-75)`);
+  verdict("review-clean", "1", p.head().toUpperCase());
+  for (const state of STATES) assert.match(back(state) ?? "", new RegExp(`T1's head [0-9a-f]{7} has a full clean cycle, so T1 stays at ${state}`), `${state}: cycle 1 is full (F-T301-67, R1028 m_verified_same_probe)`);
+  p.commit();
+  for (const state of STATES) assert.equal(back(state), undefined, `${state}: the head moved past the clean cycle`);
+  p.chief("task", "T1", "set", "branch=sage/t1-gone");
+  for (const state of STATES) assert.match(back(state) ?? "", new RegExp(`the head of T1's branch cannot be read, so T1 stays at ${state}`), `${state}: fail closed`);
 });
 
 test("T301 F-T301-58: after a ready report whose checks fail, the sage does as after a blocked report: the fresh lead at verifying repairs through round, which names QA", () => {

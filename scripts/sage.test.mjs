@@ -549,6 +549,9 @@ test("finding move: a medium or low finding goes to a follow-up task, which hold
   assert.equal(s.ok("finding", "move", "T2", "F-T2-1", "--to", "Export later", "--size", "tiny"), "F-T2-1 moved to T3 as F-T3-1 · T3 framed · tiny · route build", "a moved finding can move again, with a size");
 });
 
+/** The refusal of finding move for a fix key of the round (F-T301-65). */
+const KEY_STAYS = (k) => `sage: ${k} is a fix of T1's current round, so it stays on T1: it is fixed in a round, or dismissed with a reason. It moves to a follow-up task only after the owner chose the first option of a gate of T1 whose question names ${k}: sage gate add T1 --question "Move ${k} to a follow-up task?" --options "move|keep" --recommend <move or keep>.`;
+
 test("F-T301-40: an open fix of the current round never moves, at any severity, also after the move back to reviewing; a new finding of the round still moves", () => {
   const s = store();
   s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
@@ -557,55 +560,72 @@ test("F-T301-40: an open fix of the current round never moves, at any severity, 
   s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo in the error");
   for (const k of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", k, "fix");
   assert.equal(s.ok("round", "T1"), "T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 · re-run code-reviewer on the repair's diff");
-  for (const k of ["F-T1-1", "F-T1-2"]) {
-    assert.equal(s.no("finding", "move", "T1", k, "--to", "later"), `sage: ${k} is a fix of T1's current round, so it stays on T1: it is fixed in a round, or dismissed with a reason. It moves to a follow-up task only while T1 is held or in replan.`);
-  }
+  for (const k of ["F-T1-1", "F-T1-2"]) assert.equal(s.no("finding", "move", "T1", k, "--to", "later"), KEY_STAYS(k));
   s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the fix saves a blank row");
   assert.match(s.ok("finding", "move", "T1", "F-T1-3", "--to", "Blank rows"), /^F-T1-3 moved to T2 as F-T2-1 /, "a new finding of the round is not a key");
   s.ok("finding", "close", "T1", "F-T1-2");
   s.ok("task", "T1", "set", "state=reviewing");
-  assert.match(s.no("finding", "move", "T1", "F-T1-1", "--to", "later"), /F-T1-1 is a fix of T1's current round/, "after the move back to reviewing, the key is still the round's");
+  assert.equal(s.no("finding", "move", "T1", "F-T1-1", "--to", "later"), KEY_STAYS("F-T1-1"), "after the move back to reviewing, the key is still the round's");
   assert.deepEqual(rows(s.dir, "findings").filter((f) => f.task === "T1").map((f) => `${f.key} ${f.status}`), ["F-T1-1 open", "F-T1-2 closed"], "the refused moves left the keys on T1");
 });
 
-test("F-T301-61: while the task is held or in replan, the owner decides: a fix key of the round moves to a follow-up task", () => {
-  for (const [rounds, state] of [["1", "held"], ["3", "replan"]]) {
+test("F-T301-65: a fix key of the round moves only after the owner chose the first option of a gate that names it, in every state, also held and replan", () => {
+  for (const [rounds, state] of [["3", "repairing"], ["1", "held"], ["3", "replan"]]) {
     const s = store();
     s.ok("config", `max_rounds=${rounds}`);
     s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
+    s.ok("task", "add", "--title", "Other", "--size", "small"); // T2
     toReviewing(s, "T1");
-    s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the export skips the last row");
+    for (let i = 1; i <= 10; i++) s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", `m${i}`);
     s.ok("finding", "triage", "T1", "F-T1-1", "fix");
     s.ok("round", "T1");
-    s.ok("task", "T1", "set", "state=reviewing");
-    assert.match(s.no("finding", "move", "T1", "F-T1-1", "--to", "Export later"), /F-T1-1 is a fix of T1's current round, so it stays on T1/, "before the hold, the key stays");
-    assert.match(s.ok("round", "T1"), new RegExp(`^T1 ${state}`), `the next round gives ${state}`);
-    assert.match(s.ok("finding", "move", "T1", "F-T1-1", "--to", "Export later"), /^F-T1-1 moved to T2 as F-T2-1 /, `while ${state}, the owner's move passes`);
+    if (state !== "repairing") {
+      s.ok("task", "T1", "set", "state=reviewing");
+      assert.match(s.ok("round", "T1"), new RegExp(`^T1 ${state}`), `the next round gives ${state}`);
+    }
+    const move = () => s.run("finding", "move", "T1", "F-T1-1", "--to", "Export later");
+    assert.equal(s.no("finding", "move", "T1", "F-T1-1", "--to", "Export later"), KEY_STAYS("F-T1-1"), `${state}: no gate`);
+    s.ok("gate", "add", "T1", "--question", "Move F-T1-1 to a follow-up task?", "--options", "move|keep", "--recommend", "move"); // G1
+    assert.notEqual(move().status, 0, `${state}: the gate is not answered`);
+    s.ok("gate", "add", "T2", "--question", "Move F-T1-1 to a follow-up task?", "--options", "move|keep", "--recommend", "move"); // G2, of another task
+    s.ok("gate", "add", "T1", "--question", "Move F-T1-10 to a follow-up task?", "--options", "move|keep", "--recommend", "move"); // G3, of another key
+    s.ok("gate", "add", "T1", "--question", "Move F-T1-1 now?", "--options", "keep|move", "--recommend", "keep"); // G4, answered with a later option
+    for (const [g, n] of [["G2", "1"], ["G3", "1"], ["G4", "2"]]) s.ok("gate", "answer", g, "--option", n);
+    assert.notEqual(move().status, 0, `${state}: no answered gate of T1 names F-T1-1 with its first option`);
+    s.ok("gate", "answer", "G1", "--option", "1");
+    assert.match(s.ok("finding", "move", "T1", "F-T1-1", "--to", "Export later"), /^F-T1-1 moved to T3 as F-T3-1 /, `${state}: after the owner's answer move, the key moves`);
   }
 });
 
-test("F-T301-59: a low fix key of the round is not dismissed while a medium fix of the task is open, so round still re-plans; after the medium closes, it is", () => {
-  const s = store();
-  s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
-  toReviewing(s, "T1");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "m");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "l");
-  for (const k of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", k, "fix");
-  s.ok("round", "T1");
-  s.ok("task", "T1", "set", "state=reviewing");
+test("F-T301-59, F-T301-66: a low fix key of the round is not dismissed while a medium or high finding of the task is open, in any triage and any state; a low that is no key is", () => {
+  const setup = (severity = "medium") => {
+    const s = store();
+    s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
+    toReviewing(s, "T1");
+    s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", severity, "--summary", "m"); // F-T1-1
+    s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "l"); // F-T1-2
+    for (const k of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", k, "fix");
+    s.ok("round", "T1");
+    s.ok("task", "T1", "set", "state=reviewing");
+    return s;
+  };
+  const dismiss = (s, k = "F-T1-2") => s.run("finding", "triage", "T1", k, "dismiss", "--reason", "unconfirmed low fix, carried by follow-up T2");
+  const s = setup();
   assert.equal(s.no("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "unconfirmed low fix, carried by follow-up T2"),
-    "sage: F-T1-2 is a low fix of T1's current round, and F-T1-1 is open and triaged fix: F-T1-2 joins the next round with it, so it is not dismissed now.");
+    "sage: F-T1-2 is a low fix of T1's current round, and F-T1-1 is open: F-T1-2 joins the next round with it, so it is not dismissed now.");
   assert.match(s.ok("round", "T1"), /^T1 replan: round 1 did not fix F-T1-1,F-T1-2\./, "R1020 probe A: the round fixed nothing, so a replan");
-  const t = store();
-  t.ok("task", "add", "--title", "Fix the crash", "--size", "small");
-  toReviewing(t, "T1");
-  t.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "m");
-  t.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "l");
-  for (const k of ["F-T1-1", "F-T1-2"]) t.ok("finding", "triage", "T1", k, "fix");
-  t.ok("round", "T1");
-  t.ok("finding", "close", "T1", "F-T1-1");
-  t.ok("task", "T1", "set", "state=reviewing");
-  assert.equal(t.ok("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "unconfirmed low fix, carried by follow-up T2"), "F-T1-2 dismissed · dismiss", "with no medium or high fix open, the low key is dismissed");
+  assert.notEqual(dismiss(s).status, 0, "in replan too (F-T301-66)");
+  assert.notEqual(dismiss(setup("high")).status, 0, "a high finding blocks it too");
+  const fresh = setup();
+  fresh.ok("finding", "close", "T1", "F-T1-1");
+  fresh.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "new"); // F-T1-3, untriaged
+  assert.notEqual(dismiss(fresh).status, 0, "a new medium finding that is not triaged blocks it (F-T301-66)");
+  fresh.ok("finding", "triage", "T1", "F-T1-3", "ask");
+  assert.notEqual(dismiss(fresh).status, 0, "so does one triaged ask");
+  fresh.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "other"); // F-T1-4, no key
+  assert.equal(dismiss(fresh, "F-T1-4").status, 0, "a low finding that is no key of the round is dismissed while the medium is open");
+  fresh.ok("finding", "triage", "T1", "F-T1-3", "dismiss", "--reason", "not a problem");
+  assert.equal(fresh.ok("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "unconfirmed low fix, carried by follow-up T2"), "F-T1-2 dismissed · dismiss", "with no medium or high finding open, the low key is dismissed");
 });
 
 test("F-T301-49: a task at verifying goes back to reviewing, so that the cycles run again on a head that moved", () => {

@@ -373,7 +373,9 @@ export function handle(input, state, slots) {
     // A look-alike form names the same agent: NFKC, no format character, no spaces at the ends, any case (F-T301-53, F-T301-54).
     const name = agentName(id);
     if (!main && (/^(r\d+|lead-t\d+|main)$/.test(name) || slots.holds(id))) return deny(event, `an agent stops no agent: only the main session does, and ${id} is an agent. Stop only your own shell tasks; report to your lead or the sage what needs a stop.`);
-    return void (main && (/^lead-t[1-9]\d*$/.test(name) ? slots.stopLead(`T${name.slice("lead-t".length)}`) : slots.release(id)));
+    // The main session stops a lead by its exact name, in any letter case: a look-alike form may name no agent for Claude
+    // Code, and its stop would free the slot of a lead that still runs (F-T301-71).
+    return void (main && (/^lead-t[1-9]\d*$/i.test(String(id ?? "")) ? slots.stopLead(`T${String(id).slice("lead-t".length)}`) : slots.release(id)));
   }
   // An agent's SendMessage can wake a stopped agent outside every cap, and its event cannot tell a stopped target from a
   // live one. So an agent sends a message only to the main session: in sage mode, and for a sage agent in any mode, the
@@ -976,8 +978,6 @@ const TEAM = ["implementer", "code-reviewer", "security-reviewer", "ux-reviewer"
 const REVIEWERS = TEAM.slice(1);
 /** The state moves of a cycle that a lead may make, by the task's current state (F-T273-7). A held task moves only by the sage. */
 const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
-/** The verdict kinds of a clean cycle's reviews and QA. */
-const CLEAN_KINDS = ["review-clean", "security-clean", "ux-clean", "qa-pass"];
 /**
  * The most bytes of one logbook table that the hook reads for a lead: 4 MiB, the state tool's own limit for its
  * observations file. The largest real table on 2026-10-11 was 0.35 MB (sage's own decisions.tsv), so a real logbook
@@ -985,7 +985,7 @@ const CLEAN_KINDS = ["review-clean", "security-clean", "ux-clean", "qa-pass"];
  */
 const LEAD_READ_MAX = 4 * 1024 * 1024;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
-const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task); run done <a run of these roles on its task>; finding add <its task> (no --key); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch=, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, while its lead run runs";
+const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task); run done <a run of these roles on its task>; finding add <its task> (no --key); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round or of an earlier one; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch=, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, while its lead run runs";
 /** Each key=value of task set: a key at most once, and each value as the lead may set it on this task (F-T273-2, F-T273-7). */
 const LEAD_PAIRS = {
   branch: (branch) => branch !== "", // the state tool takes only a branch of the task; a lead never clears it (T275)
@@ -995,19 +995,20 @@ const LEAD_PAIRS = {
   state: (state, task, view, own, ctx) => {
     const next = LEAD_MOVES[task.state] ?? [];
     if (!next.includes(state)) return `${task.id} is ${task.state}: ${next.length ? `a lead moves it only to ${next.join(" or ")}` : "only the sage moves it from there"}.`;
-    // Back from verifying only when the head of the branch moved past the clean cycles: no clean verdict is on it (F-T301-49).
-    if (task.state === "verifying" && state === "reviewing") {
+    // Back from verifying or verified only when the head of the branch moved past the clean cycles: the head has no full
+    // clean cycle, as the merge check counts one (F-T301-49, F-T301-67, F-T301-75).
+    if (["verifying", "verified"].includes(task.state) && state === "reviewing") {
       const head = headOf(ctx.lead.folder, task.id);
-      if (!head) return `the head of ${task.id}'s branch cannot be read, so ${task.id} stays at verifying.`;
-      if (view.verdicts(task.id).some((v) => String(v.sha).toLowerCase() === head && CLEAN_KINDS.includes(v.kind))) return `${task.id}'s head ${head.slice(0, 7)} has its clean verdicts, so ${task.id} stays at verifying: a lead moves it back to reviewing only after the head moved (F-T301-49).`;
+      if (!head) return `the head of ${task.id}'s branch cannot be read, so ${task.id} stays at ${task.state}.`;
+      if (view.cleanCycles(task.id, head) > 0) return `${task.id}'s head ${head.slice(0, 7)} has a full clean cycle, so ${task.id} stays at ${task.state}: a lead moves it back to reviewing only after the head moved (F-T301-49).`;
     }
     return !(task.state === "repairing" && roundFixOpen(task, view)) || `${task.id} has an open fix finding of its round: close each one after the repair's commit (finding close), then move it to reviewing.`;
   },
 };
 /** The keys of the task's current round: round sets them to its fix findings. */
 const roundKeys = (task) => String(task.keys ?? "").split(",").filter(Boolean);
-/** An open, fix-triaged medium or high finding of the task's current round. */
-const roundFixOpen = (task, view) => view.findings(task.id).some((f) => f.status === "open" && f.triage === "fix" && f.severity !== "low" && roundKeys(task).includes(f.key));
+/** An open, fix-triaged finding of the task's current round, at any severity (F-T301-73). */
+const roundFixOpen = (task, view) => view.findings(task.id).some((f) => f.status === "open" && f.triage === "fix" && roundKeys(task).includes(f.key));
 /**
  * The key of a run's helper: its logbook, the lead run that added it and its id, so that one child backs one run, and a
  * new lead never ends or uses an old lead's runs (F-T284-9, F-T289-8). The first part is the key of the lead's helpers.
@@ -1235,8 +1236,11 @@ const LEAD_WRITES = {
   "finding triage": ([, t, key, how], opt, own, view, task) => {
     if (!(t === own && view.row(key)?.task === own)) return false;
     if (view.row(key).triage === "ask") return `${key} is triaged ask: only the sage changes it, with the owner's answer (F-T289-1).`;
-    // A fix key of the round stays for the sage: the next round, a replan or the sage's own dismissal (F-T301-60).
-    if (how === "dismiss" && roundKeys(task).includes(key)) return `${key} is a fix of ${own}'s current round: only the sage dismisses it. End blocked and list it (F-T301-60).`;
+    // A fix key of the round stays for the sage: the next round, a replan or the sage's own dismissal (F-T301-60). So does a
+    // key of an earlier round, also after a replan cleared the keys: a finding triaged fix from before the round, because
+    // round makes every open fix finding a key (F-T301-72).
+    const older = view.row(key).triage === "fix" && Number(view.row(key).round) < Number(task.round);
+    if (how === "dismiss" && (roundKeys(task).includes(key) || older)) return `${key} is ${roundKeys(task).includes(key) ? `a fix of ${own}'s current round` : `a fix key of an earlier round of ${own}`}: only the sage dismisses it. End blocked and list it (F-T301-60).`;
     return how === "fix" || (how === "dismiss" && view.row(key).severity === "low" && Boolean(opt.reason));
   },
   // A verdict names its task's own PR, so a lead's verdicts never count for another PR's merge check (F-T273-2, F-T273-6),

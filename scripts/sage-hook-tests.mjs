@@ -5996,13 +5996,64 @@ test("F-T301-53: an agent's TaskStop of an agent is refused also in look-alike f
   assert.match(denied(stateRun(s, `run done ${runs[1]} --status failed`)) ?? "", /has not stopped/, "the sibling still runs");
 });
 
-test("F-T301-54: the main session's TaskStop of a lead by a look-alike of lead-T<n> stops that lead", () => {
-  for (const name of ["LEAD-T1", " lead-t1 ", "lead-T１", "​lead-T1"]) {
+test("F-T301-54, F-T301-71: the main session's TaskStop stops a lead by its exact name lead-T<n> in any letter case, never by a look-alike form", () => {
+  for (const [name, stops] of [["lead-T1", true], ["LEAD-T1", true], ["lead-t1", true], [" lead-t1 ", false], ["lead-T１", false], ["​lead-T1", false], ["lead-​T1", false], ["lead-T1\n", false]]) {
     const s = leadSession();
     assert.equal(denied(stateRun(s, "run add T1 --role code-reviewer")), undefined, `${JSON.stringify(name)}: the lead writes before the stop`);
     assert.equal(denied(s.send(tool("TaskStop", { task_id: name }))), undefined);
-    assert.match(denied(stateRun(s, "run add T1 --role code-reviewer")) ?? "", /holds no bound lead slot/, `${JSON.stringify(name)} stops lead-T1`);
+    const after = denied(stateRun(s, "run add T1 --role qa"));
+    if (stops) assert.match(after ?? "", /holds no bound lead slot/, `${JSON.stringify(name)} stops lead-T1`);
+    else assert.equal(after, undefined, `${JSON.stringify(name)} names no lead: lead-T1 keeps its slot and still writes`);
   }
+});
+
+test("F-T301-53: a slot of a main-session agent made before the folded mark still compares its agent id in another letter case", () => {
+  const s = leadSession();
+  assert.equal(denied(s.send(spawnAgent("sage:pe", BRIEF, "main-pe"))), undefined, "the main session starts an agent");
+  s.send(resultOf("main-pe", "Main-Kid"));
+  const slots = join(s.vars.SAGE_HOOKS_STATE, "slots");
+  let removed = 0; // the slots as an older hook made them: no folded- mark
+  for (const slot of readdirSync(slots)) for (const m of readdirSync(join(slots, slot))) if (m.startsWith("folded-")) rmSync(join(slots, slot, m)), removed++;
+  assert.ok(removed > 0, "the slots had folded marks");
+  const stop = (task_id) => denied(s.send(tool("TaskStop", { task_id }, { agent_id: "child-R2", agent_type: "sage:qa" })));
+  for (const name of ["Main-Kid", "main-kid", "MAIN-KID"]) assert.match(stop(name) ?? "", /^sage: an agent stops no agent: only the main session does/, name);
+  assert.equal(stop("b7k2x9"), undefined, "a shell task still stops");
+});
+
+test("F-T301-72: after a replan cleared the round's keys, a fresh lead still does not dismiss a low key of the earlier round; a new low finding it does", () => {
+  const s = leadSession();
+  s.sage("task", "T1", "set", "state=building");
+  s.sage("task", "T1", "set", "state=reviewing");
+  s.sage("finding", "triage", "T1", "F-T1-2", "fix");
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "early"); // F-T1-3, of round 0, not triaged: no key
+  assert.match(s.sage("round", "T1"), /^T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 /);
+  s.sage("task", "T1", "set", "state=reviewing");
+  assert.match(s.sage("round", "T1"), /^T1 replan: /);
+  s.sage("task", "T1", "set", "state=briefed"); // the keys go, and the lead run ends
+  assert.match(s.sage("task", "T1"), /^T1 briefed .* round 1 /);
+  s.sage("run", "add", "T1", "--role", "lead");
+  const fresh = { agent_id: "lead-b", agent_type: "sage:lead" };
+  s.send(tool("TaskStop", { task_id: "lead-a" }));
+  assert.equal(s.send(leadSpawn("lead-call-2", 1, { cwd: s.dir })), undefined, "the fresh lead starts");
+  s.send(resultOf("lead-call-2", "lead-b"));
+  assert.equal(denied(stateRun(s, "task T1 set state=building", fresh)), undefined, "the fresh lead writes");
+  assert.match(denied(stateRun(s, "finding triage T1 F-T1-1 dismiss --reason=old-low-after-replan", fresh)) ?? "", /^sage: F-T1-1 is a fix key of an earlier round of T1: only the sage dismisses it\./, "R1027 runY");
+  assert.equal(denied(stateRun(s, "finding triage T1 F-T1-3 dismiss --reason=not-worth-it", fresh)), undefined, "a low finding of round 0 that was never triaged fix is dismissed");
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "new"); // F-T1-4, of round 1
+  s.sage("finding", "triage", "T1", "F-T1-4", "fix");
+  assert.equal(denied(stateRun(s, "finding triage T1 F-T1-4 dismiss --reason=not-worth-it", fresh)), undefined, "a low fix of this round that is no key is dismissed");
+});
+
+test("F-T301-73: a lead moves the task from repairing to reviewing only after it closes each fix key of the round, also a low one", () => {
+  const s = leadSession();
+  s.sage("task", "T1", "set", "state=building");
+  s.sage("task", "T1", "set", "state=reviewing");
+  s.sage("finding", "triage", "T1", "F-T1-2", "fix");
+  s.sage("round", "T1"); // F-T1-1 (low) and F-T1-2 (medium)
+  s.sage("finding", "close", "T1", "F-T1-2");
+  assert.match(denied(stateRun(s, "task T1 set state=reviewing")) ?? "", /T1 has an open fix finding of its round: close each one/, "R1028 x_med_fixed_low_unconf_move: the low key is open");
+  s.sage("finding", "close", "T1", "F-T1-1");
+  assert.equal(denied(stateRun(s, "task T1 set state=reviewing")), undefined, "with every key closed, the move passes");
 });
 
 test("F-T301-57: a lead names each helper by its run id: a spawn with another name, or with only a description, is refused", () => {

@@ -40,7 +40,7 @@ In this file, `sage` stands for `node <path to skills/sage/sage.mjs>`, the absol
 
 - reads: `sage status`, `sage standing`, `sage logbook`;
 - runs: `sage run add <T> --role <role> --branch <branch>` (the branch only for the implementer) and `sage run done <R> --status done --tokens <n>`, for the five roles above; `sage run done <R> --status failed` for a helper that gave no report;
-- findings: `sage finding add <T> --source <role> --severity <severity> --summary=<word>`, `sage finding triage <T> <K> fix`, `sage finding triage <T> <K> dismiss --reason=<word>` (a low finding only) and `sage finding close <T> <K>`;
+- findings: `sage finding add <T> --source <role> --severity <severity> --summary=<word>`, `sage finding triage <T> <K> fix`, `sage finding triage <T> <K> dismiss --reason=<word>` (a low finding that is no fix key of the round or of an earlier one) and `sage finding close <T> <K>`;
 - verdicts: `sage verdict <T> --sha <sha> --kind <kind> --cycle <n> --pr <n> --run <R>`, for a review or QA only;
 - the round: `sage round <T>`;
 - the task: `sage task <T> set state=<state>`, with `branch=<branch>` and `pr=<n>`.
@@ -69,7 +69,7 @@ The hook lets you move the task only one step of the cycle at a time:
 | verifying | reviewing |
 | verified | reviewing |
 
-You move from repairing to reviewing only after you close each fix finding of the round. You move from verifying to reviewing only when the head of the branch has no clean verdict: the head moved past the clean cycles. The move to verified needs a checks verdict on the head, so it is the sage's unless the ledger already has one there. You set `pr=` once, while the task has none. You never clear the branch. Everything else is the sage's: the checks verdicts, `finding move`, a dismissal of a medium or high finding, a dismissal of a fix key of the round, a triage `ask`, gates, the decision trail, the pages record, other states and the merge. A held, replan, merged, concluded or abandoned task takes no write from you and no helper. When your lead run ends (for example, the sage moved the task back to briefed), you write nothing more.
+You move from repairing to reviewing only after you close each fix key of the round, also a low one. You move from verifying or verified to reviewing only when the head of the branch has no full clean cycle (one cycle with the clean verdict of each review and QA of the route): the head moved past the clean cycles. The move to verified needs a checks verdict on the head, so it is the sage's unless the ledger already has one there. You set `pr=` once, while the task has none. You never clear the branch. Everything else is the sage's: the checks verdicts, `finding move`, a dismissal of a medium or high finding, a dismissal of a fix key of the round or of an earlier one (a finding triaged fix from before the round), a triage `ask`, gates, the decision trail, the pages record, other states and the merge. A held, replan, merged, concluded or abandoned task takes no write from you and no helper. When your lead run ends (for example, the sage moved the task back to briefed), you write nothing more.
 
 ## A helper's run, in this order
 
@@ -116,7 +116,7 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
 4. **Triage.** Triage each medium or high finding fix. A medium or high finding that you think is wrong: do not dismiss it; put it in FINDINGS for the sage, and end blocked. When no finding is triaged fix, go to step 6.
 5. **Repair round.** `sage round <T>`. It names the findings to fix and the roles to re-run. Give the repair to a fresh implementer: the original brief, the findings and the earlier reports. Then re-run each role that `round` named, on the repair's commit; a re-check gets no verdict. Wait for each re-check. Close each finding that the re-check confirms fixed with `sage finding close <T> <K>`. Once every fix key of the round is closed, run `sage task <T> set state=reviewing` before anything else, also before you end blocked. Then go back to step 3 on the new SHA.
    - A fix that the re-check does not confirm stays open, and the task stays repairing. The re-check reports its problem again: record it as a finding (the hook asks for it), and list it in FINDINGS. You may add `repeat of F-<x>` to its line, with the fix key: it is only information for the sage. Close the fixes that the re-check confirms, then end blocked. The sage triages the finding fix, so that it joins the next round with the fix key, or a replan when the round fixed none of its keys.
-   - An unconfirmed low fix: end blocked and list it. Do not dismiss a fix key; only the sage does.
+   - An unconfirmed low fix: end blocked and list it. Do not dismiss a fix key, also one of an earlier round; only the sage does.
    - A new finding from a re-check: record it as in step 4 of a helper's run, which also holds for a new low one. A new medium or high one: end blocked, with its key.
 6. **Clean cycles and the end.** A cycle is clean when it has no open medium or high finding. After a clean cycle, run the next one on the same SHA (`--cycle 2`) until the count in your brief. Then:
    - `gh pr checks <n>`. Give its result in EVIDENCE. When a check fails or still runs, or there are no checks, end blocked, with `Left: the checks`.
@@ -128,7 +128,7 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
 
 You end at once, with STATUS blocked, when a step needs the sage. Wait for your running helpers first.
 
-- **A finding that you cannot clear:** a low finding that needs a fix with no round, a new finding from a re-check, or a fix that the re-check does not confirm. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The state tool never moves a fix key of the round or a high finding to a follow-up task.
+- **A finding that you cannot clear:** a low finding that needs a fix with no round, a new finding from a re-check, or a fix that the re-check does not confirm. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The state tool never moves a high finding to a follow-up task, and it moves a fix key of the round only after the owner's answer.
 - **A report that the hook cannot read:** list its run in FINDINGS. The sage reads it and ends the run.
 - **The checks fail, still run, or there are none:** `Left: the checks`. The sage records the checks verdict.
 - **A cap:** when the hook refuses a helper for a cap, wait for a helper's completion notice and try again. With no helper running, end with RESULT `cap`. List each run that you added and did not start: the sage ends it.
