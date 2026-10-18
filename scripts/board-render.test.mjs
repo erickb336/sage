@@ -286,3 +286,26 @@ test("T218: the chat board shows 5 cards a column in the page's order, with the 
   assert.ok(text.includes("**T50 Sample T50** · sample · project\nSample\\* · implementer at work"));
   assert.ok(text.length < 3000, `${text.length} characters`);
 });
+
+test("T314: a card and a task page show the display name, the priority and the kind; archived projects are folded into one group", () => {
+  const book = (key, name, tasks, extra = {}) => ({ key: `sample/${key}`, name: key, diagnostics: [], tables: { tasks }, displayName: name, ...extra });
+  const data = buildBoardModel([{ id: "sample", label: "sample", diagnostics: [], projects: [
+    book("demos-abcdef", "seacc (Council Record)", [row("T1", "framed", { priority: "P1", kind: "bug-fix" }), row("T2", "framed")]),
+    book("old-abcdef", "Old <app>", [row("T1", "held"), row("T2", "framed")], { archived: true }),
+  ] }], { now: at });
+  const html = renderBoardHtml(data);
+  const board = html.slice(html.indexOf('<main class="board">'), html.indexOf("</main>"));
+  assert.ok(board.includes('<span class="tag prio">P1</span><span class="tag kind">bug fix</span><span class="tag">small</span>'), "the tags come before the size");
+  assert.equal(board.split('class="card').length - 1, 2, "only the two tasks of the live project are cards");
+  assert.ok(board.includes("seacc (Council Record)</span>"));
+  assert.ok(!board.includes("Old &lt;app&gt;") && !board.includes("demos-abcdef</span>"));
+  assert.ok(html.includes('<details class="archived" id="board-archived"><summary>Archived · 1 project</summary><ul><li>Old &lt;app&gt; · 2 tasks · 1 needs you</li></ul></details>'));
+  const chips = html.slice(html.indexOf('id="board-filters"'), html.indexOf("</header>"));
+  assert.ok(chips.includes("seacc (Council Record)") && !chips.includes("Old &lt;app&gt;"), "no filter chip for an archived project");
+  const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks[0].key });
+  assert.ok(page.includes('<span class="tag prio">P1</span><span class="tag kind">bug fix</span>'), "the task page has the tags too");
+  const text = renderBoardText(data);
+  assert.ok(text.includes("**T1 Sample T1** · sample · seacc \\(Council Record\\) · P1 · bug fix\n"), text);
+  assert.ok(text.includes("\nArchived: Old \\<app\\> (2 tasks · 1 needs you)\n"), text);
+  assert.ok(!text.includes("· Old \\<app\\>\n"), "an archived task is not on the chat board");
+});

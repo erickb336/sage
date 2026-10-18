@@ -20,6 +20,7 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
+import { HIDDEN, NAME_MAX, PRIORITIES, TASK_KINDS, nameProblem } from "./logbook-fields.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -83,7 +84,7 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 const TABLES = {
-  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra"],
+  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra", "priority", "kind"],
   runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
   findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status"],
   ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
@@ -91,13 +92,13 @@ const TABLES = {
   decisions: ["at", "task", "decision", "why"],
 };
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model"], tasks: ["hold", "extra"] };
+const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind"] };
 const COMMANDS = ["init", "logbook", "standing", "pages", "task", "round", "run", "finding", "verdict", "gate", "log", "status", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss"],
   "projects rebuild": ["accept-listing"],
-  "task add": ["title", "size", "risk", "add", "why"],
+  "task add": ["title", "size", "risk", "add", "why", "priority", "kind"],
   "run add": ["role", "branch", "candidate"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
   "run done": ["status", "tokens", "report"],
@@ -360,16 +361,6 @@ function swap(file, text) {
   }
 }
 
-/**
- * The characters that a person does not see but a terminal or an agent acts on: the controls but tab and line feed (C0,
- * DEL and C1), the bidi embeddings, overrides, isolates and marks (U+202A-202E, U+2066-2069, U+200E, U+200F, U+061C), the
- * zero-width characters (U+200B-200D, U+2060, U+FEFF), the variation selectors (U+FE00-FE0F, U+E0100-E01EF) and the tag
- * characters (U+E0000-E007F, text that only an agent reads). A joiner or non-joiner (U+200C, U+200D) between two letters
- * stays, as Persian and Indic text needs it; a joiner between two emoji stays, so a joined emoji stays whole; the emoji
- * selector (U+FE0F) stays after an emoji or a keycap base. Other text, also emoji and every script, stays; a subdivision
- * flag shows as a black flag.
- */
-const HIDDEN = /[\0-\x08\x0b-\x1f\x7f-\x9f\u061c\u200b\u200e\u200f\u2060\ufeff\ufe00-\ufe0e\u202a-\u202e\u2066-\u2069\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]|(?<![\p{Extended_Pictographic}0-9#*])\ufe0f|(?<![\p{L}\p{M}](?=[\u200c\u200d]\p{L})|[\p{Extended_Pictographic}\p{Emoji_Modifier}]\ufe0f?(?=\u200d\p{Extended_Pictographic}))[\u200c\u200d]/gu;
 /** A cell as the tables hold it: on one line, without a hidden character. */
 const cell = (v) => String(v ?? "").replace(/[\t\r\n]+/g, " ").replace(HIDDEN, "").trim();
 /** Text with each hidden character, tab and line feed shown as \xNN or \u{N}, so that a printed line never drives the terminal or hides text. */
@@ -1306,10 +1297,17 @@ function planTaskChanges(before, id, changes, at, facts) {
     } else if (k === "pr") decided.push(...(notHeld(task, "pr="), setPr(task, v, "task set", at)));
     else if (k === "branch") notHeld(task, "branch="), task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
     else if (k === "title") task.title = v;
-    else refuse(`task set takes state=, branch=, pr= or title=`);
+    else if (k === "priority" || k === "kind") task[k] = tag(k, v);
+    else refuse(`task set takes state=, branch=, pr=, title=, priority= or kind=`);
   }
   return { task, tasks, runs, decisions: [...decisions, ...decided] };
 }
+
+/** A task's priority or kind as its cell holds it: "" for none, else a value of the fixed list. Any other value refuses, with the list. */
+const tag = (key, value) => {
+  const values = key === "priority" ? PRIORITIES : TASK_KINDS;
+  return value === "none" ? "" : values.includes(value) ? value : refuse(`${key} is one of ${values.join(", ")}, or none to clear it; not "${visible(String(value ?? ""))}". Nothing changed.`);
+};
 
 /** Frames a task with its route and writes it: the least route of its size, the security review for a risk, and the added blocks. */
 function taskFrame(id, title, size, risk, add) {
@@ -1317,12 +1315,14 @@ function taskFrame(id, title, size, risk, add) {
   const task = { id, title, size, risk: risk.join(","), route: BLOCKS.filter((b) => blocks.has(b)).join(","), state: "framed", round: 0 }; // the blocks in their order
   return task;
 }
-function frame(dir, title, size, risk, add) {
-  const task = taskFrame(nextId(dir, "T"), title, size, risk, add);
+function frame(dir, title, size, risk, add, tags = {}) {
+  const task = { ...taskFrame(nextId(dir, "T"), title, size, risk, add), ...tags };
   write(dir, "tasks", [...read(dir, "tasks"), task]);
   return task;
 }
-const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}`;
+/** A task's priority and kind for a printed line: nothing when it has none. */
+const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}`;
+const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}`;
 
 function move(task, to) {
   if (to !== "abandoned" && !(NEXT[task.state] ?? []).includes(to)) refuse(`${task.id} cannot go from ${task.state} to ${to}. Next: ${(NEXT[task.state] ?? []).join(", ") || "none"}`);
@@ -1619,6 +1619,43 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
   };
 }
 
+/** Refuses a path that holds something other than a regular file, as config writes nothing then. */
+function fileOrNone(file) {
+  const st = lstatSync(file, { throwIfNoEntry: false });
+  if (st && !st.isFile()) refuse(`${file} is ${st.isSymbolicLink() ? "a link" : st.isDirectory() ? "a folder" : st.isFIFO() ? "a named pipe" : st.isSocket() ? "a socket" : "a device"}, not a regular file, so config writes nothing. Replace it with a regular file.`);
+}
+/** The config keys of one logbook, kept in its own config.json: the others are for all projects. */
+const ownKey = (kv) => /^(name|archived)(=|$)/.test(kv);
+
+/**
+ * Sets the keys of one logbook in its own config.json: name= (the board's display name of the project; name= alone
+ * removes it) and archived=yes or no (the board folds an archived project away). A key of a newer version stays.
+ */
+function logbookConfig(dir, pairs) {
+  const set = {};
+  for (const kv of pairs) {
+    const at = kv.indexOf("="), k = at < 0 ? kv : kv.slice(0, at), v = at < 0 ? undefined : kv.slice(at + 1);
+    if (!ownKey(kv)) refuse(`"${visible(k)}" is a key for all projects, and name= and archived= are keys of one logbook: set them in a config command of their own.`);
+    if (v === undefined) refuse(`${k} needs a value: write ${k}=<value>`);
+    if (k === "name") {
+      const name = v.normalize("NFC"), why = name && nameProblem(name);
+      if (why) refuse(`the name "${visible(name)}" ${why}. Nothing changed.`);
+      set.name = name || undefined; // name= alone removes it
+    } else set.archived = v === "yes" ? true : v === "no" ? undefined : refuse(`archived is yes or no, not "${visible(v)}". Nothing changed.`);
+  }
+  const file = join(dir, "config.json");
+  fileOrNone(file);
+  let old;
+  try {
+    old = JSON.parse(readRegular(file) ?? "{}");
+  } catch {}
+  if (!old || typeof old !== "object" || Array.isArray(old)) refuse(`${file} is not a JSON object, so config writes nothing. Ask the user to fix or remove it.`);
+  const next = { ...old, ...set };
+  for (const k of Object.keys(set)) if (set[k] === undefined) delete next[k];
+  swap(file, JSON.stringify(next, null, 2) + "\n");
+  return `name=${visible(typeof next.name === "string" ? next.name : "")} archived=${next.archived === true ? "yes" : "no"}`;
+}
+
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
 function sage(argv, env = process.env) {
   const [cmd, ...rest] = argv;
@@ -1643,7 +1680,7 @@ function sage(argv, env = process.env) {
     const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project: resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd()) });
     return r.ok ? r.reason : refuse(r.reason);
   }
-  if (cmd === "config") {
+  if (cmd === "config" && !pos.some(ownKey)) {
     const set = {};
     for (const kv of pos) {
       const [k, v = "", ...more] = kv.split("=");
@@ -1658,7 +1695,7 @@ function sage(argv, env = process.env) {
       const file = join(sageRoot(env), "config.json");
       mkdirSync(sageRoot(env), { recursive: true });
       const st = lstatSync(file, { throwIfNoEntry: false });
-      if (st && !st.isFile()) refuse(`${file} is ${st.isSymbolicLink() ? "a link" : st.isDirectory() ? "a folder" : st.isFIFO() ? "a named pipe" : st.isSocket() ? "a socket" : "a device"}, not a regular file, so config writes nothing. Replace it with a regular file.`);
+      fileOrNone(file);
       swap(file, JSON.stringify({ ...saved(env), ...set }, null, 2) + "\n"); // a key of a newer version stays
     }
     const c = { ...config(env), ...set };
@@ -1706,6 +1743,8 @@ function sage(argv, env = process.env) {
 function act(cmd, pos, opt, dir, env, skip, project) {
   const [sub, id, ...more] = pos;
   switch (cmd) {
+    case "config":
+      return logbookConfig(dir, pos);
     case "init":
       // A new logbook's tables, tasks.tsv last: the merge check takes a folder with it for a whole logbook. An existing
       // logbook passed the integrity check (ready), so init makes no table there.
@@ -1787,7 +1826,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (odd.length) refuse(`unknown: ${odd.join(", ")}. Risks: ${RISKS.join(", ")}. Blocks: ${BLOCKS.join(", ")}`);
         if (size === "investigate" && list(opt.add).includes("build")) refuse("an investigation changes no code, so it takes no build block. Frame the build as its own task: sage task add --size tiny, small or large");
         const why = opt.add ? need(opt.why, "--why for the added blocks") : ""; // refuse before anything is written
-        const task = frame(dir, need(opt.title, "--title"), size, risk, list(opt.add));
+        const tags = Object.fromEntries(["priority", "kind"].filter((k) => opt[k] !== undefined).map((k) => [k, tag(k, opt[k])]));
+        const task = frame(dir, need(opt.title, "--title"), size, risk, list(opt.add), tags);
         checkout(dir, project);
         if (opt.add) write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: task.id, decision: `added ${opt.add}`, why }]);
         return framed(task);
@@ -1801,7 +1841,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         write(dir, "tasks", planned.tasks);
         Object.assign(task, planned.task);
       }
-      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}`;
+      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}`;
     }
     case "round": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));

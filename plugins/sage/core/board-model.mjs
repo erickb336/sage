@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
+import { PRIORITIES, TASK_KINDS } from "./logbook-fields.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -16,6 +17,12 @@ const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : n
 const rows = (project, name, task) => (project.tables[name] ?? []).filter(row => row.task === task.id);
 // N1: the name that stands in for a run's provider when the run does not record it: the source's provider, else its label.
 const standIn = source => source.provider ?? source.label ?? source.id;
+// N9: a project's name: the owner's display name, else the repository name of its upstream remote, then of its origin,
+// then its main checkout's folder, then its logbook folder without the hash.
+const projectName = project => project.displayName ?? [project.upstream, project.repository].map(url => githubRepository(url)?.split("/").at(-1)).find(Boolean)
+  ?? (project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""));
+// A priority's rank: P0 first, no priority last.
+const rank = task => task.priority ? PRIORITIES.indexOf(task.priority) : PRIORITIES.length;
 const positive =value => /^([1-9]\d*)$/.test(String(value)) ? Number(value) : null;
 
 function latest(records, kind, accept = () => true) {
@@ -106,7 +113,7 @@ function card(source, project, task, now) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: moves.find(({ move }) => move[2] === task.id && move[3] === row.key)?.row.task ?? null })),
     ...moves.filter(({ row }) => row.task === task.id).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, projectName: project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""), ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: loopFor(task, route, cycles, head, reasons, runs), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, projectName: projectName(project), archived: project.archived === true, priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: loopFor(task, route, cycles, head, reasons, runs), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
 }
 
 export function buildBoardModel(sources, { now = new Date().toISOString() } = {}) {
@@ -114,6 +121,8 @@ export function buildBoardModel(sources, { now = new Date().toISOString() } = {}
   if (at === null) throw new TypeError("board time must be an ISO date");
   const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, task, at))));
   const recent = task => task.lastActivity ? Date.parse(task.lastActivity) : 0;
-  const visible = tasks.filter(task => task.visible && task.column).sort((a, b) => (b.reasons.length > 0) - (a.reasons.length > 0) || recent(b) - recent(a));
-  return { at: new Date(at).toISOString(), tasks, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: visible.filter(task => task.column === key), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message })))]) };
+  // An archived project's tasks leave the columns and the counts; the archived group lists the project, with what needs you there.
+  const visible = tasks.filter(task => task.visible && task.column && !task.archived).sort((a, b) => (b.reasons.length > 0) - (a.reasons.length > 0) || rank(a) - rank(b) || recent(b) - recent(a));
+  const archived = sources.flatMap(source => source.projects.filter(project => project.archived).map(project => ({ key: project.key, name: projectName(project), tasks: tasks.filter(task => task.project === project.key).length, needsOwner: tasks.filter(task => task.project === project.key && task.visible && task.column && task.reasons.length).length })));
+  return { at: new Date(at).toISOString(), tasks, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: visible.filter(task => task.column === key), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message })))]) };
 }

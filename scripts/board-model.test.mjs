@@ -241,3 +241,85 @@ test("T218 F-T218-20: a late run-less verdict on an old commit does not make the
   const runless = ledger.map(row => ({ ...row, run: "" }));
   assert.equal(buildBoardModel([source("one", [task("T1", "reviewing", { pr: "12" })], { ledger: runless })], { now }).tasks[0].currentHead, B, "round 0: the newest commit by its first verdict");
 });
+
+/**
+ * One sage root with a logbook per entry, each with the T314 columns and its own files: config (the logbook's config.json,
+ * as text or an object) and git (the main checkout's .git/config). Returns the board model and the source's diagnostics.
+ */
+function logbooks(t, books) {
+  const home = mkdtempSync(join(tmpdir(), "sage-board-t314-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const root = join(home, "sage");
+  const header = `${HEADERS.tasks} hold extra priority kind`;
+  for (const [i, { folder = "product-demos", tasks = [], config, git }] of books.entries()) {
+    const book = join(root, `${folder}-${String(i).padStart(6, "0")}`), checkout = join(home, `work${i}`, folder);
+    mkdirSync(book, { recursive: true }); mkdirSync(join(checkout, ".git"), { recursive: true });
+    for (const [name, head] of Object.entries({ ...HEADERS, tasks: header })) writeFileSync(join(book, `${name}.tsv`), [head.replaceAll(" ", "\t"), ...(name === "tasks" ? tasks : []).map(row => head.split(" ").map(field => row[field] ?? "").join("\t"))].join("\n") + "\n");
+    writeFileSync(join(book, "checkout.txt"), `${checkout}\n`);
+    if (config !== undefined) writeFileSync(join(book, "config.json"), typeof config === "string" ? config : JSON.stringify(config));
+    if (git) writeFileSync(join(checkout, ".git", "config"), git);
+  }
+  return buildBoardModel(readBoardSources([{ id: "claude", label: "claude", path: root }]), { now });
+}
+const remotes = (list) => list.map(([name, url]) => `[remote "${name}"]\n\turl = ${url}\n\tfetch = +refs/heads/*:refs/remotes/${name}/*\n`).join("");
+const named = model => model.tasks.map(card => card.projectName);
+
+test("T314: a project's name is its display name, else its upstream repository, then its origin repository, then its main checkout's folder", t => {
+  const both = remotes([["origin", "git@github.com:erickb336/seacc-fork.git"], ["upstream", "https://github.com/seattle-digital-commons/seacc.git"]]);
+  const one = task("T1", "framed", { pr: "4" });
+  const model = logbooks(t, [
+    { tasks: [one], config: { name: "seacc (Council Record)" }, git: both },
+    { tasks: [one], git: both },
+    { tasks: [one], git: remotes([["origin", "https://github.com/erickb336/council"]]) },
+    { tasks: [one], git: remotes([["upstream", "https://gitlab.example/x/y.git"]]) },
+    { tasks: [one] },
+  ]);
+  assert.deepEqual(named(model), ["seacc (Council Record)", "seacc", "council", "product-demos", "product-demos"]);
+  assert.equal(model.tasks[1].repository, "https://github.com/erickb336/seacc-fork", "the PR link keeps origin, where the PRs are");
+  assert.deepEqual(model.diagnostics, []);
+});
+
+test("T314: the board checks a display name again: a bad one is not shown, the next name is, with a diagnostic", t => {
+  const git = remotes([["upstream", "https://github.com/seattle-digital-commons/seacc"]]);
+  const one = task("T1", "framed");
+  const model = logbooks(t, [
+    { tasks: [one], config: { name: "sea​cc" }, git },
+    { tasks: [one], config: { name: "n".repeat(61) }, git },
+    { tasks: [one], config: { name: " seacc" }, git },
+    { tasks: [one], config: { name: 7 }, git },
+    { tasks: [one], config: "{not json", git },
+    { tasks: [one], config: { name: "n".repeat(60), archived: "yes" }, git },
+  ]);
+  assert.deepEqual(named(model), ["seacc", "seacc", "seacc", "seacc", "seacc", "n".repeat(60)]);
+  assert.deepEqual(model.diagnostics.map(d => d.message), [
+    "config: the name has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark)",
+    "config: the name has 61 characters: give 1 to 60",
+    "config: the name has a space at its start or end, or two spaces together",
+    "config: the name is not text",
+    "config: invalid JSON",
+    "config: archived is not true or false",
+  ]);
+  assert.equal(model.archived.length, 0, "only archived: true archives");
+});
+
+test("T314: an archived project's tasks leave the columns and the counts, and the archived group names it, with what needs you there", t => {
+  const model = logbooks(t, [
+    { folder: "live", tasks: [task("T1", "framed"), task("T2", "held")] },
+    { folder: "old", tasks: [task("T1", "framed"), task("T2", "held"), task("T3", "building")], config: { name: "Old app", archived: true } },
+  ]);
+  assert.deepEqual(model.columns.flatMap(column => column.tasks.map(card => `${card.projectName} ${card.id}`)), ["live T1", "live T2"]);
+  assert.deepEqual(model.counts, { tasks: 2, needsOwner: 1, recordedAgents: 0, inferredWork: 0, inReview: 0 });
+  assert.deepEqual(model.archived, [{ key: "claude/old-000001", name: "Old app", tasks: 3, needsOwner: 1 }]);
+  assert.equal(model.tasks.filter(card => card.archived).length, 3, "its tasks stay in the model, for their task pages");
+});
+
+test("T314: a card has the task's priority and kind from their fixed lists; a column puts needs-you first, then P0 to P3, then no priority", t => {
+  const model = logbooks(t, [{ tasks: [
+    task("T1", "framed", { priority: "", kind: "docs" }),
+    task("T2", "framed", { priority: "P2", kind: "bug-fix" }),
+    task("T3", "framed", { priority: "P0", kind: "feature" }),
+    task("T4", "framed", { priority: "urgent" }),
+    task("T5", "framed", { priority: "P3" }),
+  ] }]);
+  assert.deepEqual(model.columns[0].tasks.map(card => [card.id, card.priority, card.kind]), [["T3", "P0", ""], ["T2", "P2", "bug-fix"], ["T5", "P3", ""], ["T1", "", "docs"], ["T4", "", ""]]);
+});
