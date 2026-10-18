@@ -6212,7 +6212,7 @@ test("F-T289-60: a higher severity word later on a finding line or in its detail
   }
   const s = leadSession();
   const out = s.send({ hook_event_name: "SubagentStop", agent_id: "later", agent_type: "sage:code-reviewer", last_assistant_message: report("FINDINGS", "\n- K1 low noisy log, K2 high SQL injection") });
-  assert.match(out?.reason ?? "", /cannot read your report: the line "- K1 low noisy log, K2 high SQL injection" under FINDINGS has a severity word above the highest finding that the hook read \(low\): write that finding as its own line - <key> <severity> <summary>\./, "the stop gate quotes the line and names the way out");
+  assert.match(out?.reason ?? "", /cannot read your report: the line "- K1 low noisy log, K2 high SQL injection" under FINDINGS has a severity word above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>\./, "the stop gate quotes the line and names the way out");
   assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 high the token is logged", "    the impact on the logs is low, a medium fix"))) ?? "", /reported FINDINGS with high findings, so its verdict is findings/, "a lower word under a higher finding is detail");
 });
 
@@ -6223,7 +6223,7 @@ test("F-T289-62: an indented item or prose line with a higher severity word anyw
   // The trade-off: an honest detail line with a higher word blocks once at the stop, and the helper writes it again.
   const s = leadSession();
   const honest = report("FINDINGS", lines("", "- K1 low the list is slow", "    steps: load a high row count"));
-  assert.match(s.send({ hook_event_name: "SubagentStop", agent_id: "honest", agent_type: "sage:code-reviewer", last_assistant_message: honest })?.reason ?? "", /the line "steps: load a high row count" under FINDINGS has a severity word above the highest finding that the hook read \(low\)/);
+  assert.match(s.send({ hook_event_name: "SubagentStop", agent_id: "honest", agent_type: "sage:code-reviewer", last_assistant_message: honest })?.reason ?? "", /the line "steps: load a high row count" under FINDINGS has a severity word above the severity of its finding \(low\)/);
 });
 
 test("F-T289-63: a look-alike or hidden severity word counts, and U+2028 before a fence does not hide a second FINDINGS", () => {
@@ -6239,6 +6239,19 @@ test("F-T289-63: a look-alike or hidden severity word counts, and U+2028 before 
   assert.match(freshVerdict(fence) ?? "", /cannot read \(FINDINGS is given twice/, "the fence after U+2028 is no fence");
   const real = lines("STATUS done", "RESULT CLEAN", "EVIDENCE ran it", "```", "FINDINGS of an old report: - K1 high x", "```", "FINDINGS none", "QUESTIONS none", "NOT VERIFIED none", "BRANCH b");
   assert.equal(freshVerdict(real), undefined, "a real fence still hides its lines");
+});
+
+test("F-T298-1: each finding line and its detail compare with that finding's own severity, not with the highest finding", () => {
+  for (const findings of [
+    lines("- K1 high a crash", "- K2 low a slow page (raise to medium)"),
+    lines("- K1 high a crash", "- K2 low a log", "    steps: this one is medium"),
+  ]) {
+    assert.match(freshVerdict(report("FINDINGS", `\n${findings}`)) ?? "", UNREADABLE, findings);
+  }
+  const s = leadSession();
+  const out = s.send({ hook_event_name: "SubagentStop", agent_id: "raised", agent_type: "sage:code-reviewer", last_assistant_message: report("FINDINGS", lines("", "- K1 high a crash", "- K2 low a log", "    steps: this one is medium")) });
+  assert.match(out?.reason ?? "", /cannot read your report: the line "steps: this one is medium" under FINDINGS has a severity word above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>\./, "the stop gate quotes the line and names the way out");
+  assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a log", "- K2 high a crash", "    steps: a medium load, then a low disk"))) ?? "", /reported FINDINGS with low, high findings, so its verdict is findings/, "a lower word under a higher finding is detail, also after a lower finding");
 });
 
 test("F-T289-64: a lead's finding that the sage raises, or adds again with another source, no longer counts for the lead", () => {
