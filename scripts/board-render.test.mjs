@@ -331,6 +331,18 @@ test("T305: the theme follows the system until you choose, a choice applies in t
   assert.equal(none.dataset.theme, undefined, "no storage: the system theme");
 });
 
+test("T305 R1056-2: a backlog card shows only its step line; a card in another column and the task page keep Now and Next", () => {
+  const data = sample([row("T1", "framed"), row("T2", "building")]);
+  const html = renderBoardHtml(data, { snapshot: false });
+  const cardOf = id => /<a class="card[^"]*" id="card-[^"]+"[^>]*>([\s\S]*?)<\/a>/g;
+  const cards = Object.fromEntries([...html.matchAll(cardOf())].map(match => [/<span class="id">(T\d+)<\/span>/.exec(match[1])[1], match[1]]));
+  assert.ok(cards.T1.includes('<ol class="sline" aria-label="Steps">'), "the backlog card has its steps");
+  assert.ok(!cards.T1.includes('class="nowline') && !cards.T1.includes('class="nextline"'), "and no Now or Next line");
+  assert.ok(cards.T2.includes("<b>Now:</b> No agent works on it now") && cards.T2.includes("<b>Next:</b> Review cycle 1 of 1 starts when the PR opens"));
+  const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks.find(task => task.id === "T1").key });
+  assert.ok(page.includes("<b>Now:</b> In the backlog. No agent works on it.") && page.includes("<b>Next:</b> The build"), "the task page keeps both lines");
+});
+
 test("T305: the live pill is no live region; a hidden status line is there for a failure only; the 6 columns fit at 701 to 1180 px", () => {
   const html = renderBoardHtml(providers(), { snapshot: false, live: true });
   assert.ok(html.includes('<span class="livepill" id="live-state"><span class="ld" aria-hidden="true"></span><span class="lt">Board · 20:00</span></span><span class="vh" id="live-alert" role="status"></span>'));

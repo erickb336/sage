@@ -78,7 +78,8 @@ function card(ctx, task, { archived = false } = {}) {
   return `<a class="card${task.reasons.length ? " needs" : ""}" id="card-${b64(task.key)}" href="${esc(ctx.snapshot ? `#${anchor(task)}` : route(task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}"${archived ? " data-archived hidden" : ""}>`
     + `<div class="top"><span class="id">${esc(task.id)}</span>·${project(ctx, task)}<span class="who" title="The logbook that holds this task">${esc(title(task.providerStandIn))}</span>${task.pr ? `<span class="pr">PR ${esc(task.pr)}</span>` : ""}</div>`
     + `<div class="title" title="${esc(task.title)}">${esc(task.title)}</div>`
-    + (done ? "" : stepLine(task) + nowNext(task)) + agents(ctx, task)
+    // A backlog card shows only its steps: its Now and Next lines would say the same on every card (R1056-2).
+    + (done ? "" : stepLine(task) + (task.column === "backlog" ? "" : nowNext(task))) + agents(ctx, task)
     + (task.inferredWork ? `<div class="nextline">Inferred work on the open PR</div>` : "")
     + `<div class="tags">${tags(task)}<span class="more">Open</span></div></a>`;
 }
