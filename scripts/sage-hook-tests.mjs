@@ -6251,6 +6251,8 @@ test("F-T298-1: each finding line and its detail compare with that finding's own
   const s = leadSession();
   const out = s.send({ hook_event_name: "SubagentStop", agent_id: "raised", agent_type: "sage:code-reviewer", last_assistant_message: report("FINDINGS", lines("", "- K1 high a crash", "- K2 low a log", "    steps: this one is medium")) });
   assert.match(out?.reason ?? "", /cannot read your report: the line "steps: this one is medium" under FINDINGS has a severity word above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>\./, "the stop gate quotes the line and names the way out");
+  assert.match(out?.reason ?? "", /No line under FINDINGS has a severity word above the severity of the finding that it is under\./, "F-T300-1: the help text names the per-finding rule");
+  assert.doesNotMatch(out?.reason ?? "", /highest finding/, "F-T300-1: the help text no longer names the old rule");
   assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a log", "- K2 high a crash", "    steps: a medium load, then a low disk"))) ?? "", /reported FINDINGS with low, high findings, so its verdict is findings/, "a lower word under a higher finding is detail, also after a lower finding");
 });
 
