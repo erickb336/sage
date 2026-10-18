@@ -53,7 +53,7 @@ function model({ gamma = null, delta = false, current = false, rich = false } = 
 }
 
 async function pageFor(t, { live = false, snapshot = !live, scripts = true, phone = false, current = false } = {}) {
-  const context = await browser.newContext({ javaScriptEnabled: scripts, viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
+  const context = await browser.newContext({ javaScriptEnabled: scripts, colorScheme: "dark", viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   const page = await context.newPage();
@@ -79,26 +79,33 @@ async function update(page, data) {
   assert.equal(await page.locator("#live-state").textContent(), "Live · updated 20:00");
 }
 
-test("T205: real DOM keeps selection and theme across live project and count changes", async t => {
+/** Chooses a project in the picker by its shown name (T305: the picker replaces the row of project chips). */
+async function pick(page, name) {
+  await page.locator("#pick-trig").click();
+  await page.locator(`#pick-list [role=option][data-name="${name}"]`).click();
+}
+const picked = page => page.locator("#pick-name").textContent();
+
+test("T205, T305: real DOM keeps the chosen project, the needs filter and the theme across live project and count changes", async t => {
   const page = await pageFor(t, { live: true });
   assert.deepEqual(await visibleCards(page), ["T1 · Sample alpha queued", "T2 · Sample alpha review", "T3 · Sample beta held", "T4 · Sample beta work"]);
-  assert.equal(await page.locator("#light").isChecked(), false);
-  await page.locator("label[for=light]").click();
-  await page.getByRole("button", { name: "alpha", exact: true }).click();
+  assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#121212", "a dark system: the dark theme");
+  await page.locator("label[for=flip]").click();
+  await pick(page, "alpha");
   await needsButton(page).click();
   assert.deepEqual(await visibleCards(page), ["T2 · Sample alpha review"]);
 
   await update(page, model({ gamma: "held" }));
-  assert.equal(await page.getByRole("button", { name: "alpha", exact: true }).getAttribute("aria-pressed"), "true");
+  assert.equal(await picked(page), "alpha");
   assert.equal(await needsButton(page).getAttribute("aria-pressed"), "true");
   assert.equal(await needsButton(page).textContent(), "Needs you 1"); // T217: the count follows the chosen project (alpha)
   assert.equal(await summary(page), "1 needs you 0 agents at work 1 in review 1 tasks");
   assert.deepEqual(await visibleCards(page), ["T2 · Sample alpha review"]);
-  assert.equal(await page.locator("#light").isChecked(), true);
+  assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
   assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#f7f7f5");
 
-  // This button did not exist when the script first ran; a direct listener on the old buttons cannot handle it.
-  await page.getByRole("button", { name: "gamma", exact: true }).click();
+  // This option did not exist when the script first ran; a direct listener on the old options cannot handle it.
+  await pick(page, "gamma");
   assert.deepEqual(await visibleCards(page), ["T5 · Sample gamma work"]);
   await update(page, model({ gamma: "building" }));
   assert.equal(await needsButton(page).textContent(), "Needs you 0"); // gamma has no task that needs you now
@@ -106,19 +113,23 @@ test("T205: real DOM keeps selection and theme across live project and count cha
   await needsButton(page).click();
   assert.deepEqual(await visibleCards(page), ["T5 · Sample gamma work"]);
 
+  // T305 "project gone": the chosen project has no logbook now. The board shows all projects and says so.
   await update(page, model({ delta: true }));
-  assert.equal(await page.getByRole("button", { name: "gamma", exact: true }).count(), 0);
-  assert.equal(await page.getByRole("button", { name: "All projects", exact: true }).getAttribute("aria-pressed"), "true");
+  assert.equal(await page.locator('#pick-list [data-name="gamma"]').count(), 0);
+  assert.equal(await picked(page), "All projects");
+  assert.equal(await page.locator("#gone").isVisible(), true);
   assert.equal(await needsButton(page).getAttribute("aria-pressed"), "false");
   assert.deepEqual(await visibleCards(page), ["T1 · Sample alpha queued", "T2 · Sample alpha review", "T3 · Sample beta held", "T4 · Sample beta work", "T6 · Sample delta queued"]);
-  assert.equal(await page.locator("#light").isChecked(), true);
-  await page.getByRole("button", { name: "delta", exact: true }).click();
+  await page.getByRole("button", { name: "Dismiss" }).click();
+  assert.equal(await page.locator("#gone").isVisible(), false);
+  assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
+  await pick(page, "delta");
   assert.deepEqual(await visibleCards(page), ["T6 · Sample delta queued"]);
 });
 
 test("T205: phone filtering puts visible owner work first and removes empty columns", async t => {
   const page = await pageFor(t, { live: true, phone: true });
-  await page.getByRole("button", { name: "alpha", exact: true }).click();
+  await pick(page, "alpha");
   const columnOrder = () => page.locator("[data-col]").evaluateAll(columns => columns
     .filter(column => getComputedStyle(column).display !== "none")
     .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
@@ -130,7 +141,7 @@ test("T205: phone filtering puts visible owner work first and removes empty colu
   assert.deepEqual(await visibleCards(page), ["T2 · Sample alpha review"]);
   await update(page, model({ gamma: "held" }));
   assert.deepEqual(await columnOrder(), ["In review"]);
-  await page.getByRole("button", { name: "gamma", exact: true }).click();
+  await pick(page, "gamma");
   assert.deepEqual(await columnOrder(), ["Building"]);
   assert.deepEqual(await visibleCards(page), ["T5 · Sample gamma work"]);
   await update(page, model({ gamma: "building" }));
@@ -158,14 +169,14 @@ test("T218: offline task pages, the backlog fold and the theme work with scripts
   }
   const plain = await pageFor(t, { scripts: false });
   assert.deepEqual(await visibleCards(plain), ["T1 · Sample alpha queued", "T2 · Sample alpha review", "T3 · Sample beta held", "T4 · Sample beta work"]);
-  const many = await browser.newContext({ javaScriptEnabled: false });
+  const many = await browser.newContext({ javaScriptEnabled: false, colorScheme: "dark" });
   t.after(() => many.close());
   const folded = await many.newPage();
   await folded.setContent(renderBoardHtml(buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [{ key: "sample/many-abcdef", name: "many-abcdef", diagnostics: [], tables: { tasks: Array.from({ length: 9 }, (_, i) => ({ id: `T${i + 1}`, title: `Sample queued ${i + 1}`, state: "framed", size: "small", risk: "", route: "build", branch: "", pr: "", round: "0", keys: "" })) } }] }], { now: NOW })));
   assert.equal(await folded.locator("a.card:visible").count(), 6);
   await folded.getByText("Show all 9").click();
   assert.equal(await folded.locator("a.card:visible").count(), 9);
-  await plain.locator("label[for=light]").click();
+  await plain.locator("label[for=flip]").click();
   assert.equal(await plain.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#f7f7f5");
 });
 
@@ -202,40 +213,39 @@ async function contrast(page, list) {
 
 test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 contrast on the page, column and card in both themes", async t => {
   const data = model({ current: true, rich: true }), task = data.tasks.find(item => item.id === "T2");
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   const results = [];
   for (const [view, html, list] of [
-    ["board", renderBoardHtml(data, { snapshot: false }), [["faint on a card", ".card .faint"], ["faint in a column", ".rest .faint"], ["provider on a pill", ".card .agent:not(.alt) .prov"], ["alternate pill", ".card .agent.alt"], ["provider on an alternate pill", ".card .agent.alt .prov"], ["legend pill", ".legend .agent:not(.alt) .prov"], ["legend alternate pill", ".legend .agent.alt .prov"]]],
-    ["task", renderBoardHtml(data, { snapshot: false, taskKey: task.key }), [["faint on the page", ".ptop .faint"], ["faint in a section", ".log .faint"], ["skipped step", ".ls.skip"], ["earlier head", ".head .faint"], ["head", ".head"]]],
+    ["board", renderBoardHtml(data, { snapshot: false }), [["Next line on a card", ".card .nextline"], ["step not started", ".card .s-wait"], ["step separator", ".card .sep"], ["faint in a column", ".rest .faint"], ["provider on a pill", ".card .agent:not(.alt) .prov"], ["alternate pill", ".card .agent.alt"], ["provider on an alternate pill", ".card .agent.alt .prov"], ["legend pill", ".legend .agent:not(.alt) .prov"], ["legend alternate pill", ".legend .agent.alt .prov"]]],
+    ["task", renderBoardHtml(data, { snapshot: false, taskKey: task.key }), [["faint on the page", ".ptop .faint"], ["faint in a section", ".log .faint"], ["step detail", ".vlist .faint"], ["review role", ".parts .part"], ["earlier head", ".head .faint"], ["head", ".head"]]],
   ]) {
     const page = await context.newPage();
     await page.setContent(html);
     for (const theme of ["dark", "light"]) {
-      if (theme === "light") await page.locator("label[for=light]").click();
+      if (theme === "light") await page.locator("label[for=flip]").click();
       for (const item of (await contrast(page, list)).flat()) {
         results.push(`${view} ${theme} ${item.kind}`);
         assert.ok(item.ratio >= 4.5, `${view} ${theme} ${item.kind} "${item.text}": ${item.ratio.toFixed(2)}`);
       }
     }
-    if (view === "task") assert.equal(await page.locator(".ls.skip").first().evaluate(element => getComputedStyle(element).textDecorationLine), "line-through");
   }
-  assert.ok(results.includes("task light skipped step") && results.includes("board dark faint on a card") && results.includes("board light faint in a column"));
+  assert.ok(results.includes("task light review role") && results.includes("board dark step not started") && results.includes("board light faint in a column"));
   assert.ok(["board light provider on a pill", "board light provider on an alternate pill", "board dark legend alternate pill", "task light earlier head", "task dark earlier head"].every(kind => results.includes(kind)));
 });
 
 test("T218 F-T218-9, F-T218-7 and F-T218-13: chips only with scripts, the stand-in legend on both views, and a 24 px way back", async t => {
   const data = model({ current: true, rich: true }), task = data.tasks.find(item => item.id === "T2");
   for (const scripts of [false, true]) {
-    const context = await browser.newContext({ javaScriptEnabled: scripts, viewport: { width: 1280, height: 900 } });
+    const context = await browser.newContext({ javaScriptEnabled: scripts, viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
     t.after(() => context.close());
     await context.route("**/*", route => route.abort());
     const page = await context.newPage();
     await page.setContent(renderBoardHtml(data, { snapshot: false }));
     assert.equal(await needsButton(page).isVisible(), scripts, `Needs-you chip, scripts ${scripts ? "on" : "off"}`);
-    assert.equal(await page.getByRole("button", { name: "alpha", exact: true }).isVisible(), scripts);
-    assert.equal(await page.locator("label[for=light]").isVisible(), true, "the theme switch needs no script");
+    assert.equal(await page.locator("#pick-trig").isVisible(), scripts, "the picker needs the script");
+    assert.equal(await page.locator("label[for=flip]").isVisible(), true, "the theme switch needs no script");
     const sentence = "a stand-in value: the logbook does not record the real one.";
     assert.equal(await page.locator(".legend").getByText(sentence, { exact: false }).isVisible(), true);
     // F-T218-16: one legend pill for each pill colour, named by its source.
@@ -243,7 +253,7 @@ test("T218 F-T218-9, F-T218-7 and F-T218-13: chips only with scripts, the stand-
     assert.equal(await page.locator(".card .agent.alt").textContent(), "Codex · implementer");
     await page.setContent(renderBoardHtml(data, { snapshot: false, taskKey: task.key }));
     assert.equal(await page.locator(".legend").getByText(sentence, { exact: false }).isVisible(), true);
-    assert.equal(await page.locator(".legend .step.failed").isVisible(), true, "the cycle-chip legend is on the task page too");
+    assert.equal(await page.locator(".legend .step").count(), 0, "the step line needs no legend: each mark has its word (T305)");
     const box = await page.getByRole("link", { name: "← Board" }).boundingBox();
     assert.ok(box.width >= 24 && box.height >= 24, JSON.stringify(box));
     await page.keyboard.press("Tab");
@@ -267,13 +277,13 @@ test("T205: sample desktop and phone text meets 4.5 contrast in both themes", as
       document.body.prepend(label);
     });
     for (const theme of ["dark", "light"]) {
-      if (theme === "light") await page.locator("label[for=light]").click();
+      if (theme === "light") await page.locator("label[for=flip]").click();
       const measurements = (await contrast(page, [
         ["normal", ".card .title"],
         ["muted", ".card .top"],
-        ["link", ".chip[aria-pressed=true]"],
-        ["needs", ".flag"],
-        ["current", ".step.running"],
+        ["link", ".seg [aria-pressed=true]"],
+        ["needs", ".nowline.need"],
+        ["current", ".s-run"],
       ])).map(list => list[0]);
       assert.deepEqual(measurements.map(item => item.kind), ["normal", "muted", "link", "needs", "current"]);
       for (const item of measurements) assert.ok(item.ratio >= 4.5, `${phone ? "phone" : "desktop"} ${theme} ${item.kind}: ${item.ratio}`);
@@ -320,7 +330,7 @@ test("T205: real browser authenticates pages and live streams, watches files, an
   });
   await server.start();
   // On the Mac (a loopback Host) the board needs no sign-in, so the browser sends no credentials.
-  context = await browser.newContext();
+  context = await browser.newContext({ colorScheme: "dark" });
   // Only this isolated server may receive requests.
   await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
   const page = await context.newPage(), responses = [];
@@ -352,7 +362,7 @@ test("T205: real browser authenticates pages and live streams, watches files, an
   await needsButton(page).click();
 
   writeFileSync(taskFile, "Sample invalid table header\nSample incomplete write\n");
-  await page.getByText("Update failed · board from", { exact: false }).waitFor();
+  await page.locator("#live-state").getByText("Update failed · board from", { exact: false }).waitFor();
   assert.deepEqual(await visibleCards(page), ["T1 · Sample watched replacement", "T2 · Sample held task"]);
   assert.doesNotMatch(await page.locator("#board-content").textContent(), /Sample incomplete write/);
   replaceTasks("Sample restored task");
@@ -373,7 +383,7 @@ test("T205: real browser authenticates pages and live streams, watches files, an
   assert.equal(await page.evaluate(() => window.sampleDocumentMarker), "sample-task-document");
 
   await server.close();
-  await page.getByText("Reconnecting · board from", { exact: false }).waitFor();
+  await page.locator("#live-state").getByText("Reconnecting · board from", { exact: false }).waitFor();
   assert.equal(await page.getByRole("heading", { name: "Sample task live change", exact: true }).isVisible(), true);
   replaceTasks("Sample reconnected task");
   server = createBoardServer(options);
