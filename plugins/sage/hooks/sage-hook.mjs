@@ -339,7 +339,7 @@ export function handle(input, state, slots) {
       // one they read (F-T289-24, F-T289-39). The lead rules read no other role's report, so its FINDINGS may list what it
       // fixed or needs (F-T289-40).
       const { problem } = REVIEWERS.includes(input.agent_type.slice("sage:".length).toLowerCase()) ? reportOf(input.last_assistant_message) : {};
-      if (problem) return { decision: "block", reason: `sage: the hook cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. No line under FINDINGS has a severity word above the highest finding. RESULT FINDINGS or FAIL needs a finding.` };
+      if (problem) return { decision: "block", reason: `sage: the hook cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. No line under FINDINGS has a severity word above the severity of the finding that it is under. RESULT FINDINGS or FAIL needs a finding.` };
     }
   }
   if (!main && ours && input.agent_id) slots.touch(input.agent_id, input.agent_type); // the agent's lease: a slot that no event touched for an hour expires
@@ -1068,9 +1068,10 @@ const findingsLine = (line) => FINDINGS_AT.test(line.trimStart().replace(/^(?:[-
  * one with no finding above it (F-T289-25), or an indented line that is severe (F-T289-46, F-T289-54).
  * The severity rule (F-T289-60, F-T289-62, F-T289-63, F-T298-1): it is unreadable too when a line of FINDINGS has a
  * severity word (levelIn) above the severity of its own finding: a finding line and the lines under it compare with
- * that finding, and a line above the first finding with the highest finding that the reader counted. So a raised word
- * under a low finding counts also when a high finding is in the report, and an honest detail line such as "a high row
- * count" under a low finding blocks once, and the helper writes it again. A lower word under a higher finding is detail.
+ * that finding. (A line above the first finding is none or makes the report unreadable before this rule.) So a raised
+ * word under a low finding counts also when a high finding is in the report, and an honest detail line such as "a high
+ * row count" under a low finding blocks once, and the helper writes it again. A lower word under a higher finding is
+ * detail.
  */
 function reportOf(text) {
   const fields = fieldsOf(text, REPORT_FIELDS), of = (name) => fields.filter((f) => f.name === name);
@@ -1079,7 +1080,7 @@ function reportOf(text) {
   const twice = REPORT_FIELDS.find((name) => of(name).length > 1) ?? (another === undefined ? undefined : "FINDINGS");
   const said = r && [r.rest, ...r.lines].map((line) => line.trimStart().slice(0, LINE_MAX).trim()).find(Boolean);
   const result = (/^[^A-Za-z]*([A-Za-z]+)/.exec(said ?? "")?.[1] ?? "").toUpperCase();
-  const severities = [], owned = []; // owned: each line with the level of the finding that it belongs to, if any
+  const severities = [], owned = []; // owned: each line under a finding, with the level of that finding
   let none = false, long = false, odd;
   for (const line of f ? [f.rest, ...f.lines] : []) {
     if (line.length > LINE_MAX) { long = true; continue; }
@@ -1088,15 +1089,15 @@ function reportOf(text) {
     if (severity && !indented) severities.push(severity);
     else if (NONE_LINE.test(text)) none = true;
     else if (!(indented && severities.length && !severity && !severe)) odd ??= text;
-    owned.push([text, severities.length ? LEVEL[severities.at(-1)] : undefined]);
+    if (severities.length) owned.push([text, LEVEL[severities.at(-1)]]);
   }
-  const read = Math.max(0, ...severities.map((v) => LEVEL[v])), seen = owned.find(([text, own]) => levelIn(text) > (own ?? read));
+  const seen = owned.find(([text, own]) => levelIn(text) > own);
   const problem = twice ? `${twice} is given twice, the second time in the line ${JSON.stringify((of(twice)[1]?.line ?? another).trim().slice(0, 80))}` : !r ? "it has no RESULT" : !f ? "it has no FINDINGS" :
     !RESULT_WORDS.includes(result) ? `RESULT starts with ${JSON.stringify((said ?? "").slice(0, 80))}, not with one of ${RESULT_WORDS.join(", ")}` :
     long ? `a line under FINDINGS is longer than ${LINE_MAX} characters` : odd !== undefined ? `a line under FINDINGS is not none alone and not a finding in the form ${FINDING_FORM}: ${JSON.stringify(odd.slice(0, 80))}` :
     none && severities.length ? "FINDINGS has none and findings" : !none && !severities.length ? "FINDINGS is empty" :
     none && ["FINDINGS", "FAIL"].includes(result) ? `RESULT is ${result}, but FINDINGS is none` :
-    seen ? `the line ${JSON.stringify(seen[0].slice(0, 80))} under FINDINGS has a severity word above ${seen[1] !== undefined ? `the severity of its finding (${LEVELS[seen[1]]})` : severities.length ? `the highest finding that the hook read (${LEVELS[read]})` : "none"}: write that finding as its own line ${FINDING_FORM}` : undefined;
+    seen ? `the line ${JSON.stringify(seen[0].slice(0, 80))} under FINDINGS has a severity word above the severity of its finding (${LEVELS[seen[1]]}): write that finding as its own line ${FINDING_FORM}` : undefined;
   return { result, severities, unreadable: Boolean(problem), ...(problem && { problem }) };
 }
 /**
