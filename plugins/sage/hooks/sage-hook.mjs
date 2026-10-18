@@ -361,8 +361,10 @@ export function handle(input, state, slots) {
   if (event === "PostToolUseFailure" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
   // The main session's TaskStop ends the named agent and frees its slot, a lead's or a child's too (T255 M3, F-T255-12,
   // F-T273-14). A lead's name lead-T<n> stops this session's one lead of that name (F-T273-13, F-T273-16). An agent's
-  // TaskStop frees no slot: a lead could free a main-session agent's slot while that agent still runs (T255 M3).
+  // TaskStop frees no slot: a lead could free a main-session agent's slot while that agent still runs (T255 M3). A lead
+  // stops no agent: it could cut its own reviewer off before a report, then add a new run of the role (F-T301-14).
   if (event === "PreToolUse" && input.tool_name === "TaskStop") {
+    if (!main && input.agent_type === "sage:lead") return deny(event, "a lead stops no agent: only the main session does. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
     const id = input.tool_input?.task_id;
     return void (main && (/^lead-T[1-9]\d*$/.test(id ?? "") ? slots.stopLead(id.slice("lead-".length)) : slots.release(id)));
   }

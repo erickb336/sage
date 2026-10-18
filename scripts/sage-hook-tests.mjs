@@ -5897,6 +5897,17 @@ test("F-T289-20: a helper that the sage stopped gave no report, so its run ends 
   assert.match(cleanVerdictOf(s, twice) ?? "", /R7's helper gave a report that the hook cannot read \(FINDINGS is given twice, the second time in the line "FINDINGS - Y1 high a.mjs:1 the token is logged"\)/);
 });
 
+test("F-T301-14: a lead never stops its own helper before its report; the main session's TaskStop still stops it", () => {
+  const s = leadSession();
+  const run = leadAdd(s, "code-reviewer"); // R5
+  assert.equal(s.send(tool("Agent", { subagent_type: "sage:code-reviewer", prompt: BRIEF, name: run }, { tool_use_id: "cut-own", ...LEAD })), undefined);
+  s.send(resultOf("cut-own", "kid-own", LEAD));
+  assert.equal(denied(s.send(tool("TaskStop", { task_id: "kid-own" }, LEAD))), "sage: a lead stops no agent: only the main session does. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
+  assert.match(denied(stateRun(s, `run done ${run} --status failed`)) ?? "", /still runs|has not stopped|running/, "the refused stop leaves the helper running, so its run cannot end yet");
+  assert.equal(denied(s.send(tool("TaskStop", { task_id: "kid-own" }))), undefined, "the main session stops the helper");
+  assert.equal(denied(stateRun(s, `run done ${run} --status failed`)), undefined, "and then the lead ends its run as failed");
+});
+
 test("F-T289-21: FINDINGS none is clean only alone; with any words after it, the report is unreadable", () => {
   const s = leadSession();
   assert.match(cleanVerdictOf(s, report("CLEAN", "none - F1 high token in the log")) ?? "", /cannot read \(a line under FINDINGS is not none alone and not a finding/);
