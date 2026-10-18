@@ -1872,6 +1872,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         // A new medium finding of a repair round goes to a follow-up task, not to another round. A high one blocks until it is fixed.
         if (f.status !== "open") refuse(`${f.key} is ${f.status}: only an open finding moves.`);
         if (f.severity === "high") refuse(`${f.key} is high, so it blocks ${id} until it is fixed: a high finding never moves to a follow-up task.`);
+        // A fix of the round that its re-check did not confirm stays on its task, at any severity (F-T301-40).
+        if (String(taskOf(dir, id).task.keys ?? "").split(",").includes(f.key)) refuse(`${f.key} is a fix of ${id}'s current round, so it never moves to a follow-up task: it gets the next round, or a replan when the round fixed none of its keys.`);
         const title = need(cell(opt.to), '--to "<the follow-up task\'s title>"');
         const size = opt.size ?? "small";
         if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");

@@ -365,10 +365,13 @@ export function handle(input, state, slots) {
   // stops no agent: it could cut its own reviewer off before a report, then add a new run of the role (F-T301-14). No other
   // agent stops an agent either: a helper could cut a sibling or its lead off (F-T301-27). An agent still stops its own
   // shell tasks (standing order 30): a target is an agent when it has an agent's name or a slot of this session holds it.
+  // TaskStop still takes the old shell_id for task_id, and a name in any case or with spaces (F-T301-33, F-T301-34).
   if (event === "PreToolUse" && input.tool_name === "TaskStop") {
-    const id = input.tool_input?.task_id;
-    if (!main && input.agent_type === "sage:lead") return deny(event, "a lead stops no agent: only the main session does. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
-    if (!main && (/^(R[1-9]\d*|lead-T[1-9]\d*|main)$/.test(id ?? "") || slots.holds(id))) return deny(event, `an agent stops no agent: only the main session does, and ${id} is an agent. Stop only your own shell tasks; report to your lead or the sage what needs a stop.`);
+    const { task_id, shell_id } = input.tool_input ?? {}, id = task_id ?? shell_id;
+    if (!main && input.agent_type === "sage:lead") return deny(event, "a lead stops no task, also no shell task: only the main session stops one. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
+    if (!main && task_id !== undefined && shell_id !== undefined && task_id !== shell_id) return deny(event, "TaskStop gives task_id and shell_id with different values. Give only task_id.");
+    const near = String(id ?? "").trim(), low = near.toLowerCase();
+    if (!main && (/^(r\d+|lead-t\d+|main)$/.test(low) || slots.holds(near) || slots.holds(low))) return deny(event, `an agent stops no agent: only the main session does, and ${id} is an agent. Stop only your own shell tasks; report to your lead or the sage what needs a stop.`);
     return void (main && (/^lead-T[1-9]\d*$/.test(id ?? "") ? slots.stopLead(id.slice("lead-".length)) : slots.release(id)));
   }
   // An agent's SendMessage can wake a stopped agent outside every cap, and its event cannot tell a stopped target from a

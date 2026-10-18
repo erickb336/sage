@@ -549,6 +549,25 @@ test("finding move: a medium or low finding goes to a follow-up task, which hold
   assert.equal(s.ok("finding", "move", "T2", "F-T2-1", "--to", "Export later", "--size", "tiny"), "F-T2-1 moved to T3 as F-T3-1 · T3 framed · tiny · route build", "a moved finding can move again, with a size");
 });
 
+test("F-T301-40: an open fix of the current round never moves, at any severity, also after the move back to reviewing; a new finding of the round still moves", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
+  toReviewing(s, "T1");
+  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the export skips the last row");
+  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo in the error");
+  for (const k of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", k, "fix");
+  assert.equal(s.ok("round", "T1"), "T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 · re-run code-reviewer on the repair's diff");
+  for (const k of ["F-T1-1", "F-T1-2"]) {
+    assert.equal(s.no("finding", "move", "T1", k, "--to", "later"), `sage: ${k} is a fix of T1's current round, so it never moves to a follow-up task: it gets the next round, or a replan when the round fixed none of its keys.`);
+  }
+  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the fix saves a blank row");
+  assert.match(s.ok("finding", "move", "T1", "F-T1-3", "--to", "Blank rows"), /^F-T1-3 moved to T2 as F-T2-1 /, "a new finding of the round is not a key");
+  s.ok("finding", "close", "T1", "F-T1-2");
+  s.ok("task", "T1", "set", "state=reviewing");
+  assert.match(s.no("finding", "move", "T1", "F-T1-1", "--to", "later"), /F-T1-1 is a fix of T1's current round/, "after the move back to reviewing, the key is still the round's");
+  assert.deepEqual(rows(s.dir, "findings").filter((f) => f.task === "T1").map((f) => `${f.key} ${f.status}`), ["F-T1-1 open", "F-T1-2 closed"], "the refused moves left the keys on T1");
+});
+
 test("a tiny task needs only its checks once", () => {
   const s = store();
   s.ok("task", "add", "--title", "Fix a typo", "--size", "tiny");

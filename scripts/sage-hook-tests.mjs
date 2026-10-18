@@ -5902,7 +5902,7 @@ test("F-T301-14: a lead never stops its own helper before its report; the main s
   const run = leadAdd(s, "code-reviewer"); // R5
   assert.equal(s.send(tool("Agent", { subagent_type: "sage:code-reviewer", prompt: BRIEF, name: run }, { tool_use_id: "cut-own", ...LEAD })), undefined);
   s.send(resultOf("cut-own", "kid-own", LEAD));
-  assert.equal(denied(s.send(tool("TaskStop", { task_id: "kid-own" }, LEAD))), "sage: a lead stops no agent: only the main session does. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
+  assert.equal(denied(s.send(tool("TaskStop", { task_id: "kid-own" }, LEAD))), "sage: a lead stops no task, also no shell task: only the main session stops one. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
   assert.match(denied(stateRun(s, `run done ${run} --status failed`)) ?? "", /still runs|has not stopped|running/, "the refused stop leaves the helper running, so its run cannot end yet");
   assert.equal(denied(s.send(tool("TaskStop", { task_id: "kid-own" }))), undefined, "the main session stops the helper");
   assert.equal(denied(stateRun(s, `run done ${run} --status failed`)), undefined, "and then the lead ends its run as failed");
@@ -5923,6 +5923,30 @@ test("F-T301-27: a helper never stops a sibling, its lead or the sage, by name o
   assert.match(denied(stateRun(s, `run done ${runs[1]} --status failed`)) ?? "", /has not stopped/, "the sibling still runs, so its run cannot end yet");
   assert.equal(denied(stateRun(s, "run add T1 --role ux-reviewer")), undefined, "lead-a still holds its lead slot, so it still writes");
   assert.equal(denied(s.send(tool("TaskStop", { task_id: "b7k2x9" }, REVIEWER))), undefined, "a helper stops its own shell task (standing order 30)");
+});
+
+test("F-T301-33, F-T301-34: an agent's TaskStop of an agent is refused in any letter case, with spaces, and by the old shell_id; a shell task still stops", () => {
+  const s = leadSession();
+  const runs = ["code-reviewer", "qa"].map((role, i) => {
+    const run = leadAdd(s, role); // R5, R6
+    assert.equal(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name: run }, { tool_use_id: `case-${i}`, ...LEAD })), undefined);
+    s.send(resultOf(`case-${i}`, `kid-${i}`, LEAD));
+    return run;
+  });
+  const REVIEWER = { agent_id: "kid-0", agent_type: "sage:code-reviewer" };
+  const stop = (input, who = REVIEWER) => denied(s.send(tool("TaskStop", input, who)));
+  const AGENT = /^sage: an agent stops no agent: only the main session does/;
+  for (const name of [runs[1].toLowerCase(), ` ${runs[1]}`, `${runs[1]} `, "R06", "Lead-a", "LEAD-T1", "lead-t1", " lead-T1", "Main", "MAIN", " main", "KID-1", " kid-1 "]) {
+    assert.match(stop({ task_id: name }) ?? "", AGENT, `task_id ${JSON.stringify(name)}`);
+  }
+  for (const name of [runs[1], "lead-T1", "main", "kid-1", "lead-a"]) assert.match(stop({ shell_id: name }) ?? "", AGENT, `shell_id ${name}`);
+  assert.equal(stop({ task_id: "b7k2x9", shell_id: "kid-1" }), "sage: TaskStop gives task_id and shell_id with different values. Give only task_id.");
+  assert.equal(stop({ task_id: "b7k2x9", shell_id: "b7k2x9" }), undefined, "the same id twice is one shell task");
+  assert.equal(stop({ shell_id: "b7k2x9" }), undefined, "a helper stops its own shell task by its old shell_id");
+  assert.match(stop({ shell_id: "b7k2x9" }, LEAD) ?? "", /^sage: a lead stops no task, also no shell task/, "a lead stops none, by either field");
+  assert.match(denied(stateRun(s, `run done ${runs[1]} --status failed`)) ?? "", /has not stopped/, "the sibling still runs");
+  assert.equal(stop({ shell_id: "kid-1" }, {}), undefined, "the main session stops the helper by shell_id");
+  assert.equal(denied(stateRun(s, `run done ${runs[1]} --status failed`)), undefined, "and the main session's stop by shell_id frees the helper's slot, so its run ends");
 });
 
 test("F-T289-21: FINDINGS none is clean only alone; with any words after it, the report is unreadable", () => {

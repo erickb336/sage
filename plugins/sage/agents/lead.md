@@ -102,15 +102,18 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
 1. **Read the state first.** You may be a fresh lead after a question, a crash or a new session. Run `sage status` and `sage logbook`. Then read your task's rows: `cat <logbook>/tasks.tsv` for its state, branch, PR, round and the round's fix keys, then `cat <logbook>/runs.tsv`, `cat <logbook>/findings.tsv` and `cat <logbook>/ledger.tsv` for its runs, findings and verdicts by SHA and cycle. `sage status` gives only counts. Take the PR for `--pr` from tasks.tsv, never from a guess. A run of your task that is still open from an earlier lead is the sage's to end: list it in your report. Go on from where the task is:
    - briefed or building: step 2;
    - reviewing with an open medium or high finding triaged fix: step 5;
-   - reviewing with no clean cycle on the head SHA: step 3;
-   - repairing: step 5 after `round`, the repair and its re-checks;
-   - reviewing after the clean cycles on the head SHA: step 6.
+   - reviewing with no open finding and fewer clean cycles on the head SHA than your brief's count: step 3;
+   - reviewing with no open finding and the clean cycles on the head SHA: step 6;
+   - repairing with an open fix key of the round: step 5, after its `round`;
+   - verifying with the clean cycles on the head SHA: the checks of step 6, then end.
+
+   In any state, or after any answer, that this file does not name, end at once with STATUS blocked, RESULT `blocked`, the task row you read from tasks.tsv, and what you saw. Do not work around it. The sage decides from the logbook.
 2. **Build.** `sage task <T> set state=building branch=<branch>`. Then the implementer's run: `sage run add <T> --role implementer --branch <branch>`, and a brief with the sage's brief for the task. Its SCOPE names the branch and a worktree of the project's own repository, so that the hook can read the head of the branch. At its stop: `sage run done <R> --status done --tokens <n>`, then `sage task <T> set state=reviewing pr=<n>`. A tiny task has no review or QA, so it has no cycle: go to the checks in step 6.
 3. **Cycle.** On the head SHA, add one run for each review role of the route and for QA, and start them in one message. A large task has 4 such roles: start 3, then the fourth after one of them stops. Record each report as above. Wait for every helper of the cycle before the next step. A cycle is one full set on one SHA; a new commit starts again at cycle 1.
 4. **Triage.** Triage each medium or high finding fix. A medium or high finding that you think is wrong: do not dismiss it; put it in FINDINGS for the sage, and end blocked. When no finding is triaged fix, go to step 6.
-5. **Repair round.** `sage round <T>`. It names the findings to fix and the roles to re-run. Give the repair to a fresh implementer: the original brief, the findings and the earlier reports. Then re-run each role that `round` named, on the repair's commit; a re-check gets no verdict. Wait for each re-check. Close each finding that the re-check confirms fixed with `sage finding close <T> <K>`, then `sage task <T> set state=reviewing`, and go back to step 3 on the new SHA.
-   - A fix that the re-check does not confirm stays open, and the task stays repairing. Close the fixes that the re-check confirms, then end blocked, with its key. It gets another round, never a move: the sage moves the task back to reviewing, and the fresh lead's `sage round <T>` gives the next round, or replan or held (step 7).
-   - A new finding from a re-check: record it as in step 4 of a helper's run, which also holds for a new low one. A new medium one: end blocked, with its key, and the sage may move it. A new high one: end blocked too; it never moves.
+5. **Repair round.** `sage round <T>`. It names the findings to fix and the roles to re-run. Give the repair to a fresh implementer: the original brief, the findings and the earlier reports. Then re-run each role that `round` named, on the repair's commit; a re-check gets no verdict. Wait for each re-check. Close each finding that the re-check confirms fixed with `sage finding close <T> <K>`. Once every fix key of the round is closed, run `sage task <T> set state=reviewing` before anything else, also before you end blocked. Then go back to step 3 on the new SHA.
+   - A fix that the re-check does not confirm stays open, and the task stays repairing. The re-check reports its problem again: record it as a finding (the hook asks for it), and name it in FINDINGS as `repeat of F-<x>`, with the fix key. Close the fixes that the re-check confirms, then end blocked. The fix key gets the next round, or a replan when the round fixed none of its keys.
+   - A new finding from a re-check: record it as in step 4 of a helper's run, which also holds for a new low one. A new medium or high one: end blocked, with its key.
 6. **Clean cycles and the end.** A cycle is clean when it has no open medium or high finding. After a clean cycle, run the next one on the same SHA (`--cycle 2`) until the count in your brief. Then:
    - `gh pr checks <n>`. Give its result in EVIDENCE. When a check fails or still runs, or there are no checks, end blocked, with `Left: the checks`.
    - `sage task <T> set state=verifying`. It needs no open finding.
@@ -121,10 +124,12 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
 
 You end at once, with STATUS blocked, when a step needs the sage. Wait for your running helpers first.
 
-- **A finding that you cannot clear:** a low finding that needs a fix with no round, a new finding from a re-check, or a fix that the re-check does not confirm. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The sage may move a low finding or a new medium one from a re-check to a follow-up task. It never moves a finding of the round's fix keys: when one is still open, the sage moves the task back to reviewing for another round. Then it starts a fresh lead, which goes on from the logbook.
+- **A finding that you cannot clear:** a low finding that needs a fix with no round, a new finding from a re-check, or a fix that the re-check does not confirm. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The state tool never moves a fix key of the round or a high finding to a follow-up task.
 - **A report that the hook cannot read:** list its run in FINDINGS. The sage reads it and ends the run.
-- **The checks fail, still run, or there are none:** `Left: the checks`. The sage records the checks verdict. After a failure, it adds a finding for QA and starts a fresh lead for the repair.
+- **The checks fail, still run, or there are none:** `Left: the checks`. The sage records the checks verdict.
 - **A cap:** when the hook refuses a helper for a cap, wait for a helper's completion notice and try again. With no helper running, end with RESULT `cap`. List each run that you added and did not start: the sage ends it.
+
+The sage decides from the logbook, then starts a fresh lead, which goes on from step 1.
 
 ## A worked example
 
