@@ -25,13 +25,30 @@ const report = (result, findings) => ["STATUS        done", `RESULT        ${res
   "QUESTIONS     none", "NOT VERIFIED  none", "BRANCH        sage/t1-example"].join("\n");
 const denied = (out) => out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined;
 const words = (text) => text.trim().split(/\s+/).join(" ");
-// The fake gh: it answers only "gh pr checks <n>" as CI with one passing check does. Any other call fails, so the file
-// cannot teach a gh command that the test does not know.
+// The fake gh: it answers only "gh pr checks <n>" as CI with one check does. The check passes, unless the file checks
+// next to it has lines: each call then takes the first line as the check's state (p.checks). Any other call fails, so
+// the file cannot teach a gh command that the test does not know.
 const FAKE_GH = `#!/usr/bin/env node
+const fs = require("fs"), path = require("path").join(__dirname, "checks");
 const a = process.argv.slice(2);
-if (a.length === 3 && a[0] === "pr" && a[1] === "checks" && /^[1-9][0-9]*$/.test(a[2])) console.log("build\\tpass\\t1m\\thttps://example.invalid/runs/1");
-else { console.error("the fake gh knows only gh pr checks <n>: " + a.join(" ")); process.exit(1); }
+if (!(a.length === 3 && a[0] === "pr" && a[1] === "checks" && /^[1-9][0-9]*$/.test(a[2]))) { console.error("the fake gh knows only gh pr checks <n>: " + a.join(" ")); process.exit(1); }
+const [state, ...rest] = fs.existsSync(path) ? fs.readFileSync(path, "utf8").split("\\n").filter(Boolean) : [];
+if (state) fs.writeFileSync(path, rest.join("\\n"));
+console.log("build\\t" + (state ?? "pass") + "\\t1m\\thttps://example.invalid/runs/1");
 `;
+// The state tool's default agent cap: what sage config prints in an empty logbook root.
+const DEFAULT_CAP = (() => {
+  const root = mkdtempSync(join(tmpdir(), "sage-lead-config-"));
+  const out = spawnSync("node", [TOOL, "config"], { env: { ...process.env, HOME: join(root, "home"), SAGE_HOME: join(root, "sage") } }).stdout;
+  return Number(/(?:^|\s)max_agents=(\d+)(?:\s|$)/.exec(out)?.[1] ?? assert.fail(`sage config prints no max_agents: ${out}`));
+})();
+// The words that the file gives the lead for the first line of its RESULT.
+const LEAD_RESULTS = [.../\*\*RESULT\*\*: first line ((?:`\w+`(?:, | or )?)+)/.exec(TEXT)?.[1].matchAll(/`(\w+)`/g) ?? assert.fail("agents/lead.md lists the RESULT words")].map((m) => m[1]);
+// The line that the file says run add prints, as a pattern: each placeholder is one word, and the line may go on (· model <m>).
+const RUN_ADD = (() => {
+  const form = /It prints the run id: `([^`]+)`/.exec(TEXT)?.[1] ?? assert.fail("agents/lead.md states what run add prints");
+  return new RegExp(`^${form.split(/(<[^>]+>)/).map((part) => (/^<[^>]+>$/.test(part) ? "\\S+" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("")}(?: · .*)?$`);
+})();
 
 /** A text block of the file: the first one after the heading. */
 function block(heading) {
@@ -69,6 +86,8 @@ function project({ size = "small", config = [] } = {}) {
     return r.stdout.trim();
   };
   const p = { folder, send, run, chief, lead: undefined, leads: 0 };
+  /** The states of the next calls of gh pr checks, one per call; after them, the check passes. */
+  p.checks = (...states) => writeFileSync(join(bin, "checks"), states.join("\n"));
   /** The main session starts lead-T<n>, as the chief bindings say: after its lead run. */
   p.startLead = (task = "T1") => {
     const id = `lead-${++p.leads}`, call = `start-${id}`;
@@ -110,6 +129,7 @@ function project({ size = "small", config = [] } = {}) {
 function play(lines, p) {
   const roles = {}, ran = [], sage = []; // ran: the lead's commands; sage: the sage's
   let printed, last, logbook, recheck = new Set(); // printed: the output of the line just before; recheck: the roles that round named and that have not reported
+  let blocked = false; // a lead ended blocked, and no fresh lead has started yet
   const fill = (text) => text.replaceAll("<sha>", () => p.head()).replaceAll("<logbook>", () => logbook ?? assert.fail("<logbook> before sage logbook"));
   for (const line of lines) {
     const [mark, ...rest] = line.split(" "), text = rest.join(" ");
@@ -128,11 +148,16 @@ function play(lines, p) {
       last = printed = r.stdout.trim();
       if (program === "sage") p.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: { stdout: r.stdout, stderr: r.stderr, interrupted: false }, ...p.lead });
       if (program === "sage" && args[0] === "round") recheck = new Set(/ re-run (\S+) on /.exec(printed)?.[1].split(",") ?? []);
+      if (program === "sage" && args[0] === "run" && args[1] === "add") assert.match(printed, RUN_ADD, `${line}: the file says that run add prints ${RUN_ADD}`);
       ran.push([program, ...args].join(" "));
     } else if (mark === "→") {
       assert.ok(was !== undefined, `agents/lead.md: "${line}" does not follow a command`);
       if (text === "<logbook>") (logbook = was), assert.match(logbook, /^\//, "sage logbook prints a folder");
-      else assert.ok(words(was).startsWith(words(fill(text))), `the file says "${text}", the command printed "${was}"`);
+      else {
+        // Word by word: a line cut inside a word (R1 for R10) differs (F-T301-25).
+        const want = words(fill(text)).split(" ");
+        assert.deepEqual(words(was).split(" ").slice(0, want.length), want, `the file says "${text}", the command printed "${was}"`);
+      }
     } else if (mark === ">") {
       const [run, type] = rest;
       roles[run] = type;
@@ -145,17 +170,23 @@ function play(lines, p) {
       const agent = who === "lead-T1" ? p.lead : { agent_id: `child-${who}`, agent_type: roles[who] };
       assert.ok(agent?.agent_type, `agents/lead.md: "${line}" is a report of no agent that started`);
       if (agent.agent_type === "sage:implementer") p.commit();
+      if (who === "lead-T1") assert.ok(LEAD_RESULTS.includes(result), `${line}: the file gives the lead's RESULT only as ${LEAD_RESULTS.join(", ")}`);
+      if (who === "lead-T1" && result === "blocked") blocked = true;
       recheck.delete(agent.agent_type.slice("sage:".length));
       const out = p.send({ hook_event_name: "SubagentStop", ...agent, stop_hook_active: false, last_assistant_message: report(result, findings) });
       assert.equal(out?.decision, undefined, `the stop gate blocks ${who}'s report: ${out?.reason}`);
       if (who === "lead-T1") p.lead = undefined;
     } else if (mark === "!" && rest[0] === "sage") {
+      // The sage takes no state from a blocked report (D2): its one move then is a round's unconfirmed fix back to reviewing (D1).
+      const to = /^task T1 set state=(\S+)$/.exec(rest.slice(1).join(" "))?.[1];
+      if (blocked && to) assert.ok(to === "reviewing" && p.chief("task", "T1").split(" ")[1] === "repairing", `${line}: after a blocked report the sage moves the task only from repairing to reviewing`);
       last = printed = p.chief(...fill(rest.slice(1).join(" ")).split(" "));
       sage.push(fill(text));
     } else if (mark === "!" && rest[0] === "stop") {
       p.send({ hook_event_name: "PreToolUse", tool_name: "TaskStop", tool_input: { task_id: `child-${rest[1]}` } }); // the main session's TaskStop
     } else if (mark === "!" && rest[0] === "start") {
       assert.equal(p.startLead(rest[1].slice("lead-".length)), undefined, `the hook refuses: ${line}`);
+      blocked = false;
     } else assert.fail(`agents/lead.md: the example line "${line}" starts with no known mark ($, →, >, <, ! sage, ! stop, ! start)`);
   }
   return { ran, sage, printed: last };
@@ -179,6 +210,52 @@ test("T301: each example of the lead file runs through the hook, from lead-T1's 
     const shape = new RegExp(`^${form.split(/(<[^>]+>)/).map((part) => (/^<[^>]+>$/.test(part) ? "\\S+" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("")}$`);
     assert.ok(ran.some((command) => shape.test(command)), `agents/lead.md teaches "${form}", and no example runs it in full`);
   }
+});
+
+// The start of a life that both paths below share: the build, then one cycle of code review and QA on its head.
+const BUILT = ["$ sage task T1 set state=building branch=sage/t1-example", "$ sage run add T1 --role implementer --branch sage/t1-example", "> R2 sage:implementer", "< R2 done: none",
+  "$ sage run done R2 --status done --tokens 1", "$ sage task T1 set state=reviewing pr=12", "$ git rev-parse sage/t1-example", "$ sage run add T1 --role code-reviewer", "→ R3 running · code-reviewer on T1",
+  "$ sage run add T1 --role qa", "→ R4 running · qa on T1", "> R3 sage:code-reviewer", "> R4 sage:qa"];
+// A fresh lead's first reads, as step 1 says.
+const FRESH = ["$ sage status", "$ sage logbook", "→ <logbook>", "$ cat <logbook>/tasks.tsv", "$ cat <logbook>/findings.tsv"];
+
+test("T301 D3: after a CI failure the sage adds the finding for QA, so the fresh lead's round names QA, which re-checks the repair; the task then merges", () => {
+  const p = project();
+  p.checks("fail");
+  const { sage, printed } = play([...BUILT, "< R3 CLEAN: none", "< R4 PASS: none",
+    "$ sage run done R3 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R3",
+    "$ sage run done R4 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R4",
+    "$ gh pr checks 12", "→ build fail", "< lead-T1 blocked: none",
+    "! sage run done R1 --status blocked --tokens 1", "! sage verdict T1 --sha <sha> --kind checks-fail --cycle 1 --pr 12",
+    "! sage finding add T1 --source qa --severity medium --summary ci-fails", "→ F-T1-1 open · medium · T1", "! sage run add T1 --role lead", "→ R5 running · lead on T1", "! start lead-T1",
+    ...FRESH, "$ sage finding triage T1 F-T1-1 fix", "$ sage round T1", "→ T1 repairing · round 1 of 3 · fix F-T1-1 · re-run qa on the repair's diff",
+    "$ sage run add T1 --role implementer --branch sage/t1-example", "→ R6 running · implementer on T1", "> R6 sage:implementer", "< R6 done: none", "$ sage run done R6 --status done --tokens 1",
+    "$ sage run add T1 --role qa", "→ R7 running · qa on T1", "> R7 sage:qa", "< R7 PASS: none", "$ sage run done R7 --status done --tokens 1",
+    "$ sage finding close T1 F-T1-1", "$ sage task T1 set state=reviewing",
+    "$ sage run add T1 --role code-reviewer", "→ R8 running · code-reviewer on T1", "$ sage run add T1 --role qa", "→ R9 running · qa on T1", "> R8 sage:code-reviewer", "> R9 sage:qa",
+    "< R8 CLEAN: none", "< R9 PASS: none", "$ sage run done R8 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R8",
+    "$ sage run done R9 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R9",
+    "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying", "< lead-T1 ready: none",
+    "! sage verdict T1 --sha <sha> --kind checks-pass --cycle 1 --pr 12", "! sage task T1 set state=verified", "! sage merge-check --sha <sha> --pr 12"], p);
+  assert.match(sage.at(-1), /^sage merge-check --sha [0-9a-f]{40} --pr 12$/);
+  assert.match(printed, /^T1 may merge/, "the repair's head merges after QA's re-check and a fresh clean cycle");
+});
+
+test("T301 D1: a fix that the re-check did not confirm is never moved; it gets another round, and round re-plans the task", () => {
+  const p = project();
+  const { printed } = play([...BUILT, "< R3 FINDINGS: - K1 medium a.mjs:1 the token is logged", "< R4 PASS: none",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-logged", "→ F-T1-1 open · medium · T1",
+    "$ sage run done R3 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind findings --cycle 1 --pr 12 --run R3",
+    "$ sage run done R4 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R4",
+    "$ sage finding triage T1 F-T1-1 fix", "$ sage round T1", "→ T1 repairing · round 1 of 3 · fix F-T1-1 · re-run code-reviewer on the repair's diff",
+    "$ sage run add T1 --role implementer --branch sage/t1-example", "→ R5 running · implementer on T1", "> R5 sage:implementer", "< R5 done: none", "$ sage run done R5 --status done --tokens 1",
+    "$ sage run add T1 --role code-reviewer", "→ R6 running · code-reviewer on T1", "> R6 sage:code-reviewer", "< R6 FINDINGS: - K2 medium a.mjs:1 the token is still logged",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged", "→ F-T1-2 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
+    "< lead-T1 blocked: - F-T1-1 medium a.mjs:1 the re-check did not confirm the fix",
+    "! sage run done R1 --status blocked --tokens 1", "! sage task T1 set state=reviewing", "! sage run add T1 --role lead", "→ R7 running · lead on T1", "! start lead-T1",
+    ...FRESH, "$ sage finding triage T1 F-T1-2 fix", "$ sage round T1"], p);
+  assert.match(printed, /^T1 replan: round 1 did not fix F-T1-1\./, "the unconfirmed fix re-plans the task instead of a move");
+  assert.match(p.chief("task", "T1"), /^T1 replan /);
 });
 
 test("T301: the lead file's state table is the hook's: each move in it passes, and each other move of the lead is refused", () => {
@@ -217,7 +294,7 @@ test("T301: the lead file's verdict table is the hook's: each report gives only 
   const p = project({ size: "large", config: ["max_agents=20"] });
   play(["$ sage task T1 set state=building branch=sage/t1-example", "$ sage run add T1 --role implementer --branch sage/t1-example", "> R2 sage:implementer", "< R2 done: none",
     "$ sage run done R2 --status done --tokens 1", "$ sage task T1 set state=reviewing pr=12"], p);
-  const wrong = [];
+  const wrong = [], passed = new Map(rows.map(([said]) => [said, new Set()])); // passed: each row's kinds that the hook let pass in its cases
   let keys = 0;
   CASES.forEach(([role, said, row], i) => {
     const run = `R${i + 3}`, [, severity] = / (low|medium|high) /.exec(said) ?? [];
@@ -226,14 +303,19 @@ test("T301: the lead file's verdict table is the hook's: each report gives only 
     play([...lines, `$ sage run done ${run} --status done --tokens 1`], p);
     const passes = ALL.filter((kind) => p.ask(`node ${TOOL} verdict T1 --sha ${p.head()} --kind ${kind} --cycle 1 --pr 12 --run ${run}`) === undefined);
     if (passes.length !== 1 || !kinds(row).includes(passes[0])) wrong.push(`${role} "${said}": the hook passes ${passes.join(", ") || "no kind"}; the table names ${kinds(row).join(", ")}`);
+    passes.forEach((kind) => passed.get(row)?.add(kind));
     if (severity) p.chief("finding", "triage", "T1", `F-T1-${++keys}`, "dismiss", "--reason", "a-fixture"); // the next case starts with no open finding
   });
+  // A row also names no kind that the hook refuses for each of its cases (F-T301-26).
+  for (const [said, kindsOf] of rows) for (const kind of kindsOf.split(/, | or /)) if (!passed.get(said).has(kind)) wrong.push(`the row "${said}" names ${kind}, which the hook passes for none of its reports`);
   assert.deepEqual(wrong, [], "the file's verdict table and the hook differ");
 });
 
 test("T301: the lead file's helper cap is the hook's, and with the default agent cap one lead and its helpers fill the project", () => {
   const cap = Number(/At most (\d) helpers run at once/.exec(TEXT)?.[1] ?? assert.fail("the file states its helper cap"));
-  const p = project({ size: "large" }); // the default max_agents: 4
+  const stated = Number(/\(`max_agents`, (\d+) by default\)/.exec(TEXT)?.[1] ?? assert.fail("the file states the default agent cap"));
+  assert.equal(stated, DEFAULT_CAP, "the file's default agent cap is the state tool's");
+  const p = project({ size: "large" }); // the default max_agents
   play(["$ sage task T1 set state=building branch=sage/t1-example", "$ sage run add T1 --role implementer --branch sage/t1-example", "> R2 sage:implementer", "< R2 done: none",
     "$ sage run done R2 --status done --tokens 1", "$ sage task T1 set state=reviewing pr=12"], p);
   const ROLES = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
@@ -245,7 +327,7 @@ test("T301: the lead file's helper cap is the hook's, and with the default agent
   p.chief("task", "add", "--title", "second", "--size", "small");
   p.chief("task", "T2", "set", "state=briefed");
   p.chief("run", "add", "T2", "--role", "lead");
-  assert.match(p.startLead("T2") ?? "", /cap is 4/, "a second lead waits for room under the default cap");
+  assert.match(p.startLead("T2") ?? "", new RegExp(`cap is ${DEFAULT_CAP}\\b`), "a second lead waits for room under the default cap");
 });
 
 test("T301: the hook refuses what the lead file says is the sage's, so the examples' passes are real", () => {
