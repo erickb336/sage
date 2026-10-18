@@ -5,6 +5,7 @@ import { GENERATED, ROOT, outputs, filesUnder, parseSource } from "./build.mjs";
 import { checkWords, flaggedWords, yamlText } from "./dictionary.mjs";
 import { MOMENTS } from "../plugins/sage/hooks/principles-hook.mjs";
 import { BRIEF_FIELDS as CORE_BRIEF_FIELDS } from "../packages/sage-core/index.mjs";
+import { TASK_KINDS } from "../packages/sage-core/logbook-fields.mjs";
 import { BRIEF_FIELDS, FINDING_FORM, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
 import { fingerprint, overrides } from "./sync-pstack.mjs";
 import { files as graphics } from "./graphics.mjs";
@@ -77,6 +78,9 @@ if (briefFields.join(" ") !== BRIEF_FIELDS.join(" ")) problems.push(`agents/chie
 const report = /```\n([\s\S]*?)```/.exec(readFileSync(join(skillsDir, "report/SKILL.md"), "utf8"))?.[1] ?? "";
 const reportFields = report.split("\n").map((l) => l.split(/\s{2,}/)[0].trim()).filter(Boolean);
 if (reportFields.join("|") !== REPORT_FIELDS.join("|")) problems.push(`skills/report: the template has ${reportFields.join(", ")}, the hook checks ${REPORT_FIELDS.join(", ")}`);
+// The sage skill of each provider lists the task kinds that the state tool takes, in the same order (T314).
+for (const file of ["plugins/sage/skills/sage/SKILL.md", "plugins/sage-codex/skills/sage/references/commands.md"])
+  if (!readFileSync(join(ROOT, file), "utf8").includes(`A kind is one of: ${TASK_KINDS.join(", ")}.`)) problems.push(`${file}: the kind list is not "A kind is one of: ${TASK_KINDS.join(", ")}.", the kinds of the state tool`);
 // The hook reads a helper's findings only in its one line form (F-T289-11): the template's FINDINGS line gives that form.
 if (!/^FINDINGS\s.*$/m.exec(report)?.[0].includes(FINDING_FORM)) problems.push(`skills/report: the FINDINGS line does not give the hook's finding form ${FINDING_FORM}`);
 // The hook's reader takes a finding's detail only on indented lines under its line (F-T289-29): the report skill, and each

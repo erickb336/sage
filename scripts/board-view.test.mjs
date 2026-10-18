@@ -1,7 +1,8 @@
 import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStateTool } from "../packages/sage-core/index.mjs";
@@ -60,6 +61,29 @@ test("one checkout shows both sources; task lookup refuses duplicate IDs and acc
   assert.deepEqual([snapshot(root), snapshot(otherRoot)], before);
 });
 
+
+test("T314 R1043-1: a board scope takes the name that the board shows, the display name or the upstream's repository, in any letter case; a shared name stays ambiguous", t => {
+  const home = mkdtempSync(join(tmpdir(), "sage-board-view-names-")), root = join(home, "logbooks");
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const tool = createStateTool({ defaultRoot: () => root });
+  const env = { ...process.env, SAGE_HOME: root };
+  const project = (folder, title, ...config) => {
+    const dir = join(home, folder); mkdirSync(dir);
+    if (folder === "fork") { execFileSync("git", ["init", "-q", dir]); execFileSync("git", ["-C", dir, "remote", "add", "upstream", "https://github.com/sample-org/seacc.git"]); }
+    for (const args of [["init"], ["task", "add", "--title", title, "--size", "small"], ...config.map(pair => ["config", pair])]) tool.sage([...args, "--project", dir], env);
+    return dir;
+  };
+  const here = project("demos", "Sample council task", "name=Council Record");
+  project("fork", "Sample fork task");
+  project("twin-a", "Sample twin A", "name=Twin"); project("twin-b", "Sample twin B", "name=Twin");
+  const board = scope => tool.sage(["board", scope, "--view", "chat", "--project", here], env);
+  const council = board("council record");
+  assert.ok(council.includes("Sample council task") && !council.includes("Sample fork task"), council);
+  const fork = board("SEACC");
+  assert.ok(fork.includes("Sample fork task") && !fork.includes("Sample council task"), fork);
+  assert.throws(() => board("twin"), /The project is ambiguous\. Choose: current\/twin-a-[0-9a-f]{6}, current\/twin-b-[0-9a-f]{6}/);
+  assert.throws(() => board("Council"), /No recorded project matches this board scope/, "a part of a name is not a match");
+});
 
 test("task transitions record their actual time for board detail without a board write", t => {
   const { root, run } = fixture(t);

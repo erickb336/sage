@@ -10,6 +10,8 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, openSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
+import { projectName as shownName } from "./board-model.mjs";
+import { logbookSettings } from "./logbook-fields.mjs";
 export function createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock }) {
 
 const FOLDER = /^([a-z0-9-]+)-[0-9a-f]{6}$/;
@@ -80,10 +82,10 @@ function mergeable(b, t, env) {
   return { ok: r.ok, reason: r.reason.split(/\.(?:\s|$)/)[0] }; // the first sentence says what is missing
 }
 
-/** The GitHub repository of a checkout, as https://github.com/<owner>/<repo>, or null. */
-function repoOf(path) {
+/** The GitHub repository of a checkout's remote (origin, or the one named), as https://github.com/<owner>/<repo>, or null. */
+function repoOf(path, remote = "origin") {
   try {
-    const url = execFileSync("git", ["-C", path, "remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const url = execFileSync("git", ["-C", path, "remote", "get-url", remote], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
     const m = /^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(url);
     return m ? `https://github.com/${m[1]}/${m[2]}` : null;
   } catch {
@@ -130,7 +132,9 @@ function logbooks(root) {
   const books = folders.map(({ name: folder }) => {
     const dir = join(root, folder);
     const checkout = small(join(dir, "checkout.txt"), 4096)?.trim() || null;
-    const book = { folder, name: FOLDER.exec(folder)[1], dir, checkout, tasks: [], runs: [], gates: [], changed: {}, reviewed: {}, error: null };
+    // The owner's settings of the logbook (sage config name= and archived=), as the rich board reads them: a bad value is not used.
+    const settings = (() => { try { return logbookSettings(JSON.parse(small(join(dir, "config.json"), 64 * 1024) ?? "{}")); } catch { return logbookSettings(null); } })();
+    const book = { folder, name: FOLDER.exec(folder)[1], dir, checkout, displayName: settings.name, archived: settings.archived, tasks: [], runs: [], gates: [], changed: {}, reviewed: {}, error: null };
     try {
       const [tasks, runs, gates, ledger, decisions] = Object.keys(FORMAT).map((t) => read(dir, t).map((row) => clean(t, row)));
       for (const [task, at] of [...runs.flatMap((r) => [[r.task, r.started], [r.task, r.ended]]), ...[...gates, ...ledger, ...decisions].map((r) => [r.task, r.at])]) {
@@ -152,12 +156,12 @@ function logbooks(root) {
 const fold = (s) => String(s).normalize("NFC").replace(/\p{Script=Latin}/gu, (c) => c.toLowerCase());
 
 /**
- * The logbooks that a typed name can mean. An exact real name picks one. Else its slug matches a key, a logbook folder or
+ * The logbooks that a typed name can mean. An exact real name or shown name picks one. Else its slug matches a key, a logbook folder or
  * a name. Returns the candidates and whether the one candidate is sure: a typed name with letters or digits that the
  * slug drops (中文, Café) is never sure by its slug alone, so a fallback slug such as "project" never picks a project.
  */
 function named(books, typed, want) {
-  const real = books.filter((b) => b.real && fold(b.real) === fold(typed));
+  const real = books.filter((b) => [b.real, b.shown].some((name) => name && fold(name) === fold(typed)));
   if (real.length) return [real, real.length === 1];
   const bySlug = books.filter((b) => [b.key, b.folder, b.name].includes(want));
   const lossy = /(?![a-z0-9])[\p{L}\p{N}]/u.test(String(typed).toLowerCase());
@@ -269,8 +273,11 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
     b.home = answerPath(b, here, env);
     b.real = b.home ? basename(b.home).normalize("NFC") : null;
     b.repo = b.home ? repoOf(b.home) : null;
+    // The name that the rich board shows: the display name, else the upstream's or origin's repository, else the real
+    // folder's name. Without a home, the key stands in for the folder, so the label is the key alone, as before.
+    b.shown = shownName({ displayName: b.displayName, upstream: b.home ? repoOf(b.home, "upstream") : null, repository: b.repo, checkout: b.real ?? b.key, name: b.folder });
   }
-  const label = (b) => (b.real && b.real !== b.key ? `${b.key} (${text(b.real, 40)})` : b.key);
+  const label = (b) => (b.shown !== b.key ? `${b.key} (${text(b.shown, 40)})` : b.key);
   const known = books.map(label).join(", ");
   let shown;
   let others = [];
@@ -290,6 +297,9 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
     title = label(shown[0]);
   }
   const cap = want === "all" || want === "this" ? CAP.active : Infinity;
+  // An archived project shows only as a count, as on the rich board: its gates and tasks are on no other line.
+  const archived = [...shown, ...others].filter((b) => b.archived);
+  [shown, others] = [shown.filter((b) => !b.archived), others.filter((b) => !b.archived)];
 
   const pr = (b, t) => (!t.pr ? "no PR" : t.pr === "?" ? "PR ?" : b.repo ? `[#${t.pr}](${b.repo}/pull/${t.pr})` : `PR #${t.pr}`);
   const many = shown.length > 1;
@@ -370,6 +380,8 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
     })
     .filter(Boolean);
   if (elsewhere.length) section("Other projects", elsewhere, elsewhere.length);
+  const needCount = (b) => gates(b).length + verified(b).length;
+  if (archived.length) section(`Archived (${archived.length})`, archived.map((b) => `${label(b)}: ${plural(b.tasks.length, "task")}${needCount(b) ? ` · ${needCount(b)} need${needCount(b) === 1 ? "s" : ""} you` : ""}`), archived.length);
   if (save) remember(root, shown, now.toISOString().slice(0, 19) + "Z");
   return L.join("\n");
 }

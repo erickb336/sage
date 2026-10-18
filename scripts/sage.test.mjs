@@ -1685,7 +1685,7 @@ test("unknown-columns: a logbook that a newer sage wrote refuses every write com
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
   // A newer sage (T6 or T9) adds two columns to tasks.tsv and gives T2 values in them.
   const tasks = join(s.dir, "tasks.tsv");
-  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\textra\n", "\textra\tprogram\twaits\n").replace(/^(T2\t.*)$/m, "$1\tP1\tT1"));
+  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\tkind\n", "\tkind\tprogram\twaits\n").replace(/^(T2\t.*)$/m, "$1\tP1\tT1"));
   const before = snapshot(s.dir);
   const why = `sage: ${tasks} has columns that this version of sage does not know (program, waits): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`;
   const writes = [
@@ -1723,7 +1723,7 @@ test("unknown-columns: a logbook that a newer sage wrote refuses every write com
 
 test("unknown-options: a command refuses an option that it does not take, and an option without its value", () => {
   const s = store();
-  assert.equal(s.no("task", "add", "--title", "x", "--size", "small", "--program", "P1"), "sage: task add takes no --program. Its options: --title, --size, --risk, --add, --why, --project.");
+  assert.equal(s.no("task", "add", "--title", "x", "--size", "small", "--program", "P1"), "sage: task add takes no --program. Its options: --title, --size, --risk, --add, --why, --priority, --kind, --project.");
   assert.deepEqual(rows(s.dir, "tasks"), [], "a refused command writes nothing");
   s.ok("task", "add", "--title", "x", "--size", "small");
   assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--cycles", "2"), "sage: verdict takes no --cycles. Its options: --sha, --kind, --cycle, --pr, --run, --project.");
@@ -1980,9 +1980,9 @@ test("F-R65-2: only a header with every known column and more is a newer sage's;
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
   const tasks = join(s.dir, "tasks.tsv");
   const text = readFileSync(tasks, "utf8");
-  const why = `sage: ${damaged(tasks, "id, title, size, risk, route, state, branch, pr, round, keys, hold, extra")}`;
+  const why = `sage: ${damaged(tasks, "id, title, size, risk, route, state, branch, pr, round, keys, hold, extra, priority, kind")}`;
   for (const head of ["\n", "\tkept\n"]) { // a column lost, or renamed: so it lacks one, also with a column more
-    writeFileSync(tasks, text.replace("\tkeys\thold\textra\n", head));
+    writeFileSync(tasks, text.replace("\tkeys\thold\textra\tpriority\tkind\n", head));
     assert.equal(s.no("log", "-", "x", "--why", "y"), why);
   }
   writeFileSync(tasks, text);
@@ -2004,7 +2004,7 @@ test("F-R65-3: no control character reaches the terminal: a cell keeps none, a p
   byHand(s.dir, "findings", 1, "K]0;TITLE[31mRED", (cells) => cells.with(1, key)); // a person's edit puts them back
   assert.equal(s.no("finding", "close", "T1", "F-T1-9"), "sage: no finding F-T1-9 on T1. The latest: K\\x1b]0;TITLE\\x07\\x1b[31mRED.");
   const tasks = join(s.dir, "tasks.tsv");
-  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\textra\n", "\textra\tnew\x1b[2J\n"));
+  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\tkind\n", "\tkind\tnew\x1b[2J\n"));
   assert.equal(s.no("log", "-", "x", "--why", "y"), `sage: ${tasks} has columns that this version of sage does not know (new\\x1b[2J): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
   const project = join(mkdtempSync(join(tmpdir(), "sage-ctl-")), "x\rrm -rf ~ #"); // printed raw, the CR showed another command
   mkdirSync(project);
@@ -2319,6 +2319,100 @@ test("F-R92-2: variation selectors and the bidi marks go; the emoji selector sta
   assert.match(standing, new RegExp(`\n5\\. ${kept} ${shown}\n$`));
   byHand(s.dir, "tasks", 0, "T2", (cells) => cells.with(0, "T2︁‎")); // a hand edit puts them in an id
   assert.equal(s.no("task", "T9", "set", "state=briefed"), "sage: no task T9. The latest: T1, T2\\u{fe01}\\u{200e}.");
+});
+
+test("T314: task add takes --priority and --kind, and task set takes priority= and kind=; none clears; another value refuses with the list", () => {
+  const s = store();
+  assert.equal(s.ok("task", "add", "--title", "Fix the crash", "--size", "small", "--priority", "P1", "--kind", "bug-fix"), "T1 framed · small · route build,code-review,qa · P1 · kind bug-fix");
+  assert.equal(s.ok("task", "add", "--title", "No tags", "--size", "tiny"), "T2 framed · tiny · route build", "both are optional: no priority and no kind");
+  assert.deepEqual(rows(s.dir, "tasks").map((t) => [t.id, t.priority, t.kind]), [["T1", "P1", "bug-fix"], ["T2", "", ""]]);
+  const before = readFileSync(join(s.dir, "tasks.tsv"), "utf8");
+  assert.equal(s.no("task", "add", "--title", "x", "--size", "small", "--priority", "high"), 'sage: priority is one of P0, P1, P2, P3, or none to clear it; not "high". Nothing changed.');
+  assert.equal(s.no("task", "add", "--title", "x", "--size", "small", "--kind", "feature"), 'sage: kind is one of design, ui, orchestration, optimization, bug-fix, logbook, docs, security, providers, checks, or none to clear it; not "feature". Nothing changed.');
+  assert.equal(s.no("task", "T2", "set", "priority=p0"), 'sage: priority is one of P0, P1, P2, P3, or none to clear it; not "p0". Nothing changed.', "the words are exact: p0 is not P0");
+  assert.equal(s.no("task", "T2", "set", "kind=Docs"), 'sage: kind is one of design, ui, orchestration, optimization, bug-fix, logbook, docs, security, providers, checks, or none to clear it; not "Docs". Nothing changed.');
+  assert.equal(readFileSync(join(s.dir, "tasks.tsv"), "utf8"), before, "a refusal writes nothing");
+  assert.equal(s.ok("task", "T2", "set", "priority=P0", "kind=docs"), "T2 framed · tiny · round 0 · route build · P0 · kind docs");
+  assert.equal(s.ok("task", "T1", "set", "priority=none", "kind=none"), "T1 framed · small · round 0 · route build,code-review,qa");
+  assert.deepEqual(rows(s.dir, "tasks").map((t) => [t.id, t.priority, t.kind]), [["T1", "", ""], ["T2", "P0", "docs"]]);
+  assert.match(s.no("task", "T2", "set", "colour=red"), /^sage: task set takes state=, branch=, pr=, title=, priority= or kind=$/);
+});
+
+test("T314: an older logbook gets the priority and kind columns at its next write, so an older sage refuses to write it and loses no value", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  const tasks = join(s.dir, "tasks.tsv");
+  // The logbook of the sage before T314: no priority and no kind column.
+  writeFileSync(tasks, "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\n");
+  assert.equal(s.ok("status").split("\n")[1], "tasks   1 · framed 1", "it reads with the columns empty");
+  s.ok("task", "T1", "set", "kind=checks");
+  assert.equal(readFileSync(tasks, "utf8").split("\n")[0], "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind");
+  // To an older sage these are columns that it does not know: its ready() refuses every write (see unknown-columns).
+  assert.equal(rows(s.dir, "tasks")[0].kind, "checks");
+});
+
+test("T314: config name= and archived= set one logbook's own config.json, never the config for all projects", () => {
+  const s = store();
+  const own = join(s.dir, "config.json"), all = join(s.home, "config.json");
+  assert.equal(s.ok("config", "name=seacc (Council Record)"), "name=seacc (Council Record) archived=no");
+  assert.deepEqual(JSON.parse(readFileSync(own, "utf8")), { name: "seacc (Council Record)" });
+  assert.equal(existsSync(all), false, "the config for all projects is not written");
+  assert.equal(s.ok("config", "archived=yes"), "name=seacc (Council Record) archived=yes");
+  writeFileSync(own, JSON.stringify({ ...JSON.parse(readFileSync(own, "utf8")), later: 1 })); // a key of a newer version stays
+  assert.equal(s.ok("config", "name=", "archived=no"), "name= archived=no", "name= alone removes the name");
+  assert.deepEqual(JSON.parse(readFileSync(own, "utf8")), { later: 1 });
+  const sixty = "n".repeat(60);
+  assert.equal(s.ok("config", `name=${sixty}`), `name=${sixty} archived=no`, "60 characters is the most");
+  assert.equal(s.ok("config", "name=Café"), "name=Café archived=no", "the name is kept in the composed form");
+  assert.equal(s.ok("config"), "max_agents=4 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=12 " + MODEL_DEFAULTS, "config alone still prints the config for all projects");
+});
+
+test("T314: config refuses a name that is too long, empty of text, spaced at an end, or holds a control, format or hidden character, and a bad archived", () => {
+  const s = store();
+  const own = join(s.dir, "config.json");
+  const hidden = "has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark). Nothing changed.";
+  assert.equal(s.no("config", `name=${"n".repeat(61)}`), `sage: the name "${"n".repeat(61)}" has 61 characters: give 1 to 60. Nothing changed.`);
+  assert.equal(s.no("config", "name=sea​cc"), `sage: the name "sea\\u{200b}cc" ${hidden}`, "a zero-width space");
+  assert.equal(s.no("config", "name=‮ccaes"), `sage: the name "\\u{202e}ccaes" ${hidden}`, "a right-to-left override");
+  assert.equal(s.no("config", "name=sea\tcc"), `sage: the name "sea\\x09cc" ${hidden}`, "a tab");
+  assert.equal(s.no("config", "name=a­b"), `sage: the name "a­b" ${hidden}`, "a soft hyphen is a format character");
+  assert.equal(s.no("config", "name="), `sage: the name "" ${hidden}`, "a private-use character");
+  assert.equal(s.no("config", "name= seacc"), 'sage: the name " seacc" has a space at its start or end, or two spaces together. Nothing changed.');
+  assert.equal(s.no("config", "name=sea  cc"), 'sage: the name "sea  cc" has a space at its start or end, or two spaces together. Nothing changed.');
+  assert.equal(s.no("config", "archived=true"), 'sage: archived is yes or no, not "true". Nothing changed.');
+  assert.equal(s.no("config", "name=x", "arena=2"), 'sage: "arena" is a key for all projects, and name= and archived= are keys of one logbook: set them in a config command of their own.');
+  assert.equal(s.no("config", "name"), "sage: name needs a value: write name=<value>");
+  assert.equal(existsSync(own), false, "no refusal wrote the file");
+  writeFileSync(own, "[1]");
+  assert.equal(s.no("config", "name=x"), `sage: ${own} is not a JSON object, so config writes nothing. Ask the user to fix or remove it.`);
+});
+
+test("T314 R1044-2 R1041-1: config refuses a name with a line or paragraph separator, a blank letter, no visible character or a flood of combining marks", () => {
+  const s = store();
+  const c = String.fromCodePoint;
+  const hidden = "has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark). Nothing changed.";
+  // Each one shows as nothing, or breaks the line, in a terminal or on the board.
+  for (const [cp, why] of [[0x2028, "line separator"], [0x2029, "paragraph separator"], [0x34f, "combining grapheme joiner"], [0x115f, "Hangul choseong filler"], [0x1160, "Hangul jungseong filler"], [0x3164, "Hangul filler"], [0xffa0, "halfwidth Hangul filler"], [0x2800, "braille blank"]])
+    assert.equal(s.no("config", `name=sea${c(cp)}cc`), `sage: the name "sea${c(cp)}cc" ${hidden}`, why);
+  assert.equal(s.no("config", `name=${c(0x3164)}`), `sage: the name "${c(0x3164)}" ${hidden}`, "a name of a filler alone");
+  assert.equal(s.no("config", `name=${c(0x301, 0x301)}`), `sage: the name "${c(0x301, 0x301)}" has no visible character. Nothing changed.`);
+  const flood = `x${c(0x300, 0x301, 0x302, 0x303)}`;
+  assert.equal(s.no("config", `name=${flood}`), `sage: the name "${flood}" has more than 3 combining marks in a row. Nothing changed.`);
+  assert.equal(existsSync(join(s.dir, "config.json")), false, "no refusal wrote the file");
+  const three = `x${c(0x300, 0x301, 0x302)}`;
+  assert.equal(s.ok("config", `name=${three}`), `name=${three} archived=no`, "3 marks in a row are good");
+});
+
+test("T314 R1042-1: config keeps a joined family emoji and a Persian name with a non-joiner, where the hidden-character rule keeps the joiner", () => {
+  const s = store();
+  const c = String.fromCodePoint;
+  const family = c(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467), persian = `${c(0x645, 0x6cc)}${c(0x200c)}${c(0x62e, 0x648, 0x627, 0x647, 0x645)}`;
+  assert.equal(s.ok("config", `name=${family} Team`), `name=${family} Team archived=no`);
+  assert.equal(s.ok("config", `name=${persian}`), `name=${persian} archived=no`);
+  assert.deepEqual(JSON.parse(readFileSync(join(s.dir, "config.json"), "utf8")), { name: persian });
+  // A joiner where the rule removes it (at the end, or between two digits) is still a hidden character.
+  assert.match(s.no("config", `name=ab${c(0x200d)}`), /^sage: the name "ab\\u\{200d\}" has a control, format or hidden character/);
+  assert.match(s.no("config", `name=1${c(0x200c)}2`), /^sage: the name "1\\u\{200c\}2" has a control, format or hidden character/);
 });
 
 // Keep this test last: it reads every line that the tests above made the tool print.

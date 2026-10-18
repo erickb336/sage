@@ -891,3 +891,17 @@ test("T135: --name-hex refuses upper-case hex and bytes that are not UTF-8, and 
   }
   assert.equal(hex("6f6b").stdout, 'No project named "ok". Known projects: order-chaser, sage, sage-bot.\n'); // the same bytes in lower case: "ok"
 });
+
+test("T314 R1040-1: the chat board names a project by its shown name, and shows an archived project only as a count, with what needs you there", () => {
+  const { home, show } = world();
+  writeFileSync(join(home, "sage-bot-bbbbbb", "config.json"), JSON.stringify({ name: "Sage Bot", archived: true }));
+  writeFileSync(join(home, "order-chaser-cccccc", "config.json"), JSON.stringify({ name: "Order Chaser" }));
+  const out = show("all");
+  assert.ok(!out.includes("which channel first"), "the archived project's gate is not on the board");
+  assert.match(out, /\*\*Needs you \(4\)\*\*/);
+  assert.ok(out.includes("\n**order-chaser (Order Chaser)**\n"), out);
+  assert.ok(out.endsWith("\n\n**Archived (1)**\n- sage-bot (Sage Bot): 2 tasks · 1 needs you"), out);
+  assert.ok(!out.includes("**sage-bot"), "no section of its own");
+  // The shown name is a scope too, in any letter case.
+  assert.match(show("order chaser"), /^\*\*sage board · order-chaser \(Order Chaser\)\*\*/);
+});

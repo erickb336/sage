@@ -3,6 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdir
 import { isAbsolute, join } from "node:path";
 import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
+import { logbookSettings } from "./logbook-fields.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
 const MAX_FILE = 4 * 1024 * 1024;
@@ -58,17 +59,18 @@ const REPOSITORY = String.raw`([A-Za-z0-9][A-Za-z0-9-]*)\/([\w-][\w.-]*?)`;
 /** A repository link the board accepts, from a remote or a PR observation: https://github.com/<owner>/<repo>, or null. */
 export const githubRepository = value => new RegExp(String.raw`^https:\/\/github\.com\/${REPOSITORY}$`).test(value) ? value : null;
 
-/** The origin remote of a Git config file as https://github.com/<owner>/<repo>, or null for any other remote. */
-function githubRemote(config) {
-  let origin = false;
+/** The origin and upstream remotes of a Git config file, each as https://github.com/<owner>/<repo>, or null for any other remote. */
+function githubRemotes(config) {
+  const found = { origin: null, upstream: null };
+  let remote = null;
   for (const line of config.split(/\r?\n/)) {
     const section = /^\s*\[([^\]]*)\]/.exec(line);
-    if (section) { origin = /^remote\s+"origin"$/.test(section[1].trim()); continue; }
-    const url = origin && /^\s*url\s*=\s*(\S+)\s*$/.exec(line)?.[1];
+    if (section) { remote = /^remote\s+"(origin|upstream)"$/.exec(section[1].trim())?.[1] ?? null; continue; }
+    const url = remote && !found[remote] && /^\s*url\s*=\s*(\S+)\s*$/.exec(line)?.[1];
     const match = url && new RegExp(String.raw`^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[:/]${REPOSITORY}(?:\.git)?\/?$`).exec(url);
-    if (match) return `https://github.com/${match[1]}/${match[2]}`;
+    if (match) found[remote] = `https://github.com/${match[1]}/${match[2]}`;
   }
-  return null;
+  return found;
 }
 
 /** Missing or damaged input is a diagnostic, never a silently empty board. */
@@ -94,7 +96,7 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
       const entries = readdirSync(source.path, { withFileTypes: true }).filter(entry => /^[a-z0-9-]+-[0-9a-f]{6}$/.test(entry.name)).sort((a,b) => a.name.localeCompare(b.name));
       if (entries.length > 4096) throw new Error("board project count exceeds 4096");
       for (const entry of entries) {
-        const project = { key: `${source.id}/${entry.name}`, source: source.id, name: entry.name, tables: {}, diagnostics: [] };
+        const project = { key: `${source.id}/${entry.name}`, source: source.id, name: entry.name, tables: {}, diagnostics: [], warnings: [] };
         result.projects.push(project);
         if (!entry.isDirectory() || entry.isSymbolicLink()) { project.diagnostics.push("project is not a directory"); continue; }
         const directory = join(source.path, entry.name), before = lstatSync(directory);
@@ -109,9 +111,20 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
         }
         try { project.checkout = regular(join(directory, "checkout.txt"), budget).trim(); }
         catch (error) { if (error.code !== "ENOENT") project.diagnostics.push(`checkout: ${error.code ?? error.message}`); }
-        // The PR link needs the checkout's GitHub remote. Read its Git config as a file; run no Git command. No remote: no link.
-        try { project.repository = isAbsolute(project.checkout ?? "") ? githubRemote(regular(join(project.checkout, ".git", "config"), budget)) : null; }
-        catch { project.repository = null; }
+        // The PR link needs the checkout's GitHub origin, and the project's name may come from its upstream. Read its Git
+        // config as a file; run no Git command. No remote: no link.
+        const remotes = (() => { try { return isAbsolute(project.checkout ?? "") ? githubRemotes(regular(join(project.checkout, ".git", "config"), budget)) : {}; } catch { return {}; } })();
+        project.repository = remotes.origin ?? null;
+        project.upstream = remotes.upstream ?? null;
+        // The owner's settings of this logbook (sage config name= and archived=), checked again. A bad value falls back
+        // (no name; not archived) with a warning, not a diagnostic: no table is in doubt, so the board stays live.
+        project.archived = false;
+        try {
+          const settings = logbookSettings(parseJson(regular(join(directory, "config.json"), budget)));
+          if (settings.name !== null) project.displayName = settings.name;
+          project.archived = settings.archived;
+          project.warnings.push(...settings.warnings);
+        } catch (error) { if (error.code !== "ENOENT") project.warnings.push(`config: ${error.code ?? error.message}`); }
         project.contents = {};
         for (const record of project.observations.records.filter(record => record.kind === "artifact" && record.data.path)) {
           try {
