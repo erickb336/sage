@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
-import { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "../packages/sage-core/board-render.mjs";
+import { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus, needCounts, BOARD_ENHANCEMENT } from "../packages/sage-core/board-render.mjs";
 function model() {
   return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [{ key: "sample/project-abcdef", name: "project-abcdef", diagnostics: [], tables: { tasks: [{ id: "T1", title: "<script>alert(1)</script> & [sample](https://example.test)", size: "small", risk: "auth", route: "build,code-review,qa", state: "held", branch: "", pr: "", round: "1", keys: "" }] } }] }], { now: "2026-10-08T20:00:00Z" });
 }
@@ -219,7 +219,7 @@ test("T314: a card and a task page show the display name, the priority and the k
   ] }], { now: at });
   const html = renderBoardHtml(data);
   const board = html.slice(html.indexOf('<main class="board"'), html.indexOf("</main>"));
-  assert.ok(board.includes('<span class="tag prio">P1</span><span class="tag kind"><span aria-hidden="true">✱</span>Bug fix</span><span class="tag">small</span>'), "the tags come before the size");
+  assert.ok(board.includes('<span class="tag prio" title="P1, second priority">P1<span class="vh">, second priority</span></span><span class="tag kind"><span aria-hidden="true">✱</span>Bug fix</span><span class="tag">small</span>'), "the tags come before the size");
   const cards = board.split('<a class="card').slice(1);
   assert.equal(cards.filter(card => !card.includes(" data-archived hidden>")).length, 2, "the two tasks of the live project are the shown cards");
   assert.equal(cards.filter(card => card.includes(" data-archived hidden>") && card.includes("Old &lt;app&gt;")).length, 2, "an archived project's cards are hidden until you choose it in the picker");
@@ -229,7 +229,7 @@ test("T314: a card and a task page show the display name, the priority and the k
   assert.ok(/data-list="idle">[\s\S]*seacc \(Council Record\)[\s\S]*data-list="archived"><button type="button" class="morebtn" data-archived>Show 1 archived project<\/button>[\s\S]*Old &lt;app&gt;/.test(list), "the archived project is in the picker's folded Archived group");
   assert.ok(!html.slice(html.indexOf('id="pick-chips"'), html.indexOf("</header>")).includes("Old &lt;app&gt;"), "no needs-you chip for an archived project");
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks[0].key });
-  assert.ok(page.includes('<span class="tag prio">P1</span><span class="tag kind"><span aria-hidden="true">✱</span>Bug fix</span>'), "the task page has the tags too");
+  assert.ok(page.includes('<span class="tag prio" title="P1, second priority">P1<span class="vh">, second priority</span></span><span class="tag kind"><span aria-hidden="true">✱</span>Bug fix</span>'), "the task page has the tags too");
   const text = renderBoardText(data);
   assert.ok(text.includes("**T1 Sample T1** · sample · seacc \\(Council Record\\) · P1 · Bug fix\n"), text);
   assert.ok(text.includes("\nArchived: Old \\<app\\> (2 tasks · 1 needs you)\n"), text);
@@ -289,7 +289,7 @@ test("T305: the picker is one button with an ARIA combobox and listbox, every pr
   assert.ok(sage.includes('data-name="sage"') && sage.includes('data-provider="claude codex"') && sage.includes('data-providers="Claude + Codex"'), sage);
   assert.ok(sage.includes('data-terms="sage\n/sample/sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b"'), sage);
   assert.ok(html.includes('data-list="needs"><div class="grp" id="pick-g-needs"><span>Needs you</span><span class="n">1</span></div>'));
-  assert.ok(/id="pick-chips"><span class="vh">Projects that need you:<\/span><button class="chip" type="button" id="need-[^"]+" data-pick="sage-43265b" data-provider="claude codex"[^>]*><span class="dot p\d" aria-hidden="true"><\/span>sage <span class="badge">1<span class="vh"> need you<\/span><\/span><\/button><\/span>/.test(html), "one chip for each project that needs you, with its count");
+  assert.ok(/id="pick-chips"><span class="vh">Projects that need you:<\/span><button class="chip" type="button" id="need-[^"]+" data-pick="sage-43265b" data-provider="claude codex"[^>]*><span class="dot p\d" aria-hidden="true"><\/span><span class="cn">sage<\/span> <span class="badge"><span data-n>1<\/span><span class="vh"> need you<\/span><\/span><\/button><\/span>/.test(html), "one chip for each project that needs you, with its count");
   assert.equal((html.match(/data-pick="seacc|data-pick="demo-111111"/g) ?? []).length, 0, "no chip for a project that needs nothing");
   const empty = renderBoardHtml(buildBoardModel([], { now: at }), { snapshot: false });
   assert.ok(empty.includes("<b>No projects yet.</b>") && !empty.includes('id="pick-chips"><span'));
@@ -341,6 +341,44 @@ test("T305 R1056-2: a backlog card shows only its step line; a card in another c
   assert.ok(cards.T2.includes("<b>Now:</b> No agent works on it now") && cards.T2.includes("<b>Next:</b> Review cycle 1 of 1 starts when the PR opens"));
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks.find(task => task.id === "T1").key });
   assert.ok(page.includes("<b>Now:</b> In the backlog. No agent works on it.") && page.includes("<b>Next:</b> The build"), "the task page keeps both lines");
+});
+
+test("T305 F-T305-4: a backlog card that needs you keeps its Needs you line with the question", () => {
+  const data = sample([row("T1", "framed"), row("T2", "framed")], { gates: [{ id: "G1", task: "T2", question: "Sample: start with design A or B?", options: "A|B", recommendation: "A", answer: "" }] });
+  const html = renderBoardHtml(data, { snapshot: false });
+  const cards = Object.fromEntries([...html.matchAll(/<a class="card[^"]*" id="card-[^"]+"[^>]*>([\s\S]*?)<\/a>/g)].map(match => [/<span class="id">(T\d+)<\/span>/.exec(match[1])[1], match[1]]));
+  assert.ok(/<div class="nowline need">[\s\S]*<b>Needs you:<\/b>[^<]*Sample: start with design A or B\?/.test(cards.T2), cards.T2);
+  assert.ok(!cards.T2.includes('class="nextline"'), "and no Next line");
+  assert.ok(!cards.T1.includes('class="nowline'), "a backlog card that needs nothing still has no Now line");
+});
+
+test("T305 F-T305-6 and F-T305-12: a long project name ends in an ellipsis with the full name in a title; a priority says what it means", () => {
+  const long = "Sample: a very long display name that a narrow card cannot show whole";
+  const data = sample(["P0", "P1", "P2", "P3"].map((priority, i) => row(`T${i + 1}`, "framed", { priority })), {}, { displayName: long });
+  const html = renderBoardHtml(data, { snapshot: false });
+  assert.ok(html.includes(`<span class="proj" title="${long}"><span class="dot p0" aria-hidden="true"></span><span class="pn">${long}</span></span>`));
+  assert.ok(html.includes(".proj .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}"));
+  assert.deepEqual([...html.matchAll(/<span class="tag prio" title="([^"]+)">(P\d)<span class="vh">([^<]+)<\/span><\/span>/g)].map(m => `${m[2]}${m[3]}|${m[1]}`).sort(),
+    ["P0, highest priority|P0, highest priority", "P1, second priority|P1, second priority", "P2, third priority|P2, third priority", "P3, lowest priority|P3, lowest priority"]);
+});
+
+test("T305 F-T305-8: the list has a Close button that works by touch; on a phone or a touch screen it says Close", () => {
+  const html = renderBoardHtml(providers(), { snapshot: false });
+  assert.ok(html.includes('<button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span><span class="tap">Close</span></button>'));
+  assert.ok(html.includes("@media (max-width:700px),(pointer:coarse){\n .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}"));
+  assert.ok(BOARD_ENHANCEMENT.includes("if(t.closest('[data-close]')){closeList(true);return}"), "a click (a tap) closes the list and gives the focus back");
+});
+
+test("T305 F-T305-9: under a filter, the Needs you chip and each project's chip count the same tasks (the page carries this function)", () => {
+  const card = (project, priority, provider = "claude", extra = {}) => ({ project, priority, provider, kind: "ui", needs: "true", ...extra });
+  const cards = [card("a", "P0"), card("a", "P1"), card("b", "P1", "codex"), card("b", "P2"), card("c", "P0", "claude", { needs: "false" }), card("old", "P1", "claude", { archived: "" })];
+  const none = { project: "", who: "", priority: "", kind: "" };
+  assert.deepEqual(needCounts(cards, none), { all: 4, projects: { a: 2, b: 2, old: 1 } });
+  assert.deepEqual(needCounts(cards, { ...none, priority: "P1" }), { all: 2, projects: { a: 1, b: 1, old: 1 } });
+  assert.deepEqual(needCounts(cards, { ...none, who: "codex" }), { all: 1, projects: { b: 1 } });
+  assert.deepEqual(needCounts(cards, { ...none, priority: "none" }), { all: 0, projects: {} });
+  assert.deepEqual(needCounts(cards, { ...none, project: "old", priority: "P1" }), { all: 1, projects: { a: 1, b: 1, old: 1 } }, "a chosen archived project counts its own");
+  assert.ok(BOARD_ENHANCEMENT.includes("function needCounts(cards, S)") && BOARD_ENHANCEMENT.includes("set('needs-count',need.all)") && BOARD_ENHANCEMENT.includes("const n=need.projects[c.dataset.pick]||0"), "the page counts with this function");
 });
 
 test("T305: the live pill is no live region; a hidden status line is there for a failure only; the 6 columns fit at 701 to 1180 px", () => {

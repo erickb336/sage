@@ -5,7 +5,7 @@
 // installed Chrome. Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$SCRATCH/browsers" node --test scripts/board-picker.test.mjs
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +18,8 @@ import { writeSampleLogbooks } from "./board-sample.mjs";
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 const NOW = "2026-10-18T12:00:00Z";
-const dir = mkdtempSync(join(tmpdir(), "sage-board-picker-"));
+// The real path: the sample script refuses a path through a link, such as /var on macOS.
+const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-board-picker-"));
 const sources = writeSampleLogbooks(join(dir, "sample"), { now: NOW });
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, ...(process.env.BOARD_BROWSER_PATH ? { executablePath: process.env.BOARD_BROWSER_PATH } : {}) }); });
@@ -226,6 +227,45 @@ test("T305 R1023-4: the theme follows the system, a choice applies before the fi
     assert.equal(await page.evaluate(() => window.sampleThemeAtBody), other);
     assert.equal(await background(), other === "light" ? "rgb(247, 247, 245)" : "rgb(18, 18, 18)");
   }
+});
+
+test("T305 F-T305-8: at 375 px a tap on Close closes the sheet and gives focus back; the button says Close, not Esc", async t => {
+  const phone = await open(t, { width: 375, height: 812, colorScheme: "light" });
+  await phone.locator("#pick-trig").tap();
+  const close = phone.getByRole("button", { name: "Close the project list" });
+  assert.equal(await close.innerText(), "Close");
+  const box = await close.boundingBox();
+  assert.ok(box.width >= 44 && box.height >= 44, JSON.stringify(box));
+  await close.tap();
+  assert.equal(await phone.locator("#pick-pop").isVisible(), false);
+  assert.equal(await focused(phone), "pick-trig");
+  const desk = await open(t);
+  await desk.locator("#pick-trig").click();
+  assert.equal(await desk.getByRole("button", { name: "Close the project list" }).innerText(), "Esc", "a mouse and keyboard screen keeps the Esc hint, and a click on it closes too");
+  await desk.getByRole("button", { name: "Close the project list" }).click();
+  assert.equal(await desk.locator("#pick-pop").isVisible(), false);
+});
+
+test("T305 F-T305-9 and F-T305-6: under each filter the project chips add up to Needs you, and each chip's count is what Needs you says there; a long name ends in an ellipsis", async t => {
+  const long = "Council Record, the sample project with a much longer display name";
+  const page = await open(t, { html: renderBoardHtml(sample(read => { for (const project of read.flatMap(source => source.projects)) if (project.displayName) project.displayName = long; }), { snapshot: false }) });
+  const chips = () => page.locator("#pick-chips .chip:not([hidden])").evaluateAll(list => list.map(chip => [chip.dataset.pick.replace(/-[0-9a-f]{6}$/, ""), Number(chip.querySelector("[data-n]").textContent)]));
+  const seen = {};
+  for (const priority of ["", "P0", "P1", "P3"]) {
+    await page.locator("#f-priority").selectOption(priority);
+    const list = await chips(), total = Number(await page.locator("#needs-count").textContent());
+    seen[priority || "any"] = [total, list];
+    assert.equal(list.reduce((n, [, count]) => n + count, 0), total, `${priority}: ${JSON.stringify(list)}`);
+    for (const [key, count] of list) {
+      await page.locator(`#pick-chips .chip[data-pick^="${key}-"]`).click();
+      assert.equal(Number(await page.locator("#needs-count").textContent()), count, `${priority} ${key}`);
+      await page.locator("#pick-all").click();
+    }
+  }
+  assert.deepEqual(seen, { any: [6, [["sage", 3], ["product-demos", 1], ["order-chaser", 1], ["review-queue", 1]]], P0: [3, [["sage", 2], ["product-demos", 1]]], P1: [3, [["sage", 1], ["order-chaser", 1], ["review-queue", 1]]], P3: [0, []] }, "a chip with nothing under the filter hides");
+  const name = page.locator('.card .proj[title^="Council Record"]').first();
+  assert.equal(await name.getAttribute("title"), long);
+  assert.deepEqual(await name.locator(".pn").evaluate(span => [getComputedStyle(span).textOverflow, span.scrollWidth > span.clientWidth]), ["ellipsis", true]);
 });
 
 test("T305: at 375 px the list is a bottom sheet and the chips wrap; at 1024 px no column is cut off; in both themes", async t => {

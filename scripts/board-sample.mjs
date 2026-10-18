@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // SAMPLE DATA for board QA and the browser tests (T305). It writes made-up Claude and Codex logbooks, and the fake
 // checkouts that they name, into a folder that you give. It has no default folder, and it refuses a folder that is not
-// empty, so it never writes under your home folder by itself or over real logbooks.
+// empty, a path with a link in it, and a folder in a real logbook root, so it never writes over real logbooks.
 //
 //   node scripts/board-sample.mjs <empty folder> [--now <ISO time>]
 //
@@ -10,8 +10,9 @@
 // two clones (two projects); long titles; an archived project; a display name with an upstream; a project with no
 // remote; gates; closed and moved findings; earlier runs; a stale run; every priority and every kind.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir, userInfo } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TABLES = {
@@ -25,9 +26,35 @@ const TABLES = {
 const ROUTE = { tiny: "build", small: "build,code-review,qa", large: "design,pe,build,code-review,security-review,ux-review,qa", investigate: "investigate,evidence-review" };
 const sha = seed => createHash("sha1").update(String(seed)).digest("hex");
 
+/**
+ * The real logbook roots of this user, as the board and the state tools find them (F-T305-2): SAGE_HOME,
+ * CLAUDE_CONFIG_DIR/sage and ~/.claude/sage, CODEX_HOME and ~/.codex, and the board's own settings folder. Each
+ * home is both $HOME and the account's home, so a changed HOME does not hide the real one.
+ */
+const realRoots = env => {
+  const homes = [env.HOME, homedir(), userInfo().homedir].filter(Boolean);
+  return [env.SAGE_HOME, env.CLAUDE_CONFIG_DIR && join(env.CLAUDE_CONFIG_DIR, "sage"), env.CODEX_HOME,
+    ...homes.flatMap(home => [join(home, ".claude", "sage"), join(home, ".codex"), join(home, ".config", "sage-board")])]
+    .filter(Boolean).map(root => resolve(root)).flatMap(root => { try { return [root, realpathSync(root)]; } catch { return [root]; } });
+};
+const inside = (root, path) => { const rel = relative(root, path); return rel === "" || !rel.startsWith("..") && !isAbsolute(rel); };
+
 /** Writes the sample logbooks into folder (absolute, empty or missing) and gives the board sources. */
-export function writeSampleLogbooks(folder, { now = new Date().toISOString() } = {}) {
+export function writeSampleLogbooks(folder, { now = new Date().toISOString(), env = process.env } = {}) {
   if (!isAbsolute(folder ?? "")) throw new TypeError("give an absolute folder for the sample logbooks");
+  folder = resolve(folder);
+  const root = realRoots(env).find(root => inside(root, folder));
+  if (root) throw new Error(`${folder} is in the real logbook root ${root}: give a folder outside it`);
+  // A link anywhere in the path could lead the writes somewhere else (F-T305-1): refuse it, and name the real path.
+  for (let path = folder; ; path = dirname(path)) {
+    let link = false;
+    try { link = lstatSync(path).isSymbolicLink(); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    if (link) {
+      let real = "a path with no link"; try { real = realpathSync(path) + folder.slice(path.length); } catch {}
+      throw new Error(`${folder} goes through the link ${path}: give the real path (${real})`);
+    }
+    if (dirname(path) === path) break;
+  }
   if (existsSync(folder) && readdirSync(folder).length) throw new Error(`${folder} is not empty: give an empty or a new folder`);
   const at = Date.parse(now);
   if (!Number.isFinite(at)) throw new TypeError("--now must be an ISO time");

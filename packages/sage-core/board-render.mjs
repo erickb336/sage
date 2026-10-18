@@ -56,10 +56,13 @@ function context(model, snapshot) {
   return { snapshot, slot: new Map(keys.map((key, i) => [key, `p${i % 8}`])), sources: model.sources.map(source => source.id), names: model.sources.map(source => title(source.standIn)), at: model.at };
 }
 const dot = (ctx, key) => `<span class="dot ${ctx.slot.get(key) ?? "p0"}" aria-hidden="true"></span>`;
-const project = (ctx, task) => `<span class="proj">${dot(ctx, task.group ?? task.project)}${esc(task.projectName)}</span>`;
+// A long name ends in an ellipsis on its inner span (a flex box cuts its own text with none); the title keeps it whole.
+const project = (ctx, task) => `<span class="proj" title="${esc(task.projectName)}">${dot(ctx, task.group ?? task.project)}<span class="pn">${esc(task.projectName)}</span></span>`;
 // The model keeps a priority and a kind only from their fixed lists.
 const kindTag = task => task.kind ? `<span class="tag kind"><span aria-hidden="true">${KIND[task.kind][0]}</span>${KIND[task.kind][1]}</span>` : "";
-const tags = task => `${task.priority ? `<span class="tag prio">${esc(task.priority)}</span>` : ""}${kindTag(task)}<span class="tag">${esc(task.size)}</span>${task.risk ? `<span class="tag risk">risk: ${esc(task.risk.replace(/,/g, ", "))}</span>` : ""}`;
+// A priority's meaning, for its title and for screen readers (F-T305-12).
+const PRIORITY_WORD = { P0: "highest priority", P1: "second priority", P2: "third priority", P3: "lowest priority" };
+const tags = task => `${task.priority ? `<span class="tag prio" title="${task.priority}, ${PRIORITY_WORD[task.priority]}">${task.priority}<span class="vh">, ${PRIORITY_WORD[task.priority]}</span></span>` : ""}${kindTag(task)}<span class="tag">${esc(task.size)}</span>${task.risk ? `<span class="tag risk">risk: ${esc(task.risk.replace(/,/g, ", "))}</span>` : ""}`;
 /** The archived group: each archived project's name and task count, folded, with what needs you there. Its tasks are on no column. */
 const archivedCounts = book => `${book.tasks} task${book.tasks === 1 ? "" : "s"}${book.needsOwner ? ` · ${book.needsOwner} need${book.needsOwner === 1 ? "s" : ""} you` : ""}`;
 const archivedGroup = model => model.archived.length ? `<details class="archived" id="board-archived" data-key="archived"><summary id="sum-archived">Archived · ${model.archived.length} project${model.archived.length === 1 ? "" : "s"}</summary><ul>${model.archived.map(book => `<li>${esc(book.name)} · ${archivedCounts(book)}</li>`).join("")}</ul></details>` : "";
@@ -69,7 +72,7 @@ const agents = (ctx, task, extra = "") => task.agents.length ? `<div class="agen
 /** The step line: only the route's steps, each with its mark and its word (the word is for screen readers on the line). */
 const stepLine = task => `<ol class="sline" aria-label="Steps">${task.loop.steps.map(step => `<li class="s s-${status(step.status)}"><span aria-hidden="true">${MARK[status(step.status)]}</span>${esc(step.label)}<span class="vh">: ${WORD[status(step.status)]}</span></li>`).join('<li class="sep" aria-hidden="true">›</li>')}</ol>`;
 /** "Now" or "Needs you", then "Next". A gate's question shows here once, not again in a banner (bug bash R1023). */
-const nowNext = task => `<div class="nowline${task.loop.now.needs ? " need" : ""}">${task.loop.now.needs ? ICON : ""}<span><b>${task.loop.now.needs ? "Needs you" : "Now"}:</b> ${esc(task.loop.now.text)}</span></div>${task.loop.next ? `<div class="nextline"><b>Next:</b> ${esc(task.loop.next)}</div>` : ""}`;
+const nowNext = (task, next = true) => `<div class="nowline${task.loop.now.needs ? " need" : ""}">${task.loop.now.needs ? ICON : ""}<span><b>${task.loop.now.needs ? "Needs you" : "Now"}:</b> ${esc(task.loop.now.text)}</span></div>${next && task.loop.next ? `<div class="nextline"><b>Next:</b> ${esc(task.loop.next)}</div>` : ""}`;
 /** The task page lists each step with its detail and, for a review, each role with a word for its state. */
 const stepRows = task => `<ol class="vlist">${task.loop.steps.map(step => `<li class="v-${status(step.status)}"><span class="g" aria-hidden="true">${MARK[status(step.status)]}</span><b>${esc(step.label)}</b> <span class="faint">${WORD[status(step.status)]}</span>${step.detail ? `<div class="faint">${esc(step.detail)}</div>` : ""}${step.parts?.length ? `<div class="parts">${step.parts.map(([name, value]) => `<span class="part p-${status(value)}"><span aria-hidden="true">${MARK[status(value)]}</span> ${esc(name)}: ${WORD[status(value)]}</span>`).join("")}</div>` : ""}</li>`).join("")}</ol>`;
 
@@ -78,8 +81,9 @@ function card(ctx, task, { archived = false } = {}) {
   return `<a class="card${task.reasons.length ? " needs" : ""}" id="card-${b64(task.key)}" href="${esc(ctx.snapshot ? `#${anchor(task)}` : route(task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}"${archived ? " data-archived hidden" : ""}>`
     + `<div class="top"><span class="id">${esc(task.id)}</span>·${project(ctx, task)}<span class="who" title="The logbook that holds this task">${esc(title(task.providerStandIn))}</span>${task.pr ? `<span class="pr">PR ${esc(task.pr)}</span>` : ""}</div>`
     + `<div class="title" title="${esc(task.title)}">${esc(task.title)}</div>`
-    // A backlog card shows only its steps: its Now and Next lines would say the same on every card (R1056-2).
-    + (done ? "" : stepLine(task) + (task.column === "backlog" ? "" : nowNext(task))) + agents(ctx, task)
+    // A backlog card shows only its steps: its Now and Next lines would say the same on every card (R1056-2). A task
+    // that needs you keeps its Needs you line, with the question, on every card (F-T305-4).
+    + (done ? "" : stepLine(task) + (task.column !== "backlog" ? nowNext(task) : task.loop.now.needs ? nowNext(task, false) : "")) + agents(ctx, task)
     + (task.inferredWork ? `<div class="nextline">Inferred work on the open PR</div>` : "")
     + `<div class="tags">${tags(task)}<span class="more">Open</span></div></a>`;
 }
@@ -190,7 +194,7 @@ button{font:inherit;color:inherit}
 header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:3}
 h1{font-size:15px;margin:0;font-weight:650}.spacer{flex:1}html:not(.scripted) .pick,html:not(.scripted) .fbar{display:none}
 .pick{display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%}.pickchips{display:contents}
-.chip{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:99px;padding:4px 10px;font:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;min-height:28px}
+.chip{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:99px;padding:4px 10px;font:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;min-height:28px;max-width:100%;min-width:0}.chip .cn{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .chip[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
 .chip.need[aria-pressed="true"]{background:var(--need-soft);border-color:var(--need);color:var(--need)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -210,6 +214,7 @@ body:has(#flip:focus-visible) .theme{outline:2px solid var(--accent);outline-off
 .search{display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--line)}
 .search input{flex:1;min-width:0;font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
 .kbd{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+.closebtn{flex:none;background:none;border:0;padding:0;font:inherit;color:var(--accent);cursor:pointer;display:inline-flex;align-items:center;min-height:24px}.closebtn .tap{display:none}
 .list{overflow:auto;padding:4px;flex:1;margin:0;list-style:none}.list ul{list-style:none;margin:0;padding:0}
 .grp{font-size:11px;font-weight:650;color:var(--muted);padding:8px 8px 4px;display:flex;justify-content:space-between}
 .opt{display:grid;grid-template-columns:10px 1fr auto;gap:2px 8px;align-items:center;padding:7px 8px;border-radius:7px;cursor:pointer;min-height:40px}
@@ -239,7 +244,7 @@ select{font:inherit;color:var(--text);background:var(--panel);border:1px solid v
 a.card:hover{border-color:var(--accent)}.card.needs{border-color:var(--need);box-shadow:0 0 0 1px var(--need) inset}.card.needs:hover{border-color:var(--need)}
 .top{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11.5px;min-width:0}
 .id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.proj{display:inline-flex;align-items:center;gap:5px;color:var(--text);font-weight:550;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proj{display:inline-flex;align-items:center;gap:5px;color:var(--text);font-weight:550;min-width:0}.proj .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .who{font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 5px;font-weight:550;white-space:nowrap;margin-left:auto;flex:none}
 .pr{color:var(--muted);white-space:nowrap}
 .title{margin:6px 0 4px;font-weight:550;font-size:13px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
@@ -314,6 +319,9 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
  .board{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:1fr;padding:6px 16px 20px;overflow:visible}
  .col{min-height:0}.col.needs-col{order:-1}.col.empty-col{display:none}
  .page{padding:14px 16px 32px}.detail{grid-template-columns:1fr}.ptitle{font-size:18px}
+}
+@media (max-width:700px),(pointer:coarse){
+ .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}.pop .foot{display:none}
 }`;
 
 /**
@@ -329,12 +337,33 @@ export function matchProject(name, terms, query) {
   return hit ? { ok: true, why: `matches ${hit}` } : { ok: false, why: "" };
 }
 
+/**
+ * What the filter bar keeps, and the Needs you counts under it (F-T305-9): the Needs you chip counts the tasks that need
+ * you in the chosen project (else in every project that is not archived), and each project's chip counts its own, both
+ * under the same Who, Priority and Kind. A card is its data attributes. The page script carries both functions' own
+ * source, so these tests of them are tests of the page.
+ */
+export function cardFits(card, S) {
+  return (!S.who || card.provider === S.who) && (!S.priority || (S.priority === "none" ? !card.priority : card.priority === S.priority)) && (!S.kind || card.kind === S.kind);
+}
+export function needCounts(cards, S) {
+  const counts = { all: 0, projects: {} };
+  for (const card of cards) {
+    if (card.needs !== "true" || !cardFits(card, S)) continue;
+    counts.projects[card.project] = (counts.projects[card.project] || 0) + 1;
+    if (S.project ? card.project === S.project : card.archived === undefined) counts.all++;
+  }
+  return counts;
+}
+
 // The page script (T305). All state lives here, not in the DOM, so the live script can replace the server's parts and call
 // filter() and list() again: the chosen project, the filters, the open list with its search text and active row. The choice
 // is kept in the URL hash and in localStorage (with try/catch). Only the parts with ids change on a live update.
 export const BOARD_ENHANCEMENT = `document.documentElement.classList.add('scripted');
 const $=id=>document.getElementById(id),all=(selector,root)=>[...(root||document).querySelectorAll(selector)];
 const match=${matchProject.toString()};
+${cardFits.toString()}
+${needCounts.toString()}
 const S={project:'',needs:false,who:'',priority:'',kind:'',open:false,query:'',active:null,archived:false,gone:false};
 try{const h=/^#p=(.*)$/.exec(location.hash);S.project=h?decodeURIComponent(h[1]):localStorage.getItem('board-project')||''}catch(e){}
 function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#p=/.test(location.hash))history.replaceState(null,'',S.project?'#p='+encodeURIComponent(S.project):location.pathname+location.search)}catch(e){}}
@@ -342,13 +371,12 @@ const options=()=>all('#pick-list [role=option]');
 function filter(){
   const list=$('pick-list');
   if(list&&S.project&&!options().some(o=>o.dataset.key===S.project)){S.project='';S.gone=true;save()}
-  const fit=c=>(!S.who||c.dataset.provider===S.who)&&(!S.priority||(S.priority==='none'?!c.dataset.priority:c.dataset.priority===S.priority))&&(!S.kind||c.dataset.kind===S.kind);
-  const cards=all('.card[data-key]');let needsAll=0;
-  cards.forEach(c=>{const base=(S.project?c.dataset.project===S.project:!c.hasAttribute('data-archived'))&&fit(c);if(base&&c.dataset.needs==='true')needsAll++;c.hidden=!(base&&(!S.needs||c.dataset.needs==='true'))});
+  const cards=all('.card[data-key]'),need=needCounts(cards.map(c=>c.dataset),S);
+  cards.forEach(c=>{const base=(S.project?c.dataset.project===S.project:!c.hasAttribute('data-archived'))&&cardFits(c.dataset,S);c.hidden=!(base&&(!S.needs||c.dataset.needs==='true'))});
   const shown=cards.filter(c=>!c.hidden),sum=key=>shown.reduce((n,c)=>n+Number(c.dataset[key]),0);
   all('[data-col]').forEach(col=>{const visible=all('.card',col).filter(c=>!c.hidden);const count=col.querySelector('.n');if(count)count.textContent=String(visible.length);col.classList.toggle('empty-col',!visible.length);col.classList.toggle('needs-col',visible.some(c=>c.dataset.needs==='true'));const empty=col.querySelector('.empty');if(empty)empty.hidden=visible.length>0;const rest=col.querySelector('.rest');if(rest){const more=all('.card',rest).filter(c=>!c.hidden).length;rest.hidden=!more;const a=rest.querySelector('[data-all]'),m=rest.querySelector('[data-more]');if(a)a.textContent='Show all '+visible.length;if(m)m.textContent=' · '+more+' more, newest activity first'}});
   const set=(id,value)=>{const e=$(id);if(e)e.textContent=String(value)};
-  if(list){set('s-needs',shown.filter(c=>c.dataset.needs==='true').length);set('s-agents',sum('agents'));set('s-inferred',sum('inferred'));set('s-review',sum('review'));set('s-tasks',shown.length);set('needs-count',needsAll)}
+  if(list){set('s-needs',shown.filter(c=>c.dataset.needs==='true').length);set('s-agents',sum('agents'));set('s-inferred',sum('inferred'));set('s-review',sum('review'));set('s-tasks',shown.length);set('needs-count',need.all)}
   all('[data-filter=needs]').forEach(b=>b.setAttribute('aria-pressed',String(S.needs)));
   all('[data-who]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.who===S.who)));
   for(const f of ['priority','kind']){const e=$('f-'+f);if(e)e.value=S[f]}
@@ -356,7 +384,7 @@ function filter(){
   const cur=options().find(o=>o.dataset.key===S.project&&S.project);
   set('pick-name',cur?cur.dataset.name:'All projects');const d=$('pick-dot');if(d)d.className='dot '+(cur?cur.dataset.slot:'none');
   options().forEach(o=>o.setAttribute('aria-selected',String(o.dataset.key===S.project)));
-  all('[data-pick]').forEach(c=>{c.hidden=c.dataset.pick===''?!S.project:c.dataset.pick===S.project||!!S.who&&!(c.dataset.provider||'').split(' ').includes(S.who)});
+  all('[data-pick]').forEach(c=>{const n=need.projects[c.dataset.pick]||0,b=c.querySelector('[data-n]');if(b)b.textContent=String(n);c.hidden=c.dataset.pick===''?!S.project:c.dataset.pick===S.project||!n});
   const noprov=$('noprov'),lacks=!!cur&&!!S.who&&!cur.dataset.provider.split(' ').includes(S.who);
   if(noprov){noprov.hidden=!lacks;if(lacks){const w=all('[data-who]').find(b=>b.dataset.who===S.who);set('noprov-who',w?w.textContent:S.who);set('noprov-name',cur.dataset.name);set('noprov-has',cur.dataset.providers)}}
   const none=$('nomatch');if(none)none.hidden=!cards.length||shown.length>0||lacks;
@@ -382,6 +410,7 @@ function choose(key){S.project=key;S.open=false;S.query='';S.active=null;S.gone=
 function openList(){S.open=true;S.query='';S.active=null;draw();const q=$('pick-q');if(q)q.focus()}
 function closeList(focus){S.open=false;draw();if(focus){const t=$('pick-trig');if(t)t.focus()}}
 document.addEventListener('click',e=>{const t=e.target;
+  if(t.closest('[data-close]')){closeList(true);return}
   if(t.closest('#pick-trig')){if(S.open)closeList(true);else openList();return}
   if(t.closest('[data-archived]')){S.archived=true;draw();const q=$('pick-q');if(q)q.focus();return}
   if(t.closest('[data-clear]')){S.query='';S.active=null;draw();const q=$('pick-q');if(q)q.focus();return}
@@ -446,10 +475,10 @@ function picker(ctx, model) {
     ? `<li role="option" id="pick-o-all" class="opt" data-key="" data-name="All projects" aria-selected="false"><span class="dot none" aria-hidden="true"></span><span class="nm">All projects</span><span class="meta">${projects.filter(book => !book.archived).length} projects</span></li>${["needs", "active", "idle", "archived"].map(group).join("")}`
       + `<li role="presentation" class="nomatch" id="pick-none" hidden><b>No project matches “<span id="pick-qtext"></span>”.</b><br>Search looks at the shown name, the GitHub repository, the folder, its path and the logbook key. <button type="button" class="linkbtn" data-clear>Clear the search</button></li>`
     : `<li role="presentation" class="nomatch"><b>No projects yet.</b><br>A project shows here when it has a logbook. Start sage in a project folder to make one.</li>`;
-  const chips = projects.filter(book => book.needsOwner && !book.archived).map(book => `<button class="chip" type="button" id="need-${b64(book.key)}" data-pick="${esc(book.key)}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" title="${esc(book.sub)}">${dot(ctx, book.key)}${esc(book.name)} <span class="badge">${book.needsOwner}<span class="vh"> need you</span></span></button>`).join("");
+  const chips = projects.filter(book => book.needsOwner && !book.archived).map(book => `<button class="chip" type="button" id="need-${b64(book.key)}" data-pick="${esc(book.key)}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" title="${esc(book.name)} · ${esc(book.sub)}">${dot(ctx, book.key)}<span class="cn">${esc(book.name)}</span> <span class="badge"><span data-n>${book.needsOwner}</span><span class="vh"> need you</span></span></button>`).join("");
   return `<div class="pick"><button class="chip need" type="button" data-filter="needs" aria-pressed="false">${ICON}Needs you <span class="count" id="needs-count">${model.counts.needsOwner}</span></button>`
     + `<div class="pickwrap"><button class="trigger" type="button" id="pick-trig" aria-haspopup="listbox" aria-expanded="false" aria-controls="pick-pop"><span class="vh">Project: </span><span class="dot none" id="pick-dot" aria-hidden="true"></span><span class="tname" id="pick-name">All projects</span><span class="chev" aria-hidden="true">▾</span></button>`
-    + `<div class="pop" id="pick-pop" hidden><div class="search"><input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project" placeholder="Find a project: name, repo or folder" autocomplete="off" spellcheck="false"><span class="kbd">Esc</span></div>`
+    + `<div class="pop" id="pick-pop" hidden><div class="search"><input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project" placeholder="Find a project: name, repo or folder" autocomplete="off" spellcheck="false"><button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span><span class="tap">Close</span></button></div>`
     + `<ul class="list" role="listbox" id="pick-list" aria-label="Projects">${items}</ul><div class="foot"><span>↑ ↓ to move · Enter to choose</span><span>“/” opens</span></div></div></div>`
     + `<button class="chip" type="button" id="pick-all" data-pick="" hidden>All projects</button><span class="pickchips" id="pick-chips">${chips ? `<span class="vh">Projects that need you:</span>${chips}` : ""}</span></div>`;
 }

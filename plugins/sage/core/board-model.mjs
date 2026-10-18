@@ -268,11 +268,15 @@ function projectGroups(sources) {
     const merged = { name: projects[0].name, displayName: first("displayName"), upstream: first("upstream"), repository: first("repository"), checkout: first("checkout") };
     const full = repoPath(merged.upstream) ?? repoPath(merged.repository), folder = merged.checkout ? basename(merged.checkout) : null;
     const problem = projects.flatMap(project => project.diagnostics)[0] ?? null;
-    // The quiet second line names the next source of the name (notes, section 2).
-    const sub = merged.displayName ? [full ?? "no GitHub remote", folder && `folder ${folder}`] : full ? [`${full.split("/")[0]}${repoPath(merged.upstream) ? " (upstream)" : ""}`, folder && `folder ${folder}`] : merged.checkout ? [merged.checkout, "no GitHub remote"] : [`logbook ${merged.name}`];
+    // The quiet second line names the next source of the name (notes, section 2), or says first that there is no GitHub
+    // remote, then the folder; projectGroups gives the path instead when two projects would show the same lines.
+    const remote = merged.displayName ? full : full && `${full.split("/")[0]}${repoPath(merged.upstream) ? " (upstream)" : ""}`;
+    const sub = merged.checkout || remote ? [remote ?? "no GitHub remote", folder && `folder ${folder}`] : [`logbook ${merged.name}`];
     Object.assign(group, {
-      // A logbook that the board cannot read is named by its folder, with the reason (the prototype's failure state).
-      name: problem ? merged.name : projectName(merged),
+      // A project that no logbook can name, because every logbook of it is unreadable, is named by its folder, with the
+      // reason (the prototype's failure state). One unreadable logbook does not rename what the others name (F-T305-3).
+      name: projects.every(project => project.diagnostics.length) ? merged.name : projectName(merged),
+      remote, path: merged.checkout ?? null,
       archived: archived.length > 0, problem,
       providers: unique(group.books.map(book => title(standIn(book.source)))),
       sub: unique(sub).join(" · "),
@@ -280,6 +284,11 @@ function projectGroups(sources) {
       terms: unique([...names, repoPath(merged.upstream), ...projects.map(project => repoPath(project.repository)), folder, ...projects.map(project => project.checkout), merged.name, ...projects.map(project => project.key)]),
     });
   }
+  // Two projects with the same name and the same second line, such as two clones in two folders of one name: each shows
+  // its checkout's path in place of its folder, so that the picker tells them apart (F-T305-11).
+  const line = group => `${group.name}\n${group.sub}`;
+  for (const group of groups) if (group.path && groups.some(other => other !== group && line(other) === line(group))) group.twin = true;
+  for (const group of groups) if (group.twin) group.sub = `${group.remote ?? "no GitHub remote"} · ${group.path}`;
   return { groups, notes };
 }
 
