@@ -285,7 +285,35 @@ test("T301 D1: a fix that the re-check did not confirm is never moved; its repea
   assert.match(readFileSync(join(p.chief("logbook"), "findings.tsv"), "utf8"), /^T1\tF-T1-2\t[^\n]*\tdismiss\tduplicate of F-T1-1\tdismissed$/m, "the repeat is dismissed, with the reason that names the fix key");
 });
 
-test("T301 checks still run: after a blocked report, the sage waits, and after the checks pass it makes its move to verifying; the task then merges", () => {
+test("T301 F-T301-35: a low fix that the re-check did not confirm goes to a follow-up task that the sage frames; the sage dismisses the key with its reason, and the fresh lead reaches verifying", () => {
+  const p = project();
+  const { moves } = play([...BUILT, "< R3 FINDINGS: - K1 medium a.mjs:1 the token is logged\n- K2 low a.mjs:2 the log line has no label", "< R4 PASS: none",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-logged", "→ F-T1-1 open · medium · T1",
+    "$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-has-no-label", "→ F-T1-2 open · low · T1",
+    "$ sage run done R3 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind findings --cycle 1 --pr 12 --run R3",
+    "$ sage run done R4 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R4",
+    "$ sage finding triage T1 F-T1-1 fix", "$ sage finding triage T1 F-T1-2 fix", "$ sage round T1", "→ T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 · re-run code-reviewer on the repair's diff",
+    "$ sage run add T1 --role implementer --branch sage/t1-example", "→ R5 running · implementer on T1", "> R5 sage:implementer", "< R5 done: none", "$ sage run done R5 --status done --tokens 1",
+    "$ sage run add T1 --role code-reviewer", "→ R6 running · code-reviewer on T1", "> R6 sage:code-reviewer", "< R6 FINDINGS: - K3 low a.mjs:2 the log line still has no label",
+    "$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-still-has-no-label", "→ F-T1-3 open · low · T1", "$ sage run done R6 --status done --tokens 1",
+    "$ sage finding close T1 F-T1-1",
+    "< lead-T1 blocked: - F-T1-3 low a.mjs:2 the log line still has no label, repeat of F-T1-2",
+    "! sage run done R1 --status blocked --tokens 1", sageSays("sage finding triage <T> <K> dismiss", { "<K>": "F-T1-3", "F-<x>": "F-T1-2" }),
+    sageSays("sage task <T> set state=reviewing"), sageSays("sage task add", { "<title>": "label the log line", "<size>": "small" }, "unconfirmed low fix"), "→ T2",
+    sageSays("sage finding triage <T> <K> dismiss", { "<K>": "F-T1-2", "<n>": "2" }, "unconfirmed low fix"),
+    "! sage run add T1 --role lead", "→ R7 running · lead on T1", "! start lead-T1",
+    ...FRESH, "$ git rev-parse sage/t1-example", "$ sage run add T1 --role code-reviewer", "→ R8 running · code-reviewer on T1", "$ sage run add T1 --role qa", "→ R9 running · qa on T1",
+    "> R8 sage:code-reviewer", "> R9 sage:qa", "< R8 CLEAN: none", "< R9 PASS: none", "$ sage run done R8 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R8",
+    "$ sage run done R9 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R9",
+    "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying"], p);
+  assert.match(p.chief("task", "T1"), /^T1 verifying /, "the fresh lead reaches verifying");
+  assert.deepEqual(moves, ["repairing>reviewing"], "the sage's one state move");
+  const findings = readFileSync(join(p.chief("logbook"), "findings.tsv"), "utf8");
+  assert.match(findings, /^T1\tF-T1-2\t[^\n]*\tdismiss\tunconfirmed low fix, carried by follow-up T2\tdismissed$/m, "the low fix key is dismissed, with the reason that names its follow-up");
+  assert.match(p.chief("task", "T2"), /^T2 framed /, "the follow-up task is framed");
+});
+
+test("T301 checks still run:after a blocked report, the sage waits, and after the checks pass it makes its move to verifying; the task then merges", () => {
   const p = project();
   p.checks("pending");
   const { printed, moves } = play([...BUILT, ...CLEAN, "$ gh pr checks 12", "→ build pending", "< lead-T1 blocked: none",
