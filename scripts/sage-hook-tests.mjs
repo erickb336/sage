@@ -56,6 +56,7 @@ function session(env = {}) {
   // start get one: the first spawn by a sage:lead id that no main result bound gets a fixture lead slot of its own project.
   // An id that a main result bound, or that stopped, keeps what the hook made of it. sendRaw skips the fixture.
   const bound = new Set();
+  const fixtureLeads = new Map(), fixtureRuns = new Map(); // a fixture lead's task, lead run and logbook; the run id of each child call
   let side; // the side project's logbook in this session's sage home
   const sideLogbook = () => side ??= (spawnSync("node", [TOOL, "init", "--project", SIDE_DIR], { encoding: "utf8", env: vars }),
     spawnSync("node", [TOOL, "logbook", "--project", SIDE_DIR], { encoding: "utf8", env: vars }).stdout.trim());
@@ -76,6 +77,28 @@ function session(env = {}) {
       appendRows(dir, "runs", [{ id: `R${fixtureId}`, task: `T${fixtureId}`, role: "lead", round: "0", status: "running" }]);
       slots.take(`fixture-${bound.size}`, 50, 1000, call, { role: "sage:lead", input: {}, lead: { task: `T${fixtureId}`, logbook: sha256(dir), run: `R${fixtureId}`, folder: SIDE_DIR } });
       slots.result(call, undefined, { status: "async_launched", agentId: e.agent_id });
+      fixtureLeads.set(key(e.agent_id), { task: `T${fixtureId}`, run: `R${fixtureId}`, dir, slots });
+    }
+    // A fixture lead, or a lead of LEAD_DIR's logbook, names each team child by a run of its own task (F-T301-57): a child
+    // with another name, or with only a description, gets the fixture's run of its role, which the lead added, and that run
+    // id as its name. A reserved name stays, for the hook's own refusal of it. A lead of a test's own project (leadSession)
+    // names its children itself.
+    const ti = e.tool_input ?? {}, role = String(ti.subagent_type ?? "").toLowerCase().replace(/^sage:/, "");
+    const given = String(ti.name ?? ti.description ?? "");
+    if (e.hook_event_name === "PreToolUse" && /^(?:Agent|Task)$/.test(e.tool_name ?? "") && e.agent_type === "sage:lead" && typeof e.agent_id === "string" && !fixtureLeads.has(key(e.agent_id))) {
+      const slots = slotsFor(join(vars.SAGE_HOOKS_STATE, "slots"), String(e.session_id).replace(/[^\w.-]/g, "_").slice(0, 128), Date.now(), e.session_id), of = slots.leadOf(e.agent_id);
+      if (of?.folder === LEAD_DIR) fixtureLeads.set(key(e.agent_id), { task: of.task, run: of.run, dir: spawnSync("node", [TOOL, "logbook", "--project", LEAD_DIR], { encoding: "utf8", env: vars }).stdout.trim(), slots });
+    }
+    const lead = fixtureLeads.get(key(e.agent_id));
+    if (lead && e.hook_event_name === "PreToolUse" && /^(?:Agent|Task)$/.test(e.tool_name ?? "") && TEAM_ROLES.includes(role) && !/^R[1-9]\d*$/.test(given) && !/^\s*(?:main|lead-t\d+)\s*$/i.test(given)) {
+      const call = `${key(e.agent_id)}/${e.tool_use_id}`;
+      if (!fixtureRuns.has(call)) {
+        const id = `R${7000 + fixtureRuns.size}`;
+        fixtureRuns.set(call, id);
+        appendRows(lead.dir, "runs", [{ id, task: lead.task, role, round: "0", status: "running" }]);
+        lead.slots.own(`${sha256(`${sha256(lead.dir)}:${lead.run}`)}.${id}`);
+      }
+      return { ...event, tool_input: { ...ti, name: fixtureRuns.get(call) } };
     }
     return event;
   };
@@ -86,7 +109,7 @@ function session(env = {}) {
     return r.stdout ? JSON.parse(r.stdout) : undefined;
   };
   const send = (event, ms) => sendRaw(fixture(event), ms);
-  const sendAsync = (event, ms = CALL_MS) => (fixture(event),
+  const sendAsync = (raw, ms = CALL_MS, event = fixture(raw)) => (
     new Promise((done, fail) => {
       const p = spawn("node", LAUNCHER, { env: vars });
       let out = "";
@@ -106,6 +129,8 @@ function session(env = {}) {
 }
 
 const prompt = (text) => ({ hook_event_name: "UserPromptSubmit", prompt: text });
+/** The roles of a lead's helpers. */
+const TEAM_ROLES = ["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
 const tool = (tool_name, tool_input, extra = {}) => ({ hook_event_name: "PreToolUse", tool_name, tool_input, ...extra });
 const edit = (extra) => tool("Edit", { file_path: "/x/a.js" }, extra);
 /** Two checkouts for the push rule: one on a feature branch, where the commands of a test run, and one on main. */
@@ -4443,6 +4468,8 @@ test("T186: normalized command arrays retain reader option boundaries", () => {
 // T181 uses only hook JSON. No fixture starts a real subagent.
 const LEAD = { agent_id: "lead-a", agent_type: "sage:lead" };
 const nested = (role = "sage:qa", id = "child-call", extra = {}) => spawnAgent(role, BRIEF, id, { ...LEAD, ...extra });
+/** A leadSession lead's spawn of a qa helper, named by a new qa run that the lead added (F-T301-57). */
+const namedQa = (s, id) => tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: leadAdd(s, "qa") }, { tool_use_id: id, ...LEAD });
 const resultOf = (id, agentId, extra = {}, status = "async_launched") => ({ hook_event_name: "PostToolUse", tool_name: "Agent", tool_use_id: id, tool_response: { status, agentId }, ...extra });
 const ended = (agent_id, agent_type = "sage:qa", extra = {}) => ({ hook_event_name: "SubagentStop", agent_id, agent_type, stop_hook_active: true, ...extra });
 /** The folder of the main session's lead spawns: its logbook has a running lead run for each task that a test starts a lead for (#118 point 4). */
@@ -5079,7 +5106,7 @@ test("T273: each command that is not on the lead's list is refused, with the sen
 
 test("T273: a child of the lead and every other agent still cannot write the logbook; the lead's own write passes", () => {
   const s = leadSession();
-  assert.equal(s.send(nested("sage:qa", "child-call")), undefined);
+  assert.equal(s.send(namedQa(s, "child-call")), undefined);
   s.send(resultOf("child-call", "child-1", LEAD));
   assert.equal(denied(stateRun(s, "round T1")), undefined, "the lead");
   for (const actor of [{ agent_id: "child-1", agent_type: "sage:qa" }, { agent_id: "child-1", agent_type: "sage:lead" }, AGENT, { agent_id: "gp", agent_type: "general-purpose" }]) {
@@ -5233,13 +5260,13 @@ test("F-T273-2: a lead sets pr= only while its task has none, to a PR of no othe
 
 test("F-T273-7: a lead makes only the cycle's next state move, and never moves a held task", () => {
   const s = leadSession();
-  const moves = { briefed: "building", building: "reviewing", reviewing: "verifying", repairing: "reviewing", verifying: "verified", verified: "reviewing" };
+  const moves = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] }; // verifying to reviewing: the head has no clean verdict (F-T301-49)
   const states = ["framed", "designing", "awaiting-you", "briefed", "building", "held", "reviewing", "repairing", "replan", "verifying", "verified", "pr-ready", "merged", "concluded", "abandoned"];
   for (const from of states) {
     setState(s, "T1", from);
     for (const to of ["building", "reviewing", "repairing", "verifying", "verified", "held", "merged"]) {
       const why = denied(stateRun(s, `task T1 set state=${to}`));
-      if (moves[from] === to) assert.equal(why, undefined, `${from} -> ${to}`);
+      if (moves[from]?.includes(to)) assert.equal(why, undefined, `${from} -> ${to}`);
       else assert.ok(why, `${from} -> ${to} is refused`);
     }
   }
@@ -5397,7 +5424,7 @@ test("F-T273-13: the main session's TaskStop of lead-T<n> frees that lead's slot
 test("F-T273-14: a lead that the main session stopped starts no child, by its agent id or by its name", () => {
   for (const task_id of ["lead-a", "lead-T1"]) {
     const s = leadSession();
-    assert.equal(s.send(nested("sage:qa", "before-stop")), undefined, task_id);
+    assert.equal(s.send(namedQa(s, "before-stop")), undefined, task_id);
     s.send(tool("TaskStop", { task_id }));
     assert.match(denied(s.send(nested("sage:qa", "after-stop"))) ?? "", /this lead holds no bound lead slot, so it starts no agent/, task_id);
   }
@@ -5484,7 +5511,7 @@ test("F-T284-6: a lead's verdict names a finished run of its task whose role giv
 
 test("F-T284-4: an agent of type sage:lead with no bound lead slot starts no child", () => {
   const s = leadSession(); // lead-a holds T1's bound lead slot
-  assert.equal(s.send(nested("sage:qa", "bound-child")), undefined, "the bound lead");
+  assert.equal(s.send(namedQa(s, "bound-child")), undefined, "the bound lead");
   for (const agent_id of ["lead-unbound", "child-1"]) {
     assert.match(denied(s.sendRaw(nested("sage:qa", `free-${agent_id}`, { agent_id }))) ?? "", /^sage: this lead holds no bound lead slot, so it starts no agent\. Report to the sage\.$/, agent_id);
   }
@@ -5571,7 +5598,7 @@ test("F-T284-10: a lead never closes a finding triaged ask", () => {
 
 test("F-T284-11: a bound lead starts no child after its task is held, or after its lead run ended", () => {
   const held = leadSession();
-  assert.equal(held.send(nested("sage:qa", "before")), undefined);
+  assert.equal(held.send(namedQa(held, "before")), undefined);
   setState(held, "T1", "held");
   assert.match(denied(held.send(nested("sage:qa", "after-hold"))) ?? "", /T1 is held, so this lead starts no agent/);
   const ended = leadSession();
@@ -5895,6 +5922,160 @@ test("F-T289-20: a helper that the sage stopped gave no report, so its run ends 
   assert.match(cleanVerdictOf(s, quoted) ?? "", /R6's helper gave a report that the hook cannot read \(FINDINGS is given twice, the second time in the line "FINDINGS - Y1 high a.mjs:1 the token is logged"\)/, "an indented quote of FINDINGS is a second FINDINGS line (F-T289-52)");
   const twice = lines("STATUS done", "RESULT CLEAN", "EVIDENCE x", "FINDINGS none", "FINDINGS - Y1 high a.mjs:1 the token is logged", "QUESTIONS none", "NOT VERIFIED none", "BRANCH none");
   assert.match(cleanVerdictOf(s, twice) ?? "", /R7's helper gave a report that the hook cannot read \(FINDINGS is given twice, the second time in the line "FINDINGS - Y1 high a.mjs:1 the token is logged"\)/);
+});
+
+test("F-T301-14: a lead never stops its own helper before its report; the main session's TaskStop still stops it", () => {
+  const s = leadSession();
+  const run = leadAdd(s, "code-reviewer"); // R5
+  assert.equal(s.send(tool("Agent", { subagent_type: "sage:code-reviewer", prompt: BRIEF, name: run }, { tool_use_id: "cut-own", ...LEAD })), undefined);
+  s.send(resultOf("cut-own", "kid-own", LEAD));
+  assert.equal(denied(s.send(tool("TaskStop", { task_id: "kid-own" }, LEAD))), "sage: a lead stops no task, also no shell task: only the main session stops one. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
+  assert.match(denied(stateRun(s, `run done ${run} --status failed`)) ?? "", /still runs|has not stopped|running/, "the refused stop leaves the helper running, so its run cannot end yet");
+  assert.equal(denied(s.send(tool("TaskStop", { task_id: "kid-own" }))), undefined, "the main session stops the helper");
+  assert.equal(denied(stateRun(s, `run done ${run} --status failed`)), undefined, "and then the lead ends its run as failed");
+});
+
+test("F-T301-27: a helper never stops a sibling, its lead or the sage, by name or by agent id; it still stops its own shell task", () => {
+  const s = leadSession();
+  const runs = ["code-reviewer", "qa"].map((role, i) => {
+    const run = leadAdd(s, role); // R5, R6
+    assert.equal(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name: run }, { tool_use_id: `sib-${i}`, ...LEAD })), undefined);
+    s.send(resultOf(`sib-${i}`, `kid-${i}`, LEAD));
+    return run;
+  });
+  const REVIEWER = { agent_id: "kid-0", agent_type: "sage:code-reviewer" };
+  for (const task_id of ["kid-1", runs[1], "lead-a", "lead-T1", "main"]) {
+    assert.equal(denied(s.send(tool("TaskStop", { task_id }, REVIEWER))), `sage: an agent stops no agent: only the main session does, and ${task_id} is an agent. Stop only your own shell tasks; report to your lead or the sage what needs a stop.`, task_id);
+  }
+  assert.match(denied(stateRun(s, `run done ${runs[1]} --status failed`)) ?? "", /has not stopped/, "the sibling still runs, so its run cannot end yet");
+  assert.equal(denied(stateRun(s, "run add T1 --role ux-reviewer")), undefined, "lead-a still holds its lead slot, so it still writes");
+  assert.equal(denied(s.send(tool("TaskStop", { task_id: "b7k2x9" }, REVIEWER))), undefined, "a helper stops its own shell task (standing order 30)");
+});
+
+test("F-T301-33, F-T301-34: an agent's TaskStop of an agent is refused in any letter case, with spaces, and by the old shell_id; a shell task still stops", () => {
+  const s = leadSession();
+  const runs = ["code-reviewer", "qa"].map((role, i) => {
+    const run = leadAdd(s, role); // R5, R6
+    assert.equal(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name: run }, { tool_use_id: `case-${i}`, ...LEAD })), undefined);
+    s.send(resultOf(`case-${i}`, `kid-${i}`, LEAD));
+    return run;
+  });
+  const REVIEWER = { agent_id: "kid-0", agent_type: "sage:code-reviewer" };
+  const stop = (input, who = REVIEWER) => denied(s.send(tool("TaskStop", input, who)));
+  const AGENT = /^sage: an agent stops no agent: only the main session does/;
+  for (const name of [runs[1].toLowerCase(), ` ${runs[1]}`, `${runs[1]} `, "R06", "Lead-a", "LEAD-T1", "lead-t1", " lead-T1", "Main", "MAIN", " main", "KID-1", " kid-1 "]) {
+    assert.match(stop({ task_id: name }) ?? "", AGENT, `task_id ${JSON.stringify(name)}`);
+  }
+  for (const name of [runs[1], "lead-T1", "main", "kid-1", "lead-a"]) assert.match(stop({ shell_id: name }) ?? "", AGENT, `shell_id ${name}`);
+  assert.equal(stop({ task_id: "b7k2x9", shell_id: "kid-1" }), "sage: TaskStop gives task_id and shell_id with different values. Give only task_id.");
+  assert.equal(stop({ task_id: "b7k2x9", shell_id: "b7k2x9" }), undefined, "the same id twice is one shell task");
+  assert.equal(stop({ shell_id: "b7k2x9" }), undefined, "a helper stops its own shell task by its old shell_id");
+  assert.match(stop({ shell_id: "b7k2x9" }, LEAD) ?? "", /^sage: a lead stops no task, also no shell task/, "a lead stops none, by either field");
+  assert.match(denied(stateRun(s, `run done ${runs[1]} --status failed`)) ?? "", /has not stopped/, "the sibling still runs");
+  assert.equal(stop({ shell_id: "kid-1" }, {}), undefined, "the main session stops the helper by shell_id");
+  assert.equal(denied(stateRun(s, `run done ${runs[1]} --status failed`)), undefined, "and the main session's stop by shell_id frees the helper's slot, so its run ends");
+});
+
+test("F-T301-53: an agent's TaskStop of an agent is refused also in look-alike forms: NFKC, a format character, and an agent id in another letter case", () => {
+  const s = leadSession();
+  const runs = ["code-reviewer", "qa"].map((role, i) => {
+    const run = leadAdd(s, role); // R5, R6
+    assert.equal(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name: run }, { tool_use_id: `look-${i}`, ...LEAD })), undefined);
+    s.send(resultOf(`look-${i}`, ["kid-0", "Kid-Up"][i], LEAD)); // the sibling's agent id has capital letters
+    return run;
+  });
+  const REVIEWER = { agent_id: "kid-0", agent_type: "sage:code-reviewer" };
+  const stop = (task_id) => denied(s.send(tool("TaskStop", { task_id }, REVIEWER)));
+  const AGENT = /^sage: an agent stops no agent: only the main session does/;
+  // Each form of R1018 that NFKC, the removal of format characters, the trim and the lower case make an agent's name or id.
+  for (const name of ["Ｒ６", "R6​", "​R6", "﻿R6", "R6\t", "R6\n", "lead-T１", "ＭＡＩＮ", "kid-up", "KID-UP", " kid-up\n", "Kid-​Up"]) {
+    assert.match(stop(name) ?? "", AGENT, `task_id ${JSON.stringify(name)}`);
+  }
+  assert.equal(stop("b7k2x9"), undefined, "a helper still stops its own shell task");
+  assert.equal(stop("​"), undefined, "a name of only a format character names no agent");
+  assert.match(denied(stateRun(s, `run done ${runs[1]} --status failed`)) ?? "", /has not stopped/, "the sibling still runs");
+});
+
+test("F-T301-54, F-T301-71: the main session's TaskStop stops a lead by its exact name lead-T<n> in any letter case, never by a look-alike form", () => {
+  for (const [name, stops] of [["lead-T1", true], ["LEAD-T1", true], ["lead-t1", true], [" lead-t1 ", false], ["lead-T１", false], ["​lead-T1", false], ["lead-​T1", false], ["lead-T1\n", false]]) {
+    const s = leadSession();
+    assert.equal(denied(stateRun(s, "run add T1 --role code-reviewer")), undefined, `${JSON.stringify(name)}: the lead writes before the stop`);
+    assert.equal(denied(s.send(tool("TaskStop", { task_id: name }))), undefined);
+    const after = denied(stateRun(s, "run add T1 --role qa"));
+    if (stops) assert.match(after ?? "", /holds no bound lead slot/, `${JSON.stringify(name)} stops lead-T1`);
+    else assert.equal(after, undefined, `${JSON.stringify(name)} names no lead: lead-T1 keeps its slot and still writes`);
+  }
+});
+
+test("F-T301-53: a slot of a main-session agent made before the folded mark still compares its agent id in another letter case", () => {
+  const s = leadSession();
+  assert.equal(denied(s.send(spawnAgent("sage:pe", BRIEF, "main-pe"))), undefined, "the main session starts an agent");
+  s.send(resultOf("main-pe", "Main-Kid"));
+  const slots = join(s.vars.SAGE_HOOKS_STATE, "slots");
+  let removed = 0; // the slots as an older hook made them: no folded- mark
+  for (const slot of readdirSync(slots)) for (const m of readdirSync(join(slots, slot))) if (m.startsWith("folded-")) rmSync(join(slots, slot, m)), removed++;
+  assert.ok(removed > 0, "the slots had folded marks");
+  const stop = (task_id) => denied(s.send(tool("TaskStop", { task_id }, { agent_id: "child-R2", agent_type: "sage:qa" })));
+  for (const name of ["Main-Kid", "main-kid", "MAIN-KID"]) assert.match(stop(name) ?? "", /^sage: an agent stops no agent: only the main session does/, name);
+  assert.equal(stop("b7k2x9"), undefined, "a shell task still stops");
+});
+
+test("F-T301-72: after a replan cleared the round's keys, a fresh lead still does not dismiss a low key of the earlier round; a new low finding it does", () => {
+  const s = leadSession();
+  s.sage("task", "T1", "set", "state=building");
+  s.sage("task", "T1", "set", "state=reviewing");
+  s.sage("finding", "triage", "T1", "F-T1-2", "fix");
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "early"); // F-T1-3, of round 0, not triaged: no key
+  assert.match(s.sage("round", "T1"), /^T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 /);
+  s.sage("task", "T1", "set", "state=reviewing");
+  assert.match(s.sage("round", "T1"), /^T1 replan: /);
+  s.sage("task", "T1", "set", "state=briefed"); // the keys go, and the lead run ends
+  assert.match(s.sage("task", "T1"), /^T1 briefed .* round 1 /);
+  s.sage("run", "add", "T1", "--role", "lead");
+  const fresh = { agent_id: "lead-b", agent_type: "sage:lead" };
+  s.send(tool("TaskStop", { task_id: "lead-a" }));
+  assert.equal(s.send(leadSpawn("lead-call-2", 1, { cwd: s.dir })), undefined, "the fresh lead starts");
+  s.send(resultOf("lead-call-2", "lead-b"));
+  assert.equal(denied(stateRun(s, "task T1 set state=building", fresh)), undefined, "the fresh lead writes");
+  assert.match(denied(stateRun(s, "finding triage T1 F-T1-1 dismiss --reason=old-low-after-replan", fresh)) ?? "", /^sage: F-T1-1 is a fix key of an earlier round of T1: only the sage dismisses it\./, "R1027 runY");
+  assert.equal(denied(stateRun(s, "finding triage T1 F-T1-3 dismiss --reason=not-worth-it", fresh)), undefined, "a low finding of round 0 that was never triaged fix is dismissed");
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "new"); // F-T1-4, of round 1
+  s.sage("finding", "triage", "T1", "F-T1-4", "fix");
+  assert.equal(denied(stateRun(s, "finding triage T1 F-T1-4 dismiss --reason=not-worth-it", fresh)), undefined, "a low fix of this round that is no key is dismissed");
+});
+
+test("F-T301-73: a lead moves the task from repairing to reviewing only after it closes each fix key of the round, also a low one", () => {
+  const s = leadSession();
+  s.sage("task", "T1", "set", "state=building");
+  s.sage("task", "T1", "set", "state=reviewing");
+  s.sage("finding", "triage", "T1", "F-T1-2", "fix");
+  s.sage("round", "T1"); // F-T1-1 (low) and F-T1-2 (medium)
+  s.sage("finding", "close", "T1", "F-T1-2");
+  assert.match(denied(stateRun(s, "task T1 set state=reviewing")) ?? "", /T1 has an open fix finding of its round: close each one/, "R1028 x_med_fixed_low_unconf_move: the low key is open");
+  s.sage("finding", "close", "T1", "F-T1-1");
+  assert.equal(denied(stateRun(s, "task T1 set state=reviewing")), undefined, "with every key closed, the move passes");
+});
+
+test("F-T301-57: a lead names each helper by its run id: a spawn with another name, or with only a description, is refused", () => {
+  const s = leadSession();
+  const run = leadAdd(s, "code-reviewer"); // R5
+  const spawn = (input, id) => denied(s.send(tool("Agent", { subagent_type: "sage:code-reviewer", prompt: BRIEF, ...input }, { tool_use_id: id, ...LEAD })));
+  assert.match(spawn({ name: "reviewer" }, "n-1") ?? "", /a lead names each helper by its run id \(R<n>, the id that run add printed\), and "reviewer" is not one\./);
+  assert.match(spawn({ description: "review the fix" }, "n-2") ?? "", /and "review the fix" is not one\./, "a description stands for the name");
+  assert.match(spawn({ name: `${run} ` }, "n-3") ?? "", /is not one\./, "the run id with a space is not the run id");
+  assert.equal(spawn({ name: run }, "n-4"), undefined, "the run id passes");
+});
+
+test("F-T301-60: a lead never dismisses a fix key of the round, also a low one; it still dismisses a low finding that is not a key", () => {
+  const s = leadSession();
+  s.sage("task", "T1", "set", "state=building");
+  s.sage("task", "T1", "set", "state=reviewing");
+  s.sage("finding", "triage", "T1", "F-T1-2", "fix");
+  assert.match(s.sage("round", "T1"), /^T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 /);
+  assert.match(denied(stateRun(s, "finding triage T1 F-T1-1 dismiss --reason=not-worth-it")) ?? "", /^sage: F-T1-1 is a fix of T1's current round: only the sage dismisses it\. End blocked and list it \(F-T301-60\)\./);
+  assert.equal(denied(stateRun(s, "finding triage T1 F-T1-1 fix")), undefined, "a fix triage of the key still passes");
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "new"); // F-T1-3, not a key
+  assert.equal(denied(stateRun(s, "finding triage T1 F-T1-3 dismiss --reason=not-worth-it")), undefined, "a low finding that is no key is dismissed");
 });
 
 test("F-T289-21: FINDINGS none is clean only alone; with any words after it, the report is unreadable", () => {

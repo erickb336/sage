@@ -60,7 +60,7 @@ const NEXT = {
   reviewing: ["verifying"],
   repairing: ["reviewing"],
   replan: ["briefed"],
-  verifying: ["verified", "concluded"], // verified for a route with build; concluded for one without
+  verifying: ["verified", "concluded", "reviewing"], // verified for a route with build; concluded for one without; reviewing when the head moved past the clean cycles (F-T301-49)
   verified: ["merged", "pr-ready", "reviewing"],
   "pr-ready": ["merged", "reviewing"],
   merged: [],
@@ -1247,6 +1247,9 @@ const extraOf = (task) => (/^\d{1,3}$/.test(task.extra ?? "") ? Number(task.extr
 /** Refuses an id that the logbook does not have, and names the latest ids that it has, to pick from. */
 const missing = (what, ids) => refuse(`no ${what}. ${ids.length ? `The latest: ${ids.slice(-10).join(", ")}.` : "There is none yet."}`);
 
+/** The keys of a task's current round: round sets them to its fix findings, and a move out of replan clears them. */
+const roundKeys = (task) => String(task.keys ?? "").split(",").filter(Boolean);
+
 function taskOf(dir, id) {
   const tasks = read(dir, "tasks");
   const task = tasks.find((t) => t.id === id) ?? missing(`task ${id}`, tasks.map((t) => t.id));
@@ -1365,9 +1368,9 @@ function judge(dir, task, findings, id, rows, cycles, repaired, cfg, pr) {
   const bad = rows.find((r) => NOT_CLEAN.includes(r.kind));
   if (bad) return { ok: false, reason: `${who}: cycle ${bad.cycle} found problems on this SHA (${bad.kind}). Repair, then review the new SHA.` };
   if (!rows.some((r) => r.kind === "checks-pass")) return { ok: false, reason: `${who}: no checks-pass on this SHA. Run the checks on it and record checks-pass.` };
-  const perCycle = list(task.route).map((b) => VERDICT[b]).filter((k) => k && k !== "checks-pass");
+  const perCycle = cleanKinds(task);
   const want = perCycle.length ? cycles : 1;
-  const clean = perCycle.length ? [...new Set(rows.map((r) => r.cycle))].filter((c) => perCycle.every((k) => rows.some((r) => r.cycle === c && r.kind === k))).length : 1;
+  const clean = perCycle.length ? cleanCycles(task, rows) : 1;
   if (clean < want) {
     const missing = perCycle.filter((k) => !rows.some((r) => r.kind === k));
     const high = want > LIMIT["cycles.small"] && cycleKeys(task).find((k) => cfg[k] === want); // only config.json holds a count above the limit
@@ -1375,6 +1378,11 @@ function judge(dir, task, findings, id, rows, cycles, repaired, cfg, pr) {
   }
   return { ok: true, reason: `${task.id} may merge: ${clean} clean cycle${clean === 1 ? "" : "s"} on this SHA` };
 }
+
+/** The clean verdicts that each cycle of a task needs: those of its route's reviews and QA. */
+const cleanKinds = (task) => list(task.route).map((b) => VERDICT[b]).filter((k) => k && k !== "checks-pass");
+/** The cycles of a task's ledger rows on one SHA that have every clean verdict of its route (the judge's count). */
+const cleanCycles = (task, rows) => [...new Set(rows.map((r) => r.cycle))].filter((c) => cleanKinds(task).every((k) => rows.some((r) => r.cycle === c && r.kind === k))).length;
 
 /** The rows of a table by their task. */
 const group = (rows) => rows.reduce((m, r) => (m.has(r.task) ? m.get(r.task).push(r) : m.set(r.task, [r]), m), new Map());
@@ -1601,6 +1609,11 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     },
     shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
     verdicts: (task) => rows("ledger").filter((r) => r.task === task),
+    /** The clean cycles of a task on one SHA, as the merge check counts them: 0 for a task with no review or QA. */
+    cleanCycles: (id, sha) => {
+      const task = one(rows("tasks").filter((t) => t.id === id)), on = rows("ledger").filter((r) => r.task === id && String(r.sha).toLowerCase() === String(sha).toLowerCase());
+      return task && cleanKinds(task).length ? cleanCycles(task, on) : 0;
+    },
     endedLeadRuns: () => rows("runs").filter((r) => r.role === "lead" && r.status !== "running"),
     prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),
   };
@@ -1806,7 +1819,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       }
       // A round that fixed none of the last round's findings re-plans: also when new ones join them, and on the retry after
       // a hold, whose last round's findings are still open (F-T284-17, option a).
-      const last = String(task.keys ?? "").split(",").filter(Boolean);
+      const last = roundKeys(task);
       if (last.length && last.every((k) => keys.split(",").includes(k))) {
         task.state = "replan";
         write(dir, "tasks", tasks);
@@ -1863,6 +1876,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub === "triage") {
         const t = need(more[1], "fix, dismiss or ask");
         if (!["fix", "dismiss", "ask"].includes(t)) refuse("triage is fix, dismiss or ask");
+        // A low fix key of the round joins the next round while a medium or high finding of the task is open, in any
+        // triage and any state, so it is not dismissed then (F-T301-59, F-T301-66).
+        const big = t === "dismiss" && f.status === "open" && f.severity === "low" && roundKeys(taskOf(dir, id).task).includes(f.key)
+          ? findings.filter((g) => g.task === id && g.status === "open" && g.severity !== "low").map((g) => g.key) : [];
+        if (big.length) refuse(`${f.key} is a low fix of ${id}'s current round, and ${big.join(", ")} is open: ${f.key} joins the next round with it, so it is not dismissed now.`);
         if (t === "dismiss") Object.assign(f, { reason: need(opt.reason, "--reason for a dismissal"), status: "dismissed" });
         f.triage = t;
       } else if (sub === "close") {
@@ -1872,6 +1890,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         // A new medium finding of a repair round goes to a follow-up task, not to another round. A high one blocks until it is fixed.
         if (f.status !== "open") refuse(`${f.key} is ${f.status}: only an open finding moves.`);
         if (f.severity === "high") refuse(`${f.key} is high, so it blocks ${id} until it is fixed: a high finding never moves to a follow-up task.`);
+        // A fix key of the round stays on its task, at any severity and in any state (F-T301-40), until the owner answers a
+        // gate of the task that names the key with the gate's first option (F-T301-65).
+        if (roundKeys(taskOf(dir, id).task).includes(f.key) && !read(dir, "gates").some((g) => g.task === id && g.question.split(/[^\w-]+/).includes(f.key) && g.answer && g.answer === optionsOf(g)[0])) {
+          refuse(`${f.key} is a fix of ${id}'s current round, so it stays on ${id}: it is fixed in a round, or dismissed with a reason. It moves to a follow-up task only after the owner chose the first option of a gate of ${id} whose question names ${f.key}: sage gate add ${id} --question "Move ${f.key} to a follow-up task?" --options "move|keep" --recommend <move or keep>.`);
+        }
         const title = need(cell(opt.to), '--to "<the follow-up task\'s title>"');
         const size = opt.size ?? "small";
         if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");
