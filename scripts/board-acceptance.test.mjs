@@ -58,7 +58,7 @@ function fixture(t) {
   };
   return { dir, project, sources, add, ...first, invoke, view };
 }
-const cards = html => /<main class="board">([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
+const cards = html => /<main class="board"[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
 
 test("T205 acceptance: HTML state columns and phone text describe the same recorded tasks without logbook writes", t => {
   const f = fixture(t);
@@ -70,7 +70,7 @@ test("T205 acceptance: HTML state columns and phone text describe the same recor
   for (const id of ["T1", "T2", "T3", "T4", "T5", "T6"]) { assert.ok(cards(html).includes(`Sample ${id}`)); assert.ok(text.includes(`Sample ${id}`)); }
   assert.ok(!cards(html).includes("Sample T7"));
   assert.match(text, /### 🔴 Needs you/); assert.match(text, /### 🔁 In review/); assert.match(text, /### 🔨 Building/); assert.match(text, /### ✅ Ready to merge/);
-  assert.ok(html.indexOf("Sample T1") < html.indexOf("<script>"), "initial cards must exist without running scripts");
+  assert.ok(html.indexOf("Sample T1") < html.lastIndexOf("<script>"), "initial cards must exist without running the page script");
   assert.deepEqual(snapshot(f.root), before);
 });
 
@@ -82,10 +82,10 @@ test("T205 acceptance: current-head review evidence ignores old SHA and clears s
   const verdict = (kind, sha = HEAD) => ({ task: "T1", pr: "12", sha, kind, cycle: "1", at: AT });
   table(f.book, "ledger", [verdict("qa-pass", OLD_HEAD), verdict("qa-fail")]);
   const failed = f.view("task", { id: "T1" });
-  assert.ok(failed.includes("QA failed on the recorded PR head")); assert.ok(failed.includes("✗ qa"));
-  assert.ok(failed.includes("… security-review")); assert.ok(failed.includes("sample-provider · security-reviewer"));
+  assert.ok(failed.includes("QA failed on the recorded PR head")); assert.ok(failed.includes("✗ QA: failed"));
+  assert.ok(failed.includes("▶ security review: running now")); assert.ok(failed.includes("sample-provider · security-reviewer"));
   table(f.book, "ledger", [verdict("qa-pass", OLD_HEAD), verdict("qa-fail"), verdict("qa-pass")]);
-  const fixed = f.view("task", { id: "T1" }); assert.ok(fixed.includes("✓ qa")); assert.ok(!fixed.includes("QA failed on the recorded PR head"));
+  const fixed = f.view("task", { id: "T1" }); assert.ok(fixed.includes("✓ QA: done")); assert.ok(!fixed.includes("QA failed on the recorded PR head"));
   table(f.book, "ledger", [verdict("qa-pass"), verdict("qa-fail")]);
   assert.ok(f.view("task", { id: "T1" }).includes("QA failed on the recorded PR head"));
 });
@@ -126,7 +126,7 @@ test("T205 acceptance: task details show verified briefs, report proof, run time
   assert.ok(text.includes("Goal: Show recorded work")); assert.ok(text.includes("Acceptance: Keep both views equal\n- Preserve detail"));
   assert.ok(text.includes("tests 12\npass 12")); assert.ok(text.includes("120 s")); assert.ok(text.includes("tokens 200"));
   assert.ok(text.includes("R1 · digest verified")); assert.ok(html.includes("R1 · digest verified"));
-  assert.ok(html.includes("<summary>Full brief</summary>")); assert.ok(html.includes("&lt;sample proof&gt;")); assert.ok(html.includes("data:image/png;base64,"));
+  assert.ok(html.includes(">Full brief</summary>")); assert.ok(html.includes("&lt;sample proof&gt;")); assert.ok(html.includes("data:image/png;base64,"));
   assert.ok(text.includes("digest verified")); assert.ok(!text.includes("content not verified"));
   assert.deepEqual(snapshot(f.root), before);
   writeFileSync(join(f.book, "reports/R1.md"), "TAMPERED CONTENT MUST NOT SHOW");
@@ -167,11 +167,11 @@ test("T205 acceptance: the task loop marks recorded PE work current without infe
   table(f.book, "tasks", [task("T1", "designing", { route: "design,pe,build,code-review,qa" })]);
   table(f.book, "runs", [{ id: "R1", task: "T1", role: "pe", status: "running", started: AT }]);
   const text = f.view("task", { id: "T1" }), html = f.view("html");
-  assert.ok(text.includes("▶ PE check")); assert.ok(text.includes("The PE check is recorded running"));
-  assert.ok(html.includes('<span class="ls now">PE check</span>'));
+  assert.ok(text.includes("▶ PE check: running now")); assert.ok(text.includes("Now: The PE check runs"));
+  assert.ok(html.includes('<span class="part p-run"><span aria-hidden="true">▶</span> PE check: running now</span>'));
   table(f.book, "runs", []);
   const unknown = f.view("task", { id: "T1" });
-  assert.ok(unknown.includes("▶ design")); assert.ok(!unknown.includes("▶ PE check")); assert.ok(!unknown.includes("PE check is recorded running"));
+  assert.ok(unknown.includes("▶ design: running now")); assert.ok(!unknown.includes("▶ PE check")); assert.ok(!unknown.includes("The PE check runs"));
 });
 
 test("T205 acceptance: existing Claude hook dispatches owner board/task/status phrases and rejects quoted agent text", t => {

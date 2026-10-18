@@ -86,8 +86,9 @@ const OFF = "Access from outside this Mac is off until the owner sets a board pa
  * a response on the Mac carries the X-Sage-Board header: the id, this process's pid and the time the listener started,
  * so the board command can tell which board answers on the port.
  */
-export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id } = {}) {
+export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id, clock = () => new Date().toISOString() } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
+  if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
   if (!Array.isArray(sources) || !sources.length || sources.length > 32) throw new TypeError("board needs 1 to 32 explicit sources");
   const ids = new Set();
@@ -170,9 +171,14 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     }
   }
 
+  // A stream gets an update only when its page changed (bug bash R1023-3): each client keeps the digest of what it got last,
+  // so a file event that changes nothing on the page sends nothing, and the page keeps its state.
   function publish(client) {
     try {
       const payload = { revision: String(revision), html: htmlFor(client.task), stale: model.stale, diagnostics: model.diagnostics };
+      const sent = digest(JSON.stringify([payload.html, payload.stale, payload.diagnostics])).toString("base64");
+      if (client.sent === sent) return;
+      client.sent = sent;
       send(client, `id: ${revision}\nevent: board\ndata: ${JSON.stringify(payload)}\n\n`);
     } catch { client.response.end(); removeClient(client); }
   }
@@ -245,12 +251,12 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
         source.diagnostics = source.diagnostics.filter(message => message !== "ENOENT");
         notSetUp.push(source.label);
       }
-      next = { ...buildBoardModel(read), notSetUp };
+      next = { ...buildBoardModel(read, { now: clock() }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
       // Validate the complete HTML before replacing a good snapshot.
       const preview = renderBoardHtml(next, { snapshot: false, live: true });
       if (Buffer.byteLength(preview) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
-    } catch { next = { ...buildBoardModel([]), diagnostics: unavailable }; }
+    } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
     if (!next.diagnostics.length) { lastGood = next; model = { ...next, stale: false }; }
     else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp };
     revision++;
@@ -285,7 +291,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
       if (request.method === "HEAD") return response.end();
       response.flushHeaders();
-      const client = { response, task: selected.task, blocked: false, pending: null, deadline: null };
+      const client = { response, task: selected.task, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
     }

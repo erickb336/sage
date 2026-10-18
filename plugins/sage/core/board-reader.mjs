@@ -73,6 +73,31 @@ function githubRemotes(config) {
   return found;
 }
 
+/**
+ * What names one logbook: its checkout (checkout.txt), the checkout's origin and upstream GitHub remotes, and the owner's
+ * settings (sage config name= and archived=). It pushes a problem to the lists of `into` (diagnostics, warnings).
+ */
+export function logbookIdentity(directory, budget = null, into = { diagnostics: [], warnings: [] }) {
+  const found = { checkout: undefined, repository: null, upstream: null, archived: false };
+  try { found.checkout = regular(join(directory, "checkout.txt"), budget).trim(); }
+  catch (error) { if (error.code !== "ENOENT") into.diagnostics.push(`checkout: ${error.code ?? error.message}`); }
+  // The PR link needs the checkout's GitHub origin, and the project's name may come from its upstream. Read its Git
+  // config as a file; run no Git command. No remote: no link.
+  const remotes = (() => { try { return isAbsolute(found.checkout ?? "") ? githubRemotes(regular(join(found.checkout, ".git", "config"), budget)) : {}; } catch { return {}; } })();
+  found.repository = remotes.origin ?? null;
+  found.upstream = remotes.upstream ?? null;
+  // The owner's settings of this logbook, checked again. A bad value falls back (no name; not archived) with a warning,
+  // not a diagnostic: no table is in doubt, so the board stays live.
+  try {
+    const settings = logbookSettings(parseJson(regular(join(directory, "config.json"), budget)));
+    if (settings.name !== null) found.displayName = settings.name;
+    found.archived = settings.archived;
+    into.warnings.push(...settings.warnings);
+  } catch (error) { if (error.code !== "ENOENT") into.warnings.push(`config: ${error.code ?? error.message}`); }
+  if (found.checkout === undefined) delete found.checkout;
+  return found;
+}
+
 /** Missing or damaged input is a diagnostic, never a silently empty board. */
 export function readBoardSources(sources, { now = Date.now() } = {}) {
   if (!Array.isArray(sources) || sources.length > 32) throw new TypeError("board sources must be an array of at most 32 roots");
@@ -109,22 +134,7 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
           project.observations = { version: 1, records: [] };
           if (error.code !== "ENOENT") project.diagnostics.push(`observations: ${error.code ?? error.message}`);
         }
-        try { project.checkout = regular(join(directory, "checkout.txt"), budget).trim(); }
-        catch (error) { if (error.code !== "ENOENT") project.diagnostics.push(`checkout: ${error.code ?? error.message}`); }
-        // The PR link needs the checkout's GitHub origin, and the project's name may come from its upstream. Read its Git
-        // config as a file; run no Git command. No remote: no link.
-        const remotes = (() => { try { return isAbsolute(project.checkout ?? "") ? githubRemotes(regular(join(project.checkout, ".git", "config"), budget)) : {}; } catch { return {}; } })();
-        project.repository = remotes.origin ?? null;
-        project.upstream = remotes.upstream ?? null;
-        // The owner's settings of this logbook (sage config name= and archived=), checked again. A bad value falls back
-        // (no name; not archived) with a warning, not a diagnostic: no table is in doubt, so the board stays live.
-        project.archived = false;
-        try {
-          const settings = logbookSettings(parseJson(regular(join(directory, "config.json"), budget)));
-          if (settings.name !== null) project.displayName = settings.name;
-          project.archived = settings.archived;
-          project.warnings.push(...settings.warnings);
-        } catch (error) { if (error.code !== "ENOENT") project.warnings.push(`config: ${error.code ?? error.message}`); }
+        Object.assign(project, logbookIdentity(directory, budget, project));
         project.contents = {};
         for (const record of project.observations.records.filter(record => record.kind === "artifact" && record.data.path)) {
           try {

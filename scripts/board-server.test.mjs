@@ -43,11 +43,11 @@ async function freePort() {
 const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
 
 /** A board server on a free port. password: null is a board with no password set yet (T229). */
-async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id } = {}) {
+async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id, clock } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
   if (!missing) populate(root);
   const sources = [{ id: "sample", path: root, label: "Sample source" }];
-  const server = createBoardServer({ sources, ...(password ? { password } : {}), port, allowedHosts, id });
+  const server = createBoardServer({ sources, ...(password ? { password } : {}), port, allowedHosts, id, ...(clock ? { clock } : {}) });
   t.after(async () => { await server.close(); rmSync(dir, { recursive: true, force: true }); });
   await server.start();
   return { dir, root, project: join(root, "project-abcdef"), port, sources, server, authorization: `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}` };
@@ -258,6 +258,19 @@ test("board event streams deliver initial and atomic file updates for the select
   assert.ok(Number(updated.revision) > Number(first.revision)); assert.match(updatedTask.html, /class="detail"/);
   const reconnect = events(f); t.after(() => reconnect.close());
   const snapshot = await reconnect.next(); assert.equal(snapshot.revision, updated.revision); assert.match(snapshot.html, /Sample replaced title/);
+});
+
+test("T305 R1023-3: a file event that does not change the page sends nothing; the next change sends the new page", async t => {
+  // A fixed clock, so the page's built time does not change between the two refreshes.
+  const f = await fixture(t, { clock: () => "2026-10-18T12:00:00Z" }), stream = events(f); t.after(() => stream.close());
+  const first = await stream.next(); assert.match(first.html, /Sample first task/);
+  writeFileSync(join(f.project, "unrelated.txt"), "sample\n");
+  // Time for the watcher and its 20 ms debounce. A slower machine merges the two events, so the test still passes; it
+  // can never fail for time. On the old server this file event alone sent the same page again.
+  await new Promise(wake => setTimeout(wake, 1000));
+  const temporary = join(f.project, "tasks.pending"); writeFileSync(temporary, tasks(row("Sample changed title"))); renameSync(temporary, join(f.project, "tasks.tsv"));
+  const next = await stream.next();
+  assert.match(next.html, /Sample changed title/, "the next event is the change, not a copy of the page");
 });
 
 test("board event streams keep the last valid content while an incomplete write is stale, then recover", async t => {

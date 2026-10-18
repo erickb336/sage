@@ -57,15 +57,14 @@ test("same-second later clean verdict clears the owner failure; later failure re
 });
 
 
-test("task detail derives brief fields and skipped loop stages from recorded route", () => {
+test("task detail derives brief fields, and the step line shows only the route's steps (T305: no struck-through step)", () => {
   const input = source("one", [task("T1", "building")], {}, [observation("artifact", { type: "brief", label: "Brief" })]);
   input.projects[0].contents = { O1: { verified: true, text: "**GOAL:** Ship the board\nSCOPE: This task\n## ACCEPTANCE\nAll views agree\n- Keep sources separate\nVERIFY: Tests" } };
   const result = buildBoardModel([input], { now }).tasks[0];
   assert.equal(result.briefFields.goal, "Ship the board");
   assert.equal(result.briefFields.acceptance, "All views agree\n- Keep sources separate");
-  assert.equal(result.loop.steps.find(step => step.label === "design").status, "skipped");
-  assert.equal(result.loop.steps.find(step => step.label === "build").status, "current");
-  assert.equal(result.loop.steps.find(step => step.label === "framed").status, "done");
+  assert.deepEqual(result.loop.steps.map(step => `${step.label}: ${step.status}`), ["Plan: done", "Build: run", "Review 1 of 1: wait", "Merge: wait"]);
+  assert.deepEqual(result.loop.steps[0].parts, [["framed", "done"], ["briefed", "done"]], "no design and no PE check on this route");
 });
 
 
@@ -89,8 +88,10 @@ test("review cycle requirements take the largest applicable size and risk count"
 test("recorded running PE work selects the PE stage during design", () => {
   const input = source("one", [task("T1", "designing", { size: "large", route: "design,pe,build,code-review,qa" })], { runs: [{ id: "R1", task: "T1", role: "pe", status: "running" }] });
   const result = buildBoardModel([input], { now }).tasks[0];
-  assert.equal(result.loop.steps.find(step => step.label === "PE check").status, "current");
-  assert.equal(result.loop.steps.find(step => step.label === "design").status, "done");
+  assert.deepEqual(result.loop.steps[0].parts, [["framed", "done"], ["design", "done"], ["PE check", "run"], ["briefed", "wait"]]);
+  assert.equal(result.loop.now.text, "The PE check runs");
+  input.projects[0].tables.runs = [];
+  assert.deepEqual(buildBoardModel([input], { now }).tasks[0].loop.steps[0].parts, [["framed", "done"], ["design", "run"], ["PE check", "wait"], ["briefed", "wait"]], "no PE run recorded: the design runs");
 });
 
 // T218: the model fields the board page needs, read from a sample logbook in a scratch HOME (made-up data).
@@ -310,7 +311,7 @@ test("T314: an archived project's tasks leave the columns and the counts, and th
   ]);
   assert.deepEqual(model.columns.flatMap(column => column.tasks.map(card => `${card.projectName} ${card.id}`)), ["live T1", "live T2"]);
   assert.deepEqual(model.counts, { tasks: 2, needsOwner: 1, recordedAgents: 0, inferredWork: 0, inReview: 0 });
-  assert.deepEqual(model.archived, [{ key: "claude/old-000001", name: "Old app", tasks: 3, needsOwner: 1 }]);
+  assert.deepEqual(model.archived, [{ key: "old-000001", name: "Old app", tasks: 3, needsOwner: 1 }]);
   assert.equal(model.tasks.filter(card => card.archived).length, 3, "its tasks stay in the model, for their task pages");
 });
 
@@ -344,4 +345,114 @@ test("T314 R1043-4: the board refuses a display name that is not in the composed
   const model = logbooks(t, [{ tasks: [task("T1", "framed")], config: { name: decomposed }, git }, { tasks: [task("T1", "framed")], config: { name: decomposed.normalize("NFC") }, git }]);
   assert.deepEqual(named(model), ["seacc", "Café"]);
   assert.deepEqual(model.warnings.map(d => d.message), ["config: the name is not in the composed Unicode form (NFC)"]);
+});
+
+// T305: the step line (loop design 1), the merge of one repository's logbooks, and the picker's list. Sample data only.
+const line = card => card.loop.steps.map(step => `${step.label}: ${step.status}`);
+const oneTask = (row, tables = {}, records = [], config = {}) => buildBoardModel([{ ...source("one", [row], tables, records), config }], { now }).tasks[0];
+
+test("T305: the step line and the Now and Next lines follow the fixed rule of each state on a build route", () => {
+  const running = role => ({ runs: [{ id: "R7", task: "T1", role, status: "running", started: "2026-10-08T19:20:00Z" }] });
+  assert.deepEqual([line(oneTask(task("T1", "framed"))), oneTask(task("T1", "framed")).loop.now, oneTask(task("T1", "framed")).loop.next], [["Plan: wait", "Build: wait", "Review 1 of 1: wait", "Merge: wait"], { needs: false, text: "In the backlog. No agent works on it." }, "The build"]);
+  const building = oneTask(task("T1", "building"), running("implementer"));
+  assert.deepEqual(line(building), ["Plan: done", "Build: run", "Review 1 of 1: wait", "Merge: wait"]);
+  assert.equal(building.loop.steps[1].detail, "The implementer (run R7) is at work, 40 min.");
+  assert.deepEqual([building.loop.now.text, building.loop.next], ["The implementer builds it", "Review cycle 1 of 1 starts when the PR opens"]);
+  const held = oneTask(task("T1", "held"), { gates: [{ id: "G3", task: "T1", question: "Sample: refuse the copy?", recommendation: "yes", answer: "" }] });
+  assert.deepEqual(line(held), ["Plan: done", "Build: need", "Review 1 of 1: wait", "Merge: wait"]);
+  assert.equal(held.loop.steps[1].detail, "Held at gate G3 (the question above).");
+  assert.deepEqual([held.loop.now, held.loop.next], [{ needs: true, text: "Sample: refuse the copy? I recommend: yes" }, "The build continues after your answer"]);
+  const verified = oneTask(task("T1", "verified", { pr: "41" }), { ledger: [{ task: "T1", pr: "41", sha: head, kind: "checks-pass", cycle: "1", at: now }, { task: "T1", pr: "41", sha: head, kind: "review-clean", cycle: "1", at: now }, { task: "T1", pr: "41", sha: head, kind: "qa-pass", cycle: "1", at: now }] }, [observation("mode", { autopilot: false })]);
+  assert.deepEqual(line(verified), ["Plan: done", "Build: done", "Review 1 of 1: done", "Merge: need"]);
+  assert.deepEqual([verified.loop.now, verified.loop.next], [{ needs: true, text: "Autopilot is off: review and merge PR 41." }, "Done after the merge"]);
+  const auto = oneTask(task("T1", "verified", { pr: "41" }), {}, [observation("mode", { autopilot: true })]);
+  assert.deepEqual([line(auto).at(-1), auto.loop.now.text], ["Merge: run", "Verified: autopilot merges PR 41"]);
+  const merged = oneTask(task("T1", "merged", { pr: "41" }));
+  assert.deepEqual([line(merged), merged.loop.next], [["Plan: done", "Build: done", "Review 1 of 1: done", "Merge: done"], null]);
+});
+
+test("T305: in review, the current cycle runs and its roles have words; the next role, then the next cycle, is Next", () => {
+  const records = [observation("pr", { number: 12, head, state: "open" }), observation("run", { run: "R1", provider: "Codex", head, cycle: 1 }, { id: "O2" })];
+  const ledger = [{ task: "T1", pr: "12", sha: head, kind: "checks-pass", cycle: "1", at: now }, { task: "T1", pr: "12", sha: head, kind: "review-clean", cycle: "1", run: "R0", at: now }];
+  const runs = [{ id: "R0", task: "T1", role: "code-reviewer", status: "done" }, { id: "R1", task: "T1", role: "security-reviewer", status: "running", started: "2026-10-08T19:35:00Z" }];
+  const card = oneTask(task("T1", "reviewing", { pr: "12", risk: "auth", route: "build,code-review,security-review,qa" }), { ledger, runs }, records);
+  assert.deepEqual(line(card), ["Plan: done", "Build: done", "Review 1 of 2: run", "Review 2 of 2: wait", "Merge: wait"]);
+  assert.deepEqual(card.loop.steps[2].parts, [["checks", "done"], ["code review", "done"], ["security review", "run"], ["QA", "wait"]]);
+  assert.equal(card.loop.steps[2].detail, "On the last commit (aaaaaaa). The security review (run R1) started 25 min ago.");
+  assert.equal(card.loop.steps[3].detail, "A risk flag (auth) needs 2 clean cycles.");
+  assert.deepEqual([card.loop.now.text, card.loop.next], ["security review runs (cycle 1 of 2)", "QA, then review cycle 2 of 2"]);
+  const unknown = oneTask(task("T1", "reviewing", { pr: "12" }));
+  assert.equal(unknown.loop.steps[2].detail, "No verdict is recorded on the PR's last commit yet.", "plain words, not 'PR head not recorded'");
+  assert.deepEqual(unknown.loop.steps[2].parts.map(([, value]) => value), ["unknown", "unknown", "unknown"]);
+});
+
+test("T305: a repair is its own step, round n of m, then Review again; the round count comes from max_rounds", () => {
+  const ledger = [{ task: "T1", pr: "52", sha: head, kind: "checks-pass", cycle: "1", at: now }, { task: "T1", pr: "52", sha: head, kind: "findings", cycle: "1", run: "R2", at: now }];
+  const runs = [{ id: "R2", task: "T1", role: "code-reviewer", round: "0", status: "done" }, { id: "R3", task: "T1", role: "implementer", round: "1", status: "running", started: "2026-10-08T17:50:00Z" }];
+  const card = oneTask(task("T1", "repairing", { pr: "52", round: "1" }), { ledger, runs }, [], { max_rounds: 4 });
+  assert.deepEqual(line(card), ["Plan: done", "Build: done", "Review 1 of 1: fail", "Repair, round 1 of 4: run", "Review again: wait", "Merge: wait"]);
+  assert.equal(card.loop.steps[2].detail, "The code review found problems on aaaaaaa.");
+  assert.equal(card.loop.steps[3].detail, "The implementer (run R3) fixes the findings on the same branch, 2 h 10 min.");
+  assert.deepEqual([card.loop.now.text, card.loop.next], ["Repair, round 1 of 4: fix the open findings", "The reviews start again at cycle 1 on the new commit"]);
+});
+
+test("T305: an investigation shows Plan, Investigate, Evidence review and Conclude, with no Build and no Merge", () => {
+  const route = "investigate,evidence-review";
+  const verifying = oneTask(task("T1", "verifying", { size: "investigate", route }), { runs: [{ id: "R19", task: "T1", role: "evidence-review", status: "running", started: now }] });
+  assert.deepEqual(line(verifying), ["Plan: done", "Investigate: done", "Evidence review: run", "Conclude: wait"]);
+  assert.deepEqual([verifying.loop.now.text, verifying.loop.next], ["The evidence review checks the report", "Concluded: the report comes to you, with no PR"]);
+  assert.deepEqual(line(oneTask(task("T1", "building", { size: "investigate", route }))), ["Plan: done", "Investigate: run", "Evidence review: wait", "Conclude: wait"]);
+  assert.deepEqual(line(oneTask(task("T1", "concluded", { size: "investigate", route }))), ["Plan: done", "Investigate: done", "Evidence review: done", "Conclude: done"]);
+});
+
+test("T305: a run's time is minutes or hours up to 24 h; after 24 h with no logbook change, the run may have stopped", async () => {
+  const { runClock } = await import("../packages/sage-core/board-model.mjs");
+  const at = Date.parse(now);
+  assert.deepEqual(runClock("2026-10-08T19:20:00Z", at, null), { text: "40 min", stale: false });
+  assert.deepEqual(runClock("2026-10-08T16:55:00Z", at, null), { text: "3 h 5 min", stale: false });
+  assert.deepEqual(runClock("2026-10-05T08:00:00Z", at, "2026-10-05T08:00:00Z"), { text: "no news since 5 Oct: the run may have stopped; ask the sage to check it", stale: true });
+  assert.deepEqual(runClock("2026-10-05T08:00:00Z", at, "2026-10-08T12:00:00Z"), { text: "since 5 Oct", stale: false }, "a change in the last 24 h: not stale");
+  const card = oneTask(task("T1", "building"), { runs: [{ id: "R5", task: "T1", role: "implementer", status: "running", started: "2026-10-05T08:00:00Z" }] });
+  assert.equal(card.runClocks.R5.text, "no news since 5 Oct: the run may have stopped; ask the sage to check it");
+  assert.equal(card.loop.steps[1].detail, "The implementer (run R5) is at work, no news since 5 Oct: the run may have stopped; ask the sage to check it.");
+});
+
+/** Two sources, each with projects given as { name, checkout, tasks, ...fields }: in memory, as the reader gives them. */
+const twoSources = (claude, codex) => buildBoardModel([["claude", "Claude", claude], ["codex", "Codex", codex]].map(([id, provider, books]) => ({ id, label: id, provider, diagnostics: [], projects: books.map(({ name, tasks, ...rest }) => ({ key: `${id}/${name}`, name, diagnostics: [], warnings: [], tables: { tasks }, ...rest })) })), { now });
+
+test("T305: one repository is one project: the logbooks of one key and one checkout merge; tasks keep source-qualified keys", () => {
+  const book = (tasks, extra = {}) => ({ name: "sage-43265b", checkout: "/sample/work/sage", repository: "https://github.com/sample-owner/sage", tasks, ...extra });
+  const model = twoSources([book([task("T9", "framed")])], [book([task("T9", "held")])]);
+  assert.deepEqual(model.projects.map(project => [project.key, project.name, project.providers]), [["sage-43265b", "sage", ["Claude", "Codex"]]]);
+  assert.deepEqual(model.tasks.map(card => [card.key, card.group, card.providerStandIn]), [["claude/sage-43265b/T9", "sage-43265b", "Claude"], ["codex/sage-43265b/T9", "sage-43265b", "Codex"]]);
+  assert.deepEqual(model.notes, []);
+  const missing = twoSources([book([task("T1", "framed")])], [book([task("T2", "framed")], { checkout: undefined })]);
+  assert.equal(missing.projects.length, 1);
+  assert.deepEqual(missing.notes.map(note => note.message), ["One project: the checkout of codex/sage-43265b is not known, and the logbook key is the same."]);
+  const apart = twoSources([book([task("T1", "framed")])], [book([task("T2", "framed")], { checkout: "/sample/other/sage" })]);
+  assert.deepEqual(apart.projects.map(project => project.key).sort(), ["claude/sage-43265b", "codex/sage-43265b"], "never merge on doubt");
+  assert.deepEqual(apart.notes.map(note => note.message), ["Two projects: claude/sage-43265b and codex/sage-43265b have one logbook key but name different checkouts, so the board keeps them apart."]);
+  const clones = twoSources([book([task("T1", "framed")]), book([task("T1", "framed")], { name: "sage-9a9a9a", checkout: "/sample/clone/sage" })], []);
+  assert.deepEqual(clones.projects.map(project => [project.key, project.name]).sort(), [["sage-43265b", "sage"], ["sage-9a9a9a", "sage"]], "two clones at two paths stay two projects");
+  const names = twoSources([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([task("T2", "framed")], { displayName: "Other name", archived: true })]);
+  assert.deepEqual([names.projects[0].name, names.projects[0].archived], ["Sage (sample)", true]);
+  assert.deepEqual(names.notes.map(note => note.message), ['Two display names: the board shows "Sage (sample)" (the first source), not "Other name".', "Archived in codex/sage-43265b only: the board archives the project."]);
+});
+
+test("T305: the picker's list puts needs you first, then active in the last 14 days, idle and archived, with every name a person may know", () => {
+  const decision = (id, at) => [{ task: id, at, decision: "sample", why: "sample" }];
+  // Activity: fresh had a decision 2 days ago, old 20 days ago.
+  const withActivity = buildBoardModel([{ id: "claude", label: "claude", provider: "Claude", diagnostics: [], projects: [
+    { key: "claude/product-demos-1c0254", name: "product-demos-1c0254", checkout: "/sample/work/sdc/product-demos", repository: "https://github.com/sample-owner/seacc", upstream: "https://github.com/sample-org/seacc", displayName: "seacc (Council Record)", diagnostics: [], tables: { tasks: [task("T41", "held")] } },
+    { key: "claude/fresh-aaaaaa", name: "fresh-aaaaaa", checkout: "/sample/work/fresh", diagnostics: [], tables: { tasks: [task("T1", "framed")], decisions: decision("T1", "2026-10-06T20:00:00Z") } },
+    { key: "claude/old-bbbbbb", name: "old-bbbbbb", checkout: "/sample/work/old", repository: "https://github.com/sample-owner/old", diagnostics: [], tables: { tasks: [task("T1", "framed")], decisions: decision("T1", "2026-09-18T20:00:00Z") } },
+    { key: "claude/gone-cccccc", name: "gone-cccccc", checkout: "/sample/work/gone", archived: true, diagnostics: [], tables: { tasks: [task("T1", "framed")] } },
+    { key: "claude/broken-dddddd", name: "broken-dddddd", checkout: "/sample/work/broken", diagnostics: ["tasks: damaged table header"], tables: {} },
+  ] }], { now });
+  assert.deepEqual(withActivity.projects.map(project => [project.list, project.name, project.needsOwner]), [["needs", "seacc (Council Record)", 1], ["active", "fresh", 0], ["idle", "old", 0], ["idle", "broken-dddddd", 0], ["archived", "gone", 0]]);
+  const sdc = withActivity.projects[0];
+  assert.equal(sdc.sub, "sample-org/seacc · folder product-demos");
+  assert.deepEqual(sdc.terms, ["seacc (Council Record)", "sample-org/seacc", "sample-owner/seacc", "product-demos", "/sample/work/sdc/product-demos", "product-demos-1c0254", "claude/product-demos-1c0254"]);
+  assert.deepEqual(withActivity.projects.map(project => project.sub), ["sample-org/seacc · folder product-demos", "/sample/work/fresh · no GitHub remote", "sample-owner · folder old", "/sample/work/broken · no GitHub remote", "/sample/work/gone · no GitHub remote"]);
+  assert.equal(withActivity.projects[3].problem, "tasks: damaged table header", "an unreadable logbook is named by its folder, with the reason");
 });
