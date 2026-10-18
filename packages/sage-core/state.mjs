@@ -60,7 +60,7 @@ const NEXT = {
   reviewing: ["verifying"],
   repairing: ["reviewing"],
   replan: ["briefed"],
-  verifying: ["verified", "concluded"], // verified for a route with build; concluded for one without
+  verifying: ["verified", "concluded", "reviewing"], // verified for a route with build; concluded for one without; reviewing when the head moved past the clean cycles (F-T301-49)
   verified: ["merged", "pr-ready", "reviewing"],
   "pr-ready": ["merged", "reviewing"],
   merged: [],
@@ -1863,6 +1863,12 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub === "triage") {
         const t = need(more[1], "fix, dismiss or ask");
         if (!["fix", "dismiss", "ask"].includes(t)) refuse("triage is fix, dismiss or ask");
+        // A low fix key of the round joins the next round while a medium or high fix finding of the task is open, so it is
+        // not dismissed then; while the task is held or in replan, the owner decides (F-T301-59).
+        const { task: of } = taskOf(dir, id);
+        const big = t === "dismiss" && f.status === "open" && f.severity === "low" && !["held", "replan"].includes(of.state) && String(of.keys ?? "").split(",").includes(f.key)
+          ? findings.filter((g) => g.task === id && g.status === "open" && g.triage === "fix" && g.severity !== "low").map((g) => g.key) : [];
+        if (big.length) refuse(`${f.key} is a low fix of ${id}'s current round, and ${big.join(", ")} is open and triaged fix: ${f.key} joins the next round with it, so it is not dismissed now.`);
         if (t === "dismiss") Object.assign(f, { reason: need(opt.reason, "--reason for a dismissal"), status: "dismissed" });
         f.triage = t;
       } else if (sub === "close") {
@@ -1872,8 +1878,10 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         // A new medium finding of a repair round goes to a follow-up task, not to another round. A high one blocks until it is fixed.
         if (f.status !== "open") refuse(`${f.key} is ${f.status}: only an open finding moves.`);
         if (f.severity === "high") refuse(`${f.key} is high, so it blocks ${id} until it is fixed: a high finding never moves to a follow-up task.`);
-        // A fix of the round that its re-check did not confirm stays on its task, at any severity (F-T301-40).
-        if (String(taskOf(dir, id).task.keys ?? "").split(",").includes(f.key)) refuse(`${f.key} is a fix of ${id}'s current round, so it never moves to a follow-up task: it gets the next round, or a replan when the round fixed none of its keys.`);
+        // A fix of the round that its re-check did not confirm stays on its task, at any severity (F-T301-40), except
+        // while the task is held or in replan: the owner decides there (F-T301-61).
+        const { task: of } = taskOf(dir, id);
+        if (!["held", "replan"].includes(of.state) && String(of.keys ?? "").split(",").includes(f.key)) refuse(`${f.key} is a fix of ${id}'s current round, so it stays on ${id}: it is fixed in a round, or dismissed with a reason. It moves to a follow-up task only while ${id} is held or in replan.`);
         const title = need(cell(opt.to), '--to "<the follow-up task\'s title>"');
         const size = opt.size ?? "small";
         if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");

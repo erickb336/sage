@@ -558,7 +558,7 @@ test("F-T301-40: an open fix of the current round never moves, at any severity, 
   for (const k of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", k, "fix");
   assert.equal(s.ok("round", "T1"), "T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 · re-run code-reviewer on the repair's diff");
   for (const k of ["F-T1-1", "F-T1-2"]) {
-    assert.equal(s.no("finding", "move", "T1", k, "--to", "later"), `sage: ${k} is a fix of T1's current round, so it never moves to a follow-up task: it gets the next round, or a replan when the round fixed none of its keys.`);
+    assert.equal(s.no("finding", "move", "T1", k, "--to", "later"), `sage: ${k} is a fix of T1's current round, so it stays on T1: it is fixed in a round, or dismissed with a reason. It moves to a follow-up task only while T1 is held or in replan.`);
   }
   s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the fix saves a blank row");
   assert.match(s.ok("finding", "move", "T1", "F-T1-3", "--to", "Blank rows"), /^F-T1-3 moved to T2 as F-T2-1 /, "a new finding of the round is not a key");
@@ -566,6 +566,54 @@ test("F-T301-40: an open fix of the current round never moves, at any severity, 
   s.ok("task", "T1", "set", "state=reviewing");
   assert.match(s.no("finding", "move", "T1", "F-T1-1", "--to", "later"), /F-T1-1 is a fix of T1's current round/, "after the move back to reviewing, the key is still the round's");
   assert.deepEqual(rows(s.dir, "findings").filter((f) => f.task === "T1").map((f) => `${f.key} ${f.status}`), ["F-T1-1 open", "F-T1-2 closed"], "the refused moves left the keys on T1");
+});
+
+test("F-T301-61: while the task is held or in replan, the owner decides: a fix key of the round moves to a follow-up task", () => {
+  for (const [rounds, state] of [["1", "held"], ["3", "replan"]]) {
+    const s = store();
+    s.ok("config", `max_rounds=${rounds}`);
+    s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
+    toReviewing(s, "T1");
+    s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the export skips the last row");
+    s.ok("finding", "triage", "T1", "F-T1-1", "fix");
+    s.ok("round", "T1");
+    s.ok("task", "T1", "set", "state=reviewing");
+    assert.match(s.no("finding", "move", "T1", "F-T1-1", "--to", "Export later"), /F-T1-1 is a fix of T1's current round, so it stays on T1/, "before the hold, the key stays");
+    assert.match(s.ok("round", "T1"), new RegExp(`^T1 ${state}`), `the next round gives ${state}`);
+    assert.match(s.ok("finding", "move", "T1", "F-T1-1", "--to", "Export later"), /^F-T1-1 moved to T2 as F-T2-1 /, `while ${state}, the owner's move passes`);
+  }
+});
+
+test("F-T301-59: a low fix key of the round is not dismissed while a medium fix of the task is open, so round still re-plans; after the medium closes, it is", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
+  toReviewing(s, "T1");
+  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "m");
+  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "l");
+  for (const k of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", k, "fix");
+  s.ok("round", "T1");
+  s.ok("task", "T1", "set", "state=reviewing");
+  assert.equal(s.no("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "unconfirmed low fix, carried by follow-up T2"),
+    "sage: F-T1-2 is a low fix of T1's current round, and F-T1-1 is open and triaged fix: F-T1-2 joins the next round with it, so it is not dismissed now.");
+  assert.match(s.ok("round", "T1"), /^T1 replan: round 1 did not fix F-T1-1,F-T1-2\./, "R1020 probe A: the round fixed nothing, so a replan");
+  const t = store();
+  t.ok("task", "add", "--title", "Fix the crash", "--size", "small");
+  toReviewing(t, "T1");
+  t.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "m");
+  t.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "l");
+  for (const k of ["F-T1-1", "F-T1-2"]) t.ok("finding", "triage", "T1", k, "fix");
+  t.ok("round", "T1");
+  t.ok("finding", "close", "T1", "F-T1-1");
+  t.ok("task", "T1", "set", "state=reviewing");
+  assert.equal(t.ok("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "unconfirmed low fix, carried by follow-up T2"), "F-T1-2 dismissed · dismiss", "with no medium or high fix open, the low key is dismissed");
+});
+
+test("F-T301-49: a task at verifying goes back to reviewing, so that the cycles run again on a head that moved", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
+  toReviewing(s, "T1");
+  s.ok("task", "T1", "set", "state=verifying");
+  assert.match(s.ok("task", "T1", "set", "state=reviewing"), /^T1 reviewing /);
 });
 
 test("a tiny task needs only its checks once", () => {
