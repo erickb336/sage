@@ -309,3 +309,41 @@ test("T314: a card and a task page show the display name, the priority and the k
   assert.ok(text.includes("\nArchived: Old \\<app\\> (2 tasks · 1 needs you)\n"), text);
   assert.ok(!text.includes("· Old \\<app\\>\n"), "an archived task is not on the chat board");
 });
+
+/** One source with a live project and an archived one, each a list of tasks; extra goes to the live project. */
+const twoBooks = (live, old, extra = {}) => buildBoardModel([{ id: "sample", label: "sample", diagnostics: [], projects: [
+  { key: "sample/live-abcdef", name: "live-abcdef", diagnostics: [], tables: { tasks: live }, ...extra },
+  { key: "sample/old-abcdef", name: "old-abcdef", diagnostics: [], tables: { tasks: old }, displayName: "Old app", archived: true },
+] }], { now: at });
+
+test("T314 R1040-2: the status leaves archived tasks out of Tasks and Owner, and one line counts the archived projects and what needs you there", () => {
+  const status = renderBoardStatus(twoBooks([row("T1", "framed"), row("T2", "held")], [row("T1", "held"), row("T2", "building"), row("T3", "held")]));
+  assert.deepEqual(status.split("\n").slice(0, 4), ["Tasks: framed 1 · held 1", "Agents: 0 recorded running · 0 inferred PRs", "Owner: 1 tasks need you", "Archived: 1 project · 2 tasks need you"]);
+  assert.equal(renderBoardStatus(twoBooks([row("T1", "framed")], [])).split("\n")[3], "Archived: 1 project · 0 tasks need you", "an archived project without tasks still counts");
+  assert.ok(!renderBoardStatus(sample([row("T1", "framed")])).includes("Archived"), "no archived project: no line");
+});
+
+test("T314 R1040-3: the empty-board text shows only with no task at all; tasks only in archived projects get one line that says so", () => {
+  const empty = "<b>No tasks recorded yet.</b>", archived = "<b>All tasks are in archived projects.</b> The Archived group below counts them.";
+  const onlyArchived = renderBoardHtml(twoBooks([], [row("T1", "framed")]));
+  assert.ok(!onlyArchived.includes(empty) && onlyArchived.includes(archived));
+  assert.ok(onlyArchived.indexOf(archived) < onlyArchived.indexOf('id="board-archived"'));
+  const none = renderBoardHtml(twoBooks([], []));
+  assert.ok(none.includes(empty) && !none.includes(archived));
+  const live = renderBoardHtml(twoBooks([row("T1", "framed")], [row("T1", "framed")]));
+  assert.ok(!live.includes(empty) && !live.includes(archived));
+});
+
+test("T314 R1042-3 R1042-2: each chat diagnostic names its project, and an ignored setting is a warning line, not an incomplete source", () => {
+  const model = twoBooks([row("T1", "framed")], [], { diagnostics: ["runs: EACCES"], warnings: ["config: archived is not true or false"] });
+  const text = renderBoardText(model);
+  assert.ok(text.endsWith("\nIncomplete source: sample · sample/live-abcdef · runs: EACCES\nSetting ignored: sample · sample/live-abcdef · config: archived is not true or false"), text);
+  const html = renderBoardHtml(model);
+  assert.ok(html.includes("<b>Settings ignored.</b> The board shows these projects without them.<ul class=\"diag\"><li>sample · sample/live-abcdef · config: archived is not true or false</li></ul>"));
+});
+
+test("T314 R1045-3: the task text shows the priority and the kind when they are set, and nothing for them when not", () => {
+  const model = twoBooks([row("T1", "framed", { priority: "P1", kind: "bug-fix", risk: "auth" }), row("T2", "framed")], []);
+  assert.equal(renderTaskText(model.tasks[0]).split("\n")[1], "sample · live · framed · small · P1 · bug fix · risk: auth");
+  assert.equal(renderTaskText(model.tasks[1]).split("\n")[1], "sample · live · framed · small");
+});

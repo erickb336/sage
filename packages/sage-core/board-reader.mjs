@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdir
 import { isAbsolute, join } from "node:path";
 import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
-import { nameProblem } from "./logbook-fields.mjs";
+import { logbookSettings } from "./logbook-fields.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
 const MAX_FILE = 4 * 1024 * 1024;
@@ -96,7 +96,7 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
       const entries = readdirSync(source.path, { withFileTypes: true }).filter(entry => /^[a-z0-9-]+-[0-9a-f]{6}$/.test(entry.name)).sort((a,b) => a.name.localeCompare(b.name));
       if (entries.length > 4096) throw new Error("board project count exceeds 4096");
       for (const entry of entries) {
-        const project = { key: `${source.id}/${entry.name}`, source: source.id, name: entry.name, tables: {}, diagnostics: [] };
+        const project = { key: `${source.id}/${entry.name}`, source: source.id, name: entry.name, tables: {}, diagnostics: [], warnings: [] };
         result.projects.push(project);
         if (!entry.isDirectory() || entry.isSymbolicLink()) { project.diagnostics.push("project is not a directory"); continue; }
         const directory = join(source.path, entry.name), before = lstatSync(directory);
@@ -116,17 +116,15 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
         const remotes = (() => { try { return isAbsolute(project.checkout ?? "") ? githubRemotes(regular(join(project.checkout, ".git", "config"), budget)) : {}; } catch { return {}; } })();
         project.repository = remotes.origin ?? null;
         project.upstream = remotes.upstream ?? null;
-        // The owner's settings of this logbook (sage config name= and archived=), checked again: a bad name is not shown.
+        // The owner's settings of this logbook (sage config name= and archived=), checked again. A bad value falls back
+        // (no name; not archived) with a warning, not a diagnostic: no table is in doubt, so the board stays live.
         project.archived = false;
         try {
-          const config = parseJson(regular(join(directory, "config.json"), budget));
-          if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("config is not an object");
-          const why = config.name === undefined ? null : nameProblem(config.name);
-          if (why) project.diagnostics.push(`config: the name ${why}`);
-          else if (config.name !== undefined) project.displayName = config.name;
-          if (config.archived !== undefined && typeof config.archived !== "boolean") project.diagnostics.push("config: archived is not true or false");
-          project.archived = config.archived === true;
-        } catch (error) { if (error.code !== "ENOENT") project.diagnostics.push(`config: ${error.code ?? error.message}`); }
+          const settings = logbookSettings(parseJson(regular(join(directory, "config.json"), budget)));
+          if (settings.name !== null) project.displayName = settings.name;
+          project.archived = settings.archived;
+          project.warnings.push(...settings.warnings);
+        } catch (error) { if (error.code !== "ENOENT") project.warnings.push(`config: ${error.code ?? error.message}`); }
         project.contents = {};
         for (const record of project.observations.records.filter(record => record.kind === "artifact" && record.data.path)) {
           try {

@@ -279,7 +279,7 @@ test("T314: a project's name is its display name, else its upstream repository, 
   assert.deepEqual(model.diagnostics, []);
 });
 
-test("T314: the board checks a display name again: a bad one is not shown, the next name is, with a diagnostic", t => {
+test("T314 R1042-2: the board checks a display name again: a bad one is not shown, the next name is, with a warning and no diagnostic", t => {
   const git = remotes([["upstream", "https://github.com/seattle-digital-commons/seacc"]]);
   const one = task("T1", "framed");
   const model = logbooks(t, [
@@ -291,7 +291,8 @@ test("T314: the board checks a display name again: a bad one is not shown, the n
     { tasks: [one], config: { name: "n".repeat(60), archived: "yes" }, git },
   ]);
   assert.deepEqual(named(model), ["seacc", "seacc", "seacc", "seacc", "seacc", "n".repeat(60)]);
-  assert.deepEqual(model.diagnostics.map(d => d.message), [
+  assert.deepEqual(model.diagnostics, [], "a bad setting leaves every table whole: no diagnostic, so the board server stays live");
+  assert.deepEqual(model.warnings.map(d => d.message), [
     "config: the name has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark)",
     "config: the name has 61 characters: give 1 to 60",
     "config: the name has a space at its start or end, or two spaces together",
@@ -322,4 +323,25 @@ test("T314: a card has the task's priority and kind from their fixed lists; a co
     task("T5", "framed", { priority: "P3" }),
   ] }]);
   assert.deepEqual(model.columns[0].tasks.map(card => [card.id, card.priority, card.kind]), [["T3", "P0", ""], ["T2", "P2", "bug-fix"], ["T5", "P3", ""], ["T1", "", "docs"], ["T4", "", ""]]);
+});
+
+test("T314 R1043-2: a task that needs you comes before a task of a higher priority", () => {
+  const gates = [{ id: "G1", task: "T1", question: "Sample: which option?", answer: "" }];
+  const model = buildBoardModel([source("one", [task("T1", "framed", { priority: "P3" }), task("T2", "framed", { priority: "P0" })], { gates })], { now });
+  assert.deepEqual(model.columns[0].tasks.map(card => [card.id, card.reasons.length > 0]), [["T1", true], ["T2", false]]);
+});
+
+test("T314 R1040-4: Done stays newest first whatever the priority; the other columns sort by priority", () => {
+  const decisions = [{ task: "T1", at: "2026-10-05T10:00:00Z", decision: "state merged", why: "task set" }, { task: "T2", at: "2026-10-07T10:00:00Z", decision: "state merged", why: "task set" }];
+  const model = buildBoardModel([source("one", [task("T1", "merged", { priority: "P0" }), task("T2", "merged", { priority: "P3" }), task("T3", "framed", { priority: "P3" }), task("T4", "framed", { priority: "P0" })], { decisions })], { now });
+  assert.deepEqual(model.columns.find(column => column.key === "done").tasks.map(card => card.id), ["T2", "T1"]);
+  assert.deepEqual(model.columns.find(column => column.key === "backlog").tasks.map(card => card.id), ["T4", "T3"]);
+});
+
+test("T314 R1043-4: the board refuses a display name that is not in the composed form (NFC), and shows the next name", t => {
+  const git = remotes([["upstream", "https://github.com/seattle-digital-commons/seacc"]]);
+  const decomposed = `Cafe${String.fromCodePoint(0x301)}`;
+  const model = logbooks(t, [{ tasks: [task("T1", "framed")], config: { name: decomposed }, git }, { tasks: [task("T1", "framed")], config: { name: decomposed.normalize("NFC") }, git }]);
+  assert.deepEqual(named(model), ["seacc", "Café"]);
+  assert.deepEqual(model.warnings.map(d => d.message), ["config: the name is not in the composed Unicode form (NFC)"]);
 });

@@ -272,6 +272,17 @@ test("board event streams keep the last valid content while an incomplete write 
   const repaired = await stream.next(p => !p.stale && p.html.includes("Sample repaired title")); assert.deepEqual(repaired.diagnostics, []);
 });
 
+test("T314 R1042-2: a bad name or archived value in a logbook's config.json is a warning: the board stays live and shows the warning", async t => {
+  const f = await fixture(t), stream = events(f); t.after(() => stream.close());
+  const initial = await stream.next(); assert.equal(initial.stale, false);
+  writeFileSync(join(f.project, "config.json"), JSON.stringify({ name: "bad\ttab", archived: "yes" }));
+  writeFileSync(join(f.project, "tasks.tsv"), tasks(row("Sample title after the bad config")));
+  const live = await stream.next(p => p.html.includes("Sample title after the bad config"));
+  assert.equal(live.stale, false); assert.deepEqual(live.diagnostics, []);
+  assert.match(live.html, /<b>Settings ignored\.<\/b>.*<li>sample · sample\/project-abcdef · config: the name has a control, format or hidden character [^<]*<\/li><li>sample · sample\/project-abcdef · config: archived is not true or false<\/li>/);
+  assert.doesNotMatch(live.html, /Incomplete sources/);
+});
+
 test("F-T216-19: a root that appears while the board starts does not stop the start, and close ends", async t => {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
   t.after(() => rmSync(dir, { recursive: true, force: true }));

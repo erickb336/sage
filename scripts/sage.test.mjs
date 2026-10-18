@@ -2387,6 +2387,34 @@ test("T314: config refuses a name that is too long, empty of text, spaced at an 
   assert.equal(s.no("config", "name=x"), `sage: ${own} is not a JSON object, so config writes nothing. Ask the user to fix or remove it.`);
 });
 
+test("T314 R1044-2 R1041-1: config refuses a name with a line or paragraph separator, a blank letter, no visible character or a flood of combining marks", () => {
+  const s = store();
+  const c = String.fromCodePoint;
+  const hidden = "has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark). Nothing changed.";
+  // Each one shows as nothing, or breaks the line, in a terminal or on the board.
+  for (const [cp, why] of [[0x2028, "line separator"], [0x2029, "paragraph separator"], [0x34f, "combining grapheme joiner"], [0x115f, "Hangul choseong filler"], [0x1160, "Hangul jungseong filler"], [0x3164, "Hangul filler"], [0xffa0, "halfwidth Hangul filler"], [0x2800, "braille blank"]])
+    assert.equal(s.no("config", `name=sea${c(cp)}cc`), `sage: the name "sea${c(cp)}cc" ${hidden}`, why);
+  assert.equal(s.no("config", `name=${c(0x3164)}`), `sage: the name "${c(0x3164)}" ${hidden}`, "a name of a filler alone");
+  assert.equal(s.no("config", `name=${c(0x301, 0x301)}`), `sage: the name "${c(0x301, 0x301)}" has no visible character. Nothing changed.`);
+  const flood = `x${c(0x300, 0x301, 0x302, 0x303)}`;
+  assert.equal(s.no("config", `name=${flood}`), `sage: the name "${flood}" has more than 3 combining marks in a row. Nothing changed.`);
+  assert.equal(existsSync(join(s.dir, "config.json")), false, "no refusal wrote the file");
+  const three = `x${c(0x300, 0x301, 0x302)}`;
+  assert.equal(s.ok("config", `name=${three}`), `name=${three} archived=no`, "3 marks in a row are good");
+});
+
+test("T314 R1042-1: config keeps a joined family emoji and a Persian name with a non-joiner, where the hidden-character rule keeps the joiner", () => {
+  const s = store();
+  const c = String.fromCodePoint;
+  const family = c(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467), persian = `${c(0x645, 0x6cc)}${c(0x200c)}${c(0x62e, 0x648, 0x627, 0x647, 0x645)}`;
+  assert.equal(s.ok("config", `name=${family} Team`), `name=${family} Team archived=no`);
+  assert.equal(s.ok("config", `name=${persian}`), `name=${persian} archived=no`);
+  assert.deepEqual(JSON.parse(readFileSync(join(s.dir, "config.json"), "utf8")), { name: persian });
+  // A joiner where the rule removes it (at the end, or between two digits) is still a hidden character.
+  assert.match(s.no("config", `name=ab${c(0x200d)}`), /^sage: the name "ab\\u\{200d\}" has a control, format or hidden character/);
+  assert.match(s.no("config", `name=1${c(0x200c)}2`), /^sage: the name "1\\u\{200c\}2" has a control, format or hidden character/);
+});
+
 // Keep this test last: it reads every line that the tests above made the tool print.
 test("QA-2: every line the tool prints says logbook, never store, and merge check, never merge gate, and holds no control character", () => {
   const s = store();

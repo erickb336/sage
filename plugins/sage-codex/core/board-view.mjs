@@ -1,6 +1,6 @@
 import { basename, resolve } from "node:path";
 import { readBoardSources } from "./board-reader.mjs";
-import { buildBoardModel } from "./board-model.mjs";
+import { buildBoardModel, projectName } from "./board-model.mjs";
 import { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
 
 const fold = value => String(value).normalize("NFC").toLowerCase();
@@ -15,7 +15,9 @@ export function boardView({ sources, scope = "all", project = null, taskId = nul
       if (!project) throw new RangeError("this board needs the current project");
       selected = projects.filter(book => book.checkout && resolve(book.checkout) === resolve(project));
       if (!selected.length) selected = projects.filter(book => fold(book.name.replace(/-[0-9a-f]{6}$/, "")) === fold(basename(project)));
-    } else selected = projects.filter(book => [book.key, book.name, book.name.replace(/-[0-9a-f]{6}$/, ""), ...(book.checkout ? [basename(book.checkout)] : [])].some(name => fold(name) === fold(scope)));
+    // A scope is any name that the board shows or that the logbook has: its key, its folder with or without the hash, its
+    // checkout's folder, or its shown name (the display name, else the upstream or origin repository's name).
+    } else selected = projects.filter(book => [book.key, book.name, book.name.replace(/-[0-9a-f]{6}$/, ""), ...(book.checkout ? [basename(book.checkout)] : []), projectName(book)].some(name => fold(name) === fold(scope)));
     if (!selected.length || scope !== "this" && selected.length !== 1) throw new RangeError(selected.length ? `The project is ambiguous. Choose: ${selected.map(book => book.key).join(", ")}` : "No recorded project matches this board scope.");
   }
   const keys = new Set(selected.map(book => book.key));
