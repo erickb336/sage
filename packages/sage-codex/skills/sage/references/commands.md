@@ -35,6 +35,20 @@ The no-argument command lists commands. These are syntax examples, not a script 
 
 Sizes are `tiny`, `small`, `large`, `investigate`. Risk flags `auth,data,schema,money,secrets,input` add security review to build routes. Use `--risk auth,input` when applicable. Added blocks need `--add <block-list> --why "reason"`. Read the framed route; do not omit its least required blocks.
 
+## Priority, kind, project name and archive
+
+```sh
+node "$SAGE_CLI" task add --title "Describe the task" --size small --priority P1 --kind bug-fix --project "$PROJECT"
+node "$SAGE_CLI" task T7 set priority=P0 --project "$PROJECT"
+node "$SAGE_CLI" task T7 set kind=none --project "$PROJECT"
+node "$SAGE_CLI" config name="Council Record" --project "$PROJECT"
+node "$SAGE_CLI" config archived=yes --project "$PROJECT"
+```
+
+A task's priority and kind are optional, and the board shows them as tags on its card. A priority is `P0`, `P1`, `P2` or `P3`; no priority sorts last. A kind is one of: design, ui, orchestration, optimization, bug-fix, logbook, docs, security, providers, checks. Choose the task's main one. Another value refuses, with the list, and `none` clears either one.
+
+`config name=` and `config archived=` set keys of the project's own logbook, never the config for all projects. Set them in a config command of their own, and only when the owner asks. The name is the project's name on the board: 1 to 60 characters, with no space at an end or two together, and no control, format or hidden character. `name=` alone removes it. Without a name, the board shows the repository name of the checkout's `upstream` remote, then of `origin`, then the folder. `archived=yes` folds the project into the board's Archived group, which shows only a count of its tasks and of what needs the owner there; `archived=no` brings it back.
+
 ## Findings and evidence
 
 Only the chief runs writes. Start a separate run for each actual specialist assignment with its exact role (`implementer`, `code-reviewer`, `security-reviewer`, `ux-reviewer`, `qa`). Roles and tasks must satisfy the CLI's existing rules. Do not rename unsupported design or investigation work to evade a refusal.
