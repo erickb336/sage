@@ -362,10 +362,13 @@ export function handle(input, state, slots) {
   // The main session's TaskStop ends the named agent and frees its slot, a lead's or a child's too (T255 M3, F-T255-12,
   // F-T273-14). A lead's name lead-T<n> stops this session's one lead of that name (F-T273-13, F-T273-16). An agent's
   // TaskStop frees no slot: a lead could free a main-session agent's slot while that agent still runs (T255 M3). A lead
-  // stops no agent: it could cut its own reviewer off before a report, then add a new run of the role (F-T301-14).
+  // stops no agent: it could cut its own reviewer off before a report, then add a new run of the role (F-T301-14). No other
+  // agent stops an agent either: a helper could cut a sibling or its lead off (F-T301-27). An agent still stops its own
+  // shell tasks (standing order 30): a target is an agent when it has an agent's name or a slot of this session holds it.
   if (event === "PreToolUse" && input.tool_name === "TaskStop") {
-    if (!main && input.agent_type === "sage:lead") return deny(event, "a lead stops no agent: only the main session does. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
     const id = input.tool_input?.task_id;
+    if (!main && input.agent_type === "sage:lead") return deny(event, "a lead stops no agent: only the main session does. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
+    if (!main && (/^(R[1-9]\d*|lead-T[1-9]\d*|main)$/.test(id ?? "") || slots.holds(id))) return deny(event, `an agent stops no agent: only the main session does, and ${id} is an agent. Stop only your own shell tasks; report to your lead or the sage what needs a stop.`);
     return void (main && (/^lead-T[1-9]\d*$/.test(id ?? "") ? slots.stopLead(id.slice("lead-".length)) : slots.release(id)));
   }
   // An agent's SendMessage can wake a stopped agent outside every cap, and its event cannot tell a stopped target from a
@@ -2372,6 +2375,8 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
       const slot = valid(agent) && ofSession().find((slot) => ownsAgent(slot, agent) && mark(slot, "helper-"));
       return slot ? { key: mark(slot, "helper-"), ...parsed(helperNote(`started-${mark(slot, "helper-")}`)) } : undefined;
     },
+    /** Does a slot of this session hold this agent: a running agent, not a shell task (F-T301-27)? */
+    holds: (agent) => valid(agent) && ofSession().some((slot) => ownsAgent(slot, agent)),
     stopLead: transaction((task) => {
       for (const slot of ofSession().filter(slot => mark(slot, "role-") === "sage_lead" && mark(slot, "task-") === task)) {
         const bound = mark(slot, "bound-");

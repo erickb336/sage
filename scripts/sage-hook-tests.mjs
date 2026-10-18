@@ -5908,6 +5908,23 @@ test("F-T301-14: a lead never stops its own helper before its report; the main s
   assert.equal(denied(stateRun(s, `run done ${run} --status failed`)), undefined, "and then the lead ends its run as failed");
 });
 
+test("F-T301-27: a helper never stops a sibling, its lead or the sage, by name or by agent id; it still stops its own shell task", () => {
+  const s = leadSession();
+  const runs = ["code-reviewer", "qa"].map((role, i) => {
+    const run = leadAdd(s, role); // R5, R6
+    assert.equal(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name: run }, { tool_use_id: `sib-${i}`, ...LEAD })), undefined);
+    s.send(resultOf(`sib-${i}`, `kid-${i}`, LEAD));
+    return run;
+  });
+  const REVIEWER = { agent_id: "kid-0", agent_type: "sage:code-reviewer" };
+  for (const task_id of ["kid-1", runs[1], "lead-a", "lead-T1", "main"]) {
+    assert.equal(denied(s.send(tool("TaskStop", { task_id }, REVIEWER))), `sage: an agent stops no agent: only the main session does, and ${task_id} is an agent. Stop only your own shell tasks; report to your lead or the sage what needs a stop.`, task_id);
+  }
+  assert.match(denied(stateRun(s, `run done ${runs[1]} --status failed`)) ?? "", /has not stopped/, "the sibling still runs, so its run cannot end yet");
+  assert.equal(denied(stateRun(s, "run add T1 --role ux-reviewer")), undefined, "lead-a still holds its lead slot, so it still writes");
+  assert.equal(denied(s.send(tool("TaskStop", { task_id: "b7k2x9" }, REVIEWER))), undefined, "a helper stops its own shell task (standing order 30)");
+});
+
 test("F-T289-21: FINDINGS none is clean only alone; with any words after it, the report is unreadable", () => {
   const s = leadSession();
   assert.match(cleanVerdictOf(s, report("CLEAN", "none - F1 high token in the log")) ?? "", /cannot read \(a line under FINDINGS is not none alone and not a finding/);
