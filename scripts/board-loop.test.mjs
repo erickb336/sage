@@ -79,7 +79,15 @@ export function check(c, task = sample(c)) {
   if (FINAL.includes(c.state)) assert.equal(next, null, `${name}: Next on a final state`);
   else {
     assert.ok(next, `${name}: no Next`);
-    if (openGate) assert.match(next, /after your answer\.$/, `${name}: ${next}`);
+    if (openGate) {
+      assert.match(next, /after your answer\.$/, `${name}: ${next}`);
+      // It names the step that waits for the answer: the one that needs you (R1073-1, R1073-3).
+      const label = steps.find(step => step.status === "need").label;
+      const said = { Plan: c.state === "designing" ? "The design" : "The plan", Build: "The build", Investigate: "The investigation", Merge: "The merge", Conclude: "The conclusion", "Evidence review": "The evidence review" }[label]
+        ?? label.replace(/^Review (\d)/, "Review cycle $1").replace(/^Repair, round/, "Repair round");
+      const expected = { replan: "The chief briefs it again", "awaiting-you": `${build ? "The build" : "The investigation"} is briefed` }[c.state] ?? said;
+      assert.ok(next.startsWith(expected), `${name}: ${next} does not name ${label}`);
+    }
   }
   // The Now line matches the state.
   if (!now.needs && !(c.state === "awaiting-you" && c.gate !== "answered")) assert.match(now.text, stale && ![c.gate === "answered" && "awaiting-you", "held", "replan", "verifying", "verified", "pr-ready", ...FINAL].includes(c.state) && !/failed|reviews are done/.test(now.text) ? /may have stopped/ : NOW[c.state], `${name}: Now ${JSON.stringify(now.text)}`);
