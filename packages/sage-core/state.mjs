@@ -1223,23 +1223,44 @@ const notHeld = (task, what) => task.state === "held" && refuse(`${task.id} is h
 
 /**
  * Waits (T336): a task may wait for other tasks of its own logbook. A wait is met when that task is merged or concluded; an
- * abandoned task never meets it (the owner, 2026-10-19). A task with an unmet wait takes no build work (WAIT_ROLES, a move
- * to building) and does not merge; its design and PE may run.
+ * abandoned or lost task never meets it, also in the same merge (the owner, 2026-10-19). A task with an unmet wait takes
+ * no build work (WAIT_ROLES, a move to building) and does not merge; its design and PE may run.
  */
 const MET = ["merged", "concluded"];
 const WAIT_ROLES = ["lead", "implementer", "investigate", "arena-judge"];
 const WAITS_MAX = 20;
-const waitsOf = (task) => list(task?.waits);
+const TASK_ID = /^T[1-9]\d*$/;
+/** The words of a waits value, as a write and a read split them: by commas or spaces. */
+const waitWords = (value) => String(value ?? "").split(/[\s,]+/).filter(Boolean);
+/**
+ * A task's waits cell, read with the parser of the writes: its task ids, and odd when a hand edit put other text there. No
+ * line prints the cell itself, so its text never reaches the chief; odd counts as one unmet wait, so the task still waits.
+ */
+const waitsOf = (task) => {
+  const words = waitWords(task?.waits);
+  return { ids: [...new Set(words.filter((w) => TASK_ID.test(w)))], odd: words.some((w) => !TASK_ID.test(w)) };
+};
 /** The tasks by id, built once by a caller that looks up many waits, so a merge check stays linear. */
 const byIds = (tasks) => new Map(tasks.map((t) => [t.id, t]));
-/** The waits of a task that are not met, each with the state of its task (undefined for a task that the logbook lost). passes(id) meets a wait too. */
-const unmetWaits = (task, byId, passes = () => false) =>
-  waitsOf(task).map((id) => ({ id, state: byId.get(id)?.state })).filter(({ id, state }) => !MET.includes(state) && !passes(id));
-const waitList = (open) => open.map(({ id, state }) => `${id} (${state ?? "not in the logbook"})`).join(", ");
-/** The fix for a wait that is never met: its task was abandoned or is lost. */
+/** A task's waits, each with the state of its task (undefined for a task that the logbook lost), and odd text as one more. */
+const waitsWithState = (task, byId) => {
+  const { ids, odd } = waitsOf(task);
+  return [...ids.map((id) => ({ id, state: byId.get(id)?.state })), ...(odd ? [{ odd }] : [])];
+};
+/** The waits of a task that are not met. passes(id) meets a wait too: a task that passes in the same merge. */
+const unmetWaits = (task, byId, passes = () => false) => waitsWithState(task, byId).filter(({ id, state, odd }) => odd || (!MET.includes(state) && !passes(id)));
+const ODD = "the waits cell has text that is not a task id";
+const waitList = (open) => open.map(({ id, state, odd }) => (odd ? ODD : `${id} (${state ?? "not in the logbook"})`)).join(", ");
+/** A task that never meets a wait: abandoned, or lost from the logbook. */
+const dead = (state) => state === "abandoned" || state === undefined;
+/** The fix for a wait that is never met: its task was abandoned or is lost, or the cell has text that is not a task id. */
 const waitFix = (task, open) => {
-  const dead = open.filter(({ state }) => state === "abandoned" || state === undefined).map(({ id }) => id);
-  return dead.length ? ` ${dead.join(", ")} ${dead.length === 1 ? "is" : "are"} abandoned or not in the logbook, so ${dead.length === 1 ? "that wait is" : "those waits are"} never met: remove or change the wait (sage task ${task.id} set waits=<ids>, or waits= to clear it), or ask the owner.` : "";
+  const gone = open.filter(({ state, odd }) => !odd && dead(state)).map(({ id }) => id);
+  const how = `sage task ${task.id} set waits=<ids>, or waits= to clear it`;
+  return [
+    gone.length ? ` ${gone.join(", ")} ${gone.length === 1 ? "is" : "are"} abandoned or not in the logbook, so ${gone.length === 1 ? "that wait is" : "those waits are"} never met: remove or change the wait (${how}), or ask the owner.` : "",
+    open.some(({ odd }) => odd) ? ` A hand edit put that text there: set the waits again (${how}).` : "",
+  ].join("");
 };
 /** Refuses work of what on a task with an unmet wait, and names each unmet task with its state. */
 const waitsMet = (task, tasks, what) => {
@@ -1248,9 +1269,9 @@ const waitsMet = (task, tasks, what) => {
 };
 /** A task's waits for a printed line: each with its task's state, then the unmet ones. */
 const waitsText = (task, tasks) => {
-  if (!waitsOf(task).length) return "";
-  const byId = byIds(tasks), open = unmetWaits(task, byId);
-  return ` · waits ${waitList(waitsOf(task).map((id) => ({ id, state: byId.get(id)?.state })))} · ${open.length ? `unmet ${open.map(({ id }) => id).join(", ")}` : "all met"}`;
+  const byId = byIds(tasks), all = waitsWithState(task, byId), open = unmetWaits(task, byId);
+  if (!all.length) return "";
+  return ` · waits ${waitList(all)} · ${open.length ? `unmet ${open.map(({ id, odd }) => (odd ? "the odd text" : id)).join(", ")}` : "all met"}`;
 };
 /**
  * A waits value as its cell holds it: task ids joined by commas, "" for none (an empty value or none clears it). The ids may
@@ -1258,9 +1279,9 @@ const waitsText = (task, tasks) => {
  * WAITS_MAX, a task that this logbook does not have, and a loop, which it names (T8, T9, T8).
  */
 function waitsValue(task, value, tasks) {
-  const ids = value === "none" ? [] : String(value ?? "").split(/[\s,]+/).filter(Boolean);
+  const ids = value === "none" ? [] : waitWords(value);
   const nothing = " Nothing changed.";
-  const odd = ids.find((id) => !/^T[1-9]\d*$/.test(id));
+  const odd = ids.find((id) => !TASK_ID.test(id));
   if (odd !== undefined) refuse(`waits takes task ids such as T7, separated by commas or spaces, or none to clear it; not "${visible(odd)}".${nothing}`);
   const twice = ids.find((id, i) => ids.indexOf(id) !== i);
   if (twice) refuse(`waits names ${twice} twice: give each task once.${nothing}`);
@@ -1270,7 +1291,7 @@ function waitsValue(task, value, tasks) {
   const lost = ids.find((id) => !known.has(id));
   if (lost) refuse(`no task ${lost} in this logbook: a task waits only for a task of its own logbook.${nothing}`);
   // A loop: a path of waits from one of the new ids back to the task. One depth-first search over the logbook's tasks.
-  const next = (id) => (id === task.id ? ids : waitsOf(known.get(id)));
+  const next = (id) => (id === task.id ? ids : waitsOf(known.get(id)).ids);
   const seen = new Set();
   const back = (id, path) => {
     if (id === task.id) return path;
@@ -1289,7 +1310,11 @@ function waitsValue(task, value, tasks) {
   return ids.join(",");
 }
 /** The decision row of a changed waits list, so that a replaced list leaves its record. */
-const waitsDecision = (task, was, at, why) => (was === (task.waits ?? "") ? [] : [{ at, task: task.id, decision: `waits ${was || "none"} → ${task.waits || "none"}`, why }]);
+const waitsDecision = (task, was, at, why) => {
+  if (was === (task.waits ?? "")) return [];
+  const { ids, odd } = waitsOf({ waits: was }); // the old cell through the parser: a hand edit's text never reaches the row
+  return [{ at, task: task.id, decision: `waits ${[...ids, ...(odd ? ["(text that is not a task id)"] : [])].join(",") || "none"} → ${task.waits || "none"}`, why }];
+};
 
 /** The extra rounds of a task's holds by round: a whole number, and 0 for any other cell, so a hand-written cell never gives NaN (F-T286-2). */
 const extraOf = (task) => (/^\d{1,3}$/.test(task.extra ?? "") ? Number(task.extra) : 0);
@@ -1586,15 +1611,29 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
         return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...verdict, ...busy, ...held };
       });
-      // A task with an unmet wait does not merge. A wait on a task of this same merge (its SHA or its PR) is met when that
-      // task passes here too, its own waits included: else two tasks of one PR could never merge. path stops a loop of a
-      // hand-edited logbook.
+      // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
+      // too, its own waits included: else two tasks of one PR could never merge. The same PR is the PR of --pr for both
+      // tasks, or without --pr the same recorded PR number; a task of another PR with verdicts on this SHA meets no wait,
+      // and an abandoned or lost task meets none. clear() keeps each task's answer, so the check is linear in the tasks
+      // and their waits; a task counts as failing while its answer is open, so a loop of a hand-edited logbook never passes.
       const here = new Map(checked.map((r) => [r.id, r]));
-      const passes = (id, path) => !path.includes(id) && here.get(id)?.ok === true && !unmetWaits(byId.get(id), byId, (u) => passes(u, [...path, id])).length;
+      const samePr = (a, b) => (pr ? !!(here.get(a.id)?.ofPr && here.get(b.id)?.ofPr) : !!a.pr && prNumber(a.pr) === prNumber(b.pr));
+      const answers = new Map();
+      const clear = (task) => {
+        if (answers.has(task.id)) return answers.get(task.id);
+        answers.set(task.id, false);
+        const ok = here.get(task.id)?.ok === true && !unmetWaits(task, byId, (u) => passes(task, u)).length;
+        answers.set(task.id, ok);
+        return ok;
+      };
+      const passes = (waiter, id) => {
+        const up = byId.get(id);
+        return !!up && !dead(up.state) && samePr(waiter, up) && clear(up);
+      };
       return checked.map((r) => {
-        const task = byId.get(r.id), open = task ? unmetWaits(task, byId, (u) => passes(u, [r.id])) : [];
+        const task = byId.get(r.id), open = task ? unmetWaits(task, byId, (u) => passes(task, u)) : [];
         if (!open.length || task.state === "held") return r;
-        return { ...r, ok: false, reason: `${r.id} waits for ${waitList(open)}: it merges after ${open.length === 1 ? "that task is" : "each of them is"} merged or concluded, or passes in this same merge.${waitFix(task, open)}` };
+        return { ...r, ok: false, reason: `${r.id} waits for ${waitList(open)}: it merges after ${open.length === 1 ? "that task is" : "each of them is"} merged or concluded, or passes in this same merge on the same PR.${waitFix(task, open)}` };
       });
     });
     const one = strangers.length === 1;

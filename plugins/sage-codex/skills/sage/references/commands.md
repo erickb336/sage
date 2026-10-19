@@ -57,7 +57,7 @@ node "$SAGE_CLI" task T8 set waits=T7 --project "$PROJECT"
 node "$SAGE_CLI" task T8 set waits= --project "$PROJECT"
 ```
 
-A task may wait for other tasks of the same logbook. A wait is met when that task is merged or concluded; an abandoned task never meets it, so remove or change the wait, or ask the owner. While a wait is unmet, the task takes no lead, implementer, investigate or arena-judge run (also through native run creation) and no `state=building`, and the merge check refuses it; its designer and pe runs, and review and QA runs, go on. A wait on a task of the same pull request is met at the merge check when that task passes too. The tool refuses a word that is not a task id, a duplicate, the task itself, more than 20 tasks, a task that the logbook does not have, and a loop. Each change writes a decision row.
+A task may wait for other tasks of the same logbook. A wait is met when that task is merged or concluded; an abandoned task never meets it, so remove or change the wait, or ask the owner. While a wait is unmet, the task takes no lead, implementer, investigate or arena-judge run (also through native run creation) and no `state=building`, and the merge check refuses it; its designer and pe runs, and review and QA runs, go on. A wait on a task of the same pull request (`--pr`, or else the same recorded PR) is met at the merge check when that task passes too; a task of another pull request, or an abandoned one, never meets it. The tool refuses a word that is not a task id, a duplicate, the task itself, more than 20 tasks, a task that the logbook does not have, and a loop. Each change writes a decision row.
 
 ## Findings and evidence
 
