@@ -59,6 +59,18 @@ node "$SAGE_CLI" task T8 set waits= --project "$PROJECT"
 
 A task may wait for other tasks of the same logbook. A wait is met when that task is merged or concluded; an abandoned task never meets it, so remove or change the wait, or ask the owner. While a wait is unmet, the task takes no lead, implementer, investigate or arena-judge run (also through native run creation) and no `state=building` or `state=merged`, and the merge check refuses it; its designer and pe runs, and review and QA runs, go on. A wait on a task of the same pull request (`--pr`, or else the same recorded PR) is met at the merge check when that task passes too; a task of another pull request, or an abandoned one, never meets it. When the waiting task is not on that pull request, the refusal names the `pr=` to set. The tool refuses a word that is not a task id, a duplicate, the task itself, more than 20 tasks, a task that the logbook does not have, and a loop. Each change writes a decision row.
 
+## Programs
+
+```sh
+node "$SAGE_CLI" program propose --name "Codex support" --goal "Codex runs sage too." --pilot T7 --project "$PROJECT"
+node "$SAGE_CLI" task add --title "Describe the task" --size small --program PG1 --waits T7 --project "$PROJECT"
+node "$SAGE_CLI" task T8 set program=PG1 --project "$PROJECT"
+node "$SAGE_CLI" task T8 set program=none --project "$PROJECT"
+node "$SAGE_CLI" program propose PG1 --pilot T9 --project "$PROJECT"
+```
+
+A program groups the tasks of one request with one goal and one pilot task. `program propose` writes the program and opens the breakdown gate on the pilot task (approve, change, drop): show the owner the breakdown with it. The state comes from the gate's answer: proposed, active (done when its tasks ended), changing, or dropped (drop, or the owner's own words). Until the owner approves, no task of the program takes a lead, implementer, investigate or arena-judge run (also through native run creation) or a move to building, merged or concluded (also through the native task update), and the merge check refuses it; after the approval, each task but the pilot waits for the pilot in the same way. Designer and pe runs, and review and QA runs, go on. After change, `program propose <PG>` proposes again with a new gate. The pilot stays in its program until a new pilot is proposed. A task that joins after the approval needs no new gate: tell the owner. The tool refuses a bad or used name, an empty goal or one over 300 characters, an ended pilot or one in another program, an unknown or dropped program, an ended task that joins, and a loop through a pilot. `status` shows each open program with its progress.
+
 ## Findings and evidence
 
 Only the chief runs writes. Start a separate run for each actual specialist assignment with its exact role (`implementer`, `code-reviewer`, `security-reviewer`, `ux-reviewer`, `qa`). Roles and tasks must satisfy the CLI's existing rules. Do not rename unsupported design or investigation work to evade a refusal.
