@@ -11,7 +11,7 @@ const COLUMNS = [
   ["done", "Done", ["merged", "concluded"]],
 ];
 const CLEAN = { checks: "checks-pass", "code-review": "review-clean", "security-review": "security-clean", "ux-review": "ux-clean", qa: "qa-pass", "evidence-review": "evidence-clean" };
-const FAILED = { checks: ["checks-fail"], qa: ["qa-fail"], "code-review": ["findings"], "security-review": ["findings"], "ux-review": ["findings"] };
+const FAILED = { checks: ["checks-fail"], qa: ["qa-fail"], "code-review": ["findings"], "security-review": ["findings"], "ux-review": ["findings"], "evidence-review": ["findings"] };
 const RUN_ROLE = { "code-review": "code-reviewer", "security-review": "security-reviewer", "ux-review": "ux-reviewer" };
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 const rows = (project, name, task) => (project.tables[name] ?? []).filter(row => row.task === task.id);
@@ -38,33 +38,199 @@ function briefFields(text) {
   }
   return { goal: fields.GOAL?.trim() || null, acceptance: fields.ACCEPTANCE?.trim() || null };
 }
-function loopFor(task, route, cycles, head, reasons, runs) {
-  const active = ["designing", "awaiting-you"].includes(task.state) && route.includes("pe") && runs.some(run => run.role === "pe" && run.status === "running") ? "PE check" : { framed: "framed", designing: "design", "awaiting-you": "design", briefed: "briefed", building: "build", reviewing: "review", verifying: "review", repairing: "repair", verified: "verified", "pr-ready": "verified", merged: "merge", concluded: "verified" }[task.state] ?? null;
-  const stages = ["framed", "design", "PE check", "briefed", "build", "review", "repair", "verified", "merge"];
-  const index = stages.indexOf(active);
-  const steps = stages.map((label, i) => {
-    const skipped = label === "design" && !route.includes("design") || label === "PE check" && !route.includes("pe") || label === "build" && !route.includes("build") || label === "merge" && !route.includes("build") || label === "repair" && Number(task.round) === 0;
-    return { label, status: skipped ? "skipped" : label === active ? reasons.length ? "needs-owner" : "current" : index >= 0 && i < index ? "done" : "pending" };
-  });
-  const cycle = cycles.find(c => c.steps.some(s => s.status !== "done")) ?? cycles.at(-1);
-  const running = cycle?.steps.filter(s => s.status === "running").map(s => s.role) ?? [];
-  const explanation = reasons.length ? reasons.map(reason => reason.text).join(" ") : active === "PE check" ? "The PE check is recorded running." : running.length ? `Cycle ${cycle.number} of ${cycles.length} on head ${head?.slice(0, 7) ?? "unknown"}: ${running.join(", ")} runs now.` : `Recorded state: ${task.state}. ${head ? `Review evidence uses head ${head.slice(0, 7)}.` : "The current PR head is unknown."}`;
-  return { steps, explanation };
+// T305 loop design 1: the step line. Each step and each part has one of these statuses; the renderer gives each a mark and a word.
+const ROLE_WORD = { checks: "checks", "code-review": "code review", "security-review": "security review", "ux-review": "UX review", qa: "QA", "evidence-review": "evidence review" };
+const AGENT_WORD = { implementer: "implementer", lead: "lead", designer: "designer", pe: "PE", investigate: "investigator", "code-reviewer": "code reviewer", "security-reviewer": "security reviewer", "ux-reviewer": "UX reviewer", qa: "QA agent", "evidence-review": "evidence reviewer" };
+const PART = { done: "done", failed: "fail", pending: "wait", unknown: "unknown" };
+const PLANNING = ["framed", "designing", "awaiting-you"];
+const BEFORE_REVIEW = [...PLANNING, "briefed", "building", "held", "replan"];
+const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
+const dayMonth = ms => { const at = new Date(ms); return `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]}`; };
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const cap = text => text.charAt(0).toUpperCase() + text.slice(1);
+const and = list => list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list.at(-1)}` : list[0] ?? "";
+const STALE_MS = 86400000;
+/**
+ * A running run's age: minutes, or hours and minutes, up to 24 h; then the day it started. After 24 h with no change in
+ * the task's logbook rows, the run may have stopped, and the text says so (T305, bug bash R1023).
+ */
+export function runClock(started, now, lastActivity) {
+  const start = time(started);
+  if (start === null) return { text: "start time unknown", stale: false };
+  const minutes = Math.max(0, Math.floor((now - start) / 60000));
+  if (minutes < 60) return { text: `${minutes} min`, stale: false };
+  if (minutes < 24 * 60) return { text: `${Math.floor(minutes / 60)} h ${minutes % 60} min`, stale: false };
+  const last = Math.max(start, time(lastActivity) ?? start);
+  return now - last >= STALE_MS ? { text: `no news since ${dayMonth(last)}. The run may have stopped, so ask the sage to check it`, stale: true, since: dayMonth(last) } : { text: `since ${dayMonth(start)}`, stale: false };
 }
 
-function card(source, project, task, now) {
+/**
+ * Who acts in each state, and on which step (R1077: one table, not a rule per state by hand). The step is the current
+ * step of the line; "started" says whether it began. Who acts: an agent (the step runs, may have stopped, or waits for
+ * an agent, by the task's running runs), the chief (no agent), the owner (the step needs you) or nobody (the task is done).
+ * An open gate makes the current step need you in every state but a final one. A reviewing task whose cycles are all
+ * clean moves to the merge step, where the chief acts. A failed review marks its cycle failed, and the step stays the review.
+ */
+const PHASE = {
+  framed: ["plan", "agent", false], designing: ["plan", "agent", true], "awaiting-you": ["plan", "owner", true],
+  briefed: ["build", "agent", false], building: ["build", "agent", true], held: ["build", "chief", true], replan: ["build", "chief", true],
+  reviewing: ["review", "agent", true], repairing: ["repair", "agent", true], verifying: ["merge", "chief", false],
+  verified: ["merge", "owner", false], "pr-ready": ["merge", "owner", false], merged: [null, "done"], concluded: [null, "done"], abandoned: [null, "done"],
+};
+
+/**
+ * Where a task is in its route, as design 1 of the T305 notes: only the route's steps (Plan, then Build, the review cycles
+ * and Merge; or Investigate, Evidence review and Conclude), the current step marked, a repair as its own step, a "Now" or
+ * "Needs you" line, and a "Next" line. Every text comes from the state's row of PHASE and the facts: the gates, the runs
+ * (running, or stale after 24 h with no news), the cycles and the known head. "judged" says whether the cycles know their
+ * verdicts: a build route needs the PR's head; a route without build has no commit, so its verdicts have no SHA (R1081-1).
+ */
+function stepLine({ task, route, cycles, required, head, judged, reasons, gates, runs, ledger, rounds, autopilot }) {
+  const state = PHASE[task.state] ? task.state : "abandoned", build = route.includes("build"), sha = head ? head.slice(0, 7) : null;
+  const gate = gates.find(row => !row.answer), answered = !gate && gates.length && gates.at(-1).answer ? gates.at(-1) : null;
+  const running = runs.filter(run => run.status === "running"), live = running.filter(run => !run.clock.stale), stale = running.filter(run => run.clock.stale);
+  const round = Number(task.round) || 1;
+  // The current review cycle: the first that is not clean. A failed role fails it. Unjudged cycles (no known head) are not known.
+  const reviewing = task.state === "reviewing";
+  const clean = cycle => cycle.steps.every(step => step.status === "done");
+  const at = Math.max(0, cycles.findIndex(cycle => !clean(cycle)));
+  const allClean = reviewing && judged && cycles.every(clean);
+  const failed = reviewing && judged && !allClean ? cycles[at].steps.filter(step => step.status === "failed").map(step => ROLE_WORD[step.role] ?? step.role) : [];
+  let [step, who, started] = PHASE[state];
+  if (allClean) [step, who, started] = ["merge", "chief", false];
+  if (["verified", "pr-ready"].includes(state) && (autopilot || !build)) who = "chief";
+  if (state === "awaiting-you" && answered) who = "chief";
+  if (gate && who !== "done") who = "owner";
+
+  // Each step's name, as the Now and Next lines say it.
+  const reviewName = i => build ? `review cycle ${i} of ${required}` : required > 1 ? `evidence review ${i} of ${required}` : "the evidence review";
+  const NAME = { plan: task.state === "designing" ? "the design" : "the plan", build: build ? "the build" : "the investigation", review: reviewName(at + 1), repair: `repair round ${round} of ${rounds}`, merge: build ? "the merge" : "the conclusion" };
+  const actor = list => and([...new Set(list.map(run => `the ${AGENT_WORD[run.role] ?? run.role}`))]);
+  const ago = run => { const clock = run.clock.text; return /^\d/.test(clock) ? `${clock} ago` : clock.startsWith("since ") ? `on ${clock.slice(6)}` : "at a time that is not recorded"; };
+  const runText = run => run.clock.stale ? `No news from the ${AGENT_WORD[run.role] ?? run.role} (run ${run.id}) since ${run.clock.since}. The run may have stopped, so ask the sage to check it.`
+    : `The ${AGENT_WORD[run.role] ?? run.role} (${run.evidence?.data.provider ? `${run.evidence.data.provider}, ` : ""}run ${run.id}) is at work. It started ${ago(run)}.`;
+  const heldAt = gate ? `Held at gate ${gate.id} (the question above).` : null;
+  // The current step's status: it needs you, it failed, an agent runs it, its run may have stopped, or nobody runs it now.
+  const status = who === "owner" ? "need" : failed.length ? "fail" : who === "agent" ? live.length ? "run" : stale.length ? "stale" : started ? "idle" : "wait" : who === "chief" ? "idle" : "done";
+  const agentDetail = idle => live.length ? runText(live[0]) : stale.length ? runText(stale[0]) : idle;
+
+  const steps = [];
+  const order = s => ["plan", "build", "review", "repair", "merge"].indexOf(s);
+  const place = key => step === null ? (state === "abandoned" && key !== "plan" ? "after" : "before") : order(key) < order(step) ? "before" : order(key) > order(step) ? "after" : "at";
+  const mark = (key, done = "done") => ({ before: done, at: status, after: "wait" })[place(key)];
+
+  // Plan: framed, design and PE check, briefed.
+  const pe = running.find(run => run.role === "pe");
+  const planDetail = place("plan") === "before" ? "Framed and briefed." : heldAt ?? (state === "framed" ? "In the backlog. No agent works on it."
+    : state === "awaiting-you" ? answered ? `You answered gate ${answered.id}. The chief moves the design on.` : "The design waits for your answer."
+    : agentDetail("No agent works on the design now."));
+  const designPart = place("plan") === "before" ? "done" : state === "framed" ? "wait" : pe ? "done" : status;
+  steps.push({ key: "plan", label: "Plan", status: mark("plan"), detail: planDetail,
+    parts: [["framed", "done"], ...(route.includes("design") ? [["design", designPart]] : []),
+      ...(route.includes("pe") ? [["PE check", pe ? pe.clock.stale ? "stale" : "run" : PLANNING.includes(state) ? "wait" : "done"]] : []),
+      ["briefed", place("plan") === "before" ? "done" : "wait"]] });
+
+  // Build or Investigate.
+  const doneBuild = build ? task.pr ? `PR ${task.pr}${sha ? `, last commit ${sha}` : ""}.` : "Built." : "The report is written.";
+  const buildDetail = { before: doneBuild, after: "" }[place("build")] ?? heldAt ?? (state === "held" ? task.hold === "round" ? `Held after ${plural(Number(task.round) || 0, "repair round")} that did not make it clean.` : "Held by the chief."
+    : state === "replan" ? "It needs a new plan." : agentDetail(state === "briefed" ? "Briefed. No agent took the brief yet." : `No agent works on ${NAME.build} now.`));
+  steps.push({ key: "build", label: build ? "Build" : "Investigate", status: mark("build"), detail: buildDetail });
+
+  // The review cycles, or a failed review, the repair and Review again.
+  const why = required > 1 ? task.risk ? `A risk flag (${task.risk.replace(/,/g, ", ")}) needs ${required} clean cycles.` : task.size === "large" ? `A large task needs ${required} clean cycles.` : `The project needs ${required} clean cycles.` : "";
+  const reviewLabel = number => build ? `Review ${number} of ${required}` : required > 1 ? `Evidence review ${number} of ${required}` : "Evidence review";
+  const partOf = item => item.status === "running" ? runs.find(run => run.id === item.run)?.clock.stale ? "stale" : "run" : PART[item.status] ?? "unknown";
+  const waiting = cycle => cycle.steps.map(item => [ROLE_WORD[item.role] ?? item.role, "wait"]);
+  if (task.state === "repairing") {
+    const fails = ledger.filter(row => String(row.pr) === task.pr && ["findings", "checks-fail", "qa-fail"].includes(row.kind)), last = fails.at(-1);
+    const what = last ? { "checks-fail": "The checks failed", "qa-fail": "QA failed" }[last.kind] ?? `The ${ROLE_WORD[(runs.find(run => run.id === last.run)?.role ?? "").replace(/er$/, "")] ?? "review"} found problems` : "A review found problems";
+    steps.push({ key: "review", label: last && positive(last.cycle) ? reviewLabel(positive(last.cycle)) : build ? "Review" : "Evidence review", status: "fail", detail: `${what}${last?.sha && build ? ` on ${String(last.sha).slice(0, 7)}` : ""}.` });
+    steps.push({ key: "repair", label: `Repair, round ${round} of ${rounds}`, status, detail: heldAt ?? agentDetail("No agent works on the repair now.") },
+      { key: "again", label: "Review again", status: "wait", detail: build ? `A new commit starts again from cycle 1 of ${required}.` : "The evidence review starts again.", parts: cycles[0] ? waiting(cycles[0]) : [] });
+  } else for (const [i, cycle] of cycles.entries()) {
+    const where = place("review"), pos = where === "at" ? i < at ? "before" : i > at ? "after" : "at" : where;
+    const first = build ? task.pr ? "Starts when the build is done." : "Starts when the PR opens." : "Starts when the report is written.";
+    const runningRun = cycle.steps.map(item => runs.find(run => run.id === item.run)).find(Boolean);
+    const detail = pos === "before" ? build && sha ? `Clean on ${sha}.` : "Clean."
+      : pos === "after" ? where === "after" && i === 0 && BEFORE_REVIEW.includes(task.state) ? first : why
+      : heldAt ?? (failed.length ? `${cap(and(failed))} failed${sha ? ` on ${sha}` : ""}.` : `${build ? sha ? `On the last commit (${sha}).` : "The board does not know the PR's last commit, so it shows no verdicts yet." : "The evidence review checks the report."}${live.length || stale.length ? ` ${runText(runningRun ?? live[0] ?? stale[0])}` : ""}`);
+    const parts = pos === "before" ? cycle.steps.map(item => [ROLE_WORD[item.role] ?? item.role, "done"]) : BEFORE_REVIEW.includes(task.state) ? waiting(cycle) : cycle.steps.map(item => [ROLE_WORD[item.role] ?? item.role, partOf(item)]);
+    steps.push({ key: `review-${i + 1}`, label: reviewLabel(i + 1), status: { before: "done", at: status, after: "wait" }[pos], detail, parts });
+  }
+
+  // Merge or Conclude.
+  const mergeDetail = { before: build ? task.state === "concluded" ? "Closed with no merge." : "Merged." : "The report went to you.", after: build ? `After ${plural(required, "clean cycle")}${required > 1 ? " on one commit" : ""}.` : "The report goes to you." }[place("merge")]
+    ?? heldAt ?? (!build ? "The chief concludes it." : task.state === "verifying" || allClean ? "The chief checks the verdicts first." : autopilot ? "Autopilot merges it."
+      : reasons.some(reason => reason.kind === "merge" && reason.mode) ? "Autopilot is off, so the merge waits for you." : "The board cannot tell if autopilot is on, so the merge waits for you.");
+  steps.push({ key: "merge", label: build ? "Merge" : "Conclude", status: mark("merge"), detail: mergeDetail });
+
+  // Now: what needs you (the reasons, each once), else what happens on the current step.
+  const name = step === "review" ? NAME.review : NAME[step] ?? "";
+  const needs = reasons.length ? reasons.map(reason => `${reason.text}${reason.recommendation ? ` I recommend: ${reason.recommendation}` : ""}`).join(" ") : null;
+  const CHIEF = {
+    held: () => `${task.hold === "round" ? `Held after ${plural(Number(task.round) || 0, "repair round")} that did not make it clean.` : "Held by the chief."}${answered ? ` You answered gate ${answered.id}, so the chief moves it on.` : ""}`,
+    replan: () => `The last repair round did not fix its findings, so the task needs a new plan.${answered ? ` You answered gate ${answered.id}.` : ""}`,
+    "awaiting-you": () => `You answered gate ${answered.id}. The chief moves the design on.`,
+    verifying: () => build ? "The chief checks the verdicts before the merge." : "The chief checks the evidence review before the conclusion.",
+    verified: () => build ? `Verified. Autopilot merges ${task.pr ? `PR ${task.pr}` : "it"}.` : "Verified. The chief concludes it.",
+  };
+  CHIEF["pr-ready"] = CHIEF.verified;
+  const IDLE = { framed: "In the backlog. No agent works on it.", briefed: `Briefed. No agent works on ${NAME.build} yet.` };
+  const noHead = build && reviewing && !head ? " The board does not know the PR's last commit." : "";
+  const nowText = who === "done" ? { merged: build ? "Merged." : "Done.", concluded: build ? "Closed with no merge." : "Concluded. The report went to you.", abandoned: "Abandoned." }[state]
+    : allClean ? build ? `The reviews are done, with ${plural(required, "clean cycle")} on ${sha}.` : "The evidence review is done."
+    : failed.length ? `${cap(and(failed))} failed${sha ? ` on ${sha}` : ""}.`
+    : who === "chief" ? CHIEF[state]()
+    : live.length ? `${cap(actor(live))} ${new Set(live.map(run => run.role)).size > 1 ? "are" : "is"} at work on ${name}.${noHead}`
+    : stale.length ? `No news from ${actor(stale)} since ${stale[0].clock.since}. The run may have stopped, so ask the sage to check it.`
+    : `${IDLE[state] ?? `No agent works on ${name} now.`}${noHead}`;
+
+  // Next: after an answer, the current step goes on; else the fixed rule of the state.
+  const pending = reviewing && judged ? cycles[at].steps.find(item => item.status === "pending") : null;
+  const after = at + 1 < required ? reviewName(at + 2) : NAME.merge;
+  const NEXT = {
+    framed: route.includes("design") ? "The design." : `${cap(NAME.build)}.`,
+    designing: "You approve the design.",
+    "awaiting-you": answered ? `The chief briefs ${NAME.build}.` : `${cap(NAME.build)} is briefed after your answer.`,
+    briefed: `${cap(NAME.build)}.`,
+    building: build ? `Review cycle 1 of ${required}, ${task.pr ? "on the PR's last commit" : "when the PR opens"}.` : `${cap(reviewName(1))}.`,
+    held: answered ? `${cap(NAME.build)} goes on, or the chief briefs it again.` : "The chief asks you how to go on.",
+    replan: "The chief briefs it again.",
+    reviewing: allClean ? build ? "The chief checks the verdicts, then the merge." : "The chief checks the evidence review, then the conclusion."
+      : failed.length ? build ? "A repair round, then the reviews start again at cycle 1." : "A repair round, then the evidence review starts again."
+      : !build ? at + 1 < required ? `${cap(reviewName(at + 2))}.` : "The conclusion. The report comes to you."
+      : !head ? "The review cycles on the PR's last commit, then the merge."
+      : pending ? `${cap(ROLE_WORD[pending.role] ?? pending.role)}, then ${after}.` : `${cap(after)}.`,
+    repairing: build ? "The reviews start again at cycle 1 on the new commit." : "The evidence review starts again.",
+    verifying: build ? "The merge." : "The conclusion. The report comes to you.",
+    verified: build ? "Done after the merge." : "The conclusion. The report comes to you.",
+  };
+  NEXT["pr-ready"] = NEXT.verified;
+  // A gate's answer lets the current step go on; awaiting-you and replan say what the chief does after it.
+  const AFTER = { replan: "The chief briefs it again after your answer.", "awaiting-you": `${cap(NAME.build)} is briefed after your answer.` };
+  const next = who === "done" ? null : gate ? AFTER[state] ?? `${cap(name)} ${started ? "goes on" : "starts"} after your answer.` : NEXT[state];
+  return { steps, current: step, now: needs ? { needs: true, text: needs } : { needs: false, stale: status === "stale", text: nowText }, next };
+}
+
+
+function card(source, project, group, task, now) {
   const records = (project.observations?.records ?? []).filter(record => record.task === task.id && time(record.observedAt) !== null && time(record.observedAt) <= now);
   const pr = latest(records, "pr", data => String(data.number) === task.pr);
   const completion = latest(records, "completion", data => data.state === task.state);
   const mode = latest(records, "mode");
-  const runs = rows(project, "runs", task).map(run => ({ ...run, evidence: latest(records, "run", data => data.run === run.id) }));
-  const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.evidence?.data.provider ?? null, evidence: run.evidence, recordedStatus: run.status }));
   const ledger = rows(project, "ledger", task);
-  const gates = rows(project, "gates", task).filter(gate => !gate.answer);
+  // N7: the newest run, verdict or decision time. A running run with no news for 24 h may have stopped (its clock is stale).
+  const times = [...rows(project, "runs", task).flatMap(run => [run.started, run.ended]), ...ledger.map(row => row.at), ...rows(project, "decisions", task).map(row => row.at)].map(time).filter(at => at !== null);
+  const lastActivity = times.length ? new Date(Math.max(...times)).toISOString() : null;
+  const runs = rows(project, "runs", task).map(run => ({ ...run, evidence: latest(records, "run", data => data.run === run.id), clock: runClock(run.started, now, lastActivity) }));
+  const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.evidence?.data.provider ?? null, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
+  // Needs you: an open gate, or a state that waits for the owner (R1077). Held and replan wait for the chief, not for you.
+  const allGates = rows(project, "gates", task), gates = allGates.filter(gate => !gate.answer);
   const reasons = gates.map(gate => ({ kind: "gate", key: `${project.key}/${gate.id}`, text: gate.question, recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [] }));
-  if (["held", "replan"].includes(task.state)) reasons.push({ kind: task.state, text: task.state === "held" ? "The task is held." : "The task needs a new plan." });
-  if (["verified", "pr-ready"].includes(task.state)) {
-    if (!mode || !mode.data.autopilot) reasons.push({ kind: "merge", text: mode ? "Autopilot is off. The owner can review the merge." : "Autopilot state is unknown. The owner must review the merge." });
+  if (task.state === "awaiting-you" && !gates.length && !allGates.at(-1)?.answer) reasons.push({ kind: "design", text: "The design waits for your answer." });
+  if (["verified", "pr-ready"].includes(task.state) && task.route.split(",").includes("build") && mode?.data.autopilot !== true) {
+    const merge = task.pr ? `review and merge PR ${task.pr}` : "review and merge it";
+    reasons.push({ kind: "merge", mode: !!mode, text: mode ? `Autopilot is off, so ${merge}.` : `The board cannot tell if autopilot is on, so ${merge}.` });
   }
   // N2: an observed PR head wins. Else the ledger head: the newest commit of the task's PR by its first verdict (the ledger
   // is append-only), when that first verdict comes after every verdict by a run of an earlier round. At round 1 or later, a
@@ -78,9 +244,11 @@ function card(source, project, task, now) {
   const reviewed = !repairing && known && first > rounds.findLastIndex(r => r !== null && r < round) ? verdicts[first].sha : null;
   const head = pr?.data.head ?? reviewed;
   const headBasis = pr?.data.head ? "observed" : head ? "ledger" : null;
-  const current = head && !repairing ? ledger.filter(row => row.sha === head && String(row.pr) === task.pr) : [];
-  const route = task.route.split(",").filter(Boolean);
-  const steps = [...(route.includes("build") ? ["checks"] : []), ...route.filter(block => CLEAN[block])];
+  const route = task.route.split(",").filter(Boolean), build = route.includes("build");
+  // A route without build has no commit: its verdicts are the task's rows, with no SHA (R1081-1).
+  const judged = build ? !!head : true;
+  const current = repairing ? [] : build ? head ? ledger.filter(row => row.sha === head && String(row.pr) === task.pr) : [] : ledger.filter(row => !row.sha);
+  const steps = [...(build ? ["checks"] : []), ...route.filter(block => CLEAN[block])];
   const required = Math.max(positive(source.config?.["cycles.small"]) ?? 1, task.size === "large" ? Math.max(2, positive(source.config?.["cycles.large"] ?? source.config?.autopilot_cycles) ?? 2) : 1, task.risk ? Math.max(2, positive(source.config?.["cycles.risk"]) ?? 2) : 1);
   const count = Math.min(required, 10);
   const verdict = (role, number) => current.filter(row => (role === "checks" || positive(row.cycle) === number) && (row.kind === CLEAN[role] || (FAILED[role] ?? []).includes(row.kind) && (row.kind !== "findings" || runs.some(run => run.id === row.run && run.role === (RUN_ROLE[role] ?? role))))).at(-1) ?? null;
@@ -88,8 +256,8 @@ function card(source, project, task, now) {
     const last = verdict(role, i + 1);
     // A running run of the step's role runs the cycle its evidence names; with no run evidence, the role's first cycle without a verdict.
     const open = Array.from({ length: count }, (_, j) => j + 1).find(number => !verdict(role, number));
-    const running = runs.find(run => run.status === "running" && run.role === (RUN_ROLE[role] ?? role) && (run.evidence ? run.evidence.data.head === head && run.evidence.data.cycle === i + 1 : open === i + 1));
-    return { role, status: !head ? "unknown" : last ? last.kind === CLEAN[role] ? "done" : "failed" : running ? "running" : "pending", evidence: last, run: running?.id ?? null };
+    const running = runs.find(run => run.status === "running" && run.role === (RUN_ROLE[role] ?? role) && (run.evidence ? (run.evidence.data.head ?? null) === head && run.evidence.data.cycle === i + 1 : open === i + 1));
+    return { role, status: !judged ? "unknown" : last ? last.kind === CLEAN[role] ? "done" : "failed" : running ? "running" : "pending", evidence: last, run: running?.id ?? null };
   }) }));
   for (const [index, row] of current.entries()) {
     if (!["checks-fail", "qa-fail"].includes(row.kind)) continue;
@@ -103,9 +271,6 @@ function card(source, project, task, now) {
   const completionDecision = rows(project, "decisions", task).filter(row => row.decision === `state ${task.state}`).at(-1);
   const completedAt = completion ? time(completion.data.at) : ["merged", "concluded", "abandoned"].includes(task.state) ? time(completionDecision?.at) : null;
   const brief = project.contents?.[latest(records, "artifact", data => data.type === "brief")?.id]?.text ?? null;
-  // N7: the newest run, verdict or decision time.
-  const times = [...runs.flatMap(run => [run.started, run.ended]), ...ledger.map(row => row.at), ...rows(project, "decisions", task).map(row => row.at)].map(time).filter(at => at !== null);
-  const lastActivity = times.length ? new Date(Math.max(...times)).toISOString() : null;
   // N8: a moved finding leaves its task; the move decision on the old task names the new task and key.
   const moves = (project.tables.decisions ?? []).map(row => ({ row, move: /^(F-\S+) moved to (T[1-9]\d*) as (F-\S+):/.exec(row.decision ?? "") })).filter(item => item.move);
   const found = (to, key) => (project.tables.findings ?? []).find(row => row.task === to && row.key === key);
@@ -113,19 +278,111 @@ function card(source, project, task, now) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: moves.find(({ move }) => move[2] === task.id && move[3] === row.key)?.row.task ?? null })),
     ...moves.filter(({ row }) => row.task === task.id).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, projectName: projectName(project), archived: project.archived === true, priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: loopFor(task, route, cycles, head, reasons, runs), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+}
+
+const title = value => String(value ?? "").charAt(0).toUpperCase() + String(value ?? "").slice(1);
+const ACTIVE_DAYS = 14;
+const repoPath = url => githubRepository(url)?.slice("https://github.com/".length) ?? null;
+const unique = list => list.filter((item, i) => item && list.indexOf(item) === i);
+
+/**
+ * One repository is one project (T305 notes, section 3). The logbooks of all sources with the same key and the same
+ * checkout.txt are one project. A logbook without checkout.txt joins them, with a note: the key holds a hash of the path.
+ * Two checkouts of one key stay two projects, with a note: the board never merges on doubt. Two clones at two paths have
+ * two keys, so they stay two projects. The display name: the first source that has one wins, with a note when another
+ * differs. A project is archived only when all its logbooks are. A joined logbook without checkout.txt never gives the
+ * name or the archive (R1070-1), unless no logbook of the project has checkout.txt.
+ */
+function projectGroups(sources) {
+  const byName = new Map(), groups = [], notes = [];
+  for (const source of sources) for (const project of source.projects) byName.set(project.name, [...(byName.get(project.name) ?? []), { source, project }]);
+  const keys = books => books.map(book => book.project.key).join(" and ");
+  const note = (books, message) => notes.push({ source: books.map(book => book.source.id).join(" + "), project: books[0].project.name, message });
+  for (const books of byName.values()) {
+    if (unique(books.map(book => book.project.checkout)).length > 1) {
+      note(books, `Two projects: ${keys(books)} have one logbook key but name different checkouts, so the board keeps them apart.`);
+      for (const book of books) groups.push({ key: book.project.key, books: [book] });
+      continue;
+    }
+    const unknown = books.filter(book => !book.project.checkout);
+    if (books.length > 1 && unknown.length) note(books, `One project: the checkout of ${keys(unknown)} is not known, and the logbook key is the same.`);
+    groups.push({ key: books[0].project.name, books });
+  }
+  for (const group of groups) {
+    const known = group.books.filter(book => book.project.checkout), trusted = known.length ? known : group.books;
+    const projects = trusted.map(book => book.project), first = field => projects.map(project => project[field]).find(Boolean) ?? null;
+    const names = unique(projects.map(project => project.displayName));
+    if (names.length > 1) note(trusted, `Two display names: the board shows "${names[0]}" (the first source), not ${names.slice(1).map(other => `"${other}"`).join(", ")}.`);
+    const archived = trusted.filter(book => book.project.archived);
+    if (archived.length && archived.length < trusted.length) note(trusted, `Archived in ${keys(archived)} only: the board does not archive the project.`);
+    const merged = { name: projects[0].name, displayName: first("displayName"), upstream: first("upstream"), repository: first("repository"), checkout: first("checkout") };
+    const full = repoPath(merged.upstream) ?? repoPath(merged.repository), folder = merged.checkout ? basename(merged.checkout) : null;
+    const all = group.books.map(book => book.project), problem = all.flatMap(project => project.diagnostics)[0] ?? null;
+    // The quiet second line names the next source of the name (notes, section 2): the repository as owner/repo, or first
+    // that there is no GitHub remote, then the folder. Two projects that would show the same lines show the end of their paths.
+    const remote = full ? `${full}${!merged.displayName && repoPath(merged.upstream) ? " (upstream)" : ""}` : null;
+    const sub = merged.checkout || remote ? [remote ?? "no GitHub remote", folder && `folder ${folder}`] : [`logbook ${merged.name}`];
+    Object.assign(group, {
+      // A project that no logbook can name, because every logbook of it is unreadable, is named by its folder, with the
+      // reason (the prototype's failure state). One unreadable logbook does not rename what the others name (F-T305-3).
+      name: all.every(project => project.diagnostics.length) ? merged.name : projectName(merged),
+      remote, path: merged.checkout ?? null,
+      archived: archived.length > 0 && archived.length === trusted.length, problem: problem && plainProblem(problem),
+      providers: unique(group.books.map(book => title(standIn(book.source)))),
+      sub: unique(sub).join(" · "),
+      // Search matches every name a person may know: the display names, the repositories, the folder and the logbook keys.
+      // The checkout paths are apart: only the Mac's own page carries them (R1069-2).
+      terms: unique([...names, repoPath(merged.upstream), ...all.map(project => repoPath(project.repository)), folder, merged.name, ...all.map(project => project.key)]),
+      paths: unique(all.map(project => project.checkout)),
+    });
+  }
+  // Two projects with the same name and the same second line, such as two clones in two folders of one name: each shows
+  // "clone 1", "clone 2" first, by the order of the logbook keys. Only the Mac's own page shows, in pathSub, the end of
+  // the checkout's path instead, as many folders as tell them apart, so that a cut line keeps the part that differs
+  // (F-T305-11, R1076-4, R1079-1).
+  const lines = new Map(groups.map(group => [group, `${group.name}\n${group.sub}`])), line = group => lines.get(group);
+  const twins = groups.filter(group => group.path && groups.some(other => other !== group && line(other) === line(group)));
+  for (const group of twins) {
+    const others = twins.filter(other => other !== group && line(other) === line(group)), parts = group.path.split(/[\\/]/).filter(Boolean);
+    const end = n => parts.slice(-n).join("/"), clone = [group, ...others].map(item => item.key).sort().indexOf(group.key) + 1;
+    let n = 1; while (n < parts.length && others.some(other => other.path.split(/[\\/]/).filter(Boolean).slice(-n).join("/") === end(n))) n++;
+    Object.assign(group, { sub: `clone ${clone} · ${group.remote ?? "no GitHub remote"}`, pathSub: `…/${end(n)} · ${group.remote ?? "no GitHub remote"}` });
+  }
+  return { groups, notes };
+}
+
+// A logbook that the board cannot read says why in plain words, not as an error code: in its picker row and in the
+// banners (R1075-6).
+const PLAIN = { EACCES: "has no read permission", EPERM: "has no read permission", ENOENT: "is missing", EISDIR: "is a folder, not a file", ELOOP: "is a link, which the board does not follow", EMFILE: "cannot open now, because too many files are open" };
+function plainProblem(message) {
+  const coded = /^([a-z][\w .-]*): (E[A-Z]+)$/.exec(message) ?? /^()(E[A-Z]+)$/.exec(message);
+  if (!coded) return message;
+  return `${coded[1] ? `its ${coded[1]} file` : "its folder"} ${PLAIN[coded[2]] ?? "cannot be read"}`;
 }
 
 export function buildBoardModel(sources, { now = new Date().toISOString() } = {}) {
   const at = time(now);
   if (at === null) throw new TypeError("board time must be an ISO date");
-  const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, task, at))));
+  const { groups, notes } = projectGroups(sources);
+  const groupOf = new Map(groups.flatMap(group => group.books.map(book => [book.project.key, group])));
+  const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, groupOf.get(project.key), task, at))));
   const recent = task => task.lastActivity ? Date.parse(task.lastActivity) : 0;
   // An archived project's tasks leave the columns and the counts; the archived group lists the project, with what needs you there.
   // Needs you first, then the newest activity. A priority sorts each column but Done, which stays newest first.
   const newest = (a, b) => (b.reasons.length > 0) - (a.reasons.length > 0) || recent(b) - recent(a);
-  const visible = tasks.filter(task => task.visible && task.column && !task.archived).sort((a, b) => (b.reasons.length > 0) - (a.reasons.length > 0) || rank(a) - rank(b) || recent(b) - recent(a));
-  const columnOf = key => { const cards = visible.filter(task => task.column === key); return key === "done" ? cards.sort(newest) : cards; };
-  const archived = sources.flatMap(source => source.projects.filter(project => project.archived).map(project => ({ key: project.key, name: projectName(project), tasks: tasks.filter(task => task.project === project.key).length, needsOwner: tasks.filter(task => task.project === project.key && task.visible && task.column && task.reasons.length).length })));
-  return { at: new Date(at).toISOString(), tasks, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message })))) };
+  const shown = tasks.filter(task => task.visible && task.column).sort((a, b) => (b.reasons.length > 0) - (a.reasons.length > 0) || rank(a) - rank(b) || recent(b) - recent(a));
+  const visible = shown.filter(task => !task.archived);
+  const columnOf = (key, list) => { const cards = list.filter(task => task.column === key); return key === "done" ? cards.sort(newest) : cards; };
+  // The picker's list (T305 design B): each project with its counts, in its list group: needs you, active in the last 14
+  // days, idle, archived. Needs you sorts by its count, the others by the newest activity.
+  const LISTS = ["needs", "active", "idle", "archived"];
+  const projects = groups.map(group => {
+    const own = tasks.filter(task => task.group === group.key), live = shown.filter(task => task.group === group.key);
+    const last = Math.max(0, ...own.map(recent)), needsOwner = live.filter(task => task.reasons.length).length;
+    return { key: group.key, name: group.name, sub: group.sub, pathSub: group.pathSub ?? null, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
+      list: group.archived ? "archived" : needsOwner ? "needs" : last && at - last <= ACTIVE_DAYS * 86400000 ? "active" : "idle" };
+  }).sort((a, b) => LISTS.indexOf(a.list) - LISTS.indexOf(b.list) || (a.list === "needs" ? b.needsOwner - a.needsOwner : 0) || (Date.parse(b.lastActivity ?? 0) || 0) - (Date.parse(a.lastActivity ?? 0) || 0) || a.name.localeCompare(b.name));
+  const archived = projects.filter(project => project.archived).map(project => ({ key: project.key, name: project.name, tasks: project.tasks, needsOwner: project.needsOwner }));
+  return { at: new Date(at).toISOString(), tasks, projects, notes, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
 }

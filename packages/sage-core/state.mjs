@@ -15,6 +15,8 @@ import { closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, lin
 import { homedir, hostname, platform, tmpdir, uptime } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { boardView } from "./board-view.mjs";
+import { projectName as shownName } from "./board-model.mjs";
+import { logbookIdentity } from "./board-reader.mjs";
 import { createBoard } from "./board.mjs";
 import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
@@ -1553,7 +1555,8 @@ function status(dir, save) {
   for (const t of tasks) count[t.state] = (count[t.state] ?? 0) + 1;
   const tokens = runs.reduce((n, r) => n + (Number(r.tokens) || 0), 0);
   const lines = [
-    `sage · ${basename(dir)} · ${now().slice(11, 16)} UTC`,
+    // The name that the board shows (T305): the display name, the upstream's or origin's repository, the checkout's folder.
+    `sage · ${shownName({ name: basename(dir), ...logbookIdentity(dir) })} · ${now().slice(11, 16)} UTC`,
     `tasks   ${tasks.length}${Object.entries(count).map(([s, n]) => ` · ${s} ${n}`).join("")}`,
     `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${g.question} (default: ${g.default || "none"})`).join("")}`,
     `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens`,

@@ -86,8 +86,9 @@ const OFF = "Access from outside this Mac is off until the owner sets a board pa
  * a response on the Mac carries the X-Sage-Board header: the id, this process's pid and the time the listener started,
  * so the board command can tell which board answers on the port.
  */
-export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id } = {}) {
+export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id, clock = () => new Date().toISOString() } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
+  if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
   if (!Array.isArray(sources) || !sources.length || sources.length > 32) throw new TypeError("board needs 1 to 32 explicit sources");
   const ids = new Set();
@@ -143,8 +144,9 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       (site === undefined || ["none", "same-origin"].includes(site));
   }
 
-  function htmlFor(key) {
-    const html = renderBoardHtml(model, { taskKey: key, snapshot: false, live: true });
+  // The checkout paths go only to the Mac's own page (R1069-2).
+  function htmlFor(key, paths = false) {
+    const html = renderBoardHtml(model, { taskKey: key, snapshot: false, live: true, paths });
     if (Buffer.byteLength(html) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
     return html;
   }
@@ -170,9 +172,14 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     }
   }
 
+  // A stream gets an update only when its page changed (bug bash R1023-3): each client keeps the digest of what it got last,
+  // so a file event that changes nothing on the page sends nothing, and the page keeps its state.
   function publish(client) {
     try {
-      const payload = { revision: String(revision), html: htmlFor(client.task), stale: model.stale, diagnostics: model.diagnostics };
+      const payload = { revision: String(revision), html: htmlFor(client.task, client.paths), stale: model.stale, diagnostics: model.diagnostics };
+      const sent = digest(JSON.stringify([payload.html, payload.stale, payload.diagnostics])).toString("base64");
+      if (client.sent === sent) return;
+      client.sent = sent;
       send(client, `id: ${revision}\nevent: board\ndata: ${JSON.stringify(payload)}\n\n`);
     } catch { client.response.end(); removeClient(client); }
   }
@@ -245,12 +252,12 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
         source.diagnostics = source.diagnostics.filter(message => message !== "ENOENT");
         notSetUp.push(source.label);
       }
-      next = { ...buildBoardModel(read), notSetUp };
+      next = { ...buildBoardModel(read, { now: clock() }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
       // Validate the complete HTML before replacing a good snapshot.
       const preview = renderBoardHtml(next, { snapshot: false, live: true });
       if (Buffer.byteLength(preview) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
-    } catch { next = { ...buildBoardModel([]), diagnostics: unavailable }; }
+    } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
     if (!next.diagnostics.length) { lastGood = next; model = { ...next, stale: false }; }
     else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp };
     revision++;
@@ -270,7 +277,8 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     // The owner's decisions (T216, T229): on the Mac itself the board needs no sign-in. Every other request signs in
     // with the owner's password: also one that a tunnel forwards to the loopback listener, maybe with a loopback Host.
     // Until the owner sets a password, there is no sign-in, so such a request gets 403 (no sign-in can change it).
-    if (onMac(request)) { if (boardHeader) response.setHeader("X-Sage-Board", boardHeader); }
+    const mac = onMac(request);
+    if (mac) { if (boardHeader) response.setHeader("X-Sage-Board", boardHeader); }
     else if (!password) return fail(403, OFF);
     else {
       const signedIn = await authenticated(request);
@@ -285,12 +293,12 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
       if (request.method === "HEAD") return response.end();
       response.flushHeaders();
-      const client = { response, task: selected.task, blocked: false, pending: null, deadline: null };
+      const client = { response, task: selected.task, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
     }
     try {
-      const html = htmlFor(selected.task);
+      const html = htmlFor(selected.task, mac);
       securityHeaders(response, html);
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html) });
       response.end(request.method === "HEAD" ? undefined : html);

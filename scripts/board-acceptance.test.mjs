@@ -19,6 +19,8 @@ const HEADERS = {
   decisions: "at task decision why",
 };
 const AT = "2026-01-01T00:00:00.000Z", HEAD = "a".repeat(40), OLD_HEAD = "b".repeat(40);
+// A running run that started 10 minutes ago. A run of AT has had no news for months, so the board says it may have stopped.
+const FRESH = () => new Date(Date.now() - 600000).toISOString();
 const task = (id, state, extra = {}) => ({ id, title: `Sample ${id}`, size: "small", risk: "", route: "build,code-review,qa", state, branch: "sample", pr: "", round: "0", keys: "", ...extra });
 function table(directory, name, rows) {
   const fields = HEADERS[name].split(" ");
@@ -58,7 +60,7 @@ function fixture(t) {
   };
   return { dir, project, sources, add, ...first, invoke, view };
 }
-const cards = html => /<main class="board">([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
+const cards = html => /<main class="board"[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
 
 test("T205 acceptance: HTML state columns and phone text describe the same recorded tasks without logbook writes", t => {
   const f = fixture(t);
@@ -70,22 +72,22 @@ test("T205 acceptance: HTML state columns and phone text describe the same recor
   for (const id of ["T1", "T2", "T3", "T4", "T5", "T6"]) { assert.ok(cards(html).includes(`Sample ${id}`)); assert.ok(text.includes(`Sample ${id}`)); }
   assert.ok(!cards(html).includes("Sample T7"));
   assert.match(text, /### 🔴 Needs you/); assert.match(text, /### 🔁 In review/); assert.match(text, /### 🔨 Building/); assert.match(text, /### ✅ Ready to merge/);
-  assert.ok(html.indexOf("Sample T1") < html.indexOf("<script>"), "initial cards must exist without running scripts");
+  assert.ok(html.indexOf("Sample T1") < html.lastIndexOf("<script>"), "initial cards must exist without running the page script");
   assert.deepEqual(snapshot(f.root), before);
 });
 
 test("T205 acceptance: current-head review evidence ignores old SHA and clears same-second repaired failures", t => {
   const f = fixture(t);
   table(f.book, "tasks", [task("T1", "reviewing", { pr: "12", risk: "auth", route: "build,code-review,security-review,qa" })]);
-  table(f.book, "runs", [{ id: "R1", task: "T1", role: "security-reviewer", status: "running", started: AT }]);
+  table(f.book, "runs", [{ id: "R1", task: "T1", role: "security-reviewer", status: "running", started: FRESH() }]);
   records(f.book, [pr(), { kind: "run", data: { run: "R1", provider: "sample-provider", head: HEAD, cycle: 1 } }]);
   const verdict = (kind, sha = HEAD) => ({ task: "T1", pr: "12", sha, kind, cycle: "1", at: AT });
   table(f.book, "ledger", [verdict("qa-pass", OLD_HEAD), verdict("qa-fail")]);
   const failed = f.view("task", { id: "T1" });
-  assert.ok(failed.includes("QA failed on the recorded PR head")); assert.ok(failed.includes("✗ qa"));
-  assert.ok(failed.includes("… security-review")); assert.ok(failed.includes("sample-provider · security-reviewer"));
+  assert.ok(failed.includes("QA failed on the recorded PR head")); assert.ok(failed.includes("✗ QA: failed"));
+  assert.ok(failed.includes("▶ security review: running now")); assert.ok(failed.includes("sample-provider · security-reviewer"));
   table(f.book, "ledger", [verdict("qa-pass", OLD_HEAD), verdict("qa-fail"), verdict("qa-pass")]);
-  const fixed = f.view("task", { id: "T1" }); assert.ok(fixed.includes("✓ qa")); assert.ok(!fixed.includes("QA failed on the recorded PR head"));
+  const fixed = f.view("task", { id: "T1" }); assert.ok(fixed.includes("✓ QA: done")); assert.ok(!fixed.includes("QA failed on the recorded PR head"));
   table(f.book, "ledger", [verdict("qa-pass"), verdict("qa-fail")]);
   assert.ok(f.view("task", { id: "T1" }).includes("QA failed on the recorded PR head"));
 });
@@ -98,6 +100,9 @@ test("T205 acceptance: provider roots keep duplicate task identities separate an
   const detail = f.view("task", { id: "T1", sourceScope: other.key });
   assert.ok(detail.includes("Sample second provider")); assert.ok(!detail.includes("Source sample"));
   assert.throws(() => f.invoke("task", { id: "T9", sourceScope: other.key }), /Nearest recorded ids: T1.*No task was opened/);
+  // R1069-3: the shown name chooses the project, with both its logbooks; it is not ambiguous.
+  const named = f.view("chat", { sourceScope: "project" });
+  assert.ok(named.includes("Sample T1") && named.includes("Sample second provider"), named);
   assert.deepEqual([snapshot(f.root), snapshot(other.root)], before);
 });
 
@@ -126,7 +131,7 @@ test("T205 acceptance: task details show verified briefs, report proof, run time
   assert.ok(text.includes("Goal: Show recorded work")); assert.ok(text.includes("Acceptance: Keep both views equal\n- Preserve detail"));
   assert.ok(text.includes("tests 12\npass 12")); assert.ok(text.includes("120 s")); assert.ok(text.includes("tokens 200"));
   assert.ok(text.includes("R1 · digest verified")); assert.ok(html.includes("R1 · digest verified"));
-  assert.ok(html.includes("<summary>Full brief</summary>")); assert.ok(html.includes("&lt;sample proof&gt;")); assert.ok(html.includes("data:image/png;base64,"));
+  assert.ok(html.includes(">Full brief</summary>")); assert.ok(html.includes("&lt;sample proof&gt;")); assert.ok(html.includes("data:image/png;base64,"));
   assert.ok(text.includes("digest verified")); assert.ok(!text.includes("content not verified"));
   assert.deepEqual(snapshot(f.root), before);
   writeFileSync(join(f.book, "reports/R1.md"), "TAMPERED CONTENT MUST NOT SHOW");
@@ -140,12 +145,12 @@ test("T205 acceptance: missing and malformed inputs show diagnostics without exp
   writeFileSync(join(f.root, "config.json"), "SAMPLE_PRIVATE_CONFIG_DO_NOT_SHOW");
   writeFileSync(join(f.book, "runs.tsv"), "bad header\nSAMPLE_PRIVATE_TABLE_DO_NOT_SHOW\n");
   const before = snapshot(f.root), html = f.view("html");
-  assert.ok(html.includes("Incomplete sources")); assert.ok(html.includes("missing")); assert.ok(html.includes("ENOENT")); assert.ok(html.includes("config: invalid JSON"));
+  assert.ok(html.includes("Incomplete sources")); assert.ok(html.includes("missing")); assert.ok(html.includes("its folder is missing") && !html.includes("ENOENT"), "R1075-6: plain words, not the code"); assert.ok(html.includes("config: invalid JSON"));
   assert.ok(!html.includes("SAMPLE_PRIVATE_CONFIG_DO_NOT_SHOW")); assert.ok(!html.includes("SAMPLE_PRIVATE_TABLE_DO_NOT_SHOW"));
   assert.deepEqual(snapshot(f.root), before);
   rmSync(join(f.book, "runs.tsv"));
   const external = join(f.dir, "external.tsv"); writeFileSync(external, "SAMPLE_LINK_TARGET_DO_NOT_SHOW"); symlinkSync(external, join(f.book, "runs.tsv"));
-  const linked = f.view("html"); assert.ok(linked.includes("runs:")); assert.ok(!linked.includes("SAMPLE_LINK_TARGET_DO_NOT_SHOW"));
+  const linked = f.view("html"); assert.ok(linked.includes("its runs file is a link, which the board does not follow"), "R1075-6"); assert.ok(!linked.includes("SAMPLE_LINK_TARGET_DO_NOT_SHOW"));
   assert.equal(readFileSync(external, "utf8"), "SAMPLE_LINK_TARGET_DO_NOT_SHOW");
 });
 
@@ -165,13 +170,13 @@ test("T205 acceptance: Done uses completion evidence and status preserves actual
 test("T205 acceptance: the task loop marks recorded PE work current without inferring it from the route alone", t => {
   const f = fixture(t);
   table(f.book, "tasks", [task("T1", "designing", { route: "design,pe,build,code-review,qa" })]);
-  table(f.book, "runs", [{ id: "R1", task: "T1", role: "pe", status: "running", started: AT }]);
+  table(f.book, "runs", [{ id: "R1", task: "T1", role: "pe", status: "running", started: FRESH() }]);
   const text = f.view("task", { id: "T1" }), html = f.view("html");
-  assert.ok(text.includes("▶ PE check")); assert.ok(text.includes("The PE check is recorded running"));
-  assert.ok(html.includes('<span class="ls now">PE check</span>'));
+  assert.ok(text.includes("▶ PE check: running now")); assert.ok(text.includes("Now: The PE is at work on the design\\."));
+  assert.ok(html.includes('<span class="part p-run"><span aria-hidden="true">▶</span> PE check: running now</span>'));
   table(f.book, "runs", []);
   const unknown = f.view("task", { id: "T1" });
-  assert.ok(unknown.includes("▶ design")); assert.ok(!unknown.includes("▶ PE check")); assert.ok(!unknown.includes("PE check is recorded running"));
+  assert.ok(unknown.includes("▷ design: no agent at work")); assert.ok(!unknown.includes("▶")); assert.ok(!unknown.includes("at work on"), "no run: nothing says running now (R1077)");
 });
 
 test("T205 acceptance: existing Claude hook dispatches owner board/task/status phrases and rejects quoted agent text", t => {

@@ -2351,6 +2351,20 @@ test("T314: an older logbook gets the priority and kind columns at its next writ
   assert.equal(rows(s.dir, "tasks")[0].kind, "checks");
 });
 
+test("T305: the first status line names the project as the board does, not by its logbook folder", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Sample status task", "--size", "tiny");
+  const folder = basename(s.dir);
+  assert.match(folder, /-[0-9a-f]{6}$/);
+  const before = s.ok("status").split("\n")[0];
+  assert.ok(!before.includes(folder), before);
+  const checkout = basename(readFileSync(join(s.dir, "checkout.txt"), "utf8").trim());
+  assert.match(before, new RegExp(`^sage · ${checkout} · \\d\\d:\\d\\d UTC$`), "no remote, no name: the checkout's folder");
+  s.ok("config", "name=seacc (Council Record)");
+  assert.match(s.ok("status").split("\n")[0], /^sage · seacc \(Council Record\) · \d\d:\d\d UTC$/);
+  assert.match(readFileSync(join(s.dir, "status.md"), "utf8").split("\n")[0], /^# sage · /);
+});
+
 test("T314: config name= and archived= set one logbook's own config.json, never the config for all projects", () => {
   const s = store();
   const own = join(s.dir, "config.json"), all = join(s.home, "config.json");
