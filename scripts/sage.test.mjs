@@ -2544,6 +2544,60 @@ test("R1139-1: a move to merged refuses while a wait is unmet, so it never opens
   assert.match(s.ok("task", "T2", "set", "state=merged"), /^T2 merged · /, "after the first one, it moves to merged");
 });
 
+test("R1155-1: a move to concluded refuses while a wait is unmet, so it never opens the waits on that task", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Up", "--size", "small");
+  s.ok("task", "add", "--title", "Why?", "--size", "investigate", "--waits", "T1");
+  s.ok("task", "add", "--title", "Later", "--size", "small", "--waits", "T2");
+  stateIs(s, "T2", "verifying");
+  s.ok("verdict", "T2", "--kind", "evidence-clean");
+  assert.equal(s.no("task", "T2", "set", "state=concluded"), "sage: T2 waits for T1 (framed), so it takes no move to concluded: it moves to concluded after each of them is merged or concluded.");
+  assert.equal(rows(s.dir, "tasks")[1].state, "verifying", "the refused move changes nothing");
+  assert.match(s.ok("task", "T3"), / · waits T2 \(verifying\) · unmet T2$/, "T3 still waits");
+  stateIs(s, "T1", "merged");
+  assert.match(s.ok("task", "T2", "set", "state=concluded"), /^T2 concluded/, "after its wait is met, it moves to concluded");
+  assert.match(s.ok("task", "T3"), / · waits T2 \(concluded\) · all met$/);
+});
+
+test("R1153-2: an ended task takes no new wait, and waits= still clears one on any state", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Up", "--size", "small");
+  s.ok("task", "add", "--title", "Down", "--size", "small", "--waits", "T1");
+  for (const state of ["merged", "concluded", "abandoned"]) {
+    s.ok("task", "add", "--title", state, "--size", "small");
+    const t = rows(s.dir, "tasks").at(-1).id;
+    stateIs(s, t, state);
+    const before = readFileSync(join(s.dir, "tasks.tsv"), "utf8");
+    assert.equal(s.no("task", t, "set", "waits=T1"), `sage: ${t} is ${state}: an ended task waits for nothing, so it takes no new wait. waits= clears a wait. Nothing changed.`, state);
+    assert.equal(readFileSync(join(s.dir, "tasks.tsv"), "utf8"), before, `${state}: the refused wait is not written`);
+  }
+  stateIs(s, "T2", "abandoned");
+  assert.match(s.ok("task", "T2", "set", "waits="), /^T2 abandoned · /, "waits= clears the wait of an ended task");
+  assert.equal(rows(s.dir, "tasks")[1].waits, "");
+});
+
+test("R1155-2, R1154-2, R1154-3: the not-on-PR hint names a PR only for a wait of this merge check whose task is on a PR that the waiting task is not on", () => {
+  const head = "T2 waits for T1 (verified): it merges after that task is merged or concluded, or passes in this same merge on the same PR.";
+  const alone = ` ${head} To merge, make each one pass`; // T2's reason with no hint, then the end of the merge check's text
+  // M2: a task of the same PR that fails: no hint, as T2 is on that PR already.
+  const same = twoOnSha("5", "5");
+  byHand(same.dir, "ledger", 0, "T1", (cells) => cells.with(3, "qa-fail"));
+  for (const args of [["--pr", "5"], []]) assert.ok(same.no("merge-check", "--sha", SHA, ...args).includes(alone), `same PR, no hint: merge-check ${args.join(" ")}`);
+  // M5: with --pr, a wait on a task of another PR: T2 is on PR 5 already, so no PR to set.
+  assert.ok(twoOnSha("6", "5").no("merge-check", "--sha", SHA, "--pr", "5").includes(alone), "another PR with --pr: no hint");
+  // A wait on a task that is not in this merge check, or whose PR cell is not digits: no hint, and the refusal stays.
+  const away = twoOnSha("6", "5");
+  writeFileSync(join(away.dir, "ledger.tsv"), readFileSync(join(away.dir, "ledger.tsv"), "utf8").split("\n").filter((l) => !l.startsWith("T1\t")).join("\n"));
+  assert.equal(away.no("merge-check", "--sha", SHA), `sage: ${head}`, "T1 has no verdicts on this SHA");
+  const odd = twoOnSha("6", "5");
+  byHand(odd.dir, "tasks", 0, "T1", (cells) => cells.with(7, "#6"));
+  assert.ok(odd.no("merge-check", "--sha", SHA).includes(alone), "a PR cell that is not digits names no PR");
+  // M7: with --pr, the same PR is the PR history: T1 left PR 5 after its verdicts there, and still meets T2's wait.
+  const moved = twoOnSha("5", "5");
+  moved.ok("task", "T1", "set", "pr=7");
+  assert.match(moved.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts on a1b2c3d or belong to PR 5, and each must pass: /);
+});
+
 test("R1124-2: the merge check of dense waits in one merge is linear: 60 tasks, each waiting for the 20 before it, all on one PR", async () => {
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "tiny");
@@ -2594,17 +2648,16 @@ test("R1128-3: a hand-edited waits cell is read with the ids parser: its other t
   assert.match(s.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts/);
 });
 
-test("R1130-1, R1140-2, R1140-3: the README names the update command and the restart before waits, and teaches a pair on one PR", () => {
+test("R1130-1, R1140-2, R1140-3, R1157-2, R1157-3: the README gives the update command and the restart first in both waits places, and teaches a pair on one PR that you merge", () => {
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-  const lines = [
-    "Before you use waits, run `claude plugin update sage@sage` (see To update sage), then restart every session that was already open: an older session still merges a waiting task.",
-    "To merge two tasks on one pull request, build both under the first task. The waiting task takes the same `pr=` and records its own verdicts with `--pr`; set its wait after its build, or give it no build of its own. It moves to merged after the first one.",
-  ];
-  for (const line of lines) {
-    const rows = readme.split("\n").filter((l) => l.includes(line));
-    assert.equal(rows.length, 2, `once in the usage guide's table and once in what's new: ${line}`);
-    assert.ok(rows.some((l) => l.startsWith("| A task can wait")) && rows.some((l) => l.startsWith("- **A task can wait")));
-  }
+  const warn = "Before you use waits, run `claude plugin update sage@sage` (see To update sage), then restart every session that was already open: an older session still merges a waiting task.";
+  const pair = "To merge two tasks on one pull request, build both under the first task. The waiting task takes the same `pr=` and records its own verdicts with `--pr`, and gets its wait after its build. It moves to merged after the first one. Autopilot does not merge such a pull request, because its head branch is not a branch of each task: you merge it.";
+  const rows = readme.split("\n").filter((l) => l.includes(warn));
+  assert.equal(rows.length, 2, "once in the usage guide's table and once in what's new");
+  assert.ok(rows[0].startsWith(`| ${warn} A task can wait`), "the warning starts the table's cell");
+  assert.ok(rows[1].startsWith(`- **A task can wait for other tasks.** ${warn} `), "the warning starts the what's-new text");
+  for (const row of rows) assert.ok(row.includes(pair), "each place teaches the pair");
+  assert.ok(!readme.includes("no build of its own"), "no option to record states that did not happen");
   assert.ok(readme.includes("**To update sage**"), "the section that the line names");
 });
 

@@ -1262,10 +1262,11 @@ const waitFix = (task, open) => {
     open.some(({ odd }) => odd) ? ` A hand edit put that text there: set the waits again (${how}).` : "",
   ].join("");
 };
-/** Refuses work of what on a task with an unmet wait, and names each unmet task with its state. A move to merged opens the waits on it, so it refuses too. */
+/** Refuses work of what on a task with an unmet wait, and names each unmet task with its state. A move to merged or concluded opens the waits on it, so it refuses too. */
 const waitsMet = (task, tasks, what) => {
   const open = unmetWaits(task, byIds(tasks));
-  const after = what === "move to merged" ? "it moves to merged after each of them is merged or concluded." : "it starts after each of them is merged or concluded. Its design and PE may run.";
+  const end = { "move to merged": "merged", "move to concluded": "concluded" }[what];
+  const after = end ? `it moves to ${end} after each of them is merged or concluded.` : "it starts after each of them is merged or concluded. Its design and PE may run.";
   if (open.length) refuse(`${task.id} waits for ${waitList(open)}, so it takes no ${what}: ${after}${waitFix(task, open)}`);
 };
 /** A task's waits for a printed line: each with its task's state, then the unmet ones. */
@@ -1346,7 +1347,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
       const was = task.state;
       move(task, v); // the design's states first; the table is written only if every check below passes
-      if (v === "building" || v === "merged") waitsMet(task, tasks, `move to ${v}`);
+      if (["building", "merged", "concluded"].includes(v)) waitsMet(task, tasks, `move to ${v}`);
       // A move to abandoned gives no round: the task ends (F-T286-3).
       if (was === "held" && task.hold === "round" && v !== "abandoned") {
         task.extra = String(extraOf(task) + 1);
@@ -1387,6 +1388,7 @@ function planTaskChanges(before, id, changes, at, facts) {
     else if (k === "waits") {
       const was = task.waits ?? "";
       task.waits = waitsValue(task, v, tasks);
+      if (task.waits && ["merged", "concluded", "abandoned"].includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task waits for nothing, so it takes no new wait. waits= clears a wait. Nothing changed.`);
       decided.push(...waitsDecision(task, was, at, "task set"));
     } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind= or waits=`);
   }
@@ -1632,7 +1634,8 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         return !!up && !dead(up.state) && samePr(waiter, up) && clear(up);
       };
       // A wait on a task of a PR that the waiting task is not on: name the PR to set, not a new commit (R1140-1).
-      const prOf = (up) => (pr ? (here.get(up.id)?.ofPr ? pr : "") : up.pr ? prNumber(up.pr) : "");
+      // Only a task of this merge check has a PR to name, and only a cell of digits names one (R1155-2, R1154-2).
+      const prOf = (up) => (pr ? (here.get(up.id)?.ofPr ? pr : "") : here.has(up.id) && PR.test(prNumber(up.pr)) ? prNumber(up.pr) : "");
       const offPr = (task, open) => {
         const by = new Map();
         for (const { id } of open) {
