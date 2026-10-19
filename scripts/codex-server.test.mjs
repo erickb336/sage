@@ -3977,6 +3977,19 @@ test('T57: core historical run receipts preserve the selected model after provid
 });
 
 
+test('T336: core native run creation refuses a lead run while a wait is unmet, as the CLI does, and creates a PE run', async t => {
+  const f = await runCreationFixture(t);
+  const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); } });
+  const cli = (...args) => tool.sage([...args, '--project', f.options.projectDirectory], f.env);
+  cli('task', 'add', '--title', 'Upstream', '--size', 'small');
+  cli('task', 'T1', 'set', 'waits=T2');
+  const input = { ...f.input, project: f.options.projectDirectory, owner: 'test-owner' };
+  const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
+  assert.throws(() => tool.createRequestedRun(input, f.env), { message: 'T1 waits for T2 (framed), so it takes no lead run: it starts after each of them is merged or concluded. Its design and PE may run.' });
+  assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
+  assert.equal(tool.createRequestedRun({ ...input, role: 'pe', request: turns[2] }, f.env).run.role, 'pe');
+});
+
 test('T57: historical run receipts preserve a nonzero round and timestamp after clock advancement', async t => {
   const f = await runCreationFixture(t);
   for (const state of ['briefed', 'building', 'reviewing']) f.cli('task', 'T1', 'set', `state=${state}`);

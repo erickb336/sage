@@ -20,7 +20,7 @@ A part marked "coming with programs" describes programs, a feature that is appro
 | --- | --- | --- |
 | **request** | What the owner asks for in the chat, in the owner's words, before sage frames it. | ask, ticket, issue, prompt |
 | **program** | (Coming with programs.) A request that sage runs as two or more tasks for one goal, where at least one task waits for another. It has a goal, a done condition (a count of merged tasks), a breakdown that the owner approves, and one pilot task. | project (a project is one repository and its logbook), epic, initiative, plan, roadmap |
-| **task** | One unit of work in one project, with one route and at most one pull request. Coming with programs: it is in at most one program, and it may wait for other tasks ("waits for": it starts only when they are merged). | job, ticket, issue, item, unit, phase, step |
+| **task** | One unit of work in one project, with one route and at most one pull request. It may wait for other tasks of its logbook ("waits for": it builds and merges only after they are merged or concluded). Coming with programs: it is in at most one program. | job, ticket, issue, item, unit, phase, step |
 | **step** | One block of a task's route, done by one agent role: design, arena, pe, build, code-review, security-review, ux-review, qa, investigate, evidence-review. | stage, phase; never "step" for a task of a program (the approved plan's "step 0 to 4" are tasks T4 to T8) |
 | **route** | The ordered steps of one task, set by its size and risk flags. | pipeline, workflow, flow, process |
 | **run** | One agent's work on one step of a task, from brief to report; it has an id such as R12. Coming with programs: also the PE check of a breakdown. | job, attempt, session, invocation, execution |
@@ -42,7 +42,7 @@ A part marked "coming with programs" describes programs, a feature that is appro
 These are not new words. They are fixed phrases inside the lines above, so that the list stays at 18 words.
 
 - **breakdown** (coming with programs): the content of a program that the owner approves (goal, done condition, tasks, "waits for" links, pilot, cost, questions). In the program line.
-- **waits for** (coming with programs): the link from a task to a task or a pull request that must merge first. In the task line. A circle of such links is a **loop**, and sage refuses it.
+- **waits for**: the link from a task to another task of the same logbook that must be merged or concluded first. In the task line. A circle of such links is a **loop**, and sage refuses it.
 - **pilot** (coming with programs): the one task of a program that runs end to end before any other task builds. In the program line.
 - **done condition** (coming with programs): the count that ends a program, for example "6 of 6 tasks merged, each verified". In the program line.
 - **round**: one repair of findings on a task. In the cycle line.

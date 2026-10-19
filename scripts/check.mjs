@@ -8,6 +8,7 @@ import { BRIEF_FIELDS as CORE_BRIEF_FIELDS } from "../packages/sage-core/index.m
 import { TASK_KINDS } from "../packages/sage-core/logbook-fields.mjs";
 import { BRIEF_FIELDS, FINDING_FORM, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
 import { fingerprint, overrides } from "./sync-pstack.mjs";
+import { withoutPrinciplesTable } from "./principles-table.mjs";
 import { files as graphics } from "./graphics.mjs";
 import { packageBoundaryProblems } from "./package-boundaries.mjs";
 
@@ -147,7 +148,9 @@ const readByPeople = [
   ...readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg")).map((f) => `docs/assets/${f}`),
 ];
 for (const f of dictionary ? readByPeople : []) {
-  const found = flaggedWords(readFileSync(join(ROOT, f), "utf8"), dictionary, { html: !f.endsWith(".md") });
+  const text = readFileSync(join(ROOT, f), "utf8");
+  // The README's principles table is generated from the principles, like the generated skills that this check leaves out.
+  const found = flaggedWords(f === "README.md" ? withoutPrinciplesTable(text) : text, dictionary, { html: !f.endsWith(".md") });
   // A graphic's text comes from scripts/graphics.mjs, and nobody edits an SVG by hand.
   for (const h of found) problems.push(`${f}:${h.line}: "${h.word}" is a flagged word${h.use.length ? `; say ${h.use.join(" or ")}` : ""} (writing/dictionary.md)${f.startsWith("docs/assets/") ? "; fix it in scripts/graphics.mjs, then run npm run graphics" : ""}`);
 }
