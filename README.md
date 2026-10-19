@@ -14,7 +14,7 @@
 
 **Contents:** [Quick start](#quick-start) · [Learn sage in 5 minutes](#learn-sage-in-5-minutes) · [Why "sage"?](#why-sage) · [How it works](#how-it-works) · [Concepts](#concepts) · [What to say](#what-to-say) · [Principles](#principles) · [Following pstack](#following-pstack) · [Remote Control](#remote-control) · [FAQ](#faq) · [Under the hood](#under-the-hood) · [Credits](#credits)
 
-It also gives every session 25 short working principles at the moment they apply.
+It also gives every session short working principles, most of them from pstack, at the moment they apply.
 
 **Codex:** a separate plugin includes the same principles, writing guides and manual logbook commands. Sage mode and autopilot remain Claude-only. See [Codex setup and package boundaries](docs/design/provider-packages.md).
 
@@ -385,7 +385,48 @@ The [board service guide](packages/sage-board/README.md) gives local startup, st
 
 ## Principles
 
-A principle is a short rule for one kind of moment, for example "test behaviour, not implementation" when you change a test. There are 25. My own versions win over pstack's where both exist.
+A principle is a short rule for one kind of moment, for example "test behaviour, not implementation" when you change a test.
+
+<!-- The principles table comes from principles/ and upstream/pstack/: edit them there, then run npm run build. -->
+
+There are 25 principles: 24 are pstack's, by Lauren Tan (MIT), and 1 is sage's own. Where sage has an adapted version of a pstack principle, sage uses it.
+
+<details>
+<summary><strong>All 25 principles</strong></summary>
+
+| Principle | Apply when | Text |
+| --- | --- | --- |
+| attack-the-premise | two or more fixes that share one premise have failed the same check or review | pstack, adapted |
+| boundary-discipline | reviewing or writing validation, error handling or framework adapters | pstack, adapted |
+| build-the-lever | any non-trivial work, not just bulk work: edits, migrations, analyses, checks | pstack |
+| contextualize-and-write-for-the-reader | writing anything someone else will read later: a design, a handoff, findings, a report, a verification, a brief, a reply | sage's own |
+| encode-lessons-in-structure | writing the same instruction a second time, or noticing a correction that keeps recurring | pstack, adapted |
+| exhaust-the-design-space | a new interaction or an architectural choice has no precedent in the code | pstack, adapted |
+| experience-first | a product, UX or scope trade-off comes up | pstack, adapted |
+| explain-the-number | before you trust, report, or act on a number you measured: a speedup, a regression, a throughput, a latency, or an eval result | pstack |
+| fix-root-causes | debugging a failure or repairing a finding | pstack, adapted |
+| foundational-thinking | before writing logic, when choosing core types and data structures or ordering scaffold against features | pstack, adapted |
+| guard-the-context-window | context is filling up: large outputs, long files, repeated reads, fan-out planning | pstack |
+| laziness-protocol | refactoring, judging a diff's size, or tempted to add an abstraction, a layer or a threaded signal | pstack, adapted |
+| make-operations-idempotent | designing commands, lifecycle steps, or processing loops that run amid crashes, restarts, and retries | pstack |
+| migrate-callers-then-delete-legacy-apis | a change introduces a new internal API while callers of the old one still exist | pstack, adapted |
+| minimize-reader-load | reviewing or shaping code that is hard to follow | pstack, adapted |
+| model-the-domain | writing stateful logic, or when code branches a lot or repeats a shape assumption across files | pstack |
+| never-block-on-the-human | tempted to ask "should I do X?" about reversible work | pstack, adapted |
+| outcome-oriented-execution | during planned rewrites and migrations with explicit phase boundaries | pstack |
+| prove-it-works | before declaring a task done, or when judging a claim that something works | pstack, adapted |
+| redesign-from-first-principles | integrating a new requirement into an existing design | pstack |
+| separate-before-serializing-shared-state | concurrent actors might write to the same file, branch, key, or state object | pstack |
+| sequence-verifiable-units | multi-step work (a sweep, a migration, a run of similar edits) or the order of commits in a change | pstack, adapted |
+| subtract-before-you-add | ordering an addition, a refactor or a rewrite | pstack, adapted |
+| test-behavior-not-implementation | writing, changing or keeping a test | pstack, adapted |
+| type-system-discipline | designing types, reviewing a function signature, or writing code in any statically-typed language | pstack |
+
+Every principle except sage's own is pstack's, by Lauren Tan (MIT). "pstack" is pstack's text as it is, from `upstream/pstack/`. "pstack, adapted" means that sage changed the wording: it is shorter, and it follows sage's writing standard. Its `upstream:` fingerprint records which pstack text it was checked against. "sage's own" has no pstack source.
+
+</details>
+
+<!-- The end of the principles table. -->
 
 Agents seldom load a skill by themselves, so a **hook** gives the principle at the moment it applies, once per session.
 
@@ -402,41 +443,6 @@ Agents seldom load a skill by themselves, so a **hook** gives the principle at t
 
 The hook also has **one check**, the stop check. When the agent tries to finish, the code changed, and no check ran after the change, it stops the agent once. The agent must run a check or say what it did not verify.
 
-<details>
-<summary><strong>All 25 principles</strong></summary>
-
-| Principle | Apply when | Text |
-| --- | --- | --- |
-| attack-the-premise | two or more fixes that share one premise failed the same check | mine |
-| boundary-discipline | writing or reviewing validation, error handling or adapters | mine |
-| build-the-lever | any non-trivial work: build the tool that does it or proves it | pstack |
-| contextualize-and-write-for-the-reader | writing anything that someone reads later | mine |
-| encode-lessons-in-structure | you write the same instruction a second time | mine |
-| exhaust-the-design-space | a new interaction or architecture has no precedent | mine |
-| experience-first | a product, UX or scope trade-off comes up | mine |
-| explain-the-number | before you trust or report a number you measured | pstack |
-| fix-root-causes | debugging a failure or repairing a finding | mine |
-| foundational-thinking | before writing logic: types, data, order of work | mine |
-| guard-the-context-window | the context fills up with large outputs or many reads | pstack |
-| laziness-protocol | refactoring, judging a diff's size, or adding a layer | mine |
-| make-operations-idempotent | commands and loops that must survive crashes and retries | pstack |
-| migrate-callers-then-delete-legacy-apis | a new internal API replaces an old one | mine |
-| minimize-reader-load | code is hard to follow | mine |
-| model-the-domain | stateful logic, or the same shape assumed in many files | pstack |
-| never-block-on-the-human | tempted to ask "should I?" about reversible work | mine |
-| outcome-oriented-execution | a planned rewrite or migration in phases | pstack |
-| prove-it-works | before declaring a task done | mine |
-| redesign-from-first-principles | a new requirement meets an existing design | pstack |
-| separate-before-serializing-shared-state | several actors may write the same file, branch or key | pstack |
-| sequence-verifiable-units | multi-step work, and the order of commits | mine |
-| subtract-before-you-add | ordering an addition, a refactor or a rewrite | mine |
-| test-behavior-not-implementation | writing, changing or keeping a test | mine |
-| type-system-discipline | designing types or code in a typed language | pstack |
-
-"mine" is my rewrite of pstack's principle, or my own (contextualize-and-write-for-the-reader). "pstack" is pstack's text as it is.
-
-</details>
-
 ## Following pstack
 
 pstack changes often. sage follows it so that you don't have to.
@@ -449,8 +455,8 @@ pstack changes often. sage follows it so that you don't have to.
 </a>
 
 1. `upstream/pstack/` holds pstack's principles and its MIT licence, at the commit in `upstream/pstack.json`.
-2. The build takes each pstack principle as it is, unless `principles/` has my version with the same name.
-3. Every Monday, a workflow brings pstack up to date, rebuilds, and runs the checks and tests. The update merges by itself, unless pstack changed a principle that I rewrote. Then its pull request waits for me, with the change listed.
+2. The build takes each pstack principle as it is, unless `principles/` has sage's adapted version with the same name.
+3. Every Monday, a workflow brings pstack up to date, rebuilds, and runs the checks and tests. The update merges by itself, unless pstack changed a principle that sage adapted. Then its pull request waits for me, with the change listed.
 
 Only principles come in for now. pstack's own modes (poteto mode, orchestrate, autopilot) stay out, because sage mode is the orchestration layer here. Each other pstack skill comes in only when it works in Claude Code and has a test.
 
@@ -510,7 +516,7 @@ While the server runs, your claude.ai account can start sessions on your compute
 | `plugins/sage/skills/` | The skills: one per principle (generated), the writing standard and the README guide (generated), `remote-control`, `sage-help`, the state tool `sage`, and `report`. |
 | `plugins/sage/hooks/` | Built Claude hooks. |
 | `plugins/sage-codex/` | Built Codex plugin, without Claude hooks or agents. |
-| `principles/` | My principles: my own, and my versions of pstack's. |
+| `principles/` | Principles: pstack's, most of them adapted to sage's writing standard, and sage's own. |
 | `upstream/pstack/` | pstack's principles, kept up to date by the sync. |
 | `writing/ste-80.md` | The writing standard: about 80% of ASD-STE100, Simplified Technical English. |
 | `writing/readme.md` | The README guide: how to write a project README, with examples and a checklist. |
