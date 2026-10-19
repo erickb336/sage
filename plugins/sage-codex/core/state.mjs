@@ -22,7 +22,7 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
-import { HIDDEN, NAME_MAX, PRIORITIES, TASK_KINDS, nameProblem } from "./logbook-fields.mjs";
+import { AGENT_CAPS, HIDDEN, NAME_MAX, PRIORITIES, TASK_KINDS, countOf, nameProblem } from "./logbook-fields.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -71,7 +71,7 @@ const NEXT = {
   abandoned: [],
 };
 const STATES = Object.keys(NEXT);
-const DEFAULTS = { max_agents: 4, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "inherit,inherit,inherit", cap_total: 12, ...modelDefaults };
+const DEFAULTS = { max_agents: AGENT_CAPS.max_agents, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "inherit,inherit,inherit", cap_total: AGENT_CAPS.cap_total, ...modelDefaults };
 /** The counts in the config, and what a 0 would do. Each count is a whole number of 1 or more. */
 /** The owner's floors (gate G18): a large or risk-flagged task needs at least 2 clean cycles. Only a code change lowers them; every other count is 1 or more. */
 const FLOOR = { "cycles.large": 2, "cycles.risk": 2 };
@@ -214,9 +214,6 @@ function storeDir(project, env = process.env) {
   return join(sageRoot(env), `${projectName(root)}-${createHash("sha1").update(root).digest("hex").slice(0, 6)}`);
 }
 
-/** A decimal number, also with spaces around it, a sign, leading zeros, a fraction or an exponent: "03", " 2", "-1", "2.5". */
-const NUMERIC = /^\s*[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?\s*$/i;
-
 /**
  * A config value in its stored form, or undefined when it has no number. One rule reads every count: a finite number,
  * or a numeric string. A cycles count rounds up, and any other count rounds down. Below its floor a count reads as the
@@ -231,10 +228,7 @@ function valid(key, value) {
   if (MODEL.test(key)) return MODELS.includes(value) ? value : undefined;
   if (!(Object.hasOwn(COUNTS, key) || CAP.test(key))) return undefined;
   const cycles = key.startsWith("cycles.");
-  let n = typeof value === "number" || (typeof value === "string" && NUMERIC.test(value)) ? Number(value) : NaN;
-  if (!Number.isFinite(n)) return undefined;
-  n = Math.max(cycles ? Math.ceil(n) : Math.floor(n), floor(key));
-  return cycles ? n : Math.min(n, limit(key));
+  return countOf(value, { floor: floor(key), limit: cycles ? Infinity : limit(key), up: cycles });
 }
 
 /** A count typed on the command line, or undefined when it is not a whole number from its floor to its limit. */

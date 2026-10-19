@@ -9,6 +9,26 @@ export const TASK_KINDS = ["design", "ui", "orchestration", "optimization", "bug
 /** The most characters of a display name. */
 export const NAME_MAX = 60;
 
+/** A decimal number, also with spaces around it, a sign, leading zeros, a fraction or an exponent: "03", " 2", "-1", "2.5". */
+const NUMERIC = /^\s*[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?\s*$/i;
+/**
+ * A config count, or undefined when the value has no number: a finite number, or a numeric string. It rounds up (up) or
+ * down, then reads as floor when below it and as limit when above it. The state tool reads every count with this rule,
+ * and the board reads the agent caps with it, so the two never disagree.
+ */
+export function countOf(value, { floor = 1, limit = 50, up = false } = {}) {
+  const n = typeof value === "number" || (typeof value === "string" && NUMERIC.test(value)) ? Number(value) : NaN;
+  return Number.isFinite(n) ? Math.min(Math.max(up ? Math.ceil(n) : Math.floor(n), floor), limit) : undefined;
+}
+/** The agent caps without a config: max_agents for each project (unless cap.<project> is set), cap_total for all. */
+export const AGENT_CAPS = { max_agents: 4, cap_total: 12 };
+/** The agent caps of a sage root's parsed config.json, as the hook applies them: cap(<project name>) and the total. */
+export function agentCaps(config) {
+  const c = config && typeof config === "object" && !Array.isArray(config) ? config : {};
+  const max = countOf(c.max_agents) ?? AGENT_CAPS.max_agents;
+  return { total: countOf(c.cap_total) ?? AGENT_CAPS.cap_total, cap: project => countOf(c[`cap.${project}`]) ?? max };
+}
+
 /**
  * The characters that a person does not see but a terminal or an agent acts on: the controls but tab and line feed (C0,
  * DEL and C1), the bidi embeddings, overrides, isolates and marks (U+202A-202E, U+2066-2069, U+200E, U+200F, U+061C), the

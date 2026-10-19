@@ -312,6 +312,29 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
 .emptyboard{border:1px dashed var(--line);border-radius:8px;padding:12px;margin:0 20px 12px;font-size:12px;color:var(--muted)}
 .emptyboard b{color:var(--text);display:block;margin-bottom:2px}
 .linkbtn{background:none;border:0;padding:0;margin-top:6px;font:inherit;color:var(--accent);text-decoration:underline;cursor:pointer}
+.boardtabs{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex:none}
+.boardtabs a{padding:5px 12px;text-decoration:none;color:var(--muted);min-height:30px;display:inline-flex;align-items:center}
+.boardtabs a+a{border-left:1px solid var(--line)}.boardtabs a[aria-current="page"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.caps{display:flex;flex-wrap:wrap;gap:4px 10px;padding:0 20px 10px;font-size:12px;color:var(--muted)}
+.cap{display:inline-flex;gap:5px;align-items:center;white-space:nowrap}.cap .bar{display:inline-flex;gap:2px}.cap .bar i{width:6px;height:10px;border-radius:2px;background:var(--line)}.cap .bar i.on{background:var(--run)}
+.cap.full{color:var(--warn);font-weight:600}.cap.full .bar i.on{background:var(--warn)}
+.agentsview{padding:0 20px 8px}.group{border:1px solid var(--line);background:var(--panel);border-radius:10px;margin:0 0 12px;overflow:hidden}
+.ghead{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:9px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
+.ghead h2{margin:0;font-size:13px;font-weight:650;overflow-wrap:anywhere}.ghead .n{color:var(--muted);font-size:12px}.ghead .gcap{margin-left:auto;font-size:12px;color:var(--muted)}
+.alist,.alist ul{list-style:none;margin:0;padding:0}
+.arow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:9px 12px;border-top:1px solid var(--line)}.alist>li:first-child>.arow{border-top:0}
+.arow.child{padding-left:34px;position:relative}.arow.child::before{content:"";position:absolute;left:18px;top:0;bottom:0;border-left:1px solid var(--line)}.arow.child::after{content:"";position:absolute;left:18px;top:19px;width:9px;border-top:1px solid var(--line)}
+.amain{min-width:0}.l1,.l2{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;min-width:0}.l2{margin-top:2px}.role{font-weight:650}
+.l2 .t{color:var(--text);text-decoration:none;font-weight:500;overflow-wrap:anywhere}.l2 a.t:hover{text-decoration:underline}
+.l3{color:var(--muted);font-size:11.5px;margin-top:2px;display:flex;flex-wrap:wrap;gap:2px 10px}
+.ptag{font-size:10.5px;border:1px solid currentColor;border-radius:4px;padding:0 5px;font-weight:550;white-space:nowrap;color:var(--muted)}.ptag-claude{color:var(--p2)}.ptag-codex{color:var(--p6)}
+.rside{text-align:right;max-width:300px;display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.st{display:inline-flex;gap:5px;align-items:baseline;font-size:12px;font-weight:600}.st .m{font-weight:700;width:12px;text-align:center;flex:none}
+.st-work{color:var(--ok)}.st-wait{color:var(--run)}.st-stuck,.st-stop{color:var(--need)}.st-long{color:var(--warn)}.st-unk{color:var(--muted)}
+.awhy{font-size:11.5px;color:var(--muted);font-weight:400;overflow-wrap:anywhere}
+.arow.flag{background:linear-gradient(90deg,var(--need-soft),transparent 60%)}.arow.flagw{background:linear-gradient(90deg,var(--warn-soft),transparent 60%)}
+.rules{margin:4px 20px 28px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:12px;color:var(--muted)}
+.rules h2{margin:0 0 6px;font-size:12.5px;color:var(--text)}.rules ul{margin:0;padding-left:18px}.rules li{margin:2px 0}.rules b{color:var(--text)}
 @media (min-width:701px) and (max-width:1180px){
  .board{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr));overflow-x:visible}
 }
@@ -324,9 +347,11 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
  .board{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:1fr;padding:6px 16px 20px;overflow:visible}
  .col{min-height:0}.col.needs-col{order:-1}.col.empty-col{display:none}
  .page{padding:14px 16px 32px}.detail{grid-template-columns:1fr}.ptitle{font-size:18px}
+ .caps{padding:0 16px 10px}.agentsview{padding:0 16px 8px}.rules{margin:4px 16px 24px}
+ .arow{grid-template-columns:minmax(0,1fr)}.rside{text-align:left;align-items:flex-start;flex-direction:row;flex-wrap:wrap;gap:4px 10px;max-width:none}
 }
 @media (max-width:700px),(pointer:coarse){
- .chip,.trigger,select,.seg button,.morebtn,.opt,.back{min-height:44px}.linkbtn{min-height:44px;display:inline-flex;align-items:center}
+ .chip,.trigger,select,.seg button,.morebtn,.opt,.back,.boardtabs a{min-height:44px}.l2 a.t{display:inline-block;padding:13px 0;margin:-13px 0}.linkbtn{min-height:44px;display:inline-flex;align-items:center}
  .archived summary{min-height:44px;display:flex;align-items:center}.seg button{min-width:44px}
  details.fold>summary,details.rest>summary{min-height:44px;padding-top:13px;padding-bottom:13px;margin:0}
  .standin[tabindex],.ptop a[href]{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;margin:-14px 0;vertical-align:middle;position:relative;z-index:1}table.runs .standin[tabindex]{margin:0}table.runs td{vertical-align:middle}
@@ -457,9 +482,8 @@ filter();`;
 // gives back what the viewer had: the open details (by data-key), the page and column scroll, and the focus (by id). The
 // picker's state lives in the page script, which draws the new list again. The pill has no live region; a hidden status
 // line announces only a failure.
-function liveScript(taskKey) {
-  const stream = taskKey ? `/?events=1&task=${b64(taskKey)}` : "/?events=1";
-  return `const PARTS=['board-content','board-summary','board-filters','pick-list','pick-chips'],last={};PARTS.forEach(id=>{const e=$(id);if(e)last[id]=e.innerHTML});
+function liveScript(stream, parts = ["board-content", "board-summary", "board-filters", "pick-list", "pick-chips", "board-pages"]) {
+  return `const PARTS=${JSON.stringify(parts)},last={};PARTS.forEach(id=>{const e=$(id);if(e)last[id]=e.innerHTML});
 const stream=new EventSource(${JSON.stringify(stream)});const at=()=>$('board-content').dataset.at;
 const show=(kind,text)=>{const pill=$('live-state');if(pill){pill.className='livepill '+kind;pill.querySelector('.lt').textContent=text}const alert=$('live-alert');if(alert)alert.textContent=kind==='bad'?text:''};
 show('wait','Connecting…');
@@ -531,10 +555,62 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
     const nomatch = `<div class="emptyboard" id="nomatch" hidden><b>No task matches.</b> No visible task fits this filter. <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprov = `<div class="emptyboard" id="noprov" hidden><b>No <span id="noprov-who"></span> logbook in this project.</b> <span id="noprov-name"></span> has tasks only in <span id="noprov-has"></span>. <button class="linkbtn" type="button" data-showall>Show all providers</button></div>`;
     const gone = `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. The board shows all projects. <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
-    body = `<div class="boardview"><header><h1>Task board</h1>${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${gone}${empty}${nomatch}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
+    body = `<div class="boardview"><header>${snapshot ? "<h1>Task board</h1>" : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${gone}${empty}${nomatch}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
       + (snapshot ? `<div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}</div>` : "");
   }
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${task ? `${esc(task.id)} · ` : ""}Sage task board</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(taskKey) : ""}</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${task ? `${esc(task.id)} · ` : ""}Sage task board</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(taskKey ? `/?events=1&task=${b64(taskKey)}` : "/?events=1") : ""}</script></body></html>`;
+}
+
+/** The two pages of the served board, as links (T308): "Task board | Agents (n)". The count is the running agents. */
+const pagesNav = (current, model) => `<nav class="boardtabs" id="board-pages" aria-label="Board pages"><a href="/"${current === "board" ? ' aria-current="page"' : ""}>Task board</a><a href="/agents"${current === "agents" ? ' aria-current="page"' : ""}>Agents (${model.agents?.count ?? 0})</a></nav>`;
+
+// The Agents page (T308 layout A, approved 2026-10-18): one box per project with its cap, a lead's helpers under it,
+// the projects and the rows that need a look first. Each state has a mark and a word, never colour alone.
+const AGENT_STATE = { stuck: ["!", "may be stuck"], stop: ["■", "helper stopped, run still open"], long: ["▲", "running long"], wait: ["◷", "waiting for its helpers"], work: ["●", "working"], unk: ["○", "running"] };
+const agentState = value => AGENT_STATE[value] ? value : "unk";
+const minutesText = ms => { const m = Math.max(0, Math.floor(ms / 60000)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`; };
+const PROVIDER_TAGS = ["claude", "codex"];
+const capBar = (used, cap) => `<span class="bar" aria-hidden="true">${Array.from({ length: Math.min(cap, 50) }, (_, i) => `<i${i < used ? ' class="on"' : ""}></i>`).join("")}</span>`;
+const capText = (name, used, cap, bar = true) => `<span class="cap${used >= cap ? " full" : ""}">${bar ? capBar(used, cap) : ""}${esc(name)} ${used} of ${cap}${used >= cap ? " · at cap" : ""}</span>`;
+
+function agentRow(agent, live, child) {
+  const state = agentState(agent.state), [mark, word] = AGENT_STATE[state];
+  const flag = ["stuck", "stop"].includes(state) ? " flag" : state === "long" ? " flagw" : "";
+  const prov = agent.provider.toLowerCase();
+  const task = agent.task;
+  const link = task?.key && live ? `<a class="t" id="al-${b64(agent.key)}" href="${route(task)}"><span class="id">${esc(task.id)}</span> ${esc(task.title)}</a>`
+    : task ? `<span class="t"><span class="id">${esc(task.id)}</span> ${esc(task.title)}</span>` : `<span class="faint">${agent.runId ? `Run ${esc(agent.runId)} is not a running run in the logbook.` : "No run recorded: the agent's brief named no run."}</span>`;
+  const prio = task?.priority ? `<span class="tag prio" title="${task.priority}, ${PRIORITY_WORD[task.priority]}">${task.priority}<span class="vh">, ${PRIORITY_WORD[task.priority]}</span></span>` : "";
+  const facts = [agent.model ? `model ${esc(agent.model)}` : "", agent.running === null ? "time running not known" : `running ${minutesText(agent.running)}`, `last activity ${agent.idle === null ? "not recorded" : agent.idle < 60000 ? "just now" : `${minutesText(agent.idle)} ago`}`].filter(Boolean);
+  return `<div class="arow${child ? " child" : ""}${flag}"><div class="amain"><div class="l1"><span class="ptag ptag-${known(PROVIDER_TAGS, prov)}">${esc(title(agent.provider))}</span><span class="role">${esc(agent.role)}</span>${agent.runId ? `<span class="id">${esc(agent.runId)}</span>` : ""}${child ? `<span class="faint">helper of ${esc(agent.lead)}</span>` : ""}</div>`
+    + `<div class="l2">${link}${prio}${task ? kindTag(task) : ""}</div><div class="l3">${facts.map(fact => `<span>${fact}</span>`).join("")}</div></div>`
+    + `<div class="rside"><span class="st st-${state}"><span class="m" aria-hidden="true">${mark}</span>${word}</span>${agent.why ? `<span class="awhy">${esc(agent.why)}</span>` : ""}</div></div>`;
+}
+const agentItem = (agent, live) => `<li>${agentRow(agent, live, false)}${agent.children.length ? `<ul aria-label="Helpers of ${esc(agent.runId ?? agent.role)}">${agent.children.map(kid => `<li>${agentRow(kid, live, true)}</li>`).join("")}</ul>` : ""}</li>`;
+
+/** The Agents page: the totals and caps, the notes, one box per project, and how each state is decided. */
+export function renderAgentsHtml(model, { live = false, paths = false } = {}) {
+  const agents = model.agents, at = hhmm(model.at);
+  const pill = `<span class="livepill" id="live-state"><span class="ld" aria-hidden="true"></span><span class="lt">Board · ${esc(at)}</span></span><span class="vh" id="live-alert" role="status"></span>`;
+  const theme = `<input type="checkbox" id="flip" class="vh"><label class="chip theme" for="flip"><span class="to-light">Light theme</span><span class="to-dark">Dark theme</span></label>`;
+  const totals = `<div class="summary"><span><b>${agents.count}</b> agent${agents.count === 1 ? "" : "s"} running</span>${agents.providers.length ? `<span>${agents.providers.map(p => `<b>${p.count}</b> ${esc(p.name)}`).join(" · ")}</span>` : ""}${agents.look ? `<span><b class="needn">${agents.look}</b> need${agents.look === 1 ? "s" : ""} a look</span>` : ""}<span>built ${esc(day(model.at))} UTC</span></div>`;
+  const caps = agents.problems.length ? `<div class="caps">Caps: not known while the hook notes cannot be read.</div>`
+    : agents.caps.map(entry => `<div class="caps" aria-label="Agent caps, ${esc(entry.label)} agents"><span>Caps (${esc(entry.label)} agents):</span>${entry.projects.map(project => capText(project.name, project.used, project.cap)).join("")}${capText("total", entry.total.used, entry.total.cap, false)}</div>`).join("");
+  const problems = agents.problems.length ? `<div class="banner warn">${ICON}<div><b>The hook notes cannot be read</b> (${agents.problems.map(p => `${esc(p.source)}: ${esc(p.message)}`).join("; ")}). The page shows runs from the logbooks only, with no last activity and no helpers. Caps are not known.</div></div>` : "";
+  const unmatched = agents.unmatched.length ? `<div class="banner warn">${ICON}<div><b>${agents.unmatched.length} run${agents.unmatched.length === 1 ? " has" : "s have"} no hook record.</b> The logbook says ${agents.unmatched.map(item => `${esc(item.run)} (${esc(item.project)})`).join(", ")} ${agents.unmatched.length === 1 ? "runs" : "run"}, but no agent slot holds ${agents.unmatched.length === 1 ? "it" : "them"}. Each row stays, marked "may be stuck", until the sage ends the run.</div></div>` : "";
+  const box = project => `<section class="group" aria-labelledby="g-${b64(project.key)}"><div class="ghead"><h2 id="g-${b64(project.key)}">${esc(project.name)}</h2>${paths && project.pathSub ? `<span class="faint">${esc(project.pathSub)}</span>` : project.pathSub ? `<span class="faint">${esc(project.sub)}</span>` : ""}<span class="n">${project.count} running</span>${project.cap ? `<span class="gcap">${capText(`${project.cap.label} cap`, project.cap.used, project.cap.cap)}</span>` : ""}</div><ul class="alist">${project.agents.map(agent => agentItem(agent, live)).join("")}</ul></section>`;
+  const rules = agents.rules, list = agents.count ? `<div class="wrap">${agents.projects.map(box).join("")}</div>`
+    : `<div class="emptyboard"><b>No agent runs now.</b> When the sage starts an agent in any project, it shows here within a few seconds. The ${live ? '<a href="/">Task board</a>' : "Task board"} shows what comes next.</div>`;
+  const how = `<section class="rules" aria-label="How the page decides each state"><h2>How each state is decided</h2><ul>`
+    + `<li><b>${AGENT_STATE.work[0]} working</b>: the hook saw the agent in the last ${rules.quiet} min.</li>`
+    + `<li><b>${AGENT_STATE.wait[0]} waiting for its helpers</b>: a lead with at least one helper that still runs. A quiet lead is normal then.</li>`
+    + `<li><b>${AGENT_STATE.stuck[0]} may be stuck</b>: no activity for ${rules.quiet} min or more, and no running helper; or the logbook says the run runs, and no agent slot holds it (the hook frees a slot after 60 min with no activity).</li>`
+    + `<li><b>${AGENT_STATE.long[0]} running long</b>: the time running is more than ${rules.factor} times the median of the same role's ended runs in this project (it needs ${rules.basis} ended runs).</li>`
+    + `<li><b>${AGENT_STATE.stop[0]} helper stopped, run still open</b>: the hook saw the helper stop, but the logbook still says the run runs. The sage must end the run.</li>`
+    + `<li><b>${AGENT_STATE.unk[0]} running</b>: the logbook says the run runs, and no activity is recorded (Codex sends no activity notes yet).</li></ul></section>`;
+  const body = `<div class="boardview"><header><h1>Sage board</h1>${live ? pagesNav("agents", model) : ""}${pill}<span class="spacer"></span>${theme}</header>`
+    + `<div id="board-content" data-at="${esc(at)}">${totals}${caps}${banners(model)}${problems}${unmatched}<main class="agentsview">${list}</main>${how}</div></div>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sage agents</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript("/agents?events=1", ["board-content", "board-pages"]) : ""}</script></body></html>`;
 }
 
 const columnMark = key => ({ backlog: "📋", design: "🎨", building: "🔨", review: "🔁", ready: "✅", done: "🏁" }[key]);

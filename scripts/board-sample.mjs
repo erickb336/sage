@@ -8,9 +8,10 @@
 // It prints the board sources as JSON: give them to createBoardServer, or to readBoardSources and buildBoardModel.
 // The set: 9 projects; one repository with a Claude and a Codex logbook (one project on the board); one repository in
 // two clones (two projects); long titles; an archived project; a display name with an upstream; a project with no
-// remote; gates; closed and moved findings; earlier runs; a stale run; every priority and every kind.
+// remote; gates; closed and moved findings; earlier runs; a stale run; every priority and every kind; and the Claude
+// hook's agent slots and helper notes for the Agents page (T308).
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -174,7 +175,68 @@ export function writeSampleLogbooks(folder, { now = new Date().toISOString(), en
   repo({ folder: "old-site", origin: "sample-owner/old-site", archived: true, books: { codex: { tasks: [task("T2", "Sample: a dark mode", "framed", { kind: "ui" }), task("T3", "Sample: the old held task", "held")], decisions: [{ at: ago(60 * 24), task: "T2", decision: "task framed", why: "sample" }] } } });
   // 8. Idle for 3 weeks.
   repo({ folder: "recipes-app", origin: "sample-owner/recipes", books: { claude: { tasks: [task("T8", "Sample: scale a recipe", "framed", { kind: "optimization" })], decisions: [{ at: ago(21 * 24), task: "T8", decision: "task framed", why: "sample" }] } } });
+  hookNotes(join(folder, "claude"), at);
   return sources;
+}
+
+/**
+ * SAMPLE agent slots and helper notes of the Claude hook (T308), as sage-hook.mjs writes them under <root>/.hooks: one
+ * folder per slot, one empty file per mark, and the folder's change time as the agent's last activity. It adds the
+ * running runs that the slots hold to the sample logbooks, and a cap. The set: a lead with three helpers (two working,
+ * one stopped while its run is still open), a run that runs long, two reviewers from the chief, a quiet agent that may be
+ * stuck, a run that no slot holds, and a slot from an older hook with no run mark.
+ */
+function hookNotes(root, at) {
+  const sha256 = text => createHash("sha256").update(text).digest("hex");
+  const book = name => readdirSync(root).find(entry => entry.startsWith(`${name}-`));
+  const minutes = n => new Date(at - n * 60000);
+  const iso = n => minutes(n).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const addRuns = (name, rows) => {
+    const file = join(root, book(name), "runs.tsv"), [head, ...lines] = readFileSync(file, "utf8").replace(/\n+$/, "").split("\n"), columns = head.split("\t");
+    writeFileSync(file, [head, ...lines, ...rows.map(row => columns.map(column => String(row[column] ?? "")).join("\t"))].join("\n") + "\n");
+  };
+  const slots = join(root, ".hooks", "slots"), helpers = join(root, ".hooks", "helpers");
+  mkdirSync(helpers, { recursive: true });
+  let n = 0;
+  const slot = (marks, idle) => {
+    const dir = join(slots, `slot-${++n}`);
+    mkdirSync(dir, { recursive: true });
+    for (const mark of [...marks, "ok", "exact", `session-sample`, `scope-${sha256("sample")}`]) writeFileSync(join(dir, mark), "");
+    utimesSync(dir, minutes(idle), minutes(idle));
+  };
+  const note = (name, ago) => { writeFileSync(join(helpers, name), "{}"); utimesSync(join(helpers, name), minutes(ago), minutes(ago)); };
+  // sage: the lead of T301 and its helpers. R213 runs long: an implementer here usually takes about 30 min.
+  const sage = join(root, book("sage")), logbook = sha256(sage), lead = sha256(`${logbook}:R240`), agent = sha256("sample lead agent");
+  addRuns("sage", [
+    { id: "R240", task: "T301", role: "lead", round: "0", status: "running", started: iso(55), model: "opus" },
+    { id: "R241", task: "T301", role: "qa", round: "0", status: "running", started: iso(20), model: "sonnet" },
+    { id: "R242", task: "T301", role: "ux-reviewer", round: "0", status: "running", started: iso(22), model: "sonnet" },
+  ]);
+  slot(["project-sage", "role-sage_lead", "task-T301", `logbook-${logbook}`, "run-R240", `bound-${agent}`], 1);
+  for (const [run, role, idle] of [["R203", "security-reviewer", 1], ["R241", "qa", 3]]) {
+    slot(["project-sage", `role-sage_${role}`, `run-${run}`, `parent-${agent}`, `helper-${lead}.${run}`, `bound-${sha256(run)}`], idle);
+    note(`started-${lead}.${run}`, 20);
+  }
+  note(`started-${lead}.R242`, 22);
+  note(`stopped-${lead}.R242`, 14);
+  slot(["project-sage", "role-sage_implementer", "run-R213", `bound-${sha256("R213")}`], 2);
+  slot(["project-sage", "role-sage_implementer", "run-R230", `bound-${sha256("R230")}`], 5);
+  // Council Record: two reviewers that the chief started.
+  addRuns("product-demos", [
+    { id: "R50", task: "T41", role: "code-reviewer", round: "0", status: "running", started: iso(18), model: "opus" },
+    { id: "R51", task: "T41", role: "qa", round: "0", status: "running", started: iso(17), model: "sonnet" },
+  ]);
+  slot(["project-product-demos", "role-sage_code-reviewer", "run-R50", `bound-${sha256("R50")}`], 0);
+  slot(["project-product-demos", "role-sage_qa", "run-R51", `bound-${sha256("R51")}`], 1);
+  // home-lab: a PE with no activity for 41 min, and a run that no slot holds (its slot ended after an hour).
+  addRuns("home-lab", [
+    { id: "R31", task: "T5", role: "pe", round: "0", status: "running", started: iso(58), model: "opus" },
+    { id: "R29", task: "T5", role: "implementer", round: "0", status: "running", started: iso(204), model: "sonnet" },
+  ]);
+  slot(["project-home-lab", "role-sage_pe", "run-R31", `bound-${sha256("R31")}`], 41);
+  // order-chaser: a slot from an older hook, with no run mark.
+  slot(["project-order-chaser", "role-sage_designer", `bound-${sha256("old designer")}`], 6);
+  writeFileSync(join(root, "config.json"), `${JSON.stringify({ max_agents: 3, "cap.sage": 5 })}\n`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
