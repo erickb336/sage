@@ -2121,6 +2121,9 @@ const agentName = (raw) => String(raw ?? "").normalize("NFKC").replace(/\p{Cf}/g
 const decide = (event, decision, reason) => ({ hookSpecificOutput: { hookEventName: event, permissionDecision: decision, permissionDecisionReason: `sage: ${String(reason).replace(/\p{Cc}/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}` } });
 const deny = (event, reason) => decide(event, "deny", reason);
 
+/** The run id of a brief's first line, "Run R<n> · task T<n>" (T308), or undefined: only R and digits pass. */
+const briefRun = (prompt) => /^Run (R[1-9]\d{0,8}) · task T[1-9]\d*(?: ·|\s*$)/.exec(String(prompt ?? "").split("\n", 1)[0])?.[1];
+
 /**
  * All sessions share numbered capacity slots. One short filesystem transaction protects allocation and lifecycle
  * changes, including legacy slots: a released slot number must never be mistaken for its next reservation.
@@ -2289,7 +2292,11 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
       try {
         const initial = [`project-${project}`, `session-${session}`, `tool-${id(tu)}`, `pending-${id(tu)}`, `call-${call}`, `caller-${owner}`, `scope-${scope}`, `input-${hash(input)}`];
         if (role) initial.push(`role-${safe(role)}`);
-        if (role === "sage:lead" && lead) initial.push(`task-${lead.task}`, `logbook-${lead.logbook}`, `run-${lead.run}`); // the lead's own task, logbook and lead run (T273)
+        if (role === "sage:lead" && lead) initial.push(`task-${lead.task}`, `logbook-${lead.logbook}`); // the lead's own task and logbook (T273)
+        // The slot's run, so that the board's Agents page joins it to its logbook row (T308): a lead's lead run (T273), a
+        // helper's run (its name), else the run of the brief's first line.
+        const run = role === "sage:lead" && lead ? lead.run : helper ? helper.run : briefRun(input?.prompt);
+        if (run) initial.push(`run-${run}`);
         if (helper) initial.push(`helper-${helper.key}`); // the run that this child helps with (F-T284-9)
         if (exact) initial.push("exact");
         if (caller !== undefined) initial.push(`parent-${hash(caller)}`);

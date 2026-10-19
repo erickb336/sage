@@ -16,7 +16,7 @@ export { BRIEF_FIELDS, parseBrief, renderBrief } from "./brief.mjs";
 export { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "./roles.mjs";
 export { readBoardSources } from "./board-reader.mjs";
 export { buildBoardModel } from "./board-model.mjs";
-export { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
+export { renderBoardHtml, renderAgentsHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
 export { boardView } from "./board-view.mjs";
 export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
 

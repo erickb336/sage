@@ -83,4 +83,6 @@ The board displays recorded facts. Missing provider, head, completion, or budget
 
 Claude owner phrases can request the board and task views. Codex uses the manual skill commands until native owner phrase delivery is verified. The service does not start agent orchestration or autopilot.
 
-Local tests exercise the sign-in, file updates, task routes, reconnects, offline export, and stable installation. Phone access, login startup, and browser appearance still need direct checks.
+The server has two pages: the task board (`/`, with a page for each task at `/task/<id>`) and the Agents page (`/agents`). Each page has its live stream (`/?events=1` and `/agents?events=1`), with the same sign-in. The Agents page also reads the hook's agent slots and helper notes under each logbook root (`.hooks/slots` and `.hooks/helpers`), by name and change time only. It refreshes by itself when an agent's state changes with time (30 min with no activity, or running long), as no file changes then.
+
+Local tests exercise the sign-in, file updates, task routes, the Agents page, reconnects, offline export, and stable installation. Phone access, login startup, and browser appearance still need direct checks.

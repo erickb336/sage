@@ -240,6 +240,42 @@ test("board server rejects foreign, duplicate and mismatched browser authority h
   assert.equal((await read(f, "/", { headers: { Host: "sample.tailnet.ts.net", Origin: "https://sample.tailnet.ts.net", "Sec-Fetch-Site": "same-origin" } })).status, 200);
 });
 
+/** A hook slot of the sample project (T308): one empty file per mark, as sage-hook.mjs writes it. */
+function slot(root, name, marks) {
+  const dir = join(root, ".hooks", "slots", name); mkdirSync(dir, { recursive: true });
+  for (const mark of [...marks, "ok"]) writeFileSync(join(dir, mark), "");
+}
+
+test("T308: the Agents page is a route with the same sign-in, CSP and browser checks; its stream follows the hook's slots", async t => {
+  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] }), loopback = `127.0.0.1:${f.port}`;
+  writeFileSync(join(f.project, "runs.tsv"), `${HEADERS.runs.replaceAll(" ", "\t")}\nR1\tT1\tqa\t0\t\t\trunning\t\t\t${new Date(Date.now() - 60_000).toISOString()}\t\n`);
+  slot(f.root, "slot-1", ["project-project", "role-sage_qa", "run-R1"]);
+  let mac;
+  for (let i = 0; i < 100 && !(mac = await read(f, "/agents", { rawHeaders: ["Host", loopback] })).body.includes("Sample first task"); i++) await new Promise(wake => setTimeout(wake, 50));
+  assert.equal(mac.status, 200); assert.equal(mac.headers["www-authenticate"], undefined, "no sign-in on the Mac");
+  assert.match(mac.body, /<a href="\/agents" aria-current="page">Agents \(1\)<\/a>/); assert.match(mac.body, /<span class="role">qa<\/span><span class="id">R1<\/span>/);
+  assert.match(mac.body, /new EventSource\("\/agents\?events=1"\)/);
+  for (const [tag, content] of [...mac.body.matchAll(/<(script|style)>([\s\S]*?)<\/\1>/g)].map(m => [m[1], m[2]])) assert.ok(mac.headers["content-security-policy"].includes(`'sha256-${createHash("sha256").update(content).digest("base64")}'`), tag);
+  // The task board names the page with its count.
+  assert.match((await read(f, "/", { rawHeaders: ["Host", loopback] })).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/agents">Agents \(1\)<\/a>/);
+  // Away from the Mac, the page and its stream need the password.
+  for (const path of ["/agents", "/agents?events=1"]) {
+    const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
+    assert.equal(refused.status, 401, path); assert.doesNotMatch(refused.body, /Sample first task/);
+    assert.equal((await read(f, path, { rawHeaders: ["Host", loopback, "X-Forwarded-For", "100.64.0.7"] })).status, 401, path);
+    assert.equal((await read(f, path, { method: "HEAD", rawHeaders: ["Host", "sample.tailnet.ts.net", "Authorization", f.authorization] })).status, 200, path);
+    assert.equal((await read(f, path, { rawHeaders: ["Host", loopback, "Origin", "https://attacker.test"] })).status, 403, path);
+  }
+  for (const path of ["/agents/", "/agents?events=1&task=x", "/agents?x=1", "/Agents"]) assert.equal((await read(f, path)).status, 404, path);
+  // The stream sends the Agents page, and a new slot of the hook sends the page again with it.
+  const stream = events(f, "/agents?events=1"); t.after(() => stream.close());
+  assert.match((await stream.next()).html, /Agents \(1\)/);
+  writeFileSync(join(f.project, "runs.tsv"), `${readFileSync(join(f.project, "runs.tsv"), "utf8")}R2\tT1\tcode-reviewer\t0\t\t\trunning\t\t\t${new Date().toISOString()}\t\n`);
+  slot(f.root, "slot-2", ["project-project", "role-sage_code-reviewer", "run-R2"]);
+  const next = await stream.next(p => p.html.includes("Agents (2)"));
+  assert.match(next.html, /<span class="role">code-reviewer<\/span><span class="id">R2<\/span>/); assert.doesNotMatch(next.html, /class="board"/);
+});
+
 test("board server exposes only canonical read routes and refuses invalid configuration", async t => {
   const f = await fixture(t);
   for (const path of ["/tasks.tsv", "/../config.json", "/%2e%2e/config.json", "/?events=1&events=1", "/?events=1&other=x", `/?events=1&task=${key}&task=${key}`, `/?task=${key}&events=1`, `/task/${key}=`, "/task/_w", `/task/${Buffer.from("missing").toString("base64url")}`, "/task/YR"]) {
