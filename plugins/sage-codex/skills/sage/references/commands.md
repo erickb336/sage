@@ -54,7 +54,8 @@ A task's priority and kind are optional, and the board shows them as tags on its
 Only the chief runs writes. Start a separate run for each actual specialist assignment with its exact role (`implementer`, `code-reviewer`, `security-reviewer`, `ux-reviewer`, `qa`). Roles and tasks must satisfy the CLI's existing rules. Do not rename unsupported design or investigation work to evade a refusal.
 
 ```sh
-node "$SAGE_CLI" finding add T7 --source code-reviewer --severity medium --summary "Reproducible problem" --project "$PROJECT"
+node "$SAGE_CLI" run done R3 --status done --tokens 52000 --project "$PROJECT"
+node "$SAGE_CLI" finding add T7 --source code-reviewer --severity medium --summary "Reproducible problem" --run R3 --class state-edge --project "$PROJECT"
 node "$SAGE_CLI" finding triage T7 F-T7-1 fix --project "$PROJECT"
 node "$SAGE_CLI" round T7 --project "$PROJECT"
 node "$SAGE_CLI" finding close T7 F-T7-1 --project "$PROJECT"
@@ -63,6 +64,8 @@ node "$SAGE_CLI" verdict T7 --kind review-clean --sha "$HEAD_SHA" --run R3 --cyc
 node "$SAGE_CLI" verdict T7 --kind qa-pass --sha "$HEAD_SHA" --run R4 --cycle 1 --project "$PROJECT"
 node "$SAGE_CLI" merge-check --sha "$HEAD_SHA" --project "$PROJECT"
 ```
+
+A done review, QA or evidence-review run needs `--tokens` with its tokens as a whole number. `finding add` takes `--run`, the run whose report holds the finding (a run of that task), and `--class`, one of state-edge, speed, copy, layout, security or other; both are optional. `stats [--task T7]` prints each task's review runs, review tokens, rounds and findings by role and by cycle, and a total line; it reads only.
 
 Use the full 40-character checked commit as `HEAD_SHA`. Record medium/high findings before a problem verdict (`findings` for a review, `qa-fail` for QA). Security and UX clean kinds are `security-clean` and `ux-clean`. Checks use `checks-pass` or `checks-fail`. Investigation verdicts use `evidence-clean` or `findings` without a commit. Record only an outcome that actually happened. A manual verdict's `--run` field is not native reviewer authentication.
 
