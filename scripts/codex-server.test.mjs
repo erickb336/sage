@@ -5444,6 +5444,9 @@ async function nativeTaskUpdateFixture(t) {
 test('T337: a native task update refuses a move to building while the program breakdown is not approved, as the CLI does', async t => {
   const f = await nativeTaskUpdateFixture(t);
   f.assignmentCli('task', 'T1', 'set', 'state=briefed');
+  // A task with a running lead run joins no unapproved program (R1208-2), so the fixture's lead run ends first.
+  assert.throws(() => f.assignmentCli('program', 'propose', '--name', 'Codex support', '--goal', 'Codex runs sage too.', '--pilot', 'T1'), /T1 has R1 \(lead\) running, so it joins PG1 only after the owner approves its breakdown/);
+  f.assignmentCli('run', 'done', 'R1', '--status', 'blocked');
   f.assignmentCli('program', 'propose', '--name', 'Codex support', '--goal', 'Codex runs sage too.', '--pilot', 'T1');
   const tasks = join(f.assignmentLogbook, 'tasks.tsv'), before = readFileSync(tasks, 'utf8');
   assert.throws(() => f.update(f.request({ state: 'building' })), { code: 'invalid-change' });

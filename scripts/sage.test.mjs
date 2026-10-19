@@ -2584,8 +2584,8 @@ test("T336: waits refuses a word that is not a task id, a duplicate, the task it
     [["task", "T5", "set", "waits=T5"], "sage: T5 cannot wait for itself. Nothing changed."],
     [["task", "T22", "set", `waits=${Array.from({ length: 21 }, (_, i) => `T${i + 1}`).join(",")}`], "sage: waits names 21 tasks, more than the 20 that a task may wait for. Split the task, or wait for fewer. Nothing changed."],
     [["task", "T5", "set", "waits=T99"], "sage: no task T99 in this logbook: a task waits only for a task of its own logbook. Nothing changed."],
-    [["task", "T2", "set", "waits=T1"], "sage: these waits make a loop: T2, T1, T2. A loop never ends, so sage refuses it. Nothing changed."],
-    [["task", "T3", "set", "waits=T4 T1"], "sage: these waits make a loop: T3, T1, T2, T3. A loop never ends, so sage refuses it. Nothing changed."],
+    [["task", "T2", "set", "waits=T1"], "sage: these waits make a loop: T2, T1, T2. A loop never ends, so sage refuses it. T1 waits for T2: clear that wait first (sage task T1 set waits=none). Nothing changed."],
+    [["task", "T3", "set", "waits=T4 T1"], "sage: these waits make a loop: T3, T1, T2, T3. A loop never ends, so sage refuses it. T1 waits for T2: clear that wait first (sage task T1 set waits=none); or T2 waits for T3: clear that wait first (sage task T2 set waits=none). Nothing changed."],
     [["task", "add", "--title", "x", "--size", "small", "--waits", "T99"], "sage: no task T99 in this logbook: a task waits only for a task of its own logbook. Nothing changed."],
     [["task", "add", "--title", "x", "--size", "small", "--waits", "T23"], "sage: T23 cannot wait for itself. Nothing changed.", "T23 is the new task's own id"],
   ];
@@ -2606,8 +2606,8 @@ test("T336: a wait is met only when its task is merged or concluded; an abandone
     assert.equal(s.ok("status").split("\n")[4], `waits   1 waiting · T2 for T1 (${state})`, state);
   }
   stateIs(s, "T1", "abandoned");
-  assert.equal(s.no("run", "add", "T2", "--role", "lead"), `${UNMET("T2", "T1 (abandoned)", "lead run")} T1 is abandoned or not in the logbook, so that wait is never met: remove or change the wait (sage task T2 set waits=<ids>, or waits= to clear it), or ask the owner.`);
-  assert.match(s.ok("task", "T2"), / · waits T1 \(abandoned\) · unmet T1$/);
+  assert.equal(s.no("run", "add", "T2", "--role", "lead"), `${UNMET("T2", "T1 (abandoned, never met)", "lead run")} T1 is abandoned or not in the logbook, so that wait is never met: remove or change the wait (sage task T2 set waits=<ids>, or waits= to clear it), or ask the owner.`);
+  assert.match(s.ok("task", "T2"), / · waits T1 \(abandoned, never met\) · unmet T1$/);
   for (const state of ["merged", "concluded"]) {
     stateIs(s, "T1", state);
     const run = s.ok("run", "add", "T2", "--role", "lead");
@@ -2616,7 +2616,7 @@ test("T336: a wait is met only when its task is merged or concluded; an abandone
     assert.equal(s.ok("status").split("\n").length, 4, `${state}: no waits line when no task waits`);
   }
   byHand(s.dir, "tasks", 0, "T1", () => null); // a hand edit loses the upstream row: the wait is never met
-  assert.match(s.no("run", "add", "T2", "--role", "lead"), /^sage: T2 waits for T1 \(not in the logbook\), so .* T1 is abandoned or not in the logbook, so that wait is never met/);
+  assert.match(s.no("run", "add", "T2", "--role", "lead"), /^sage: T2 waits for T1 \(not in the logbook, never met\), so .* T1 is abandoned or not in the logbook, so that wait is never met/);
 });
 
 test("T336: a task with an unmet wait takes no lead, implementer, investigate or arena-judge run and no move to building; design, PE, review and QA runs go on", () => {
@@ -2648,7 +2648,7 @@ test("T336: the merge check refuses a task with an unmet wait and names it; a wa
   stateIs(s, "T1", "reviewing");
   assert.equal(s.no("merge-check", "--sha", SHA), "sage: T2 waits for T1 (reviewing): it merges after that task is merged or concluded, or passes in this same merge on the same PR.");
   stateIs(s, "T1", "abandoned");
-  assert.equal(s.no("merge-check", "--sha", SHA), "sage: T2 waits for T1 (abandoned): it merges after that task is merged or concluded, or passes in this same merge on the same PR. T1 is abandoned or not in the logbook, so that wait is never met: remove or change the wait (sage task T2 set waits=<ids>, or waits= to clear it), or ask the owner.");
+  assert.equal(s.no("merge-check", "--sha", SHA), "sage: T2 waits for T1 (abandoned, never met): it merges after that task is merged or concluded, or passes in this same merge on the same PR. T1 is abandoned or not in the logbook, so that wait is never met: remove or change the wait (sage task T2 set waits=<ids>, or waits= to clear it), or ask the owner.");
   stateIs(s, "T2", "held");
   assert.equal(s.no("merge-check", "--sha", SHA), "sage: T2 is held: only the sage moves a held task, and it does not merge until then.", "held is named first");
   stateIs(s, "T2", "verified");
@@ -2683,7 +2683,7 @@ test("R1126-1: an abandoned task never meets a wait, also with clean verdicts on
   const s = twoOnSha("5", "5");
   assert.match(s.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts/, "while T1 lives, the two merge together");
   stateIs(s, "T1", "abandoned");
-  const why = "T2 waits for T1 (abandoned): it merges after that task is merged or concluded, or passes in this same merge on the same PR. T1 is abandoned or not in the logbook, so that wait is never met: remove or change the wait (sage task T2 set waits=<ids>, or waits= to clear it), or ask the owner.";
+  const why = "T2 waits for T1 (abandoned, never met): it merges after that task is merged or concluded, or passes in this same merge on the same PR. T1 is abandoned or not in the logbook, so that wait is never met: remove or change the wait (sage task T2 set waits=<ids>, or waits= to clear it), or ask the owner.";
   for (const args of [["--pr", "5"], []]) assert.ok(s.no("merge-check", "--sha", SHA, ...args).includes(why), `merge-check ${args.join(" ")}`);
 });
 
@@ -2860,8 +2860,10 @@ test("T336: an older logbook gets the waits column at its next write with no val
   assert.equal(readFileSync(tasks, "utf8"), "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP1\tdocs\t\t\nT2\tb\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\t\t\tT1\t\n");
 });
 
-/** Proposes PG1 with the pilot given, as the chief does: a program of one name and goal. */
-const propose = (s, pilot = "T1", name = "Codex support") => s.ok("program", "propose", "--name", name, "--goal", "Codex runs sage too.", "--pilot", pilot);
+/** Proposes a program with the pilot and the other tasks given, as the chief does: a program of one name and goal. */
+const propose = (s, pilot = "T1", name = "Codex support", tasks) => s.ok("program", "propose", "--name", name, "--goal", "Codex runs sage too.", "--pilot", pilot, ...(tasks ? ["--tasks", tasks] : []));
+/** What the propose line asks of the chief: the owner's three answers, and own words for a change. */
+const ASK = "ask the owner to approve, change or drop it. To say what to change, the owner may answer in own words.";
 /** The status line of the programs: the last line, as status prints it only when the logbook has a program. */
 const programsLine = (s) => s.ok("status").split("\n").at(-1);
 const OPEN = "the breakdown of PG1 (open, gate G1)";
@@ -2906,45 +2908,98 @@ test("T337: a task that names a program without programs.tsv is a loss: every wr
 
 test("T337: a program's state comes from its breakdown gate's answer: proposed, changing, active, done and dropped, and lost without the gate's row", () => {
   const s = store();
-  for (const title of ["Pilot", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
-  assert.equal(propose(s), "PG1 proposed · Codex support · pilot T1 · G1 open: the owner approves, changes or drops the breakdown. Until approve, no task of PG1 builds.");
+  for (const title of ["Read the Codex hooks", "Port the state tool", "Show it on the board"]) s.ok("task", "add", "--title", title, "--size", "small");
+  s.ok("task", "T3", "set", "waits=T2");
+  // R1205-1: the sage frames the tasks first and proposes once; the gate's question names each task and what it waits for.
+  assert.equal(s.ok("program", "propose", "--name", "Codex support", "--goal", "Sage runs in Codex as well as in Claude Code", "--pilot", "T1", "--tasks", "T2,T3"), `PG1 proposed · Codex support · pilot T1 · tasks T2, T3 · G1 open: ${ASK} Until the owner approves, no task of PG1 builds.`);
   const { at, ...gate } = rows(s.dir, "gates")[0];
-  assert.deepEqual(gate, { id: "G1", task: "T1", question: "Approve the breakdown of PG1 Codex support (pilot T1)? Goal: Codex runs sage too.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "" });
-  assert.deepEqual(lastDecision(s), { at: lastDecision(s).at, task: "T1", decision: "PG1 proposed: Codex support, pilot T1, gate G1", why: "program propose" });
-  s.ok("task", "T2", "set", "program=PG1");
+  assert.deepEqual(gate, { id: "G1", task: "T1", question: 'Approve PG1 "Codex support"? Goal: Sage runs in Codex as well as in Claude Code. Pilot T1 "Read the Codex hooks" runs first. Then: T2 "Port the state tool" (waits for T1), T3 "Show it on the board" (waits for T1, T2). No task builds before you approve.', options: "approve|change|drop", recommendation: "approve", default: "", answer: "" });
+  assert.deepEqual(rows(s.dir, "tasks").map((t) => t.program), ["PG1", "PG1", "PG1"]);
+  assert.deepEqual(rows(s.dir, "decisions").slice(-3).map((d) => [d.task, d.decision, d.why]), [["T2", "program none → PG1", "program propose"], ["T3", "program none → PG1", "program propose"], ["T1", "PG1 proposed: Codex support, pilot T1, tasks T2,T3, gate G1", "program propose"]]);
   s.ok("task", "add", "--title", "Four", "--size", "small", "--program", "PG1");
-  assert.equal(programsLine(s), "programs 1 · PG1 Codex support 0 of 3, breakdown waits for you (G1)");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support, pilot T1: 0 of 4 tasks merged, breakdown waits for you (G1)");
   s.ok("gate", "answer", "G1", "--option", "2");
-  assert.equal(programsLine(s), "programs 1 · PG1 Codex support 0 of 3, you asked for changes (G1): the sage proposes again");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support, pilot T1: 0 of 4 tasks merged, you asked for changes (G1): the sage proposes again");
   assert.match(s.no("run", "add", "T2", "--role", "lead"), / The owner asked for changes to the breakdown of PG1: propose it again \(sage program propose PG1, with --name, --goal or --pilot when they change\), and the owner answers the new gate\.$/);
-  assert.equal(s.ok("program", "propose", "PG1", "--goal", "Codex runs every sage step."), "PG1 proposed · Codex support · pilot T1 · G2 open: the owner approves, changes or drops the breakdown. Until approve, no task of PG1 builds.");
-  assert.equal(lastDecision(s).decision, "PG1 proposed again with gate G2: a new goal");
-  assert.equal(rows(s.dir, "programs")[0].goal, "Codex runs every sage step.");
-  assert.equal(programsLine(s), "programs 1 · PG1 Codex support 0 of 3, breakdown waits for you (G2)");
-  s.ok("gate", "answer", "G2", "--option", "1");
-  assert.equal(programsLine(s), "programs 1 · PG1 Codex support 0 of 3", "active");
+  // A re-proposal builds the question again from the program's tasks, and says its round.
+  assert.equal(s.ok("program", "propose", "PG1", "--goal", "Codex runs every sage step."), `PG1 proposed (round 2) · Codex support · pilot T1 · tasks T2, T3, T4 · G2 open: ${ASK} Until the owner approves, no task of PG1 builds.`);
+  assert.equal(rows(s.dir, "gates")[1].question, 'Approve PG1 "Codex support" (round 2)? Goal: Codex runs every sage step. Pilot T1 "Read the Codex hooks" runs first. Then: T2 "Port the state tool" (waits for T1), T3 "Show it on the board" (waits for T1, T2), T4 "Four" (waits for T1). No task builds before you approve.');
+  assert.equal(lastDecision(s).decision, "PG1 proposed again with gate G2, round 2: a new goal");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support, pilot T1: 0 of 4 tasks merged, breakdown waits for you (G2)");
+  // The owner's own words say what to change: the program is changing, never dropped by them.
+  s.ok("gate", "answer", "G2", "--other-hex", Buffer.from("leave out the board", "utf8").toString("hex"));
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support, pilot T1: 0 of 4 tasks merged, you asked for changes (G2): the sage proposes again");
+  assert.match(s.ok("program", "propose", "PG1", "--tasks", "T2 T4"), /^PG1 proposed \(round 3\) · Codex support · pilot T1 · tasks T2, T4 · G3 open/);
+  assert.deepEqual(rows(s.dir, "decisions").slice(-2).map((d) => [d.task, d.decision]), [["T3", "program PG1 → none"], ["T1", "PG1 proposed again with gate G3, round 3: T3 leaves"]]);
+  s.ok("gate", "answer", "G3", "--option", "1");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support, pilot T1: 0 of 3 tasks merged", "active");
   stateIs(s, "T1", "merged");
   stateIs(s, "T4", "abandoned");
-  assert.equal(programsLine(s), "programs 1 · PG1 Codex support 1 of 2, 1 abandoned", "an abandoned task leaves the count");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support, pilot T1: 1 of 2 tasks merged, 1 abandoned", "an abandoned task leaves the count");
   stateIs(s, "T2", "concluded");
-  assert.equal(programsLine(s), "programs 1 · 1 done", "each task that counts is merged or concluded");
-  // Dropped: by the drop option, and by the owner's own words.
-  for (const [title, name, answer] of [["Five", "Old idea", ["--option", "3"]], ["Six", "Own words", ["--other-hex", Buffer.from("not now", "utf8").toString("hex")]]]) {
-    const t = s.ok("task", "add", "--title", title, "--size", "small").split(" ")[0];
-    const gateId = propose(s, t, name).split(" · ")[3].split(" ")[0];
-    s.ok("gate", "answer", gateId, ...answer);
-  }
-  assert.equal(programsLine(s), "programs 3 · 1 done · 2 dropped");
-  assert.match(s.ok("task", "T6"), / · program PG3 · waits the breakdown of PG3 \(dropped, gate G4\) · unmet the breakdown of PG3$/);
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support done, 2 of 2 tasks merged, 1 abandoned", "each task that counts is merged or concluded");
+  // Dropped: the name stays, with the next step for the tasks still in it.
+  for (const title of ["Five", "Six"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T5", "Old idea", "T6");
+  s.ok("gate", "answer", "G4", "--option", "3");
+  assert.equal(programsLine(s), "programs 2 · PG1 Codex support done, 2 of 2 tasks merged, 1 abandoned · PG2 Old idea dropped: 2 tasks still in it, take each out with program=none");
+  assert.match(s.ok("task", "T6"), / · program PG2 · waits the breakdown of PG2 \(dropped, gate G4\) · unmet the breakdown of PG2$/);
+  for (const t of ["T5", "T6"]) s.ok("task", t, "set", "program=none");
+  assert.equal(programsLine(s).split(" · ").at(-1), "PG2 Old idea dropped");
   // Lost: the gate's row is gone, so the breakdown is never approved.
   s.ok("task", "add", "--title", "Seven", "--size", "small");
   propose(s, "T7", "Lost gate");
   byHand(s.dir, "gates", 0, "G5", () => null);
-  assert.equal(programsLine(s), "programs 4 · PG4 Lost gate 0 of 1, its breakdown gate G5 is not in the logbook · 1 done · 2 dropped");
-  assert.match(s.no("run", "add", "T7", "--role", "lead"), /^sage: T7 waits for the breakdown of PG4 \(its gate G5 is not in the logbook\), so it takes no lead run: .* PG4 or its breakdown gate is not in the logbook/);
+  assert.equal(programsLine(s).split(" · ").at(-1), "PG3 Lost gate, pilot T7: 0 of 1 tasks merged, its breakdown gate G5 is not in the logbook");
+  assert.match(s.no("run", "add", "T7", "--role", "lead"), /^sage: T7 waits for the breakdown of PG3 \(its gate G5 is not in the logbook\), so it takes no lead run\. Its design and PE may run\. PG3 or its breakdown gate is not in the logbook/);
 });
 
-test("T337: program propose refuses a bad name or goal, a name in use, an unknown, ended or other program's pilot, and an open or dropped breakdown, and changes nothing", () => {
+test("R1208-3: a program's state reads only from a breakdown gate on its pilot; any other gate that its gate cell names reads as lost", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  s.ok("gate", "add", "T2", "--question", "Approve?", "--options", "approve|change|drop", "--recommend", "approve"); // G2: not on the pilot
+  s.ok("gate", "add", "T1", "--question", "Ship it?", "--options", "approve|no", "--recommend", "approve"); // G3: not a breakdown gate
+  for (const g of ["G2", "G3"]) {
+    s.ok("gate", "answer", g, "--option", "1");
+    byHand(s.dir, "programs", 0, "PG1", (cells) => cells.with(4, g));
+    assert.equal(programsLine(s), `programs 1 · PG1 Codex support, pilot T1: 0 of 2 tasks merged, its breakdown gate ${g} is not in the logbook`, g);
+    assert.match(s.no("run", "add", "T1", "--role", "lead"), /^sage: T1 waits for the breakdown of PG1 /, g);
+  }
+  byHand(s.dir, "programs", 0, "PG1", (cells) => cells.with(4, "G1"));
+  s.ok("gate", "answer", "G1", "--option", "1");
+  assert.match(s.ok("run", "add", "T1", "--role", "lead"), /^R1 running · lead on T1/, "the pilot's own breakdown gate sets the state");
+});
+
+test("R1208-3: the integrity check refuses a programs file with two rows for one program id", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Pilot", "--size", "small");
+  propose(s);
+  const file = join(s.dir, "programs.tsv");
+  const [head, row] = readFileSync(file, "utf8").trim().split("\n");
+  writeFileSync(file, `${head}\n${row}\n${row.replace("Codex support", "Other")}\n`);
+  const why = `${file} has two rows for PG1, but a program's id is on one row. Ask the user to fix the file: keep one row of PG1.`;
+  assert.equal(s.no("task", "add", "--title", "x", "--size", "tiny"), `sage: ${why}`);
+  assert.equal(s.no("merge-check", "--sha", SHA), `sage: the merge check refuses every merge, because ${why}`);
+});
+
+test("R1208-1: a breakdown gate answers once, so no second answer undoes a drop; another gate still takes a new answer", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  s.ok("gate", "answer", "G1", "--option", "3");
+  const before = ["gates", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8"));
+  const why = "sage: G1 is a breakdown gate, and the owner answered it already (drop): a breakdown gate answers once. For a change of mind, the sage proposes the program again (sage program propose <PG>) and the owner answers the new gate. A dropped program does not come back: propose a new one. Nothing changed.";
+  assert.equal(s.no("gate", "answer", "G1", "--option", "1"), why);
+  assert.equal(s.no("gate", "answer", "G1", "--other-hex", Buffer.from("go", "utf8").toString("hex")), why);
+  assert.deepEqual(["gates", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8")), before, "a refusal writes nothing");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support dropped: 2 tasks still in it, take each out with program=none");
+  s.ok("gate", "add", "T2", "--question", "Which name?", "--options", "short|long", "--recommend", "short");
+  s.ok("gate", "answer", "G2", "--option", "1");
+  assert.equal(s.ok("gate", "answer", "G2", "--option", "2"), "G2 answered · long", "a gate that is not a breakdown gate takes a new answer, as before");
+});
+
+test("T337: program propose refuses a bad name or goal, a name in use or like a program id, a bad --tasks list, an unknown, ended or other program's task, and an open or dropped breakdown, and changes nothing", () => {
   const s = store();
   for (const title of ["One", "Two", "Three", "Four"]) s.ok("task", "add", "--title", title, "--size", "small");
   stateIs(s, "T3", "merged");
@@ -2956,6 +3011,8 @@ test("T337: program propose refuses a bad name or goal, a name in use, an unknow
     [p("--name", "", "--goal", "g", "--pilot", "T1"), `sage: the program's name has 0 characters: give 1 to 60.${nothing}`],
     [p("--name", "x".repeat(61), "--goal", "g", "--pilot", "T1"), `sage: the program's name has 61 characters: give 1 to 60.${nothing}`],
     [p("--name", "a\tb", "--goal", "g", "--pilot", "T1"), `sage: the program's name has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark).${nothing}`],
+    [p("--name", "PG7", "--goal", "g", "--pilot", "T1"), `sage: the program's name looks like a program id (PG7), so a line could name the wrong program: give it a name of words, such as Codex support.${nothing}`],
+    [p("--name", "pg2", "--goal", "g", "--pilot", "T1"), `sage: the program's name looks like a program id (pg2), so a line could name the wrong program: give it a name of words, such as Codex support.${nothing}`],
     [p("--name", "Codex", "--goal", "", "--pilot", "T1"), `sage: the program's goal has 0 characters: give 1 to 300.${nothing}`],
     [p("--name", "Codex", "--goal", "g".repeat(301), "--pilot", "T1"), `sage: the program's goal has 301 characters: give 1 to 300.${nothing}`],
     [p("--name", "Codex", "--goal", "line\nbreak", "--pilot", "T1"), `sage: the program's goal has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark).${nothing}`],
@@ -2963,17 +3020,23 @@ test("T337: program propose refuses a bad name or goal, a name in use, an unknow
     [p("--goal", "g", "--pilot", "T1"), "sage: missing --name"],
     [p("--name", "Codex", "--goal", "g", "--pilot", "T9"), "sage: no task T9. The latest: T1, T2, T3, T4."],
     [p("--name", "Codex", "--goal", "g", "--pilot", "T3"), `sage: T3 is merged: an ended task is no pilot, as it runs nothing more. Give a task that has not ended.${nothing}`],
+    [p("--name", "Codex", "--goal", "g", "--pilot", "T1", "--tasks", "T2;T4"), `sage: --tasks takes task ids such as T7, separated by commas or spaces, or none; not "T2;T4".${nothing}`],
+    [p("--name", "Codex", "--goal", "g", "--pilot", "T1", "--tasks", "T2,T2"), `sage: --tasks names T2 twice: give each task once.${nothing}`],
+    [p("--name", "Codex", "--goal", "g", "--pilot", "T1", "--tasks", "T1,T2"), `sage: T1 is the pilot: --tasks names the other tasks of the program.${nothing}`],
+    [p("--name", "Codex", "--goal", "g", "--pilot", "T1", "--tasks", "T9"), "sage: no task T9. The latest: T1, T2, T3, T4."],
+    [p("--name", "Codex", "--goal", "g", "--pilot", "T1", "--tasks", "T3"), `sage: T3 is merged: an ended task joins no program. Leave it out of --tasks.${nothing}`],
     [p("PG1", "--name", "Codex"), "sage: no program PG1. There is none yet."],
-    [["program", "list"], "sage: program takes: propose --name <name> --goal <goal> --pilot <T>, or propose <PG> with --name, --goal or --pilot to propose it again"],
+    [["program", "list"], "sage: program takes: propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>, or propose <PG> with --name, --goal, --pilot or --tasks to propose it again"],
   ];
   for (const [args, why] of first) assert.equal(s.no(...args), why, args.join(" "));
   assert.deepEqual(files(), before, "a refusal writes nothing");
   assert.equal(existsSync(join(s.dir, "programs.tsv")) && rows(s.dir, "programs").length, 0, "and no program");
-  propose(s);
+  propose(s, "T1", "Codex support", "T2");
   before = files();
   const then = [
-    [p("--name", "CODEX support", "--goal", "g", "--pilot", "T2"), `sage: PG1 has that name already: give each program its own name.${nothing}`],
+    [p("--name", "CODEX support", "--goal", "g", "--pilot", "T4"), `sage: PG1 has that name already: give each program its own name.${nothing}`],
     [p("--name", "Other", "--goal", "g", "--pilot", "T1"), `sage: T1 is in PG1, and a task is in one program: take it out first (sage task T1 set program=none), or give another pilot.${nothing}`],
+    [p("--name", "Other", "--goal", "g", "--pilot", "T4", "--tasks", "T2"), `sage: T2 is in PG1, and a task is in one program: take it out first (sage task T2 set program=none), or leave it out of --tasks.${nothing}`],
     [p("PG1", "--pilot", "T2"), `sage: the breakdown gate G1 of PG1 is still open: the owner answers it first. To change the breakdown, the owner answers change, then propose it again.${nothing}`],
   ];
   for (const [args, why] of then) assert.equal(s.no(...args), why, args.join(" "));
@@ -2982,44 +3045,70 @@ test("T337: program propose refuses a bad name or goal, a name in use, an unknow
   assert.equal(s.no(...p("PG1", "--pilot", "T2")), `sage: the owner dropped PG1 (gate G1), and a dropped program does not come back. Propose a new program.${nothing}`);
 });
 
-test("T337: the pilot stays in its program until a new pilot is proposed; program= refuses another word, an unknown or dropped program and an ended task", () => {
+test("T337: the pilot stays in its program until a new pilot is proposed; no task leaves before the owner approves or drops the breakdown; program= refuses another word, an unknown or dropped program and an ended task", () => {
   const s = store();
   for (const title of ["One", "Two", "Three", "Four"]) s.ok("task", "add", "--title", title, "--size", "small");
   stateIs(s, "T3", "merged");
-  propose(s);
-  s.ok("task", "T2", "set", "program=PG1");
+  propose(s, "T1", "Codex support", "T2");
   const before = ["tasks", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8"));
   const nothing = " Nothing changed.";
+  const stays = (t, g) => `sage: ${t} is in PG1, and the owner has not approved or dropped its breakdown (gate ${g}), so ${t} stays in it. To leave ${t} out, propose PG1 again after a change answer, with --tasks that do not name it.${nothing}`;
   for (const [change, why] of [
     [["T1", "program=none"], `sage: T1 is the pilot of PG1, so it stays in PG1: propose a new pilot first (sage program propose PG1 --pilot <T>).${nothing}`],
     [["T1", "program="], `sage: T1 is the pilot of PG1, so it stays in PG1: propose a new pilot first (sage program propose PG1 --pilot <T>).${nothing}`],
+    [["T2", "program=none"], stays("T2", "G1")],
     [["T4", "program=pg1"], `sage: program takes a program id such as PG1, or none to take the task out; not "pg1".${nothing}`],
     [["T4", "program=PG2"], "sage: no program PG2. The latest: PG1."],
     [["T3", "program=PG1"], `sage: T3 is merged: an ended task joins no program. program=none takes a task out.${nothing}`],
   ]) assert.equal(s.no("task", change[0], "set", change[1]), why, change.join(" "));
   assert.equal(s.no("task", "add", "--title", "x", "--size", "small", "--program", "PG7"), "sage: no program PG7. The latest: PG1.");
   assert.deepEqual(["tasks", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8")), before, "a refusal writes nothing");
-  // A new pilot: the owner asks for changes, the sage proposes T2. T1 stays in the program and may now leave it.
+  // R1204-1: after change, a task still stays until the owner answers a new proposal; the proposal may leave it out.
   s.ok("gate", "answer", "G1", "--option", "2");
-  assert.equal(s.ok("program", "propose", "PG1", "--pilot", "T2"), "PG1 proposed · Codex support · pilot T2 · G2 open: the owner approves, changes or drops the breakdown. Until approve, no task of PG1 builds.");
-  assert.equal(lastDecision(s).decision, "PG1 proposed again with gate G2: pilot T1 → T2");
-  assert.deepEqual(rows(s.dir, "tasks").map((t) => t.program), ["PG1", "PG1", "", ""]);
+  assert.equal(s.no("task", "T2", "set", "program=none"), stays("T2", "G1"));
+  assert.match(s.ok("program", "propose", "PG1", "--pilot", "T2"), /^PG1 proposed \(round 2\) · Codex support · pilot T2 · tasks T1 · G2 open: /);
+  assert.equal(lastDecision(s).decision, "PG1 proposed again with gate G2, round 2: pilot T1 → T2");
+  assert.deepEqual(rows(s.dir, "tasks").map((t) => t.program), ["PG1", "PG1", "", ""], "the old pilot stays in the program");
+  assert.equal(s.no("task", "T1", "set", "program=none"), stays("T1", "G2"), "the old pilot stays too until the owner answers");
+  // After the approval, a task may leave.
+  s.ok("gate", "answer", "G2", "--option", "1");
   assert.equal(s.ok("task", "T1", "set", "program=none"), "T1 framed · small · round 0 · route build,code-review,qa");
   assert.deepEqual(lastDecision(s), { at: lastDecision(s).at, task: "T1", decision: "program PG1 → none", why: "task set" });
-  // A dropped program takes no task, and its pilot may leave it.
-  s.ok("gate", "answer", "G2", "--option", "3");
-  assert.equal(s.no("task", "T4", "set", "program=PG1"), `sage: the owner dropped PG1 (gate G2), so it takes no task. Propose a new program (sage program propose --name <name> --goal <goal> --pilot <T>).${nothing}`);
-  assert.match(s.no("run", "add", "T2", "--role", "lead"), / The owner dropped PG1, so its breakdown is never approved: take T2 out of it \(sage task T2 set program=none\), or ask the owner\.$/);
-  assert.equal(s.ok("task", "T2", "set", "program=none"), "T2 framed · small · round 0 · route build,code-review,qa");
+  // A dropped program takes no task, and each task leaves it, the pilot too.
+  stateIs(s, "T2", "abandoned");
+  assert.match(s.ok("program", "propose", "PG1", "--pilot", "T4", "--tasks", "none"), /^PG1 proposed \(round 3\) · Codex support · pilot T4 · no other task · G3 open: /);
+  s.ok("gate", "answer", "G3", "--option", "3");
+  assert.equal(s.no("task", "T1", "set", "program=PG1"), `sage: the owner dropped PG1 (gate G3), so it takes no task. Propose a new program (sage program propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>).${nothing}`);
+  assert.equal(s.no("run", "add", "T4", "--role", "lead"), "sage: T4 waits for the breakdown of PG1 (dropped, gate G3), so it takes no lead run. Its design and PE may run. The owner dropped PG1, so its breakdown is never approved: take T4 out of it (sage task T4 set program=none), or ask the owner.", "no clause says it starts after an approval that never comes");
+  assert.equal(s.ok("task", "T4", "set", "program=none"), "T4 framed · small · round 0 · route build,code-review,qa");
+});
+
+test("R1208-2: a task joins a program that the owner has not approved only while it has not started: framed or briefed, with no build run that runs", () => {
+  const s = store();
+  for (const title of ["Pilot", "Building", "Leading", "Briefed", "Later"]) s.ok("task", "add", "--title", title, "--size", "small");
+  s.ok("task", "T2", "set", "state=briefed", "state=building");
+  s.ok("run", "add", "T3", "--role", "lead");
+  s.ok("task", "T4", "set", "state=briefed");
+  const nothing = " Nothing changed.";
+  const started = (t, what, pid = "PG1") => `sage: ${t} ${what}, so it joins ${pid} only after the owner approves its breakdown: before that, a task joins only while it is framed or briefed, with no lead, implementer, investigate or arena-judge run that runs.${nothing}`;
+  const p = (pilot, tasks) => ["program", "propose", "--name", "Codex support", "--goal", "g", "--pilot", pilot, "--tasks", tasks];
+  assert.equal(s.no(...p("T2", "T4")), started("T2", "is building"), "a pilot joins too");
+  assert.equal(s.no(...p("T1", "T2")), started("T2", "is building"));
+  assert.equal(s.no(...p("T1", "T3")), started("T3", "has R1 (lead) running"));
+  propose(s, "T1", "Codex support", "T4");
+  assert.equal(s.no("task", "T2", "set", "program=PG1"), started("T2", "is building"));
+  assert.equal(s.no("task", "T3", "set", "program=PG1"), started("T3", "has R1 (lead) running"));
+  assert.match(s.ok("task", "T5", "set", "program=PG1"), / · program PG1 · /, "a framed task joins");
+  s.ok("gate", "answer", "G1", "--option", "1");
+  assert.match(s.ok("task", "T2", "set", "program=PG1"), / · joins PG1 after the owner approved its breakdown: no new gate, so tell the owner$/, "after the approval, a started task joins as before");
 });
 
 test("T337: each task of a program waits for the breakdown's approval, and then each but the pilot waits for the pilot: no lead, no build, no merge", () => {
   const s = store();
   s.ok("task", "add", "--title", "Pilot", "--size", "small");
   s.ok("task", "add", "--title", "Two", "--size", "small");
-  propose(s);
-  assert.equal(s.ok("task", "T2", "set", "program=PG1"), "T2 framed · small · round 0 · route build,code-review,qa · program PG1 · waits the breakdown of PG1 (open, gate G1) · unmet the breakdown of PG1");
-  assert.deepEqual(lastDecision(s), { at: lastDecision(s).at, task: "T2", decision: "program none → PG1", why: "task set" });
+  propose(s, "T1", "Codex support", "T2");
+  assert.equal(s.ok("task", "T2"), "T2 framed · small · round 0 · route build,code-review,qa · program PG1 · waits the breakdown of PG1 (open, gate G1) · unmet the breakdown of PG1");
   const unapproved = (t, what) => `sage: ${t} waits for ${OPEN}, so it takes no ${what}: it starts after the owner approves the breakdown of PG1. Its design and PE may run.${APPROVE}`;
   assert.equal(s.no("run", "add", "T1", "--role", "lead"), unapproved("T1", "lead run"), "the pilot waits for the approval too");
   assert.equal(s.no("run", "add", "T2", "--role", "implementer", "--branch", "sage/t2"), unapproved("T2", "implementer run"));
@@ -3036,27 +3125,64 @@ test("T337: each task of a program waits for the breakdown's approval, and then 
   assert.equal(s.ok("task", "T2"), "T2 framed · small · round 0 · route build,code-review,qa · program PG1 · waits T1 (briefed, the pilot of PG1) · unmet T1");
   assert.equal(s.ok("merge-check", "--sha", SHA), "T1 may merge: 1 clean cycle on this SHA", "the pilot of an approved program merges");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T2", "--sha", SHA, "--kind", kind);
-  assert.match(s.no("merge-check", "--sha", SHA), / T2 waits for T1 \(briefed, the pilot of PG1\): it merges after that task is merged or concluded, or passes in this same merge on the same PR\./);
+  assert.match(s.no("merge-check", "--sha", SHA), / T2 waits for T1 \(briefed, the pilot of PG1\): it merges after that task is merged or concluded\. To merge,/, "a pilot wait never passes in the same merge");
   stateIs(s, "T1", "abandoned");
-  assert.equal(s.no("run", "add", "T2", "--role", "lead"), "sage: T2 waits for T1 (abandoned, the pilot of PG1), so it takes no lead run: it starts after each of them is merged or concluded. Its design and PE may run. T1, the pilot of PG1, is abandoned or not in the logbook, so no other task of PG1 builds: propose a new pilot (sage program propose PG1 --pilot <T>), or take T2 out of it (sage task T2 set program=none), or ask the owner.");
+  assert.equal(s.no("run", "add", "T2", "--role", "lead"), "sage: T2 waits for T1 (abandoned, the pilot of PG1, never met), so it takes no lead run: it starts after each of them is merged or concluded. Its design and PE may run. T1, the pilot of PG1, is abandoned or not in the logbook, so no other task of PG1 builds: propose a new pilot (sage program propose PG1 --pilot <T>), or take T2 out of it (sage task T2 set program=none), or ask the owner.");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support: 0 of 1 tasks merged, 1 abandoned, pilot T1 abandoned: propose a new pilot", "status says the program is stuck");
   stateIs(s, "T1", "merged");
   assert.match(s.ok("run", "add", "T2", "--role", "lead"), /^R4 running · lead on T2/);
   assert.match(s.ok("merge-check", "--sha", SHA), /^2 tasks have verdicts on a1b2c3d, and each must pass: /);
 });
 
-test("T337: the loop check counts each task's wait for its pilot, at waits=, program= and a new pilot", () => {
+test("R1204-3: a pilot wait is met only after the pilot is merged or concluded, never by the same-PR rule, also when the task names the pilot in its waits", () => {
+  for (const explicit of [false, true]) {
+    const s = store();
+    s.ok("task", "add", "--title", "Pilot", "--size", "small");
+    s.ok("task", "add", "--title", "Two", "--size", "small", ...(explicit ? ["--waits", "T1"] : []));
+    propose(s, "T1", "Codex support", "T2");
+    s.ok("gate", "answer", "G1", "--option", "1");
+    for (const t of ["T1", "T2"]) {
+      s.ok("task", t, "set", "pr=7");
+      for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", t, "--sha", SHA, "--kind", kind, "--pr", "7");
+    }
+    const out = s.no("merge-check", "--sha", SHA, "--pr", "7");
+    assert.match(out, / T2 waits for T1 \(framed, the pilot of PG1\): it merges after that task is merged or concluded\. To merge,/, `explicit ${explicit}`);
+    assert.ok(!out.includes("is not on PR"), "no PR to set for a pilot wait");
+    stateIs(s, "T1", "merged");
+    assert.match(s.ok("merge-check", "--sha", SHA, "--pr", "7"), /^2 tasks have verdicts on a1b2c3d or belong to PR 7, and each must pass: /, `explicit ${explicit}: the pilot merged`);
+  }
+});
+
+test("T337: the loop check counts each task's wait for its pilot, at waits=, program= and a new pilot, and names the wait to clear", () => {
   const s = store();
   for (const title of ["Pilot", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
-  propose(s);
-  s.ok("task", "T2", "set", "program=PG1");
-  assert.equal(s.no("task", "T1", "set", "waits=T2"), "sage: these waits make a loop: T1, T2, T1. T2 waits for T1 as the pilot of PG1: each task of a program waits for its pilot. A loop never ends, so sage refuses it. Nothing changed.");
+  propose(s, "T1", "Codex support", "T2");
+  assert.equal(s.no("task", "T1", "set", "waits=T2"), "sage: these waits make a loop: T1, T2, T1. T2 waits for T1 as the pilot of PG1: each task of a program waits for its pilot. A loop never ends, so sage refuses it. Give T1 other waits. Nothing changed.");
   s.ok("task", "T1", "set", "waits=T3");
-  assert.equal(s.no("task", "T3", "set", "program=PG1"), "sage: these waits make a loop: T3, T1, T3. T3 waits for T1 as the pilot of PG1: each task of a program waits for its pilot. A loop never ends, so sage refuses it. Nothing changed.");
+  assert.equal(s.no("task", "T3", "set", "program=PG1"), "sage: these waits make a loop: T3, T1, T3. T3 waits for T1 as the pilot of PG1: each task of a program waits for its pilot. A loop never ends, so sage refuses it. T1 waits for T3: clear that wait first (sage task T1 set waits=none). Nothing changed.");
   s.ok("task", "T1", "set", "waits=");
   s.ok("task", "T3", "set", "waits=T2");
   s.ok("gate", "answer", "G1", "--option", "2");
-  assert.equal(s.no("program", "propose", "PG1", "--pilot", "T3"), "sage: these waits make a loop: T3, T2, T3. T2 waits for T3 as the pilot of PG1: each task of a program waits for its pilot. A loop never ends, so sage refuses it. Nothing changed.");
+  assert.equal(s.no("program", "propose", "PG1", "--pilot", "T3"), "sage: these waits make a loop: T3, T2, T3. T2 waits for T3 as the pilot of PG1: each task of a program waits for its pilot. A loop never ends, so sage refuses it. T3 waits for T2: clear that wait first (sage task T3 set waits=none). Nothing changed.");
   assert.deepEqual(rows(s.dir, "tasks").map((t) => [t.waits, t.program]), [["", "PG1"], ["", "PG1"], ["T2", ""]], "no refused change is written");
+});
+
+test("R1209-4: after its pilot is abandoned, a program is stuck until a new pilot; a new pilot that waits for the old one is refused with the wait to clear", () => {
+  const s = store();
+  for (const title of ["Read the Codex hooks", "Port the state tool", "Show it on the board"]) s.ok("task", "add", "--title", title, "--size", "small");
+  s.ok("task", "T2", "set", "waits=T1");
+  propose(s, "T1", "Codex support", "T2,T3");
+  s.ok("gate", "answer", "G1", "--option", "1");
+  stateIs(s, "T1", "abandoned");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support: 0 of 2 tasks merged, 1 abandoned, pilot T1 abandoned: propose a new pilot");
+  const before = ["tasks", "gates", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8"));
+  assert.equal(s.no("program", "propose", "PG1", "--pilot", "T2"), "sage: these waits make a loop: T2, T1, T2. T1 waits for T2 as the pilot of PG1: each task of a program waits for its pilot. A loop never ends, so sage refuses it. T2 waits for the old pilot T1: clear that wait first (sage task T2 set waits=none). Nothing changed.");
+  assert.deepEqual(["tasks", "gates", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8")), before, "a refusal writes nothing");
+  s.ok("task", "T2", "set", "waits=none");
+  assert.match(s.ok("program", "propose", "PG1", "--pilot", "T2"), /^PG1 proposed \(round 2\) · Codex support · pilot T2 · tasks T1, T3 · G2 open: /);
+  assert.equal(rows(s.dir, "gates")[1].question, 'Approve PG1 "Codex support" (round 2)? Goal: Codex runs sage too. Pilot T2 "Port the state tool" runs first. Then: T1 "Read the Codex hooks" (abandoned), T3 "Show it on the board" (waits for T2). No task builds before you approve.');
+  s.ok("gate", "answer", "G2", "--option", "1");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support, pilot T2: 0 of 2 tasks merged, 1 abandoned");
 });
 
 test("T337: a task that joins a program after the owner approved its breakdown joins with no new gate, and the line tells the chief to tell the owner", () => {
@@ -3072,7 +3198,7 @@ test("T337: a task that joins a program after the owner approved its breakdown j
   s.ok("task", "add", "--title", "Later", "--size", "small");
   assert.equal(s.ok("task", "T4", "set", "program=PG1"), `T4 framed · small · round 0 · route build,code-review,qa · program PG1 · waits T1 (framed, the pilot of PG1) · unmet T1${note}`);
   assert.equal(rows(s.dir, "gates").length, 1, "no new gate");
-  assert.equal(programsLine(s), "programs 1 · PG1 Codex support 0 of 4");
+  assert.equal(programsLine(s), "programs 1 · PG1 Codex support, pilot T1: 0 of 4 tasks merged");
 });
 
 test("T337: a lead run of a task that waits prints the report of the last lead or investigate run of each task that it waits for, for the brief", () => {
@@ -3080,8 +3206,7 @@ test("T337: a lead run of a task that waits prints the report of the last lead o
   s.ok("task", "add", "--title", "Pilot", "--size", "small");
   s.ok("task", "add", "--title", "Why?", "--size", "investigate");
   s.ok("task", "add", "--title", "Down", "--size", "small", "--waits", "T2");
-  propose(s);
-  s.ok("task", "T3", "set", "program=PG1");
+  propose(s, "T1", "Codex support", "T3");
   s.ok("gate", "answer", "G1", "--option", "1");
   assert.equal(s.ok("run", "add", "T1", "--role", "lead"), "R1 running · lead on T1", "a task that waits for nothing prints no reports");
   s.ok("run", "done", "R1", "--status", "done", "--report", "reports/R1.md");
@@ -3089,6 +3214,7 @@ test("T337: a lead run of a task that waits prints the report of the last lead o
   stateIs(s, "T2", "concluded");
   assert.equal(s.ok("run", "add", "T3", "--role", "lead"), `R2 running · lead on T3 · upstream reports: T2 no report recorded, T1 R1 ${join(s.dir, "reports", "R1.md")}`);
 });
+
 
 test("T337: an older logbook gets the program column at its next write, so an older sage refuses to write it and loses no value", () => {
   const s = store();
@@ -3105,13 +3231,63 @@ test("T337: an older logbook gets the program column at its next write, so an ol
   assert.match(old.stderr, /tasks\.tsv has columns that this version of sage does not know \(.*\bprogram\): a newer sage wrote this logbook/);
 });
 
+
 test("T337: program ids are PG<n>, apart from gate ids, and a lost program's id never comes back while a task names it", () => {
   const s = store();
   for (const title of ["One", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
   propose(s, "T1", "First");
-  assert.match(propose(s, "T2", "Second"), /^PG2 proposed · Second · pilot T2 · G2 open/);
-  writeFileSync(join(s.dir, "programs.tsv"), readFileSync(join(s.dir, "programs.tsv"), "utf8").split("\n").filter((l) => !l.startsWith("PG2\t")).join("\n") + "\n");
-  assert.match(propose(s, "T3", "Third"), /^PG3 proposed · Third · pilot T3 · G3 open/, "T2 still names PG2, so PG2 is not given again");
+  assert.match(propose(s, "T2", "Second"), /^PG2 proposed · Second · pilot T2 · no other task · G2 open/);
+  // The hand edit loses PG2's row and its decision rows: only T2's program cell still names PG2 (IDS.tasks program).
+  for (const [table, keep] of [["programs", (l) => !l.startsWith("PG2\t")], ["decisions", (l) => !l.includes("\tPG2 ")]]) {
+    writeFileSync(join(s.dir, `${table}.tsv`), readFileSync(join(s.dir, `${table}.tsv`), "utf8").split("\n").filter(keep).join("\n") + "\n");
+  }
+  assert.match(propose(s, "T3", "Third"), /^PG3 proposed · Third · pilot T3 · no other task · G3 open/, "T2 still names PG2, so PG2 is not given again");
+});
+
+test("R1203-1, R1203-2: an id that only a program's pilot or gate cell, or a task's waits cell, still names is never given again, so a lost gate never sets the program", () => {
+  const s = store();
+  for (const title of ["Two", "Pilot"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T2", "Codex support", "T1");
+  // A hand edit loses the pilot's task row, its gate row and every decision row of the pilot.
+  byHand(s.dir, "tasks", 0, "T2", () => null);
+  byHand(s.dir, "gates", 0, "G1", () => null);
+  byHand(s.dir, "decisions", 1, "T2", () => null);
+  assert.deepEqual(rows(s.dir, "programs").map((p) => [p.id, p.pilot, p.gate]), [["PG1", "T2", "G1"]], "only the program row names T2 and G1");
+  assert.match(s.ok("task", "add", "--title", "New", "--size", "small"), /^T3 framed/, "T2 is not given again (IDS.programs pilot)");
+  assert.equal(s.ok("gate", "add", "T2", "--question", "Approve?", "--options", "approve|change|drop", "--recommend", "approve"), "G2 open · Approve?", "G1 is not given again (IDS.programs gate)");
+  s.ok("gate", "answer", "G2", "--option", "1");
+  assert.match(s.no("run", "add", "T1", "--role", "lead"), /^sage: T1 waits for the breakdown of PG1 \(its gate G1 is not in the logbook\)/, "the program does not turn active");
+  // A task's waits cell: the waited-for task's row is lost, and no other cell names it.
+  s.ok("task", "add", "--title", "Up", "--size", "small"); // T4
+  s.ok("task", "T3", "set", "waits=T4");
+  byHand(s.dir, "tasks", 0, "T4", () => null);
+  byHand(s.dir, "decisions", 1, "T3", () => null);
+  assert.match(s.ok("task", "add", "--title", "Next", "--size", "small"), /^T5 framed/, "T4 is not given again (IDS.tasks waits)");
+});
+
+test("R1208-5: the status programs line groups the tasks by program once, so many programs and tasks take about the time of one program", () => {
+  // Measured as a ratio of two runs on the same machine, with a wide margin (3x), so a slow machine does not fail it: the
+  // line before R1208-5 read every task for every program, about 10 times slower here with 5,000 programs and 20,000 tasks.
+  const logbookOf = (programs) => {
+    const s = store();
+    s.ok("task", "add", "--title", "Pilot", "--size", "small");
+    propose(s);
+    const [taskHead, taskRow] = readFileSync(join(s.dir, "tasks.tsv"), "utf8").trim().split("\n");
+    const [programHead, programRow] = readFileSync(join(s.dir, "programs.tsv"), "utf8").trim().split("\n");
+    const n = 20000; // merged tasks, so the waits line stays short
+    writeFileSync(join(s.dir, "tasks.tsv"), [taskHead, ...Array.from({ length: n }, (_, i) => taskRow.replace(/^T1\t/, `T${i + 1}\t`).replace("\tframed\t", "\tmerged\t").replace(/\tPG1$/, `\tPG${(i % programs) + 1}`))].join("\n") + "\n");
+    writeFileSync(join(s.dir, "programs.tsv"), [programHead, ...Array.from({ length: programs }, (_, i) => programRow.replace(/^PG1\tCodex support/, `PG${i + 1}\tProgram ${i + 1}`))].join("\n") + "\n");
+    return s;
+  };
+  const statusNs = (s) => {
+    const start = process.hrtime.bigint();
+    assert.match(s.ok("status"), /\nprograms \d+ · /);
+    return Number(process.hrtime.bigint() - start);
+  };
+  const [one, many] = [logbookOf(1), logbookOf(5000)];
+  const oneNs = Math.min(statusNs(one), statusNs(one));
+  const manyNs = Math.min(statusNs(many), statusNs(many));
+  assert.ok(manyNs / oneNs < 3, `5,000 programs took ${Math.round(manyNs / 1e6)} ms, one program ${Math.round(oneNs / 1e6)} ms`);
 });
 
 test("T305: the first status line names the project as the board does, not by its logbook folder", () => {
