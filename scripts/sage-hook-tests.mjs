@@ -197,6 +197,24 @@ test("at most max_agents sage agents run at once, also when the chief starts the
   assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "tu9")), undefined, "a spawn that failed frees its slot");
 });
 
+test("T308: the hook marks an agent's slot with the run of its brief's first line, and only a valid one", () => {
+  const s = session();
+  s.sage("config", "max_agents=20");
+  s.send(prompt("sage mode"));
+  const runs = (id) => readdirSync(join(s.vars.SAGE_HOOKS_STATE, "slots")).flatMap((slot) => readdirSync(join(s.vars.SAGE_HOOKS_STATE, "slots", slot)).includes(`tool-${id}`) ? readdirSync(join(s.vars.SAGE_HOOKS_STATE, "slots", slot)).filter((m) => m.startsWith("run-")) : null).filter((m) => m !== null);
+  assert.equal(s.send(spawnAgent("sage:qa", `Run R1116 · task T308 · repo sample/sage · new branch\n${BRIEF}`, "tuA")), undefined);
+  assert.deepEqual(runs("tuA"), ["run-R1116"], "a valid first line gives the run mark");
+  assert.equal(s.send(spawnAgent("sage:qa", `Run R12 · task T3\n${BRIEF}`, "tuB")), undefined);
+  assert.deepEqual(runs("tuB"), ["run-R12"], "the first line may end after the task");
+  const bad = ["Run R12x · task T3", "Run r12 · task T3", "Run R0 · task T3", "Run R12/../x · task T3", "Run R12 · task T3x", "run R12 · task T3", " Run R12 · task T3", "Task T3\nRun R12 · task T3"];
+  bad.forEach((line, i) => {
+    assert.equal(s.send(spawnAgent("sage:qa", `${line}\n${BRIEF}`, `tuC${i}`)), undefined, line);
+    assert.deepEqual(runs(`tuC${i}`), [], `no run mark from ${JSON.stringify(line)}`);
+  });
+  assert.equal(s.send(spawnAgent("sage:qa", BRIEF, "tuD")), undefined);
+  assert.deepEqual(runs("tuD"), [], "a brief with no run line gets no mark");
+});
+
 test("the cap comes from the sage config", () => {
   const s = session();
   s.sage("config", "max_agents=1");

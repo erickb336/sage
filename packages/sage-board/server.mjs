@@ -3,7 +3,7 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { lstatSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
-import { readBoardSources, buildBoardModel, renderBoardHtml } from "../sage-core/index.mjs";
+import { readBoardSources, buildBoardModel, renderBoardHtml, renderAgentsHtml } from "../sage-core/index.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
@@ -38,6 +38,8 @@ function taskKey(encoded) {
 function route(target) {
   if (typeof target !== "string" || target.length > 4096) return null;
   if (target === "/") return { task: null, events: false };
+  // The Agents page (T308) and its live stream.
+  if (target === "/agents" || target === "/agents?events=1") return { task: null, agents: true, events: target !== "/agents" };
   const page = /^\/task\/([A-Za-z0-9_-]+)$/.exec(target);
   if (page) { const key = taskKey(page[1]); return key ? { task: key, events: false } : null; }
   const stream = /^\/\?events=1(?:&task=([A-Za-z0-9_-]+))?$/.exec(target);
@@ -145,8 +147,8 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   }
 
   // The checkout paths go only to the Mac's own page (R1069-2).
-  function htmlFor(key, paths = false) {
-    const html = renderBoardHtml(model, { taskKey: key, snapshot: false, live: true, paths });
+  function htmlFor(key, paths = false, agents = false) {
+    const html = agents ? renderAgentsHtml(model, { live: true, paths }) : renderBoardHtml(model, { taskKey: key, snapshot: false, live: true, paths });
     if (Buffer.byteLength(html) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
     return html;
   }
@@ -176,7 +178,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   // so a file event that changes nothing on the page sends nothing, and the page keeps its state.
   function publish(client) {
     try {
-      const payload = { revision: String(revision), html: htmlFor(client.task, client.paths), stale: model.stale, diagnostics: model.diagnostics };
+      const payload = { revision: String(revision), html: htmlFor(client.task, client.paths, client.agents), stale: model.stale, diagnostics: model.diagnostics };
       const sent = digest(JSON.stringify([payload.html, payload.stale, payload.diagnostics])).toString("base64");
       if (client.sent === sent) return;
       client.sent = sent;
@@ -256,7 +258,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
       // Validate the complete HTML before replacing a good snapshot.
       const preview = renderBoardHtml(next, { snapshot: false, live: true });
-      if (Buffer.byteLength(preview) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
+      if (Buffer.byteLength(preview) > MAX_HTML || Buffer.byteLength(renderAgentsHtml(next, { live: true })) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
     } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
     if (!next.diagnostics.length) { lastGood = next; model = { ...next, stale: false }; }
     else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp };
@@ -266,7 +268,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     const now = Date.now(), boundary = model.tasks.reduce((first, task) => {
       const at = task.completedAt === null ? NaN : task.completedAt + 7 * 86400000 + 1;
       return Number.isFinite(at) && at > now ? Math.min(first, at) : first;
-    }, Infinity);
+    }, model.agents?.next > now ? model.agents.next : Infinity); // and the next time an agent's state changes with no file event (T308)
     if (Number.isFinite(boundary)) { boundaryTimer = setTimeout(schedule, Math.min(boundary - now, 2_147_483_647)); boundaryTimer.unref(); }
   }
 
@@ -293,12 +295,12 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
       if (request.method === "HEAD") return response.end();
       response.flushHeaders();
-      const client = { response, task: selected.task, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
+      const client = { response, task: selected.task, agents: !!selected.agents, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
     }
     try {
-      const html = htmlFor(selected.task, mac);
+      const html = htmlFor(selected.task, mac, selected.agents);
       securityHeaders(response, html);
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html) });
       response.end(request.method === "HEAD" ? undefined : html);

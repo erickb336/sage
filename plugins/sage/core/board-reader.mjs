@@ -98,6 +98,52 @@ export function logbookIdentity(directory, budget = null, into = { diagnostics: 
   return found;
 }
 
+const MAX_SLOTS = 64, MAX_MARKS = 64, MAX_NOTES = 4096;
+/** A folder that is a real folder, not a link: its entries, or null when it is missing. Anything else throws its code. */
+function folder(path) {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat) return null;
+  if (!stat.isDirectory()) throw Object.assign(new Error("not a folder"), { code: stat.isSymbolicLink() ? "ELOOP" : "ENOTDIR" });
+  return readdirSync(path);
+}
+/**
+ * The hook's notes under a sage root (T308), read-only and bounded, by name only: no file content. Each agent slot
+ * (.hooks/slots/slot-<n>) gives its marks (the names of its empty files) and its last activity (the folder's change time,
+ * which the hook renews on each event of the agent). The helper notes (.hooks/helpers) give each helper's lead and run,
+ * and whether it stopped, with the time of its stop note. present is false when the root has no slot folder: no hook
+ * wrote here. problem is the code of a folder that the board cannot read; the slots are then not known.
+ */
+export function readHookNotes(root) {
+  const notes = { present: false, slots: [], helpers: [], problem: null };
+  try {
+    const hooks = join(root, ".hooks");
+    if (folder(hooks) === null) return notes;
+    const names = folder(join(hooks, "slots"));
+    if (names === null) return notes;
+    notes.present = true;
+    const slots = names.filter(name => /^slot-[1-9]\d{0,3}$/.test(name));
+    if (slots.length > MAX_SLOTS) throw Object.assign(new Error("too many slots"), { code: "E2BIG" });
+    for (const name of slots) {
+      const path = join(hooks, "slots", name), stat = lstatSync(path, { throwIfNoEntry: false });
+      if (!stat?.isDirectory()) continue; // a slot that the hook frees while the board reads it is gone
+      let marks;
+      try { marks = readdirSync(path); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      if (marks.length > MAX_MARKS) throw Object.assign(new Error("too many marks"), { code: "E2BIG" });
+      notes.slots.push({ name, marks, at: stat.mtimeMs });
+    }
+    const helpers = folder(join(hooks, "helpers")) ?? [];
+    if (helpers.length > MAX_NOTES) throw Object.assign(new Error("too many notes"), { code: "E2BIG" });
+    // A helper's key is <its lead's key>.<its run id>: started-<key> when its slot was taken, stopped-<key> at its stop.
+    for (const name of helpers) {
+      const note = /^(started|stopped)-([0-9a-f]{64})\.(R[1-9]\d*)$/.exec(name);
+      if (!note) continue;
+      const at = note[1] === "stopped" ? lstatSync(join(hooks, "helpers", name), { throwIfNoEntry: false })?.mtimeMs ?? null : null;
+      notes.helpers.push({ lead: note[2], run: note[3], stopped: note[1] === "stopped", at });
+    }
+  } catch (error) { Object.assign(notes, { slots: [], helpers: [], problem: error.code ?? error.message }); }
+  return notes;
+}
+
 /** Missing or damaged input is a diagnostic, never a silently empty board. */
 export function readBoardSources(sources, { now = Date.now() } = {}) {
   if (!Array.isArray(sources) || sources.length > 32) throw new TypeError("board sources must be an array of at most 32 roots");
@@ -106,7 +152,7 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
   return sources.map(source => {
     if (!source || !/^[a-zA-Z0-9_-]{1,80}$/.test(source.id ?? "") || ids.has(source.id) || !isAbsolute(source.path ?? "")) throw new TypeError("each board source needs a unique id and an absolute path");
     ids.add(source.id);
-    const result = { id: source.id, label: source.label ?? source.id, provider: source.provider ?? null, config: {}, projects: [], diagnostics: [] };
+    const result = { id: source.id, label: source.label ?? source.id, provider: source.provider ?? null, config: {}, projects: [], diagnostics: [], hooks: { present: false, slots: [], helpers: [], problem: null } };
     try {
       const root = lstatSync(source.path);
       if (!root.isDirectory() || root.isSymbolicLink()) throw new Error("source is not a directory");
@@ -121,7 +167,8 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
       const entries = readdirSync(source.path, { withFileTypes: true }).filter(entry => /^[a-z0-9-]+-[0-9a-f]{6}$/.test(entry.name)).sort((a,b) => a.name.localeCompare(b.name));
       if (entries.length > 4096) throw new Error("board project count exceeds 4096");
       for (const entry of entries) {
-        const project = { key: `${source.id}/${entry.name}`, source: source.id, name: entry.name, tables: {}, diagnostics: [], warnings: [] };
+        // logbook: the hook's name of this logbook (the sha256 of its folder), which its lead slots and helper notes carry (T308).
+        const project = { key: `${source.id}/${entry.name}`, source: source.id, name: entry.name, logbook: createHash("sha256").update(join(source.path, entry.name)).digest("hex"), tables: {}, diagnostics: [], warnings: [] };
         result.projects.push(project);
         if (!entry.isDirectory() || entry.isSymbolicLink()) { project.diagnostics.push("project is not a directory"); continue; }
         const directory = join(source.path, entry.name), before = lstatSync(directory);
@@ -157,6 +204,7 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
           project.tables = {}; project.contents = {}; project.observations = { version: 1, records: [] }; project.diagnostics.push("project changed during the read");
         }
       }
+      result.hooks = readHookNotes(source.path);
       const after = lstatSync(source.path);
       if (after.dev !== root.dev || after.ino !== root.ino || !after.isDirectory()) throw new Error("source changed during the read");
     } catch (error) { result.diagnostics.push(error.code ?? error.message); result.projects = []; }

@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
-import { PRIORITIES, TASK_KINDS } from "./logbook-fields.mjs";
+import { PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -361,6 +362,141 @@ function plainProblem(message) {
   return `${coded[1] ? `its ${coded[1]} file` : "its folder"} ${PLAIN[coded[2]] ?? "cannot be read"}`;
 }
 
+// The Agents page (T308, owner's decisions of 2026-10-18). Every rule is on recorded times; the board never reads the
+// process list. "May be stuck" after 30 min with no hook activity (half the hook's 60-min slot lease); "running long"
+// after more than 2 times the median time of the same role's ended runs in the project, with at least 5 of them.
+export const AGENT_QUIET_MS = 30 * 60_000;
+const LONG_FACTOR = 2, LONG_BASIS = 5;
+/** Providers whose hook writes no agent slots yet: their agents show from the logbook only (T308 decision 2). */
+const NO_SLOT_NOTES = ["codex"];
+/** The states of an agent, most in need of a look first; the renderer gives each a mark and a word. */
+export const AGENT_STATES = ["stuck", "stop", "long", "wait", "work", "unk"];
+const LOOK = ["stuck", "stop", "long"];
+const sha256 = text => createHash("sha256").update(text).digest("hex");
+const minutes = ms => Math.max(0, Math.floor(ms / 60_000));
+const span = ms => { const m = minutes(ms); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`; };
+const article = word => /^[aeiou]/i.test(word) ? `an ${word}` : `a ${word}`;
+const median = list => { const sorted = [...list].sort((a, b) => a - b), mid = sorted.length >> 1; return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2; };
+
+/** One slot's marks: the hook writes each as an empty file named <prefix><value>; only a slot marked ok is taken. */
+function slotOf(slot) {
+  const mark = prefix => slot.marks.find(name => name.startsWith(prefix))?.slice(prefix.length);
+  const hex = value => /^[0-9a-f]{64}$/.test(value ?? "") ? value : null;
+  const helper = /^([0-9a-f]{64})\.(R[1-9]\d*)$/.exec(mark("helper-") ?? "");
+  return { name: slot.name, at: slot.at, ok: slot.marks.includes("ok"), project: /^[a-z0-9][a-z0-9-]*$/.test(mark("project-") ?? "") ? mark("project-") : null,
+    role: /^sage_[a-z-]+$/.test(mark("role-") ?? "") ? mark("role-").slice(5) : null, run: /^R[1-9]\d*$/.test(mark("run-") ?? "") ? mark("run-") : null,
+    bound: hex(mark("bound-")), parent: hex(mark("parent-")), logbook: hex(mark("logbook-")), lead: helper?.[1] ?? null };
+}
+
+/**
+ * The agents that run now, in every project, from the logbooks and the hook's notes (T308 layout A). A slot joins its run
+ * by its run mark, in a logbook of the slot's project. A running run that no slot holds shows from the logbook only: a
+ * provider without slot notes (Codex) as "running"; a helper whose stop the hook noted as "stopped"; any other as "may be
+ * stuck", as the hook frees a slot after 60 min with no event. A helper sits under its lead: by the slot's parent mark,
+ * or by its helper note's lead key. at is the board's time in ms; cards gives each task's card by its key.
+ */
+function agentsOf(sources, groups, groupOf, cards, at) {
+  const rows = [], problems = [], caps = [];
+  const bare = name => name.replace(/-[0-9a-f]{6}$/, "");
+  const groupNamed = name => groups.find(group => group.books.some(book => bare(book.project.name) === name));
+  for (const source of sources) {
+    const hooks = source.hooks ?? { present: false, slots: [], helpers: [], problem: null };
+    const provider = String(source.provider ?? standIn(source)).toLowerCase();
+    if (hooks.problem) problems.push({ source: source.id, message: plainProblem(hooks.problem) });
+    const slots = hooks.slots.map(slotOf);
+    const known = hooks.present && !hooks.problem;
+    if (known) {
+      const config = agentCaps(source.config);
+      const used = name => slots.filter(slot => slot.project === name).length;
+      caps.push({ source: source.id, label: title(provider), total: { used: slots.length, cap: config.total }, of: name => ({ used: used(name), cap: config.cap(name) }) });
+    }
+    const runs = source.projects.flatMap(book => (book.tables.runs ?? []).filter(run => run.status === "running" && /^R[1-9]\d*$/.test(run.id)).map(run => ({ book, run })));
+    const leadKey = item => sha256(`${item.book.logbook}:${item.run.id}`);
+    const taken = new Set();
+    const row = (item, extra) => {
+      const record = item && (item.book.observations?.records ?? []).filter(r => r.kind === "run" && r.data.run === item.run.id).at(-1);
+      const group = item ? groupOf.get(item.book.key) : groupNamed(extra.slot?.project);
+      const card = item ? cards.get(`${item.book.key}/${item.run.task}`) : null;
+      rows.push({ key: `${source.id}/${item ? `${item.book.name}/${item.run.id}` : extra.slot.name}`, source: source.id, runId: item?.run.id ?? extra.slot?.run ?? null, run: item?.run ?? null,
+        group: group?.key ?? `slot:${extra.slot?.project ?? "other"}`, groupName: group?.name ?? extra.slot?.project ?? "other",
+        provider: String(record?.data.provider ?? source.provider ?? standIn(source)), role: item?.run.role ?? extra.slot?.role ?? "agent", model: item?.run.model || null,
+        task: card ? { key: card.key, id: card.id, title: card.title, kind: card.kind, priority: card.priority } : item ? { key: null, id: item.run.task, title: "", kind: "", priority: "" } : null,
+        lead: null, children: [], ...extra });
+    };
+    // 1. Each taken slot, joined to its running run by the run mark, in a logbook of the slot's project.
+    for (const slot of slots.filter(slot => slot.ok)) {
+      const match = slot.run ? runs.filter(item => item.run.id === slot.run && bare(item.book.name) === slot.project && (!slot.logbook || item.book.logbook === slot.logbook)) : [];
+      const item = match.length === 1 ? match[0] : null;
+      if (item) taken.add(item);
+      row(item, { slot, activity: slot.at, leadKey: item && slot.role === "lead" ? leadKey(item) : null, helperOf: slot.lead });
+    }
+    // 2. Each running run that no slot holds.
+    const notes = hooks.helpers ?? [];
+    for (const item of runs.filter(item => !taken.has(item))) {
+      const note = notes.filter(note => note.run === item.run.id && runs.some(lead => lead.book === item.book && lead.run.role === "lead" && leadKey(lead) === note.lead));
+      const stopped = note.find(note => note.stopped);
+      const prov = String((item.book.observations?.records ?? []).filter(r => r.kind === "run" && r.data.run === item.run.id).at(-1)?.data.provider ?? source.provider ?? standIn(source)).toLowerCase();
+      const how = NO_SLOT_NOTES.includes(prov) ? "logbook" : !known ? "unknown" : stopped ? "stopped" : "noslot";
+      row(item, { slot: null, activity: null, how, stoppedAt: stopped?.at ?? null, leadKey: item.run.role === "lead" ? leadKey(item) : null, helperOf: note[0]?.lead ?? null });
+    }
+  }
+  // The tree: a helper under its lead, by the slot's parent mark (the lead slot's bound mark) or by its lead key.
+  for (const child of rows) {
+    const lead = rows.find(other => other !== child && other.source === child.source && (child.slot?.parent && other.slot?.bound === child.slot.parent || child.helperOf && other.leadKey === child.helperOf));
+    if (lead) { child.lead = lead.runId ?? lead.key; lead.children.push(child); }
+  }
+  // The usual time of each role in each project: the ended runs of its logbooks.
+  const usual = new Map();
+  const usualOf = (group, role) => {
+    const key = `${group}\n${role}`;
+    if (!usual.has(key)) {
+      const books = groups.find(item => item.key === group)?.books ?? [];
+      const ended = books.flatMap(book => book.project.tables.runs ?? []).filter(run => run.role === role && run.status !== "running").map(run => time(run.ended) - time(run.started)).filter(ms => Number.isFinite(ms) && ms >= 0);
+      usual.set(key, ended.length >= LONG_BASIS ? median(ended) : null);
+    }
+    return usual.get(key);
+  };
+  let next = Infinity;
+  const soon = ms => { if (ms > at) next = Math.min(next, ms); };
+  for (const agent of rows) {
+    const started = time(agent.run?.started);
+    agent.running = started === null ? null : Math.max(0, at - started);
+    agent.idle = agent.activity === null ? null : Math.max(0, at - agent.activity);
+    const helpers = agent.children.filter(child => child.slot);
+    if (agent.slot) {
+      if (helpers.length) [agent.state, agent.why] = ["wait", `${helpers.filter(child => at - child.activity < AGENT_QUIET_MS).length} of ${agent.children.length} helper${agent.children.length === 1 ? "" : "s"} working`];
+      else if (agent.idle >= AGENT_QUIET_MS) [agent.state, agent.why] = ["stuck", `no activity for ${span(agent.idle)}`];
+      else { [agent.state, agent.why] = ["work", ""]; soon(agent.activity + AGENT_QUIET_MS); }
+    } else if (agent.how === "logbook") [agent.state, agent.why] = ["unk", `${title(agent.provider)} sends no activity notes yet`];
+    else if (agent.how === "unknown") [agent.state, agent.why] = ["unk", "no hook notes: activity not known"];
+    else if (agent.how === "stopped") [agent.state, agent.why] = ["stop", `stopped${agent.stoppedAt ? ` at ${new Date(agent.stoppedAt).toISOString().slice(11, 16)} UTC` : ""}; the logbook still says running`];
+    else [agent.state, agent.why] = ["stuck", "no agent slot holds this run: the hook frees a slot after 60 min with no activity. Ask the sage to check the run."];
+    // Running long is apart from stuck: a busy agent can take much longer than usual.
+    const basis = agent.run && ["work", "unk"].includes(agent.state) ? usualOf(agent.group, agent.run.role) : null;
+    if (basis !== null && agent.running !== null) {
+      if (agent.running > LONG_FACTOR * basis) [agent.state, agent.why] = ["long", `${span(agent.running)}; usual for ${article(agent.run.role)} here is about ${span(basis)}`];
+      else soon(started + LONG_FACTOR * basis + 1);
+    }
+  }
+  const order = agent => AGENT_STATES.indexOf(agent.state);
+  const sort = list => list.sort((a, b) => order(a) - order(b) || (b.running ?? 0) - (a.running ?? 0));
+  for (const agent of rows) sort(agent.children);
+  const byGroup = new Map();
+  for (const agent of rows) byGroup.set(agent.group, [...(byGroup.get(agent.group) ?? []), agent]);
+  const projects = [...byGroup.entries()].map(([key, list]) => {
+    const name = list[0].groupName, group = groups.find(item => item.key === key);
+    // The cap of the hook that knows this project's agents: a provider with no slot notes has none (T308 decision 5).
+    const hooked = caps.find(entry => list.some(agent => agent.source === entry.source && agent.how !== "logbook"));
+    const cap = hooked ? { label: hooked.label, ...hooked.of(group ? bare(group.books[0].project.name) : key.slice(5)) } : null;
+    return { key, name, sub: group?.sub ?? "", pathSub: group?.pathSub ?? null, agents: sort(list.filter(agent => !agent.lead)), count: list.length, look: list.filter(agent => LOOK.includes(agent.state)).length, worst: Math.min(...list.map(order)), cap };
+  }).sort((a, b) => a.worst - b.worst || b.count - a.count || a.name.localeCompare(b.name));
+  const providers = [...new Set(rows.map(agent => title(agent.provider.toLowerCase())))].map(name => ({ name, count: rows.filter(agent => title(agent.provider.toLowerCase()) === name).length }));
+  return { count: rows.length, look: rows.filter(agent => LOOK.includes(agent.state)).length, providers, projects,
+    caps: caps.map(entry => ({ label: entry.label, total: entry.total, projects: projects.filter(project => project.cap?.label === entry.label).map(project => ({ name: project.name, used: project.cap.used, cap: project.cap.cap })) })),
+    problems, unmatched: rows.filter(agent => agent.how === "noslot").map(agent => ({ run: agent.runId, project: agent.groupName })), next: Number.isFinite(next) ? next : null,
+    rules: { quiet: AGENT_QUIET_MS / 60_000, factor: LONG_FACTOR, basis: LONG_BASIS } };
+}
+
 export function buildBoardModel(sources, { now = new Date().toISOString() } = {}) {
   const at = time(now);
   if (at === null) throw new TypeError("board time must be an ISO date");
@@ -384,5 +520,6 @@ export function buildBoardModel(sources, { now = new Date().toISOString() } = {}
       list: group.archived ? "archived" : needsOwner ? "needs" : last && at - last <= ACTIVE_DAYS * 86400000 ? "active" : "idle" };
   }).sort((a, b) => LISTS.indexOf(a.list) - LISTS.indexOf(b.list) || (a.list === "needs" ? b.needsOwner - a.needsOwner : 0) || (Date.parse(b.lastActivity ?? 0) || 0) - (Date.parse(a.lastActivity ?? 0) || 0) || a.name.localeCompare(b.name));
   const archived = projects.filter(project => project.archived).map(project => ({ key: project.key, name: project.name, tasks: project.tasks, needsOwner: project.needsOwner }));
-  return { at: new Date(at).toISOString(), tasks, projects, notes, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
+  const agents = agentsOf(sources, groups, groupOf, new Map(tasks.map(task => [task.key, task])), at);
+  return { at: new Date(at).toISOString(), tasks, projects, notes, agents, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
 }
