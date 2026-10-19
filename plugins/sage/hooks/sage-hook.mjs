@@ -634,8 +634,8 @@ function firstCreation({ owner, repo, branch, sha }) {
 const READS = { status: () => true, "merge-check": () => true, logbook: (pos) => pos[0] !== "repair", standing: (pos) => pos[0] !== "add", config: (pos) => !pos.length };
 const READ_FORM = "node <path to skills/sage/sage.mjs> <status, merge-check, logbook, standing or config> [--project <path>], as one plain command: no quote, variable, ;, &&, ||, |, `, $(, >, < or newline, and config with no key=value";
 const PLAIN = /^[\w./=:@,+-]+(?:[ \t]+[\w./=:@,+-]+)*$/;
-/** The logbook's files by name (S2). */
-const TABLES = ["tasks.tsv", "runs.tsv", "findings.tsv", "gates.tsv", "ledger.tsv", "decisions.tsv", "config.json", "standing.md", "status.md"];
+/** The logbook's files by name (S2), from the core's one list, so a new table is guarded too (K2). Without the core it is undefined, and a check that uses it throws, so the hook refuses. */
+const TABLES = boardPolicy.LOGBOOK_FILES;
 /** All the text of a tool call's input, one string per field. */
 const fields = (v) => (typeof v === "string" ? [v] : v && typeof v === "object" ? Object.values(v).flatMap(fields) : []);
 /** Text as APFS compares names: it ignores case and Unicode form, and folds compatibility forms (ſ is s, ﬆ is st). */

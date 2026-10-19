@@ -1744,6 +1744,17 @@ test("S2: the chief's shell writes to a logbook file are refused, in sage mode b
   for (const command of allowed) assert.equal(denied(s.send(bash(command, book))), undefined, command);
 });
 
+test("K2 (T336): in sage mode the chief's shell write that names any table of the state tool, or another logbook record, is refused by its name", async () => {
+  // The tables as the state tool writes them: a table that the hook's list left out would pass here.
+  const { TABLES } = await import(new URL("../plugins/sage/core/logbook-fields.mjs", import.meta.url));
+  const names = [...Object.keys(TABLES).map((t) => `${t}.tsv`), "config.json", "standing.md", "status.md", "observations.json"];
+  const s = session();
+  s.send(prompt("sage mode"));
+  const work = mkdtempSync(join(tmpdir(), "sage-k2-")); // outside the sage root: only the name can refuse
+  for (const name of names) assert.match(denied(s.send(bash(`echo x >> ${name}`, work))) ?? "", ONLY_TOOL, name);
+  assert.equal(denied(s.send(bash("echo x >> notes.tsv", work))), undefined, "another name passes");
+});
+
 test("S2: the chief's Write, Edit, MultiEdit and NotebookEdit under the sage root are refused, in sage mode and out of it (T83)", () => {
   for (const on of [false, true]) {
     const s = session();

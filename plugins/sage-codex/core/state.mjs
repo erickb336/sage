@@ -22,7 +22,7 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
-import { HIDDEN, NAME_MAX, PRIORITIES, TASK_KINDS, nameProblem } from "./logbook-fields.mjs";
+import { HIDDEN, NAME_MAX, PRIORITIES, TABLES, TASK_KINDS, nameProblem } from "./logbook-fields.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -85,22 +85,14 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 /** Model choice by role, task size or risk flag; provider defaults supply the model names. */
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
-const TABLES = {
-  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra", "priority", "kind"],
-  runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
-  findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status"],
-  ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
-  gates: ["id", "task", "question", "options", "recommendation", "default", "answer", "at"],
-  decisions: ["at", "task", "decision", "why"],
-};
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind"] };
+const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind", "waits"] };
 const COMMANDS = ["init", "logbook", "standing", "pages", "task", "round", "run", "finding", "verdict", "gate", "log", "status", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss"],
   "projects rebuild": ["accept-listing"],
-  "task add": ["title", "size", "risk", "add", "why", "priority", "kind"],
+  "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits"],
   "run add": ["role", "branch", "candidate"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
   "run done": ["status", "tokens", "report"],
@@ -722,6 +714,7 @@ function createRequestedRun(input, env = process.env) {
 /** A recorded running run is an assignment record, not proof that a native agent started. */
 function runFrame(dir, task, role, branch, candidate, env) {
   if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
+  if (WAIT_ROLES.includes(role)) waitsMet(task, read(dir, "tasks"), `${role} run`);
   if (role === "lead") {
     // A lead carries one task's pull request: one running lead per task, and at most LEADS per project.
     if (["merged", "abandoned", "concluded"].includes(task.state)) refuse(`${task.id} is ${task.state}, so it takes no lead run: the task has ended.`);
@@ -1234,6 +1227,76 @@ const shell = (word) => (/^[\w./-]+$/.test(word) ? word : `'${word.replaceAll("'
  */
 const notHeld = (task, what) => task.state === "held" && refuse(`${task.id} is held, so it takes no ${what}: only the sage moves a held task (sage task ${task.id} set state=building or briefed), then ${what} again.`);
 
+/**
+ * Waits (T336): a task may wait for other tasks of its own logbook. A wait is met when that task is merged or concluded; an
+ * abandoned task never meets it (the owner, 2026-10-19). A task with an unmet wait takes no build work (WAIT_ROLES, a move
+ * to building) and does not merge; its design and PE may run.
+ */
+const MET = ["merged", "concluded"];
+const WAIT_ROLES = ["lead", "implementer", "investigate", "arena-judge"];
+const WAITS_MAX = 20;
+const waitsOf = (task) => list(task?.waits);
+/** The tasks by id, built once by a caller that looks up many waits, so a merge check stays linear. */
+const byIds = (tasks) => new Map(tasks.map((t) => [t.id, t]));
+/** The waits of a task that are not met, each with the state of its task (undefined for a task that the logbook lost). passes(id) meets a wait too. */
+const unmetWaits = (task, byId, passes = () => false) =>
+  waitsOf(task).map((id) => ({ id, state: byId.get(id)?.state })).filter(({ id, state }) => !MET.includes(state) && !passes(id));
+const waitList = (open) => open.map(({ id, state }) => `${id} (${state ?? "not in the logbook"})`).join(", ");
+/** The fix for a wait that is never met: its task was abandoned or is lost. */
+const waitFix = (task, open) => {
+  const dead = open.filter(({ state }) => state === "abandoned" || state === undefined).map(({ id }) => id);
+  return dead.length ? ` ${dead.join(", ")} ${dead.length === 1 ? "is" : "are"} abandoned or not in the logbook, so ${dead.length === 1 ? "that wait is" : "those waits are"} never met: remove or change the wait (sage task ${task.id} set waits=<ids>, or waits= to clear it), or ask the owner.` : "";
+};
+/** Refuses work of what on a task with an unmet wait, and names each unmet task with its state. */
+const waitsMet = (task, tasks, what) => {
+  const open = unmetWaits(task, byIds(tasks));
+  if (open.length) refuse(`${task.id} waits for ${waitList(open)}, so it takes no ${what}: it starts after each of them is merged or concluded. Its design and PE may run.${waitFix(task, open)}`);
+};
+/** A task's waits for a printed line: each with its task's state, then the unmet ones. */
+const waitsText = (task, tasks) => {
+  if (!waitsOf(task).length) return "";
+  const byId = byIds(tasks), open = unmetWaits(task, byId);
+  return ` · waits ${waitList(waitsOf(task).map((id) => ({ id, state: byId.get(id)?.state })))} · ${open.length ? `unmet ${open.map(({ id }) => id).join(", ")}` : "all met"}`;
+};
+/**
+ * A waits value as its cell holds it: task ids joined by commas, "" for none (an empty value or none clears it). The ids may
+ * be separated by commas or spaces. It refuses a word that is not a task id, a duplicate, the task itself, more than
+ * WAITS_MAX, a task that this logbook does not have, and a loop, which it names (T8, T9, T8).
+ */
+function waitsValue(task, value, tasks) {
+  const ids = value === "none" ? [] : String(value ?? "").split(/[\s,]+/).filter(Boolean);
+  const nothing = " Nothing changed.";
+  const odd = ids.find((id) => !/^T[1-9]\d*$/.test(id));
+  if (odd !== undefined) refuse(`waits takes task ids such as T7, separated by commas or spaces, or none to clear it; not "${visible(odd)}".${nothing}`);
+  const twice = ids.find((id, i) => ids.indexOf(id) !== i);
+  if (twice) refuse(`waits names ${twice} twice: give each task once.${nothing}`);
+  if (ids.includes(task.id)) refuse(`${task.id} cannot wait for itself.${nothing}`);
+  if (ids.length > WAITS_MAX) refuse(`waits names ${ids.length} tasks, more than the ${WAITS_MAX} that a task may wait for. Split the task, or wait for fewer.${nothing}`);
+  const known = new Map(tasks.map((t) => [t.id, t]));
+  const lost = ids.find((id) => !known.has(id));
+  if (lost) refuse(`no task ${lost} in this logbook: a task waits only for a task of its own logbook.${nothing}`);
+  // A loop: a path of waits from one of the new ids back to the task. One depth-first search over the logbook's tasks.
+  const next = (id) => (id === task.id ? ids : waitsOf(known.get(id)));
+  const seen = new Set();
+  const back = (id, path) => {
+    if (id === task.id) return path;
+    if (seen.has(id)) return undefined;
+    seen.add(id);
+    for (const n of next(id)) {
+      const found = back(n, [...path, n]);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  for (const id of ids) {
+    const loop = back(id, [task.id, id]);
+    if (loop) refuse(`these waits make a loop: ${loop.join(", ")}. A loop never ends, so sage refuses it.${nothing}`);
+  }
+  return ids.join(",");
+}
+/** The decision row of a changed waits list, so that a replaced list leaves its record. */
+const waitsDecision = (task, was, at, why) => (was === (task.waits ?? "") ? [] : [{ at, task: task.id, decision: `waits ${was || "none"} → ${task.waits || "none"}`, why }]);
+
 /** The extra rounds of a task's holds by round: a whole number, and 0 for any other cell, so a hand-written cell never gives NaN (F-T286-2). */
 const extraOf = (task) => (/^\d{1,3}$/.test(task.extra ?? "") ? Number(task.extra) : 0);
 
@@ -1263,6 +1326,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
       const was = task.state;
       move(task, v); // the design's states first; the table is written only if every check below passes
+      if (v === "building") waitsMet(task, tasks, "move to building");
       // A move to abandoned gives no round: the task ends (F-T286-3).
       if (was === "held" && task.hold === "round" && v !== "abandoned") {
         task.extra = String(extraOf(task) + 1);
@@ -1300,7 +1364,11 @@ function planTaskChanges(before, id, changes, at, facts) {
     else if (k === "branch") notHeld(task, "branch="), task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
     else if (k === "title") task.title = v;
     else if (k === "priority" || k === "kind") task[k] = tag(k, v);
-    else refuse(`task set takes state=, branch=, pr=, title=, priority= or kind=`);
+    else if (k === "waits") {
+      const was = task.waits ?? "";
+      task.waits = waitsValue(task, v, tasks);
+      decided.push(...waitsDecision(task, was, at, "task set"));
+    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind= or waits=`);
   }
   return { task, tasks, runs, decisions: [...decisions, ...decided] };
 }
@@ -1324,7 +1392,7 @@ function frame(dir, title, size, risk, add, tags = {}) {
 }
 /** A task's priority and kind for a printed line: nothing when it has none. */
 const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}`;
-const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}`;
+const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}${task.waits ? ` · waits ${task.waits.replaceAll(",", ", ")}` : ""}`;
 
 function move(task, to) {
   if (to !== "abandoned" && !(NEXT[task.state] ?? []).includes(to)) refuse(`${task.id} cannot go from ${task.state} to ${to}. Next: ${(NEXT[task.state] ?? []).join(", ") || "none"}`);
@@ -1513,7 +1581,7 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
       const [byId, ownOf, findingsOf, runsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs)];
-      return [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
+      const checked = [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
         // A held task never merges until the sage moves it (F-T273-12).
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
@@ -1523,6 +1591,16 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
         return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...verdict, ...busy, ...held };
+      });
+      // A task with an unmet wait does not merge. A wait on a task of this same merge (its SHA or its PR) is met when that
+      // task passes here too, its own waits included: else two tasks of one PR could never merge. path stops a loop of a
+      // hand-edited logbook.
+      const here = new Map(checked.map((r) => [r.id, r]));
+      const passes = (id, path) => !path.includes(id) && here.get(id)?.ok === true && !unmetWaits(byId.get(id), byId, (u) => passes(u, [...path, id])).length;
+      return checked.map((r) => {
+        const task = byId.get(r.id), open = task ? unmetWaits(task, byId, (u) => passes(u, [r.id])) : [];
+        if (!open.length || task.state === "held") return r;
+        return { ...r, ok: false, reason: `${r.id} waits for ${waitList(open)}: it merges after ${open.length === 1 ? "that task is" : "each of them is"} merged or concluded, or passes in this same merge.${waitFix(task, open)}` };
       });
     });
     const one = strangers.length === 1;
@@ -1561,6 +1639,10 @@ function status(dir, save) {
     `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${g.question} (default: ${g.default || "none"})`).join("")}`,
     `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens`,
   ];
+  // The open tasks that wait, each with its unmet waits: a line only when one waits.
+  const byId = byIds(tasks);
+  const waiting = tasks.filter((t) => !["merged", "concluded", "abandoned"].includes(t.state)).map((t) => [t, unmetWaits(t, byId)]).filter(([, open]) => open.length);
+  if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
   const table = ["", "| Task | State | Size | Round | PR | Title |", "| --- | --- | --- | --- | --- | --- |", ...tasks.map((t) => `| ${t.id} | ${t.state} | ${t.size} | ${t.round} | ${t.pr} | ${t.title} |`)];
   if (save) put(join(dir, "status.md"), [`# ${lines[0]}`, "", ...lines.slice(1).map((l) => `    ${l}`), ...table].join("\n") + "\n");
   return lines.join("\n");
@@ -1830,9 +1912,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (size === "investigate" && list(opt.add).includes("build")) refuse("an investigation changes no code, so it takes no build block. Frame the build as its own task: sage task add --size tiny, small or large");
         const why = opt.add ? need(opt.why, "--why for the added blocks") : ""; // refuse before anything is written
         const tags = Object.fromEntries(["priority", "kind"].filter((k) => opt[k] !== undefined).map((k) => [k, tag(k, opt[k])]));
+        if (opt.waits !== undefined) tags.waits = waitsValue({ id: nextId(dir, "T") }, opt.waits, read(dir, "tasks"));
         const task = frame(dir, need(opt.title, "--title"), size, risk, list(opt.add), tags);
         checkout(dir, project);
-        if (opt.add) write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: task.id, decision: `added ${opt.add}`, why }]);
+        const at = now(), decided = [...(opt.add ? [{ at, task: task.id, decision: `added ${opt.add}`, why }] : []), ...waitsDecision(task, "", at, "task add")];
+        if (decided.length) write(dir, "decisions", [...read(dir, "decisions"), ...decided]);
         return framed(task);
       }
       const { tasks, task } = taskOf(dir, need(sub, "the task id")); // task <T> [set key=value ...]
@@ -1844,7 +1928,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         write(dir, "tasks", planned.tasks);
         Object.assign(task, planned.task);
       }
-      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}`;
+      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, tasks)}`;
     }
     case "round": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));

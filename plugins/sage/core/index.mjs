@@ -14,6 +14,7 @@ export { createAssignment, correlateReport } from "./assignments.mjs";
 export { AdmissionError, configureAdmission, activateAdmission, changeAdmissionMode, reserveAdmission, reserveRoleAdmission, reserveBriefAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, bindAdmission, bindContinuationAdmission, completeAdmission, recordReportAdmission, interruptAdmission, failAdmission, failContinuationAdmission, readAdmission } from "./admission.mjs";
 export { BRIEF_FIELDS, parseBrief, renderBrief } from "./brief.mjs";
 export { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "./roles.mjs";
+export { LOGBOOK_FILES } from "./logbook-fields.mjs";
 export { readBoardSources } from "./board-reader.mjs";
 export { buildBoardModel } from "./board-model.mjs";
 export { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";

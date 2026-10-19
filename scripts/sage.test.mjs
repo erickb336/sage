@@ -1683,11 +1683,11 @@ test("unknown-columns: a logbook that a newer sage wrote refuses every write com
   s.ok("gate", "add", "T1", "--question", "q?", "--options", "yes|no", "--recommend", "no");
   s.ok("run", "add", "T1", "--role", "qa");
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
-  // A newer sage (T6 or T9) adds two columns to tasks.tsv and gives T2 values in them.
+  // A newer sage (programs, T337) adds two columns to tasks.tsv and gives T2 values in them.
   const tasks = join(s.dir, "tasks.tsv");
-  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\tkind\n", "\tkind\tprogram\twaits\n").replace(/^(T2\t.*)$/m, "$1\tP1\tT1"));
+  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\twaits\n", "\twaits\tprogram\tlater\n").replace(/^(T2\t.*)$/m, "$1\tPG1\tx"));
   const before = snapshot(s.dir);
-  const why = `sage: ${tasks} has columns that this version of sage does not know (program, waits): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`;
+  const why = `sage: ${tasks} has columns that this version of sage does not know (program, later): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`;
   const writes = [
     ["init"],
     ["standing", "add", "x"],
@@ -1707,11 +1707,11 @@ test("unknown-columns: a logbook that a newer sage wrote refuses every write com
   ];
   assert.deepEqual(writes.map((w) => s.no(...w)), writes.map(() => why));
   assert.deepEqual(snapshot(s.dir), before, "no value lost, and no file changed");
-  assert.match(rows(s.dir, "tasks")[1].program + rows(s.dir, "tasks")[1].waits, /^P1T1$/);
+  assert.match(rows(s.dir, "tasks")[1].program + rows(s.dir, "tasks")[1].later, /^PG1x$/);
   assert.equal(s.ok("status").split("\n")[1], "tasks   2 · reviewing 1 · framed 1", "reading goes on");
   assert.match(s.no("merge-check", "--sha", SHA), /T1 has open findings: F-T1-1/);
 
-  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\tprogram\twaits\n", "\n")); // the same with a new column in runs.tsv, as T6 would add
+  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\tprogram\tlater\n", "\n")); // the same with a new column in runs.tsv, as T6 would add
   const runs = join(s.dir, "runs.tsv");
   writeFileSync(runs, readFileSync(runs, "utf8").replace("\tmodel\n", "\tmodel\tsaved\n"));
   assert.match(s.no("log", "-", "x", "--why", "y"), /runs\.tsv has columns that this version of sage does not know \(saved\)/);
@@ -1723,7 +1723,7 @@ test("unknown-columns: a logbook that a newer sage wrote refuses every write com
 
 test("unknown-options: a command refuses an option that it does not take, and an option without its value", () => {
   const s = store();
-  assert.equal(s.no("task", "add", "--title", "x", "--size", "small", "--program", "P1"), "sage: task add takes no --program. Its options: --title, --size, --risk, --add, --why, --priority, --kind, --project.");
+  assert.equal(s.no("task", "add", "--title", "x", "--size", "small", "--program", "P1"), "sage: task add takes no --program. Its options: --title, --size, --risk, --add, --why, --priority, --kind, --waits, --project.");
   assert.deepEqual(rows(s.dir, "tasks"), [], "a refused command writes nothing");
   s.ok("task", "add", "--title", "x", "--size", "small");
   assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--cycles", "2"), "sage: verdict takes no --cycles. Its options: --sha, --kind, --cycle, --pr, --run, --project.");
@@ -1980,9 +1980,9 @@ test("F-R65-2: only a header with every known column and more is a newer sage's;
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
   const tasks = join(s.dir, "tasks.tsv");
   const text = readFileSync(tasks, "utf8");
-  const why = `sage: ${damaged(tasks, "id, title, size, risk, route, state, branch, pr, round, keys, hold, extra, priority, kind")}`;
+  const why = `sage: ${damaged(tasks, "id, title, size, risk, route, state, branch, pr, round, keys, hold, extra, priority, kind, waits")}`;
   for (const head of ["\n", "\tkept\n"]) { // a column lost, or renamed: so it lacks one, also with a column more
-    writeFileSync(tasks, text.replace("\tkeys\thold\textra\tpriority\tkind\n", head));
+    writeFileSync(tasks, text.replace("\tkeys\thold\textra\tpriority\tkind\twaits\n", head));
     assert.equal(s.no("log", "-", "x", "--why", "y"), why);
   }
   writeFileSync(tasks, text);
@@ -2004,7 +2004,7 @@ test("F-R65-3: no control character reaches the terminal: a cell keeps none, a p
   byHand(s.dir, "findings", 1, "K]0;TITLE[31mRED", (cells) => cells.with(1, key)); // a person's edit puts them back
   assert.equal(s.no("finding", "close", "T1", "F-T1-9"), "sage: no finding F-T1-9 on T1. The latest: K\\x1b]0;TITLE\\x07\\x1b[31mRED.");
   const tasks = join(s.dir, "tasks.tsv");
-  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\tkind\n", "\tkind\tnew\x1b[2J\n"));
+  writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\twaits\n", "\twaits\tnew\x1b[2J\n"));
   assert.equal(s.no("log", "-", "x", "--why", "y"), `sage: ${tasks} has columns that this version of sage does not know (new\\x1b[2J): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
   const project = join(mkdtempSync(join(tmpdir(), "sage-ctl-")), "x\rrm -rf ~ #"); // printed raw, the CR showed another command
   mkdirSync(project);
@@ -2335,7 +2335,7 @@ test("T314: task add takes --priority and --kind, and task set takes priority= a
   assert.equal(s.ok("task", "T2", "set", "priority=P0", "kind=docs"), "T2 framed · tiny · round 0 · route build · P0 · kind docs");
   assert.equal(s.ok("task", "T1", "set", "priority=none", "kind=none"), "T1 framed · small · round 0 · route build,code-review,qa");
   assert.deepEqual(rows(s.dir, "tasks").map((t) => [t.id, t.priority, t.kind]), [["T1", "", ""], ["T2", "P0", "docs"]]);
-  assert.match(s.no("task", "T2", "set", "colour=red"), /^sage: task set takes state=, branch=, pr=, title=, priority= or kind=$/);
+  assert.match(s.no("task", "T2", "set", "colour=red"), /^sage: task set takes state=, branch=, pr=, title=, priority=, kind= or waits=$/);
 });
 
 test("T314: an older logbook gets the priority and kind columns at its next write, so an older sage refuses to write it and loses no value", () => {
@@ -2346,9 +2346,149 @@ test("T314: an older logbook gets the priority and kind columns at its next writ
   writeFileSync(tasks, "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\n");
   assert.equal(s.ok("status").split("\n")[1], "tasks   1 · framed 1", "it reads with the columns empty");
   s.ok("task", "T1", "set", "kind=checks");
-  assert.equal(readFileSync(tasks, "utf8").split("\n")[0], "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind");
+  assert.equal(readFileSync(tasks, "utf8").split("\n")[0], "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits");
   // To an older sage these are columns that it does not know: its ready() refuses every write (see unknown-columns).
   assert.equal(rows(s.dir, "tasks")[0].kind, "checks");
+});
+
+/** Sets a task's state by hand, as the end of its route would: the waits tests need upstream tasks in each state. */
+const stateIs = (s, id, state) => byHand(s.dir, "tasks", 0, id, (cells) => cells.with(5, state));
+const lastDecision = (s) => rows(s.dir, "decisions").at(-1);
+const UNMET = (task, waits, what) => `sage: ${task} waits for ${waits}, so it takes no ${what}: it starts after each of them is merged or concluded. Its design and PE may run.`;
+
+test("T336: task add --waits and task set waits= keep a list of task ids, show each with its state, and leave a decisions row; waits= and none clear it", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Up one", "--size", "small");
+  s.ok("task", "add", "--title", "Up two", "--size", "small");
+  assert.equal(s.ok("task", "add", "--title", "Down", "--size", "small", "--waits", "T1 T2"), "T3 framed · small · route build,code-review,qa · waits T1, T2");
+  assert.deepEqual(rows(s.dir, "tasks").map((t) => [t.id, t.waits]), [["T1", ""], ["T2", ""], ["T3", "T1,T2"]]);
+  assert.deepEqual(lastDecision(s), { at: lastDecision(s).at, task: "T3", decision: "waits none → T1,T2", why: "task add" });
+  stateIs(s, "T1", "merged");
+  assert.equal(s.ok("task", "T3"), "T3 framed · small · round 0 · route build,code-review,qa · waits T1 (merged), T2 (framed) · unmet T2");
+  assert.equal(s.ok("task", "T3", "set", "waits=T2,T1"), "T3 framed · small · round 0 · route build,code-review,qa · waits T2 (framed), T1 (merged) · unmet T2");
+  assert.equal(lastDecision(s).decision, "waits T1,T2 → T2,T1", "a replaced list leaves its old and new values");
+  const count = rows(s.dir, "decisions").length;
+  s.ok("task", "T3", "set", "waits=T2, T1");
+  assert.equal(rows(s.dir, "decisions").length, count, "the same list again changes nothing, so it writes no row");
+  stateIs(s, "T2", "concluded");
+  assert.match(s.ok("task", "T3"), / · waits T2 \(concluded\), T1 \(merged\) · all met$/);
+  assert.equal(s.ok("task", "T3", "set", "waits="), "T3 framed · small · round 0 · route build,code-review,qa", "waits= clears it");
+  assert.equal(lastDecision(s).decision, "waits T2,T1 → none");
+  s.ok("task", "T3", "set", "waits=T1");
+  s.ok("task", "T3", "set", "waits=none");
+  assert.deepEqual([rows(s.dir, "tasks")[2].waits, lastDecision(s).decision], ["", "waits T1 → none"], "none clears it too");
+  assert.equal(s.ok("task", "add", "--title", "No waits", "--size", "tiny"), "T4 framed · tiny · route build");
+  assert.equal(lastDecision(s).decision, "waits T1 → none", "a task without waits writes no waits row");
+});
+
+test("T336: waits refuses a word that is not a task id, a duplicate, the task itself, more than 20, a task of no row and a loop, and changes nothing", () => {
+  const s = store();
+  for (let i = 0; i < 22; i++) s.ok("task", "add", "--title", `t${i + 1}`, "--size", "small");
+  s.ok("task", "T1", "set", "waits=T2");
+  s.ok("task", "T2", "set", "waits=T3");
+  const files = () => ["tasks", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8"));
+  const before = files();
+  const refusals = [
+    [["task", "T5", "set", "waits=t1"], 'sage: waits takes task ids such as T7, separated by commas or spaces, or none to clear it; not "t1". Nothing changed.'],
+    [["task", "T5", "set", "waits=T0"], 'sage: waits takes task ids such as T7, separated by commas or spaces, or none to clear it; not "T0". Nothing changed.'],
+    [["task", "T5", "set", "waits=T1;T2"], 'sage: waits takes task ids such as T7, separated by commas or spaces, or none to clear it; not "T1;T2". Nothing changed.'],
+    [["task", "T5", "set", "waits=codex:T7"], 'sage: waits takes task ids such as T7, separated by commas or spaces, or none to clear it; not "codex:T7". Nothing changed.'],
+    [["task", "T5", "set", "waits=T1,T1"], "sage: waits names T1 twice: give each task once. Nothing changed."],
+    [["task", "T5", "set", "waits=T5"], "sage: T5 cannot wait for itself. Nothing changed."],
+    [["task", "T22", "set", `waits=${Array.from({ length: 21 }, (_, i) => `T${i + 1}`).join(",")}`], "sage: waits names 21 tasks, more than the 20 that a task may wait for. Split the task, or wait for fewer. Nothing changed."],
+    [["task", "T5", "set", "waits=T99"], "sage: no task T99 in this logbook: a task waits only for a task of its own logbook. Nothing changed."],
+    [["task", "T2", "set", "waits=T1"], "sage: these waits make a loop: T2, T1, T2. A loop never ends, so sage refuses it. Nothing changed."],
+    [["task", "T3", "set", "waits=T4 T1"], "sage: these waits make a loop: T3, T1, T2, T3. A loop never ends, so sage refuses it. Nothing changed."],
+    [["task", "add", "--title", "x", "--size", "small", "--waits", "T99"], "sage: no task T99 in this logbook: a task waits only for a task of its own logbook. Nothing changed."],
+    [["task", "add", "--title", "x", "--size", "small", "--waits", "T23"], "sage: T23 cannot wait for itself. Nothing changed.", "T23 is the new task's own id"],
+  ];
+  for (const [args, why] of refusals) assert.equal(s.no(...args), why, args.join(" "));
+  assert.equal(rows(s.dir, "tasks").length, 22, "a refused task add frames no task");
+  assert.deepEqual(files(), before, "a refusal writes nothing");
+  assert.match(s.ok("task", "T22", "set", `waits=${Array.from({ length: 20 }, (_, i) => `T${i + 1}`).join(",")}`), / · waits T1 \(framed\), .* T20 \(framed\) · unmet T1, /, "20 is the most");
+  assert.match(s.ok("task", "T3", "set", "waits=T4"), / · waits T4 \(framed\) · unmet T4$/, "a chain that does not come back is no loop");
+});
+
+test("T336: a wait is met only when its task is merged or concluded; an abandoned task never meets it, and the refusal names the fix", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Up", "--size", "small");
+  s.ok("task", "add", "--title", "Down", "--size", "small", "--waits", "T1");
+  for (const state of ["framed", "briefed", "building", "held", "reviewing", "replan", "verified", "pr-ready"]) {
+    stateIs(s, "T1", state);
+    assert.equal(s.no("run", "add", "T2", "--role", "lead"), UNMET("T2", `T1 (${state})`, "lead run"), state);
+    assert.equal(s.ok("status").split("\n")[4], `waits   1 waiting · T2 for T1 (${state})`, state);
+  }
+  stateIs(s, "T1", "abandoned");
+  assert.equal(s.no("run", "add", "T2", "--role", "lead"), `${UNMET("T2", "T1 (abandoned)", "lead run")} T1 is abandoned or not in the logbook, so that wait is never met: remove or change the wait (sage task T2 set waits=<ids>, or waits= to clear it), or ask the owner.`);
+  assert.match(s.ok("task", "T2"), / · waits T1 \(abandoned\) · unmet T1$/);
+  for (const state of ["merged", "concluded"]) {
+    stateIs(s, "T1", state);
+    const run = s.ok("run", "add", "T2", "--role", "lead");
+    assert.match(run, /^R\d+ running · lead on T2/, state);
+    s.ok("run", "done", run.split(" ")[0], "--status", "done");
+    assert.equal(s.ok("status").split("\n").length, 4, `${state}: no waits line when no task waits`);
+  }
+  byHand(s.dir, "tasks", 0, "T1", () => null); // a hand edit loses the upstream row: the wait is never met
+  assert.match(s.no("run", "add", "T2", "--role", "lead"), /^sage: T2 waits for T1 \(not in the logbook\), so .* T1 is abandoned or not in the logbook, so that wait is never met/);
+});
+
+test("T336: a task with an unmet wait takes no lead, implementer, investigate or arena-judge run and no move to building; design, PE, review and QA runs go on", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Up", "--size", "small");
+  s.ok("task", "add", "--title", "Down", "--size", "large", "--waits", "T1");
+  stateIs(s, "T1", "building");
+  const runs = () => readFileSync(join(s.dir, "runs.tsv"), "utf8");
+  const before = runs();
+  for (const [role, more] of [["lead", []], ["Lead", []], ["implementer", ["--branch", "sage/t2"]], ["investigate", []], ["arena-judge", []]]) {
+    assert.equal(s.no("run", "add", "T2", "--role", role, ...more), UNMET("T2", "T1 (building)", `${role.toLowerCase()} run`), role);
+  }
+  assert.equal(runs(), before, "a refused run is not written");
+  for (const [role, more] of [["designer", ["--branch", "sage/t2-design"]], ["pe", []], ["code-reviewer", []], ["qa", []]]) assert.match(s.ok("run", "add", "T2", "--role", role, ...more), new RegExp(`^R\\d+ running · ${role} on T2`), role);
+  s.ok("task", "T2", "set", "state=briefed");
+  assert.equal(s.no("task", "T2", "set", "state=building"), UNMET("T2", "T1 (building)", "move to building"));
+  assert.equal(rows(s.dir, "tasks")[1].state, "briefed", "the refused move changes nothing");
+  stateIs(s, "T1", "merged");
+  assert.equal(s.ok("task", "T2", "set", "state=building"), "T2 building · large · round 0 · route design,pe,build,code-review,security-review,ux-review,qa · waits T1 (merged) · all met");
+});
+
+test("T336: the merge check refuses a task with an unmet wait and names it; a wait on a task of the same merge is met when that task passes too", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "Up", "--size", "small");
+  s.ok("task", "add", "--title", "Down", "--size", "small", "--waits", "T1");
+  const clean = (t, kinds = ["checks-pass", "review-clean", "qa-pass"]) => kinds.forEach((kind) => s.ok("verdict", t, "--sha", SHA, "--kind", kind, "--pr", "5"));
+  s.ok("task", "T2", "set", "pr=5");
+  clean("T2");
+  stateIs(s, "T1", "reviewing");
+  assert.equal(s.no("merge-check", "--sha", SHA), "sage: T2 waits for T1 (reviewing): it merges after that task is merged or concluded, or passes in this same merge.");
+  stateIs(s, "T1", "abandoned");
+  assert.equal(s.no("merge-check", "--sha", SHA), "sage: T2 waits for T1 (abandoned): it merges after that task is merged or concluded, or passes in this same merge. T1 is abandoned or not in the logbook, so that wait is never met: remove or change the wait (sage task T2 set waits=<ids>, or waits= to clear it), or ask the owner.");
+  stateIs(s, "T2", "held");
+  assert.equal(s.no("merge-check", "--sha", SHA), "sage: T2 is held: only the sage moves a held task, and it does not merge until then.", "held is named first");
+  stateIs(s, "T2", "verified");
+  stateIs(s, "T1", "merged");
+  assert.equal(s.ok("merge-check", "--sha", SHA), "T2 may merge: 1 clean cycle on this SHA");
+  // The same PR: T1 is on PR 5 too. T2's wait is met when T1 passes in this merge, and not while T1 fails.
+  stateIs(s, "T1", "verified");
+  s.ok("task", "T1", "set", "pr=5");
+  clean("T1", ["checks-pass", "review-clean"]);
+  const both = s.no("merge-check", "--sha", SHA, "--pr", "5");
+  assert.match(both, /^sage: 2 tasks have verdicts on a1b2c3d or belong to PR 5, and each must pass; 2 fail\./);
+  assert.match(both, / T1: 0 of 1 clean cycles on this SHA; never recorded: qa-pass\./);
+  assert.match(both, / T2 waits for T1 \(verified\): it merges after that task is merged or concluded, or passes in this same merge\./);
+  clean("T1", ["qa-pass"]);
+  assert.match(s.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts on a1b2c3d or belong to PR 5, and each must pass: /);
+});
+
+test("T336: an older logbook gets the waits column at its next write with no value lost, so an older sage then refuses to write it", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  const tasks = join(s.dir, "tasks.tsv");
+  // The logbook of the sage before T336: priority and kind, no waits column.
+  writeFileSync(tasks, "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP1\tdocs\n");
+  assert.equal(s.ok("status").split("\n")[1], "tasks   1 · framed 1", "it reads with the column empty");
+  assert.equal(s.ok("task", "T1"), "T1 framed · small · round 0 · route build,code-review,qa · P1 · kind docs");
+  s.ok("task", "add", "--title", "b", "--size", "small", "--waits", "T1");
+  assert.equal(readFileSync(tasks, "utf8"), "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP1\tdocs\t\nT2\tb\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\t\t\tT1\n");
 });
 
 test("T305: the first status line names the project as the board does, not by its logbook folder", () => {

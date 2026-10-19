@@ -47,6 +47,18 @@ export function nameProblem(name) {
   return null;
 }
 
+/** The tables of a logbook and their columns, in the order that a write gives them. The state tool writes them; the hook guards their files. */
+export const TABLES = {
+  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra", "priority", "kind", "waits"],
+  runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
+  findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status"],
+  ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
+  gates: ["id", "task", "question", "options", "recommendation", "default", "answer", "at"],
+  decisions: ["at", "task", "decision", "why"],
+};
+/** Every file of a logbook that only the state tool writes, by name: each table and the logbook's other records (K2). */
+export const LOGBOOK_FILES = [...Object.keys(TABLES).map((t) => `${t}.tsv`), "config.json", "standing.md", "status.md", "observations.json"];
+
 /**
  * The owner's settings of one logbook from its parsed config.json: its display name (null for none) and its archived
  * flag. A bad value falls back (no name; not archived) with a warning, so that a hand-edited file never stops the board.
