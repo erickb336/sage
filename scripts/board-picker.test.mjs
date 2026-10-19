@@ -424,6 +424,26 @@ test("R1093-1: at 375 px no tall header stays on screen, and at every width a ca
   }
 });
 
+test("R1098-1: with the header sticky, a control in the header takes focus without a scroll of the page", async t => {
+  for (const width of [800, 1440]) {
+    const page = await open(t, { width, height: 800 });
+    assert.equal(await page.locator("header").evaluate(header => getComputedStyle(header).position), "sticky", `${width} px: the header is sticky`);
+    const after = async (label, act) => {
+      await page.evaluate(() => { document.activeElement?.blur(); scrollTo(0, 700); });
+      assert.equal(await page.evaluate(() => scrollY), 700, `${width} px: the page scrolls to 700 px`);
+      await act();
+      const y = await page.evaluate(() => scrollY);
+      assert.ok(Math.abs(y - 700) <= 2, `${width} px, ${label}: the page is at ${y} px, not at 700 px`);
+    };
+    await after("a click on the theme label", () => page.click("label.theme"));
+    await after("/", () => page.keyboard.press("/"));
+    assert.equal(await page.evaluate(() => document.activeElement.id), "pick-q", `${width} px: / focuses the search`);
+    await page.keyboard.press("Escape");
+    await after("/ then Esc", async () => { await page.keyboard.press("/"); await page.keyboard.press("Escape"); });
+    assert.equal(await page.evaluate(() => document.activeElement.id), "pick-trig", `${width} px: Esc gives focus back to the button`);
+  }
+});
+
 test("R1075-6: a logbook that the board cannot read has a mark and a plain reason in its picker row, not an error code", async t => {
   const book = sources[0].path, folder = readdirSync(book).find(name => name.startsWith("recipes-app-")), file = join(book, folder, "tasks.tsv");
   chmodSync(file, 0o000);

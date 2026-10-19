@@ -191,7 +191,7 @@ const THEME_CSS = `:root{${DARK}}${whenLight("", LIGHT)}.to-dark{display:none}${
 export const THEME_HEAD = "try{const t=localStorage.getItem('board-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}";
 
 const CSS = `${THEME_CSS}
-*{box-sizing:border-box}[hidden]{display:none!important}html{background:var(--bg);scroll-padding-top:calc(var(--sticky,56px) + 8px)}
+*{box-sizing:border-box}[hidden]{display:none!important}html{background:var(--bg)}header~*,header~* *{scroll-margin-top:calc(var(--sticky,56px) + 8px)}
 body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;min-height:100vh}
 a{color:var(--accent)}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 button{font:inherit;color:inherit}
@@ -374,7 +374,8 @@ const match=${matchProject.toString()};
 ${cardFits.toString()}
 ${needCounts.toString()}
 const SHOWN=${BACKLOG_SHOWN},foldText=${foldText.toString()};
-// A focused control never hides under the sticky header (R1093-1): the page keeps its height free at the top of a scroll.
+// A focused control below the sticky header never hides under it (R1093-1): each one keeps the header's height free above it.
+// Only content below the header has the margin, so a control in the header takes focus without a scroll (R1098-1).
 const head=document.querySelector('header'),pad=()=>document.documentElement.style.setProperty('--sticky',(head&&getComputedStyle(head).position==='sticky'?head.offsetHeight:0)+'px');
 pad();addEventListener('resize',pad);if(head&&window.ResizeObserver)new ResizeObserver(pad).observe(head);
 const S={project:'',needs:false,who:'',priority:'',kind:'',open:false,query:'',active:null,archived:false,gone:false};
