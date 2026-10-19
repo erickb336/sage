@@ -2382,6 +2382,27 @@ test("T346: finding add takes --run of a run of its task and --class from the st
   // A known key opened again keeps its run and class, unless the command gives new ones.
   s.ok("finding", "add", "T1", "--key", "F-T1-1", "--source", "code-reviewer", "--severity", "medium");
   assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.run, f.class]), [["F-T1-1", "R1", "state-edge"], ["F-T1-2", "", ""]]);
+  s.ok("run", "add", "T1", "--role", "code-reviewer"); // R3
+  s.ok("finding", "add", "T1", "--key", "F-T1-1", "--source", "code-reviewer", "--severity", "medium", "--run", "R3", "--class", "copy");
+  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.run, f.class]), [["F-T1-1", "R3", "copy"], ["F-T1-2", "", ""]], "a re-opened finding takes the new run and class");
+});
+
+test("T346: a finding's run counts for the next run id, so after a lost run row the id is not given again", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa"); // R1
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x", "--run", "R1");
+  byHand(s.dir, "runs", 0, "R1", () => null); // the run row is lost; only the finding still names R1
+  assert.equal(s.ok("run", "add", "T1", "--role", "qa"), "R2 running · qa on T1 · model sonnet");
+});
+
+test("T346: finding move clears the finding's run, as that run is a run of the old task", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa"); // R1
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x", "--run", "R1", "--class", "copy");
+  assert.match(s.ok("finding", "move", "T1", "F-T1-1", "--to", "Follow-up"), /^F-T1-1 moved to T2 as F-T2-1 · /);
+  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.task, f.key, f.run, f.class]), [["T2", "F-T2-1", "", "copy"]]);
 });
 
 test("T346: a done review, QA or evidence-review run needs --tokens as a whole number; other roles and other statuses do not", () => {
@@ -2393,19 +2414,25 @@ test("T346: a done review, QA or evidence-review run needs --tokens as a whole n
     for (const bad of ["abc", "0", "1.5", "-3"]) s.no("run", "done", id, "--status", "done", `--tokens=${bad}`);
   }
   assert.ok(rows(s.dir, "runs").slice(0, 5).every((r) => r.status === "running"), "no refused run ended");
-  assert.equal(s.ok("run", "done", "R1", "--status", "done", "--tokens", "52000"), "R1 done");
+  const big = 'sage: --tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not "1234567890123". Nothing changed.';
+  assert.equal(s.no("run", "done", "R1", "--status", "done", "--tokens", "1234567890123"), big, "13 digits is a typo, not a run's tokens");
+  assert.equal(s.no("run", "done", "R2", "--status", "failed", "--tokens", "abc"), 'sage: --tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not "abc". Nothing changed.', "every status checks its --tokens");
+  assert.equal(s.no("run", "done", "R6", "--status", "done", "--tokens", "1e5"), 'sage: --tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not "1e5". Nothing changed.');
+  assert.equal(s.ok("run", "done", "R1", "--status", "done", "--tokens", "123456789012"), "R1 done");
   assert.equal(s.ok("run", "done", "R2", "--status", "failed"), "R2 failed", "a failed run has no report to count");
-  assert.equal(s.ok("run", "done", "R3", "--status", "blocked"), "R3 blocked");
+  assert.equal(s.ok("run", "done", "R3", "--status", "blocked", "--tokens", "900"), "R3 blocked");
   assert.equal(s.ok("run", "done", "R6", "--status", "done"), "R6 done", "an implementer gives tokens when it has them");
   assert.equal(s.ok("run", "done", "R7", "--status", "done"), "R7 done");
-  assert.equal(s.ok("run", "done", "R1", "--status", "done"), "R1 done", "a run that has its tokens keeps them");
-  assert.deepEqual(rows(s.dir, "runs").map((r) => r.tokens), ["52000", "", "", "", "", "", ""]);
+  assert.equal(s.no("run", "done", "R1", "--status", "done", "--tokens", "99"), "sage: R1 already ended as done: a run ends once, and its tokens stay. Nothing changed.");
+  assert.equal(s.no("run", "done", "R2", "--status", "done", "--tokens", "99"), "sage: R2 already ended as failed: a run ends once, and its tokens stay. Nothing changed.");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => r.tokens), ["123456789012", "", "900", "", "", "", ""]);
 });
 
-test("T346: sage stats gives each task's review runs, tokens, rounds and findings by role and cycle, and a total; it reads only", () => {
+test("T346: sage stats gives each task's review runs, tokens, tokens after round 0, rounds and findings by role and cycle, and a total; it reads only", () => {
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
   s.ok("task", "add", "--title", "b", "--size", "small");
+  s.ok("task", "add", "--title", "c", "--size", "small");
   s.ok("run", "add", "T1", "--role", "code-reviewer"); // R1
   s.ok("run", "add", "T1", "--role", "qa"); // R2
   s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"); // R3: no review run
@@ -2417,24 +2444,42 @@ test("T346: sage stats gives each task's review runs, tokens, rounds and finding
   s.ok("run", "done", "R4", "--status", "done", "--tokens", "300");
   byHand(s.dir, "runs", 0, "R5", (c) => Object.assign(c, { 6: "done" })); // an old done review run with no tokens
   byHand(s.dir, "tasks", 0, "T1", (c) => Object.assign(c, { 8: "1" })); // one repair round
+  byHand(s.dir, "tasks", 0, "T3", (c) => Object.assign(c, { 8: "x" })); // a hand-edited round that is no number
+  s.ok("run", "add", "T1", "--role", "qa"); // R6: a run of round 1, so after round 0
+  s.ok("run", "done", "R6", "--status", "done", "--tokens", "1500000");
+  s.ok("run", "add", "T2", "--role", "qa"); // R7
+  s.ok("run", "done", "R7", "--status", "blocked", "--tokens", "7000"); // only a done run's tokens count
   s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a", "--run", "R1", "--class", "state-edge");
   s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "b", "--run", "R2");
   s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "c"); // no run: no cycle
+  // Sources that an object's own keys hold, and a | that a Markdown table reads as a new cell.
+  for (const source of ["constructor", "__proto__", "a|b"]) s.ok("finding", "add", "T2", "--source", source, "--severity", "low", "--summary", source, "--run", "R4");
   s.ok("verdict", "T1", "--kind", "findings", "--sha", SHA, "--cycle", "1", "--run", "R1");
   s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--cycle", "2", "--run", "R2");
+  s.ok("verdict", "T1", "--kind", "findings", "--sha", SHA, "--cycle", "3", "--run", "R4"); // a T1 row that names T2's run: not R4's cycle for T2
   const files = () => readdirSync(s.dir).filter((f) => f.endsWith(".tsv") || f.endsWith(".md")).map((f) => [f, readFileSync(join(s.dir, f), "utf8")]);
   const before = files();
+  // Largest review tokens first (T3 before T2 in the logbook, after it here), in thousands.
   assert.equal(s.ok("stats"), [
-    "| Task | Review runs | Review tokens | Rounds | Findings by role | Findings by cycle |",
-    "| --- | --- | --- | --- | --- | --- |",
-    "| T1 | 2 | 1500 | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |",
-    "| T2 | 2 | 300 | 0 | none | none |",
-    "total · 2 tasks · 4 review runs (1 done without tokens) · 1800 tokens · 1 rounds · 3 findings",
+    "Tokens in thousands (k), of done runs only. A round is one repair of findings; after round 0 counts the runs of round 1 and later. A cycle is one set of reviews and QA on one head commit.",
+    "| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |",
+    "| T2 | 3 | 0k | 0k | 0 | __proto__: 1 · a\\|b: 1 · constructor: 1 | none: 3 |",
+    "| T3 | 0 | 0k | 0k | invalid | none | none |",
+    "total · 3 tasks · 6 review runs (1 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 6 findings",
   ].join("\n"));
-  assert.equal(s.ok("stats", "--task", "T2").split("\n").slice(2).join("\n"), "| T2 | 2 | 300 | 0 | none | none |\ntotal · 1 tasks · 2 review runs (1 done without tokens) · 300 tokens · 0 rounds · 0 findings");
+  assert.equal(s.ok("stats", "--task", "T1").split("\n").slice(3).join("\n"), "| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |\ntotal · 1 tasks · 3 review runs (0 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 3 findings");
   assert.deepEqual(files(), before, "stats writes no table and no status.md");
-  assert.equal(s.no("stats", "--task", "T9"), "sage: no task T9. The latest: T1, T2.");
+  assert.equal(s.no("stats", "--task", "T9"), "sage: no task T9. The latest: T1, T2, T3.");
   assert.match(s.no("stats", "--since", "2026-10-01"), /^sage: stats takes no --since\./);
+});
+
+test("T346: sage stats on a logbook with no review runs says so, and how its data starts", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1");
+  assert.equal(s.ok("stats"), "No review runs yet.\nData starts when a review or QA run ends with run done <R> --status done --tokens <n>, and its findings name it with finding add --run <R>.");
 });
 
 /** Sets a task's state by hand, as the end of its route would: the waits tests need upstream tasks in each state. */
@@ -3034,7 +3079,7 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   assert.equal(head, "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel");
   assert.equal(lines[0], "R1\tT1\timplementer\t0\t\tb/1\tdone\t900\t\t2026-10-01T00:00:00Z\t2026-10-01T01:00:00Z\t");
   assert.match(lines[1], /^R2\tT1\tqa\t0\t\t\trunning\t\t\t\S+\t\tsonnet$/);
-  assert.equal(o.ok("run", "done", "R1", "--status", "done"), "R1 done");
+  assert.equal(o.no("run", "done", "R1", "--status", "done"), "sage: R1 already ended as done: a run ends once, and its tokens stay. Nothing changed.");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) o.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.match(o.no("merge-check", "--sha", SHA), /T1 has a review or QA run that still runs: R2 \(qa\)/, "R2's QA still runs (F-T289-18)");
   o.ok("run", "done", "R2", "--status", "done", "--tokens", "1");

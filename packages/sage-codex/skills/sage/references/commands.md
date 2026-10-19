@@ -75,7 +75,7 @@ node "$SAGE_CLI" verdict T7 --kind qa-pass --sha "$HEAD_SHA" --run R4 --cycle 1 
 node "$SAGE_CLI" merge-check --sha "$HEAD_SHA" --project "$PROJECT"
 ```
 
-A done review, QA or evidence-review run needs `--tokens` with its tokens as a whole number. `finding add` takes `--run`, the run whose report holds the finding (a run of that task), and `--class`, one of state-edge, speed, copy, layout, security or other; both are optional. `stats [--task T7]` prints each task's review runs, review tokens, rounds and findings by role and by cycle, and a total line; it reads only.
+A done review, QA or evidence-review run needs `--tokens` with its tokens as a whole number; any `--tokens` has 1 to 12 digits, and a run ends once. `finding add` takes `--run`, the run whose report holds the finding (a run of that task), and `--class`, one of state-edge, speed, copy, layout, security or other; both are optional. `stats [--task T7]` prints a guide line and one table, largest review tokens first: each task's review runs, review tokens in thousands (done runs only), the tokens after round 0 (its runs of repair round 1 or later), rounds and findings by role and by cycle, and a total line; with no review runs it prints "No review runs yet."; it reads only.
 
 Use the full 40-character checked commit as `HEAD_SHA`. Record medium/high findings before a problem verdict (`findings` for a review, `qa-fail` for QA). Security and UX clean kinds are `security-clean` and `ux-clean`. Checks use `checks-pass` or `checks-fail`. Investigation verdicts use `evidence-clean` or `findings` without a commit. Record only an outcome that actually happened. A manual verdict's `--run` field is not native reviewer authentication.
 

@@ -1155,10 +1155,10 @@ function write(dir, table, rows) {
 
 const now = () => new Date().toISOString().slice(0, 19) + "Z";
 /** The cells that hold ids: each table's own id, the columns that name the id of another row, and a decision's subject. */
-const IDS = { tasks: ["id", "keys"], runs: ["id", "task"], findings: ["task", "key"], ledger: ["task", "run"], gates: ["id", "task"], decisions: ["task"] };
+const IDS = { tasks: ["id", "keys"], runs: ["id", "task"], findings: ["task", "key", "run"], ledger: ["task", "run"], gates: ["id", "task"], decisions: ["task"] };
 /**
  * A new id: the highest whole number after the prefix that any id cell of the logbook names, plus 1. So an id never
- * comes back, also when its own row is lost while another row (a verdict's run, a decision, a round's keys) still names
+ * comes back, also when its own row is lost while another row (a verdict's or a finding's run, a decision, a round's keys) still names
  * it. Free text does not count: a path or a title can hold "-T9" by chance. In a decision, only its subjects count: the
  * first word ("F-T2-1 opened again", "G1 was answered by phone"), and in a move, also the new task and key ("F-T1-1 moved
  * to T2 as F-T2-1: …"). Only digits count ("Infinity" does not), and BigInt keeps a long number exact.
@@ -1699,25 +1699,36 @@ function status(dir, save) {
 }
 
 /**
- * The review cost of each task (T346): its review and QA runs, their tokens, its repair rounds, and its findings by role
- * and by cycle, then one total line. A finding's cycle is the cycle of its run's verdict in the ledger: "none" when it
- * names no run or its run gave no verdict. Read only.
+ * The review cost of each task (T346), largest review tokens first: its review and QA runs, their tokens, the tokens of
+ * its runs after round 0 (a run added in repair round 1 or later: the cycle starts again at 1 on each new commit, so the
+ * run's round is what tells a repair's review), its repair rounds, and its findings by role and by cycle, then one total
+ * line. Only a done run's tokens count. A finding's cycle is the cycle of its run's verdict in its own task's ledger rows:
+ * "none" when it names no run or its run gave no verdict. Read only; each table is read and indexed once.
  */
 function stats(dir, only) {
-  const ledger = read(dir, "ledger"), runs = read(dir, "runs").filter((r) => CHECKERS.includes(r.role)), findings = read(dir, "findings");
+  const group = (rows, key) => rows.reduce((m, r) => (m.get(r[key])?.push(r) ?? m.set(r[key], [r]), m), new Map());
   const tasks = read(dir, "tasks").filter((t) => !only || t.id === only);
-  const counts = (values) => Object.entries(values.reduce((n, v) => ({ ...n, [v]: (n[v] ?? 0) + 1 }), {})).sort().map(([v, n]) => `${v}: ${n}`).join(" · ") || "none";
-  const total = { runs: 0, untold: 0, tokens: 0, rounds: 0, findings: 0 };
+  const runs = group(read(dir, "runs").filter((r) => CHECKERS.includes(r.role)), "task"), findings = group(read(dir, "findings"), "task");
+  const cycles = new Map(); // task, then run id, to the cycle of the run's first verdict
+  for (const l of read(dir, "ledger")) if (l.run && !cycles.has(`${l.task}\t${l.run}`)) cycles.set(`${l.task}\t${l.run}`, l.cycle);
+  const whole = (v) => (/^(0|[1-9]\d*)$/.test(v ?? "") ? Number(v) : undefined); // a hand-edited "x" is no number
+  const tokensOf = (rs) => rs.reduce((n, r) => n + (r.status === "done" ? whole(r.tokens) ?? 0 : 0), 0);
+  const k = (n) => `${Math.round(n / 1000)}k`;
+  const esc = (v) => String(v).replace(/\|/g, "\\|");
+  const counts = (values) => [...values.reduce((m, v) => m.set(v, (m.get(v) ?? 0) + 1), new Map())].sort(([a], [b]) => (a < b ? -1 : 1)).map(([v, n]) => `${esc(v)}: ${n}`).join(" · ") || "none";
   const rows = tasks.map((t) => {
-    const own = runs.filter((r) => r.task === t.id), found = findings.filter((f) => f.task === t.id);
-    const tokens = own.reduce((n, r) => n + (Number(r.tokens) || 0), 0);
-    const cycle = (f) => { const c = f.run && ledger.find((l) => l.run === f.run)?.cycle; return c ? `cycle ${c}` : "none"; };
-    Object.assign(total, { runs: total.runs + own.length, untold: total.untold + own.filter((r) => r.status === "done" && !Number(r.tokens)).length,
-      tokens: total.tokens + tokens, rounds: total.rounds + Number(t.round || 0), findings: total.findings + found.length });
-    return `| ${t.id} | ${own.length} | ${tokens} | ${t.round || 0} | ${counts(found.map((f) => f.source))} | ${counts(found.map(cycle))} |`;
-  });
-  return ["| Task | Review runs | Review tokens | Rounds | Findings by role | Findings by cycle |", "| --- | --- | --- | --- | --- | --- |", ...rows,
-    `total · ${tasks.length} tasks · ${total.runs} review runs (${total.untold} done without tokens) · ${total.tokens} tokens · ${total.rounds} rounds · ${total.findings} findings`].join("\n");
+    const own = runs.get(t.id) ?? [], found = findings.get(t.id) ?? [];
+    const cycle = (f) => { const c = f.run && cycles.get(`${t.id}\t${f.run}`); return c ? `cycle ${c}` : "none"; };
+    return { t, own, found, tokens: tokensOf(own), later: tokensOf(own.filter((r) => whole(r.round) >= 1)), round: whole(t.round || "0"), cycle };
+  }).sort((a, b) => b.tokens - a.tokens);
+  const sum = (f) => rows.reduce((n, r) => n + f(r), 0);
+  if (!sum((r) => r.own.length + r.found.length)) return "No review runs yet.\nData starts when a review or QA run ends with run done <R> --status done --tokens <n>, and its findings name it with finding add --run <R>.";
+  return [
+    "Tokens in thousands (k), of done runs only. A round is one repair of findings; after round 0 counts the runs of round 1 and later. A cycle is one set of reviews and QA on one head commit.",
+    "| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |", "| --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.map((r) => `| ${esc(r.t.id)} | ${r.own.length} | ${k(r.tokens)} | ${k(r.later)} | ${r.round ?? "invalid"} | ${counts(r.found.map((f) => f.source))} | ${counts(r.found.map(r.cycle))} |`),
+    `total · ${rows.length} tasks · ${sum((r) => r.own.length)} review runs (${sum((r) => r.own.filter((x) => x.status === "done" && !whole(x.tokens)).length)} done without tokens) · ${k(sum((r) => r.tokens))} tokens · ${k(sum((r) => r.later))} after round 0 · ${sum((r) => r.round ?? 0)} rounds · ${sum((r) => r.found.length)} findings`,
+  ].join("\n");
 }
 
 /**
@@ -2046,8 +2057,12 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const run = runs.find((r) => r.id === id) ?? missing(`run ${id}`, runs.map((r) => r.id));
         const st = need(opt.status, "--status");
         if (!["done", "blocked", "question", "failed"].includes(st)) refuse("status is done, blocked, question or failed");
-        // A done review or QA run gives its tokens, so that sage stats counts every review's cost (T346).
-        if (st === "done" && CHECKERS.includes(run.role) && !/^[1-9]\d*$/.test(opt.tokens ?? run.tokens ?? "")) refuse(`${run.id} is a ${run.role} run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000. Nothing changed.`);
+        // A run ends once, so its tokens are counted once and never replaced (T346).
+        if (run.status !== "running") refuse(`${run.id} already ended as ${run.status}: a run ends once, and its tokens stay. Nothing changed.`);
+        // A done review or QA run gives its tokens, so that sage stats counts every review's cost (T346). Any --tokens is a
+        // whole number of at most 12 digits, so that a typo cannot make a total that a number cannot hold.
+        if (opt.tokens !== undefined && !/^[1-9]\d{0,11}$/.test(opt.tokens)) refuse(`--tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not ${JSON.stringify(opt.tokens)}. Nothing changed.`);
+        if (st === "done" && CHECKERS.includes(run.role) && opt.tokens === undefined) refuse(`${run.id} is a ${run.role} run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000. Nothing changed.`);
         Object.assign(run, { status: st, tokens: opt.tokens ?? run.tokens, report: opt.report ?? run.report, ended: now() });
         write(dir, "runs", runs);
         return `${run.id} ${st}`;
@@ -2108,7 +2123,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");
         const to = frame(dir, title, size, [], []);
         const was = f.key;
-        Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: 0, triage: "" });
+        Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: 0, triage: "", run: "" }); // its run is a run of the old task
         write(dir, "findings", findings);
         write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: id, decision: `${was} moved to ${to.id} as ${f.key}: ${f.summary}`, why: `the follow-up task: ${title}` }]);
         return `${was} moved to ${to.id} as ${f.key} · ${framed(to)}`;
