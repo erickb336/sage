@@ -381,7 +381,7 @@ function sheet(dir, table, also = [], max = Infinity) {
     if (e instanceof Refusal || !e.code) throw e;
     refuse(`${file} cannot be read (${e.code}). ${fixIt(file, e.code)}`);
   }
-  if (text === undefined && table === "programs" && !namesProgram(dir)) return { cols: TABLES.programs, lines: [] };
+  if (text === undefined && table === "programs" && !namesProgram(dir, max)) return { cols: TABLES.programs, lines: [] };
   if (text === undefined) throw lost(dir, table, "is missing or is a link to nothing", also);
   const { cols, lines } = sheetText(text);
   if (!cols.length) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
@@ -395,9 +395,9 @@ function sheet(dir, table, also = [], max = Infinity) {
  * missing rows, and a missing file is a loss as for any table. The first program propose writes it. A tasks table that
  * cannot be read names none here: its own check refuses it.
  */
-function namesProgram(dir) {
+function namesProgram(dir, max) {
   try {
-    return rowsOf(sheet(dir, "tasks")).some((t) => t.program);
+    return rowsOf(sheet(dir, "tasks", [], max)).some((t) => t.program);
   } catch {
     return false;
   }
