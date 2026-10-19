@@ -267,7 +267,7 @@ test("T314 R1040-3: the empty-board text shows only with no task at all; tasks o
 test("T314 R1042-3 R1042-2: each chat diagnostic names its project, and an ignored setting is a warning line, not an incomplete source", () => {
   const model = twoBooks([row("T1", "framed")], [], { diagnostics: ["runs: EACCES"], warnings: ["config: archived is not true or false"] });
   const text = renderBoardText(model);
-  assert.ok(text.endsWith("\nIncomplete source: sample · sample/live-abcdef · runs: EACCES\nSetting ignored: sample · sample/live-abcdef · config: archived is not true or false"), text);
+  assert.ok(text.endsWith("\nIncomplete source: sample · sample/live-abcdef · its runs file has no read permission\nSetting ignored: sample · sample/live-abcdef · config: archived is not true or false"), text);
   const html = renderBoardHtml(model);
   assert.ok(html.includes("<b>Settings ignored.</b> The board shows these projects without them.<ul class=\"diag\"><li>sample · sample/live-abcdef · config: archived is not true or false</li></ul>"));
 });
@@ -303,6 +303,21 @@ test("T305: the picker is one button with an ARIA combobox and listbox, every pr
   assert.equal((html.match(/data-pick="seacc|data-pick="demo-111111"/g) ?? []).length, 0, "no chip for a project that needs nothing");
   const empty = renderBoardHtml(buildBoardModel([], { now: at }), { snapshot: false });
   assert.ok(empty.includes("<b>No projects yet.</b>") && !empty.includes('id="pick-chips"><span'));
+});
+
+test("R1079-1: two clones show their path tails only on the Mac's own page; every other render says clone 1 and clone 2", () => {
+  const clone = (key, checkout) => ({ key, name: key, checkout, repository: "https://github.com/sample-owner/sage", diagnostics: [], tables: { tasks: [row("T1", "awaiting-you")] } });
+  const twins = buildBoardModel([{ id: "claude", label: "claude", provider: "Claude", diagnostics: [], projects: [clone("sage-9a9a9a", "/sample/clone/sage"), clone("sage-43265b", "/sample/work/sage")] }], { now: at });
+  const lines = html => [...html.matchAll(/data-key="(sage-[0-9a-f]+)"[^>]*>.*?<span class="sub"><span class="why" data-why><\/span>([^<]*)<\/span>/g)].map(m => [m[1], m[2]]).sort();
+  const titles = html => [...html.matchAll(/data-pick="(sage-[0-9a-f]+)"[^>]*title="([^"]*)"/g)].map(m => [m[1], m[2]]).sort();
+  for (const html of [renderBoardHtml(twins), renderBoardHtml(twins, { snapshot: false })]) {
+    assert.deepEqual(lines(html), [["sage-43265b", "clone 1 · sample-owner/sage · Claude"], ["sage-9a9a9a", "clone 2 · sample-owner/sage · Claude"]]);
+    assert.deepEqual(titles(html), [["sage-43265b", "sage · clone 1 · sample-owner/sage"], ["sage-9a9a9a", "sage · clone 2 · sample-owner/sage"]]);
+    assert.ok(!html.includes("…/"), "no path tail for a tunnel viewer or in the offline snapshot");
+  }
+  const mac = renderBoardHtml(twins, { snapshot: false, paths: true });
+  assert.deepEqual(lines(mac), [["sage-43265b", "…/work/sage · sample-owner/sage · Claude"], ["sage-9a9a9a", "…/clone/sage · sample-owner/sage · Claude"]]);
+  assert.deepEqual(titles(mac), [["sage-43265b", "sage · …/work/sage · sample-owner/sage"], ["sage-9a9a9a", "sage · …/clone/sage · sample-owner/sage"]]);
 });
 
 test("T305: the picker's search matches the shown name, else another name, and says which (the page carries this function)", async () => {

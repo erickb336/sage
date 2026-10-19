@@ -5,7 +5,7 @@
 // installed Chrome. Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$SCRATCH/browsers" node --test scripts/board-picker.test.mjs
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -370,6 +370,43 @@ test("R1075-7: at 375 px each chip, filter, the picker button and the Archived s
   assert.match(await standIn.evaluate(element => getComputedStyle(element, "::after").content), /Stand-in: the logbook's source/);
   await standIn.tap();
   assert.equal(await page.evaluate(() => document.activeElement.classList.contains("standin")), true, "a tap focuses it, so the reason shows");
+});
+
+test("R1080-1: at 375 px every touch target on the board and on each task page takes a tap in a 44 by 44 px square", async t => {
+  const model = sample(), phone = await open(t, { width: 375, height: 812, colorScheme: "light" });
+  const small = [];
+  for (const key of [null, ...model.tasks.map(task => task.key)]) {
+    await reload(phone, renderBoardHtml(model, { snapshot: false, taskKey: key }));
+    // Each visible control (the theme switch is its label; a closed fold hides its content), scrolled to the middle of the
+    // screen. Its box is 44 by 44 px or more, and elementFromPoint shows that no neighbour covers it: a tap reaches it at the
+    // centre, 21 px out on each axis, and 18 px out on both, which a rounded corner of 8 px does not clip.
+    small.push(...await phone.evaluate(page => [...document.querySelectorAll("a[href],button,select,input:not(.vh),label[for],summary,[tabindex]:not([tabindex='-1'])")]
+      .filter(control => control.checkVisibility({ visibilityProperty: true })).flatMap(control => {
+        control.scrollIntoView({ block: "center", inline: "center" });
+        const box = control.getBoundingClientRect(), x = box.left + box.width / 2, y = box.top + box.height / 2;
+        const name = `${page} ${control.tagName.toLowerCase()} ${JSON.stringify(control.textContent.trim().slice(0, 30))}`;
+        if (box.width < 44 || box.height < 44) return [`${name}: ${Math.round(box.width)} x ${Math.round(box.height)} px`];
+        const missed = [[0, 0], [-21, 0], [21, 0], [0, -21], [0, 21], [-18, -18], [18, -18], [-18, 18], [18, 18]].filter(([dx, dy]) => !control.contains(document.elementFromPoint(x + dx, y + dy)));
+        return missed.length ? [`${name}: a tap at ${JSON.stringify(missed)} from the centre misses it ${JSON.stringify([box.left, box.top, box.width, box.height])} ${missed.map(([dx, dy]) => document.elementFromPoint(x + dx, y + dy)?.outerHTML.slice(0, 60)).join(" | ")}`] : [];
+      }), key ?? "board"));
+  }
+  assert.deepEqual(small, []);
+});
+
+test("R1075-6: a logbook that the board cannot read has a mark and a plain reason in its picker row, not an error code", async t => {
+  const book = sources[0].path, folder = readdirSync(book).find(name => name.startsWith("recipes-app-")), file = join(book, folder, "tasks.tsv");
+  chmodSync(file, 0o000);
+  let model;
+  try { model = sample(); } finally { chmodSync(file, 0o644); }
+  const page = await open(t, { html: renderBoardHtml(model, { snapshot: false }) });
+  await page.locator("#pick-trig").click();
+  const row = page.locator(`#pick-list [role=option][data-key="${folder}"]`);
+  assert.equal(await row.getAttribute("class"), "opt warn");
+  assert.equal(await row.locator(".sub svg").count(), 1, "the mark");
+  assert.equal(await row.locator(".sub").innerText(), "Logbook unreadable: its tasks file has no read permission · Claude");
+  // The banner names the same logbook in the same words; no error code shows anywhere on the page.
+  assert.equal(await page.locator(".banner.warn .diag li").filter({ hasText: folder }).innerText(), `claude · claude/${folder} · its tasks file has no read permission`);
+  assert.equal(await page.evaluate(() => /\bE[A-Z]{3,}\b/.test(document.body.innerText)), false, "no error code on the page");
 });
 
 test("R1071-3: with a 15 px scroll bar, the board does not scroll sideways at 1181 to 1195 px", async t => {

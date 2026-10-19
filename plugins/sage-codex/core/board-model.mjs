@@ -11,7 +11,7 @@ const COLUMNS = [
   ["done", "Done", ["merged", "concluded"]],
 ];
 const CLEAN = { checks: "checks-pass", "code-review": "review-clean", "security-review": "security-clean", "ux-review": "ux-clean", qa: "qa-pass", "evidence-review": "evidence-clean" };
-const FAILED = { checks: ["checks-fail"], qa: ["qa-fail"], "code-review": ["findings"], "security-review": ["findings"], "ux-review": ["findings"] };
+const FAILED = { checks: ["checks-fail"], qa: ["qa-fail"], "code-review": ["findings"], "security-review": ["findings"], "ux-review": ["findings"], "evidence-review": ["findings"] };
 const RUN_ROLE = { "code-review": "code-reviewer", "security-review": "security-reviewer", "ux-review": "ux-reviewer" };
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 const rows = (project, name, task) => (project.tables[name] ?? []).filter(row => row.task === task.id);
@@ -69,7 +69,7 @@ export function runClock(started, now, lastActivity) {
  * step of the line; "started" says whether it began. Who acts: an agent (the step runs, may have stopped, or waits for
  * an agent, by the task's running runs), the chief (no agent), the owner (the step needs you) or nobody (the task is done).
  * An open gate makes the current step need you in every state but a final one. A reviewing task whose cycles are all
- * clean moves to the merge step, where the chief acts; a failed review fails its cycle.
+ * clean moves to the merge step, where the chief acts. A failed review marks its cycle failed, and the step stays the review.
  */
 const PHASE = {
   framed: ["plan", "agent", false], designing: ["plan", "agent", true], "awaiting-you": ["plan", "owner", true],
@@ -82,22 +82,22 @@ const PHASE = {
  * Where a task is in its route, as design 1 of the T305 notes: only the route's steps (Plan, then Build, the review cycles
  * and Merge; or Investigate, Evidence review and Conclude), the current step marked, a repair as its own step, a "Now" or
  * "Needs you" line, and a "Next" line. Every text comes from the state's row of PHASE and the facts: the gates, the runs
- * (running, or stale after 24 h with no news), the cycles and the known head.
+ * (running, or stale after 24 h with no news), the cycles and the known head. "judged" says whether the cycles know their
+ * verdicts: a build route needs the PR's head; a route without build has no commit, so its verdicts have no SHA (R1081-1).
  */
-function stepLine({ task, route, cycles, required, head, reasons, gates, runs, ledger, rounds, autopilot }) {
+function stepLine({ task, route, cycles, required, head, judged, reasons, gates, runs, ledger, rounds, autopilot }) {
   const state = PHASE[task.state] ? task.state : "abandoned", build = route.includes("build"), sha = head ? head.slice(0, 7) : null;
   const gate = gates.find(row => !row.answer), answered = !gate && gates.length && gates.at(-1).answer ? gates.at(-1) : null;
   const running = runs.filter(run => run.status === "running"), live = running.filter(run => !run.clock.stale), stale = running.filter(run => run.clock.stale);
   const round = Number(task.round) || 1;
-  // The current review cycle: the first that is not clean. A failed role fails it. With no known head, the reviews are not known.
+  // The current review cycle: the first that is not clean. A failed role fails it. Unjudged cycles (no known head) are not known.
   const reviewing = task.state === "reviewing";
   const clean = cycle => cycle.steps.every(step => step.status === "done");
   const at = Math.max(0, cycles.findIndex(cycle => !clean(cycle)));
-  const allClean = reviewing && !!head && cycles.every(clean);
-  const failed = reviewing && head && !allClean ? cycles[at].steps.filter(step => step.status === "failed").map(step => ROLE_WORD[step.role] ?? step.role) : [];
+  const allClean = reviewing && judged && cycles.every(clean);
+  const failed = reviewing && judged && !allClean ? cycles[at].steps.filter(step => step.status === "failed").map(step => ROLE_WORD[step.role] ?? step.role) : [];
   let [step, who, started] = PHASE[state];
   if (allClean) [step, who, started] = ["merge", "chief", false];
-  if (failed.length) who = "chief";
   if (["verified", "pr-ready"].includes(state) && (autopilot || !build)) who = "chief";
   if (state === "awaiting-you" && answered) who = "chief";
   if (gate && who !== "done") who = "owner";
@@ -153,7 +153,7 @@ function stepLine({ task, route, cycles, required, head, reasons, gates, runs, l
     const runningRun = cycle.steps.map(item => runs.find(run => run.id === item.run)).find(Boolean);
     const detail = pos === "before" ? build && sha ? `Clean on ${sha}.` : "Clean."
       : pos === "after" ? where === "after" && i === 0 && BEFORE_REVIEW.includes(task.state) ? first : why
-      : heldAt ?? (failed.length ? `${cap(and(failed))} failed on ${sha}.` : `${build ? sha ? `On the last commit (${sha}).` : "The board does not know the PR's last commit, so it shows no verdicts yet." : "The evidence review checks the report."}${live.length || stale.length ? ` ${runText(runningRun ?? live[0] ?? stale[0])}` : ""}`);
+      : heldAt ?? (failed.length ? `${cap(and(failed))} failed${sha ? ` on ${sha}` : ""}.` : `${build ? sha ? `On the last commit (${sha}).` : "The board does not know the PR's last commit, so it shows no verdicts yet." : "The evidence review checks the report."}${live.length || stale.length ? ` ${runText(runningRun ?? live[0] ?? stale[0])}` : ""}`);
     const parts = pos === "before" ? cycle.steps.map(item => [ROLE_WORD[item.role] ?? item.role, "done"]) : BEFORE_REVIEW.includes(task.state) ? waiting(cycle) : cycle.steps.map(item => [ROLE_WORD[item.role] ?? item.role, partOf(item)]);
     steps.push({ key: `review-${i + 1}`, label: reviewLabel(i + 1), status: { before: "done", at: status, after: "wait" }[pos], detail, parts });
   }
@@ -179,14 +179,14 @@ function stepLine({ task, route, cycles, required, head, reasons, gates, runs, l
   const noHead = build && reviewing && !head ? " The board does not know the PR's last commit." : "";
   const nowText = who === "done" ? { merged: build ? "Merged." : "Done.", concluded: build ? "Closed with no merge." : "Concluded. The report went to you.", abandoned: "Abandoned." }[state]
     : allClean ? build ? `The reviews are done, with ${plural(required, "clean cycle")} on ${sha}.` : "The evidence review is done."
-    : failed.length ? `${cap(and(failed))} failed on ${sha}.`
+    : failed.length ? `${cap(and(failed))} failed${sha ? ` on ${sha}` : ""}.`
     : who === "chief" ? CHIEF[state]()
     : live.length ? `${cap(actor(live))} ${new Set(live.map(run => run.role)).size > 1 ? "are" : "is"} at work on ${name}.${noHead}`
     : stale.length ? `No news from ${actor(stale)} since ${stale[0].clock.since}. The run may have stopped, so ask the sage to check it.`
     : `${IDLE[state] ?? `No agent works on ${name} now.`}${noHead}`;
 
   // Next: after an answer, the current step goes on; else the fixed rule of the state.
-  const pending = reviewing && head ? cycles[at].steps.find(item => item.status === "pending") : null;
+  const pending = reviewing && judged ? cycles[at].steps.find(item => item.status === "pending") : null;
   const after = at + 1 < required ? reviewName(at + 2) : NAME.merge;
   const NEXT = {
     framed: route.includes("design") ? "The design." : `${cap(NAME.build)}.`,
@@ -197,7 +197,7 @@ function stepLine({ task, route, cycles, required, head, reasons, gates, runs, l
     held: answered ? `${cap(NAME.build)} goes on, or the chief briefs it again.` : "The chief asks you how to go on.",
     replan: "The chief briefs it again.",
     reviewing: allClean ? build ? "The chief checks the verdicts, then the merge." : "The chief checks the evidence review, then the conclusion."
-      : failed.length ? `A repair round, then the reviews start again at cycle 1.`
+      : failed.length ? build ? "A repair round, then the reviews start again at cycle 1." : "A repair round, then the evidence review starts again."
       : !build ? at + 1 < required ? `${cap(reviewName(at + 2))}.` : "The conclusion. The report comes to you."
       : !head ? "The review cycles on the PR's last commit, then the merge."
       : pending ? `${cap(ROLE_WORD[pending.role] ?? pending.role)}, then ${after}.` : `${cap(after)}.`,
@@ -244,9 +244,11 @@ function card(source, project, group, task, now) {
   const reviewed = !repairing && known && first > rounds.findLastIndex(r => r !== null && r < round) ? verdicts[first].sha : null;
   const head = pr?.data.head ?? reviewed;
   const headBasis = pr?.data.head ? "observed" : head ? "ledger" : null;
-  const current = head && !repairing ? ledger.filter(row => row.sha === head && String(row.pr) === task.pr) : [];
-  const route = task.route.split(",").filter(Boolean);
-  const steps = [...(route.includes("build") ? ["checks"] : []), ...route.filter(block => CLEAN[block])];
+  const route = task.route.split(",").filter(Boolean), build = route.includes("build");
+  // A route without build has no commit: its verdicts are the task's rows, with no SHA (R1081-1).
+  const judged = build ? !!head : true;
+  const current = repairing ? [] : build ? head ? ledger.filter(row => row.sha === head && String(row.pr) === task.pr) : [] : ledger.filter(row => !row.sha);
+  const steps = [...(build ? ["checks"] : []), ...route.filter(block => CLEAN[block])];
   const required = Math.max(positive(source.config?.["cycles.small"]) ?? 1, task.size === "large" ? Math.max(2, positive(source.config?.["cycles.large"] ?? source.config?.autopilot_cycles) ?? 2) : 1, task.risk ? Math.max(2, positive(source.config?.["cycles.risk"]) ?? 2) : 1);
   const count = Math.min(required, 10);
   const verdict = (role, number) => current.filter(row => (role === "checks" || positive(row.cycle) === number) && (row.kind === CLEAN[role] || (FAILED[role] ?? []).includes(row.kind) && (row.kind !== "findings" || runs.some(run => run.id === row.run && run.role === (RUN_ROLE[role] ?? role))))).at(-1) ?? null;
@@ -254,8 +256,8 @@ function card(source, project, group, task, now) {
     const last = verdict(role, i + 1);
     // A running run of the step's role runs the cycle its evidence names; with no run evidence, the role's first cycle without a verdict.
     const open = Array.from({ length: count }, (_, j) => j + 1).find(number => !verdict(role, number));
-    const running = runs.find(run => run.status === "running" && run.role === (RUN_ROLE[role] ?? role) && (run.evidence ? run.evidence.data.head === head && run.evidence.data.cycle === i + 1 : open === i + 1));
-    return { role, status: !head ? "unknown" : last ? last.kind === CLEAN[role] ? "done" : "failed" : running ? "running" : "pending", evidence: last, run: running?.id ?? null };
+    const running = runs.find(run => run.status === "running" && run.role === (RUN_ROLE[role] ?? role) && (run.evidence ? (run.evidence.data.head ?? null) === head && run.evidence.data.cycle === i + 1 : open === i + 1));
+    return { role, status: !judged ? "unknown" : last ? last.kind === CLEAN[role] ? "done" : "failed" : running ? "running" : "pending", evidence: last, run: running?.id ?? null };
   }) }));
   for (const [index, row] of current.entries()) {
     if (!["checks-fail", "qa-fail"].includes(row.kind)) continue;
@@ -276,7 +278,7 @@ function card(source, project, group, task, now) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: moves.find(({ move }) => move[2] === task.id && move[3] === row.key)?.row.task ?? null })),
     ...moves.filter(({ row }) => row.task === task.id).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: stepLine({ task, route, cycles, required: count, head, reasons, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
 }
 
 const title = value => String(value ?? "").charAt(0).toUpperCase() + String(value ?? "").slice(1);
@@ -336,20 +338,22 @@ function projectGroups(sources) {
     });
   }
   // Two projects with the same name and the same second line, such as two clones in two folders of one name: each shows
-  // the end of its checkout's path first, as many folders as tell them apart, so that a cut line keeps the part that differs
-  // (F-T305-11, R1076-4).
+  // "clone 1", "clone 2" first, by the order of the logbook keys. Only the Mac's own page shows, in pathSub, the end of
+  // the checkout's path instead, as many folders as tell them apart, so that a cut line keeps the part that differs
+  // (F-T305-11, R1076-4, R1079-1).
   const lines = new Map(groups.map(group => [group, `${group.name}\n${group.sub}`])), line = group => lines.get(group);
   const twins = groups.filter(group => group.path && groups.some(other => other !== group && line(other) === line(group)));
   for (const group of twins) {
     const others = twins.filter(other => other !== group && line(other) === line(group)), parts = group.path.split(/[\\/]/).filter(Boolean);
-    const end = n => parts.slice(-n).join("/");
+    const end = n => parts.slice(-n).join("/"), clone = [group, ...others].map(item => item.key).sort().indexOf(group.key) + 1;
     let n = 1; while (n < parts.length && others.some(other => other.path.split(/[\\/]/).filter(Boolean).slice(-n).join("/") === end(n))) n++;
-    group.sub = `…/${end(n)} · ${group.remote ?? "no GitHub remote"}`;
+    Object.assign(group, { sub: `clone ${clone} · ${group.remote ?? "no GitHub remote"}`, pathSub: `…/${end(n)} · ${group.remote ?? "no GitHub remote"}` });
   }
   return { groups, notes };
 }
 
-// A logbook that the board cannot read says why in plain words, not as an error code (R1075-6).
+// A logbook that the board cannot read says why in plain words, not as an error code: in its picker row and in the
+// banners (R1075-6).
 const PLAIN = { EACCES: "has no read permission", EPERM: "has no read permission", ENOENT: "is missing", EISDIR: "is a folder, not a file", ELOOP: "is a link, which the board does not follow", EMFILE: "cannot open now, because too many files are open" };
 function plainProblem(message) {
   const coded = /^([a-z][\w .-]*): (E[A-Z]+)$/.exec(message) ?? /^()(E[A-Z]+)$/.exec(message);
@@ -376,9 +380,9 @@ export function buildBoardModel(sources, { now = new Date().toISOString() } = {}
   const projects = groups.map(group => {
     const own = tasks.filter(task => task.group === group.key), live = shown.filter(task => task.group === group.key);
     const last = Math.max(0, ...own.map(recent)), needsOwner = live.filter(task => task.reasons.length).length;
-    return { key: group.key, name: group.name, sub: group.sub, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
+    return { key: group.key, name: group.name, sub: group.sub, pathSub: group.pathSub ?? null, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
       list: group.archived ? "archived" : needsOwner ? "needs" : last && at - last <= ACTIVE_DAYS * 86400000 ? "active" : "idle" };
   }).sort((a, b) => LISTS.indexOf(a.list) - LISTS.indexOf(b.list) || (a.list === "needs" ? b.needsOwner - a.needsOwner : 0) || (Date.parse(b.lastActivity ?? 0) || 0) - (Date.parse(a.lastActivity ?? 0) || 0) || a.name.localeCompare(b.name));
   const archived = projects.filter(project => project.archived).map(project => ({ key: project.key, name: project.name, tasks: project.tasks, needsOwner: project.needsOwner }));
-  return { at: new Date(at).toISOString(), tasks, projects, notes, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message })))) };
+  return { at: new Date(at).toISOString(), tasks, projects, notes, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
 }

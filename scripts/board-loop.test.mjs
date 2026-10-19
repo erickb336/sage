@@ -1,6 +1,7 @@
 // The step line, Now and Next over the whole space (R1077): every state of the state tool, on a build route, a design and
 // PE route and an investigation route, with no gate, an open gate or an answered gate, no run, a running run or a stale
-// run, a known or an unknown head, and no verdicts, some or all clean. Each case checks the invariants of the design.
+// run, a known or an unknown head, and no verdicts, some or all clean, or a failed one. Each case checks the invariants of the
+// design. An investigation's verdicts have no SHA and no PR (R1081-1); a reviewing task's run is the run of a review role.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
@@ -14,10 +15,15 @@ const FINAL = ["merged", "concluded", "abandoned"];
 export function sample({ state, route, gate, run, known, cycles, autopilot = null, hold = "" }) {
   const build = route !== "investigation";
   const task = { id: "T1", title: "Sample", size: build ? "small" : "investigate", risk: route === "build" ? "auth" : "", route: ROUTES[route], state, branch: "", pr: build ? "12" : "", round: state === "repairing" ? "1" : hold ? "3" : "0", keys: "", hold };
-  const role = { designing: "designer", reviewing: "qa", repairing: "implementer" }[state] ?? (build ? "implementer" : "investigate");
-  const runs = run === "none" ? [] : [{ id: "R7", task: "T1", role, round: task.round, status: "running", started: run === "stale" ? old : recent }];
-  const verdict = (kind, cycle) => ({ task: "T1", pr: known ? "12" : "99", sha: head, kind, cycle: String(cycle), at: old });
-  const ledger = cycles === "none" || !build ? [] : cycles === "partial" ? [verdict("checks-pass", 1), verdict("review-clean", 1)]
+  const role = { designing: "designer", reviewing: build ? "qa" : "evidence-review", repairing: "implementer" }[state] ?? (build ? "implementer" : "investigate");
+  // R5 is the ended run of the review that failed (findings); a findings verdict counts only for a run of its role. A failed
+  // check or QA would need you as well, so the failed case is a review.
+  const runs = [...(cycles === "failed" ? [{ id: "R5", task: "T1", role: build ? "code-reviewer" : "evidence-review", round: task.round, status: "done", started: old, ended: old }] : []),
+    ...(run === "none" ? [] : [{ id: "R7", task: "T1", role, round: task.round, status: "running", started: run === "stale" ? old : recent }])];
+  const verdict = (kind, cycle) => ({ task: "T1", pr: build ? known ? "12" : "99" : "", sha: build ? head : "", kind, cycle: String(cycle), run: kind === "findings" ? "R5" : "", at: old });
+  const ledger = cycles === "none" ? [] : !build ? cycles === "all" ? [verdict("evidence-clean", 1)] : cycles === "failed" ? [verdict("findings", 1)] : []
+    : cycles === "partial" ? [verdict("checks-pass", 1), verdict("review-clean", 1)]
+    : cycles === "failed" ? [verdict("checks-pass", 1), verdict("findings", 1)]
     : [verdict("checks-pass", 1), ...[1, 2].flatMap(n => [verdict("review-clean", n), verdict("security-clean", n), verdict("qa-pass", n)])];
   const gates = gate === "none" ? [] : [{ id: "G3", task: "T1", question: "Sample: keep the old copy?", options: "yes|no", recommendation: "yes", answer: gate === "answered" ? "yes" : "", at: old }];
   const records = [...(known && build ? [{ id: "O1", task: "T1", kind: "pr", source: "sample", basis: "observed", observedAt: now, recordedAt: now, data: { number: 12, head, state: "open" } }] : []),
@@ -26,10 +32,10 @@ export function sample({ state, route, gate, run, known, cycles, autopilot = nul
   return model.tasks[0];
 }
 
-/** Every case of the matrix: 15 states × 3 routes × 3 gates × 3 runs × 2 heads × 3 verdict sets = 2,430 cases. */
+/** Every case of the matrix: 15 states × 3 routes × 3 gates × 3 runs × 2 heads × 4 verdict sets = 3,240 cases. */
 export function* matrix() {
   for (const state of STATES) for (const route of Object.keys(ROUTES)) for (const gate of ["none", "open", "answered"])
-    for (const run of ["none", "running", "stale"]) for (const known of [true, false]) for (const cycles of ["none", "partial", "all"])
+    for (const run of ["none", "running", "stale"]) for (const known of [true, false]) for (const cycles of ["none", "partial", "all", "failed"])
       yield { state, route, gate, run, known, cycles };
 }
 
@@ -75,6 +81,24 @@ export function check(c, task = sample(c)) {
     assert.doesNotMatch(text, /[.:;,!?]\s*[.:;,]|\.\s*\.|:/, `${name}: punctuation in ${JSON.stringify(text)}`);
     assert.match(text, /[.)]$/, `${name}: ${JSON.stringify(text)} is not a whole sentence`);
   }
+  // The cycles agree with the verdicts once the board knows them: a known head, or a route without build (R1081-1, R1080-3).
+  const judged = c.state === "reviewing" && (c.known || !build) && !openGate;
+  const reviews = steps.filter(step => /^(Review|Evidence review)/.test(step.label));
+  if (judged && c.cycles === "all") {
+    assert.ok(reviews.every(step => step.status === "done"), `${name}: a clean review is not done`);
+    assert.match(now.text, build ? /^The reviews are done/ : /^The evidence review is done\.$/, `${name}: Now ${JSON.stringify(now.text)}`);
+  }
+  // A failed verdict fails its cycle: one step fails, Now names the failed role, and Next is a repair round (R1078-1).
+  if (judged && c.cycles === "failed") {
+    assert.deepEqual(steps.filter(step => step.status === "fail").map(step => step.label), [build ? `Review 1 of ${task.requiredCycles}` : "Evidence review"], `${name}: the failed review`);
+    assert.equal(now.text, build ? "Code review failed on aaaaaaa." : "Evidence review failed.", `${name}: Now`);
+    assert.match(next, /^A repair round/, `${name}: Next ${next}`);
+  }
+  // A live run of a review role that has no verdict yet runs its part (R1080-3).
+  if (judged && live && ["none", "partial"].includes(c.cycles)) {
+    assert.ok(reviews.some(step => step.status === "run" && step.parts.some(([part, value]) => part === (build ? "QA" : "evidence review") && value === "run")), `${name}: the running review is not running now`);
+    assert.ok(!reviews.some(step => step.status === "done"), `${name}: a review is done with no verdict`);
+  }
   // Next: none for a final state; after an answer when a gate is open.
   if (FINAL.includes(c.state)) assert.equal(next, null, `${name}: Next on a final state`);
   else {
@@ -90,13 +114,13 @@ export function check(c, task = sample(c)) {
     }
   }
   // The Now line matches the state.
-  if (!now.needs && !(c.state === "awaiting-you" && c.gate !== "answered")) assert.match(now.text, stale && ![c.gate === "answered" && "awaiting-you", "held", "replan", "verifying", "verified", "pr-ready", ...FINAL].includes(c.state) && !/failed|reviews are done/.test(now.text) ? /may have stopped/ : NOW[c.state], `${name}: Now ${JSON.stringify(now.text)}`);
+  if (!now.needs && !(c.state === "awaiting-you" && c.gate !== "answered")) assert.match(now.text, stale && ![c.gate === "answered" && "awaiting-you", "held", "replan", "verifying", "verified", "pr-ready", ...FINAL].includes(c.state) && !/failed|review(s are| is) done/.test(now.text) ? /may have stopped/ : NOW[c.state], `${name}: Now ${JSON.stringify(now.text)}`);
 }
 
 test("R1077: the step line, Now and Next keep every invariant over the whole space of states, routes, gates, runs, heads and verdicts", () => {
   let n = 0;
   for (const c of matrix()) { check(c); n++; }
-  assert.equal(n, 2430);
+  assert.equal(n, 3240);
 });
 
 test("R1077: the same invariants hold with autopilot on, off and unknown, and on a task held by the round limit", () => {

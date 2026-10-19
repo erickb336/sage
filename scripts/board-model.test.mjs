@@ -475,9 +475,11 @@ test("T305: one repository is one project: the logbooks of one key and one check
   assert.deepEqual(apart.notes.map(note => note.message), ["Two projects: claude/sage-43265b and codex/sage-43265b have one logbook key but name different checkouts, so the board keeps them apart."]);
   const clones = twoSources([book([task("T1", "framed")]), book([task("T1", "framed")], { name: "sage-9a9a9a", checkout: "/sample/clone/sage" })], []);
   assert.deepEqual(clones.projects.map(project => [project.key, project.name]).sort(), [["sage-43265b", "sage"], ["sage-9a9a9a", "sage"]], "two clones at two paths stay two projects");
-  assert.deepEqual(clones.projects.map(project => [project.key, project.sub]).sort(), [["sage-43265b", "…/work/sage · sample-owner/sage"], ["sage-9a9a9a", "…/clone/sage · sample-owner/sage"]], "F-T305-11, R1076-4: two clones in folders of one name show the end of their paths first, as far as they differ");
+  assert.deepEqual(clones.projects.map(project => [project.key, project.pathSub]).sort(), [["sage-43265b", "…/work/sage · sample-owner/sage"], ["sage-9a9a9a", "…/clone/sage · sample-owner/sage"]], "F-T305-11, R1076-4: on the Mac's page, two clones in folders of one name show the end of their paths first, as far as they differ");
+  assert.deepEqual(clones.projects.map(project => [project.key, project.sub]).sort(), [["sage-43265b", "clone 1 · sample-owner/sage"], ["sage-9a9a9a", "clone 2 · sample-owner/sage"]], "R1079-1: every other viewer sees clone 1 and clone 2, by the order of the logbook keys");
   const local = twoSources([book([task("T1", "framed")], { repository: null, checkout: "/sample/a/lab" }), book([task("T1", "framed")], { name: "lab-9a9a9a", repository: null, checkout: "/sample/b/lab" }), book([task("T1", "framed")], { name: "lab-copy-1b1b1b", repository: null, checkout: "/sample/b/lab-copy" })], []);
-  assert.deepEqual(local.projects.map(project => project.sub).sort(), ["no GitHub remote · folder lab-copy", "…/a/lab · no GitHub remote", "…/b/lab · no GitHub remote"]);
+  assert.deepEqual(local.projects.map(project => project.sub).sort(), ["clone 1 · no GitHub remote", "clone 2 · no GitHub remote", "no GitHub remote · folder lab-copy"]);
+  assert.deepEqual(local.projects.map(project => project.pathSub).sort(), [null, "…/a/lab · no GitHub remote", "…/b/lab · no GitHub remote"]);
   // F-T305-3: one unreadable logbook does not rename the project that the other logbook names.
   const broken = twoSources([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([], { diagnostics: ["tasks: damaged table header"] })]);
   assert.deepEqual(broken.projects.map(project => [project.name, project.problem]), [["Sage (sample)", "tasks: damaged table header"]]);

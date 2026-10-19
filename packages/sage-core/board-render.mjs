@@ -327,7 +327,9 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
 }
 @media (max-width:700px),(pointer:coarse){
  .chip,.trigger,select,.seg button,.morebtn,.opt,.back{min-height:44px}.linkbtn{min-height:44px;display:inline-flex;align-items:center}
- .archived summary{min-height:44px;display:flex;align-items:center}
+ .archived summary{min-height:44px;display:flex;align-items:center}.seg button{min-width:44px}
+ details.fold>summary,details.rest>summary{min-height:44px;padding-top:13px;padding-bottom:13px;margin:0}
+ .standin[tabindex],.ptop a[href]{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;margin:-14px 0;vertical-align:middle;position:relative;z-index:1}table.runs .standin[tabindex]{margin:0}table.runs td{vertical-align:middle}
  .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}.pop .foot{display:none}
 }`;
 
@@ -477,9 +479,11 @@ const LIST_NAME = { needs: "Needs you", active: "Active · last 14 days", idle: 
 function picker(ctx, model, paths) {
   const projects = model.projects ?? [];
   // The checkout paths are search terms only on the Mac's own page; a tunnel viewer and the offline snapshot get none (R1069-2).
+  // So is the path tail of two clones; the others see "clone 1", "clone 2" (R1079-1).
+  const sub = book => paths && book.pathSub ? book.pathSub : book.sub;
   const option = book => `<li role="option" id="pick-o-${b64(book.key)}" class="opt${book.problem ? " warn" : ""}" data-key="${esc(book.key)}" data-name="${esc(book.name)}" data-slot="${ctx.slot.get(book.key) ?? "p0"}" data-terms="${esc([...book.terms, ...(paths ? book.paths ?? [] : [])].join("\n"))}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" data-providers="${esc(book.providers.join(" + "))}" aria-selected="false">`
     + `${dot(ctx, book.key)}<span class="nm">${esc(book.name)}</span><span class="meta">${book.agents ? `<span>${book.agents} at work</span>` : ""}${book.needsOwner ? `<span class="badge">${book.needsOwner}<span class="vh"> need you</span></span>` : `<span>${ago(book.lastActivity, model.at)}</span>`}</span>`
-    + `<span class="sub"><span class="why" data-why></span>${book.problem ? `${ICON}Logbook unreadable: ${esc(book.problem)}` : esc(book.sub)} · ${esc(book.providers.join(" + "))}</span></li>`;
+    + `<span class="sub"><span class="why" data-why></span>${book.problem ? `${ICON}Logbook unreadable: ${esc(book.problem)}` : esc(sub(book))} · ${esc(book.providers.join(" + "))}</span></li>`;
   const group = list => {
     const books = projects.filter(book => book.list === list);
     if (!books.length) return "";
@@ -491,7 +495,7 @@ function picker(ctx, model, paths) {
     ? (archivedCount ? `<button type="button" class="morebtn" id="pick-more" data-showarchived>Show ${archivedCount} archived project${archivedCount === 1 ? "" : "s"}</button>` : "")
       + `<div class="nomatch" id="pick-none" hidden><b>No project matches “<span id="pick-qtext"></span>”.</b><br>Search looks at the shown name, the GitHub repository, the folder${paths ? ", its path" : ""} and the logbook key. <button type="button" class="linkbtn" data-clear>Clear the search</button></div>`
     : `<div class="nomatch"><b>No projects yet.</b><br>A project shows here when it has a logbook. Start sage in a project folder to make one.</div>`;
-  const chips = projects.filter(book => book.needsOwner && !book.archived).map(book => `<button class="chip" type="button" id="need-${b64(book.key)}" data-pick="${esc(book.key)}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" title="${esc(book.name)} · ${esc(book.sub)}">${dot(ctx, book.key)}<span class="cn">${esc(book.name)}</span> <span class="badge"><span data-n>${book.needsOwner}</span><span class="vh"> need you</span></span></button>`).join("");
+  const chips = projects.filter(book => book.needsOwner && !book.archived).map(book => `<button class="chip" type="button" id="need-${b64(book.key)}" data-pick="${esc(book.key)}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" title="${esc(book.name)} · ${esc(sub(book))}">${dot(ctx, book.key)}<span class="cn">${esc(book.name)}</span> <span class="badge"><span data-n>${book.needsOwner}</span><span class="vh"> need you</span></span></button>`).join("");
   return `<div class="pick"><button class="chip need" type="button" data-filter="needs" aria-pressed="false">${ICON}Needs you <span class="count" id="needs-count">${model.counts.needsOwner}</span></button>`
     + `<div class="pickwrap"><button class="trigger" type="button" id="pick-trig" aria-haspopup="listbox" aria-expanded="false" aria-controls="pick-pop"><span class="vh">Project: </span><span class="dot none" id="pick-dot" aria-hidden="true"></span><span class="tname" id="pick-name">All projects</span><span class="archtag" id="pick-arch" hidden>Archived</span><span class="chev" aria-hidden="true">▾</span></button>`
     + `<div class="pop" id="pick-pop" hidden><div class="search"><input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project" placeholder="Find a project: name, repo or folder" autocomplete="off" spellcheck="false"><button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span><span class="tap">Close</span></button></div>`

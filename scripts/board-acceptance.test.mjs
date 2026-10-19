@@ -145,12 +145,12 @@ test("T205 acceptance: missing and malformed inputs show diagnostics without exp
   writeFileSync(join(f.root, "config.json"), "SAMPLE_PRIVATE_CONFIG_DO_NOT_SHOW");
   writeFileSync(join(f.book, "runs.tsv"), "bad header\nSAMPLE_PRIVATE_TABLE_DO_NOT_SHOW\n");
   const before = snapshot(f.root), html = f.view("html");
-  assert.ok(html.includes("Incomplete sources")); assert.ok(html.includes("missing")); assert.ok(html.includes("ENOENT")); assert.ok(html.includes("config: invalid JSON"));
+  assert.ok(html.includes("Incomplete sources")); assert.ok(html.includes("missing")); assert.ok(html.includes("its folder is missing") && !html.includes("ENOENT"), "R1075-6: plain words, not the code"); assert.ok(html.includes("config: invalid JSON"));
   assert.ok(!html.includes("SAMPLE_PRIVATE_CONFIG_DO_NOT_SHOW")); assert.ok(!html.includes("SAMPLE_PRIVATE_TABLE_DO_NOT_SHOW"));
   assert.deepEqual(snapshot(f.root), before);
   rmSync(join(f.book, "runs.tsv"));
   const external = join(f.dir, "external.tsv"); writeFileSync(external, "SAMPLE_LINK_TARGET_DO_NOT_SHOW"); symlinkSync(external, join(f.book, "runs.tsv"));
-  const linked = f.view("html"); assert.ok(linked.includes("runs:")); assert.ok(!linked.includes("SAMPLE_LINK_TARGET_DO_NOT_SHOW"));
+  const linked = f.view("html"); assert.ok(linked.includes("its runs file is a link, which the board does not follow"), "R1075-6"); assert.ok(!linked.includes("SAMPLE_LINK_TARGET_DO_NOT_SHOW"));
   assert.equal(readFileSync(external, "utf8"), "SAMPLE_LINK_TARGET_DO_NOT_SHOW");
 });
 
