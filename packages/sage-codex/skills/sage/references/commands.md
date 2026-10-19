@@ -49,6 +49,16 @@ A task's priority and kind are optional, and the board shows them as tags on its
 
 `config name=` and `config archived=` set keys of the project's own logbook, never the config for all projects. Set them in a config command of their own, and only when the owner asks. The name is the project's name on the board: 1 to 60 characters, with no space at an end or two together, and no control, format or hidden character. `name=` alone removes it. Without a name, the board shows the repository name of the checkout's `upstream` remote, then of `origin`, then the folder. `archived=yes` folds the project into the board's Archived group, which shows only a count of its tasks and of what needs the owner there; `archived=no` brings it back.
 
+## Waits
+
+```sh
+node "$SAGE_CLI" task add --title "Describe the task" --size small --waits T7,T9 --project "$PROJECT"
+node "$SAGE_CLI" task T8 set waits=T7 --project "$PROJECT"
+node "$SAGE_CLI" task T8 set waits= --project "$PROJECT"
+```
+
+A task may wait for other tasks of the same logbook. A wait is met when that task is merged or concluded; an abandoned task never meets it, so remove or change the wait, or ask the owner. While a wait is unmet, the task takes no lead, implementer, investigate or arena-judge run (also through native run creation) and no `state=building` or `state=merged`, and the merge check refuses it; its designer and pe runs, and review and QA runs, go on. A wait on a task of the same pull request (`--pr`, or else the same recorded PR) is met at the merge check when that task passes too; a task of another pull request, or an abandoned one, never meets it. When the waiting task is not on that pull request, the refusal names the `pr=` to set. The tool refuses a word that is not a task id, a duplicate, the task itself, more than 20 tasks, a task that the logbook does not have, and a loop. Each change writes a decision row.
+
 ## Findings and evidence
 
 Only the chief runs writes. Start a separate run for each actual specialist assignment with its exact role (`implementer`, `code-reviewer`, `security-reviewer`, `ux-reviewer`, `qa`). Roles and tasks must satisfy the CLI's existing rules. Do not rename unsupported design or investigation work to evade a refusal.
