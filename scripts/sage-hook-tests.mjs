@@ -171,6 +171,42 @@ test("a session that starts as the chief-of-staff agent is in sage mode without 
   assert.match(denied(s.send(edit({ agent_type: "sage:chief-of-staff" }))), /you do not change files yourself/);
 });
 
+test("T347: in sage mode the chief writes only Markdown files of its own memory folder", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-memory-")));
+  const config = join(root, "config"), memory = join(config, "projects", "-x-workspace-app", "memory"), outside = join(root, "outside");
+  mkdirSync(memory, { recursive: true });
+  mkdirSync(join(memory, "sub.md"));
+  mkdirSync(outside);
+  writeFileSync(join(memory, "MEMORY.md"), "- a line\n");
+  writeFileSync(join(outside, "notes.md"), "");
+  symlinkSync(join(outside, "notes.md"), join(memory, "link.md"));
+  linkSync(join(outside, "notes.md"), join(memory, "hard.md"));
+  symlinkSync(outside, join(config, "projects", "linked"));
+  mkdirSync(join(config, "projects", "new"));
+  const s = session({ CLAUDE_CONFIG_DIR: config });
+  s.send(prompt("sage mode"));
+  const write = (tool_name, file_path) => denied(s.send(tool(tool_name, { file_path }, { cwd: root })));
+  assert.equal(write("Write", join(memory, "user_role.md")), undefined, "a new memory file");
+  assert.equal(write("Edit", join(memory, "MEMORY.md")), undefined, "the index");
+  assert.equal(write("MultiEdit", join(memory, "MEMORY.md")), undefined);
+  assert.equal(write("Write", join(config, "projects", "new", "memory", "a.md")), undefined, "a memory folder that does not exist yet");
+  const refused = /you do not change files yourself/;
+  assert.match(write("Write", join(root, "app", "README.md")), refused, "the project");
+  assert.match(write("Write", join(root, "other", "projects", "-x-workspace-app", "memory", "a.md")), refused, "another config folder");
+  assert.match(write("Write", join(memory, "a.txt")), refused, "not Markdown");
+  assert.match(write("Write", join(memory, "sub.md", "a.md")), refused, "a subfolder");
+  assert.match(write("Write", join(config, "plugins", "-x-workspace-app", "memory", "a.md")), refused, "not under projects");
+  assert.match(write("Write", join(config, "projects", "-x-workspace-app", "memory.md")), refused, "the project folder");
+  assert.match(write("Write", join(config, "projects", "a.md")), refused);
+  assert.match(write("Write", `${memory}/../memory/a.md`), refused, "..");
+  assert.match(write("Write", `${memory}/../../../../outside/a.md`), refused, ".. out of the folder");
+  assert.match(write("Edit", join(memory, "link.md")), refused, "a link to a file outside");
+  assert.match(write("Edit", join(memory, "hard.md")), refused, "a hard link to a file outside");
+  assert.match(write("Write", join(config, "projects", "linked", "memory", "a.md")), refused, "a folder on the way is a link");
+  assert.match(denied(s.send(tool("NotebookEdit", { notebook_path: join(memory, "a.md"), file_path: join(memory, "a.md") }, { cwd: root }))), refused, "NotebookEdit");
+  assert.equal(denied(s.send(tool("Write", { file_path: join(memory, "a.md") }, { cwd: root, agent_id: "a1", agent_type: "sage:implementer" }))), undefined, "an agent's rules do not change");
+});
+
 test("a brief to a sage agent needs every field; other agents and other sessions are not checked", () => {
   const s = session();
   assert.equal(s.send(spawnAgent("sage:implementer", "fix it")), undefined, "outside sage mode");

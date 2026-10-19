@@ -15,7 +15,7 @@ Short working principles for coding agents. The plugin's principles are these fi
 
 ## Credit
 
-Fifteen principles here override pstack's, by Lauren Tan (MIT), at [github.com/cursor/plugins](https://github.com/cursor/plugins). The licence is in [LICENSE-pstack](LICENSE-pstack). Each file's `source` names the original. The texts are shortened and rewritten, and some change the meaning on purpose, for example with a Stop rule.
+Some principles here override pstack's (the table in the main README lists which). The source is pstack, by Lauren Tan (MIT), at [github.com/cursor/plugins](https://github.com/cursor/plugins). The licence is in [LICENSE-pstack](LICENSE-pstack). Each file's `source` names the original. The texts are shortened and rewritten, and some change the meaning on purpose, for example with a Stop rule.
 
 "Contextualize and write for the reader" is this kit's own.
 
