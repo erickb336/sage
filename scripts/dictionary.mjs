@@ -14,12 +14,14 @@ export function wordTable(body) {
 
 export const TABLE_START = "<!-- The word table comes from writing/dictionary.md: edit it there, then run npm run build. -->";
 export const TABLE_END = "<!-- The end of the word table. -->";
-/** The README with its word table replaced by a new one. */
-export function withWordTable(readme, table) {
-  const i = readme.indexOf(TABLE_START), j = readme.indexOf(TABLE_END);
-  if (i < 0 || j < i) throw new Error(`README.md: the word table needs the lines ${TABLE_START} and ${TABLE_END}`);
-  return `${readme.slice(0, i + TABLE_START.length)}\n\n${table}\n\n${readme.slice(j)}`;
+/** The README with the generated text between two marker lines replaced; `what` names the text in the error. */
+export function withBlock(readme, start, end, text, what) {
+  const i = readme.indexOf(start), j = readme.indexOf(end);
+  if (i < 0 || j < i) throw new Error(`README.md: ${what} needs the lines ${start} and ${end}`);
+  return `${readme.slice(0, i + start.length)}\n\n${text}\n\n${readme.slice(j)}`;
 }
+/** The README with its word table replaced by a new one. */
+export const withWordTable = (readme, table) => withBlock(readme, TABLE_START, TABLE_END, table, "the word table");
 
 /** A flagged word as a pattern: its characters as they are, and a hyphen, a space or a line break between its parts, or none. */
 const pattern = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/[- ]/g, "(?:-|\\s+)?");
