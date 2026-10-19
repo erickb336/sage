@@ -22,7 +22,7 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
-import { AGENT_CAPS, HIDDEN, NAME_MAX, PRIORITIES, TASK_KINDS, countOf, nameProblem } from "./logbook-fields.mjs";
+import { AGENT_CAPS, FINDING_CLASSES, HIDDEN, NAME_MAX, PRIORITIES, TABLES, TASK_KINDS, countOf, nameProblem } from "./logbook-fields.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -85,26 +85,18 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 /** Model choice by role, task size or risk flag; provider defaults supply the model names. */
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
-const TABLES = {
-  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra", "priority", "kind"],
-  runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
-  findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status"],
-  ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
-  gates: ["id", "task", "question", "options", "recommendation", "default", "answer", "at"],
-  decisions: ["at", "task", "decision", "why"],
-};
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind"] };
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "round", "run", "finding", "verdict", "gate", "log", "status", "merge-check", "config", "projects", "board", "observe"];
+const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind", "waits"], findings: ["run", "class"] };
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss"],
   "projects rebuild": ["accept-listing"],
-  "task add": ["title", "size", "risk", "add", "why", "priority", "kind"],
+  "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits"],
   "run add": ["role", "branch", "candidate"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
   "run done": ["status", "tokens", "report"],
-  "finding add": ["source", "severity", "summary", "key"],
+  "finding add": ["source", "severity", "summary", "key", "run", "class"],
   "finding triage": ["reason"],
   "finding move": ["to", "size"],
   verdict: ["sha", "kind", "cycle", "pr", "run"],
@@ -113,6 +105,7 @@ const OPTIONS = {
   log: ["why"],
   "merge-check": ["sha", "pr", "cycles", "head"],
   board: ["remember", "name-hex", "view"],
+  stats: ["task"],
 };
 /** The canonical number of a PR in an older row: "040" is PR 40. */
 const prNumber = (pr) => (/^\d+$/.test(pr ?? "") ? String(BigInt(pr)) : pr);
@@ -405,7 +398,9 @@ const rowsOf = ({ cols, lines }) =>
     const v = line.split("\t");
     return Object.fromEntries(cols.map((c, i) => [c, v[i] ?? ""]));
   });
-const read = (dir, table) => rowsOf(sheet(dir, table));
+/** A table's rows, with an empty cell after the others for each column that a later version added and the file does not have yet. */
+const rowsIn = (table, text) => rowsOf(text).map((row) => ({ ...row, ...Object.fromEntries((ADDED[table] ?? []).filter((c) => !Object.hasOwn(row, c)).map((c) => [c, ""])) }));
+const read = (dir, table) => rowsIn(table, sheet(dir, table));
 
 /**
  * The integrity check of a logbook: every table (but skip, the ones that a repair starts again) is there, is a regular
@@ -480,7 +475,7 @@ function updateRows(table, text) {
   const sheet = sheetText(text);
   if (!TABLES[table].every(key => sheet.cols.includes(key) || ADDED[table]?.includes(key))
     || sheet.cols.some(key => !TABLES[table].includes(key)) || new Set(sheet.cols).size !== sheet.cols.length) updateDeny();
-  return rowsOf(sheet);
+  return rowsIn(table, sheet);
 }
 function updateFacts(rows, readiness) {
   return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, readiness };
@@ -716,6 +711,7 @@ function createRequestedRun(input, env = process.env) {
 /** A recorded running run is an assignment record, not proof that a native agent started. */
 function runFrame(dir, task, role, branch, candidate, env) {
   if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
+  if (WAIT_ROLES.includes(role)) waitsMet(task, read(dir, "tasks"), `${role} run`);
   if (role === "lead") {
     // A lead carries one task's pull request: one running lead per task, and at most LEADS per project.
     if (["merged", "abandoned", "concluded"].includes(task.state)) refuse(`${task.id} is ${task.state}, so it takes no lead run: the task has ended.`);
@@ -771,7 +767,7 @@ function reviewDelta({ reference, result }, claims, rows) {
     || ledger.some(row => row.run === run && !["checks-pass", "checks-fail"].includes(row.kind))
     || findings.some(row => result.findings.includes(row.key))) deny();
   claims.findings.forEach((finding, index) => findings.push({ task: id, key: result.findings[index], round: task.round,
-    source: role, severity: finding.severity, summary: cell(finding.summary), triage: "", reason: "", status: "open" }));
+    source: role, severity: finding.severity, summary: cell(finding.summary), triage: "", reason: "", status: "open", run, class: "" }));
   ledger.push({ task: id, pr: task.pr, sha: review.sha, kind: claims.kind, cycle: String(review.cycle), run, at: result.at });
   if (["verified", "pr-ready"].includes(task.state) && NOT_CLEAN.includes(claims.kind)) {
     const before = task.state;
@@ -1159,10 +1155,10 @@ function write(dir, table, rows) {
 
 const now = () => new Date().toISOString().slice(0, 19) + "Z";
 /** The cells that hold ids: each table's own id, the columns that name the id of another row, and a decision's subject. */
-const IDS = { tasks: ["id", "keys"], runs: ["id", "task"], findings: ["task", "key"], ledger: ["task", "run"], gates: ["id", "task"], decisions: ["task"] };
+const IDS = { tasks: ["id", "keys"], runs: ["id", "task"], findings: ["task", "key", "run"], ledger: ["task", "run"], gates: ["id", "task"], decisions: ["task"] };
 /**
  * A new id: the highest whole number after the prefix that any id cell of the logbook names, plus 1. So an id never
- * comes back, also when its own row is lost while another row (a verdict's run, a decision, a round's keys) still names
+ * comes back, also when its own row is lost while another row (a verdict's or a finding's run, a decision, a round's keys) still names
  * it. Free text does not count: a path or a title can hold "-T9" by chance. In a decision, only its subjects count: the
  * first word ("F-T2-1 opened again", "G1 was answered by phone"), and in a move, also the new task and key ("F-T1-1 moved
  * to T2 as F-T2-1: …"). Only digits count ("Infinity" does not), and BigInt keeps a long number exact.
@@ -1228,6 +1224,103 @@ const shell = (word) => (/^[\w./-]+$/.test(word) ? word : `'${word.replaceAll("'
  */
 const notHeld = (task, what) => task.state === "held" && refuse(`${task.id} is held, so it takes no ${what}: only the sage moves a held task (sage task ${task.id} set state=building or briefed), then ${what} again.`);
 
+/**
+ * Waits (T336): a task may wait for other tasks of its own logbook. A wait is met when that task is merged or concluded; an
+ * abandoned or lost task never meets it, also in the same merge (the owner, 2026-10-19). A task with an unmet wait takes
+ * no build work (WAIT_ROLES, a move to building) and does not merge; its design and PE may run.
+ */
+const MET = ["merged", "concluded"];
+const WAIT_ROLES = ["lead", "implementer", "investigate", "arena-judge"];
+const WAITS_MAX = 20;
+const TASK_ID = /^T[1-9]\d*$/;
+/** The words of a waits value, as a write and a read split them: by commas or spaces. */
+const waitWords = (value) => String(value ?? "").split(/[\s,]+/).filter(Boolean);
+/**
+ * A task's waits cell, read with the parser of the writes: its task ids, and odd when a hand edit put other text there. No
+ * line prints the cell itself, so its text never reaches the chief; odd counts as one unmet wait, so the task still waits.
+ */
+const waitsOf = (task) => {
+  const words = waitWords(task?.waits);
+  return { ids: [...new Set(words.filter((w) => TASK_ID.test(w)))], odd: words.some((w) => !TASK_ID.test(w)) };
+};
+/** The tasks by id, built once by a caller that looks up many waits, so a merge check stays linear. */
+const byIds = (tasks) => new Map(tasks.map((t) => [t.id, t]));
+/** A task's waits, each with the state of its task (undefined for a task that the logbook lost), and odd text as one more. */
+const waitsWithState = (task, byId) => {
+  const { ids, odd } = waitsOf(task);
+  return [...ids.map((id) => ({ id, state: byId.get(id)?.state })), ...(odd ? [{ odd }] : [])];
+};
+/** The waits of a task that are not met. passes(id) meets a wait too: a task that passes in the same merge. */
+const unmetWaits = (task, byId, passes = () => false) => waitsWithState(task, byId).filter(({ id, state, odd }) => odd || (!MET.includes(state) && !passes(id)));
+const ODD = "the waits cell has text that is not a task id";
+const waitList = (open) => open.map(({ id, state, odd }) => (odd ? ODD : `${id} (${state ?? "not in the logbook"})`)).join(", ");
+/** A task that never meets a wait: abandoned, or lost from the logbook. */
+const dead = (state) => state === "abandoned" || state === undefined;
+/** The fix for a wait that is never met: its task was abandoned or is lost, or the cell has text that is not a task id. */
+const waitFix = (task, open) => {
+  const gone = open.filter(({ state, odd }) => !odd && dead(state)).map(({ id }) => id);
+  const how = `sage task ${task.id} set waits=<ids>, or waits= to clear it`;
+  return [
+    gone.length ? ` ${gone.join(", ")} ${gone.length === 1 ? "is" : "are"} abandoned or not in the logbook, so ${gone.length === 1 ? "that wait is" : "those waits are"} never met: remove or change the wait (${how}), or ask the owner.` : "",
+    open.some(({ odd }) => odd) ? ` A hand edit put that text there: set the waits again (${how}).` : "",
+  ].join("");
+};
+/** Refuses work of what on a task with an unmet wait, and names each unmet task with its state. A move to merged or concluded opens the waits on it, so it refuses too. */
+const waitsMet = (task, tasks, what) => {
+  const open = unmetWaits(task, byIds(tasks));
+  const end = { "move to merged": "merged", "move to concluded": "concluded" }[what];
+  const after = end ? `it moves to ${end} after each of them is merged or concluded.` : "it starts after each of them is merged or concluded. Its design and PE may run.";
+  if (open.length) refuse(`${task.id} waits for ${waitList(open)}, so it takes no ${what}: ${after}${waitFix(task, open)}`);
+};
+/** A task's waits for a printed line: each with its task's state, then the unmet ones. */
+const waitsText = (task, tasks) => {
+  const byId = byIds(tasks), all = waitsWithState(task, byId), open = unmetWaits(task, byId);
+  if (!all.length) return "";
+  return ` · waits ${waitList(all)} · ${open.length ? `unmet ${open.map(({ id, odd }) => (odd ? "the odd text" : id)).join(", ")}` : "all met"}`;
+};
+/**
+ * A waits value as its cell holds it: task ids joined by commas, "" for none (an empty value or none clears it). The ids may
+ * be separated by commas or spaces. It refuses a word that is not a task id, a duplicate, the task itself, more than
+ * WAITS_MAX, a task that this logbook does not have, and a loop, which it names (T8, T9, T8).
+ */
+function waitsValue(task, value, tasks) {
+  const ids = value === "none" ? [] : waitWords(value);
+  const nothing = " Nothing changed.";
+  const odd = ids.find((id) => !TASK_ID.test(id));
+  if (odd !== undefined) refuse(`waits takes task ids such as T7, separated by commas or spaces, or none to clear it; not "${visible(odd)}".${nothing}`);
+  const twice = ids.find((id, i) => ids.indexOf(id) !== i);
+  if (twice) refuse(`waits names ${twice} twice: give each task once.${nothing}`);
+  if (ids.includes(task.id)) refuse(`${task.id} cannot wait for itself.${nothing}`);
+  if (ids.length > WAITS_MAX) refuse(`waits names ${ids.length} tasks, more than the ${WAITS_MAX} that a task may wait for. Split the task, or wait for fewer.${nothing}`);
+  const known = new Map(tasks.map((t) => [t.id, t]));
+  const lost = ids.find((id) => !known.has(id));
+  if (lost) refuse(`no task ${lost} in this logbook: a task waits only for a task of its own logbook.${nothing}`);
+  // A loop: a path of waits from one of the new ids back to the task. One depth-first search over the logbook's tasks.
+  const next = (id) => (id === task.id ? ids : waitsOf(known.get(id)).ids);
+  const seen = new Set();
+  const back = (id, path) => {
+    if (id === task.id) return path;
+    if (seen.has(id)) return undefined;
+    seen.add(id);
+    for (const n of next(id)) {
+      const found = back(n, [...path, n]);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  for (const id of ids) {
+    const loop = back(id, [task.id, id]);
+    if (loop) refuse(`these waits make a loop: ${loop.join(", ")}. A loop never ends, so sage refuses it.${nothing}`);
+  }
+  return ids.join(",");
+}
+/** The decision row of a changed waits list, so that a replaced list leaves its record. */
+const waitsDecision = (task, was, at, why) => {
+  if (was === (task.waits ?? "")) return [];
+  const { ids, odd } = waitsOf({ waits: was }); // the old cell through the parser: a hand edit's text never reaches the row
+  return [{ at, task: task.id, decision: `waits ${[...ids, ...(odd ? ["(text that is not a task id)"] : [])].join(",") || "none"} → ${task.waits || "none"}`, why }];
+};
+
 /** The extra rounds of a task's holds by round: a whole number, and 0 for any other cell, so a hand-written cell never gives NaN (F-T286-2). */
 const extraOf = (task) => (/^\d{1,3}$/.test(task.extra ?? "") ? Number(task.extra) : 0);
 
@@ -1257,6 +1350,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
       const was = task.state;
       move(task, v); // the design's states first; the table is written only if every check below passes
+      if (["building", "merged", "concluded"].includes(v)) waitsMet(task, tasks, `move to ${v}`);
       // A move to abandoned gives no round: the task ends (F-T286-3).
       if (was === "held" && task.hold === "round" && v !== "abandoned") {
         task.extra = String(extraOf(task) + 1);
@@ -1294,7 +1388,12 @@ function planTaskChanges(before, id, changes, at, facts) {
     else if (k === "branch") notHeld(task, "branch="), task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
     else if (k === "title") task.title = v;
     else if (k === "priority" || k === "kind") task[k] = tag(k, v);
-    else refuse(`task set takes state=, branch=, pr=, title=, priority= or kind=`);
+    else if (k === "waits") {
+      const was = task.waits ?? "";
+      task.waits = waitsValue(task, v, tasks);
+      if (task.waits && ["merged", "concluded", "abandoned"].includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task waits for nothing, so it takes no new wait. waits= clears a wait. Nothing changed.`);
+      decided.push(...waitsDecision(task, was, at, "task set"));
+    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind= or waits=`);
   }
   return { task, tasks, runs, decisions: [...decisions, ...decided] };
 }
@@ -1318,7 +1417,7 @@ function frame(dir, title, size, risk, add, tags = {}) {
 }
 /** A task's priority and kind for a printed line: nothing when it has none. */
 const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}`;
-const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}`;
+const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}${task.waits ? ` · waits ${task.waits.replaceAll(",", ", ")}` : ""}`;
 
 function move(task, to) {
   if (to !== "abandoned" && !(NEXT[task.state] ?? []).includes(to)) refuse(`${task.id} cannot go from ${task.state} to ${to}. Next: ${(NEXT[task.state] ?? []).join(", ") || "none"}`);
@@ -1507,7 +1606,7 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
       const [byId, ownOf, findingsOf, runsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs)];
-      return [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
+      const checked = [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
         // A held task never merges until the sage moves it (F-T273-12).
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
@@ -1517,6 +1616,41 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
         return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...verdict, ...busy, ...held };
+      });
+      // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
+      // too, its own waits included: else two tasks of one PR could never merge. The same PR is the PR of --pr for both
+      // tasks, or without --pr the same recorded PR number; a task of another PR with verdicts on this SHA meets no wait,
+      // and an abandoned or lost task meets none. clear() keeps each task's answer, so the check is linear in the tasks
+      // and their waits; a task counts as failing while its answer is open, so a loop of a hand-edited logbook never passes.
+      const here = new Map(checked.map((r) => [r.id, r]));
+      const samePr = (a, b) => (pr ? !!(here.get(a.id)?.ofPr && here.get(b.id)?.ofPr) : !!a.pr && prNumber(a.pr) === prNumber(b.pr));
+      const answers = new Map();
+      const clear = (task) => {
+        if (answers.has(task.id)) return answers.get(task.id);
+        answers.set(task.id, false);
+        const ok = here.get(task.id)?.ok === true && !unmetWaits(task, byId, (u) => passes(task, u)).length;
+        answers.set(task.id, ok);
+        return ok;
+      };
+      const passes = (waiter, id) => {
+        const up = byId.get(id);
+        return !!up && !dead(up.state) && samePr(waiter, up) && clear(up);
+      };
+      // A wait on a task of a PR that the waiting task is not on: name the PR to set, not a new commit (R1140-1).
+      // Only a task of this merge check has a PR to name, and only a cell of digits names one (R1155-2, R1154-2).
+      const prOf = (up) => (pr ? (here.get(up.id)?.ofPr ? pr : "") : here.has(up.id) && PR.test(prNumber(up.pr)) ? prNumber(up.pr) : "");
+      const offPr = (task, open) => {
+        const by = new Map();
+        for (const { id } of open) {
+          const up = id && byId.get(id), n = up && !dead(up.state) && !samePr(task, up) && prOf(up);
+          if (n) by.set(n, [...(by.get(n) ?? []), id]);
+        }
+        return [...by].map(([n, ids]) => ` ${task.id} is not on PR ${n}, so its wait on ${ids.join(", ")} cannot pass in this merge: run sage task ${task.id} set pr=${n}, and record its verdicts with --pr ${n}.`).join("");
+      };
+      return checked.map((r) => {
+        const task = byId.get(r.id), open = task ? unmetWaits(task, byId, (u) => passes(task, u)) : [];
+        if (!open.length || task.state === "held") return r;
+        return { ...r, ok: false, reason: `${r.id} waits for ${waitList(open)}: it merges after ${open.length === 1 ? "that task is" : "each of them is"} merged or concluded, or passes in this same merge on the same PR.${waitFix(task, open)}${offPr(task, open)}` };
       });
     });
     const one = strangers.length === 1;
@@ -1555,9 +1689,56 @@ function status(dir, save) {
     `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${g.question} (default: ${g.default || "none"})`).join("")}`,
     `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens`,
   ];
+  // The open tasks that wait, each with its unmet waits: a line only when one waits.
+  const byId = byIds(tasks);
+  const waiting = tasks.filter((t) => !["merged", "concluded", "abandoned"].includes(t.state)).map((t) => [t, unmetWaits(t, byId)]).filter(([, open]) => open.length);
+  if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
   const table = ["", "| Task | State | Size | Round | PR | Title |", "| --- | --- | --- | --- | --- | --- |", ...tasks.map((t) => `| ${t.id} | ${t.state} | ${t.size} | ${t.round} | ${t.pr} | ${t.title} |`)];
   if (save) put(join(dir, "status.md"), [`# ${lines[0]}`, "", ...lines.slice(1).map((l) => `    ${l}`), ...table].join("\n") + "\n");
   return lines.join("\n");
+}
+
+const TOP = 50; // the tasks that sage stats shows in its table, largest review tokens first
+
+/**
+ * The review cost of each task (T346), largest review tokens first: its review and QA runs, their tokens, the tokens of
+ * its runs after round 0 (a run added in repair round 1 or later: the cycle starts again at 1 on each new commit, so the
+ * run's round is what tells a repair's review), its repair rounds, and its findings by role and by cycle. One total line
+ * comes before the table, which shows the TOP tasks and then says how many more there are. Only a done run's tokens
+ * count. A finding's cycle is the cycle of its run's verdict in its own task's ledger rows: "none" when it names no run
+ * or its run gave no verdict. Read only; each table is read and indexed once.
+ */
+function stats(dir, only) {
+  const group = (rows, key) => rows.reduce((m, r) => (m.get(r[key])?.push(r) ?? m.set(r[key], [r]), m), new Map());
+  const tasks = read(dir, "tasks").filter((t) => !only || t.id === only);
+  const runs = group(read(dir, "runs").filter((r) => CHECKERS.includes(r.role)), "task"), findings = group(read(dir, "findings"), "task");
+  const cycles = new Map(); // task, then run id, to the cycle of the run's first verdict
+  for (const l of read(dir, "ledger")) if (l.run && !cycles.has(`${l.task}\t${l.run}`)) cycles.set(`${l.task}\t${l.run}`, l.cycle);
+  const whole = (v) => (/^(0|[1-9]\d*)$/.test(v ?? "") ? Number(v) : undefined); // a hand-edited "x" is no number
+  // A tokens cell counts only in the form that run done takes (1 to 12 digits); an older sage wrote any digit string.
+  const tokens = (v) => (/^[1-9]\d{0,11}$/.test(v ?? "") ? Number(v) : 0);
+  const tokensOf = (rs) => rs.reduce((n, r) => n + (r.status === "done" ? tokens(r.tokens) : 0), 0);
+  const k = (n) => `${Math.round(n / 1000)}k`;
+  const esc = (v) => String(v).replace(/\|/g, "\\|");
+  const counts = (values) => [...values.reduce((m, v) => m.set(v, (m.get(v) ?? 0) + 1), new Map())].sort(([a], [b]) => (a < b ? -1 : 1)).map(([v, n]) => `${esc(v)}: ${n}`).join(" · ") || "none";
+  const rows = tasks.map((t) => {
+    const own = runs.get(t.id) ?? [], found = findings.get(t.id) ?? [];
+    const cycle = (f) => { const c = f.run && cycles.get(`${t.id}\t${f.run}`); return c ? `cycle ${c}` : "none"; };
+    return { t, own, found, tokens: tokensOf(own), later: tokensOf(own.filter((r) => whole(r.round) >= 1)), round: whole(t.round || "0"), cycle };
+  }).sort((a, b) => b.tokens - a.tokens);
+  const sum = (f) => rows.reduce((n, r) => n + f(r), 0);
+  if (!sum((r) => r.own.length + r.found.length)) return "No review runs yet.\nData starts when a review or QA run ends with run done <R> --status done --tokens <n>, and its findings name it with finding add --run <R>.";
+  // The total comes first, so that a view that cuts a long output keeps it; the table shows the TOP tasks only.
+  const more = rows.length - TOP;
+  return [
+    "Tokens in thousands (k), of done runs only. A round is one repair of findings; after round 0 counts the runs of round 1 and later. A cycle is one set of reviews and QA on one head commit.",
+    `total · ${rows.length} tasks · ${sum((r) => r.own.length)} review runs (${sum((r) => r.own.filter((x) => x.status === "done" && !tokens(x.tokens)).length)} done without tokens) · ${k(sum((r) => r.tokens))} tokens · ${k(sum((r) => r.later))} after round 0 · ${sum((r) => r.round ?? 0)} rounds · ${sum((r) => r.found.length)} findings`,
+    "",
+    "| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |", "| --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.slice(0, TOP).map((r) => `| ${esc(r.t.id)} | ${r.own.length} | ${k(r.tokens)} | ${k(r.later)} | ${r.round ?? "invalid"} | ${counts(r.found.map((f) => f.source))} | ${counts(r.found.map(r.cycle))} |`),
+    // A blank line ends the Markdown table, so that a view does not draw the next line as one of its rows.
+    ...(more > 0 ? ["", `${more} more tasks not shown; use --task <T>`] : []),
+  ].join("\n");
 }
 
 /**
@@ -1718,7 +1899,7 @@ function sage(argv, env = process.env) {
     refuse(`no logbook for the project ${printed}. ${printed === project ? `Run: sage init --project ${shell(project)}` : "Its path has control characters, so no command is printed to paste. Rename the folder, or run sage init from inside it."}`);
   }
   // A read takes no lock: every file is replaced whole, so it sees the store before or after a change, never half of one.
-  if ((cmd === "logbook" && !repair) || cmd === "status" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
+  if ((cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
   const run = () =>
     withLock(dir, () => {
       ready(dir, skip);
@@ -1824,9 +2005,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (size === "investigate" && list(opt.add).includes("build")) refuse("an investigation changes no code, so it takes no build block. Frame the build as its own task: sage task add --size tiny, small or large");
         const why = opt.add ? need(opt.why, "--why for the added blocks") : ""; // refuse before anything is written
         const tags = Object.fromEntries(["priority", "kind"].filter((k) => opt[k] !== undefined).map((k) => [k, tag(k, opt[k])]));
+        if (opt.waits !== undefined) tags.waits = waitsValue({ id: nextId(dir, "T") }, opt.waits, read(dir, "tasks"));
         const task = frame(dir, need(opt.title, "--title"), size, risk, list(opt.add), tags);
         checkout(dir, project);
-        if (opt.add) write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: task.id, decision: `added ${opt.add}`, why }]);
+        const at = now(), decided = [...(opt.add ? [{ at, task: task.id, decision: `added ${opt.add}`, why }] : []), ...waitsDecision(task, "", at, "task add")];
+        if (decided.length) write(dir, "decisions", [...read(dir, "decisions"), ...decided]);
         return framed(task);
       }
       const { tasks, task } = taskOf(dir, need(sub, "the task id")); // task <T> [set key=value ...]
@@ -1838,7 +2021,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         write(dir, "tasks", planned.tasks);
         Object.assign(task, planned.task);
       }
-      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}`;
+      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, tasks)}`;
     }
     case "round": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));
@@ -1884,6 +2067,22 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const run = runs.find((r) => r.id === id) ?? missing(`run ${id}`, runs.map((r) => r.id));
         const st = need(opt.status, "--status");
         if (!["done", "blocked", "question", "failed"].includes(st)) refuse("status is done, blocked, question or failed");
+        // Any --tokens is a whole number of at most 12 digits, so that a typo cannot make a total that a number cannot hold.
+        if (opt.tokens !== undefined && !/^[1-9]\d{0,11}$/.test(opt.tokens)) refuse(`--tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not ${JSON.stringify(opt.tokens)}. Nothing changed.`);
+        // A run ends once (T346). A later run done of an ended run, with its own status, only adds the tokens or the report
+        // path that the run lacks: the Codex native finish and a re-plan end a run with neither. It replaces nothing.
+        if (run.status !== "running") {
+          const flag = (col) => `--${col}`, lacks = ["tokens", "report"].filter((col) => !run[col]);
+          const kept = ["tokens", "report"].find((col) => opt[col] !== undefined && run[col]);
+          if (kept) refuse(`${run.id} already ended as ${run.status} with its ${kept}, and ${flag(kept)} never replaces it. Nothing changed.`);
+          const adds = lacks.filter((col) => opt[col]);
+          if (st !== run.status || !adds.length) refuse(`${run.id} already ended as ${run.status}: a run ends once. A later run done --status ${run.status} may only add ${lacks.length ? lacks.map(flag).join(" or ") + ", which it lacks" : "nothing, as it has its tokens and its report"}. Nothing changed.`);
+          for (const c of adds) run[c] = opt[c];
+          write(dir, "runs", runs);
+          return `${run.id} ${st} · added ${adds.join(" and ")}`;
+        }
+        // A done review or QA run gives its tokens, so that sage stats counts every review's cost (T346).
+        if (st === "done" && CHECKERS.includes(run.role) && opt.tokens === undefined) refuse(`${run.id} is a ${run.role} run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000. Nothing changed.`);
         Object.assign(run, { status: st, tokens: opt.tokens ?? run.tokens, report: opt.report ?? run.report, ended: now() });
         write(dir, "runs", runs);
         return `${run.id} ${st}`;
@@ -1897,13 +2096,20 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         notHeld(task, "finding add");
         const severity = need(opt.severity, "--severity");
         if (!["high", "medium", "low"].includes(severity)) refuse("severity is high, medium or low");
+        // The run whose report holds the finding, and its problem class: both optional, and checked when given (T346).
+        if (opt.run !== undefined) {
+          const run = read(dir, "runs").find((r) => r.id === opt.run) ?? missing(`run ${opt.run}`, read(dir, "runs").filter((r) => r.task === task.id).map((r) => r.id));
+          if (run.task !== task.id) refuse(`--run ${run.id} is a run of ${run.task}, not of ${task.id}: give the run whose report holds the finding. Nothing changed.`);
+        }
+        if (opt.class !== undefined && !FINDING_CLASSES.includes(opt.class)) refuse(`--class is one of ${FINDING_CLASSES.join(", ")}; not ${JSON.stringify(opt.class)}. Nothing changed.`);
+        const tags = { ...(opt.run !== undefined && { run: opt.run }), ...(opt.class !== undefined && { class: opt.class }) };
         const key = cell(opt.key) || nextId(dir, `F-${task.id}-`); // as the table holds it, so the same --key finds its finding again
         const again = findings.find((f) => f.task === task.id && f.key === key);
         // Without --summary, a known key keeps its summary. An empty one is refused, so no summary is ever lost.
         const summary = opt.summary === undefined ? again?.summary : cell(opt.summary) || refuse(`${key} on ${task.id}: --summary is empty. Give the finding in a few words${again ? ", or leave out --summary to keep its summary" : ""}.`);
         if (again && summary !== again.summary) write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: task.id, decision: `${key} opened again: ${summary}`, why: `the summary before: ${again.summary}` }]);
-        if (again) Object.assign(again, { status: "open", triage: "", round: task.round, severity, source: opt.source ?? again.source, summary }); // it came back
-        else findings.push({ task: task.id, key, round: task.round, source: need(opt.source, "--source"), severity, summary: need(summary, "--summary"), status: "open" });
+        if (again) Object.assign(again, { status: "open", triage: "", round: task.round, severity, source: opt.source ?? again.source, summary, ...tags }); // it came back
+        else findings.push({ task: task.id, key, round: task.round, source: need(opt.source, "--source"), severity, summary: need(summary, "--summary"), status: "open", ...tags });
         write(dir, "findings", findings);
         return `${key} open${again ? " again" : ""} · ${severity} · ${task.id}`;
       }
@@ -1937,7 +2143,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");
         const to = frame(dir, title, size, [], []);
         const was = f.key;
-        Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: 0, triage: "" });
+        Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: 0, triage: "", run: "" }); // its run is a run of the old task
         write(dir, "findings", findings);
         write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: id, decision: `${was} moved to ${to.id} as ${f.key}: ${f.summary}`, why: `the follow-up task: ${title}` }]);
         return `${was} moved to ${to.id} as ${f.key} · ${framed(to)}`;
@@ -2021,6 +2227,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     }
     case "status":
       return status(dir);
+    case "stats":
+      if (pos.length) refuse("stats takes no words: sage stats [--task <T>]");
+      return stats(dir, opt.task === undefined ? undefined : taskOf(dir, opt.task).task.id);
     case "pages": {
       // pages <T> makes the task's pages folder (mode 700) and prints it. pages <T> record <file> logs a page in it, with its sha256.
       const folder = pagesDir(project, taskOf(dir, need(sub, "the task id")).task.id, env);

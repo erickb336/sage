@@ -6,6 +6,8 @@
 export const PRIORITIES = ["P0", "P1", "P2", "P3"];
 /** The kinds of a task: exactly one per task, from this fixed list (the T305 design). A new kind is a change of this list. */
 export const TASK_KINDS = ["design", "ui", "orchestration", "optimization", "bug-fix", "logbook", "docs", "security", "providers", "checks"];
+/** The problem classes of a finding, which its reviewer tags (finding add --class, T346): a starter list for every project. */
+export const FINDING_CLASSES = ["state-edge", "speed", "copy", "layout", "security", "other"];
 /** The most characters of a display name. */
 export const NAME_MAX = 60;
 
@@ -66,6 +68,18 @@ export function nameProblem(name) {
   if (!/[\p{L}\p{N}\p{P}\p{S}]/u.test(name)) return "has no visible character";
   return null;
 }
+
+/** The tables of a logbook and their columns, in the order that a write gives them. The state tool writes them; the hook guards their files. */
+export const TABLES = {
+  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra", "priority", "kind", "waits"],
+  runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
+  findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status", "run", "class"],
+  ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
+  gates: ["id", "task", "question", "options", "recommendation", "default", "answer", "at"],
+  decisions: ["at", "task", "decision", "why"],
+};
+/** Every file of a logbook that only the state tool writes, by name: each table and the logbook's other records (K2). */
+export const LOGBOOK_FILES = [...Object.keys(TABLES).map((t) => `${t}.tsv`), "config.json", "standing.md", "status.md", "observations.json"];
 
 /**
  * The owner's settings of one logbook from its parsed config.json: its display name (null for none) and its archived
