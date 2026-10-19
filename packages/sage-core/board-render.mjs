@@ -191,7 +191,7 @@ const THEME_CSS = `:root{${DARK}}${whenLight("", LIGHT)}.to-dark{display:none}${
 export const THEME_HEAD = "try{const t=localStorage.getItem('board-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}";
 
 const CSS = `${THEME_CSS}
-*{box-sizing:border-box}[hidden]{display:none!important}html{background:var(--bg)}
+*{box-sizing:border-box}[hidden]{display:none!important}html{background:var(--bg);scroll-padding-top:calc(var(--sticky,56px) + 8px)}
 body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;min-height:100vh}
 a{color:var(--accent)}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 button{font:inherit;color:inherit}
@@ -316,7 +316,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
  .board{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr));overflow-x:visible}
 }
 @media (max-width:700px){
- header{padding:12px 16px;gap:8px 10px}
+ header{padding:12px 16px;gap:8px 10px;position:static}
  .fbar{padding:10px 16px 0}
  .summary,.legend{padding-left:16px;padding-right:16px;gap:6px 14px}
  .banner,.emptyboard{margin:0 16px 10px}
@@ -374,6 +374,9 @@ const match=${matchProject.toString()};
 ${cardFits.toString()}
 ${needCounts.toString()}
 const SHOWN=${BACKLOG_SHOWN},foldText=${foldText.toString()};
+// A focused control never hides under the sticky header (R1093-1): the page keeps its height free at the top of a scroll.
+const head=document.querySelector('header'),pad=()=>document.documentElement.style.setProperty('--sticky',(head&&getComputedStyle(head).position==='sticky'?head.offsetHeight:0)+'px');
+pad();addEventListener('resize',pad);if(head&&window.ResizeObserver)new ResizeObserver(pad).observe(head);
 const S={project:'',needs:false,who:'',priority:'',kind:'',open:false,query:'',active:null,archived:false,gone:false};
 try{const h=/^#p=(.*)$/.exec(location.hash);S.project=h?decodeURIComponent(h[1]):localStorage.getItem('board-project')||''}catch(e){}
 function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#p=/.test(location.hash))history.replaceState(null,'',S.project?'#p='+encodeURIComponent(S.project):location.pathname+location.search)}catch(e){}}

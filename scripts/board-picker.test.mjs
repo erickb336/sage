@@ -393,6 +393,37 @@ test("R1080-1: at 375 px every touch target on the board and on each task page t
   assert.deepEqual(small, []);
 });
 
+test("R1093-1: at 375 px no tall header stays on screen, and at every width a card that Shift+Tab focuses is not under a sticky header", async t => {
+  // The sticky part: every shown element that stays on screen when the page scrolls, as high as its lowest bottom.
+  const stuck = page => page.evaluate(() => Math.max(0, ...[...document.querySelectorAll("body *")].filter(e => ["sticky", "fixed"].includes(getComputedStyle(e).position) && e.getClientRects().length).map(e => e.getBoundingClientRect().bottom)));
+  for (const [width, colorScheme] of [[375, "light"], [375, "dark"], [800, "light"], [1440, "dark"]]) {
+    const page = await open(t, { width, height: 812, colorScheme });
+    const label = `${width} px ${colorScheme}`;
+    if (width === 375) {
+      assert.ok(await page.locator("#pick-chips .chip:not([hidden])").count() >= 4, "4 or more need-you chips");
+      assert.ok(await stuck(page) < 120, `${label}: the sticky part is ${await stuck(page)} px high`);
+    }
+    if (width === 1440) assert.equal(await page.locator("header").evaluate(header => getComputedStyle(header).position), "sticky", "the desktop header stays");
+    // A card below the fold: focus the control after it, scroll the card's top (or all of it) off the top of the screen,
+    // then go back with Shift+Tab. Chromium centres a card that is out of view, and puts one that is partly in view at the top.
+    const below = await page.locator(".card[data-key]:visible").evaluateAll(cards => cards.findIndex(card => card.getBoundingClientRect().top > innerHeight));
+    assert.ok(below >= 0,`${label}: a card below the first screen`);
+    const target = page.locator(".card[data-key]:visible").nth(below);
+    for (const off of ["top", "bottom"]) {
+      await page.evaluate(([card, off]) => {
+        const all = [...document.querySelectorAll("a[href],button,select,input:not(.vh),summary,[tabindex]:not([tabindex='-1'])")].filter(e => e.checkVisibility());
+        all[all.indexOf(card) + 1].focus({ preventScroll: true });
+        scrollTo(0, card.getBoundingClientRect()[off] + scrollY + 10);
+      }, [await target.elementHandle(), off]);
+      await page.keyboard.press("Shift+Tab");
+      assert.equal(await target.evaluate(card => document.activeElement === card), true, `${label}: Shift+Tab focuses the card`);
+      const [top, hit] = await target.evaluate(card => { const box = card.getBoundingClientRect(); return [box.top, card.contains(document.elementFromPoint(box.left + box.width / 2, box.top + 2))]; });
+      const bottom = await stuck(page);
+      assert.ok(top > bottom - 1 && hit,`${label}, its ${off} off the screen: the card's top is at ${top} px, under a sticky part to ${bottom} px`);
+    }
+  }
+});
+
 test("R1075-6: a logbook that the board cannot read has a mark and a plain reason in its picker row, not an error code", async t => {
   const book = sources[0].path, folder = readdirSync(book).find(name => name.startsWith("recipes-app-")), file = join(book, folder, "tasks.tsv");
   chmodSync(file, 0o000);
