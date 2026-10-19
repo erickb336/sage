@@ -228,14 +228,14 @@ function hookNotes(root, at) {
   ]);
   slot(["project-product-demos", "role-sage_code-reviewer", "run-R50", `bound-${sha256("R50")}`], 0);
   slot(["project-product-demos", "role-sage_qa", "run-R51", `bound-${sha256("R51")}`], 1);
-  // home-lab: a PE with no activity for 41 min, and a run that no slot holds (its slot ended after an hour).
-  addRuns("home-lab", [
-    { id: "R31", task: "T5", role: "pe", round: "0", status: "running", started: iso(58), model: "opus" },
-    { id: "R29", task: "T5", role: "implementer", round: "0", status: "running", started: iso(204), model: "sonnet" },
+  // order-chaser: a PE with no activity for 41 min, and a run that no slot holds (its slot ended after an hour).
+  addRuns("order-chaser", [
+    { id: "R31", task: "T13", role: "pe", round: "0", status: "running", started: iso(58), model: "opus" },
+    { id: "R29", task: "T13", role: "implementer", round: "0", status: "running", started: iso(204), model: "sonnet" },
   ]);
-  slot(["project-home-lab", "role-sage_pe", "run-R31", `bound-${sha256("R31")}`], 41);
-  // order-chaser: a slot from an older hook, with no run mark.
-  slot(["project-order-chaser", "role-sage_designer", `bound-${sha256("old designer")}`], 6);
+  slot(["project-order-chaser", "role-sage_pe", "run-R31", `bound-${sha256("R31")}`], 41);
+  // recipes-app: a slot from an older hook, with no run mark. It changes no logbook, so the project stays idle.
+  slot(["project-recipes-app", "role-sage_designer", `bound-${sha256("old designer")}`], 6);
   writeFileSync(join(root, "config.json"), `${JSON.stringify({ max_agents: 3, "cap.sage": 5 })}\n`);
 }
 

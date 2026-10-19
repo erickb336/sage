@@ -354,7 +354,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
  .chip,.trigger,select,.seg button,.morebtn,.opt,.back,.boardtabs a{min-height:44px}.l2 a.t{display:inline-block;padding:13px 0;margin:-13px 0}.linkbtn{min-height:44px;display:inline-flex;align-items:center}
  .archived summary{min-height:44px;display:flex;align-items:center}.seg button{min-width:44px}
  details.fold>summary,details.rest>summary{min-height:44px;padding-top:13px;padding-bottom:13px;margin:0}
- .standin[tabindex],.ptop a[href]{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;margin:-14px 0;vertical-align:middle;position:relative;z-index:1}table.runs .standin[tabindex]{margin:0}table.runs td{vertical-align:middle}
+ .standin[tabindex],.ptop a[href]{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;margin:-14px 0;vertical-align:middle;position:relative;z-index:1}table.runs .standin[tabindex]{margin:0}table.runs td{vertical-align:middle}.nowagents{row-gap:26px;margin:14px 0 22px}
  .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}.pop .foot{display:none}
 }`;
 
