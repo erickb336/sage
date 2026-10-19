@@ -2423,9 +2423,28 @@ test("T346: a done review, QA or evidence-review run needs --tokens as a whole n
   assert.equal(s.ok("run", "done", "R3", "--status", "blocked", "--tokens", "900"), "R3 blocked");
   assert.equal(s.ok("run", "done", "R6", "--status", "done"), "R6 done", "an implementer gives tokens when it has them");
   assert.equal(s.ok("run", "done", "R7", "--status", "done"), "R7 done");
-  assert.equal(s.no("run", "done", "R1", "--status", "done", "--tokens", "99"), "sage: R1 already ended as done: a run ends once, and its tokens stay. Nothing changed.");
-  assert.equal(s.no("run", "done", "R2", "--status", "done", "--tokens", "99"), "sage: R2 already ended as failed: a run ends once, and its tokens stay. Nothing changed.");
+  assert.equal(s.no("run", "done", "R1", "--status", "done", "--tokens", "99"), "sage: R1 already ended as done with its tokens, and --tokens never replaces it. Nothing changed.");
+  assert.equal(s.no("run", "done", "R2", "--status", "done", "--tokens", "99"), "sage: R2 already ended as failed: a run ends once. A later run done --status failed may only add --tokens or --report, which it lacks. Nothing changed.", "a status change is refused, also with tokens to add");
   assert.deepEqual(rows(s.dir, "runs").map((r) => r.tokens), ["123456789012", "", "900", "", "", "", ""]);
+});
+
+test("T346: a later run done of an ended run only adds the tokens or the report path that it lacks, and keeps its status and end time", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  for (const state of ["briefed", "building"]) s.ok("task", "T1", "set", `state=${state}`);
+  s.ok("run", "add", "T1", "--role", "lead"); // R1
+  byHand(s.dir, "tasks", 0, "T1", (cells) => Object.assign(cells, { 5: "replan" }));
+  s.ok("task", "T1", "set", "state=briefed"); // a re-plan ends R1 as blocked, with no tokens
+  const ended = rows(s.dir, "runs")[0].ended;
+  assert.equal(s.no("run", "done", "R1", "--status", "blocked"), "sage: R1 already ended as blocked: a run ends once. A later run done --status blocked may only add --tokens or --report, which it lacks. Nothing changed.", "a call that adds nothing");
+  assert.equal(s.ok("run", "done", "R1", "--status", "blocked", "--tokens", "42000"), "R1 blocked · added tokens");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => [r.status, r.tokens, r.report, r.ended]), [["blocked", "42000", "", ended]]);
+  assert.equal(s.no("run", "done", "R1", "--status", "blocked", "--tokens", "43000"), "sage: R1 already ended as blocked with its tokens, and --tokens never replaces it. Nothing changed.", "a second add of tokens");
+  assert.equal(s.no("run", "done", "R1", "--status", "blocked", "--tokens", "42000"), "sage: R1 already ended as blocked with its tokens, and --tokens never replaces it. Nothing changed.", "the same tokens add nothing");
+  assert.equal(s.no("run", "done", "R1", "--status", "done", "--report", "r.md"), "sage: R1 already ended as blocked: a run ends once. A later run done --status blocked may only add --report, which it lacks. Nothing changed.", "a status change");
+  assert.equal(s.ok("run", "done", "R1", "--status", "blocked", "--report", "r.md"), "R1 blocked · added report");
+  assert.equal(s.no("run", "done", "R1", "--status", "blocked"), "sage: R1 already ended as blocked: a run ends once. A later run done --status blocked may only add nothing, as it has its tokens and its report. Nothing changed.");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => [r.status, r.tokens, r.report, r.ended]), [["blocked", "42000", "r.md", ended]]);
 });
 
 test("T346: sage stats gives each task's review runs, tokens, tokens after round 0, rounds and findings by role and cycle, and a total; it reads only", () => {
@@ -2462,14 +2481,15 @@ test("T346: sage stats gives each task's review runs, tokens, tokens after round
   // Largest review tokens first (T3 before T2 in the logbook, after it here), in thousands.
   assert.equal(s.ok("stats"), [
     "Tokens in thousands (k), of done runs only. A round is one repair of findings; after round 0 counts the runs of round 1 and later. A cycle is one set of reviews and QA on one head commit.",
+    "total · 3 tasks · 6 review runs (1 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 6 findings",
+    "",
     "| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |",
     "| --- | --- | --- | --- | --- | --- | --- |",
     "| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |",
     "| T2 | 3 | 0k | 0k | 0 | __proto__: 1 · a\\|b: 1 · constructor: 1 | none: 3 |",
     "| T3 | 0 | 0k | 0k | invalid | none | none |",
-    "total · 3 tasks · 6 review runs (1 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 6 findings",
   ].join("\n"));
-  assert.equal(s.ok("stats", "--task", "T1").split("\n").slice(3).join("\n"), "| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |\ntotal · 1 tasks · 3 review runs (0 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 3 findings");
+  assert.equal(s.ok("stats", "--task", "T1").split("\n").slice(1).join("\n"), "total · 1 tasks · 3 review runs (0 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 3 findings\n\n| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |\n| --- | --- | --- | --- | --- | --- | --- |\n| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |");
   assert.deepEqual(files(), before, "stats writes no table and no status.md");
   assert.equal(s.no("stats", "--task", "T9"), "sage: no task T9. The latest: T1, T2, T3.");
   assert.match(s.no("stats", "--since", "2026-10-01"), /^sage: stats takes no --since\./);
@@ -2480,6 +2500,42 @@ test("T346: sage stats on a logbook with no review runs says so, and how its dat
   s.ok("task", "add", "--title", "a", "--size", "small");
   s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1");
   assert.equal(s.ok("stats"), "No review runs yet.\nData starts when a review or QA run ends with run done <R> --status done --tokens <n>, and its findings name it with finding add --run <R>.");
+});
+
+test("T346: sage stats shows findings with no review runs, and review runs with no findings", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("finding", "add", "T1", "--source", "checks", "--severity", "medium", "--summary", "the checks fail"); // the chief's finding, no run
+  assert.equal(s.ok("stats").split("\n").slice(1).join("\n"), "total · 1 tasks · 0 review runs (0 done without tokens) · 0k tokens · 0k after round 0 · 0 rounds · 1 findings\n\n| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |\n| --- | --- | --- | --- | --- | --- | --- |\n| T1 | 0 | 0k | 0k | 0 | checks: 1 | none: 1 |");
+  const r = store();
+  r.ok("task", "add", "--title", "a", "--size", "small");
+  r.ok("run", "add", "T1", "--role", "qa");
+  assert.equal(r.ok("stats").split("\n")[1], "total · 1 tasks · 1 review runs (0 done without tokens) · 0k tokens · 0k after round 0 · 0 rounds · 0 findings");
+});
+
+test("T346: sage stats sorts by review tokens, counts a tokens cell of 1 to 12 digits only, and shows the top 50 tasks with a line for the rest", () => {
+  const s = store();
+  for (const [task, tokens] of [["T1", "2000"], ["T2", "9000"], ["T3", "5000"]]) {
+    s.ok("task", "add", "--title", task, "--size", "small");
+    const run = s.ok("run", "add", task, "--role", "qa").split(" ")[0];
+    s.ok("run", "done", run, "--status", "done", "--tokens", tokens);
+  }
+  s.ok("run", "add", "T1", "--role", "qa"); // R4
+  byHand(s.dir, "runs", 0, "R4", (c) => Object.assign(c, { 6: "done", 7: "9".repeat(400) })); // an older sage's digit string
+  const table = (out) => out.split("\n").filter((l) => /^\| T\d/.test(l)).map((l) => l.split(" | ").slice(0, 3).join(" | "));
+  assert.deepEqual(table(s.ok("stats")), ["| T2 | 1 | 9k", "| T3 | 1 | 5k", "| T1 | 2 | 2k"], "largest review tokens first, not the logbook's order");
+  assert.equal(s.ok("stats").split("\n")[1], "total · 3 tasks · 4 review runs (1 done without tokens) · 16k tokens · 0k after round 0 · 0 rounds · 0 findings");
+  // 52 tasks: T4 to T52 by hand, as copies of T3 and its run with more tokens each.
+  const add = (table, from, rowsOf) => appendFileSync(join(s.dir, `${table}.tsv`), "\n" + rowsOf(readFileSync(join(s.dir, `${table}.tsv`), "utf8").split("\n").find((l) => l.startsWith(`${from}\t`))).join("\n"));
+  const ids = Array.from({ length: 49 }, (_, i) => i + 4);
+  add("tasks", "T3", (line) => ids.map((n) => line.replace(/^T3\t/, `T${n}\t`)));
+  add("runs", "R3", (line) => ids.map((n) => line.replace(/^R3\tT3\t/, `R${n + 1}\tT${n}\t`).replace(/\t5000\t/, `\t${n * 1000}\t`)));
+  const out = s.ok("stats").split("\n");
+  assert.equal(out[1], `total · 52 tasks · 53 review runs (1 done without tokens) · ${16 + (4 + 52) * 49 / 2}k tokens · 0k after round 0 · 0 rounds · 0 findings`, "the total counts every task, also those not shown");
+  assert.deepEqual(table(out.join("\n")).slice(0, 2), ["| T52 | 1 | 52k", "| T51 | 1 | 51k"]);
+  assert.equal(table(out.join("\n")).length, 50);
+  assert.deepEqual(out.slice(-3), [out.at(-3), "", "2 more tasks not shown; use --task <T>"], "a blank line ends the table before the line after it");
+  assert.match(out.at(-3), /^\| T\d+ \| /);
 });
 
 /** Sets a task's state by hand, as the end of its route would: the waits tests need upstream tasks in each state. */
@@ -3079,7 +3135,7 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   assert.equal(head, "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel");
   assert.equal(lines[0], "R1\tT1\timplementer\t0\t\tb/1\tdone\t900\t\t2026-10-01T00:00:00Z\t2026-10-01T01:00:00Z\t");
   assert.match(lines[1], /^R2\tT1\tqa\t0\t\t\trunning\t\t\t\S+\t\tsonnet$/);
-  assert.equal(o.no("run", "done", "R1", "--status", "done"), "sage: R1 already ended as done: a run ends once, and its tokens stay. Nothing changed.");
+  assert.equal(o.no("run", "done", "R1", "--status", "done"), "sage: R1 already ended as done: a run ends once. A later run done --status done may only add --report, which it lacks. Nothing changed.");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) o.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.match(o.no("merge-check", "--sha", SHA), /T1 has a review or QA run that still runs: R2 \(qa\)/, "R2's QA still runs (F-T289-18)");
   o.ok("run", "done", "R2", "--status", "done", "--tokens", "1");

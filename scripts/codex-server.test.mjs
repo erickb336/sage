@@ -2857,6 +2857,18 @@ test("native recorded run requires a saved receipt and only finishes its assigne
   assert.deepEqual(f.core.readAdmission(f.options.directory), journal);
 });
 
+test("native recorded run leaves its tokens to a later run done, which adds them and keeps the status and end time (T346)", async t => {
+  const f = await runReportFixture(t); f.record();
+  const first = f.finish();
+  const before = f.tool.read(f.logbook, "runs")[0];
+  assert.deepEqual([before.status, before.tokens, before.report], ["done", "", first.report]);
+  assert.equal(f.cli("run", "done", "R1", "--status", "done", "--tokens", "52000"), "R1 done · added tokens");
+  assert.deepEqual(f.tool.read(f.logbook, "runs")[0], { ...before, tokens: "52000" });
+  assert.throws(() => f.cli("run", "done", "R1", "--status", "done", "--tokens", "60000"), /R1 already ended as done with its tokens, and --tokens never replaces it/);
+  assert.throws(() => f.cli("run", "done", "R1", "--status", "failed", "--tokens", "60000"), /R1 already ended as done with its tokens/);
+  assert.deepEqual(f.tool.read(f.logbook, "runs")[0], { ...before, tokens: "52000" });
+});
+
 test("native recorded run rejects foreign agents forged paths hashes scopes and unsupported clients", async t => {
   const f = await runReportFixture(t); f.record();
   const bytes = readFileSync(join(f.logbook, "runs.tsv"), "utf8");
