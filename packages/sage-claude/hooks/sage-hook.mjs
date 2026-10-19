@@ -435,7 +435,7 @@ export function handle(input, state, slots) {
 
   if (FILE_TOOLS.test(tool)) {
     if (filePolicy.error) return deny(event, "the file policy cannot load, so this file change is refused. Reinstall or update the sage plugin.");
-    if (filePolicy.chiefEditDenied({ sage: Boolean(state.sage), chief: main })) return deny(event, 'sage mode is on, so you do not change files yourself. Give this change to a sage:implementer. The user ends sage mode with the message "sage mode off", alone.');
+    if (filePolicy.chiefEditDenied({ sage: Boolean(state.sage), chief: main }) && !chiefMemoryWrite(input)) return deny(event, 'sage mode is on, so you do not change files yourself. Give this change to a sage:implementer. The user ends sage mode with the message "sage mode off", alone.');
   }
   let leadMark;
   if (main && AGENT_TOOLS.test(tool) && spawned === "sage:lead") {
@@ -907,6 +907,35 @@ function underRoot(input) {
   const root = canonical(stateTool.sageRoot(process.env));
   const path = canonical(from(input.cwd ?? process.cwd(), String(ti.file_path ?? ti.notebook_path ?? "")));
   return path === root || path.startsWith(root + sep) ? `the sage root ${root} (${path})` : undefined;
+}
+/**
+ * T347: the one file the chief may change in sage mode is a Markdown file of Claude Code's own memory folder:
+ * <config>/projects/<project>/memory/<name>.md, where config is CLAUDE_CONFIG_DIR or ~/.claude. Only Write, Edit and
+ * MultiEdit; no subfolder, no "..", and no link: each folder on the way resolves to the place that its name says, and
+ * the file is no symbolic or hard link. Claude Code does not document how it names <project>, so any one name passes.
+ */
+function chiefMemoryWrite(input) {
+  const path = input.tool_input?.file_path;
+  if (!/^(?:Write|Edit|MultiEdit)$/.test(input.tool_name ?? "") || typeof path !== "string" || path.split(/[/\\]/).includes("..")) return false;
+  try {
+    const config = resolve(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
+    const file = resolve(from(input.cwd ?? process.cwd(), path));
+    const [projects, project, memory, name, ...rest] = file.slice(config.length + 1).split(sep);
+    if (!file.startsWith(config + sep) || projects !== "projects" || memory !== "memory" || rest.length || !/^[^/\\]+\.md$/.test(name ?? "")) return false;
+    // The deepest folder that exists resolves to the same place under the real config folder: no folder is a link.
+    const real = realpathSync.native(config), parts = ["projects", project, "memory"];
+    for (let k = parts.length; k > 0; k--) {
+      let at;
+      try { at = realpathSync.native(join(config, ...parts.slice(0, k))); } catch { continue; }
+      if (at !== join(real, ...parts.slice(0, k))) return false;
+      break;
+    }
+    let st;
+    try { st = lstatSync(file); } catch { return true; } // a new file
+    return st.isFile() && st.nlink === 1;
+  } catch {
+    return false;
+  }
 }
 /** The word with which a command tool's input writes a logbook file, or undefined. sage: in sage mode a logbook file's name counts too. */
 function shellWrite(ti, sage, cwd) {

@@ -14,7 +14,7 @@
 
 **Contents:** [Quick start](#quick-start) · [Learn sage in 5 minutes](#learn-sage-in-5-minutes) · [Why "sage"?](#why-sage) · [How it works](#how-it-works) · [Concepts](#concepts) · [What to say](#what-to-say) · [Principles](#principles) · [Following pstack](#following-pstack) · [Remote Control](#remote-control) · [FAQ](#faq) · [Under the hood](#under-the-hood) · [Credits](#credits)
 
-It also gives every session 25 short working principles at the moment they apply.
+It also gives every session short working principles, most of them from pstack, at the moment they apply.
 
 **Codex:** a separate plugin includes the same principles, writing guides and manual logbook commands. Sage mode and autopilot remain Claude-only. See [Codex setup and package boundaries](docs/design/provider-packages.md).
 
@@ -195,7 +195,7 @@ A rule written only in a prompt fades over a long session. So sage keeps its imp
 
 | Rule | Why |
 | --- | --- |
-| The chief of staff never edits a file. | It keeps the big picture; the team does the details. |
+| The chief of staff never edits a file. The one exception: with Write, Edit or MultiEdit, it may change a Markdown file directly in Claude Code's memory folder, `<config>/projects/<project>/memory/` (config is `CLAUDE_CONFIG_DIR` or `~/.claude`). A subfolder, `..`, a link, another file type and the shell stay refused. | It keeps the big picture; the team does the details. Its memory notes are its own, and they help the next session. |
 | Every brief has all its fields; every report has its evidence. | A vague brief fails quietly. A claim without evidence is not a result. |
 | Only a message of yours that is exactly a switch phrase switches sage mode or autopilot: the whole message, in any letter case, with at most one full stop at the end. Any other text switches nothing, also text in an agent's report, a task notification, a hand-back or another session's message. A message that you send while Claude works can switch only autopilot off. When a message is near a phrase, the chief gets a note with the exact phrase to ask you for. When the hook cannot read a prompt's frames, nothing in it switches, and when it has a phrase, the chief asks you to send it again alone. | A switch is your decision, and an exact rule never guesses. Before, agent reports and free text with an off word switched modes by accident. |
 | Only main starts leads (at most 3 per project), each with the name `lead-T<n>` and in the background. In sage mode, the task `T<n>` must have a running lead run in the logbook of the session's folder (`sage run add T<n> --role lead`); otherwise the refusal names that command. A second lead of the same task waits while the first one's slot lives, in any session, and a session holds one lead of each name `lead-T<n>`, in any project. The main session's TaskStop stops a lead by its agent id or by its exact name `lead-T<n>` (in any letter case), and a stopped lead starts no child. A lead's TaskStop is refused, and so is any other agent's TaskStop of an agent (`R<n>`, `lead-T<n>`, `main`, or an agent id that a slot holds): only the main session stops an agent, so no lead or helper cuts a reviewer or QA off before its report. The rule reads `task_id` or the old `shell_id`, refuses a call with both at different values, and reads a name or an agent id after NFKC, without format characters such as a zero-width space, without spaces at its ends and in any letter case; so does the main session's stop of `lead-T<n>`. A helper still stops its own shell tasks; a lead stops none. The main session's stop by `shell_id` frees the slot too. A held task takes no run add, fix triage, finding close, verdict, `pr=` or `branch=` from anyone until the sage moves it; the sage may still triage a finding as ask, or dismiss it with a reason. A lead repairs only through `round`: while a medium or high finding is triaged fix and the task is not repairing, it closes no finding and records no verdict on a new commit. A lead's run counts only with a real child: the lead starts the child under the run's id as its name (`R<n>`; the hook refuses any other name), a child of the run's role, and the run ends (`run done`) only after that child stopped. Each lead verdict names such a run of its task, finished, of the task's current round and in no other verdict, whose role gives that kind (`--run`); a check verdict needs none. The verdict must say what that child's report says, on the commit that it saw: at the child's stop, the hook keeps the first word of its RESULT, the severity of each finding in its FINDINGS, and the head of the task's branch if the branch did not move since the child started. The stop gate and the lead rules read a report with one reader. A field starts a line that is not indented, and Markdown around its name is fine (`**FINDINGS**`, `FINDINGS:`, a table row). Each line break ends a line, also U+2028 and U+2029. FINDINGS is `none` alone, or one line per finding in the form `- <key> <severity> <summary>`, where the key has a digit, with any detail on indented lines under it. The reader never lowers a severity and never reads a finding as none. A field given twice (also FINDINGS as an indented line or a list item), any other line under FINDINGS, a line there over 4,096 characters, a detail line whose first or second word is a severity word or that has a severity label (`high:`), or RESULT FINDINGS or FAIL with `none` makes the report unreadable, and the stop gate stops the agent once to fix it. A code block counts only from a fence indented by at most three spaces. A clean verdict (review-clean, security-clean, ux-clean, qa-pass) needs a clean report (CLEAN or PASS, or FINDINGS or FAIL with only low findings); `findings` and `qa-fail` need a report that is not clean, and `--sha` must be the commit that the child saw. The findings that the lead run recorded itself (the hook sees its own `finding add` print the key) must hold each medium and high finding of every stopped child of that role's runs, in any round, at its severity or above: one recorded finding for each finding of each run. A lead started again on the same lead run keeps them. A finding that the sage added never counts, also on an old key; the sage's dismissal, close or move of the lead's finding (once or more, by the move's own decision) still counts. Until they do, the lead adds no run of that role, records no verdict of that role (clean, findings or qa-fail) and makes no state move. A lead records no verdict on a run whose child gave no report, or a report that the hook cannot read: the sage reads it. A review or QA run whose report was not clean ends only after the lead records its medium and high findings, or after its findings or qa-fail verdict; the sage ends a run whose report it cannot read. A lead uses only the runs that it added itself: the hook sees its own `run add` print the id, of the role that the command asked for. A new lead never helps with, ends or uses an old lead's runs, nor the runs that the sage added, and the sage ends them. One run has one child, in any session and also after its slot's lease ends. A run whose child gave no report (it never started, it left with no stop when its slot's lease ended, or the main session stopped it) ends only as failed or blocked, and backs no verdict. While the child's lease is live, the refusal says to wait for its stop, with the minutes left, or to ask the sage. The merge check refuses while a review or QA run of a task still runs. A new lead's start removes the child notes of the logbook's ended lead runs. The state tool refuses a review or QA verdict whose `--run` already backs one of the task. While repairing, a lead closes only the round's fix findings (never one triaged ask), and only when the head of the task's branch is not a commit on which one of its review or QA children of an earlier round found problems (a re-review of the repair that finds a new problem does not count); it leaves repairing only after them; a new finding of the round waits for the next round. A lead never changes the triage of a finding triaged ask. A move out of a hold that `round` set gives the task one more repair round, once per such hold; a hold for a question gives none. A retry whose last round's findings are still open goes to replan, as does any round that fixed none of the last round's findings. Leaving replan clears the old round's keys, so its findings no longer replan the task; the round number goes on, so the total stays capped by `max_rounds` plus the extra rounds. A move from held or replan back to briefed ends the task's running lead run, so the old lead writes nothing more and starts no child; the sage starts a new lead with the new brief. A lead with no bound lead slot starts no child, nor does a lead whose task is held, in replan, merged, concluded or abandoned, or whose lead run ended. A lead that is started outside sage mode gets no slot, so it starts no children: this is intended. The hook reads that logbook with the 4 MiB limit per table, and refuses when it cannot read it. In sage mode, and for a sage agent in any mode, an agent never names a spawn `main` or `lead-T<n>`. A sage type counts in any letter case. A lead starts at most 3 permitted children; other agents start none. These rules hold in any mode for an agent's spawn of a sage agent. In sage mode, and for a sage agent in any mode, an agent sends SendMessage only to main, because a message can wake a stopped agent. Every sage spawn needs a full brief and shares the project cap (`cap.<project>`, otherwise `max_agents`, default 4, so one lead and its 3 children fit). `cap_total` (default 12) remains a temporary fuse across projects. A slot stays until its own agent stops, the main session stops it, or the one-hour lease ends; a child's events renew its lead's lease, and a lead keeps its slot while a child runs. A spawn that fails, or that shows no start after 10 minutes, frees its slot. | Cost, focus and bounded nesting. |
@@ -250,6 +250,7 @@ When a design has no clear answer, the chief can run an **arena**. You can also 
 ## What's new
 
 - **A task can wait for other tasks.** Before you use waits, run `claude plugin update sage@sage` (see To update sage), then restart every session that was already open: an older session still merges a waiting task. Ask the sage to make a task wait for others of the same project, for example "T8 waits for T7" (`task add --waits T7`, or `task <T> set waits=T7`). The task starts its build only after each task that it waits for is merged or concluded, and it does not merge before that, but its design and PE can run meanwhile. A wait on an abandoned task is never met: the sage then asks you to remove or change it. Tasks of one pull request that wait for each other merge together when all of them pass; a task of another pull request, or an abandoned one, never meets a wait. The sage refuses a loop of waits when it is written. `status` and `sage task <T>` show what each task waits for. This is the first part of programs; the board shows waits later. An older sage refuses to write a logbook with the new column, so it loses no value. To merge two tasks on one pull request, build both under the first task. The waiting task takes the same `pr=` and records its own verdicts with `--pr`, and gets its wait after its build. It moves to merged after the first one. Autopilot does not merge such a pull request, because its head branch is not a branch of each task: you merge it.
+- **The chief keeps its memory.** In sage mode the chief may write or edit a Markdown file directly in Claude Code's own memory folder (`<config>/projects/<project>/memory/`). Every other file write of the chief stays refused, also a subfolder, `..`, a link or a shell write.
 - **The board has an Agents page.** A second tab in the board header, "Agents (n)", opens `/agents`: every agent that runs now, in all projects, for Claude and Codex, with one box for each project and its Claude agent cap, and each lead's helpers under it. Each agent has a state with a mark and a word: working, waiting for its helpers, may be stuck (30 min with no hook activity), running long (more than 2 times the usual time of its role in the project), helper stopped while its run is still open, or running (Codex, with no activity record yet). The rows that need a look come first. The sage hook now marks each agent slot with the run id from the brief's first line, so that the page joins a slot to its run exactly. See [The Agents page](#the-agents-page).
 - **The board has a project picker, a filter bar and a step line for each task.** One button with the current project opens a list that you can search: by the shown name, the GitHub repository (upstream or origin), the folder, the logbook key, and on the Mac's own page also the folder's full path (a tunnel viewer and the offline file get no paths). A screen reader hears the count of matches. The list closes when the focus leaves it. A match on a name that is not the shown name says which name it matched. The list has the groups Needs you, Active in the last 14 days, Idle and Archived (folded). Next to the button, a chip for each project that needs you takes you there in one tap. Keys: "/" opens the list, the arrows move, Enter chooses and Esc closes. Each row's second line says where the project is: its GitHub repository as owner/repo, or "no GitHub remote", then its folder. When two projects would look the same, the line starts with the end of the path, as far as the two differ (for example …/clone-b/sage). An unreadable logbook's row says why in plain words. A chosen archived project has an Archived mark. The board keeps your choice in the address (`#p=`) and in the browser. On a phone the list opens from the bottom, with a Close button. The filter bar has Who (All, Claude or Codex), Priority (P0 to P3, or none) and Kind. The Claude and Codex logbooks of one checkout are now one project, and each card says which provider's logbook holds it. Two clones at two paths stay two projects, and when the logbooks of one key name different checkouts, the board keeps them apart and says so. Each card shows its steps in plain words, for example Plan › Build › Review 1 of 2 › Review 2 of 2 › Merge. A card that is not in the backlog then shows a "Now" or "Needs you" line and a "Next" line. A backlog card shows only its steps, and its "Needs you" line when it needs you. A repair shows as "Repair, round 1 of 3", then "Review again"; an investigation shows Plan › Investigate › Evidence review › Conclude. A question for you shows once, in the "Needs you" line. A step says "running now" (▶) only while a run of the task runs; a current step that no agent runs says "no agent at work" (▷); an open gate makes the current step "needs you" (!). A run with no change in its logbook for 24 h shows "may have stopped" (⧗) on the step, the Now line and its agent pill, and it is not counted as an agent at work. "Needs you" means an open gate, a design that waits for your answer, or a verified PR that waits for your merge: a held task or a replan waits for the chief until it asks you. When all review cycles are clean, the Now line says the reviews are done and Next says that the chief checks the verdicts, then the merge. The backlog folds after the project and the filters are applied ("Show 3 more tasks"), and never when 6 or fewer cards show. A live update no longer resets the page: the server sends one only when the page changed, and the page keeps its scroll, its focus, its open folds and the open list with its search. The theme follows your system until you choose one, with no flash at load. The first `status` line names the project as the board does. For QA, `node scripts/board-sample.mjs <empty folder>` writes sample logbooks. The board stays read-only: ask the sage to change a priority or a kind.
 - **Project names, archived projects, and a priority and a kind for each task.** Ask the sage to name a project, and the board shows that name in place of the folder name (`sage config name="<name>"`, 1 to 60 characters, kept in the project's own logbook). Without a name, the board shows the GitHub repository of the checkout's `upstream` remote, then of `origin`, then the folder. Ask the sage to archive a project (`sage config archived=yes`), and the board folds it into an Archived group, with a count of what needs you there. The board's scope (`show board for <name>`) takes the name that the board shows. A bad name or archived value in a hand-edited logbook is a warning on the board, which then shows the project without it. Each task can have a priority (P0 to P3; none by default, and it sorts last) and one kind (design, ui, orchestration, optimization, bug-fix, logbook, docs, security, providers or checks), which show as tags on its card: `task add --priority --kind`, or `task <T> set priority=` and `kind=`. The board stays read-only. An older sage refuses to write a logbook with the new columns, so it loses no value: update sage in each session.
@@ -387,7 +388,48 @@ The [board service guide](packages/sage-board/README.md) gives local startup, st
 
 ## Principles
 
-A principle is a short rule for one kind of moment, for example "test behaviour, not implementation" when you change a test. There are 25. My own versions win over pstack's where both exist.
+A principle is a short rule for one kind of moment, for example "test behaviour, not implementation" when you change a test.
+
+<!-- The principles table comes from principles/ and upstream/pstack/: edit them there, then run npm run build. -->
+
+There are 25 principles: 24 are pstack's, by Lauren Tan (MIT), and 1 is sage's own. Where sage has an adapted version of a pstack principle, sage uses it.
+
+<details>
+<summary><strong>All 25 principles</strong></summary>
+
+| Principle | Apply when | Text |
+| --- | --- | --- |
+| attack-the-premise | two or more fixes that share one premise have failed the same check or review | pstack, adapted |
+| boundary-discipline | reviewing or writing validation, error handling or framework adapters | pstack, adapted |
+| build-the-lever | any non-trivial work, not just bulk work: edits, migrations, analyses, checks | pstack |
+| contextualize-and-write-for-the-reader | writing anything someone else will read later: a design, a handoff, findings, a report, a verification, a brief, a reply | sage's own |
+| encode-lessons-in-structure | writing the same instruction a second time, or noticing a correction that keeps recurring | pstack, adapted |
+| exhaust-the-design-space | a new interaction or an architectural choice has no precedent in the code | pstack, adapted |
+| experience-first | a product, UX or scope trade-off comes up | pstack, adapted |
+| explain-the-number | before you trust, report, or act on a number you measured: a speedup, a regression, a throughput, a latency, or an eval result | pstack |
+| fix-root-causes | debugging a failure or repairing a finding | pstack, adapted |
+| foundational-thinking | before writing logic, when choosing core types and data structures or ordering scaffold against features | pstack, adapted |
+| guard-the-context-window | context is filling up: large outputs, long files, repeated reads, fan-out planning | pstack |
+| laziness-protocol | refactoring, judging a diff's size, or tempted to add an abstraction, a layer or a threaded signal | pstack, adapted |
+| make-operations-idempotent | designing commands, lifecycle steps, or processing loops that run amid crashes, restarts, and retries | pstack |
+| migrate-callers-then-delete-legacy-apis | a change introduces a new internal API while callers of the old one still exist | pstack, adapted |
+| minimize-reader-load | reviewing or shaping code that is hard to follow | pstack, adapted |
+| model-the-domain | writing stateful logic, or when code branches a lot or repeats a shape assumption across files | pstack |
+| never-block-on-the-human | tempted to ask "should I do X?" about reversible work | pstack, adapted |
+| outcome-oriented-execution | during planned rewrites and migrations with explicit phase boundaries | pstack |
+| prove-it-works | before declaring a task done, or when judging a claim that something works | pstack, adapted |
+| redesign-from-first-principles | integrating a new requirement into an existing design | pstack |
+| separate-before-serializing-shared-state | concurrent actors might write to the same file, branch, key, or state object | pstack |
+| sequence-verifiable-units | multi-step work (a sweep, a migration, a run of similar edits) or the order of commits in a change | pstack, adapted |
+| subtract-before-you-add | ordering an addition, a refactor or a rewrite | pstack, adapted |
+| test-behavior-not-implementation | writing, changing or keeping a test | pstack, adapted |
+| type-system-discipline | designing types, reviewing a function signature, or writing code in any statically-typed language | pstack |
+
+Every principle except sage's own is pstack's, by Lauren Tan (MIT). "pstack" is pstack's text as it is, from `upstream/pstack/`. "pstack, adapted" means that sage changed the wording: it is shorter, and it follows sage's writing standard. Its `upstream:` fingerprint records which pstack text it was checked against. "sage's own" has no pstack source.
+
+</details>
+
+<!-- The end of the principles table. -->
 
 Agents seldom load a skill by themselves, so a **hook** gives the principle at the moment it applies, once per session.
 
@@ -404,41 +446,6 @@ Agents seldom load a skill by themselves, so a **hook** gives the principle at t
 
 The hook also has **one check**, the stop check. When the agent tries to finish, the code changed, and no check ran after the change, it stops the agent once. The agent must run a check or say what it did not verify.
 
-<details>
-<summary><strong>All 25 principles</strong></summary>
-
-| Principle | Apply when | Text |
-| --- | --- | --- |
-| attack-the-premise | two or more fixes that share one premise failed the same check | mine |
-| boundary-discipline | writing or reviewing validation, error handling or adapters | mine |
-| build-the-lever | any non-trivial work: build the tool that does it or proves it | pstack |
-| contextualize-and-write-for-the-reader | writing anything that someone reads later | mine |
-| encode-lessons-in-structure | you write the same instruction a second time | mine |
-| exhaust-the-design-space | a new interaction or architecture has no precedent | mine |
-| experience-first | a product, UX or scope trade-off comes up | mine |
-| explain-the-number | before you trust or report a number you measured | pstack |
-| fix-root-causes | debugging a failure or repairing a finding | mine |
-| foundational-thinking | before writing logic: types, data, order of work | mine |
-| guard-the-context-window | the context fills up with large outputs or many reads | pstack |
-| laziness-protocol | refactoring, judging a diff's size, or adding a layer | mine |
-| make-operations-idempotent | commands and loops that must survive crashes and retries | pstack |
-| migrate-callers-then-delete-legacy-apis | a new internal API replaces an old one | mine |
-| minimize-reader-load | code is hard to follow | mine |
-| model-the-domain | stateful logic, or the same shape assumed in many files | pstack |
-| never-block-on-the-human | tempted to ask "should I?" about reversible work | mine |
-| outcome-oriented-execution | a planned rewrite or migration in phases | pstack |
-| prove-it-works | before declaring a task done | mine |
-| redesign-from-first-principles | a new requirement meets an existing design | pstack |
-| separate-before-serializing-shared-state | several actors may write the same file, branch or key | pstack |
-| sequence-verifiable-units | multi-step work, and the order of commits | mine |
-| subtract-before-you-add | ordering an addition, a refactor or a rewrite | mine |
-| test-behavior-not-implementation | writing, changing or keeping a test | mine |
-| type-system-discipline | designing types or code in a typed language | pstack |
-
-"mine" is my rewrite of pstack's principle, or my own (contextualize-and-write-for-the-reader). "pstack" is pstack's text as it is.
-
-</details>
-
 ## Following pstack
 
 pstack changes often. sage follows it so that you don't have to.
@@ -451,8 +458,8 @@ pstack changes often. sage follows it so that you don't have to.
 </a>
 
 1. `upstream/pstack/` holds pstack's principles and its MIT licence, at the commit in `upstream/pstack.json`.
-2. The build takes each pstack principle as it is, unless `principles/` has my version with the same name.
-3. Every Monday, a workflow brings pstack up to date, rebuilds, and runs the checks and tests. The update merges by itself, unless pstack changed a principle that I rewrote. Then its pull request waits for me, with the change listed.
+2. The build takes each pstack principle as it is, unless `principles/` has sage's adapted version with the same name.
+3. Every Monday, a workflow brings pstack up to date, rebuilds, and runs the checks and tests. The update merges by itself, unless pstack changed a principle that sage adapted. Then its pull request waits for me, with the change listed.
 
 Only principles come in for now. pstack's own modes (poteto mode, orchestrate, autopilot) stay out, because sage mode is the orchestration layer here. Each other pstack skill comes in only when it works in Claude Code and has a test.
 
@@ -512,7 +519,7 @@ While the server runs, your claude.ai account can start sessions on your compute
 | `plugins/sage/skills/` | The skills: one per principle (generated), the writing standard and the README guide (generated), `remote-control`, `sage-help`, the state tool `sage`, and `report`. |
 | `plugins/sage/hooks/` | Built Claude hooks. |
 | `plugins/sage-codex/` | Built Codex plugin, without Claude hooks or agents. |
-| `principles/` | My principles: my own, and my versions of pstack's. |
+| `principles/` | Principles: pstack's, most of them adapted to sage's writing standard, and sage's own. |
 | `upstream/pstack/` | pstack's principles, kept up to date by the sync. |
 | `writing/ste-80.md` | The writing standard: about 80% of ASD-STE100, Simplified Technical English. |
 | `writing/readme.md` | The README guide: how to write a project README, with examples and a checklist. |
