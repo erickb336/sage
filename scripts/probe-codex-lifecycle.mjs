@@ -1388,7 +1388,8 @@ data: ${JSON.stringify(event)}
         otherFailureKindsVerified: false});
     }
     if(workflow) {
-      const evidence={scenario:workflow,transitions:workflowTransitions,results:workflowResults,journal:integrated.readJournal(),book:integrated.readLogbook(),stops:integrated.readStops(),native:{child:childThread,parent:rootThread,childRequests,rootRequests,verified,code:result.code,signal:result.signal,exactMessages,completedTurns,failedTurns,unexpectedItems,malformedEvents,rejectedRequests},baselineHashes:offStop ? [createHash("sha256").update(workflowBaseline).digest("hex"),createHash("sha256").update(integrated.readLogbookBytes()).digest("hex")] : null};
+      const offIdentity=offStop ? integrated.verifyUnmanagedIdentity({parent:rootThread,child:childThread,start:start[0],stop:stop[0]}) : null;
+      const evidence={offIdentity,scenario:workflow,transitions:workflowTransitions,results:workflowResults,journal:integrated.readJournal(),book:integrated.readLogbook(),stops:integrated.readStops(),native:{child:childThread,parent:rootThread,childRequests,rootRequests,verified,code:result.code,signal:result.signal,exactMessages,completedTurns,failedTurns,unexpectedItems,malformedEvents,rejectedRequests},baselineHashes:offStop ? [createHash("sha256").update(workflowBaseline).digest("hex"),createHash("sha256").update(integrated.readLogbookBytes()).digest("hex")] : null};
       verifyWorkflowEvidence(evidence);
       if(process.env.SAGE_WORKFLOW_EVIDENCE) writeFileSync(process.env.SAGE_WORKFLOW_EVIDENCE,JSON.stringify(evidence,null,2)+"\n");
       print({type:"workflow_evidence",scenario:workflow,verified,transitions:workflowTransitions,simulatedModel:true,automaticSage:false});

@@ -136,6 +136,7 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
         const last=messages.at(-1)?.payload.content?.filter(part=>part.type==='output_text').map(part=>part.text).join('\\n');
         appendFileSync(${JSON.stringify(join(root, "stop-receipts.jsonl"))}, JSON.stringify({decision: result.decision,
           ...(last===undefined ? {} : {reportHash:createHash("sha256").update(last).digest("hex"), session:input.session_id,child:input.agent_id,turn:input.turn_id}),
+          ...(${JSON.stringify(workflow === "--sage-off-stop")} ? {transcript:input.agent_transcript_path} : {}),
           reservations: state.reservations.length, bindings: state.bindings.length,
           completions: state.completions?.length ?? 0}) + '\\n');
         return result;
@@ -150,8 +151,21 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
     .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
   const receiptConfig = (updateTask || workflow ? '[mcp_servers.sage_preparation.tools.sage_update_task]\napproval_mode="approve"\n' : "") + (nestedReport ? '[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n' : "") + '[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
-  const { readAssignmentTurn, readNativeRecovery } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
-  return { reviewTarget, verifyNestedAssignments(expected) {
+  const { readAssignmentTurn, readNativeRecovery, readInitialSession, readChildTurn } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
+  return { verifyUnmanagedIdentity({ parent, child, start, stop }) {
+    const receipts=readFileSync(join(root,"stop-receipts.jsonl"),"utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(receipts.length,1);
+    // The MCP callback path selects the file. The trusted reader authenticates it against the
+    // independent native parent/child and derives the expected turn from its initial native record.
+    const first=readInitialSession(receipts[0].transcript,{sessionsDir:options.sessionsDir});
+    const found=readChildTurn(receipts[0].transcript,{sessionsDir:options.sessionsDir},{session:parent,child,turn:first.turn});
+    assert.equal(found.initialTurn,first.turn);assert.equal(found.turn,first.turn);
+    assert.equal(found.metadata.parent_thread_id,parent);assert.equal(found.metadata.agent_path,"/root/probe_child");
+    assert.equal(start.metadata.id,child);assert.equal(start.metadata.session_id,parent);assert.equal(start.metadata.parent_thread_id,parent);
+    assert.equal(start.agent_id,child);assert.equal(start.session_id,parent);
+    assert.equal(stop.agent_id,child);assert.equal(stop.session_id,parent);assert.equal(stop.turn_id,found.turn);
+    return {session:found.metadata.session_id,parent:found.metadata.parent_thread_id,child:found.metadata.id,turn:found.turn,path:found.metadata.agent_path};
+  }, reviewTarget, verifyNestedAssignments(expected) {
     const state=readAdmission(options.directory);
     for(const {child,parent,path,message} of expected) {
       const bound=state.bindings.find(row=>row.child===child);assert(bound);

@@ -16,6 +16,13 @@ export function verifyWorkflowEvidence(evidence) {
   assert.equal(state.reservations.length,off?0:1);assert.equal(state.bindings.length,off?0:1);
   assert.equal((state.completions??[]).length,off?0:1);assert.equal((state.reports??[]).length,off||escape?0:1);
   if(off) {
+    // This is a consistency join, not authentication of replayed JSON. The native caller derives
+    // offIdentity through readInitialSession/readChildTurn before it invokes this helper.
+    const identity=evidence.offIdentity,uuid=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+    for(const key of ["session","parent","child","turn"]) assert.match(identity[key],uuid);
+    assert.equal(identity.parent,native.parent);assert.equal(identity.session,native.parent);assert.equal(identity.child,native.child);
+    assert.notEqual(identity.turn,identity.child);assert.notEqual(identity.turn,identity.session);assert.equal(identity.path,"/root/probe_child");
+    assert.equal(stops[0].child,identity.child);assert.equal(stops[0].session,identity.session);assert.equal(stops[0].turn,identity.turn);
     assert.equal(evidence.baselineHashes.length,2);assert.match(evidence.baselineHashes[0],/^[a-f0-9]{64}$/);assert.equal(evidence.baselineHashes[0],evidence.baselineHashes[1]);assert.equal(state.modes.at(-1).sage,false);
     assert.equal(book.runs[0].status,"running");assert.equal(book.runs[0].ended,"");assert.equal(book.runs[0].report,"");
     assert.equal(stops[0].decision,"unmanaged");assert.equal(stops[0].completions,0);
