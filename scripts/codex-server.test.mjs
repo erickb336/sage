@@ -2857,6 +2857,18 @@ test("native recorded run requires a saved receipt and only finishes its assigne
   assert.deepEqual(f.core.readAdmission(f.options.directory), journal);
 });
 
+test("native recorded run leaves its tokens to a later run done, which adds them and keeps the status and end time (T346)", async t => {
+  const f = await runReportFixture(t); f.record();
+  const first = f.finish();
+  const before = f.tool.read(f.logbook, "runs")[0];
+  assert.deepEqual([before.status, before.tokens, before.report], ["done", "", first.report]);
+  assert.equal(f.cli("run", "done", "R1", "--status", "done", "--tokens", "52000"), "R1 done · added tokens");
+  assert.deepEqual(f.tool.read(f.logbook, "runs")[0], { ...before, tokens: "52000" });
+  assert.throws(() => f.cli("run", "done", "R1", "--status", "done", "--tokens", "60000"), /R1 already ended as done with its tokens, and --tokens never replaces it/);
+  assert.throws(() => f.cli("run", "done", "R1", "--status", "failed", "--tokens", "60000"), /R1 already ended as done with its tokens/);
+  assert.deepEqual(f.tool.read(f.logbook, "runs")[0], { ...before, tokens: "52000" });
+});
+
 test("native recorded run rejects foreign agents forged paths hashes scopes and unsupported clients", async t => {
   const f = await runReportFixture(t); f.record();
   const bytes = readFileSync(join(f.logbook, "runs.tsv"), "utf8");
@@ -3043,7 +3055,7 @@ test("T53: native review target rejects missing cycles foreign roles and changed
   for (const request of [missing, { ...f.input, reviewCycle: 0 }, { ...f.input, reviewCycle: 11 },
     { ...f.input, reviewCycle: "1" }, { ...f.input, role: "lead" }, { ...f.input, role: "qa" },
     { ...f.input, task: "T2" }, { ...f.input, sha: receipt.review.sha }]) assert.throws(() => f.prepare(request));
-  f.cli("run", "done", "R1", "--status", "done");
+  f.cli("run", "done", "R1", "--status", "done", "--tokens", "1");
   const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
   await assert.rejects(f.evaluate(policy));
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
@@ -3155,7 +3167,7 @@ async function preparedFollowupFixture(t, role = "lead", beforeComplete) {
   const prior = f.core.readAdmission(f.options.directory).bindings[0];
   if (beforeComplete) await beforeComplete(f);
   f.core.completeAdmission(f.options.directory, prior);
-  f.assignmentCli('run', 'done', f.input.run, '--status', 'done');
+  f.assignmentCli('run', 'done', f.input.run, '--status', 'done', '--tokens', '1');
   f.assignmentCli('run', 'add', 'T1', '--role', role);
   const request = { ...f.input, run: 'R4', name: 'continued_lead', previous: prior.assignment };
   const prepared = f.api.prepareNativeTask(request, f.native(session), f.options);
@@ -3271,7 +3283,7 @@ test('native follow-up preparation requires a completed predecessor owned by the
   const f = await composedPolicyFixture(t); f.bindLead();
   const previous = f.core.readAdmission(f.options.directory).bindings[0].assignment;
   // The next run is independently valid; only admission completion is absent.
-  f.assignmentCli('run','done','R1','--status','done'); f.assignmentCli('run','add','T1','--role','lead');
+  f.assignmentCli('run','done','R1','--status','done', '--tokens', '1'); f.assignmentCli('run','add','T1','--role','lead');
   const request = {...f.input,run:'R4',name:'continued',previous};
   assert.throws(()=>f.api.prepareNativeTask(request,f.native(session),f.options));
   const bound = f.core.readAdmission(f.options.directory).bindings[0];
@@ -3775,10 +3787,10 @@ test('native run creation shares the CLI single-writer rule and never revives a 
   f.cli('run', 'add', 'T1', '--role', 'designer', '--branch', input.branch);
   assert.throws(() => f.createRun(input), /one writer/);
   assert.throws(() => f.createRun({ ...input, branch: '' }), /needs --branch/);
-  f.cli('run', 'done', 'R1', '--status', 'done');
+  f.cli('run', 'done', 'R1', '--status', 'done', '--tokens', '1');
   const first = f.createRun(input); assert.equal(first.run.id, 'R2');
   assert.throws(() => f.cli('run', 'add', 'T1', '--role', 'implementer', '--branch', input.branch), /one writer/);
-  f.cli('run', 'done', 'R2', '--status', 'done');
+  f.cli('run', 'done', 'R2', '--status', 'done', '--tokens', '1');
   assert.deepEqual(f.createRun(input), { ...first, decision: 'already-created' });
   assert.equal(f.tool.read(f.logbook, 'runs')[1].status, 'done');
   const next = f.createRun({ ...input, request: turns[2] }); assert.equal(next.run.id, 'R3');
@@ -3853,7 +3865,7 @@ test('native run creation retains merged lead uniqueness and project capacity', 
   const next = {...f.input, request: turns[2], task: 'T4'};
   assert.throws(() => f.createRun(next), /3 running lead runs/);
   assert.equal(f.tool.read(f.logbook, 'runs').length, 3);
-  f.cli('run', 'done', 'R1', '--status', 'done');
+  f.cli('run', 'done', 'R1', '--status', 'done', '--tokens', '1');
   assert.equal(f.createRun(next).run.task, 'T4');
   assert.equal(f.tool.read(f.logbook, 'runs').filter(run => run.status === 'running' && run.role === 'lead').length, 3);
 });
@@ -3872,7 +3884,7 @@ test('native run creation retains merged role and lead task eligibility rules', 
 
 test('T57: held tasks refuse new runs while exact historical retries remain unchanged', async t => {
   const f = await runCreationFixture(t), first = f.createRun();
-  f.cli('run', 'done', 'R1', '--status', 'done');
+  f.cli('run', 'done', 'R1', '--status', 'done', '--tokens', '1');
   for (const state of ['briefed', 'building', 'held']) f.cli('task', 'T1', 'set', `state=${state}`);
   const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
   const receipts = readdirSync(join(f.logbook, 'run-requests'));
@@ -3891,7 +3903,7 @@ test('T57: run framing matches CLI normalization and preserves saved model round
   const cli = f.tool.read(f.logbook, 'runs')[0];
   for (const key of ['task', 'role', 'round', 'candidate', 'branch', 'status', 'model']) assert.equal(first.run[key], cli[key]);
   assert.equal(first.run.model, '');
-  f.cli('run', 'done', first.run.id, '--status', 'done');
+  f.cli('run', 'done', first.run.id, '--status', 'done', '--tokens', '1');
   f.cli('config', 'cycles.small=3');
   const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
   assert.deepEqual(f.createRun({ ...f.input, role: 'qa', candidate: 'candidate-a' }), { ...first, decision: 'already-created' });
@@ -3969,7 +3981,7 @@ test('T57: core historical run receipts preserve the selected model after provid
   cli('config', 'model.qa.small=first-model');
   const input = { ...f.input, role: 'qa', project: f.options.projectDirectory, owner: 'test-owner' };
   const first = tool.createRequestedRun(input, f.env); assert.equal(first.run.model, 'first-model');
-  cli('run', 'done', first.run.id, '--status', 'done'); cli('config', 'model.qa.small=second-model');
+  cli('run', 'done', first.run.id, '--status', 'done', '--tokens', '1'); cli('config', 'model.qa.small=second-model');
   const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
   assert.deepEqual(tool.createRequestedRun(input, f.env), { ...first, decision: 'already-created' });
   assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
@@ -4001,7 +4013,7 @@ test('T57: historical run receipts preserve a nonzero round and timestamp after 
   const first = f.createRun();
   assert.equal(first.run.round, '1');
   assert.equal(first.run.started, '2026-01-02T03:04:05Z');
-  f.cli('run', 'done', first.run.id, '--status', 'done');
+  f.cli('run', 'done', first.run.id, '--status', 'done', '--tokens', '1');
   const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
   t.mock.timers.setTime(Date.parse('2026-02-03T04:05:06Z'));
   assert.deepEqual(f.createRun(), { ...first, decision: 'already-created' });
@@ -4422,7 +4434,7 @@ test('T61: task reader returns exact metadata, stable tokens and off-mode reads 
   const row = f.assignmentTool.read(f.assignmentLogbook, 'tasks')[0], value = f.readTask();
   assert.deepEqual(value, {task:row,version:createHash('sha256').update(JSON.stringify(row)).digest('hex')});
   assert.deepEqual(f.readTask(), value);
-  f.assignmentCli('run','done','R1','--status','done');
+  f.assignmentCli('run','done','R1','--status','done', '--tokens', '1');
   assert.deepEqual(f.readTask(), value, 'run evidence is outside the task metadata token');
   f.assignmentCli('task','T1','set','title=Changed recorded task');
   const changed = f.readTask(); assert.notEqual(changed.version,value.version); assert.equal(changed.task.title,'Changed recorded task');
@@ -5334,7 +5346,7 @@ async function nestedDescendantContinuationFixture(t) {
   const f = await descendantAuthorityFixture(t);
   appendReport(f, reportText, f.worker, turns[2]);
   f.policy.completeChild({ ...f.stop, agent_id: f.worker, turn_id: turns[2] }, f.native(f.worker));
-  f.assignmentCli('run', 'done', 'R4', '--status', 'done');
+  f.assignmentCli('run', 'done', 'R4', '--status', 'done', '--tokens', '1');
   f.assignmentCli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-fixture');
   const previous = f.core.readAdmission(f.options.directory).bindings.find(row => row.child === f.worker).assignment;
   const prepared = f.api.prepareNativeTask({ task: 'T1', run: 'R5', name: 'continued_worker', role: 'implementer',
@@ -5607,7 +5619,7 @@ for (const boundary of ['intent', 'tasks', 'runs', 'decisions', 'receipt', 'clea
 test('T13: disruptive update retires unreserved preparations and permits fresh task generation', async t => {
   const f = await nativeTaskUpdateFixture(t);
   appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
-  f.assignmentCli('run', 'done', 'R1', '--status', 'done');
+  f.assignmentCli('run', 'done', 'R1', '--status', 'done', '--tokens', '1');
   f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
   f.api.prepareNativeTask({ ...f.input, run: 'R4', name: 'not_yet_started' }, f.native(session), f.options);
   const old = f.core.readAdmission(f.options.directory).preparations.find(row => row.name === 'not_yet_started');
@@ -5639,7 +5651,7 @@ test('T13: disruptive update sees unresolved unbound work from another owner ses
 test('T13: preparation pins task generation before capture across branch away and back', async t => {
   const f = await nativeTaskUpdateFixture(t);
   appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
-  f.assignmentCli('run', 'done', 'R1', '--status', 'done');
+  f.assignmentCli('run', 'done', 'R1', '--status', 'done', '--tokens', '1');
   f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
   f.assignmentCli('task', 'T1', 'set', 'branch=codex/t1-original');
   const fs = (await import('node:fs')).default;
@@ -5677,7 +5689,7 @@ test('T13: preparation server exposes authenticated task updates and historical 
 
 async function taskUpdateReadinessFixture(t) {
   const f = await reviewPreparationFixture(t);
-  f.cli('run', 'done', 'R1', '--status', 'done');
+  f.cli('run', 'done', 'R1', '--status', 'done', '--tokens', '1');
   for (const state of ['briefed', 'building', 'reviewing', 'verifying']) f.cli('task', 'T1', 'set', `state=${state}`);
   const head = f.git('rev-parse', 'HEAD');
   for (const kind of ['checks-pass', 'review-clean', 'qa-pass']) f.cli('verdict', 'T1', '--sha', head, '--kind', kind);
@@ -5754,7 +5766,7 @@ test('T13: retired review terminal evidence uses exact candidate and coherent hi
   const update = (changes, request) => updateNativeTask({ request, task: 'T1', changes,
     version: f.tool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T1' }, f.env).version }, f.native(session), f.options);
   update({ title: 'Before new review run' }, 'a7777777-7777-4777-8777-777777777777');
-  f.cli('run', 'done', 'R1', '--status', 'done'); f.cli('run', 'add', 'T1', '--role', 'code-reviewer');
+  f.cli('run', 'done', 'R1', '--status', 'done', '--tokens', '1'); f.cli('run', 'add', 'T1', '--role', 'code-reviewer');
   const prepared = f.prepare({ ...f.input, run: 'R2', name: 'later_review' });
   const row = f.core.readAdmission(f.options.directory).preparations.find(value => value.id === prepared.preparation);
   const { taskUpdateHistory } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update-history.mjs')));
@@ -5810,7 +5822,7 @@ test('T13: verified and pr-ready metadata retains fresh readiness and PR require
 test('T13: acknowledgement keeps initial continuation and preparation work fenced until separate release', async t => {
   const f = await nativeTaskUpdateFixture(t);
   appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
-  f.assignmentCli('run', 'done', 'R1', '--status', 'done'); f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
+  f.assignmentCli('run', 'done', 'R1', '--status', 'done', '--tokens', '1'); f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
   const previous = f.core.readAdmission(f.options.directory).bindings[0].assignment;
   const initial = f.api.prepareNativeTask({ ...f.input, run: 'R4', name: 'reserved_after_release' }, f.native(session), f.options);
   const continuation = f.api.prepareNativeTask({ ...f.input, run: 'R4', name: 'continued_after_release', previous }, f.native(session), f.options);
@@ -5940,7 +5952,7 @@ for (const kind of ['initial', 'continuation', 'foreign']) for (const winner of 
   test(`QA-T13-1: real journal CAS loss recomputes ${kind} with ${winner} winner`, async t => {
     const f = await nativeTaskUpdateFixture(t);
     appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
-    f.assignmentCli('run', 'done', 'R1', '--status', 'done');
+    f.assignmentCli('run', 'done', 'R1', '--status', 'done', '--tokens', '1');
     f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
     const state = f.core.readAdmission(f.options.directory), previous = state.bindings[0].assignment;
     const name = `cas_${kind}`, dispatch = { ...state.reservations[0].dispatch, name };
