@@ -289,7 +289,8 @@ const unique = list => list.filter((item, i) => item && list.indexOf(item) === i
  * checkout.txt are one project. A logbook without checkout.txt joins them, with a note: the key holds a hash of the path.
  * Two checkouts of one key stay two projects, with a note: the board never merges on doubt. Two clones at two paths have
  * two keys, so they stay two projects. The display name: the first source that has one wins, with a note when another
- * differs; a project is archived when one of its logbooks is, with a note when another is not.
+ * differs. A project is archived only when all its logbooks are. A joined logbook without checkout.txt never gives the
+ * name or the archive (R1070-1), unless no logbook of the project has checkout.txt.
  */
 function projectGroups(sources) {
   const byName = new Map(), groups = [], notes = [];
@@ -307,36 +308,53 @@ function projectGroups(sources) {
     groups.push({ key: books[0].project.name, books });
   }
   for (const group of groups) {
-    const projects = group.books.map(book => book.project), first = field => projects.map(project => project[field]).find(Boolean) ?? null;
+    const known = group.books.filter(book => book.project.checkout), trusted = known.length ? known : group.books;
+    const projects = trusted.map(book => book.project), first = field => projects.map(project => project[field]).find(Boolean) ?? null;
     const names = unique(projects.map(project => project.displayName));
-    if (names.length > 1) note(group.books, `Two display names: the board shows "${names[0]}" (the first source), not ${names.slice(1).map(other => `"${other}"`).join(", ")}.`);
-    const archived = group.books.filter(book => book.project.archived);
-    if (archived.length && archived.length < projects.length) note(group.books, `Archived in ${keys(archived)} only: the board archives the project.`);
+    if (names.length > 1) note(trusted, `Two display names: the board shows "${names[0]}" (the first source), not ${names.slice(1).map(other => `"${other}"`).join(", ")}.`);
+    const archived = trusted.filter(book => book.project.archived);
+    if (archived.length && archived.length < trusted.length) note(trusted, `Archived in ${keys(archived)} only: the board does not archive the project.`);
     const merged = { name: projects[0].name, displayName: first("displayName"), upstream: first("upstream"), repository: first("repository"), checkout: first("checkout") };
     const full = repoPath(merged.upstream) ?? repoPath(merged.repository), folder = merged.checkout ? basename(merged.checkout) : null;
-    const problem = projects.flatMap(project => project.diagnostics)[0] ?? null;
-    // The quiet second line names the next source of the name (notes, section 2), or says first that there is no GitHub
-    // remote, then the folder; projectGroups gives the path instead when two projects would show the same lines.
-    const remote = merged.displayName ? full : full && `${full.split("/")[0]}${repoPath(merged.upstream) ? " (upstream)" : ""}`;
+    const all = group.books.map(book => book.project), problem = all.flatMap(project => project.diagnostics)[0] ?? null;
+    // The quiet second line names the next source of the name (notes, section 2): the repository as owner/repo, or first
+    // that there is no GitHub remote, then the folder. Two projects that would show the same lines show the end of their paths.
+    const remote = full ? `${full}${!merged.displayName && repoPath(merged.upstream) ? " (upstream)" : ""}` : null;
     const sub = merged.checkout || remote ? [remote ?? "no GitHub remote", folder && `folder ${folder}`] : [`logbook ${merged.name}`];
     Object.assign(group, {
       // A project that no logbook can name, because every logbook of it is unreadable, is named by its folder, with the
       // reason (the prototype's failure state). One unreadable logbook does not rename what the others name (F-T305-3).
-      name: projects.every(project => project.diagnostics.length) ? merged.name : projectName(merged),
+      name: all.every(project => project.diagnostics.length) ? merged.name : projectName(merged),
       remote, path: merged.checkout ?? null,
-      archived: archived.length > 0, problem,
+      archived: archived.length > 0 && archived.length === trusted.length, problem: problem && plainProblem(problem),
       providers: unique(group.books.map(book => title(standIn(book.source)))),
       sub: unique(sub).join(" · "),
-      // Search matches every name a person may know: the display names, the repositories, the folder, its path and the logbook keys.
-      terms: unique([...names, repoPath(merged.upstream), ...projects.map(project => repoPath(project.repository)), folder, ...projects.map(project => project.checkout), merged.name, ...projects.map(project => project.key)]),
+      // Search matches every name a person may know: the display names, the repositories, the folder and the logbook keys.
+      // The checkout paths are apart: only the Mac's own page carries them (R1069-2).
+      terms: unique([...names, repoPath(merged.upstream), ...all.map(project => repoPath(project.repository)), folder, merged.name, ...all.map(project => project.key)]),
+      paths: unique(all.map(project => project.checkout)),
     });
   }
   // Two projects with the same name and the same second line, such as two clones in two folders of one name: each shows
-  // its checkout's path in place of its folder, so that the picker tells them apart (F-T305-11).
-  const line = group => `${group.name}\n${group.sub}`;
-  for (const group of groups) if (group.path && groups.some(other => other !== group && line(other) === line(group))) group.twin = true;
-  for (const group of groups) if (group.twin) group.sub = `${group.remote ?? "no GitHub remote"} · ${group.path}`;
+  // the end of its checkout's path first, as many folders as tell them apart, so that a cut line keeps the part that differs
+  // (F-T305-11, R1076-4).
+  const lines = new Map(groups.map(group => [group, `${group.name}\n${group.sub}`])), line = group => lines.get(group);
+  const twins = groups.filter(group => group.path && groups.some(other => other !== group && line(other) === line(group)));
+  for (const group of twins) {
+    const others = twins.filter(other => other !== group && line(other) === line(group)), parts = group.path.split(/[\\/]/).filter(Boolean);
+    const end = n => parts.slice(-n).join("/");
+    let n = 1; while (n < parts.length && others.some(other => other.path.split(/[\\/]/).filter(Boolean).slice(-n).join("/") === end(n))) n++;
+    group.sub = `…/${end(n)} · ${group.remote ?? "no GitHub remote"}`;
+  }
   return { groups, notes };
+}
+
+// A logbook that the board cannot read says why in plain words, not as an error code (R1075-6).
+const PLAIN = { EACCES: "has no read permission", EPERM: "has no read permission", ENOENT: "is missing", EISDIR: "is a folder, not a file", ELOOP: "is a link, which the board does not follow", EMFILE: "cannot open now, because too many files are open" };
+function plainProblem(message) {
+  const coded = /^([a-z][\w .-]*): (E[A-Z]+)$/.exec(message) ?? /^()(E[A-Z]+)$/.exec(message);
+  if (!coded) return message;
+  return `${coded[1] ? `its ${coded[1]} file` : "its folder"} ${PLAIN[coded[2]] ?? "cannot be read"}`;
 }
 
 export function buildBoardModel(sources, { now = new Date().toISOString() } = {}) {
@@ -358,7 +376,7 @@ export function buildBoardModel(sources, { now = new Date().toISOString() } = {}
   const projects = groups.map(group => {
     const own = tasks.filter(task => task.group === group.key), live = shown.filter(task => task.group === group.key);
     const last = Math.max(0, ...own.map(recent)), needsOwner = live.filter(task => task.reasons.length).length;
-    return { key: group.key, name: group.name, sub: group.sub, terms: group.terms, providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
+    return { key: group.key, name: group.name, sub: group.sub, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
       list: group.archived ? "archived" : needsOwner ? "needs" : last && at - last <= ACTIVE_DAYS * 86400000 ? "active" : "idle" };
   }).sort((a, b) => LISTS.indexOf(a.list) - LISTS.indexOf(b.list) || (a.list === "needs" ? b.needsOwner - a.needsOwner : 0) || (Date.parse(b.lastActivity ?? 0) || 0) - (Date.parse(a.lastActivity ?? 0) || 0) || a.name.localeCompare(b.name));
   const archived = projects.filter(project => project.archived).map(project => ({ key: project.key, name: project.name, tasks: project.tasks, needsOwner: project.needsOwner }));

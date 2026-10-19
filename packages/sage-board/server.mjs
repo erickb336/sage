@@ -144,8 +144,9 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       (site === undefined || ["none", "same-origin"].includes(site));
   }
 
-  function htmlFor(key) {
-    const html = renderBoardHtml(model, { taskKey: key, snapshot: false, live: true });
+  // The checkout paths go only to the Mac's own page (R1069-2).
+  function htmlFor(key, paths = false) {
+    const html = renderBoardHtml(model, { taskKey: key, snapshot: false, live: true, paths });
     if (Buffer.byteLength(html) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
     return html;
   }
@@ -175,7 +176,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   // so a file event that changes nothing on the page sends nothing, and the page keeps its state.
   function publish(client) {
     try {
-      const payload = { revision: String(revision), html: htmlFor(client.task), stale: model.stale, diagnostics: model.diagnostics };
+      const payload = { revision: String(revision), html: htmlFor(client.task, client.paths), stale: model.stale, diagnostics: model.diagnostics };
       const sent = digest(JSON.stringify([payload.html, payload.stale, payload.diagnostics])).toString("base64");
       if (client.sent === sent) return;
       client.sent = sent;
@@ -276,7 +277,8 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     // The owner's decisions (T216, T229): on the Mac itself the board needs no sign-in. Every other request signs in
     // with the owner's password: also one that a tunnel forwards to the loopback listener, maybe with a loopback Host.
     // Until the owner sets a password, there is no sign-in, so such a request gets 403 (no sign-in can change it).
-    if (onMac(request)) { if (boardHeader) response.setHeader("X-Sage-Board", boardHeader); }
+    const mac = onMac(request);
+    if (mac) { if (boardHeader) response.setHeader("X-Sage-Board", boardHeader); }
     else if (!password) return fail(403, OFF);
     else {
       const signedIn = await authenticated(request);
@@ -291,12 +293,12 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
       if (request.method === "HEAD") return response.end();
       response.flushHeaders();
-      const client = { response, task: selected.task, blocked: false, pending: null, deadline: null, sent: null };
+      const client = { response, task: selected.task, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
     }
     try {
-      const html = htmlFor(selected.task);
+      const html = htmlFor(selected.task, mac);
       securityHeaders(response, html);
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html) });
       response.end(request.method === "HEAD" ? undefined : html);

@@ -171,6 +171,21 @@ test("T216, T229: a request that a private HTTPS tunnel forwards signs in, also 
   assert.match(mac.headers["x-sage-board"], new RegExp(`^id=0123456789abcdef; pid=${process.pid}; started=\\d+$`));
 });
 
+test("R1069-2: the checkout's full path is a search term only on the Mac's own page; a tunnel viewer gets none", async t => {
+  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] }), checkout = join(f.dir, "work", "sample-checkout-folder");
+  mkdirSync(checkout, { recursive: true }); writeFileSync(join(f.project, "checkout.txt"), `${checkout}\n`);
+  const loopback = `127.0.0.1:${f.port}`;
+  // The board reads the logbooks again on a file event; wait until the Mac's page names the checkout's folder.
+  let mac;
+  for (let i = 0; i < 100 && !(mac = await read(f, "/", { rawHeaders: ["Host", loopback] })).body.includes("folder sample-checkout-folder"); i++) await new Promise(wake => setTimeout(wake, 50));
+  assert.ok(mac.body.includes(checkout), "the Mac's own page can search by the path");
+  for (const raw of [["Host", loopback, "X-Forwarded-For", "100.64.0.7", "Authorization", f.authorization], ["Host", "sample.tailnet.ts.net", "Authorization", f.authorization]]) {
+    const remote = await read(f, "/", { rawHeaders: raw });
+    assert.equal(remote.status, 200);
+    assert.ok(remote.body.includes("folder sample-checkout-folder") && !remote.body.includes(checkout), raw.join(" "));
+  }
+});
+
 test("T229: a generic proxy that adds only X-Forwarded-For needs the password, and the board knows no vendor's headers", async t => {
   const f = await fixture(t, { id: "0123456789abcdef" }), loopback = `127.0.0.1:${f.port}`;
   // A proxy of any vendor: a loopback peer, a loopback Host and one X-Forwarded-For header, nothing else.

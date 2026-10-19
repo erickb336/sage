@@ -475,9 +475,9 @@ test("T305: one repository is one project: the logbooks of one key and one check
   assert.deepEqual(apart.notes.map(note => note.message), ["Two projects: claude/sage-43265b and codex/sage-43265b have one logbook key but name different checkouts, so the board keeps them apart."]);
   const clones = twoSources([book([task("T1", "framed")]), book([task("T1", "framed")], { name: "sage-9a9a9a", checkout: "/sample/clone/sage" })], []);
   assert.deepEqual(clones.projects.map(project => [project.key, project.name]).sort(), [["sage-43265b", "sage"], ["sage-9a9a9a", "sage"]], "two clones at two paths stay two projects");
-  assert.deepEqual(clones.projects.map(project => [project.key, project.sub]).sort(), [["sage-43265b", "sample-owner · /sample/work/sage"], ["sage-9a9a9a", "sample-owner · /sample/clone/sage"]], "F-T305-11: two clones in folders of one name show their paths");
+  assert.deepEqual(clones.projects.map(project => [project.key, project.sub]).sort(), [["sage-43265b", "…/work/sage · sample-owner/sage"], ["sage-9a9a9a", "…/clone/sage · sample-owner/sage"]], "F-T305-11, R1076-4: two clones in folders of one name show the end of their paths first, as far as they differ");
   const local = twoSources([book([task("T1", "framed")], { repository: null, checkout: "/sample/a/lab" }), book([task("T1", "framed")], { name: "lab-9a9a9a", repository: null, checkout: "/sample/b/lab" }), book([task("T1", "framed")], { name: "lab-copy-1b1b1b", repository: null, checkout: "/sample/b/lab-copy" })], []);
-  assert.deepEqual(local.projects.map(project => project.sub).sort(), ["no GitHub remote · /sample/a/lab", "no GitHub remote · /sample/b/lab", "no GitHub remote · folder lab-copy"]);
+  assert.deepEqual(local.projects.map(project => project.sub).sort(), ["no GitHub remote · folder lab-copy", "…/a/lab · no GitHub remote", "…/b/lab · no GitHub remote"]);
   // F-T305-3: one unreadable logbook does not rename the project that the other logbook names.
   const broken = twoSources([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([], { diagnostics: ["tasks: damaged table header"] })]);
   assert.deepEqual(broken.projects.map(project => [project.name, project.problem]), [["Sage (sample)", "tasks: damaged table header"]]);
@@ -485,8 +485,18 @@ test("T305: one repository is one project: the logbooks of one key and one check
   const unnamed = twoSources([book([task("T1", "framed")])], [book([], { diagnostics: ["tasks: damaged table header"] })]);
   assert.deepEqual(unnamed.projects.map(project => project.name), ["sage"], "the remote names it");
   const names = twoSources([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([task("T2", "framed")], { displayName: "Other name", archived: true })]);
-  assert.deepEqual([names.projects[0].name, names.projects[0].archived], ["Sage (sample)", true]);
-  assert.deepEqual(names.notes.map(note => note.message), ['Two display names: the board shows "Sage (sample)" (the first source), not "Other name".', "Archived in codex/sage-43265b only: the board archives the project."]);
+  assert.deepEqual([names.projects[0].name, names.projects[0].archived], ["Sage (sample)", false], "R1070-1: archived only when all its logbooks are");
+  assert.deepEqual(names.notes.map(note => note.message), ['Two display names: the board shows "Sage (sample)" (the first source), not "Other name".', "Archived in codex/sage-43265b only: the board does not archive the project."]);
+  const both = twoSources([book([task("T1", "framed")], { archived: true })], [book([task("T2", "framed")], { archived: true })]);
+  assert.equal(both.projects[0].archived, true);
+  // R1070-1: a joined logbook without checkout.txt never gives the name or the archive.
+  const stray = twoSources([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([task("T2", "framed")], { checkout: undefined, displayName: "Sample other name", archived: true })]);
+  assert.deepEqual([stray.projects[0].name, stray.projects[0].archived], ["Sage (sample)", false]);
+  const first = twoSources([book([task("T1", "framed")], { checkout: undefined, displayName: "Sample other name", archived: true })], [book([task("T2", "framed")])]);
+  assert.deepEqual([first.projects[0].name, first.projects[0].archived], ["sage", false], "also when it comes first");
+  // R1075-6: an error code reads as a plain reason.
+  const denied = twoSources([book([task("T1", "framed")])], [book([], { diagnostics: ["tasks: EACCES"] })]);
+  assert.equal(denied.projects[0].problem, "its tasks file has no read permission");
 });
 
 test("T305: the picker's list puts needs you first, then active in the last 14 days, idle and archived, with every name a person may know", () => {
@@ -502,7 +512,8 @@ test("T305: the picker's list puts needs you first, then active in the last 14 d
   assert.deepEqual(withActivity.projects.map(project => [project.list, project.name, project.needsOwner]), [["needs", "seacc (Council Record)", 1], ["active", "fresh", 0], ["idle", "old", 0], ["idle", "broken-dddddd", 0], ["archived", "gone", 0]]);
   const sdc = withActivity.projects[0];
   assert.equal(sdc.sub, "sample-org/seacc · folder product-demos");
-  assert.deepEqual(sdc.terms, ["seacc (Council Record)", "sample-org/seacc", "sample-owner/seacc", "product-demos", "/sample/work/sdc/product-demos", "product-demos-1c0254", "claude/product-demos-1c0254"]);
-  assert.deepEqual(withActivity.projects.map(project => project.sub), ["sample-org/seacc · folder product-demos", "no GitHub remote · folder fresh", "sample-owner · folder old", "no GitHub remote · folder broken", "no GitHub remote · folder gone"], "F-T305-11: no GitHub remote comes first, so the line never cuts it off");
+  assert.deepEqual(sdc.terms, ["seacc (Council Record)", "sample-org/seacc", "sample-owner/seacc", "product-demos", "product-demos-1c0254", "claude/product-demos-1c0254"]);
+  assert.deepEqual(sdc.paths, ["/sample/work/sdc/product-demos"], "R1069-2: the paths are apart from the terms");
+  assert.deepEqual(withActivity.projects.map(project => project.sub), ["sample-org/seacc · folder product-demos", "no GitHub remote · folder fresh", "sample-owner/old · folder old", "no GitHub remote · folder broken", "no GitHub remote · folder gone"], "F-T305-11: no GitHub remote comes first, so the line never cuts it off; R1071-6: owner/repo, not the owner alone");
   assert.equal(withActivity.projects[3].problem, "tasks: damaged table header", "an unreadable logbook is named by its folder, with the reason");
 });

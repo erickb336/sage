@@ -92,14 +92,15 @@ test("T218, T305: the page keeps all its code in one <style> and two <script>s w
   }
 });
 
-test("T218: the backlog shows the newest 6 tasks, then a Show all fold that needs no script", () => {
+test("T218: the backlog shows the newest 6 tasks, then a fold that needs no script; R1075-2: its words count the folded tasks", () => {
   const tasks = Array.from({ length: 8 }, (_, i) => row(`T${i + 1}`, "framed"));
   const decisions = tasks.map((task, i) => ({ at: `2026-10-0${i + 1}T10:00:00Z`, task: task.id, decision: "task framed", why: "sample" }));
   const html = renderBoardHtml(sample(tasks, { decisions }));
   const backlog = /<section class="col" aria-label="Backlog" data-col="backlog" data-scroll="col-backlog">([\s\S]*?)<\/section>/.exec(html)[1];
   const [shown, folded] = backlog.split('<details class="rest" data-key="fold-backlog">');
   assert.deepEqual([...shown.matchAll(/<span class="id">(T\d+)<\/span>/g)].map(m => m[1]), ["T8", "T7", "T6", "T5", "T4", "T3"]);
-  assert.match(folded, /^<summary id="sum-fold-backlog"><span data-all>Show all 8<\/span><span class="faint" data-more> · 2 more, newest activity first<\/span><\/summary>/);
+  assert.match(folded, /^<summary id="sum-fold-backlog"><span data-more>Show 2 more tasks<\/span><\/summary>/);
+  assert.deepEqual([...backlog.matchAll(/data-i="(\d+)"/g)].map(m => m[1]), ["0", "1", "2", "3", "4", "5", "6", "7"], "each card has its place, so the page script folds after the filters");
   assert.deepEqual([...folded.matchAll(/<span class="id">(T\d+)<\/span>/g)].map(m => m[1]), ["T2", "T1"]);
   assert.match(backlog, /<h2>Backlog <span class="n">8<\/span><\/h2>/);
 });
@@ -145,10 +146,12 @@ test("T305: the step line shows the ledger's verdicts on the newest reviewed hea
   assert.ok(html.includes("<b>Now:</b> No agent works on review cycle 1 of 1 now. The board does not know the PR&#39;s last commit."));
   assert.ok(!html.includes("PR head not recorded"), "no jargon");
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks.find(t => t.id === "T1").key });
-  assert.ok(page.includes(`last commit <span class="standin" title="The commit of the newest verdict for this PR. The PR&#39;s own last commit is not recorded.">ccccccc</span>`));
+  assert.ok(page.includes(`last commit <span class="standin" tabindex="0" title="The commit of the newest verdict for this PR. The PR&#39;s own last commit is not recorded." data-why="The commit of the newest verdict for this PR. The PR&#39;s own last commit is not recorded.">ccccccc<span class="vh">`));
   assert.ok(page.includes('<div class="parts"><span class="part p-done"><span aria-hidden="true">✓</span> checks: done</span><span class="part p-run"><span aria-hidden="true">▶</span> code review: running now</span><span class="part p-fail"><span aria-hidden="true">✗</span> QA: failed</span></div>'));
   assert.ok(!page.includes('class="step '), "the old legend of cycle chips is gone");
-  assert.ok(page.includes('<span class="prov"><span class="standin" title="Stand-in: the logbook&#39;s source. The run does not record its provider.">Sample</span> ·</span> code-reviewer'));
+  assert.ok(page.includes('<span class="prov"><span class="standin" tabindex="0" title="Stand-in: the logbook&#39;s source. The run does not record its provider." data-why="Stand-in: the logbook&#39;s source. The run does not record its provider.">Sample<span class="vh"> (Stand-in: the logbook&#39;s source. The run does not record its provider.)</span></span> ·</span> code-reviewer'), "R1075-7: the reason takes the focus on the task page");
+  const board = renderBoardHtml(data, { snapshot: false });
+  assert.ok(board.includes('<span class="prov"><span class="standin" title="Stand-in: the logbook&#39;s source. The run does not record its provider." data-why'), "in a card, which is a link, the stand-in takes no focus");
 });
 
 test("T218: the PR links only to https://github.com/<owner>/<repo>, from the remote or the PR observation, and stays text otherwise", () => {
@@ -164,7 +167,7 @@ test("T218: the PR links only to https://github.com/<owner>/<repo>, from the rem
     const page = renderBoardHtml(data, { snapshot: false, taskKey: "sample/project-abcdef/T1" }), text = renderTaskText(data.tasks[0]);
     assert.equal(data.tasks[0].repository, null);
     assert.ok(!page.includes("/pull/7") && !text.includes("/pull/7"));
-    assert.ok(page.includes('title="No link: the project&#39;s GitHub remote is not known.">PR 7</span>'));
+    assert.ok(page.includes('data-why="No link: the project&#39;s GitHub remote is not known.">PR 7<span class="vh">'));
   }
 });
 
@@ -227,7 +230,7 @@ test("T314: a card and a task page show the display name, the priority and the k
   assert.ok(board.includes("seacc (Council Record)</span>") && !board.includes("demos-abcdef</span>"));
   assert.ok(html.includes('<details class="archived" id="board-archived" data-key="archived"><summary id="sum-archived">Archived · 1 project</summary><ul><li>Old &lt;app&gt; · 2 tasks · 1 needs you</li></ul></details>'));
   const list = html.slice(html.indexOf('id="pick-list"'), html.indexOf("</header>"));
-  assert.ok(/data-list="idle">[\s\S]*seacc \(Council Record\)[\s\S]*data-list="archived"><button type="button" class="morebtn" data-archived>Show 1 archived project<\/button>[\s\S]*Old &lt;app&gt;/.test(list), "the archived project is in the picker's folded Archived group");
+  assert.ok(/data-list="idle">[\s\S]*seacc \(Council Record\)[\s\S]*data-list="archived">[\s\S]*Old &lt;app&gt;[\s\S]*<\/ul><button type="button" class="morebtn" id="pick-more" data-showarchived>Show 1 archived project<\/button>/.test(list), "the archived project is in the picker's folded Archived group; R1071-4, R1069-1: its button is after the listbox, with its own attribute");
   assert.ok(!html.slice(html.indexOf('id="pick-chips"'), html.indexOf("</header>")).includes("Old &lt;app&gt;"), "no needs-you chip for an archived project");
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks[0].key });
   assert.ok(page.includes('<span class="tag prio" title="P1, second priority">P1<span class="vh">, second priority</span></span><span class="tag kind"><span aria-hidden="true">✱</span>Bug fix</span>'), "the task page has the tags too");
@@ -285,10 +288,16 @@ test("T305: the picker is one button with an ARIA combobox and listbox, every pr
   const html = renderBoardHtml(providers(), { snapshot: false });
   assert.ok(html.includes('<button class="trigger" type="button" id="pick-trig" aria-haspopup="listbox" aria-expanded="false" aria-controls="pick-pop">'));
   assert.ok(html.includes('<input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project"'));
-  assert.ok(html.includes('<ul class="list" role="listbox" id="pick-list" aria-label="Projects"><li role="option" id="pick-o-all" class="opt" data-key="" data-name="All projects" aria-selected="false">'));
+  assert.ok(html.includes('<div class="list"><ul class="opts" role="listbox" id="pick-list" aria-label="Projects"><li role="option" id="pick-o-all" class="opt" data-key="" data-name="All projects" aria-selected="false">'));
+  const listbox = html.slice(html.indexOf('role="listbox"'), html.indexOf("</ul>", html.lastIndexOf('role="option"')));
+  assert.ok(!/<button/.test(listbox), "R1071-4: the listbox holds only options and their groups");
+  assert.ok(html.includes('<div class="vh" id="pick-say" role="status" aria-live="polite"></div>'), "R1075-6: a polite status says the count of matches");
   const sage = /<li role="option" id="pick-o-[^"]+" class="opt" data-key="sage-43265b"[^>]*>/.exec(html)[0];
   assert.ok(sage.includes('data-name="sage"') && sage.includes('data-provider="claude codex"') && sage.includes('data-providers="Claude + Codex"'), sage);
-  assert.ok(sage.includes('data-terms="sage\n/sample/sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b"'), sage);
+  assert.ok(sage.includes('data-terms="sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b"'), sage);
+  // R1069-2: the checkout paths go only to the Mac's own page, which the server asks for with paths.
+  assert.ok(!html.includes("/sample/sage") && !renderBoardHtml(providers()).includes("/sample/sage"), "no path for a tunnel viewer or in the offline snapshot");
+  assert.ok(renderBoardHtml(providers(), { snapshot: false, paths: true }).includes('data-terms="sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b\n/sample/sage"'));
   assert.ok(html.includes('data-list="needs"><div class="grp" id="pick-g-needs"><span>Needs you</span><span class="n">1</span></div>'));
   assert.ok(/id="pick-chips"><span class="vh">Projects that need you:<\/span><button class="chip" type="button" id="need-[^"]+" data-pick="sage-43265b" data-provider="claude codex"[^>]*><span class="dot p\d" aria-hidden="true"><\/span><span class="cn">sage<\/span> <span class="badge"><span data-n>1<\/span><span class="vh"> need you<\/span><\/span><\/button><\/span>/.test(html), "one chip for each project that needs you, with its count");
   assert.equal((html.match(/data-pick="seacc|data-pick="demo-111111"/g) ?? []).length, 0, "no chip for a project that needs nothing");
@@ -366,7 +375,7 @@ test("T305 F-T305-6 and F-T305-12: a long project name ends in an ellipsis with 
 test("T305 F-T305-8: the list has a Close button that works by touch; on a phone or a touch screen it says Close", () => {
   const html = renderBoardHtml(providers(), { snapshot: false });
   assert.ok(html.includes('<button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span><span class="tap">Close</span></button>'));
-  assert.ok(html.includes("@media (max-width:700px),(pointer:coarse){\n .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}"));
+  assert.ok(html.includes(" .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}"));
   assert.ok(BOARD_ENHANCEMENT.includes("if(t.closest('[data-close]')){closeList(true);return}"), "a click (a tap) closes the list and gives the focus back");
 });
 

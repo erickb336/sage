@@ -31,12 +31,13 @@ const status = value => MARK[value] ? value : "unknown";
 const KIND = { design: ["◇", "Design"], ui: ["▢", "UI"], orchestration: ["⇄", "Orchestration"], optimization: ["↗", "Optimization"], "bug-fix": ["✱", "Bug fix"], logbook: ["≡", "Logbook"], docs: ["¶", "Docs"], security: ["▲", "Security"], providers: ["⊞", "Providers"], checks: ["✓", "Checks"] };
 const COLUMN_NAME = { done: "Done, last 7 days" };
 const BACKLOG_SHOWN = 6, RUNS_SHOWN = 6;
+const foldText = n => `Show ${n} more task${n === 1 ? "" : "s"}`;
 const hhmm = iso => String(iso ?? "").slice(11, 16);
 const day = iso => iso ? `${String(iso).slice(0, 10)} ${hhmm(iso)}` : "";
 const title = value => String(value ?? "").charAt(0).toUpperCase() + String(value ?? "").slice(1);
-const standIn = (value, note) => `<span class="standin" title="${esc(note)}">${esc(value)}</span>`;
+const standIn = (value, note, focus = true) => `<span class="standin"${focus ? ' tabindex="0"' : ""} title="${esc(note)}" data-why="${esc(note)}">${esc(value)}<span class="vh"> (${esc(note)})</span></span>`;
 // N1: runs do not record their provider yet; the logbook's source stands in for it, marked with a dotted underline.
-const provider = (name, task) => name ? esc(name) : standIn(title(task.providerStandIn), "Stand-in: the logbook's source. The run does not record its provider.");
+const provider = (name, task, focus = true) => name ? esc(name) : standIn(title(task.providerStandIn), "Stand-in: the logbook's source. The run does not record its provider.", focus);
 function duration(seconds) {
   if (seconds === null) return "—";
   if (seconds < 60) return `${seconds} s`;
@@ -67,9 +68,9 @@ const tags = task => `${task.priority ? `<span class="tag prio" title="${task.pr
 /** The archived group: each archived project's name and task count, folded, with what needs you there. Its tasks are on no column. */
 const archivedCounts = book => `${book.tasks} task${book.tasks === 1 ? "" : "s"}${book.needsOwner ? ` · ${book.needsOwner} need${book.needsOwner === 1 ? "s" : ""} you` : ""}`;
 const archivedGroup = model => model.archived.length ? `<details class="archived" id="board-archived" data-key="archived"><summary id="sum-archived">Archived · ${model.archived.length} project${model.archived.length === 1 ? "" : "s"}</summary><ul>${model.archived.map(book => `<li>${esc(book.name)} · ${archivedCounts(book)}</li>`).join("")}</ul></details>` : "";
-const agentPill = (ctx, task, agent) => agent.stale ? `<span class="agent stale"><span aria-hidden="true">${MARK.stale}</span><span class="prov">${provider(agent.provider, task)} ·</span> ${esc(agent.role)} · may have stopped</span>`
-  : `<span class="agent${ctx.sources.indexOf(task.source) % 2 ? " alt" : ""}"><span class="live" aria-hidden="true"></span><span class="prov">${provider(agent.provider, task)} ·</span> ${esc(agent.role)}</span>`;
-const agents = (ctx, task, extra = "") => task.agents.length ? `<div class="agents${extra}">${task.agents.map(agent => agentPill(ctx, task, agent)).join("")}</div>` : "";
+const agentPill = (ctx, task, agent, focus) => agent.stale ? `<span class="agent stale"><span aria-hidden="true">${MARK.stale}</span><span class="prov">${provider(agent.provider, task, focus)} ·</span> ${esc(agent.role)} · may have stopped</span>`
+  : `<span class="agent${ctx.sources.indexOf(task.source) % 2 ? " alt" : ""}"><span class="live" aria-hidden="true"></span><span class="prov">${provider(agent.provider, task, focus)} ·</span> ${esc(agent.role)}</span>`;
+const agents = (ctx, task, extra = "", focus = true) => task.agents.length ? `<div class="agents${extra}">${task.agents.map(agent => agentPill(ctx, task, agent, focus)).join("")}</div>` : "";
 
 /** The step line: only the route's steps, each with its mark and its word (the word is for screen readers on the line). */
 const stepLine = task => `<ol class="sline" aria-label="Steps">${task.loop.steps.map(step => `<li class="s s-${status(step.status)}"><span aria-hidden="true">${MARK[status(step.status)]}</span>${esc(step.label)}<span class="vh">: ${WORD[status(step.status)]}</span></li>`).join('<li class="sep" aria-hidden="true">›</li>')}</ol>`;
@@ -78,14 +79,14 @@ const nowNext = (task, next = true) => `<div class="nowline${task.loop.now.needs
 /** The task page lists each step with its detail and, for a review, each role with a word for its state. */
 const stepRows = task => `<ol class="vlist">${task.loop.steps.map(step => `<li class="v-${status(step.status)}"><span class="g" aria-hidden="true">${MARK[status(step.status)]}</span><b>${esc(step.label)}</b> <span class="faint">${WORD[status(step.status)]}</span>${step.detail ? `<div class="faint">${esc(step.detail)}</div>` : ""}${step.parts?.length ? `<div class="parts">${step.parts.map(([name, value]) => `<span class="part p-${status(value)}"><span aria-hidden="true">${MARK[status(value)]}</span> ${esc(name)}: ${WORD[status(value)]}</span>`).join("")}</div>` : ""}</li>`).join("")}</ol>`;
 
-function card(ctx, task, { archived = false } = {}) {
+function card(ctx, task, { archived = false, i = 0 } = {}) {
   const done = task.column === "done";
-  return `<a class="card${task.reasons.length ? " needs" : ""}" id="card-${b64(task.key)}" href="${esc(ctx.snapshot ? `#${anchor(task)}` : route(task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.filter(agent => !agent.stale).length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}"${archived ? " data-archived hidden" : ""}>`
+  return `<a class="card${task.reasons.length ? " needs" : ""}" id="card-${b64(task.key)}" href="${esc(ctx.snapshot ? `#${anchor(task)}` : route(task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.filter(agent => !agent.stale).length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}" data-i="${i}"${archived ? " data-archived hidden" : ""}>`
     + `<div class="top"><span class="id">${esc(task.id)}</span>·${project(ctx, task)}<span class="who" title="The logbook that holds this task">${esc(title(task.providerStandIn))}</span>${task.pr ? `<span class="pr">PR ${esc(task.pr)}</span>` : ""}</div>`
     + `<div class="title" title="${esc(task.title)}">${esc(task.title)}</div>`
     // A backlog card shows only its steps: its Now and Next lines would say the same on every card (R1056-2). A task
     // that needs you keeps its Needs you line, with the question, on every card (F-T305-4).
-    + (done ? "" : stepLine(task) + (task.column !== "backlog" ? nowNext(task) : task.loop.now.needs ? nowNext(task, false) : "")) + agents(ctx, task)
+    + (done ? "" : stepLine(task) + (task.column !== "backlog" ? nowNext(task) : task.loop.now.needs ? nowNext(task, false) : "")) + agents(ctx, task, "", false)
     + (task.inferredWork ? `<div class="nextline">Inferred work on the open PR</div>` : "")
     + `<div class="tags">${tags(task)}<span class="more">Open</span></div></a>`;
 }
@@ -94,14 +95,15 @@ function column(ctx, col) {
   const name = COLUMN_NAME[col.key] ?? col.name;
   const head = `<h2>${esc(name)} <span class="n">${col.tasks.length}</span></h2>`;
   // An archived project's cards are in the page but hidden: they show only when you choose that project in the picker.
-  const archived = (col.archivedTasks ?? []).map(task => card(ctx, task, { archived: true })).join("");
+  const archived = (col.archivedTasks ?? []).map((task, i) => card(ctx, task, { archived: true, i: col.tasks.length + i })).join("");
   const attrs = `aria-label="${esc(name)}" data-col="${esc(col.key)}" data-scroll="col-${esc(col.key)}"`;
   if (!col.tasks.length) return `<section class="col empty-col" ${attrs}>${head}<div class="empty">No tasks.</div>${archived}</section>`;
-  // The backlog shows the newest 6; a browser fold holds the rest, so it opens with scripts off.
+  // The backlog shows its first 6 cards; a browser fold holds the rest, so it opens with scripts off. The page script folds
+  // again after the project and the filters, and never when 6 or fewer cards show (R1075-2).
   const fold = col.key === "backlog" ? col.tasks.slice(BACKLOG_SHOWN) : [];
   const shown = col.tasks.slice(0, col.tasks.length - fold.length);
-  return `<section class="col${col.needsOwner ? " needs-col" : ""}" ${attrs}>${head}${shown.map(task => card(ctx, task)).join("")}`
-    + (fold.length ? `<details class="rest" data-key="fold-${esc(col.key)}"><summary id="sum-fold-${esc(col.key)}"><span data-all>Show all ${col.tasks.length}</span><span class="faint" data-more> · ${fold.length} more, newest activity first</span></summary>${fold.map(task => card(ctx, task)).join("")}</details>` : "")
+  return `<section class="col${col.needsOwner ? " needs-col" : ""}" ${attrs}>${head}${shown.map((task, i) => card(ctx, task, { i })).join("")}`
+    + (fold.length ? `<details class="rest" data-key="fold-${esc(col.key)}"><summary id="sum-fold-${esc(col.key)}"><span data-more>${foldText(fold.length)}</span></summary>${fold.map((task, i) => card(ctx, task, { i: shown.length + i })).join("")}</details>` : "")
     + `${archived}</section>`;
 }
 
@@ -163,7 +165,7 @@ function page(ctx, task, { routed = false } = {}) {
 const legendPill = (alt, name, text) => `<span><span class="agent${alt ? " alt" : ""}"><span class="live" aria-hidden="true"></span><span class="prov">${esc(name)} ·</span> role</span> ${esc(text)}</span>`;
 const legend = ctx => {
   const names = parity => ctx?.names.filter((_, i) => i % 2 === parity).join(" or ");
-  return `<div class="legend">${ctx ? legendPill(false, names(0) || "Provider", "an agent at work now") + (names(1) ? legendPill(true, names(1), `the same for ${names(1)}`) : "") : ""}<span>${standIn("Dotted", "A stand-in value.")} a stand-in value: the logbook does not record the real one. Put the pointer on it to see the reason.</span></div>`;
+  return `<div class="legend">${ctx ? legendPill(false, names(0) || "Provider", "an agent at work now") + (names(1) ? legendPill(true, names(1), `the same for ${names(1)}`) : "") : ""}<span>${standIn("Dotted", "A stand-in value.")} a stand-in value: the logbook does not record the real one. On a task page, tap it or move the focus to it to see the reason.</span></div>`;
 };
 
 function banners(model) {
@@ -217,14 +219,14 @@ body:has(#flip:focus-visible) .theme{outline:2px solid var(--accent);outline-off
 .search input{flex:1;min-width:0;font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
 .kbd{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 4px}
 .closebtn{flex:none;background:none;border:0;padding:0;font:inherit;color:var(--accent);cursor:pointer;display:inline-flex;align-items:center;min-height:24px}.closebtn .tap{display:none}
-.list{overflow:auto;padding:4px;flex:1;margin:0;list-style:none}.list ul{list-style:none;margin:0;padding:0}
+.list{overflow:auto;padding:4px;flex:1;margin:0}.list ul{list-style:none;margin:0;padding:0}
 .grp{font-size:11px;font-weight:650;color:var(--muted);padding:8px 8px 4px;display:flex;justify-content:space-between}
 .opt{display:grid;grid-template-columns:10px 1fr auto;gap:2px 8px;align-items:center;padding:7px 8px;border-radius:7px;cursor:pointer;min-height:40px}
 .opt .nm{font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .opt .sub{grid-column:2/4;color:var(--muted);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .opt .meta{display:flex;gap:6px;align-items:center;color:var(--muted);font-size:11.5px;white-space:nowrap}
 .opt.active,.opt:hover{background:var(--panel2)}.opt.active{box-shadow:0 0 0 1px var(--accent) inset}.opt[aria-selected="true"] .nm{color:var(--accent)}
-.opt.warn .sub{color:var(--warn)}.why{color:var(--accent)}
+.opt.warn .sub{color:var(--warn)}.opt.warn .sub svg{vertical-align:-2px;margin-right:3px}.archtag{flex:none;font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 5px}.why{color:var(--accent)}
 .morebtn{display:block;width:calc(100% - 8px);margin:4px;text-align:left;background:none;border:1px dashed var(--line);border-radius:7px;padding:7px 8px;color:var(--muted);cursor:pointer}
 .nomatch{padding:14px 10px;color:var(--muted)}.nomatch b{color:var(--text)}
 .foot{border-top:1px solid var(--line);padding:6px 10px;color:var(--muted);font-size:11.5px;display:flex;gap:10px;flex-wrap:wrap}
@@ -238,7 +240,7 @@ select{font:inherit;color:var(--text);background:var(--panel);border:1px solid v
 .summary b{color:var(--text)}.summary b.needn{color:var(--need)}
 .banner{display:flex;gap:8px;align-items:flex-start;margin:0 20px 10px;padding:8px 10px;border-radius:8px;font-size:12px}
 .banner.warn{background:var(--warn-soft);color:var(--warn)}.banner.info{background:var(--accent-soft);color:var(--accent)}.banner svg{flex:none;margin-top:1px}.diag{margin:4px 0 0;padding-left:16px;overflow-wrap:anywhere}
-.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(180px,1fr);gap:12px;padding:6px 20px 24px;overflow-x:auto;align-items:start}
+.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(170px,1fr);gap:12px;padding:6px 20px 24px;overflow-x:auto;align-items:start}
 .col{background:var(--panel2);border-radius:10px;padding:8px;min-height:120px;min-width:0}
 .col h2{font-size:12px;font-weight:650;margin:4px 6px 10px;display:flex;align-items:center;gap:8px}
 .col h2 .n,h3 .n{color:var(--muted);font-weight:500}
@@ -278,7 +280,8 @@ a.card:hover{border-color:var(--accent)}.card.needs{border-color:var(--need);box
 details.rest>summary{cursor:pointer;color:var(--accent);font-size:12px;font-weight:600;padding:4px 6px 8px;list-style:none}
 details.rest>summary::-webkit-details-marker{display:none}
 details.rest>summary::before{content:"▸ "}details.rest[open]>summary::before{content:"▾ "}
-.standin{text-decoration:underline dotted;text-underline-offset:3px;text-decoration-thickness:1px}
+.standin{text-decoration:underline dotted;text-underline-offset:3px;text-decoration-thickness:1px;position:relative}
+.standin[tabindex]:focus::after{content:attr(data-why);position:absolute;left:0;top:calc(100% + 4px);z-index:6;width:max-content;max-width:min(280px,80vw);white-space:normal;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:5px 7px;font-size:11.5px;font-weight:400;box-shadow:var(--pop)}
 .page{display:none;max-width:1100px;margin:0 auto;padding:18px 20px 40px}.page:target,.page.open{display:block}
 body:has(.page:target) .boardview{display:none}
 .pagebar{display:flex;align-items:center;gap:12px;margin-bottom:12px}
@@ -323,6 +326,8 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
  .page{padding:14px 16px 32px}.detail{grid-template-columns:1fr}.ptitle{font-size:18px}
 }
 @media (max-width:700px),(pointer:coarse){
+ .chip,.trigger,select,.seg button,.morebtn,.opt,.back{min-height:44px}.linkbtn{min-height:44px;display:inline-flex;align-items:center}
+ .archived summary{min-height:44px;display:flex;align-items:center}
  .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}.pop .foot{display:none}
 }`;
 
@@ -366,6 +371,7 @@ const $=id=>document.getElementById(id),all=(selector,root)=>[...(root||document
 const match=${matchProject.toString()};
 ${cardFits.toString()}
 ${needCounts.toString()}
+const SHOWN=${BACKLOG_SHOWN},foldText=${foldText.toString()};
 const S={project:'',needs:false,who:'',priority:'',kind:'',open:false,query:'',active:null,archived:false,gone:false};
 try{const h=/^#p=(.*)$/.exec(location.hash);S.project=h?decodeURIComponent(h[1]):localStorage.getItem('board-project')||''}catch(e){}
 function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#p=/.test(location.hash))history.replaceState(null,'',S.project?'#p='+encodeURIComponent(S.project):location.pathname+location.search)}catch(e){}}
@@ -376,7 +382,7 @@ function filter(){
   const cards=all('.card[data-key]'),need=needCounts(cards.map(c=>c.dataset),S);
   cards.forEach(c=>{const base=(S.project?c.dataset.project===S.project:!c.hasAttribute('data-archived'))&&cardFits(c.dataset,S);c.hidden=!(base&&(!S.needs||c.dataset.needs==='true'))});
   const shown=cards.filter(c=>!c.hidden),sum=key=>shown.reduce((n,c)=>n+Number(c.dataset[key]),0);
-  all('[data-col]').forEach(col=>{const visible=all('.card',col).filter(c=>!c.hidden);const count=col.querySelector('.n');if(count)count.textContent=String(visible.length);col.classList.toggle('empty-col',!visible.length);col.classList.toggle('needs-col',visible.some(c=>c.dataset.needs==='true'));const empty=col.querySelector('.empty');if(empty)empty.hidden=visible.length>0;const rest=col.querySelector('.rest');if(rest){const more=all('.card',rest).filter(c=>!c.hidden).length;rest.hidden=!more;const a=rest.querySelector('[data-all]'),m=rest.querySelector('[data-more]');if(a)a.textContent='Show all '+visible.length;if(m)m.textContent=' · '+more+' more, newest activity first'}});
+  all('[data-col]').forEach(col=>{const visible=all('.card',col).filter(c=>!c.hidden);const count=col.querySelector('.n');if(count)count.textContent=String(visible.length);col.classList.toggle('empty-col',!visible.length);col.classList.toggle('needs-col',visible.some(c=>c.dataset.needs==='true'));const empty=col.querySelector('.empty');if(empty)empty.hidden=visible.length>0;const rest=col.querySelector('.rest');if(rest){const order=all('.card',col).sort((a,b)=>a.dataset.i-b.dataset.i),seen=order.filter(c=>!c.hidden);order.forEach(c=>{const at=seen.indexOf(c);if(at>-1&&at<SHOWN)rest.before(c);else rest.append(c)});const more=Math.max(0,seen.length-SHOWN);rest.hidden=!more;const m=rest.querySelector('[data-more]');if(m)m.textContent=foldText(more)}});
   const set=(id,value)=>{const e=$(id);if(e)e.textContent=String(value)};
   if(list){set('s-needs',shown.filter(c=>c.dataset.needs==='true').length);set('s-agents',sum('agents'));set('s-inferred',sum('inferred'));set('s-review',sum('review'));set('s-tasks',shown.length);set('needs-count',need.all)}
   all('[data-filter=needs]').forEach(b=>b.setAttribute('aria-pressed',String(S.needs)));
@@ -384,7 +390,7 @@ function filter(){
   for(const f of ['priority','kind']){const e=$('f-'+f);if(e)e.value=S[f]}
   const clear=$('f-clear');if(clear)clear.hidden=!(S.who||S.priority||S.kind);
   const cur=options().find(o=>o.dataset.key===S.project&&S.project);
-  set('pick-name',cur?cur.dataset.name:'All projects');const d=$('pick-dot');if(d)d.className='dot '+(cur?cur.dataset.slot:'none');
+  set('pick-name',cur?cur.dataset.name:'All projects');const arch=$('pick-arch');if(arch)arch.hidden=!(cur&&cur.closest('[data-list=archived]'));const d=$('pick-dot');if(d)d.className='dot '+(cur?cur.dataset.slot:'none');
   options().forEach(o=>o.setAttribute('aria-selected',String(o.dataset.key===S.project)));
   all('[data-pick]').forEach(c=>{const n=need.projects[c.dataset.pick]||0,b=c.querySelector('[data-n]');if(b)b.textContent=String(n);c.hidden=c.dataset.pick===''?!S.project:c.dataset.pick===S.project||!n});
   const noprov=$('noprov'),lacks=!!cur&&!!S.who&&!cur.dataset.provider.split(' ').includes(S.who);
@@ -401,8 +407,10 @@ function draw(){
     if(o.dataset.key==='')ok=!q;
     else{ok=(!S.who||o.dataset.provider.split(' ').includes(S.who))&&(!archived||S.archived||!!q);if(ok&&q){const m=match(o.dataset.name,o.dataset.terms.split('\\n'),q);ok=m.ok;why=m.why}}
     o.hidden=!ok;const w=o.querySelector('[data-why]');if(w)w.textContent=why?why+' · ':'';if(ok)shown.push(o)});
-  all('#pick-list [data-list]').forEach(g=>{const n=all('[role=option]',g).filter(o=>!o.hidden).length;const more=g.querySelector('[data-archived]');if(more)more.hidden=S.archived||!!q;g.querySelector('.grp').hidden=!n;const c=g.querySelector('.grp .n');if(c)c.textContent=String(n);g.hidden=!n&&!(more&&!more.hidden)});
+  all('#pick-list [data-list]').forEach(g=>{const n=all('[role=option]',g).filter(o=>!o.hidden).length;g.querySelector('.grp').hidden=!n;const c=g.querySelector('.grp .n');if(c)c.textContent=String(n);g.hidden=!n});
+  const more=$('pick-more');if(more)more.hidden=S.archived||!!q||!all('#pick-list [data-list=archived] [role=option]').length;
   const nomatch=$('pick-none');if(nomatch){nomatch.hidden=!(q&&!shown.length);const t=$('pick-qtext');if(t)t.textContent=q}
+  const say=$('pick-say');if(say){const n=shown.filter(o=>o.dataset.key!=='').length,text=!S.open||!q?'':n?n+(n===1?' project matches':' projects match'):'No project matches “'+q+'”';if(say.textContent!==text)say.textContent=text}
   if(!shown.some(o=>o.dataset.key===S.active))S.active=shown.length?shown[0].dataset.key:null;
   shown.forEach(o=>o.classList.toggle('active',o.dataset.key===S.active));options().filter(o=>o.hidden).forEach(o=>o.classList.remove('active'));
   const act=shown.find(o=>o.dataset.key===S.active);if(act&&S.open){input.setAttribute('aria-activedescendant',act.id);if(act.scrollIntoView)act.scrollIntoView({block:'nearest'})}else input.removeAttribute('aria-activedescendant');
@@ -414,7 +422,7 @@ function closeList(focus){S.open=false;draw();if(focus){const t=$('pick-trig');i
 document.addEventListener('click',e=>{const t=e.target;
   if(t.closest('[data-close]')){closeList(true);return}
   if(t.closest('#pick-trig')){if(S.open)closeList(true);else openList();return}
-  if(t.closest('[data-archived]')){S.archived=true;draw();const q=$('pick-q');if(q)q.focus();return}
+  if(t.closest('[data-showarchived]')){S.archived=true;draw();const q=$('pick-q');if(q)q.focus();return}
   if(t.closest('[data-clear]')){S.query='';S.active=null;draw();const q=$('pick-q');if(q)q.focus();return}
   const o=t.closest('#pick-list [role=option]');if(o){choose(o.dataset.key);return}
   const p=t.closest('[data-pick]');if(p){choose(p.dataset.pick);return}
@@ -427,6 +435,10 @@ document.addEventListener('click',e=>{const t=e.target;
   if(t.closest('[data-dismiss]')){S.gone=false;filter();return}});
 document.addEventListener('change',e=>{const f=e.target.dataset&&e.target.dataset.f;if(f){S[f]=e.target.value;filter()}
   if(e.target.id==='flip'){const now=getComputedStyle(document.documentElement).getPropertyValue('--scheme').trim();document.documentElement.dataset.theme=now;e.target.checked=false;try{localStorage.setItem('board-theme',now)}catch(x){}}});
+// The list closes when the focus leaves the picker (R1075-5). A press inside the list keeps the focus in the search field,
+// so a click on a row or a button still lands.
+document.addEventListener('focusout',e=>{const w=$('pick-pop')&&$('pick-pop').parentNode;if(S.open&&w&&w.contains(e.target)&&!(e.relatedTarget&&w.contains(e.relatedTarget)))closeList(false)});
+document.addEventListener('mousedown',e=>{if(e.target.closest&&e.target.closest('#pick-pop')&&!e.target.closest('input'))e.preventDefault()});
 document.addEventListener('input',e=>{if(e.target.id==='pick-q'){S.query=e.target.value;S.active=null;draw()}});
 document.addEventListener('keydown',e=>{const inQ=e.target.id==='pick-q';
   if(e.key==='/'&&!inQ&&!/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)&&$('pick-pop')){e.preventDefault();openList();return}
@@ -462,26 +474,28 @@ stream.onerror=()=>show('bad','Reconnecting · board from '+at());`;
 const ago = (iso, now) => { if (!iso) return "no activity"; const days = Math.floor((Date.parse(now) - Date.parse(iso)) / 86400000); return days <= 0 ? "today" : days === 1 ? "1 day ago" : `${days} days ago`; };
 const LIST_NAME = { needs: "Needs you", active: "Active · last 14 days", idle: "Idle", archived: "Archived" };
 /** The project picker (T305 design B): one button opens a searchable list; the server writes every row, the script filters them. */
-function picker(ctx, model) {
+function picker(ctx, model, paths) {
   const projects = model.projects ?? [];
-  const option = book => `<li role="option" id="pick-o-${b64(book.key)}" class="opt${book.problem ? " warn" : ""}" data-key="${esc(book.key)}" data-name="${esc(book.name)}" data-slot="${ctx.slot.get(book.key) ?? "p0"}" data-terms="${esc(book.terms.join("\n"))}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" data-providers="${esc(book.providers.join(" + "))}" aria-selected="false">`
+  // The checkout paths are search terms only on the Mac's own page; a tunnel viewer and the offline snapshot get none (R1069-2).
+  const option = book => `<li role="option" id="pick-o-${b64(book.key)}" class="opt${book.problem ? " warn" : ""}" data-key="${esc(book.key)}" data-name="${esc(book.name)}" data-slot="${ctx.slot.get(book.key) ?? "p0"}" data-terms="${esc([...book.terms, ...(paths ? book.paths ?? [] : [])].join("\n"))}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" data-providers="${esc(book.providers.join(" + "))}" aria-selected="false">`
     + `${dot(ctx, book.key)}<span class="nm">${esc(book.name)}</span><span class="meta">${book.agents ? `<span>${book.agents} at work</span>` : ""}${book.needsOwner ? `<span class="badge">${book.needsOwner}<span class="vh"> need you</span></span>` : `<span>${ago(book.lastActivity, model.at)}</span>`}</span>`
-    + `<span class="sub"><span class="why" data-why></span>${book.problem ? `Logbook unreadable: ${esc(book.problem)}` : esc(book.sub)} · ${esc(book.providers.join(" + "))}</span></li>`;
+    + `<span class="sub"><span class="why" data-why></span>${book.problem ? `${ICON}Logbook unreadable: ${esc(book.problem)}` : esc(book.sub)} · ${esc(book.providers.join(" + "))}</span></li>`;
   const group = list => {
     const books = projects.filter(book => book.list === list);
     if (!books.length) return "";
-    const more = list === "archived" ? `<button type="button" class="morebtn" data-archived>Show ${books.length} archived project${books.length === 1 ? "" : "s"}</button>` : "";
-    return `<li role="presentation" data-list="${list}">${more}<div class="grp" id="pick-g-${list}"><span>${LIST_NAME[list]}</span><span class="n">${books.length}</span></div><ul role="group" aria-labelledby="pick-g-${list}">${books.map(option).join("")}</ul></li>`;
+    return `<li role="presentation" data-list="${list}"><div class="grp" id="pick-g-${list}"><span>${LIST_NAME[list]}</span><span class="n">${books.length}</span></div><ul role="group" aria-labelledby="pick-g-${list}">${books.map(option).join("")}</ul></li>`;
   };
-  const items = projects.length
-    ? `<li role="option" id="pick-o-all" class="opt" data-key="" data-name="All projects" aria-selected="false"><span class="dot none" aria-hidden="true"></span><span class="nm">All projects</span><span class="meta">${projects.filter(book => !book.archived).length} projects</span></li>${["needs", "active", "idle", "archived"].map(group).join("")}`
-      + `<li role="presentation" class="nomatch" id="pick-none" hidden><b>No project matches “<span id="pick-qtext"></span>”.</b><br>Search looks at the shown name, the GitHub repository, the folder, its path and the logbook key. <button type="button" class="linkbtn" data-clear>Clear the search</button></li>`
-    : `<li role="presentation" class="nomatch"><b>No projects yet.</b><br>A project shows here when it has a logbook. Start sage in a project folder to make one.</li>`;
+  const items = projects.length ? `<li role="option" id="pick-o-all" class="opt" data-key="" data-name="All projects" aria-selected="false"><span class="dot none" aria-hidden="true"></span><span class="nm">All projects</span><span class="meta">${projects.filter(book => !book.archived).length} projects</span></li>${["needs", "active", "idle", "archived"].map(group).join("")}` : "";
+  const archivedCount = projects.filter(book => book.list === "archived").length;
+  const after = projects.length
+    ? (archivedCount ? `<button type="button" class="morebtn" id="pick-more" data-showarchived>Show ${archivedCount} archived project${archivedCount === 1 ? "" : "s"}</button>` : "")
+      + `<div class="nomatch" id="pick-none" hidden><b>No project matches “<span id="pick-qtext"></span>”.</b><br>Search looks at the shown name, the GitHub repository, the folder${paths ? ", its path" : ""} and the logbook key. <button type="button" class="linkbtn" data-clear>Clear the search</button></div>`
+    : `<div class="nomatch"><b>No projects yet.</b><br>A project shows here when it has a logbook. Start sage in a project folder to make one.</div>`;
   const chips = projects.filter(book => book.needsOwner && !book.archived).map(book => `<button class="chip" type="button" id="need-${b64(book.key)}" data-pick="${esc(book.key)}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" title="${esc(book.name)} · ${esc(book.sub)}">${dot(ctx, book.key)}<span class="cn">${esc(book.name)}</span> <span class="badge"><span data-n>${book.needsOwner}</span><span class="vh"> need you</span></span></button>`).join("");
   return `<div class="pick"><button class="chip need" type="button" data-filter="needs" aria-pressed="false">${ICON}Needs you <span class="count" id="needs-count">${model.counts.needsOwner}</span></button>`
-    + `<div class="pickwrap"><button class="trigger" type="button" id="pick-trig" aria-haspopup="listbox" aria-expanded="false" aria-controls="pick-pop"><span class="vh">Project: </span><span class="dot none" id="pick-dot" aria-hidden="true"></span><span class="tname" id="pick-name">All projects</span><span class="chev" aria-hidden="true">▾</span></button>`
+    + `<div class="pickwrap"><button class="trigger" type="button" id="pick-trig" aria-haspopup="listbox" aria-expanded="false" aria-controls="pick-pop"><span class="vh">Project: </span><span class="dot none" id="pick-dot" aria-hidden="true"></span><span class="tname" id="pick-name">All projects</span><span class="archtag" id="pick-arch" hidden>Archived</span><span class="chev" aria-hidden="true">▾</span></button>`
     + `<div class="pop" id="pick-pop" hidden><div class="search"><input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project" placeholder="Find a project: name, repo or folder" autocomplete="off" spellcheck="false"><button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span><span class="tap">Close</span></button></div>`
-    + `<ul class="list" role="listbox" id="pick-list" aria-label="Projects">${items}</ul><div class="foot"><span>↑ ↓ to move · Enter to choose</span><span>“/” opens</span></div></div></div>`
+    + `<div class="list"><ul class="opts" role="listbox" id="pick-list" aria-label="Projects">${items}</ul>${after}</div><div class="vh" id="pick-say" role="status" aria-live="polite"></div><div class="foot"><span>↑ ↓ to move · Enter to choose</span><span>“/” opens</span></div></div></div>`
     + `<button class="chip" type="button" id="pick-all" data-pick="" hidden>All projects</button><span class="pickchips" id="pick-chips">${chips ? `<span class="vh">Projects that need you:</span>${chips}` : ""}</span></div>`;
 }
 
@@ -495,7 +509,7 @@ function filterBar(model) {
     + `<button class="linkbtn" type="button" id="f-clear" data-clearf hidden>Clear filters</button>`;
 }
 
-export function renderBoardHtml(model, { taskKey = null, snapshot = true, live = false } = {}) {
+export function renderBoardHtml(model, { taskKey = null, snapshot = true, live = false, paths = false } = {}) {
   const task = taskKey ? model.tasks.find(task => task.key === taskKey) : null;
   if (taskKey && !task) throw new RangeError("unknown task key");
   const ctx = context(model, snapshot), counts = model.counts, at = hhmm(model.at);
@@ -512,8 +526,8 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
       : model.tasks.every(task => task.archived) ? `<div class="emptyboard"><b>All tasks are in archived projects.</b> The Archived group below counts them.</div>` : "";
     const nomatch = `<div class="emptyboard" id="nomatch" hidden><b>No task matches.</b> No visible task fits this filter. <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprov = `<div class="emptyboard" id="noprov" hidden><b>No <span id="noprov-who"></span> logbook in this project.</b> <span id="noprov-name"></span> has tasks only in <span id="noprov-has"></span>. <button class="linkbtn" type="button" data-showall>Show all providers</button></div>`;
-    const gone = `<div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. The board shows all projects. <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div>`;
-    body = `<div class="boardview"><header><h1>Task board</h1>${pill}<span class="spacer"></span>${theme}${picker(ctx, model)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${gone}${empty}${nomatch}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
+    const gone = `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. The board shows all projects. <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
+    body = `<div class="boardview"><header><h1>Task board</h1>${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${gone}${empty}${nomatch}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
       + (snapshot ? `<div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}</div>` : "");
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${task ? `${esc(task.id)} · ` : ""}Sage task board</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(taskKey) : ""}</script></body></html>`;

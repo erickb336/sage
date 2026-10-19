@@ -284,3 +284,99 @@ test("T305: at 375 px the list is a bottom sheet and the chips wrap; at 1024 px 
     assert.equal(await laptop.locator("[data-scroll=board]").evaluate(board => board.scrollWidth <= board.clientWidth), true, "no hidden column to scroll to");
   }
 });
+
+// R1077: the repairs of round 2 (the picker and the board), as a person sees them. SAMPLE DATA.
+async function choose(page, query) {
+  await page.locator("#pick-trig").click();
+  await page.locator("#pick-q").fill(query);
+  await page.keyboard.press("Enter");
+}
+const visibleCards = page => page.locator(".card[data-key]").evaluateAll(cards => cards.filter(card => card.getClientRects().length).map(card => card.querySelector(".id").textContent));
+
+test("R1075-2: a chosen project's only backlog card shows without the fold; the fold counts what it holds after the filters", async t => {
+  const page = await open(t);
+  const backlog = page.locator("[data-col=backlog]"), fold = backlog.locator(".rest");
+  assert.equal(await fold.isVisible(), true);
+  const all = await backlog.locator(".card[data-key]:not([hidden])").count();
+  assert.equal(await fold.locator("summary").textContent(), `Show ${all - 6} more tasks`);
+  await choose(page, "home-lab");
+  assert.deepEqual(await visibleCards(page), ["T5"], "the card shows at once, not behind 'Show all 1'");
+  assert.equal(await fold.isVisible(), false, "no fold for 6 or fewer cards");
+  await choose(page, "sage");
+  const sage = await backlog.locator(".card[data-key]:not([hidden])").count();
+  assert.ok(sage > 6, `${sage} sage backlog cards`);
+  assert.equal(await backlog.locator(":scope > .card[data-key]:not([hidden])").count(), 6, "the first 6 cards of the project show");
+  assert.equal(await fold.locator("summary").textContent(), `Show ${sage - 6} more task${sage - 6 === 1 ? "" : "s"}`);
+});
+
+test("R1075-3, R1071-5, R1069-1: the project-gone banner is a status that clears on a pick; a chosen archived project says Archived; its card is no button", async t => {
+  const page = await open(t);
+  await page.evaluate(() => localStorage.setItem("board-project", "gone-abcdef"));
+  await reload(page, renderBoardHtml(sample(), { snapshot: false }));
+  assert.equal(await page.locator("#gone").isVisible(), true);
+  assert.equal(await page.locator("#gone").evaluate(banner => banner.closest("[role=status]") !== null), true, "a screen reader hears it");
+  await page.locator('#pick-chips [data-pick^="sage-"]').click();
+  assert.equal(await page.locator("#gone").isVisible(), false, "another pick clears it");
+  assert.equal(await page.locator("#pick-arch").isVisible(), false);
+  await choose(page, "old-site");
+  assert.equal(await page.locator("#pick-name").textContent(), "old-site");
+  assert.equal(await page.locator("#pick-arch").isVisible(), true);
+  assert.equal(await page.locator("#pick-arch").textContent(), "Archived");
+  // A click on an archived card opens the task; it is not the Show archived button.
+  await page.evaluate(() => window.addEventListener("click", event => { if (event.target.closest("a.card")) event.preventDefault(); }, true));
+  await page.locator(".card[data-archived]:not([hidden])").first().click();
+  await page.locator("#pick-trig").click();
+  await page.locator("#pick-q").fill("");
+  assert.equal(await page.getByRole("button", { name: "Show 1 archived project" }).isVisible(), true, "the archived group is still folded");
+});
+
+test("R1075-5, R1071-4, R1075-6: the list closes when the focus leaves it; only options are in the listbox; a status says the count of matches", async t => {
+  const page = await open(t);
+  assert.equal(await page.locator("#pick-list button, #pick-list .nomatch").count(), 0, "no button or message inside the listbox");
+  await page.locator("#pick-trig").click();
+  const say = page.locator("#pick-say");
+  assert.deepEqual([await say.getAttribute("role"), await say.getAttribute("aria-live")], ["status", "polite"]);
+  await page.locator("#pick-q").fill("trip");
+  assert.equal(await say.textContent(), "2 projects match");
+  await page.locator("#pick-q").fill("zzz sample");
+  assert.equal(await say.textContent(), "No project matches “zzz sample”");
+  await page.locator("#pick-q").fill("recipes");
+  assert.equal(await say.textContent(), "1 project matches");
+  // A click on a row still chooses it: the press keeps the focus in the search field.
+  await page.locator("#pick-list [role=option]:not([hidden])").filter({ hasText: "recipes" }).click();
+  assert.equal(await page.locator("#pick-name").textContent(), "recipes");
+  // Tab out of the list: it closes.
+  await page.locator("#pick-trig").click();
+  assert.equal(await page.locator("#pick-trig").getAttribute("aria-expanded"), "true");
+  const inside = () => page.evaluate(() => !!document.activeElement.closest(".pickwrap"));
+  for (let i = 0; i < 6 && await inside(); i++) {
+    assert.equal(await page.locator("#pick-pop").isVisible(), true, "open while the focus is in the picker");
+    await page.keyboard.press("Tab");
+  }
+  assert.equal(await inside(), false);
+  assert.equal(await page.locator("#pick-pop").isVisible(), false);
+  assert.equal(await page.locator("#pick-trig").getAttribute("aria-expanded"), "false");
+});
+
+test("R1075-7: at 375 px each chip, filter, the picker button and the Archived summary are 44 px high; a stand-in's reason shows on focus", async t => {
+  const phone = await open(t, { width: 375, height: 812, colorScheme: "light" });
+  const heights = await phone.evaluate(() => [".pick .chip:not([hidden])", "#pick-trig", ".fbar select", ".fbar .seg button", "#sum-archived"].map(selector => [selector, Math.min(...[...document.querySelectorAll(selector)].filter(e => e.getClientRects().length).map(e => e.getBoundingClientRect().height))]));
+  for (const [selector, height] of heights) assert.ok(height >= 44, `${selector}: ${height} px`);
+  const model = sample(), task = model.tasks.find(item => item.agents.some(agent => !agent.provider));
+  assert.ok(task, "the sample has a run with no recorded provider");
+  const page = await open(t, { width: 375, height: 812, html: renderBoardHtml(model, { snapshot: false, taskKey: task.key }) });
+  const standIn = page.locator(".standin[tabindex]").first();
+  await standIn.focus();
+  assert.match(await standIn.evaluate(element => getComputedStyle(element, "::after").content), /Stand-in: the logbook's source/);
+  await standIn.tap();
+  assert.equal(await page.evaluate(() => document.activeElement.classList.contains("standin")), true, "a tap focuses it, so the reason shows");
+});
+
+test("R1071-3: with a 15 px scroll bar, the board does not scroll sideways at 1181 to 1195 px", async t => {
+  for (const width of [1181, 1185, 1190, 1195]) {
+    const page = await open(t, { width, height: 900 });
+    // Headless Chromium has overlay scroll bars; a 15 px padding takes the width that a classic scroll bar takes.
+    await page.addStyleTag({ content: "html{padding-right:15px}" });
+    assert.equal(await page.locator("[data-scroll=board]").evaluate(board => board.scrollWidth - board.clientWidth), 0, `${width} px`);
+  }
+});

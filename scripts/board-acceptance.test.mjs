@@ -100,6 +100,9 @@ test("T205 acceptance: provider roots keep duplicate task identities separate an
   const detail = f.view("task", { id: "T1", sourceScope: other.key });
   assert.ok(detail.includes("Sample second provider")); assert.ok(!detail.includes("Source sample"));
   assert.throws(() => f.invoke("task", { id: "T9", sourceScope: other.key }), /Nearest recorded ids: T1.*No task was opened/);
+  // R1069-3: the shown name chooses the project, with both its logbooks; it is not ambiguous.
+  const named = f.view("chat", { sourceScope: "project" });
+  assert.ok(named.includes("Sample T1") && named.includes("Sample second provider"), named);
   assert.deepEqual([snapshot(f.root), snapshot(other.root)], before);
 });
 
