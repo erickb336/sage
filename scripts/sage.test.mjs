@@ -1931,7 +1931,7 @@ test("F-R65-1: a table that lost its header line fails the merge check closed an
   assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "1"), /^sage: T1 has open findings: F-T1-1, F-T1-2\./);
   const findings = join(s.dir, "findings.tsv");
   reshape(findings, (lines) => lines.slice(1)); // sed 1d, or tail -n +2
-  const why = damaged(findings, "task, key, round, source, severity, summary, triage, reason, status");
+  const why = damaged(findings, "task, key, round, source, severity, summary, triage, reason, status, run, class");
   assert.equal(s.no("merge-check", "--sha", SHA, "--cycles", "1"), `sage: the merge check refuses every merge, because ${why}`);
   assert.equal(s.no("log", "-", "x", "--why", "y"), `sage: ${why}`, "a write says that the header is damaged, not that a newer sage wrote it");
 
@@ -1991,7 +1991,7 @@ test("F-R65-2: only a header with every known column and more is a newer sage's;
   writeFileSync(findings, `\uFEFF${readFileSync(findings, "utf8").replaceAll("\n", "\r\n")}`);
   assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "1"), /^sage: T1 has open findings: F-T1-1\./, "the open finding stays open");
   assert.equal(s.ok("finding", "triage", "T1", "F-T1-1", "fix"), "F-T1-1 open · fix");
-  assert.equal(readFileSync(findings, "utf8"), "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\nT1\tF-T1-1\t0\tqa\thigh\topen one\tfix\t\topen\n");
+  assert.equal(readFileSync(findings, "utf8"), "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\trun\tclass\nT1\tF-T1-1\t0\tqa\thigh\topen one\tfix\t\topen\t\t\n");
 });
 
 test("F-R65-3: no control character reaches the terminal: a cell keeps none, a printed id, column or path shows each as \\xNN, and such a path gets no command", () => {
@@ -2349,6 +2349,193 @@ test("T314: an older logbook gets the priority and kind columns at its next writ
   assert.equal(readFileSync(tasks, "utf8").split("\n")[0], "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram");
   // To an older sage these are columns that it does not know: its ready() refuses every write (see unknown-columns).
   assert.equal(rows(s.dir, "tasks")[0].kind, "checks");
+});
+
+test("T346: an older findings table gets the run and class columns at its next write, and keeps every old row", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  const findings = join(s.dir, "findings.tsv");
+  // The findings table of the sage before T346: no run and no class column.
+  writeFileSync(findings, "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\nT1\tF-T1-1\t0\tqa\tlow\told one\t\t\topen\n");
+  assert.equal(s.ok("status").split("\n")[1], "tasks   1 · framed 1", "it reads with the columns empty");
+  s.ok("run", "add", "T1", "--role", "qa"); // R1
+  assert.equal(s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "new one", "--run", "R1", "--class", "copy"), "F-T1-2 open · medium · T1");
+  assert.equal(readFileSync(findings, "utf8").split("\n")[0], "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\trun\tclass");
+  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.summary, f.run, f.class]), [["F-T1-1", "old one", "", ""], ["F-T1-2", "new one", "R1", "copy"]]);
+  // To an older sage, run and class are columns that it does not know: its ready() refuses every write (see unknown-columns).
+});
+
+test("T346: finding add takes --run of a run of its task and --class from the starter list; it refuses the rest and changes nothing", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("task", "add", "--title", "b", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "code-reviewer"); // R1
+  s.ok("run", "add", "T2", "--role", "qa"); // R2
+  const add = (...more) => ["finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "x", ...more];
+  assert.equal(s.no(...add("--run", "R2")), "sage: --run R2 is a run of T2, not of T1: give the run whose report holds the finding. Nothing changed.");
+  assert.equal(s.no(...add("--run", "R9")), "sage: no run R9. The latest: R1.");
+  assert.equal(s.no(...add("--class", "typo")), 'sage: --class is one of state-edge, speed, copy, layout, security, other; not "typo". Nothing changed.');
+  assert.match(s.no(...add("--escaped-from", "T2")), /^sage: finding add takes no --escaped-from\./);
+  assert.equal(readFileSync(join(s.dir, "findings.tsv"), "utf8").split("\n").length, 2, "no refused finding was written");
+  assert.equal(s.ok(...add("--run", "R1", "--class", "state-edge")), "F-T1-1 open · low · T1");
+  assert.equal(s.ok(...add()), "F-T1-2 open · low · T1", "both stay optional: a finding of a failed check has no run");
+  // A known key opened again keeps its run and class, unless the command gives new ones.
+  s.ok("finding", "add", "T1", "--key", "F-T1-1", "--source", "code-reviewer", "--severity", "medium");
+  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.run, f.class]), [["F-T1-1", "R1", "state-edge"], ["F-T1-2", "", ""]]);
+  s.ok("run", "add", "T1", "--role", "code-reviewer"); // R3
+  s.ok("finding", "add", "T1", "--key", "F-T1-1", "--source", "code-reviewer", "--severity", "medium", "--run", "R3", "--class", "copy");
+  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.run, f.class]), [["F-T1-1", "R3", "copy"], ["F-T1-2", "", ""]], "a re-opened finding takes the new run and class");
+});
+
+test("T346: a finding's run counts for the next run id, so after a lost run row the id is not given again", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa"); // R1
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x", "--run", "R1");
+  byHand(s.dir, "runs", 0, "R1", () => null); // the run row is lost; only the finding still names R1
+  assert.equal(s.ok("run", "add", "T1", "--role", "qa"), "R2 running · qa on T1 · model sonnet");
+});
+
+test("T346: finding move clears the finding's run, as that run is a run of the old task", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa"); // R1
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x", "--run", "R1", "--class", "copy");
+  assert.match(s.ok("finding", "move", "T1", "F-T1-1", "--to", "Follow-up"), /^F-T1-1 moved to T2 as F-T2-1 · /);
+  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.task, f.key, f.run, f.class]), [["T2", "F-T2-1", "", "copy"]]);
+});
+
+test("T346: a done review, QA or evidence-review run needs --tokens as a whole number; other roles and other statuses do not", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  for (const role of ["code-reviewer", "security-reviewer", "ux-reviewer", "qa", "evidence-review", "implementer --branch claude/t1", "pe"]) s.ok("run", "add", "T1", "--role", ...role.split(" "));
+  for (const id of ["R1", "R2", "R3", "R4", "R5"]) {
+    assert.match(s.no("run", "done", id, "--status", "done"), new RegExp(`^sage: ${id} is a \\S+ run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000\\. Nothing changed\\.$`), id);
+    for (const bad of ["abc", "0", "1.5", "-3"]) s.no("run", "done", id, "--status", "done", `--tokens=${bad}`);
+  }
+  assert.ok(rows(s.dir, "runs").slice(0, 5).every((r) => r.status === "running"), "no refused run ended");
+  const big = 'sage: --tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not "1234567890123". Nothing changed.';
+  assert.equal(s.no("run", "done", "R1", "--status", "done", "--tokens", "1234567890123"), big, "13 digits is a typo, not a run's tokens");
+  assert.equal(s.no("run", "done", "R2", "--status", "failed", "--tokens", "abc"), 'sage: --tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not "abc". Nothing changed.', "every status checks its --tokens");
+  assert.equal(s.no("run", "done", "R6", "--status", "done", "--tokens", "1e5"), 'sage: --tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not "1e5". Nothing changed.');
+  assert.equal(s.ok("run", "done", "R1", "--status", "done", "--tokens", "123456789012"), "R1 done");
+  assert.equal(s.ok("run", "done", "R2", "--status", "failed"), "R2 failed", "a failed run has no report to count");
+  assert.equal(s.ok("run", "done", "R3", "--status", "blocked", "--tokens", "900"), "R3 blocked");
+  assert.equal(s.ok("run", "done", "R6", "--status", "done"), "R6 done", "an implementer gives tokens when it has them");
+  assert.equal(s.ok("run", "done", "R7", "--status", "done"), "R7 done");
+  assert.equal(s.no("run", "done", "R1", "--status", "done", "--tokens", "99"), "sage: R1 already ended as done with its tokens, and --tokens never replaces it. Nothing changed.");
+  assert.equal(s.no("run", "done", "R2", "--status", "done", "--tokens", "99"), "sage: R2 already ended as failed: a run ends once. A later run done --status failed may only add --tokens or --report, which it lacks. Nothing changed.", "a status change is refused, also with tokens to add");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => r.tokens), ["123456789012", "", "900", "", "", "", ""]);
+});
+
+test("T346: a later run done of an ended run only adds the tokens or the report path that it lacks, and keeps its status and end time", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  for (const state of ["briefed", "building"]) s.ok("task", "T1", "set", `state=${state}`);
+  s.ok("run", "add", "T1", "--role", "lead"); // R1
+  byHand(s.dir, "tasks", 0, "T1", (cells) => Object.assign(cells, { 5: "replan" }));
+  s.ok("task", "T1", "set", "state=briefed"); // a re-plan ends R1 as blocked, with no tokens
+  const ended = rows(s.dir, "runs")[0].ended;
+  assert.equal(s.no("run", "done", "R1", "--status", "blocked"), "sage: R1 already ended as blocked: a run ends once. A later run done --status blocked may only add --tokens or --report, which it lacks. Nothing changed.", "a call that adds nothing");
+  assert.equal(s.ok("run", "done", "R1", "--status", "blocked", "--tokens", "42000"), "R1 blocked · added tokens");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => [r.status, r.tokens, r.report, r.ended]), [["blocked", "42000", "", ended]]);
+  assert.equal(s.no("run", "done", "R1", "--status", "blocked", "--tokens", "43000"), "sage: R1 already ended as blocked with its tokens, and --tokens never replaces it. Nothing changed.", "a second add of tokens");
+  assert.equal(s.no("run", "done", "R1", "--status", "blocked", "--tokens", "42000"), "sage: R1 already ended as blocked with its tokens, and --tokens never replaces it. Nothing changed.", "the same tokens add nothing");
+  assert.equal(s.no("run", "done", "R1", "--status", "done", "--report", "r.md"), "sage: R1 already ended as blocked: a run ends once. A later run done --status blocked may only add --report, which it lacks. Nothing changed.", "a status change");
+  assert.equal(s.ok("run", "done", "R1", "--status", "blocked", "--report", "r.md"), "R1 blocked · added report");
+  assert.equal(s.no("run", "done", "R1", "--status", "blocked"), "sage: R1 already ended as blocked: a run ends once. A later run done --status blocked may only add nothing, as it has its tokens and its report. Nothing changed.");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => [r.status, r.tokens, r.report, r.ended]), [["blocked", "42000", "r.md", ended]]);
+});
+
+test("T346: sage stats gives each task's review runs, tokens, tokens after round 0, rounds and findings by role and cycle, and a total; it reads only", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("task", "add", "--title", "b", "--size", "small");
+  s.ok("task", "add", "--title", "c", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "code-reviewer"); // R1
+  s.ok("run", "add", "T1", "--role", "qa"); // R2
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"); // R3: no review run
+  s.ok("run", "add", "T2", "--role", "security-reviewer"); // R4
+  s.ok("run", "add", "T2", "--role", "code-reviewer"); // R5
+  s.ok("run", "done", "R1", "--status", "done", "--tokens", "1000");
+  s.ok("run", "done", "R2", "--status", "done", "--tokens", "500");
+  s.ok("run", "done", "R3", "--status", "done", "--tokens", "9999");
+  s.ok("run", "done", "R4", "--status", "done", "--tokens", "300");
+  byHand(s.dir, "runs", 0, "R5", (c) => Object.assign(c, { 6: "done" })); // an old done review run with no tokens
+  byHand(s.dir, "tasks", 0, "T1", (c) => Object.assign(c, { 8: "1" })); // one repair round
+  byHand(s.dir, "tasks", 0, "T3", (c) => Object.assign(c, { 8: "x" })); // a hand-edited round that is no number
+  s.ok("run", "add", "T1", "--role", "qa"); // R6: a run of round 1, so after round 0
+  s.ok("run", "done", "R6", "--status", "done", "--tokens", "1500000");
+  s.ok("run", "add", "T2", "--role", "qa"); // R7
+  s.ok("run", "done", "R7", "--status", "blocked", "--tokens", "7000"); // only a done run's tokens count
+  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a", "--run", "R1", "--class", "state-edge");
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "b", "--run", "R2");
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "c"); // no run: no cycle
+  // Sources that an object's own keys hold, and a | that a Markdown table reads as a new cell.
+  for (const source of ["constructor", "__proto__", "a|b"]) s.ok("finding", "add", "T2", "--source", source, "--severity", "low", "--summary", source, "--run", "R4");
+  s.ok("verdict", "T1", "--kind", "findings", "--sha", SHA, "--cycle", "1", "--run", "R1");
+  s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--cycle", "2", "--run", "R2");
+  s.ok("verdict", "T1", "--kind", "findings", "--sha", SHA, "--cycle", "3", "--run", "R4"); // a T1 row that names T2's run: not R4's cycle for T2
+  const files = () => readdirSync(s.dir).filter((f) => f.endsWith(".tsv") || f.endsWith(".md")).map((f) => [f, readFileSync(join(s.dir, f), "utf8")]);
+  const before = files();
+  // Largest review tokens first (T3 before T2 in the logbook, after it here), in thousands.
+  assert.equal(s.ok("stats"), [
+    "Tokens in thousands (k), of done runs only. A round is one repair of findings; after round 0 counts the runs of round 1 and later. A cycle is one set of reviews and QA on one head commit.",
+    "total · 3 tasks · 6 review runs (1 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 6 findings",
+    "",
+    "| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |",
+    "| T2 | 3 | 0k | 0k | 0 | __proto__: 1 · a\\|b: 1 · constructor: 1 | none: 3 |",
+    "| T3 | 0 | 0k | 0k | invalid | none | none |",
+  ].join("\n"));
+  assert.equal(s.ok("stats", "--task", "T1").split("\n").slice(1).join("\n"), "total · 1 tasks · 3 review runs (0 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 3 findings\n\n| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |\n| --- | --- | --- | --- | --- | --- | --- |\n| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |");
+  assert.deepEqual(files(), before, "stats writes no table and no status.md");
+  assert.equal(s.no("stats", "--task", "T9"), "sage: no task T9. The latest: T1, T2, T3.");
+  assert.match(s.no("stats", "--since", "2026-10-01"), /^sage: stats takes no --since\./);
+});
+
+test("T346: sage stats on a logbook with no review runs says so, and how its data starts", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1");
+  assert.equal(s.ok("stats"), "No review runs yet.\nData starts when a review or QA run ends with run done <R> --status done --tokens <n>, and its findings name it with finding add --run <R>.");
+});
+
+test("T346: sage stats shows findings with no review runs, and review runs with no findings", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("finding", "add", "T1", "--source", "checks", "--severity", "medium", "--summary", "the checks fail"); // the chief's finding, no run
+  assert.equal(s.ok("stats").split("\n").slice(1).join("\n"), "total · 1 tasks · 0 review runs (0 done without tokens) · 0k tokens · 0k after round 0 · 0 rounds · 1 findings\n\n| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |\n| --- | --- | --- | --- | --- | --- | --- |\n| T1 | 0 | 0k | 0k | 0 | checks: 1 | none: 1 |");
+  const r = store();
+  r.ok("task", "add", "--title", "a", "--size", "small");
+  r.ok("run", "add", "T1", "--role", "qa");
+  assert.equal(r.ok("stats").split("\n")[1], "total · 1 tasks · 1 review runs (0 done without tokens) · 0k tokens · 0k after round 0 · 0 rounds · 0 findings");
+});
+
+test("T346: sage stats sorts by review tokens, counts a tokens cell of 1 to 12 digits only, and shows the top 50 tasks with a line for the rest", () => {
+  const s = store();
+  for (const [task, tokens] of [["T1", "2000"], ["T2", "9000"], ["T3", "5000"]]) {
+    s.ok("task", "add", "--title", task, "--size", "small");
+    const run = s.ok("run", "add", task, "--role", "qa").split(" ")[0];
+    s.ok("run", "done", run, "--status", "done", "--tokens", tokens);
+  }
+  s.ok("run", "add", "T1", "--role", "qa"); // R4
+  byHand(s.dir, "runs", 0, "R4", (c) => Object.assign(c, { 6: "done", 7: "9".repeat(400) })); // an older sage's digit string
+  const table = (out) => out.split("\n").filter((l) => /^\| T\d/.test(l)).map((l) => l.split(" | ").slice(0, 3).join(" | "));
+  assert.deepEqual(table(s.ok("stats")), ["| T2 | 1 | 9k", "| T3 | 1 | 5k", "| T1 | 2 | 2k"], "largest review tokens first, not the logbook's order");
+  assert.equal(s.ok("stats").split("\n")[1], "total · 3 tasks · 4 review runs (1 done without tokens) · 16k tokens · 0k after round 0 · 0 rounds · 0 findings");
+  // 52 tasks: T4 to T52 by hand, as copies of T3 and its run with more tokens each.
+  const add = (table, from, rowsOf) => appendFileSync(join(s.dir, `${table}.tsv`), "\n" + rowsOf(readFileSync(join(s.dir, `${table}.tsv`), "utf8").split("\n").find((l) => l.startsWith(`${from}\t`))).join("\n"));
+  const ids = Array.from({ length: 49 }, (_, i) => i + 4);
+  add("tasks", "T3", (line) => ids.map((n) => line.replace(/^T3\t/, `T${n}\t`)));
+  add("runs", "R3", (line) => ids.map((n) => line.replace(/^R3\tT3\t/, `R${n + 1}\tT${n}\t`).replace(/\t5000\t/, `\t${n * 1000}\t`)));
+  const out = s.ok("stats").split("\n");
+  assert.equal(out[1], `total · 52 tasks · 53 review runs (1 done without tokens) · ${16 + (4 + 52) * 49 / 2}k tokens · 0k after round 0 · 0 rounds · 0 findings`, "the total counts every task, also those not shown");
+  assert.deepEqual(table(out.join("\n")).slice(0, 2), ["| T52 | 1 | 52k", "| T51 | 1 | 51k"]);
+  assert.equal(table(out.join("\n")).length, 50);
+  assert.deepEqual(out.slice(-3), [out.at(-3), "", "2 more tasks not shown; use --task <T>"], "a blank line ends the table before the line after it");
+  assert.match(out.at(-3), /^\| T\d+ \| /);
 });
 
 /** Sets a task's state by hand, as the end of its route would: the waits tests need upstream tasks in each state. */
@@ -3202,10 +3389,10 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   assert.equal(head, "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel");
   assert.equal(lines[0], "R1\tT1\timplementer\t0\t\tb/1\tdone\t900\t\t2026-10-01T00:00:00Z\t2026-10-01T01:00:00Z\t");
   assert.match(lines[1], /^R2\tT1\tqa\t0\t\t\trunning\t\t\t\S+\t\tsonnet$/);
-  assert.equal(o.ok("run", "done", "R1", "--status", "done"), "R1 done");
+  assert.equal(o.no("run", "done", "R1", "--status", "done"), "sage: R1 already ended as done: a run ends once. A later run done --status done may only add --report, which it lacks. Nothing changed.");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) o.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.match(o.no("merge-check", "--sha", SHA), /T1 has a review or QA run that still runs: R2 \(qa\)/, "R2's QA still runs (F-T289-18)");
-  o.ok("run", "done", "R2", "--status", "done");
+  o.ok("run", "done", "R2", "--status", "done", "--tokens", "1");
   assert.match(o.ok("merge-check", "--sha", SHA), /may merge/);
 });
 
@@ -3657,7 +3844,7 @@ test("F-T273-18: a held task takes no run add, finding change or verdict from an
     ["finding", "close", "T1", "F-T1-1"], ["verdict", "T1", "--sha", SHA, "--kind", "qa-pass"]]) {
     assert.match(s.no(...args), /^sage: T1 is held, so it takes no /, args.join(" "));
   }
-  assert.match(s.ok("run", "done", "R1", "--status", "done"), /^R1 done/, "a run still ends");
+  assert.match(s.ok("run", "done", "R1", "--status", "done", "--tokens", "1"), /^R1 done/, "a run still ends");
   assert.match(s.ok("task", "T1", "set", "state=building"), /^T1 building/, "the sage moves it out of held");
   assert.match(s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass"), /^T1 checks-pass/, "then a verdict records");
 });

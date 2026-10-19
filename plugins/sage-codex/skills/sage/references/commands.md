@@ -76,7 +76,8 @@ A program groups the tasks of one request with one goal and one pilot task. `pro
 Only the chief runs writes. Start a separate run for each actual specialist assignment with its exact role (`implementer`, `code-reviewer`, `security-reviewer`, `ux-reviewer`, `qa`). Roles and tasks must satisfy the CLI's existing rules. Do not rename unsupported design or investigation work to evade a refusal.
 
 ```sh
-node "$SAGE_CLI" finding add T7 --source code-reviewer --severity medium --summary "Reproducible problem" --project "$PROJECT"
+node "$SAGE_CLI" run done R3 --status done --tokens 52000 --project "$PROJECT"
+node "$SAGE_CLI" finding add T7 --source code-reviewer --severity medium --summary "Reproducible problem" --run R3 --class state-edge --project "$PROJECT"
 node "$SAGE_CLI" finding triage T7 F-T7-1 fix --project "$PROJECT"
 node "$SAGE_CLI" round T7 --project "$PROJECT"
 node "$SAGE_CLI" finding close T7 F-T7-1 --project "$PROJECT"
@@ -85,6 +86,8 @@ node "$SAGE_CLI" verdict T7 --kind review-clean --sha "$HEAD_SHA" --run R3 --cyc
 node "$SAGE_CLI" verdict T7 --kind qa-pass --sha "$HEAD_SHA" --run R4 --cycle 1 --project "$PROJECT"
 node "$SAGE_CLI" merge-check --sha "$HEAD_SHA" --project "$PROJECT"
 ```
+
+A done review, QA or evidence-review run needs `--tokens` with its tokens as a whole number; any `--tokens` has 1 to 12 digits. A run ends once: a later `run done` of an ended run, with the same `--status`, only adds the `--tokens` or the `--report` that it lacks (a Codex native finish and a re-plan end a run with neither); it never replaces a value, and any other call is refused. `finding add` takes `--run`, the run whose report holds the finding (a run of that task), and `--class`, one of state-edge, speed, copy, layout, security or other; both are optional. `stats [--task T7]` prints a guide line, a total line, and one table of the 50 tasks with the most review tokens, largest first: each task's review runs, review tokens in thousands (done runs only), the tokens after round 0 (its runs of repair round 1 or later), rounds and findings by role and by cycle; then "N more tasks not shown; use --task <T>" when there are more. With no review runs and no findings it prints "No review runs yet."; it reads only.
 
 Use the full 40-character checked commit as `HEAD_SHA`. Record medium/high findings before a problem verdict (`findings` for a review, `qa-fail` for QA). Security and UX clean kinds are `security-clean` and `ux-clean`. Checks use `checks-pass` or `checks-fail`. Investigation verdicts use `evidence-clean` or `findings` without a commit. Record only an outcome that actually happened. A manual verdict's `--run` field is not native reviewer authentication.
 
