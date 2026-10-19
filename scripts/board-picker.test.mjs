@@ -393,7 +393,7 @@ test("R1080-1: at 375 px every touch target on the board and on each task page t
   assert.deepEqual(small, []);
 });
 
-test("R1093-1: at 375 px no tall header stays on screen, and at every width a card that Shift+Tab focuses is not under a sticky header", async t => {
+test("R1093-1: at 375 px no tall header stays on screen, and at every width a card that Shift+Tab focuses is not under a part that stays on screen", async t => {
   // The sticky part: every shown element that stays on screen when the page scrolls, as high as its lowest bottom.
   const stuck = page => page.evaluate(() => Math.max(0, ...[...document.querySelectorAll("body *")].filter(e => ["sticky", "fixed"].includes(getComputedStyle(e).position) && e.getClientRects().length).map(e => e.getBoundingClientRect().bottom)));
   for (const [width, colorScheme] of [[375, "light"], [375, "dark"], [800, "light"], [1440, "dark"]]) {
@@ -403,7 +403,6 @@ test("R1093-1: at 375 px no tall header stays on screen, and at every width a ca
       assert.ok(await page.locator("#pick-chips .chip:not([hidden])").count() >= 4, "4 or more need-you chips");
       assert.ok(await stuck(page) < 120, `${label}: the sticky part is ${await stuck(page)} px high`);
     }
-    if (width === 1440) assert.equal(await page.locator("header").evaluate(header => getComputedStyle(header).position), "sticky", "the desktop header stays");
     // A card below the fold: focus the control after it, scroll the card's top (or all of it) off the top of the screen,
     // then go back with Shift+Tab. Chromium centres a card that is out of view, and puts one that is partly in view at the top.
     const below = await page.locator(".card[data-key]:visible").evaluateAll(cards => cards.findIndex(card => card.getBoundingClientRect().top > innerHeight));
@@ -424,16 +423,18 @@ test("R1093-1: at 375 px no tall header stays on screen, and at every width a ca
   }
 });
 
-test("R1098-1: with the header sticky, a control in the header takes focus without a scroll of the page", async t => {
+test("R1098-1: a control in the header that is on screen takes focus without a scroll of the page; / far down brings the search into view", async t => {
   for (const width of [800, 1440]) {
     const page = await open(t, { width, height: 800 });
-    assert.equal(await page.locator("header").evaluate(header => getComputedStyle(header).position), "sticky", `${width} px: the header is sticky`);
+    // Scrolled so that the highest of the controls (the theme switch and the picker button) is 2 px below the top of the window.
+    const y0 = await page.evaluate(() => Math.round(Math.min(...["label.theme", "#pick-trig"].map(s => document.querySelector(s).getBoundingClientRect().top)) - 2));
+    assert.ok(y0 >= 8, `${width} px: the page can scroll ${y0} px with the controls on screen`);
     const after = async (label, act) => {
-      await page.evaluate(() => { document.activeElement?.blur(); scrollTo(0, 700); });
-      assert.equal(await page.evaluate(() => scrollY), 700, `${width} px: the page scrolls to 700 px`);
+      await page.evaluate(y => { document.activeElement?.blur(); scrollTo(0, y); }, y0);
+      assert.equal(await page.evaluate(() => scrollY), y0, `${width} px: the page scrolls to ${y0} px`);
       await act();
       const y = await page.evaluate(() => scrollY);
-      assert.ok(Math.abs(y - 700) <= 2, `${width} px, ${label}: the page is at ${y} px, not at 700 px`);
+      assert.ok(Math.abs(y - y0) <= 2, `${width} px, ${label}: the page is at ${y} px, not at ${y0} px`);
     };
     await after("a click on the theme label", () => page.click("label.theme"));
     await after("/", () => page.keyboard.press("/"));
@@ -441,6 +442,53 @@ test("R1098-1: with the header sticky, a control in the header takes focus witho
     await page.keyboard.press("Escape");
     await after("/ then Esc", async () => { await page.keyboard.press("/"); await page.keyboard.press("Escape"); });
     assert.equal(await page.evaluate(() => document.activeElement.id), "pick-trig", `${width} px: Esc gives focus back to the button`);
+    // Far down, the header is off the screen: / focuses the search and brings all of it into view, so the typing shows.
+    await page.evaluate(() => { document.activeElement?.blur(); scrollTo(0, 700); });
+    await page.keyboard.press("/");
+    const [id, top, bottom] = await page.evaluate(() => { const box = document.activeElement.getBoundingClientRect(); return [document.activeElement.id, box.top, box.bottom]; });
+    assert.ok(id === "pick-q" && top >= 0 && bottom <= 800, `${width} px: / far down focuses ${id}, from ${top} to ${bottom} px`);
+  }
+});
+
+test("R1103-1: scrolled, Shift+Tab onto a card whose top is 20 px below the top of the window leaves all of the card in view, with nothing over its top", async t => {
+  // Each card that the page can scroll to 20 px below the top of the window, at each width; a card near the top of the
+  // page (the first of a column) and one further down both count.
+  const wrong = [], checked = {};
+  for (const width of [800, 1440]) {
+    const page = await open(t, { width, height: 800 });
+    const cards = page.locator(".card[data-key]:visible");
+    for (let i = 0, n = await cards.count(); i < n; i++) {
+      const target = cards.nth(i), name = `${width} px card ${i}`;
+      // Focus the control after the card without a scroll, then scroll the page so that the card's top is 20 px down.
+      const [y, top] = await target.evaluate(card => {
+        const all = [...document.querySelectorAll("a[href],button,select,input:not(.vh),summary,[tabindex]:not([tabindex='-1'])")].filter(e => e.checkVisibility());
+        all[all.indexOf(card) + 1].focus({ preventScroll: true });
+        scrollTo(0, card.getBoundingClientRect().top + scrollY - 20);
+        return [scrollY, Math.round(card.getBoundingClientRect().top)];
+      });
+      if (y <= 0 || top !== 20) continue;
+      checked[width] = (checked[width] ?? 0) + 1;
+      await page.keyboard.press("Shift+Tab");
+      if (!await target.evaluate(card => document.activeElement === card)) { wrong.push(`${name}: Shift+Tab does not focus it`); continue; }
+      // All of the card is in the window, and the element at the centre of its top edge is the card (nothing covers it).
+      const seen = await target.evaluate(card => { const box = card.getBoundingClientRect(), e = document.elementFromPoint(box.left + box.width / 2, box.top + 1); return `${box.top >= 0 && box.bottom <= innerHeight ? "in view" : `from ${box.top} to ${box.bottom} px`}, at its top ${card.contains(e) ? "the card" : e?.outerHTML.slice(0, 80)}`; });
+      if (seen !== "in view, at its top the card") wrong.push(`${name}: ${seen}`);
+    }
+  }
+  assert.ok(checked[800] >= 10 && checked[1440] >= 10, `cards checked: ${JSON.stringify(checked)}`);
+  assert.deepEqual(wrong, []);
+});
+
+test("R1103-1: no element stays on screen when the page scrolls, except the phone picker sheet while it is open", async t => {
+  // Each shown element whose position is sticky or fixed, by its classes.
+  const stays = page => page.evaluate(() => [...document.querySelectorAll("*")].filter(e => ["sticky", "fixed"].includes(getComputedStyle(e).position) && e.getClientRects().length).map(e => e.className || e.tagName.toLowerCase()));
+  for (const width of [375, 800, 1440]) {
+    const page = await open(t, { width, height: 800 });
+    await page.evaluate(() => scrollTo(0, 400));
+    assert.deepEqual(await stays(page), [], `${width} px: the page with the picker closed`);
+    await page.locator("#pick-trig").click();
+    assert.equal(await page.locator("#pick-trig").getAttribute("aria-expanded"), "true", `${width} px: the picker is open`);
+    assert.deepEqual(await stays(page), width === 375 ? ["pop"] : [], `${width} px: the page with the picker open`);
   }
 });
 

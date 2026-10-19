@@ -191,11 +191,11 @@ const THEME_CSS = `:root{${DARK}}${whenLight("", LIGHT)}.to-dark{display:none}${
 export const THEME_HEAD = "try{const t=localStorage.getItem('board-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}";
 
 const CSS = `${THEME_CSS}
-*{box-sizing:border-box}[hidden]{display:none!important}html{background:var(--bg)}header~*,header~* *{scroll-margin-top:calc(var(--sticky,56px) + 8px)}
+*{box-sizing:border-box}[hidden]{display:none!important}html{background:var(--bg)}
 body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;min-height:100vh}
 a{color:var(--accent)}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 button{font:inherit;color:inherit}
-header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:3}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
 h1{font-size:15px;margin:0;font-weight:650}.spacer{flex:1}html:not(.scripted) .pick,html:not(.scripted) .fbar{display:none}
 .pick{display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%}.pickchips{display:contents}
 .chip{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:99px;padding:4px 10px;font:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;min-height:28px;max-width:100%;min-width:0}.chip .cn{overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -316,7 +316,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
  .board{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr));overflow-x:visible}
 }
 @media (max-width:700px){
- header{padding:12px 16px;gap:8px 10px;position:static}
+ header{padding:12px 16px;gap:8px 10px}
  .fbar{padding:10px 16px 0}
  .summary,.legend{padding-left:16px;padding-right:16px;gap:6px 14px}
  .banner,.emptyboard{margin:0 16px 10px}
@@ -374,10 +374,6 @@ const match=${matchProject.toString()};
 ${cardFits.toString()}
 ${needCounts.toString()}
 const SHOWN=${BACKLOG_SHOWN},foldText=${foldText.toString()};
-// A focused control below the sticky header never hides under it (R1093-1): each one keeps the header's height free above it.
-// Only content below the header has the margin, so a control in the header takes focus without a scroll (R1098-1).
-const head=document.querySelector('header'),pad=()=>document.documentElement.style.setProperty('--sticky',(head&&getComputedStyle(head).position==='sticky'?head.offsetHeight:0)+'px');
-pad();addEventListener('resize',pad);if(head&&window.ResizeObserver)new ResizeObserver(pad).observe(head);
 const S={project:'',needs:false,who:'',priority:'',kind:'',open:false,query:'',active:null,archived:false,gone:false};
 try{const h=/^#p=(.*)$/.exec(location.hash);S.project=h?decodeURIComponent(h[1]):localStorage.getItem('board-project')||''}catch(e){}
 function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#p=/.test(location.hash))history.replaceState(null,'',S.project?'#p='+encodeURIComponent(S.project):location.pathname+location.search)}catch(e){}}
