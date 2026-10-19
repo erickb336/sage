@@ -1931,7 +1931,7 @@ test("F-R65-1: a table that lost its header line fails the merge check closed an
   assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "1"), /^sage: T1 has open findings: F-T1-1, F-T1-2\./);
   const findings = join(s.dir, "findings.tsv");
   reshape(findings, (lines) => lines.slice(1)); // sed 1d, or tail -n +2
-  const why = damaged(findings, "task, key, round, source, severity, summary, triage, reason, status");
+  const why = damaged(findings, "task, key, round, source, severity, summary, triage, reason, status, run, class");
   assert.equal(s.no("merge-check", "--sha", SHA, "--cycles", "1"), `sage: the merge check refuses every merge, because ${why}`);
   assert.equal(s.no("log", "-", "x", "--why", "y"), `sage: ${why}`, "a write says that the header is damaged, not that a newer sage wrote it");
 
@@ -1991,7 +1991,7 @@ test("F-R65-2: only a header with every known column and more is a newer sage's;
   writeFileSync(findings, `\uFEFF${readFileSync(findings, "utf8").replaceAll("\n", "\r\n")}`);
   assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "1"), /^sage: T1 has open findings: F-T1-1\./, "the open finding stays open");
   assert.equal(s.ok("finding", "triage", "T1", "F-T1-1", "fix"), "F-T1-1 open · fix");
-  assert.equal(readFileSync(findings, "utf8"), "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\nT1\tF-T1-1\t0\tqa\thigh\topen one\tfix\t\topen\n");
+  assert.equal(readFileSync(findings, "utf8"), "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\trun\tclass\nT1\tF-T1-1\t0\tqa\thigh\topen one\tfix\t\topen\t\t\n");
 });
 
 test("F-R65-3: no control character reaches the terminal: a cell keeps none, a printed id, column or path shows each as \\xNN, and such a path gets no command", () => {
@@ -2715,7 +2715,7 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   assert.equal(o.ok("run", "done", "R1", "--status", "done"), "R1 done");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) o.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.match(o.no("merge-check", "--sha", SHA), /T1 has a review or QA run that still runs: R2 \(qa\)/, "R2's QA still runs (F-T289-18)");
-  o.ok("run", "done", "R2", "--status", "done");
+  o.ok("run", "done", "R2", "--status", "done", "--tokens", "1");
   assert.match(o.ok("merge-check", "--sha", SHA), /may merge/);
 });
 
@@ -3167,7 +3167,7 @@ test("F-T273-18: a held task takes no run add, finding change or verdict from an
     ["finding", "close", "T1", "F-T1-1"], ["verdict", "T1", "--sha", SHA, "--kind", "qa-pass"]]) {
     assert.match(s.no(...args), /^sage: T1 is held, so it takes no /, args.join(" "));
   }
-  assert.match(s.ok("run", "done", "R1", "--status", "done"), /^R1 done/, "a run still ends");
+  assert.match(s.ok("run", "done", "R1", "--status", "done", "--tokens", "1"), /^R1 done/, "a run still ends");
   assert.match(s.ok("task", "T1", "set", "state=building"), /^T1 building/, "the sage moves it out of held");
   assert.match(s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass"), /^T1 checks-pass/, "then a verdict records");
 });

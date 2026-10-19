@@ -406,8 +406,9 @@ const rowsOf = ({ cols, lines }) =>
     const v = line.split("\t");
     return Object.fromEntries(cols.map((c, i) => [c, v[i] ?? ""]));
   });
-/** A table's rows, with an empty cell in each column that a later version added and the file does not have yet. */
-const read = (dir, table) => rowsOf(sheet(dir, table)).map((row) => ({ ...Object.fromEntries((ADDED[table] ?? []).map((c) => [c, ""])), ...row }));
+/** A table's rows, with an empty cell after the others for each column that a later version added and the file does not have yet. */
+const rowsIn = (table, text) => rowsOf(text).map((row) => ({ ...row, ...Object.fromEntries((ADDED[table] ?? []).filter((c) => !Object.hasOwn(row, c)).map((c) => [c, ""])) }));
+const read = (dir, table) => rowsIn(table, sheet(dir, table));
 
 /**
  * The integrity check of a logbook: every table (but skip, the ones that a repair starts again) is there, is a regular
@@ -482,7 +483,7 @@ function updateRows(table, text) {
   const sheet = sheetText(text);
   if (!TABLES[table].every(key => sheet.cols.includes(key) || ADDED[table]?.includes(key))
     || sheet.cols.some(key => !TABLES[table].includes(key)) || new Set(sheet.cols).size !== sheet.cols.length) updateDeny();
-  return rowsOf(sheet);
+  return rowsIn(table, sheet);
 }
 function updateFacts(rows, readiness) {
   return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, readiness };
