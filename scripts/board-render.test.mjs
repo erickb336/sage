@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus, needCounts, BOARD_ENHANCEMENT } from "../packages/sage-core/board-render.mjs";
 function model() {
-  return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [{ key: "sample/project-abcdef", name: "project-abcdef", diagnostics: [], tables: { tasks: [{ id: "T1", title: "<script>alert(1)</script> & [sample](https://example.test)", size: "small", risk: "auth", route: "build,code-review,qa", state: "held", branch: "", pr: "", round: "1", keys: "" }] } }] }], { now: "2026-10-08T20:00:00Z" });
+  return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [{ key: "sample/project-abcdef", name: "project-abcdef", diagnostics: [], tables: { tasks: [{ id: "T1", title: "<script>alert(1)</script> & [sample](https://example.test)", size: "small", risk: "auth", route: "build,code-review,qa", state: "held", branch: "", pr: "", round: "1", keys: "" }], gates: [{ id: "G1", task: "T1", question: "Sample: go on?", answer: "" }] } }] }], { now: "2026-10-08T20:00:00Z" });
 }
 test("HTML renders escaped initial cards and complete offline task sections before enhancements", () => {
   const data = model(), html = renderBoardHtml(data);
@@ -141,8 +141,8 @@ test("T305: the step line shows the ledger's verdicts on the newest reviewed hea
   });
   const html = renderBoardHtml(data, { snapshot: false });
   assert.ok(html.includes('<ol class="sline" aria-label="Steps"><li class="s s-done"><span aria-hidden="true">✓</span>Plan<span class="vh">: done</span></li><li class="sep" aria-hidden="true">›</li><li class="s s-done"><span aria-hidden="true">✓</span>Build<span class="vh">: done</span></li><li class="sep" aria-hidden="true">›</li><li class="s s-fail"><span aria-hidden="true">✗</span>Review 1 of 1<span class="vh">: failed</span></li>'));
-  assert.ok(html.includes('<b>Needs you:</b> QA failed on the recorded PR head.</span></div><div class="nextline"><b>Next:</b> A repair round, then the reviews start again at cycle 1</div>'));
-  assert.ok(html.includes('<b>Now:</b> Review cycle 1 of 1: no verdict on the last commit yet'));
+  assert.ok(html.includes('<b>Needs you:</b> QA failed on the recorded PR head.</span></div><div class="nextline"><b>Next:</b> A repair round, then the reviews start again at cycle 1.</div>'));
+  assert.ok(html.includes("<b>Now:</b> No agent works on review cycle 1 of 1 now. The board does not know the PR&#39;s last commit."));
   assert.ok(!html.includes("PR head not recorded"), "no jargon");
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks.find(t => t.id === "T1").key });
   assert.ok(page.includes(`last commit <span class="standin" title="The commit of the newest verdict for this PR. The PR&#39;s own last commit is not recorded.">ccccccc</span>`));
@@ -185,9 +185,10 @@ test("T218: the chat board shows 5 cards a column in the page's order, with the 
     row("T41", "reviewing", { pr: "3" }),
     ...Array.from({ length: 7 }, (_, i) => row(`T${50 + i}`, "building")), row("T60", "held"),
   ];
+  const gates = [{ id: "G1", task: "T60", question: "Sample: go on?", answer: "" }];
   const decisions = tasks.map((task, i) => ({ at: new Date(Date.parse(at) - (60 - i) * 60000).toISOString(), task: task.id, decision: "sample", why: "sample" }));
   const runs = [{ id: "R1", task: "T50", role: "implementer", status: "running", started: at }];
-  const data = sample(tasks, { decisions, runs }), text = renderBoardText(data);
+  const data = sample(tasks, { decisions, runs, gates }), text = renderBoardText(data);
   // The same order as the page: newest activity first (F-T218-2), 5 a column and the rest counted (F-T218-6).
   const backlog = /### 📋 Backlog \(40\)\n([\s\S]*?)\n\n###/.exec(text)[1];
   assert.deepEqual([...backlog.matchAll(/\*\*(T\d+) /g)].map(m => m[1]), ["T40", "T39", "T38", "T37", "T36"]);
@@ -203,7 +204,7 @@ test("T218: the chat board shows 5 cards a column in the page's order, with the 
   // F-T218-12: the page's date, summary words and column names; one note for the provider stand-in.
   assert.ok(text.startsWith("**sage board** · built 2026-10-08 20:00 UTC\n🔴 1 needs you · 1 agents at work · 🔁 1 in review · 49 tasks\n"));
   assert.ok(text.includes("### 🏁 Done, last 7 days (0)"));
-  assert.ok(text.includes("**T41 Sample T41** · sample · project · PR 3\n✓ Plan › ✓ Build › ▶ Review 1 of 1 › ○ Merge\nNow: Review cycle 1 of 1: no verdict on the last commit yet"), text.slice(text.indexOf("**T41"), text.indexOf("**T41") + 200));
+  assert.ok(text.includes("**T41 Sample T41** · sample · project · PR 3\n✓ Plan › ✓ Build › ▷ Review 1 of 1 › ○ Merge\nNow: No agent works on review cycle 1 of 1 now\\. The board does not know the PR's last commit\\."), text.slice(text.indexOf("**T41"), text.indexOf("**T41") + 200));
   assert.ok(!text.includes("? checks"));
   assert.ok(!text.includes("logbook source)"));
   assert.equal(text.split("A stand-in: the run does not record its provider").length, 2);
@@ -215,7 +216,7 @@ test("T314: a card and a task page show the display name, the priority and the k
   const book = (key, name, tasks, extra = {}) => ({ key: `sample/${key}`, name: key, diagnostics: [], tables: { tasks }, displayName: name, ...extra });
   const data = buildBoardModel([{ id: "sample", label: "sample", diagnostics: [], projects: [
     book("demos-abcdef", "seacc (Council Record)", [row("T1", "framed", { priority: "P1", kind: "bug-fix" }), row("T2", "framed")]),
-    book("old-abcdef", "Old <app>", [row("T1", "held"), row("T2", "framed")], { archived: true }),
+    book("old-abcdef", "Old <app>", [row("T1", "awaiting-you"), row("T2", "framed")], { archived: true }),
   ] }], { now: at });
   const html = renderBoardHtml(data);
   const board = html.slice(html.indexOf('<main class="board"'), html.indexOf("</main>"));
@@ -243,8 +244,8 @@ const twoBooks = (live, old, extra = {}) => buildBoardModel([{ id: "sample", lab
 ] }], { now: at });
 
 test("T314 R1040-2: the status leaves archived tasks out of Tasks and Owner, and one line counts the archived projects and what needs you there", () => {
-  const status = renderBoardStatus(twoBooks([row("T1", "framed"), row("T2", "held")], [row("T1", "held"), row("T2", "building"), row("T3", "held")]));
-  assert.deepEqual(status.split("\n").slice(0, 4), ["Tasks: framed 1 · held 1", "Agents: 0 recorded running · 0 inferred PRs", "Owner: 1 tasks need you", "Archived: 1 project · 2 tasks need you"]);
+  const status = renderBoardStatus(twoBooks([row("T1", "framed"), row("T2", "awaiting-you")], [row("T1", "awaiting-you"), row("T2", "building"), row("T3", "awaiting-you")]));
+  assert.deepEqual(status.split("\n").slice(0, 4), ["Tasks: framed 1 · awaiting-you 1", "Agents: 0 recorded running · 0 inferred PRs", "Owner: 1 tasks need you", "Archived: 1 project · 2 tasks need you"]);
   assert.equal(renderBoardStatus(twoBooks([row("T1", "framed")], [])).split("\n")[3], "Archived: 1 project · 0 tasks need you", "an archived project without tasks still counts");
   assert.ok(!renderBoardStatus(sample([row("T1", "framed")])).includes("Archived"), "no archived project: no line");
 });
@@ -276,7 +277,7 @@ test("T314 R1045-3: the task text shows the priority and the kind when they are 
 
 // T305: the picker, the filter bar, the theme and the live pill, as the page gives them. Sample data only.
 const providers = () => buildBoardModel([
-  { id: "claude", label: "claude", provider: "Claude", diagnostics: [], projects: [{ key: "claude/sage-43265b", name: "sage-43265b", checkout: "/sample/sage", diagnostics: [], tables: { tasks: [row("T1", "held", { priority: "P0", kind: "ui" })] } }, { key: "claude/demo-111111", name: "demo-111111", checkout: "/sample/sdc/product-demos", displayName: "seacc (Council Record)", diagnostics: [], tables: { tasks: [row("T2", "framed")] } }] },
+  { id: "claude", label: "claude", provider: "Claude", diagnostics: [], projects: [{ key: "claude/sage-43265b", name: "sage-43265b", checkout: "/sample/sage", diagnostics: [], tables: { tasks: [row("T1", "awaiting-you", { priority: "P0", kind: "ui" })] } }, { key: "claude/demo-111111", name: "demo-111111", checkout: "/sample/sdc/product-demos", displayName: "seacc (Council Record)", diagnostics: [], tables: { tasks: [row("T2", "framed")] } }] },
   { id: "codex", label: "codex", provider: "Codex", diagnostics: [], projects: [{ key: "codex/sage-43265b", name: "sage-43265b", checkout: "/sample/sage", diagnostics: [], tables: { tasks: [row("T1", "framed")] } }] },
 ], { now: at });
 
@@ -338,9 +339,9 @@ test("T305 R1056-2: a backlog card shows only its step line; a card in another c
   const cards = Object.fromEntries([...html.matchAll(cardOf())].map(match => [/<span class="id">(T\d+)<\/span>/.exec(match[1])[1], match[1]]));
   assert.ok(cards.T1.includes('<ol class="sline" aria-label="Steps">'), "the backlog card has its steps");
   assert.ok(!cards.T1.includes('class="nowline') && !cards.T1.includes('class="nextline"'), "and no Now or Next line");
-  assert.ok(cards.T2.includes("<b>Now:</b> No agent works on it now") && cards.T2.includes("<b>Next:</b> Review cycle 1 of 1 starts when the PR opens"));
+  assert.ok(cards.T2.includes("<b>Now:</b> No agent works on the build now.") && cards.T2.includes("<b>Next:</b> Review cycle 1 of 1, when the PR opens."));
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks.find(task => task.id === "T1").key });
-  assert.ok(page.includes("<b>Now:</b> In the backlog. No agent works on it.") && page.includes("<b>Next:</b> The build"), "the task page keeps both lines");
+  assert.ok(page.includes("<b>Now:</b> In the backlog. No agent works on it.") && page.includes("<b>Next:</b> The build."), "the task page keeps both lines");
 });
 
 test("T305 F-T305-4: a backlog card that needs you keeps its Needs you line with the question", () => {

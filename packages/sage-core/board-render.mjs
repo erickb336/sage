@@ -23,8 +23,9 @@ function link(label, value) { const url = safeUrl(value); return url ? `<a href=
 
 const ICON = '<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor" opacity=".18"/><rect x="7.2" y="3.6" width="1.6" height="5.6" rx=".8" fill="currentColor"/><circle cx="8" cy="11.6" r="1" fill="currentColor"/></svg>';
 // The step line (T305 loop design 1): each status has a mark and a word, so no status relies on colour or hover.
-const MARK = { done: "✓", run: "▶", fail: "✗", need: "!", wait: "○", unknown: "?" };
-const WORD = { done: "done", run: "running now", fail: "failed", need: "needs you", wait: "not started", unknown: "not known yet" };
+// "Running now" only with a live run; a current step that no agent runs is "no agent at work"; a run with no news for 24 h "may have stopped".
+const MARK = { done: "✓", run: "▶", fail: "✗", need: "!", wait: "○", idle: "▷", stale: "⧗", unknown: "?" };
+const WORD = { done: "done", run: "running now", fail: "failed", need: "needs you", wait: "not started", idle: "no agent at work", stale: "may have stopped", unknown: "not known yet" };
 const status = value => MARK[value] ? value : "unknown";
 // The ten kinds, each with a shape and a word (T305 notes, section 6).
 const KIND = { design: ["◇", "Design"], ui: ["▢", "UI"], orchestration: ["⇄", "Orchestration"], optimization: ["↗", "Optimization"], "bug-fix": ["✱", "Bug fix"], logbook: ["≡", "Logbook"], docs: ["¶", "Docs"], security: ["▲", "Security"], providers: ["⊞", "Providers"], checks: ["✓", "Checks"] };
@@ -66,19 +67,20 @@ const tags = task => `${task.priority ? `<span class="tag prio" title="${task.pr
 /** The archived group: each archived project's name and task count, folded, with what needs you there. Its tasks are on no column. */
 const archivedCounts = book => `${book.tasks} task${book.tasks === 1 ? "" : "s"}${book.needsOwner ? ` · ${book.needsOwner} need${book.needsOwner === 1 ? "s" : ""} you` : ""}`;
 const archivedGroup = model => model.archived.length ? `<details class="archived" id="board-archived" data-key="archived"><summary id="sum-archived">Archived · ${model.archived.length} project${model.archived.length === 1 ? "" : "s"}</summary><ul>${model.archived.map(book => `<li>${esc(book.name)} · ${archivedCounts(book)}</li>`).join("")}</ul></details>` : "";
-const agentPill = (ctx, task, agent) => `<span class="agent${ctx.sources.indexOf(task.source) % 2 ? " alt" : ""}"><span class="live" aria-hidden="true"></span><span class="prov">${provider(agent.provider, task)} ·</span> ${esc(agent.role)}</span>`;
+const agentPill = (ctx, task, agent) => agent.stale ? `<span class="agent stale"><span aria-hidden="true">${MARK.stale}</span><span class="prov">${provider(agent.provider, task)} ·</span> ${esc(agent.role)} · may have stopped</span>`
+  : `<span class="agent${ctx.sources.indexOf(task.source) % 2 ? " alt" : ""}"><span class="live" aria-hidden="true"></span><span class="prov">${provider(agent.provider, task)} ·</span> ${esc(agent.role)}</span>`;
 const agents = (ctx, task, extra = "") => task.agents.length ? `<div class="agents${extra}">${task.agents.map(agent => agentPill(ctx, task, agent)).join("")}</div>` : "";
 
 /** The step line: only the route's steps, each with its mark and its word (the word is for screen readers on the line). */
 const stepLine = task => `<ol class="sline" aria-label="Steps">${task.loop.steps.map(step => `<li class="s s-${status(step.status)}"><span aria-hidden="true">${MARK[status(step.status)]}</span>${esc(step.label)}<span class="vh">: ${WORD[status(step.status)]}</span></li>`).join('<li class="sep" aria-hidden="true">›</li>')}</ol>`;
 /** "Now" or "Needs you", then "Next". A gate's question shows here once, not again in a banner (bug bash R1023). */
-const nowNext = (task, next = true) => `<div class="nowline${task.loop.now.needs ? " need" : ""}">${task.loop.now.needs ? ICON : ""}<span><b>${task.loop.now.needs ? "Needs you" : "Now"}:</b> ${esc(task.loop.now.text)}</span></div>${next && task.loop.next ? `<div class="nextline"><b>Next:</b> ${esc(task.loop.next)}</div>` : ""}`;
+const nowNext = (task, next = true) => `<div class="nowline${task.loop.now.needs ? " need" : task.loop.now.stale ? " stale" : ""}">${task.loop.now.needs ? ICON : task.loop.now.stale ? `<span aria-hidden="true">${MARK.stale}</span>` : ""}<span><b>${task.loop.now.needs ? "Needs you" : "Now"}:</b> ${esc(task.loop.now.text)}</span></div>${next && task.loop.next ? `<div class="nextline"><b>Next:</b> ${esc(task.loop.next)}</div>` : ""}`;
 /** The task page lists each step with its detail and, for a review, each role with a word for its state. */
 const stepRows = task => `<ol class="vlist">${task.loop.steps.map(step => `<li class="v-${status(step.status)}"><span class="g" aria-hidden="true">${MARK[status(step.status)]}</span><b>${esc(step.label)}</b> <span class="faint">${WORD[status(step.status)]}</span>${step.detail ? `<div class="faint">${esc(step.detail)}</div>` : ""}${step.parts?.length ? `<div class="parts">${step.parts.map(([name, value]) => `<span class="part p-${status(value)}"><span aria-hidden="true">${MARK[status(value)]}</span> ${esc(name)}: ${WORD[status(value)]}</span>`).join("")}</div>` : ""}</li>`).join("")}</ol>`;
 
 function card(ctx, task, { archived = false } = {}) {
   const done = task.column === "done";
-  return `<a class="card${task.reasons.length ? " needs" : ""}" id="card-${b64(task.key)}" href="${esc(ctx.snapshot ? `#${anchor(task)}` : route(task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}"${archived ? " data-archived hidden" : ""}>`
+  return `<a class="card${task.reasons.length ? " needs" : ""}" id="card-${b64(task.key)}" href="${esc(ctx.snapshot ? `#${anchor(task)}` : route(task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.filter(agent => !agent.stale).length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}"${archived ? " data-archived hidden" : ""}>`
     + `<div class="top"><span class="id">${esc(task.id)}</span>·${project(ctx, task)}<span class="who" title="The logbook that holds this task">${esc(title(task.providerStandIn))}</span>${task.pr ? `<span class="pr">PR ${esc(task.pr)}</span>` : ""}</div>`
     + `<div class="title" title="${esc(task.title)}">${esc(task.title)}</div>`
     // A backlog card shows only its steps: its Now and Next lines would say the same on every card (R1056-2). A task
@@ -250,20 +252,20 @@ a.card:hover{border-color:var(--accent)}.card.needs{border-color:var(--need);box
 .title{margin:6px 0 4px;font-weight:550;font-size:13px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .sline{display:flex;flex-wrap:wrap;gap:2px 4px;list-style:none;margin:6px 0 4px;padding:0;align-items:center;font-size:12px}
 .sline .s{display:inline-flex;gap:4px;align-items:center;padding:1px 6px;border-radius:5px;color:var(--muted)}.sline .sep{color:var(--muted)}
-.s-done{color:var(--ok)!important}.s-run{background:var(--run-soft);color:var(--run)!important;font-weight:650}
+.s-done{color:var(--ok)!important}.s-idle{color:var(--text)!important;font-weight:650;box-shadow:0 0 0 1px var(--line) inset}.s-stale{background:var(--warn-soft);color:var(--warn)!important;font-weight:650}.s-run{background:var(--run-soft);color:var(--run)!important;font-weight:650}
 .s-fail{background:var(--need-soft);color:var(--need)!important;font-weight:600}.s-need{background:var(--need-soft);color:var(--need)!important;font-weight:650;box-shadow:0 0 0 1px var(--need) inset}
 .nowline{display:flex;gap:6px;align-items:flex-start;font-size:12.5px;margin:4px 0 2px;overflow-wrap:anywhere}.nowline svg{flex:none;margin-top:2px}
-.nowline.need{background:var(--need-soft);color:var(--need);border-radius:6px;padding:5px 8px;font-weight:600}
+.nowline.stale{color:var(--warn);font-weight:600}.nowline.need{background:var(--need-soft);color:var(--need);border-radius:6px;padding:5px 8px;font-weight:600}
 .nextline{font-size:12px;color:var(--muted);margin-bottom:4px;overflow-wrap:anywhere}
 .vlist{list-style:none;padding:0;margin:10px 0 6px;display:flex;flex-direction:column;gap:8px;font-size:12px}
 .vlist li{padding-left:20px;position:relative;overflow-wrap:anywhere}.vlist .g{position:absolute;left:0;top:0;font-weight:700}
-.v-done .g{color:var(--ok)}.v-run .g{color:var(--run)}.v-fail .g,.v-need .g{color:var(--need)}.v-wait .g,.v-unknown .g{color:var(--muted)}
+.v-done .g{color:var(--ok)}.v-stale .g{color:var(--warn)}.p-stale{color:var(--warn)}.v-run .g{color:var(--run)}.v-fail .g,.v-need .g{color:var(--need)}.v-wait .g,.v-unknown .g{color:var(--muted)}
 .parts{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:2px;color:var(--muted)}.p-done{color:var(--ok)}.p-run{color:var(--run)}.p-fail{color:var(--need)}
 .stale{color:var(--warn);font-weight:600}
 .agents{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 6px}
 .agent{display:inline-flex;align-items:center;gap:5px;background:var(--run-soft);color:var(--run);border-radius:5px;padding:2px 7px;font-size:11.5px;font-weight:550}
 .agent .live{width:6px;height:6px;border-radius:50%;background:var(--run);animation:pulse 1.6s infinite}
-.agent.alt{background:var(--ok-soft);color:var(--ok)}.agent.alt .live{background:var(--ok)}
+.agent.alt{background:var(--ok-soft);color:var(--ok)}.agent.alt .live{background:var(--ok)}.agent.stale{background:var(--warn-soft);color:var(--warn)}
 .prov{font-weight:500}
 @keyframes pulse{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}

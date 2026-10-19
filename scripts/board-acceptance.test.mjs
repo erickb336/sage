@@ -19,6 +19,8 @@ const HEADERS = {
   decisions: "at task decision why",
 };
 const AT = "2026-01-01T00:00:00.000Z", HEAD = "a".repeat(40), OLD_HEAD = "b".repeat(40);
+// A running run that started 10 minutes ago. A run of AT has had no news for months, so the board says it may have stopped.
+const FRESH = () => new Date(Date.now() - 600000).toISOString();
 const task = (id, state, extra = {}) => ({ id, title: `Sample ${id}`, size: "small", risk: "", route: "build,code-review,qa", state, branch: "sample", pr: "", round: "0", keys: "", ...extra });
 function table(directory, name, rows) {
   const fields = HEADERS[name].split(" ");
@@ -77,7 +79,7 @@ test("T205 acceptance: HTML state columns and phone text describe the same recor
 test("T205 acceptance: current-head review evidence ignores old SHA and clears same-second repaired failures", t => {
   const f = fixture(t);
   table(f.book, "tasks", [task("T1", "reviewing", { pr: "12", risk: "auth", route: "build,code-review,security-review,qa" })]);
-  table(f.book, "runs", [{ id: "R1", task: "T1", role: "security-reviewer", status: "running", started: AT }]);
+  table(f.book, "runs", [{ id: "R1", task: "T1", role: "security-reviewer", status: "running", started: FRESH() }]);
   records(f.book, [pr(), { kind: "run", data: { run: "R1", provider: "sample-provider", head: HEAD, cycle: 1 } }]);
   const verdict = (kind, sha = HEAD) => ({ task: "T1", pr: "12", sha, kind, cycle: "1", at: AT });
   table(f.book, "ledger", [verdict("qa-pass", OLD_HEAD), verdict("qa-fail")]);
@@ -165,13 +167,13 @@ test("T205 acceptance: Done uses completion evidence and status preserves actual
 test("T205 acceptance: the task loop marks recorded PE work current without inferring it from the route alone", t => {
   const f = fixture(t);
   table(f.book, "tasks", [task("T1", "designing", { route: "design,pe,build,code-review,qa" })]);
-  table(f.book, "runs", [{ id: "R1", task: "T1", role: "pe", status: "running", started: AT }]);
+  table(f.book, "runs", [{ id: "R1", task: "T1", role: "pe", status: "running", started: FRESH() }]);
   const text = f.view("task", { id: "T1" }), html = f.view("html");
-  assert.ok(text.includes("▶ PE check: running now")); assert.ok(text.includes("Now: The PE check runs"));
+  assert.ok(text.includes("▶ PE check: running now")); assert.ok(text.includes("Now: The PE is at work on the design\\."));
   assert.ok(html.includes('<span class="part p-run"><span aria-hidden="true">▶</span> PE check: running now</span>'));
   table(f.book, "runs", []);
   const unknown = f.view("task", { id: "T1" });
-  assert.ok(unknown.includes("▶ design: running now")); assert.ok(!unknown.includes("▶ PE check")); assert.ok(!unknown.includes("The PE check runs"));
+  assert.ok(unknown.includes("▷ design: no agent at work")); assert.ok(!unknown.includes("▶")); assert.ok(!unknown.includes("at work on"), "no run: nothing says running now (R1077)");
 });
 
 test("T205 acceptance: existing Claude hook dispatches owner board/task/status phrases and rejects quoted agent text", t => {

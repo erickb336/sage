@@ -27,7 +27,7 @@ test("same task IDs in different sources stay separate and owner counts count ta
   assert.equal(model.counts.tasks, 2);
   assert.equal(model.counts.needsOwner, 1);
   assert.notEqual(model.tasks[0].key, model.tasks[1].key);
-  assert.equal(model.needsOwner[0].reasons.length, 3);
+  assert.equal(model.needsOwner[0].reasons.length, 2, "two open gates; a held task waits for the chief, not for you (R1077)");
 });
 
 test("review steps use the recorded current head and run role, with inferred work counted separately", () => {
@@ -63,7 +63,7 @@ test("task detail derives brief fields, and the step line shows only the route's
   const result = buildBoardModel([input], { now }).tasks[0];
   assert.equal(result.briefFields.goal, "Ship the board");
   assert.equal(result.briefFields.acceptance, "All views agree\n- Keep sources separate");
-  assert.deepEqual(result.loop.steps.map(step => `${step.label}: ${step.status}`), ["Plan: done", "Build: run", "Review 1 of 1: wait", "Merge: wait"]);
+  assert.deepEqual(result.loop.steps.map(step => `${step.label}: ${step.status}`), ["Plan: done", "Build: idle", "Review 1 of 1: wait", "Merge: wait"], "no run: the build is the current step, and no agent is at work (R1077)");
   assert.deepEqual(result.loop.steps[0].parts, [["framed", "done"], ["briefed", "done"]], "no design and no PE check on this route");
 });
 
@@ -89,9 +89,9 @@ test("recorded running PE work selects the PE stage during design", () => {
   const input = source("one", [task("T1", "designing", { size: "large", route: "design,pe,build,code-review,qa" })], { runs: [{ id: "R1", task: "T1", role: "pe", status: "running" }] });
   const result = buildBoardModel([input], { now }).tasks[0];
   assert.deepEqual(result.loop.steps[0].parts, [["framed", "done"], ["design", "done"], ["PE check", "run"], ["briefed", "wait"]]);
-  assert.equal(result.loop.now.text, "The PE check runs");
+  assert.equal(result.loop.now.text, "The PE is at work on the design.");
   input.projects[0].tables.runs = [];
-  assert.deepEqual(buildBoardModel([input], { now }).tasks[0].loop.steps[0].parts, [["framed", "done"], ["design", "run"], ["PE check", "wait"], ["briefed", "wait"]], "no PE run recorded: the design runs");
+  assert.deepEqual(buildBoardModel([input], { now }).tasks[0].loop.steps[0].parts, [["framed", "done"], ["design", "idle"], ["PE check", "wait"], ["briefed", "wait"]], "no run recorded: the design is current, and no agent is at work (R1077)");
 });
 
 // T218: the model fields the board page needs, read from a sample logbook in a scratch HOME (made-up data).
@@ -142,6 +142,7 @@ test("T218 N7: the last activity is the newest run, verdict or decision, and a c
     runs: [{ id: "R1", task: "T1", role: "pe", status: "done", started: at(50), ended: at(45) }, { id: "R2", task: "T5", role: "implementer", status: "running", started: at(2) }],
     ledger: [{ task: "T2", pr: "4", sha: head, kind: "checks-pass", cycle: "1", at: at(30) }],
     decisions: [{ at: at(60), task: "T2", decision: "task framed", why: "sample" }, { at: at(200), task: "T4", decision: "task held", why: "sample" }],
+    gates: [{ id: "G1", task: "T4", question: "Sample: go on?", answer: "" }],
   });
   const last = id => model.tasks.find(x => x.id === id).lastActivity;
   assert.equal(last("T1"), at(45)); assert.equal(last("T2"), at(30)); assert.equal(last("T3"), null);
@@ -306,8 +307,8 @@ test("T314 R1042-2: the board checks a display name again: a bad one is not show
 
 test("T314: an archived project's tasks leave the columns and the counts, and the archived group names it, with what needs you there", t => {
   const model = logbooks(t, [
-    { folder: "live", tasks: [task("T1", "framed"), task("T2", "held")] },
-    { folder: "old", tasks: [task("T1", "framed"), task("T2", "held"), task("T3", "building")], config: { name: "Old app", archived: true } },
+    { folder: "live", tasks: [task("T1", "framed"), task("T2", "awaiting-you")] },
+    { folder: "old", tasks: [task("T1", "framed"), task("T2", "awaiting-you"), task("T3", "building")], config: { name: "Old app", archived: true } },
   ]);
   assert.deepEqual(model.columns.flatMap(column => column.tasks.map(card => `${card.projectName} ${card.id}`)), ["live T1", "live T2"]);
   assert.deepEqual(model.counts, { tasks: 2, needsOwner: 1, recordedAgents: 0, inferredWork: 0, inReview: 0 });
@@ -353,22 +354,60 @@ const oneTask = (row, tables = {}, records = [], config = {}) => buildBoardModel
 
 test("T305: the step line and the Now and Next lines follow the fixed rule of each state on a build route", () => {
   const running = role => ({ runs: [{ id: "R7", task: "T1", role, status: "running", started: "2026-10-08T19:20:00Z" }] });
-  assert.deepEqual([line(oneTask(task("T1", "framed"))), oneTask(task("T1", "framed")).loop.now, oneTask(task("T1", "framed")).loop.next], [["Plan: wait", "Build: wait", "Review 1 of 1: wait", "Merge: wait"], { needs: false, text: "In the backlog. No agent works on it." }, "The build"]);
+  const framed = oneTask(task("T1", "framed"));
+  assert.deepEqual([line(framed), framed.loop.now, framed.loop.next], [["Plan: wait", "Build: wait", "Review 1 of 1: wait", "Merge: wait"], { needs: false, stale: false, text: "In the backlog. No agent works on it." }, "The build."]);
   const building = oneTask(task("T1", "building"), running("implementer"));
   assert.deepEqual(line(building), ["Plan: done", "Build: run", "Review 1 of 1: wait", "Merge: wait"]);
-  assert.equal(building.loop.steps[1].detail, "The implementer (run R7) is at work, 40 min.");
-  assert.deepEqual([building.loop.now.text, building.loop.next], ["The implementer builds it", "Review cycle 1 of 1 starts when the PR opens"]);
-  const held = oneTask(task("T1", "held"), { gates: [{ id: "G3", task: "T1", question: "Sample: refuse the copy?", recommendation: "yes", answer: "" }] });
-  assert.deepEqual(line(held), ["Plan: done", "Build: need", "Review 1 of 1: wait", "Merge: wait"]);
-  assert.equal(held.loop.steps[1].detail, "Held at gate G3 (the question above).");
-  assert.deepEqual([held.loop.now, held.loop.next], [{ needs: true, text: "Sample: refuse the copy? I recommend: yes" }, "The build continues after your answer"]);
+  assert.equal(building.loop.steps[1].detail, "The implementer (run R7) is at work. It started 40 min ago.");
+  assert.deepEqual([building.loop.now.text, building.loop.next], ["The implementer is at work on the build.", "Review cycle 1 of 1, when the PR opens."]);
   const verified = oneTask(task("T1", "verified", { pr: "41" }), { ledger: [{ task: "T1", pr: "41", sha: head, kind: "checks-pass", cycle: "1", at: now }, { task: "T1", pr: "41", sha: head, kind: "review-clean", cycle: "1", at: now }, { task: "T1", pr: "41", sha: head, kind: "qa-pass", cycle: "1", at: now }] }, [observation("mode", { autopilot: false })]);
   assert.deepEqual(line(verified), ["Plan: done", "Build: done", "Review 1 of 1: done", "Merge: need"]);
-  assert.deepEqual([verified.loop.now, verified.loop.next], [{ needs: true, text: "Autopilot is off: review and merge PR 41." }, "Done after the merge"]);
+  assert.deepEqual([verified.loop.now, verified.loop.next], [{ needs: true, text: "Autopilot is off, so review and merge PR 41." }, "Done after the merge."]);
+  const unknown = oneTask(task("T1", "verified", { pr: "41" }));
+  assert.equal(unknown.loop.now.text, "The board cannot tell if autopilot is on, so review and merge PR 41.", "R1075-4: plain words, not 'Autopilot state is unknown'");
   const auto = oneTask(task("T1", "verified", { pr: "41" }), {}, [observation("mode", { autopilot: true })]);
-  assert.deepEqual([line(auto).at(-1), auto.loop.now.text], ["Merge: run", "Verified: autopilot merges PR 41"]);
+  assert.deepEqual([line(auto).at(-1), auto.loop.now.text, auto.reasons], ["Merge: idle", "Verified. Autopilot merges PR 41.", []]);
   const merged = oneTask(task("T1", "merged", { pr: "41" }));
-  assert.deepEqual([line(merged), merged.loop.next], [["Plan: done", "Build: done", "Review 1 of 1: done", "Merge: done"], null]);
+  assert.deepEqual([line(merged), merged.loop.now.text, merged.loop.next], [["Plan: done", "Build: done", "Review 1 of 1: done", "Merge: done"], "Merged.", null]);
+});
+
+test("R1075-1, R1071-1: a step runs now only while a run of the task runs; a gate makes it need you; a stale run shows its mark", () => {
+  const idle = oneTask(task("T1", "building"));
+  assert.deepEqual([line(idle)[1], idle.loop.now.text], ["Build: idle", "No agent works on the build now."], "no run: no step says running now");
+  const gate = { gates: [{ id: "G3", task: "T1", question: "Sample: which layout?", recommendation: "the first", answer: "" }] };
+  const designing = oneTask(task("T1", "designing", { route: "design,build,code-review,qa" }), { ...gate, runs: [{ id: "R7", task: "T1", role: "designer", status: "running", started: "2026-10-08T19:20:00Z" }] });
+  assert.deepEqual([line(designing)[0], designing.loop.steps[0].parts[1], designing.loop.now.needs, designing.loop.next], ["Plan: need", ["design", "need"], true, "The design goes on after your answer."], "an open gate: the plan needs you, not 'running now'");
+  const stale = oneTask(task("T1", "building"), { runs: [{ id: "R5", task: "T1", role: "implementer", status: "running", started: "2026-10-05T08:00:00Z" }] });
+  assert.deepEqual(line(stale)[1], "Build: stale");
+  assert.deepEqual(stale.loop.now, { needs: false, stale: true, text: "No news from the implementer since 5 Oct. The run may have stopped, so ask the sage to check it." });
+  assert.equal(stale.loop.steps[1].detail, "No news from the implementer (run R5) since 5 Oct. The run may have stopped, so ask the sage to check it.");
+  assert.deepEqual([stale.agents.map(agent => agent.stale), buildBoardModel([source("one", [task("T1", "building")], { runs: stale.runs })], { now }).counts.recordedAgents], [[true], 0], "a stale run is not an agent at work");
+});
+
+test("R1076-1: a reviewing task whose cycles are all clean says the reviews are done, and that the chief checks and merges next", () => {
+  const ledger = [1, 2].flatMap(n => ["review-clean", "security-clean", "qa-pass"].map(kind => ({ task: "T1", pr: "12", sha: head, kind, cycle: String(n), at: now })));
+  const card = oneTask(task("T1", "reviewing", { pr: "12", risk: "auth", route: "build,code-review,security-review,qa" }), { ledger: [{ task: "T1", pr: "12", sha: head, kind: "checks-pass", cycle: "1", at: now }, ...ledger] }, [observation("pr", { number: 12, head, state: "open" })]);
+  assert.deepEqual(line(card), ["Plan: done", "Build: done", "Review 1 of 2: done", "Review 2 of 2: done", "Merge: idle"]);
+  assert.deepEqual([card.loop.now.text, card.loop.next], ["The reviews are done, with 2 clean cycles on aaaaaaa.", "The chief checks the verdicts, then the merge."]);
+});
+
+test("R1073-1, R1073-2, R1076-5: Next after a gate names the step that waits for it; held and replan wait for the chief unless a gate is open", () => {
+  const gate = answer => ({ gates: [{ id: "G3", task: "T1", question: "Sample: keep it?", recommendation: "yes", answer }] });
+  assert.equal(oneTask(task("T1", "framed"), gate("")).loop.next, "The plan starts after your answer.", "a framed task has no review yet");
+  assert.equal(oneTask(task("T1", "briefed"), gate("")).loop.next, "The build starts after your answer.");
+  const held = oneTask(task("T1", "held"), gate(""));
+  assert.deepEqual([line(held), held.loop.steps[1].detail, held.loop.now, held.loop.next], [["Plan: done", "Build: need", "Review 1 of 1: wait", "Merge: wait"], "Held at gate G3 (the question above).", { needs: true, text: "Sample: keep it? I recommend: yes" }, "The build goes on after your answer."]);
+  const investigation = { size: "investigate", route: "investigate,evidence-review" };
+  assert.equal(oneTask(task("T1", "held", investigation), gate("")).loop.next, "The investigation goes on after your answer.", "an investigation has no build");
+  assert.equal(oneTask(task("T1", "replan"), gate("")).loop.next, "The chief briefs it again after your answer.");
+  const answered = oneTask(task("T1", "held"), gate("yes"));
+  assert.deepEqual([answered.loop.now, answered.loop.next, answered.reasons], [{ needs: false, stale: false, text: "Held by the chief. You answered gate G3, so the chief moves it on." }, "The build goes on, or the chief briefs it again.", []]);
+  const rounds = oneTask(task("T1", "held", { hold: "round", round: "3" }));
+  assert.deepEqual([rounds.loop.now.text, rounds.loop.next, rounds.reasons], ["Held after 3 repair rounds that did not make it clean.", "The chief asks you how to go on.", []]);
+  const replan = oneTask(task("T1", "replan", { round: "2" }));
+  assert.deepEqual([replan.loop.now.needs, replan.loop.next], [false, "The chief briefs it again."]);
+  const noHead = oneTask(task("T1", "reviewing", { pr: "12" }));
+  assert.deepEqual([noHead.loop.now.text, noHead.loop.next], ["No agent works on review cycle 1 of 1 now. The board does not know the PR's last commit.", "The review cycles on the PR's last commit, then the merge."], "no known head: Next does not skip the reviews");
 });
 
 test("T305: in review, the current cycle runs and its roles have words; the next role, then the next cycle, is Next", () => {
@@ -378,11 +417,11 @@ test("T305: in review, the current cycle runs and its roles have words; the next
   const card = oneTask(task("T1", "reviewing", { pr: "12", risk: "auth", route: "build,code-review,security-review,qa" }), { ledger, runs }, records);
   assert.deepEqual(line(card), ["Plan: done", "Build: done", "Review 1 of 2: run", "Review 2 of 2: wait", "Merge: wait"]);
   assert.deepEqual(card.loop.steps[2].parts, [["checks", "done"], ["code review", "done"], ["security review", "run"], ["QA", "wait"]]);
-  assert.equal(card.loop.steps[2].detail, "On the last commit (aaaaaaa). The security review (run R1) started 25 min ago.");
+  assert.equal(card.loop.steps[2].detail, "On the last commit (aaaaaaa). The security reviewer (Codex, run R1) is at work. It started 25 min ago.");
   assert.equal(card.loop.steps[3].detail, "A risk flag (auth) needs 2 clean cycles.");
-  assert.deepEqual([card.loop.now.text, card.loop.next], ["security review runs (cycle 1 of 2)", "QA, then review cycle 2 of 2"]);
+  assert.deepEqual([card.loop.now.text, card.loop.next], ["The security reviewer is at work on review cycle 1 of 2.", "QA, then review cycle 2 of 2."]);
   const unknown = oneTask(task("T1", "reviewing", { pr: "12" }));
-  assert.equal(unknown.loop.steps[2].detail, "No verdict is recorded on the PR's last commit yet.", "plain words, not 'PR head not recorded'");
+  assert.equal(unknown.loop.steps[2].detail, "The board does not know the PR's last commit, so it shows no verdicts yet.", "plain words, not 'PR head not recorded'");
   assert.deepEqual(unknown.loop.steps[2].parts.map(([, value]) => value), ["unknown", "unknown", "unknown"]);
 });
 
@@ -392,16 +431,19 @@ test("T305: a repair is its own step, round n of m, then Review again; the round
   const card = oneTask(task("T1", "repairing", { pr: "52", round: "1" }), { ledger, runs }, [], { max_rounds: 4 });
   assert.deepEqual(line(card), ["Plan: done", "Build: done", "Review 1 of 1: fail", "Repair, round 1 of 4: run", "Review again: wait", "Merge: wait"]);
   assert.equal(card.loop.steps[2].detail, "The code review found problems on aaaaaaa.");
-  assert.equal(card.loop.steps[3].detail, "The implementer (run R3) fixes the findings on the same branch, 2 h 10 min.");
-  assert.deepEqual([card.loop.now.text, card.loop.next], ["Repair, round 1 of 4: fix the open findings", "The reviews start again at cycle 1 on the new commit"]);
+  assert.equal(card.loop.steps[3].detail, "The implementer (run R3) is at work. It started 2 h 10 min ago.", "R1075-4: whole sentences");
+  assert.deepEqual([card.loop.now.text, card.loop.next], ["The implementer is at work on repair round 1 of 4.", "The reviews start again at cycle 1 on the new commit."]);
 });
 
-test("T305: an investigation shows Plan, Investigate, Evidence review and Conclude, with no Build and no Merge", () => {
+test("T305, R1071-2, R1076-3: an investigation shows Plan, Investigate, Evidence review and Conclude, and never a PR, a commit or a build", () => {
   const route = "investigate,evidence-review";
-  const verifying = oneTask(task("T1", "verifying", { size: "investigate", route }), { runs: [{ id: "R19", task: "T1", role: "evidence-review", status: "running", started: now }] });
-  assert.deepEqual(line(verifying), ["Plan: done", "Investigate: done", "Evidence review: run", "Conclude: wait"]);
-  assert.deepEqual([verifying.loop.now.text, verifying.loop.next], ["The evidence review checks the report", "Concluded: the report comes to you, with no PR"]);
-  assert.deepEqual(line(oneTask(task("T1", "building", { size: "investigate", route }))), ["Plan: done", "Investigate: run", "Evidence review: wait", "Conclude: wait"]);
+  const verifying = oneTask(task("T1", "verifying", { size: "investigate", route }));
+  assert.deepEqual(line(verifying), ["Plan: done", "Investigate: done", "Evidence review: done", "Conclude: idle"]);
+  assert.deepEqual(verifying.loop.steps[2].parts, [["evidence review", "done"]], "a done step's parts are done, not 'not known yet'");
+  assert.deepEqual([verifying.loop.now.text, verifying.loop.next], ["The chief checks the evidence review before the conclusion.", "The conclusion. The report comes to you."], "no doubled colon");
+  const reviewing = oneTask(task("T1", "reviewing", { size: "investigate", route }), { runs: [{ id: "R19", task: "T1", role: "evidence-review", status: "running", started: now }] });
+  assert.deepEqual([line(reviewing)[2], reviewing.loop.steps[2].detail, reviewing.loop.next], ["Evidence review: run", "The evidence review checks the report. The evidence reviewer (run R19) is at work. It started 0 min ago.", "The conclusion. The report comes to you."]);
+  assert.deepEqual(line(oneTask(task("T1", "building", { size: "investigate", route }))), ["Plan: done", "Investigate: idle", "Evidence review: wait", "Conclude: wait"]);
   assert.deepEqual(line(oneTask(task("T1", "concluded", { size: "investigate", route }))), ["Plan: done", "Investigate: done", "Evidence review: done", "Conclude: done"]);
 });
 
@@ -410,11 +452,10 @@ test("T305: a run's time is minutes or hours up to 24 h; after 24 h with no logb
   const at = Date.parse(now);
   assert.deepEqual(runClock("2026-10-08T19:20:00Z", at, null), { text: "40 min", stale: false });
   assert.deepEqual(runClock("2026-10-08T16:55:00Z", at, null), { text: "3 h 5 min", stale: false });
-  assert.deepEqual(runClock("2026-10-05T08:00:00Z", at, "2026-10-05T08:00:00Z"), { text: "no news since 5 Oct: the run may have stopped; ask the sage to check it", stale: true });
+  assert.deepEqual(runClock("2026-10-05T08:00:00Z", at, "2026-10-05T08:00:00Z"), { text: "no news since 5 Oct. The run may have stopped, so ask the sage to check it", stale: true, since: "5 Oct" });
   assert.deepEqual(runClock("2026-10-05T08:00:00Z", at, "2026-10-08T12:00:00Z"), { text: "since 5 Oct", stale: false }, "a change in the last 24 h: not stale");
   const card = oneTask(task("T1", "building"), { runs: [{ id: "R5", task: "T1", role: "implementer", status: "running", started: "2026-10-05T08:00:00Z" }] });
-  assert.equal(card.runClocks.R5.text, "no news since 5 Oct: the run may have stopped; ask the sage to check it");
-  assert.equal(card.loop.steps[1].detail, "The implementer (run R5) is at work, no news since 5 Oct: the run may have stopped; ask the sage to check it.");
+  assert.equal(card.runClocks.R5.text, "no news since 5 Oct. The run may have stopped, so ask the sage to check it");
 });
 
 /** Two sources, each with projects given as { name, checkout, tasks, ...fields }: in memory, as the reader gives them. */
@@ -452,7 +493,7 @@ test("T305: the picker's list puts needs you first, then active in the last 14 d
   const decision = (id, at) => [{ task: id, at, decision: "sample", why: "sample" }];
   // Activity: fresh had a decision 2 days ago, old 20 days ago.
   const withActivity = buildBoardModel([{ id: "claude", label: "claude", provider: "Claude", diagnostics: [], projects: [
-    { key: "claude/product-demos-1c0254", name: "product-demos-1c0254", checkout: "/sample/work/sdc/product-demos", repository: "https://github.com/sample-owner/seacc", upstream: "https://github.com/sample-org/seacc", displayName: "seacc (Council Record)", diagnostics: [], tables: { tasks: [task("T41", "held")] } },
+    { key: "claude/product-demos-1c0254", name: "product-demos-1c0254", checkout: "/sample/work/sdc/product-demos", repository: "https://github.com/sample-owner/seacc", upstream: "https://github.com/sample-org/seacc", displayName: "seacc (Council Record)", diagnostics: [], tables: { tasks: [task("T41", "awaiting-you")] } },
     { key: "claude/fresh-aaaaaa", name: "fresh-aaaaaa", checkout: "/sample/work/fresh", diagnostics: [], tables: { tasks: [task("T1", "framed")], decisions: decision("T1", "2026-10-06T20:00:00Z") } },
     { key: "claude/old-bbbbbb", name: "old-bbbbbb", checkout: "/sample/work/old", repository: "https://github.com/sample-owner/old", diagnostics: [], tables: { tasks: [task("T1", "framed")], decisions: decision("T1", "2026-09-18T20:00:00Z") } },
     { key: "claude/gone-cccccc", name: "gone-cccccc", checkout: "/sample/work/gone", archived: true, diagnostics: [], tables: { tasks: [task("T1", "framed")] } },
