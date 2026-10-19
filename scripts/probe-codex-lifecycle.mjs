@@ -1,3 +1,4 @@
+import { validateAdmissionEvidence } from "./fixtures/codex-native/admission-evidence.mjs";
 import { nestedReviewerReport, NESTED_INSPECT_TOOL, NESTED_CALLS, createNestedReportFlow } from "./fixtures/codex-native/nested-report.mjs";
 import { createHash } from "node:crypto";
 // Isolated native V2 transport check with simulated model responses; not a live Sage pilot.
@@ -15,9 +16,17 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-assert(process.argv.slice(2).every(arg => ["--sage-update-task", "--sage-nested-report", "--sage-capacity-rejection", "--sage-followup-capacity-recovery", "--sage-followup-failed-child", "--sage-read-task", "--sage-interruption", "--sage-accept-review", "--sage-create-run", "--sage-create-task", "--sage-followup-recovery", "--sage-followup", "--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
+if (process.argv.length === 3 && process.argv[2] === "--admission-evidence") {
+  const result = validateAdmissionEvidence(JSON.parse(readFileSync(0,"utf8")));
+  process.stdout.write(JSON.stringify(result)+"\n");
+  process.exit(0);
+}
+assert(process.argv.slice(2).every(arg => ["--sage-unprepared-followup", "--sage-update-task", "--sage-nested-report", "--sage-capacity-rejection", "--sage-followup-capacity-recovery", "--sage-followup-failed-child", "--sage-read-task", "--sage-interruption", "--sage-accept-review", "--sage-create-run", "--sage-create-task", "--sage-followup-recovery", "--sage-followup", "--sage-lead-ownership", "--sage-role-edit", "--writer", "--sage-child-message", "--sage-child-sandbox", "--sage-failed-spawn", "--deny-spawn", "--sage-completion", "--sage-report", "--sage-receipt", "--sage-child-recovery", "--sage-child-repeat-recovery"].includes(arg)), "unknown_probe_argument");
 const deadlineMs = process.env.NODE_TEST_CONTEXT && /^\d+$/.test(process.env.SAGE_PROBE_TEST_DEADLINE_MS ?? "")
   ? Number(process.env.SAGE_PROBE_TEST_DEADLINE_MS) : 120_000;
+const unpreparedFollowup = process.argv.includes("--sage-unprepared-followup");
+assert(!unpreparedFollowup || process.argv.length === 3, "admission_probe_is_separate");
+let admissionVerified = false, admissionBefore, admissionBook, admissionTranscript, admissionDenial;
 const nestedReport=process.argv.includes("--sage-nested-report");
 assert(!nestedReport || process.argv.length===3,"nested_report_is_separate");
 const updateTask = process.argv.includes("--sage-update-task");
@@ -64,7 +73,7 @@ const reportProbe = followupCapacity || process.argv.includes("--sage-report") |
 const capacityFailure = process.argv.includes("--sage-capacity-rejection");
 assert(!capacityFailure || process.argv.slice(2).length===1,"capacity_failure_is_separate");
 const failedSpawn = process.argv.includes("--sage-failed-spawn");
-const completion = nestedReport || capacityFailure || readTask || interruption || createTask || followup || leadOwnership || roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
+const completion = unpreparedFollowup || nestedReport || capacityFailure || readTask || interruption || createTask || followup || leadOwnership || roleEdit || childMessage || childSandbox || failedSpawn || process.argv.includes("--sage-completion") || reportProbe;
 assert(!(failedSpawn && (reportProbe || recoveryProbe)), "incompatible_failure_probe");
 assert(!(denySpawn && completion), "incompatible_probe_modes");
 let denied = false;
@@ -133,7 +142,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   process.exitCode = 1;
 } else {
   print({ type: "version", version });
-  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe || nestedReport,failedSpawn,followupCapacity,capacityFailure,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,writer,leadOwnership,followup,createTask,createRun,acceptReview,nestedReport,interruption,readTask,updateTask,resumedFailure,deadlineMs});
+  const integrated = await setupCapture({root,codexHome,workspace,env,binary,denySpawn,completion,recovery:recoveryProbe || nestedReport,failedSpawn,followupCapacity,capacityFailure,commandProbe:childSandbox,childMessageProbe:childMessage,roleEditProbe:roleEdit,writer,leadOwnership,followup,createTask,createRun,acceptReview,nestedReport,interruption,readTask,updateTask,resumedFailure,unpreparedFollowup,deadlineMs});
   const capacityBook=capacityFailure ? JSON.stringify(integrated.readLogbook()) : null;
   const interruptionBook = interruption ? JSON.stringify(integrated.readLogbook()) : null;
   let beforeInterruption;
@@ -175,7 +184,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
   let releaseBoundChild;
   const boundChild = new Promise(resolve => { releaseBoundChild = resolve; });
   const pending = new Set();
-  const calls = { taskUpdate:"probe_task_update", taskUpdateRetry:"probe_task_update_retry", freshPrepare:"fresh_prepare",freshFollow:"fresh_follow",freshControl:"fresh_control",freshWait:"fresh_wait",freshDone:"fresh_done", capacityPrepare:"capacity_prepare",capacitySpawn:"capacity_spawn",capacityList:"capacity_list",capacityRetryPrepare:"capacity_retry_prepare",capacityRetrySpawn:"capacity_retry_spawn",capacityWait:"capacity_wait",capacityDone:"capacity_done",  heldPrepare:"held_prepare",heldSpawn:"held_spawn",heldControl:"held_control",heldList:"held_list",capacityFollowPrepare:"capacity_follow_prepare",capacityFollow:"capacity_follow",capacityReconcile:"capacity_reconcile",heldWait:"held_wait",heldDone:"held_done", resumedControl:"resumed_control",resumedPrepare:"resumed_prepare",resumedSpawn:"resumed_spawn",resumedList:"resumed_list", taskRead:"probe_task_read", taskReadAgain:"probe_task_read_again", interruptControl:"probe_interrupt_control", accept:"probe_accept_review", acceptRetry:"probe_accept_review_retry", createRun:"probe_create_run", runRetry:"probe_run_retry", runHistoricalRetry:"probe_run_historical_retry", create:"probe_create", createRetry:"probe_create_retry", followPrepare:"probe_follow_prepare", follow:"probe_follow", followWait:"probe_follow_wait", followDone:"probe_follow_done", finish: "probe_finish", finishRetry: "probe_finish_retry", ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
+  const calls = { admissionFollow:"admission_follow", taskUpdate:"probe_task_update", taskUpdateRetry:"probe_task_update_retry", freshPrepare:"fresh_prepare",freshFollow:"fresh_follow",freshControl:"fresh_control",freshWait:"fresh_wait",freshDone:"fresh_done", capacityPrepare:"capacity_prepare",capacitySpawn:"capacity_spawn",capacityList:"capacity_list",capacityRetryPrepare:"capacity_retry_prepare",capacityRetrySpawn:"capacity_retry_spawn",capacityWait:"capacity_wait",capacityDone:"capacity_done",  heldPrepare:"held_prepare",heldSpawn:"held_spawn",heldControl:"held_control",heldList:"held_list",capacityFollowPrepare:"capacity_follow_prepare",capacityFollow:"capacity_follow",capacityReconcile:"capacity_reconcile",heldWait:"held_wait",heldDone:"held_done", resumedControl:"resumed_control",resumedPrepare:"resumed_prepare",resumedSpawn:"resumed_spawn",resumedList:"resumed_list", taskRead:"probe_task_read", taskReadAgain:"probe_task_read_again", interruptControl:"probe_interrupt_control", accept:"probe_accept_review", acceptRetry:"probe_accept_review_retry", createRun:"probe_create_run", runRetry:"probe_run_retry", runHistoricalRetry:"probe_run_historical_retry", create:"probe_create", createRetry:"probe_create_retry", followPrepare:"probe_follow_prepare", follow:"probe_follow", followWait:"probe_follow_wait", followDone:"probe_follow_done", finish: "probe_finish", finishRetry: "probe_finish_retry", ownerPrepare:"probe_owner_prepare", ownerSpawn:"probe_owner_spawn", ownerList:"probe_owner_list", edit:"probe_role_edit", messageControl:"probe_message_control", peerMessage:"probe_child_peer_message", chiefMessage:"probe_child_chief_message", sandbox: "probe_child_sandbox", failurePrepare: "probe_failure_prepare", failureSpawn: "probe_failure_spawn", failureList: "probe_failure_list", compact1: "probe_compact_1", compact2: "probe_compact_2", denied1: "probe_denied_1", denied2: "probe_denied_2", recovery1: "probe_recovery_1", recovery2: "probe_recovery_2", record: "probe_record", reread: "probe_reread", retry: "probe_retry", report: "probe_report", prepare: "probe_prepare", spawn: "probe_spawn", running: "probe_running", wait: "probe_wait", completed: "probe_completed" };
   const knownCalls = new Set([...Object.values(calls),...Object.values(NESTED_CALLS),"probe_child_control"]);
   const check = (condition, reason) => { if (!condition) throw new Error(reason); };
   const reject = (res) => {
@@ -202,7 +211,7 @@ if (versionResult.code !== 0 || version !== "codex-cli 0.160.0") {
         : Array.isArray(item.output) && item.output.length >= 1 && item.output.length <= ([...Object.values(NESTED_CALLS),calls.taskUpdate,calls.taskUpdateRetry,calls.freshPrepare,calls.heldPrepare,calls.capacityFollowPrepare,calls.capacityPrepare,calls.capacityRetryPrepare,calls.resumedPrepare,calls.taskRead, calls.taskReadAgain, calls.accept, calls.acceptRetry, calls.createRun, calls.runRetry, calls.runHistoricalRetry, calls.create, calls.createRetry, calls.followPrepare, calls.finish, calls.finishRetry, calls.ownerPrepare, calls.failurePrepare, calls.prepare, calls.report, calls.record, calls.reread, calls.retry, calls.recovery1, calls.recovery2].includes(item.call_id) ? 2 : 1) && item.output.every(part => part.type === "input_text") ? item.output.at(-1).text : null;
       check(typeof output === "string", "unsupported_native_tool_result_encoding");
       try { outputs[item.call_id] = JSON.parse(output); } catch {
-        if ((resumedFailure && item.call_id === calls.resumedSpawn) || (failedSpawn && item.call_id === calls.failureSpawn) || (capacityFailure && item.call_id === calls.capacitySpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.freshFollow,calls.capacityFollow,calls.follow, calls.ownerSpawn, calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
+        if ((resumedFailure && item.call_id === calls.resumedSpawn) || (failedSpawn && item.call_id === calls.failureSpawn) || (capacityFailure && item.call_id === calls.capacitySpawn) || (denySpawn && item.call_id === calls.spawn) || [calls.admissionFollow,calls.freshFollow,calls.capacityFollow,calls.follow, calls.ownerSpawn, calls.edit, calls.messageControl, calls.peerMessage, calls.chiefMessage, calls.sandbox, calls.denied1, calls.denied2].includes(item.call_id)) outputs[item.call_id] = output;
         else throw new Error("native_tool_result_is_not_json");
       }
     }
@@ -781,7 +790,11 @@ data: ${JSON.stringify(event)}
         check(agent.agent_status?.completed === CHILD_MARKER, "native_child_completion_marker_mismatch");
         nativeCompleted = true;
         print({ type: "native_tool_result", tool: "list_agents", phase: "completed", agent_name: taskName, agent_status: { completed: CHILD_MARKER } });
-        if(capacityFailure) {
+        if (unpreparedFollowup) {
+          admissionBefore = integrated.readJournal(); admissionBook = integrated.readLogbook();
+          admissionTranscript = readFileSync(integrated.interruptionEvidence(childThread).transcript,"utf8");
+          respond(res,call(calls.admissionFollow,"followup_task",{target:childThread,message:"UNPREPARED_MUST_NOT_ARRIVE"}));
+        } else if(capacityFailure) {
           const state=integrated.readJournal();
           check(state.completions.length===1 && state.completions[0].assignment===state.reservations[0].assignment.id,"capacity_first_not_completed");
           capacityFirstCompleted=state.completions[0];
@@ -801,6 +814,13 @@ data: ${JSON.stringify(event)}
           respond(res, {type: "function_call", ...info.reportTools[0], call_id: calls.report,
             arguments: JSON.stringify({name: "probe_child"})});
         } else respond(res, message(MARKER));
+      } else if (unpreparedFollowup && rootRequests === 6) {
+        admissionDenial = info.outputs[calls.admissionFollow];
+        check(typeof admissionDenial === "string" && admissionDenial.includes("Sage could not verify this tool call."), "unprepared_followup_not_denied");
+        check(JSON.stringify(integrated.readJournal()) === JSON.stringify(admissionBefore)
+          && JSON.stringify(integrated.readLogbook()) === JSON.stringify(admissionBook), "unprepared_followup_changed_state");
+        check(readFileSync(integrated.interruptionEvidence(childThread).transcript,"utf8") === admissionTranscript, "unprepared_followup_changed_transcript");
+        admissionVerified = true; respond(res,message(MARKER));
       } else if(capacityFailure && rootRequests===6) {
         const receipt=info.outputs[calls.capacityRetryPrepare];
         check(receipt?.decision==="prepared" && receipt.task==="T2" && receipt.run==="R2","capacity_retry_preparation_missing");
@@ -1187,17 +1207,27 @@ data: ${JSON.stringify(event)}
     await new Promise((resolve) => server.close(resolve));
     const routeVerified = readTask ? taskReadVerified && rootRequests===(updateTask ? 5 : 3) && childRequests===0 : createTask ? creationVerified && rootRequests===3 && childRequests===0 : denySpawn
       ? rootRequests === 2 && childRequests === 0 && denied
-      : rootRequests === (nestedReport ? 12 : capacityFailure ? 9 : followupCapacity ? 18 : interruption ? 8 : acceptReview ? 13 : createRun ? 12 : followup ? 9 : finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!followup || followupVerified) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!createRun || runCreationVerified) && (!acceptReview || reviewVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (nestedReport ? 8 : capacityFailure ? 5 : followupCapacity ? 7 : resumedFailure ? 7 : followupRecovery ? 7 : followup ? 3 : roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
+      : rootRequests === (unpreparedFollowup ? 6 : nestedReport ? 12 : capacityFailure ? 9 : followupCapacity ? 18 : interruption ? 8 : acceptReview ? 13 : createRun ? 12 : followup ? 9 : finishRun ? 11 : receiptProbe ? 9 : reportProbe ? 6 : 5) && (!followup || followupVerified) && (!leadOwnership || ownershipStage === 3) && (!reportProbe || reportVerified) && (!receiptProbe || receiptVerified) && (!finishRun || finishVerified) && (!createRun || runCreationVerified) && (!acceptReview || reviewVerified) && (!roleEdit || roleEditVerified) && (!childMessage || (messageVerified && chiefMessageDelivered)) && (!childSandbox || sandboxVerified) && childRequests === (nestedReport ? 8 : capacityFailure ? 5 : followupCapacity ? 7 : resumedFailure ? 7 : followupRecovery ? 7 : followup ? 3 : roleEdit ? 3 : childMessage ? 5 : childSandbox ? 3 : recoveryProbe ? (repeatRecovery ? 9 : 5) : completion ? 2 : 1)
         && (!(recoveryProbe || followupRecovery) || recoveredRounds === (repeatRecovery ? 2 : 1)) && (!completion || (prepared && (nestedReport || interruption || blockedStopVerified))) && rootThread !== childThread
-        && (!nestedReport || grandchildRequests===2) && (!capacityFailure || capacityVerified) && (!followupCapacity || followupCapacityVerified) && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified && interruptedFinishVerified : nativeWait && nativeCompleted);
-    const verified = result.code === 0 && !fixtureFailure && routeVerified
+        && (!unpreparedFollowup || admissionVerified) && (!nestedReport || grandchildRequests===2) && (!capacityFailure || capacityVerified) && (!followupCapacity || followupCapacityVerified) && childTaskSeen && childResponseSent && nativeRunning && (interruption ? interruptionVerified && interruptedFinishVerified : nativeWait && nativeCompleted);
+    // These refusal probes deliberately produce one native router error. Other stderr is a failure.
+    const expectedRefusal = unpreparedFollowup
+      ? "Tool call blocked by PreToolUse hook: Sage could not verify this tool call.. Tool: collaborationfollowup_task"
+      : roleEdit && !writer
+        ? "Command blocked by PreToolUse hook: This Sage role cannot edit files. Give the change to an implementer.. Command: *** Begin Patch\n*** Add File: role-edit-proof.txt\n+fixed role edit proof\n*** End Patch"
+        : "";
+    const stderrVerified = !(unpreparedFollowup || roleEdit) || (expectedRefusal
+      ? /^\d{4}-\d{2}-\d{2}T[^ ]+ ERROR codex_core::tools::router: error=/.test(stderrText.trim())
+        && stderrText.trim().replace(/^\d{4}-\d{2}-\d{2}T[^ ]+ ERROR codex_core::tools::router: error=/, "") === expectedRefusal
+      : stderrBytes === 0);
+    const verified = result.code === 0 && !fixtureFailure && routeVerified && stderrVerified
       && exactMessages === 1 && otherMessages === 0 && completedTurns === 1 && failedTurns === 0
       && unexpectedItems === 0 && malformedEvents === 0 && rejectedRequests === 0;
     if (childMessage) print({type:"message_evidence",messageVerified,chiefMessageDelivered,messageWaitCycles,simulatedModel:true});
     print({ type: "result", ...result, responseRequests, rootRequests: rootRequests + 2 * messageWaitCycles + (leadOwnership ? 3 : 0) + (capacityFailure && capacityStage===4 ? 3 : 0), childRequests, childTaskSeen, childResponseSent,
       nativeRunning, nativeWait, nativeCompleted, exactMessages, otherMessages, completedTurns, failedTurns,
-      unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, fixtureFailure, verified,
-      ...(!verified ? { diagnostic: diagnostic(stderrText) } : {}) });
+      unexpectedItems, malformedEvents, rejectedRequests, stderrBytes, ...(unpreparedFollowup || roleEdit ? {stderrVerified} : {}), fixtureFailure, verified,
+      ...(!verified || stderrBytes > 0 ? { diagnostic: diagnostic(stderrText) } : {}) });
     if(followupCapacity || nestedReport) evidenceResult={...result,verified,fixtureFailure,responseRequests,rootRequests,childRequests};
     if (!verified) { process.exitCode = 1; if(nestedReport)evidenceFailure??=fixtureFailure??"native_route_not_verified"; }
     const rows=readdirSync(join(root,"events")).map(name=>JSON.parse(readFileSync(join(root,"events",name),"utf8")));
@@ -1233,6 +1263,18 @@ data: ${JSON.stringify(event)}
         const bound=state.bindings.filter(row=>row.child===id);assert.equal(bound.length,1);assert.equal(bound[0].issuer,parent);
         assert.deepEqual(state.completions.find(row=>row.assignment===bound[0].assignment),bound[0]);
       }
+    }
+    if (unpreparedFollowup) {
+      const evidence = integrated.interruptionEvidence(childThread);
+      const {readNativeCompletion} = await import(new URL("../plugins/sage-codex/runtime/identity.mjs",import.meta.url));
+      const terminal = readNativeCompletion(evidence.transcript,{sessionsDir:join(codexHome,"sessions")},evidence.expected);
+      assert.equal(terminal.text,CHILD_MARKER);
+      const input = { scenario:"unprepared-followup",before:admissionBefore,after:integrated.readJournal(),
+        bookBefore:admissionBook,bookAfter:integrated.readLogbook(),terminal,denial:admissionDenial,
+        call:calls.admissionFollow,events:rows,childRequests };
+      const summary = validateAdmissionEvidence(input);
+      print({type:"admission_evidence",...summary,nativeTerminalAuthenticated:true,simulatedModel:true,automaticSage:false});
+      if (process.env.SAGE_ADMISSION_EVIDENCE_FILE) writeFileSync(process.env.SAGE_ADMISSION_EVIDENCE_FILE,JSON.stringify(input,null,2)+"\n",{flag:"wx"});
     }
     if (completion && !readTask && !createTask && !interruption && !followupCapacity && !capacityFailure && !nestedReport) {
       const state = integrated.readJournal(), stops = integrated.readStops();
