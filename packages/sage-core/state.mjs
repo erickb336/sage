@@ -1262,10 +1262,11 @@ const waitFix = (task, open) => {
     open.some(({ odd }) => odd) ? ` A hand edit put that text there: set the waits again (${how}).` : "",
   ].join("");
 };
-/** Refuses work of what on a task with an unmet wait, and names each unmet task with its state. */
+/** Refuses work of what on a task with an unmet wait, and names each unmet task with its state. A move to merged opens the waits on it, so it refuses too. */
 const waitsMet = (task, tasks, what) => {
   const open = unmetWaits(task, byIds(tasks));
-  if (open.length) refuse(`${task.id} waits for ${waitList(open)}, so it takes no ${what}: it starts after each of them is merged or concluded. Its design and PE may run.${waitFix(task, open)}`);
+  const after = what === "move to merged" ? "it moves to merged after each of them is merged or concluded." : "it starts after each of them is merged or concluded. Its design and PE may run.";
+  if (open.length) refuse(`${task.id} waits for ${waitList(open)}, so it takes no ${what}: ${after}${waitFix(task, open)}`);
 };
 /** A task's waits for a printed line: each with its task's state, then the unmet ones. */
 const waitsText = (task, tasks) => {
@@ -1345,7 +1346,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
       const was = task.state;
       move(task, v); // the design's states first; the table is written only if every check below passes
-      if (v === "building") waitsMet(task, tasks, "move to building");
+      if (v === "building" || v === "merged") waitsMet(task, tasks, `move to ${v}`);
       // A move to abandoned gives no round: the task ends (F-T286-3).
       if (was === "held" && task.hold === "round" && v !== "abandoned") {
         task.extra = String(extraOf(task) + 1);
@@ -1630,10 +1631,20 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         const up = byId.get(id);
         return !!up && !dead(up.state) && samePr(waiter, up) && clear(up);
       };
+      // A wait on a task of a PR that the waiting task is not on: name the PR to set, not a new commit (R1140-1).
+      const prOf = (up) => (pr ? (here.get(up.id)?.ofPr ? pr : "") : up.pr ? prNumber(up.pr) : "");
+      const offPr = (task, open) => {
+        const by = new Map();
+        for (const { id } of open) {
+          const up = id && byId.get(id), n = up && !dead(up.state) && !samePr(task, up) && prOf(up);
+          if (n) by.set(n, [...(by.get(n) ?? []), id]);
+        }
+        return [...by].map(([n, ids]) => ` ${task.id} is not on PR ${n}, so its wait on ${ids.join(", ")} cannot pass in this merge: run sage task ${task.id} set pr=${n}, and record its verdicts with --pr ${n}.`).join("");
+      };
       return checked.map((r) => {
         const task = byId.get(r.id), open = task ? unmetWaits(task, byId, (u) => passes(task, u)) : [];
         if (!open.length || task.state === "held") return r;
-        return { ...r, ok: false, reason: `${r.id} waits for ${waitList(open)}: it merges after ${open.length === 1 ? "that task is" : "each of them is"} merged or concluded, or passes in this same merge on the same PR.${waitFix(task, open)}` };
+        return { ...r, ok: false, reason: `${r.id} waits for ${waitList(open)}: it merges after ${open.length === 1 ? "that task is" : "each of them is"} merged or concluded, or passes in this same merge on the same PR.${waitFix(task, open)}${offPr(task, open)}` };
       });
     });
     const one = strangers.length === 1;

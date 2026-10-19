@@ -2510,6 +2510,40 @@ test("R1128-2: a wait is met in the same merge only by a task of the same PR: --
   assert.match(same.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts on a1b2c3d or belong to PR 5, and each must pass: /);
 });
 
+test("R1140-1: a waiting task that is not on its wait's PR gets a refusal that names the PR to set, and the fix passes", () => {
+  const fix = (pr) => ` T2 is not on PR ${pr}, so its wait on T1 cannot pass in this merge: run sage task T2 set pr=${pr}, and record its verdicts with --pr ${pr}.`;
+  const off = twoOnSha("5", ""); // T2 has its verdicts on this SHA but no PR
+  for (const args of [["--pr", "5"], []]) assert.ok(off.no("merge-check", "--sha", SHA, ...args).includes(`T2 waits for T1 (verified): it merges after that task is merged or concluded, or passes in this same merge on the same PR.${fix("5")}`), `merge-check ${args.join(" ")}`);
+  assert.ok(twoOnSha("6", "5").no("merge-check", "--sha", SHA).includes(fix("6")), "a recorded PR that differs from the wait's PR");
+  const gone = twoOnSha("5", "");
+  stateIs(gone, "T1", "abandoned");
+  assert.ok(!gone.no("merge-check", "--sha", SHA, "--pr", "5").includes(" is not on PR "), "no PR to set for an abandoned wait");
+  off.ok("task", "T2", "set", "pr=5");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) off.ok("verdict", "T2", "--sha", SHA, "--kind", kind, "--pr", "5");
+  assert.match(off.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts on a1b2c3d or belong to PR 5, and each must pass: /, "the named fix lets the pair merge");
+});
+
+test("R1138-1: a hand-edited loop of waits on one PR never passes the merge check", () => {
+  const s = twoOnSha("5", "5");
+  byHand(s.dir, "tasks", 0, "T1", (cells) => cells.with(14, "T2")); // T2 waits for T1 already: now T1 waits for T2
+  const why = s.no("merge-check", "--sha", SHA, "--pr", "5");
+  assert.match(why, /; 2 fail\. /);
+  for (const [t, u] of [["T1", "T2"], ["T2", "T1"]]) assert.ok(why.includes(` ${t} waits for ${u} (verified): it merges after`), `${t} refuses`);
+});
+
+test("R1139-1: a move to merged refuses while a wait is unmet, so it never opens the waits on that task", () => {
+  const s = twoOnSha("5", "5");
+  s.ok("task", "add", "--title", "Later", "--size", "small", "--waits", "T2");
+  assert.equal(s.no("task", "T2", "set", "state=merged"), "sage: T2 waits for T1 (verified), so it takes no move to merged: it moves to merged after each of them is merged or concluded.");
+  assert.equal(rows(s.dir, "tasks")[1].state, "verified", "the refused move changes nothing");
+  assert.match(s.ok("task", "T3"), / · waits T2 \(verified\) · unmet T2$/, "T3 still waits");
+  stateIs(s, "T1", "abandoned");
+  assert.match(s.no("task", "T2", "set", "state=merged"), / T1 is abandoned or not in the logbook, so that wait is never met: remove or change the wait/, "it names the fix");
+  stateIs(s, "T1", "verified");
+  s.ok("task", "T1", "set", "state=merged");
+  assert.match(s.ok("task", "T2", "set", "state=merged"), /^T2 merged · /, "after the first one, it moves to merged");
+});
+
 test("R1124-2: the merge check of dense waits in one merge is linear: 60 tasks, each waiting for the 20 before it, all on one PR", async () => {
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "tiny");
@@ -2560,12 +2594,18 @@ test("R1128-3: a hand-edited waits cell is read with the ids parser: its other t
   assert.match(s.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts/);
 });
 
-test("R1130-1: the README says to update sage in every open session before waits, because an older session merges a waiting task", () => {
+test("R1130-1, R1140-2, R1140-3: the README names the update command and the restart before waits, and teaches a pair on one PR", () => {
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-  const line = "Update sage in every open session before you use waits: an older session still merges a waiting task.";
-  const rows = readme.split("\n").filter((l) => l.includes(line));
-  assert.equal(rows.length, 2, "once in the usage guide's table and once in what's new");
-  assert.ok(rows.some((l) => l.startsWith("| A task can wait")) && rows.some((l) => l.startsWith("- **A task can wait")));
+  const lines = [
+    "Before you use waits, run `claude plugin update sage@sage` (see To update sage), then restart every session that was already open: an older session still merges a waiting task.",
+    "To merge two tasks on one pull request, build both under the first task. The waiting task takes the same `pr=` and records its own verdicts with `--pr`; set its wait after its build, or give it no build of its own. It moves to merged after the first one.",
+  ];
+  for (const line of lines) {
+    const rows = readme.split("\n").filter((l) => l.includes(line));
+    assert.equal(rows.length, 2, `once in the usage guide's table and once in what's new: ${line}`);
+    assert.ok(rows.some((l) => l.startsWith("| A task can wait")) && rows.some((l) => l.startsWith("- **A task can wait")));
+  }
+  assert.ok(readme.includes("**To update sage**"), "the section that the line names");
 });
 
 test("T336: an older logbook gets the waits column at its next write with no value lost, so an older sage then refuses to write it", () => {
