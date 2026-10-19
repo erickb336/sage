@@ -22,7 +22,7 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
-import { AGENT_CAPS, HIDDEN, NAME_MAX, PRIORITIES, TASK_KINDS, countOf, nameProblem } from "./logbook-fields.mjs";
+import { AGENT_CAPS, FINDING_CLASSES, HIDDEN, NAME_MAX, PRIORITIES, TASK_KINDS, countOf, nameProblem } from "./logbook-fields.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -88,14 +88,14 @@ const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, a
 const TABLES = {
   tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra", "priority", "kind"],
   runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
-  findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status"],
+  findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status", "run", "class"],
   ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
   gates: ["id", "task", "question", "options", "recommendation", "default", "answer", "at"],
   decisions: ["at", "task", "decision", "why"],
 };
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind"] };
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "round", "run", "finding", "verdict", "gate", "log", "status", "merge-check", "config", "projects", "board", "observe"];
+const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind"], findings: ["run", "class"] };
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss"],
@@ -104,7 +104,7 @@ const OPTIONS = {
   "run add": ["role", "branch", "candidate"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
   "run done": ["status", "tokens", "report"],
-  "finding add": ["source", "severity", "summary", "key"],
+  "finding add": ["source", "severity", "summary", "key", "run", "class"],
   "finding triage": ["reason"],
   "finding move": ["to", "size"],
   verdict: ["sha", "kind", "cycle", "pr", "run"],
@@ -113,6 +113,7 @@ const OPTIONS = {
   log: ["why"],
   "merge-check": ["sha", "pr", "cycles", "head"],
   board: ["remember", "name-hex", "view"],
+  stats: ["task"],
 };
 /** The canonical number of a PR in an older row: "040" is PR 40. */
 const prNumber = (pr) => (/^\d+$/.test(pr ?? "") ? String(BigInt(pr)) : pr);
@@ -405,7 +406,8 @@ const rowsOf = ({ cols, lines }) =>
     const v = line.split("\t");
     return Object.fromEntries(cols.map((c, i) => [c, v[i] ?? ""]));
   });
-const read = (dir, table) => rowsOf(sheet(dir, table));
+/** A table's rows, with an empty cell in each column that a later version added and the file does not have yet. */
+const read = (dir, table) => rowsOf(sheet(dir, table)).map((row) => ({ ...Object.fromEntries((ADDED[table] ?? []).map((c) => [c, ""])), ...row }));
 
 /**
  * The integrity check of a logbook: every table (but skip, the ones that a repair starts again) is there, is a regular
@@ -771,7 +773,7 @@ function reviewDelta({ reference, result }, claims, rows) {
     || ledger.some(row => row.run === run && !["checks-pass", "checks-fail"].includes(row.kind))
     || findings.some(row => result.findings.includes(row.key))) deny();
   claims.findings.forEach((finding, index) => findings.push({ task: id, key: result.findings[index], round: task.round,
-    source: role, severity: finding.severity, summary: cell(finding.summary), triage: "", reason: "", status: "open" }));
+    source: role, severity: finding.severity, summary: cell(finding.summary), triage: "", reason: "", status: "open", run, class: "" }));
   ledger.push({ task: id, pr: task.pr, sha: review.sha, kind: claims.kind, cycle: String(review.cycle), run, at: result.at });
   if (["verified", "pr-ready"].includes(task.state) && NOT_CLEAN.includes(claims.kind)) {
     const before = task.state;
@@ -1561,6 +1563,28 @@ function status(dir, save) {
 }
 
 /**
+ * The review cost of each task (T346): its review and QA runs, their tokens, its repair rounds, and its findings by role
+ * and by cycle, then one total line. A finding's cycle is the cycle of its run's verdict in the ledger: "none" when it
+ * names no run or its run gave no verdict. Read only.
+ */
+function stats(dir, only) {
+  const ledger = read(dir, "ledger"), runs = read(dir, "runs").filter((r) => CHECKERS.includes(r.role)), findings = read(dir, "findings");
+  const tasks = read(dir, "tasks").filter((t) => !only || t.id === only);
+  const counts = (values) => Object.entries(values.reduce((n, v) => ({ ...n, [v]: (n[v] ?? 0) + 1 }), {})).sort().map(([v, n]) => `${v}: ${n}`).join(" · ") || "none";
+  const total = { runs: 0, untold: 0, tokens: 0, rounds: 0, findings: 0 };
+  const rows = tasks.map((t) => {
+    const own = runs.filter((r) => r.task === t.id), found = findings.filter((f) => f.task === t.id);
+    const tokens = own.reduce((n, r) => n + (Number(r.tokens) || 0), 0);
+    const cycle = (f) => { const c = f.run && ledger.find((l) => l.run === f.run)?.cycle; return c ? `cycle ${c}` : "none"; };
+    Object.assign(total, { runs: total.runs + own.length, untold: total.untold + own.filter((r) => r.status === "done" && !Number(r.tokens)).length,
+      tokens: total.tokens + tokens, rounds: total.rounds + Number(t.round || 0), findings: total.findings + found.length });
+    return `| ${t.id} | ${own.length} | ${tokens} | ${t.round || 0} | ${counts(found.map((f) => f.source))} | ${counts(found.map(cycle))} |`;
+  });
+  return ["| Task | Review runs | Review tokens | Rounds | Findings by role | Findings by cycle |", "| --- | --- | --- | --- | --- | --- |", ...rows,
+    `total · ${tasks.length} tasks · ${total.runs} review runs (${total.untold} done without tokens) · ${total.tokens} tokens · ${total.rounds} rounds · ${total.findings} findings`].join("\n");
+}
+
+/**
  * A read-only view of the project's logbook, so that the hook can keep a lead's writes on its own task: its folder
  * (dir), a task's row, the row of a run id (R<n>) or a finding key (F-T<n>-<k>), a task's one running lead run, and the
  * tasks that are or were on a PR. Each lookup gives undefined for an id of another form, an id that the logbook does not
@@ -1718,7 +1742,7 @@ function sage(argv, env = process.env) {
     refuse(`no logbook for the project ${printed}. ${printed === project ? `Run: sage init --project ${shell(project)}` : "Its path has control characters, so no command is printed to paste. Rename the folder, or run sage init from inside it."}`);
   }
   // A read takes no lock: every file is replaced whole, so it sees the store before or after a change, never half of one.
-  if ((cmd === "logbook" && !repair) || cmd === "status" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
+  if ((cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
   const run = () =>
     withLock(dir, () => {
       ready(dir, skip);
@@ -1884,6 +1908,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const run = runs.find((r) => r.id === id) ?? missing(`run ${id}`, runs.map((r) => r.id));
         const st = need(opt.status, "--status");
         if (!["done", "blocked", "question", "failed"].includes(st)) refuse("status is done, blocked, question or failed");
+        // A done review or QA run gives its tokens, so that sage stats counts every review's cost (T346).
+        if (st === "done" && CHECKERS.includes(run.role) && !/^[1-9]\d*$/.test(opt.tokens ?? run.tokens ?? "")) refuse(`${run.id} is a ${run.role} run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000. Nothing changed.`);
         Object.assign(run, { status: st, tokens: opt.tokens ?? run.tokens, report: opt.report ?? run.report, ended: now() });
         write(dir, "runs", runs);
         return `${run.id} ${st}`;
@@ -1897,13 +1923,20 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         notHeld(task, "finding add");
         const severity = need(opt.severity, "--severity");
         if (!["high", "medium", "low"].includes(severity)) refuse("severity is high, medium or low");
+        // The run whose report holds the finding, and its problem class: both optional, and checked when given (T346).
+        if (opt.run !== undefined) {
+          const run = read(dir, "runs").find((r) => r.id === opt.run) ?? missing(`run ${opt.run}`, read(dir, "runs").filter((r) => r.task === task.id).map((r) => r.id));
+          if (run.task !== task.id) refuse(`--run ${run.id} is a run of ${run.task}, not of ${task.id}: give the run whose report holds the finding. Nothing changed.`);
+        }
+        if (opt.class !== undefined && !FINDING_CLASSES.includes(opt.class)) refuse(`--class is one of ${FINDING_CLASSES.join(", ")}; not ${JSON.stringify(opt.class)}. Nothing changed.`);
+        const tags = { ...(opt.run !== undefined && { run: opt.run }), ...(opt.class !== undefined && { class: opt.class }) };
         const key = cell(opt.key) || nextId(dir, `F-${task.id}-`); // as the table holds it, so the same --key finds its finding again
         const again = findings.find((f) => f.task === task.id && f.key === key);
         // Without --summary, a known key keeps its summary. An empty one is refused, so no summary is ever lost.
         const summary = opt.summary === undefined ? again?.summary : cell(opt.summary) || refuse(`${key} on ${task.id}: --summary is empty. Give the finding in a few words${again ? ", or leave out --summary to keep its summary" : ""}.`);
         if (again && summary !== again.summary) write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: task.id, decision: `${key} opened again: ${summary}`, why: `the summary before: ${again.summary}` }]);
-        if (again) Object.assign(again, { status: "open", triage: "", round: task.round, severity, source: opt.source ?? again.source, summary }); // it came back
-        else findings.push({ task: task.id, key, round: task.round, source: need(opt.source, "--source"), severity, summary: need(summary, "--summary"), status: "open" });
+        if (again) Object.assign(again, { status: "open", triage: "", round: task.round, severity, source: opt.source ?? again.source, summary, ...tags }); // it came back
+        else findings.push({ task: task.id, key, round: task.round, source: need(opt.source, "--source"), severity, summary: need(summary, "--summary"), status: "open", ...tags });
         write(dir, "findings", findings);
         return `${key} open${again ? " again" : ""} · ${severity} · ${task.id}`;
       }
@@ -2021,6 +2054,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     }
     case "status":
       return status(dir);
+    case "stats":
+      if (pos.length) refuse("stats takes no words: sage stats [--task <T>]");
+      return stats(dir, opt.task === undefined ? undefined : taskOf(dir, opt.task).task.id);
     case "pages": {
       // pages <T> makes the task's pages folder (mode 700) and prints it. pages <T> record <file> logs a page in it, with its sha256.
       const folder = pagesDir(project, taskOf(dir, need(sub, "the task id")).task.id, env);

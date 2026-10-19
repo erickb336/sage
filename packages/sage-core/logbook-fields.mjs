@@ -6,6 +6,8 @@
 export const PRIORITIES = ["P0", "P1", "P2", "P3"];
 /** The kinds of a task: exactly one per task, from this fixed list (the T305 design). A new kind is a change of this list. */
 export const TASK_KINDS = ["design", "ui", "orchestration", "optimization", "bug-fix", "logbook", "docs", "security", "providers", "checks"];
+/** The problem classes of a finding, which its reviewer tags (finding add --class, T346): a starter list for every project. */
+export const FINDING_CLASSES = ["state-edge", "speed", "copy", "layout", "security", "other"];
 /** The most characters of a display name. */
 export const NAME_MAX = 60;
 

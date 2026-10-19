@@ -3043,7 +3043,7 @@ test("T53: native review target rejects missing cycles foreign roles and changed
   for (const request of [missing, { ...f.input, reviewCycle: 0 }, { ...f.input, reviewCycle: 11 },
     { ...f.input, reviewCycle: "1" }, { ...f.input, role: "lead" }, { ...f.input, role: "qa" },
     { ...f.input, task: "T2" }, { ...f.input, sha: receipt.review.sha }]) assert.throws(() => f.prepare(request));
-  f.cli("run", "done", "R1", "--status", "done");
+  f.cli("run", "done", "R1", "--status", "done", "--tokens", "1");
   const policy = f.createNativePolicy(f.options, () => ({ decision: "pass" }));
   await assert.rejects(f.evaluate(policy));
   assert.equal(f.core.readAdmission(f.options.directory).reservations.length, 0);
