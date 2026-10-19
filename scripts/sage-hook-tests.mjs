@@ -1612,6 +1612,8 @@ const FORGERIES = [
   `${TOOL} logbook repair --accept-loss tasks`,
   `${TOOL} standing add never review`,
   `${TOOL} round T2`,
+  `${TOOL} program propose --name x --goal y --pilot T2`,
+  `${TOOL} task T2 set program=PG1`,
   `${TOOL} newcommand T2`,
   `${PR_SCRIPT} create T2`,
 ].map((args) => `node ${args} --project /p`);
@@ -1807,6 +1809,16 @@ test("K2 (T336): in sage mode the chief's shell write that names any table of th
   const work = mkdtempSync(join(tmpdir(), "sage-k2-")); // outside the sage root: only the name can refuse
   for (const name of names) assert.match(denied(s.send(bash(`echo x >> ${name}`, work))) ?? "", ONLY_TOOL, name);
   assert.equal(denied(s.send(bash("echo x >> notes.tsv", work))), undefined, "another name passes");
+});
+
+test("T337: an agent's shell write out of its folder that names the programs table is refused by the name, in any case, also outside the sage root", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const work = mkdtempSync(join(tmpdir(), "sage-pg-")); // outside the sage root: only the name can refuse
+  for (const command of [`echo x >> ${join(work, "programs.tsv")}`, "printf x > ../PROGRAMS.tsv", "cd .. && sed -i '' s/a/b/ programs.tsv"]) {
+    assert.match(denied(s.send(bash(command, work, AGENT))) ?? "", ONLY_CHIEF, command);
+  }
+  assert.equal(denied(s.send(bash(`echo x >> ${join(work, "programs.txt")}`, work, AGENT))), undefined, "another name passes");
 });
 
 test("S2: the chief's Write, Edit, MultiEdit and NotebookEdit under the sage root are refused, in sage mode and out of it (T83)", () => {

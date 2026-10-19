@@ -86,13 +86,14 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind", "waits"] };
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "round", "run", "finding", "verdict", "gate", "log", "status", "merge-check", "config", "projects", "board", "observe"];
+const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind", "waits", "program"] };
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss"],
   "projects rebuild": ["accept-listing"],
-  "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits"],
+  "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
+  "program propose": ["name", "goal", "pilot"],
   "run add": ["role", "branch", "candidate"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
   "run done": ["status", "tokens", "report"],
@@ -380,11 +381,26 @@ function sheet(dir, table, also = [], max = Infinity) {
     if (e instanceof Refusal || !e.code) throw e;
     refuse(`${file} cannot be read (${e.code}). ${fixIt(file, e.code)}`);
   }
+  if (text === undefined && table === "programs" && !namesProgram(dir)) return { cols: TABLES.programs, lines: [] };
   if (text === undefined) throw lost(dir, table, "is missing or is a link to nothing", also);
   const { cols, lines } = sheetText(text);
   if (!cols.length) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
   if (!TABLES[table].every((c) => cols.includes(c) || ADDED[table]?.includes(c))) refuse(`the header of ${file} is damaged: its first line must be the column names ${TABLES[table].join(", ")}, separated by tabs. Ask the user to fix or add that line.`);
   return { cols, lines };
+}
+
+/**
+ * Does a task of the logbook name a program? The programs table came later (T337): a logbook made before it has no
+ * programs.tsv, and that reads as a table with no rows while no task names a program. Once one does, the file is
+ * missing rows, and a missing file is a loss as for any table. The first program propose writes it. A tasks table that
+ * cannot be read names none here: its own check refuses it.
+ */
+function namesProgram(dir) {
+  try {
+    return rowsOf(sheet(dir, "tasks")).some((t) => t.program);
+  } catch {
+    return false;
+  }
 }
 
 function sheetText(text) {
@@ -475,11 +491,13 @@ function updateRows(table, text) {
   return rowsOf(sheet);
 }
 function updateFacts(rows, readiness) {
-  return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, readiness };
+  return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, programs: rows.programs, readiness };
 }
 function checkUpdateFacts(facts) {
-  if (!updateKeys(facts, ["findings", "ledger", "gates", "readiness"])) updateDeny();
-  for (const table of ["findings", "ledger", "gates"]) {
+  // The facts of a sage before programs (T337) have no programs: that sage refused a logbook with them, so it read none.
+  const tables = ["findings", "ledger", "gates", ...(facts && Object.hasOwn(facts, "programs") ? ["programs"] : [])];
+  if (!updateKeys(facts, [...tables, "readiness"])) updateDeny();
+  for (const table of tables) {
     if (!Array.isArray(facts[table]) || facts[table].some(row => !updateKeys(row, TABLES[table])
       || Object.values(row).some(value => typeof value !== "string" || cell(value) !== value))) updateDeny();
   }
@@ -556,7 +574,7 @@ function updateRequestedTask(input, env, coordination) {
       const current = before.tasks.filter(row => row.id === reference.task);
       if (current.length !== 1) throw new TaskUpdateError("invalid-state");
       if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
-      const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates"].map(table => [table, read(dir, table)])), null);
+      const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null);
       const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
       phase = needsReady ? "readiness" : "plan";
       const openFindings = facts.findings.filter(row => row.task === reference.task && row.status === "open");
@@ -708,7 +726,7 @@ function createRequestedRun(input, env = process.env) {
 /** A recorded running run is an assignment record, not proof that a native agent started. */
 function runFrame(dir, task, role, branch, candidate, env) {
   if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
-  if (WAIT_ROLES.includes(role)) waitsMet(task, read(dir, "tasks"), `${role} run`);
+  if (WAIT_ROLES.includes(role)) waitsMet(task, graphOf(dir), `${role} run`);
   if (role === "lead") {
     // A lead carries one task's pull request: one running lead per task, and at most LEADS per project.
     if (["merged", "abandoned", "concluded"].includes(task.state)) refuse(`${task.id} is ${task.state}, so it takes no lead run: the task has ended.`);
@@ -1152,7 +1170,7 @@ function write(dir, table, rows) {
 
 const now = () => new Date().toISOString().slice(0, 19) + "Z";
 /** The cells that hold ids: each table's own id, the columns that name the id of another row, and a decision's subject. */
-const IDS = { tasks: ["id", "keys"], runs: ["id", "task"], findings: ["task", "key"], ledger: ["task", "run"], gates: ["id", "task"], decisions: ["task"] };
+const IDS = { tasks: ["id", "keys", "program"], runs: ["id", "task"], findings: ["task", "key"], ledger: ["task", "run"], gates: ["id", "task"], decisions: ["task"], programs: ["id", "pilot", "gate"] };
 /**
  * A new id: the highest whole number after the prefix that any id cell of the logbook names, plus 1. So an id never
  * comes back, also when its own row is lost while another row (a verdict's run, a decision, a round's keys) still names
@@ -1169,7 +1187,8 @@ function nextId(dir, prefix) {
   };
   for (const [table, cols] of Object.entries(IDS)) {
     for (const row of read(dir, table)) {
-      for (const c of cols) take(row[c], new RegExp(`(?<![A-Za-z0-9])${prefix}(\\d+)`, "g"));
+      // An older table has no cell for a column that a later version added (ADDED): its rows read it as empty.
+      for (const c of cols) take(row[c] ?? "", new RegExp(`(?<![A-Za-z0-9])${prefix}(\\d+)`, "g"));
       if (table === "decisions") for (const word of subjects(row.decision)) take(word, new RegExp(`^${prefix}(\\d+)(?![A-Za-z0-9])`, "g"));
     }
   }
@@ -1225,11 +1244,16 @@ const notHeld = (task, what) => task.state === "held" && refuse(`${task.id} is h
  * Waits (T336): a task may wait for other tasks of its own logbook. A wait is met when that task is merged or concluded; an
  * abandoned or lost task never meets it, also in the same merge (the owner, 2026-10-19). A task with an unmet wait takes
  * no build work (WAIT_ROLES, a move to building) and does not merge; its design and PE may run.
+ *
+ * Programs (T337) add two waits that no cell holds: each task of a program waits for the owner's approval of the
+ * program's breakdown, and after it, each task but the pilot waits for the pilot. The same rules read them.
  */
 const MET = ["merged", "concluded"];
+const ENDED = [...MET, "abandoned"];
 const WAIT_ROLES = ["lead", "implementer", "investigate", "arena-judge"];
 const WAITS_MAX = 20;
 const TASK_ID = /^T[1-9]\d*$/;
+const PROGRAM_ID = /^PG[1-9]\d*$/;
 /** The words of a waits value, as a write and a read split them: by commas or spaces. */
 const waitWords = (value) => String(value ?? "").split(/[\s,]+/).filter(Boolean);
 /**
@@ -1242,43 +1266,79 @@ const waitsOf = (task) => {
 };
 /** The tasks by id, built once by a caller that looks up many waits, so a merge check stays linear. */
 const byIds = (tasks) => new Map(tasks.map((t) => [t.id, t]));
-/** A task's waits, each with the state of its task (undefined for a task that the logbook lost), and odd text as one more. */
-const waitsWithState = (task, byId) => {
-  const { ids, odd } = waitsOf(task);
-  return [...ids.map((id) => ({ id, state: byId.get(id)?.state })), ...(odd ? [{ odd }] : [])];
+/** The options of a breakdown gate, in this order: the owner answers by number. */
+const BREAKDOWN = "approve|change|drop";
+/**
+ * A program's state, from the answer of its latest breakdown gate, never from a cell: proposed while the gate is open,
+ * active after approve, changing after change, dropped after drop or the owner's own words, and lost when the logbook has
+ * no row for the gate. An active program whose tasks have all ended is done (programsLine).
+ */
+const programState = (gate) => (!gate ? "lost" : !gate.answer ? "proposed" : { approve: "active", change: "changing" }[gate.answer] ?? "dropped");
+/** What the waits of the logbook's tasks are read against: the tasks by id, and each program with its state. Built once per command. */
+const waitGraph = (tasks, programs = [], gates = []) => {
+  const gateOf = byIds(gates);
+  return { byId: byIds(tasks), programs: new Map(programs.map((p) => [p.id, { ...p, state: programState(gateOf.get(p.gate)) }])) };
 };
-/** The waits of a task that are not met. passes(id) meets a wait too: a task that passes in the same merge. */
-const unmetWaits = (task, byId, passes = () => false) => waitsWithState(task, byId).filter(({ id, state, odd }) => odd || (!MET.includes(state) && !passes(id)));
+const graphOf = (dir) => waitGraph(read(dir, "tasks"), read(dir, "programs"), read(dir, "gates"));
+/**
+ * A task's waits, each with the state of its task (undefined for a task that the logbook lost), then its program's two
+ * implicit waits: the pilot (pilot: the program's id) once the breakdown is approved, else the breakdown itself
+ * (program), and odd text as one more.
+ */
+const waitsWithState = (task, { byId, programs }) => {
+  const { ids, odd } = waitsOf(task);
+  const program = task?.program ? (programs.get(task.program) ?? { id: task.program, state: "lost" }) : undefined;
+  const pilot = program?.state === "active" && program.pilot !== task.id && !ids.includes(program.pilot) ? [{ id: program.pilot, state: byId.get(program.pilot)?.state, pilot: program.id }] : [];
+  return [...ids.map((id) => ({ id, state: byId.get(id)?.state })), ...pilot, ...(program && program.state !== "active" ? [{ program }] : []), ...(odd ? [{ odd }] : [])];
+};
+/** The waits of a task that are not met. passes(id) meets a wait too: a task that passes in the same merge. A breakdown that is not approved is never met. */
+const unmetWaits = (task, graph, passes = () => false) => waitsWithState(task, graph).filter(({ id, state, odd, program }) => odd || program || (!MET.includes(state) && !passes(id)));
 const ODD = "the waits cell has text that is not a task id";
-const waitList = (open) => open.map(({ id, state, odd }) => (odd ? ODD : `${id} (${state ?? "not in the logbook"})`)).join(", ");
+/** A program's breakdown that is not approved, for a waits line. */
+const breakdownOf = ({ id, state, gate }) => `the breakdown of ${id} (${{ proposed: `open, gate ${gate}`, changing: `changes asked, gate ${gate}`, dropped: `dropped, gate ${gate}` }[state] ?? (gate ? `its gate ${gate} is not in the logbook` : "not in the logbook")})`;
+const waitList = (open) => open.map(({ id, state, odd, pilot, program }) => (odd ? ODD : program ? breakdownOf(program) : `${id} (${state ?? "not in the logbook"}${pilot ? `, the pilot of ${pilot}` : ""})`)).join(", ");
+/** When a task with these unmet waits goes on: after its tasks are merged or concluded, and after the owner approves its breakdown. */
+const until = (open) => {
+  const program = open.find((w) => w.program)?.program;
+  return [open.some((w) => !w.program) && `each ${program ? "task" : "of them"} is merged or concluded`, program && `the owner approves the breakdown of ${program.id}`].filter(Boolean).join(", and ");
+};
 /** A task that never meets a wait: abandoned, or lost from the logbook. */
 const dead = (state) => state === "abandoned" || state === undefined;
-/** The fix for a wait that is never met: its task was abandoned or is lost, or the cell has text that is not a task id. */
+/** The fix for a wait that is never met: its task was abandoned or is lost, the cell has text that is not a task id, or the breakdown is not approved. */
 const waitFix = (task, open) => {
-  const gone = open.filter(({ state, odd }) => !odd && dead(state)).map(({ id }) => id);
+  const gone = open.filter(({ state, odd, pilot, program }) => !odd && !pilot && !program && dead(state)).map(({ id }) => id);
+  const pilot = open.find(({ state, pilot }) => pilot && dead(state));
+  const program = open.find((w) => w.program)?.program;
   const how = `sage task ${task.id} set waits=<ids>, or waits= to clear it`;
+  const out = `take ${task.id} out of it (sage task ${task.id} set program=none), or ask the owner.`;
   return [
     gone.length ? ` ${gone.join(", ")} ${gone.length === 1 ? "is" : "are"} abandoned or not in the logbook, so ${gone.length === 1 ? "that wait is" : "those waits are"} never met: remove or change the wait (${how}), or ask the owner.` : "",
+    pilot ? ` ${pilot.id}, the pilot of ${pilot.pilot}, is abandoned or not in the logbook, so no other task of ${pilot.pilot} builds: propose a new pilot (sage program propose ${pilot.pilot} --pilot <T>), or ${out}` : "",
+    !program ? "" : {
+      proposed: ` No task of ${program.id} builds before the owner approves its breakdown: ask the owner to answer gate ${program.gate}.`,
+      changing: ` The owner asked for changes to the breakdown of ${program.id}: propose it again (sage program propose ${program.id}, with --name, --goal or --pilot when they change), and the owner answers the new gate.`,
+      dropped: ` The owner dropped ${program.id}, so its breakdown is never approved: ${out}`,
+    }[program.state] ?? ` ${program.id} or its breakdown gate is not in the logbook, so its breakdown is never approved: ${out}`,
     open.some(({ odd }) => odd) ? ` A hand edit put that text there: set the waits again (${how}).` : "",
   ].join("");
 };
-/** Refuses work of what on a task with an unmet wait, and names each unmet task with its state. A move to merged or concluded opens the waits on it, so it refuses too. */
-const waitsMet = (task, tasks, what) => {
-  const open = unmetWaits(task, byIds(tasks));
+/** Refuses work of what on a task with an unmet wait, and names each unmet wait with its state. A move to merged or concluded opens the waits on it, so it refuses too. */
+const waitsMet = (task, graph, what) => {
+  const open = unmetWaits(task, graph);
   const end = { "move to merged": "merged", "move to concluded": "concluded" }[what];
-  const after = end ? `it moves to ${end} after each of them is merged or concluded.` : "it starts after each of them is merged or concluded. Its design and PE may run.";
+  const after = end ? `it moves to ${end} after ${until(open)}.` : `it starts after ${until(open)}. Its design and PE may run.`;
   if (open.length) refuse(`${task.id} waits for ${waitList(open)}, so it takes no ${what}: ${after}${waitFix(task, open)}`);
 };
 /** A task's waits for a printed line: each with its task's state, then the unmet ones. */
-const waitsText = (task, tasks) => {
-  const byId = byIds(tasks), all = waitsWithState(task, byId), open = unmetWaits(task, byId);
+const waitsText = (task, graph) => {
+  const all = waitsWithState(task, graph), open = unmetWaits(task, graph);
   if (!all.length) return "";
-  return ` · waits ${waitList(all)} · ${open.length ? `unmet ${open.map(({ id, odd }) => (odd ? "the odd text" : id)).join(", ")}` : "all met"}`;
+  return ` · waits ${waitList(all)} · ${open.length ? `unmet ${open.map(({ id, odd, program }) => (odd ? "the odd text" : program ? `the breakdown of ${program.id}` : id)).join(", ")}` : "all met"}`;
 };
 /**
  * A waits value as its cell holds it: task ids joined by commas, "" for none (an empty value or none clears it). The ids may
  * be separated by commas or spaces. It refuses a word that is not a task id, a duplicate, the task itself, more than
- * WAITS_MAX, a task that this logbook does not have, and a loop, which it names (T8, T9, T8).
+ * WAITS_MAX and a task that this logbook does not have. The caller then refuses a loop (noLoop).
  */
 function waitsValue(task, value, tasks) {
   const ids = value === "none" ? [] : waitWords(value);
@@ -1289,33 +1349,70 @@ function waitsValue(task, value, tasks) {
   if (twice) refuse(`waits names ${twice} twice: give each task once.${nothing}`);
   if (ids.includes(task.id)) refuse(`${task.id} cannot wait for itself.${nothing}`);
   if (ids.length > WAITS_MAX) refuse(`waits names ${ids.length} tasks, more than the ${WAITS_MAX} that a task may wait for. Split the task, or wait for fewer.${nothing}`);
-  const known = new Map(tasks.map((t) => [t.id, t]));
+  const known = byIds(tasks);
   const lost = ids.find((id) => !known.has(id));
   if (lost) refuse(`no task ${lost} in this logbook: a task waits only for a task of its own logbook.${nothing}`);
-  // A loop: a path of waits from one of the new ids back to the task. One depth-first search over the logbook's tasks.
-  const next = (id) => (id === task.id ? ids : waitsOf(known.get(id)).ids);
+  return ids.join(",");
+}
+/** The tasks that a task waits for in the loop check: its waits, and the pilot of its program, also before the approval, which would close the loop. */
+const edgesOf = (task, programs) => {
+  const pilot = programs.get(task?.program)?.pilot;
+  return [...waitsOf(task).ids, ...(pilot && pilot !== task.id ? [pilot] : [])];
+};
+/**
+ * Refuses a loop of waits through task, as the logbook would hold it after this change: a path from its waits back to it.
+ * One depth-first search over the logbook's tasks. It names the loop, and the pilot rule when the loop goes through it.
+ */
+function noLoop(task, { byId, programs }) {
+  const of = (id) => (id === task.id ? task : byId.get(id));
   const seen = new Set();
   const back = (id, path) => {
     if (id === task.id) return path;
     if (seen.has(id)) return undefined;
     seen.add(id);
-    for (const n of next(id)) {
+    for (const n of edgesOf(of(id), programs)) {
       const found = back(n, [...path, n]);
       if (found) return found;
     }
     return undefined;
   };
-  for (const id of ids) {
+  for (const id of edgesOf(task, programs)) {
     const loop = back(id, [task.id, id]);
-    if (loop) refuse(`these waits make a loop: ${loop.join(", ")}. A loop never ends, so sage refuses it.${nothing}`);
+    if (!loop) continue;
+    const [from, to] = loop.slice(1).map((b, i) => [loop[i], b]).find(([a, b]) => !waitsOf(of(a)).ids.includes(b)) ?? [];
+    const pilot = from ? ` ${from} waits for ${to} as the pilot of ${of(from).program}: each task of a program waits for its pilot.` : "";
+    refuse(`these waits make a loop: ${loop.join(", ")}.${pilot} A loop never ends, so sage refuses it. Nothing changed.`);
   }
-  return ids.join(",");
 }
 /** The decision row of a changed waits list, so that a replaced list leaves its record. */
 const waitsDecision = (task, was, at, why) => {
   if (was === (task.waits ?? "")) return [];
   const { ids, odd } = waitsOf({ waits: was }); // the old cell through the parser: a hand edit's text never reaches the row
   return [{ at, task: task.id, decision: `waits ${[...ids, ...(odd ? ["(text that is not a task id)"] : [])].join(",") || "none"} → ${task.waits || "none"}`, why }];
+};
+/**
+ * A program value as its cell holds it: a PG<n> of this logbook, or "" (none or an empty value takes the task out). It
+ * refuses another word, a program that the logbook does not have or that the owner dropped, an ended task joining one,
+ * and the pilot leaving its program (unless the owner dropped it). The caller then refuses a loop through the pilot.
+ */
+function programValue(task, value, { programs }) {
+  const id = value === "none" ? "" : value;
+  const nothing = " Nothing changed.";
+  if (id === (task.program ?? "")) return id;
+  const was = programs.get(task.program);
+  if (was?.pilot === task.id && was.state !== "dropped") refuse(`${task.id} is the pilot of ${was.id}, so it stays in ${was.id}: propose a new pilot first (sage program propose ${was.id} --pilot <T>).${nothing}`);
+  if (!id) return "";
+  if (!PROGRAM_ID.test(id)) refuse(`program takes a program id such as PG1, or none to take the task out; not "${visible(id)}".${nothing}`);
+  const program = programs.get(id) ?? missing(`program ${id}`, [...programs.keys()]);
+  if (program.state === "dropped") refuse(`the owner dropped ${id} (gate ${program.gate}), so it takes no task. Propose a new program (sage program propose --name <name> --goal <goal> --pilot <T>).${nothing}`);
+  if (ENDED.includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task joins no program. program=none takes a task out.${nothing}`);
+  return id;
+}
+/** The decision row of a changed program, and the note for the chief when a task joins after the breakdown approval: it joins with no new gate, and the owner hears of it (the owner, 2026-10-19). */
+const programDecision = (task, was, at, why, { programs }) => {
+  if (was === (task.program ?? "")) return { rows: [], note: "" };
+  const after = programs.get(task.program)?.state === "active" ? ` · joins ${task.program} after the owner approved its breakdown: no new gate, so tell the owner` : "";
+  return { rows: [{ at, task: task.id, decision: `program ${was || "none"} → ${task.program || "none"}`, why: `${why}${after ? "; after the breakdown approval" : ""}` }], note: after };
 };
 
 /** The extra rounds of a task's holds by round: a whole number, and 0 for any other cell, so a hand-written cell never gives NaN (F-T286-2). */
@@ -1338,7 +1435,8 @@ function planTaskChanges(before, id, changes, at, facts) {
   const { tasks, runs, decisions } = structuredClone(before);
   const matches = tasks.filter(row => row.id === id);
   if (matches.length !== 1) refuse("The task is missing or ambiguous.");
-  const task = matches[0], decided = [];
+  let note = "";
+  const task = matches[0], decided = [], graph = waitGraph(tasks, facts.programs, facts.gates);
   for (const kv of changes) {
     const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
     if (k === "state") {
@@ -1347,7 +1445,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
       const was = task.state;
       move(task, v); // the design's states first; the table is written only if every check below passes
-      if (["building", "merged", "concluded"].includes(v)) waitsMet(task, tasks, `move to ${v}`);
+      if (["building", "merged", "concluded"].includes(v)) waitsMet(task, graph, `move to ${v}`);
       // A move to abandoned gives no round: the task ends (F-T286-3).
       if (was === "held" && task.hold === "round" && v !== "abandoned") {
         task.extra = String(extraOf(task) + 1);
@@ -1388,11 +1486,19 @@ function planTaskChanges(before, id, changes, at, facts) {
     else if (k === "waits") {
       const was = task.waits ?? "";
       task.waits = waitsValue(task, v, tasks);
-      if (task.waits && ["merged", "concluded", "abandoned"].includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task waits for nothing, so it takes no new wait. waits= clears a wait. Nothing changed.`);
+      if (task.waits && ENDED.includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task waits for nothing, so it takes no new wait. waits= clears a wait. Nothing changed.`);
+      noLoop(task, graph);
       decided.push(...waitsDecision(task, was, at, "task set"));
-    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind= or waits=`);
+    } else if (k === "program") {
+      const was = task.program ?? "";
+      task.program = programValue(task, v, graph);
+      noLoop(task, graph);
+      const { rows, note: joined } = programDecision(task, was, at, "task set", graph);
+      decided.push(...rows);
+      note += joined;
+    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits= or program=`);
   }
-  return { task, tasks, runs, decisions: [...decisions, ...decided] };
+  return { task, tasks, runs, decisions: [...decisions, ...decided], note };
 }
 
 /** A task's priority or kind as its cell holds it: "" for none, else a value of the fixed list. Any other value refuses, with the list. */
@@ -1412,8 +1518,8 @@ function frame(dir, title, size, risk, add, tags = {}) {
   write(dir, "tasks", [...read(dir, "tasks"), task]);
   return task;
 }
-/** A task's priority and kind for a printed line: nothing when it has none. */
-const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}`;
+/** A task's priority, kind and program for a printed line: nothing when it has none. */
+const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.program ? ` · program ${task.program}` : ""}`;
 const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}${task.waits ? ` · waits ${task.waits.replaceAll(",", ", ")}` : ""}`;
 
 function move(task, to) {
@@ -1603,6 +1709,7 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
       const [byId, ownOf, findingsOf, runsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs)];
+      const graph = waitGraph(tasks, book ? rowsOf(book.programs) : [], book ? rowsOf(book.gates) : []);
       const checked = [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
         // A held task never merges until the sage moves it (F-T273-12).
@@ -1625,7 +1732,7 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       const clear = (task) => {
         if (answers.has(task.id)) return answers.get(task.id);
         answers.set(task.id, false);
-        const ok = here.get(task.id)?.ok === true && !unmetWaits(task, byId, (u) => passes(task, u)).length;
+        const ok = here.get(task.id)?.ok === true && !unmetWaits(task, graph, (u) => passes(task, u)).length;
         answers.set(task.id, ok);
         return ok;
       };
@@ -1645,9 +1752,10 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         return [...by].map(([n, ids]) => ` ${task.id} is not on PR ${n}, so its wait on ${ids.join(", ")} cannot pass in this merge: run sage task ${task.id} set pr=${n}, and record its verdicts with --pr ${n}.`).join("");
       };
       return checked.map((r) => {
-        const task = byId.get(r.id), open = task ? unmetWaits(task, byId, (u) => passes(task, u)) : [];
+        const task = byId.get(r.id), open = task ? unmetWaits(task, graph, (u) => passes(task, u)) : [];
         if (!open.length || task.state === "held") return r;
-        return { ...r, ok: false, reason: `${r.id} waits for ${waitList(open)}: it merges after ${open.length === 1 ? "that task is" : "each of them is"} merged or concluded, or passes in this same merge on the same PR.${waitFix(task, open)}${offPr(task, open)}` };
+        const after = open.some((w) => w.program) ? `${until(open)}${open.some((w) => !w.program) ? ", or each such task passes in this same merge on the same PR" : ""}` : `${open.length === 1 ? "that task is" : "each of them is"} merged or concluded, or passes in this same merge on the same PR`;
+        return { ...r, ok: false, reason: `${r.id} waits for ${waitList(open)}: it merges after ${after}.${waitFix(task, open)}${offPr(task, open)}` };
       });
     });
     const one = strangers.length === 1;
@@ -1671,6 +1779,24 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
   }
 }
 
+/**
+ * The programs line of status: each program that is not done or dropped, with its progress (its merged or concluded
+ * tasks of those not abandoned; an abandoned task leaves the count, the owner 2026-10-19) and what it waits for, then the
+ * count of done and dropped programs.
+ */
+function programsLine(tasks, { programs }) {
+  const ended = { done: 0, dropped: 0 };
+  const open = [...programs.values()].flatMap((p) => {
+    const own = tasks.filter((t) => t.program === p.id), gone = own.filter((t) => t.state === "abandoned").length;
+    const counted = own.length - gone, met = own.filter((t) => MET.includes(t.state)).length;
+    const state = p.state === "active" && counted && met === counted ? "done" : p.state;
+    if (state in ended) return ended[state]++, [];
+    const why = { proposed: `, breakdown waits for you (${p.gate})`, changing: `, you asked for changes (${p.gate}): the sage proposes again`, lost: `, its breakdown gate ${p.gate} is not in the logbook` }[state] ?? "";
+    return [` · ${p.id} ${p.name} ${met} of ${counted}${gone ? `, ${gone} abandoned` : ""}${why}`];
+  });
+  return `programs ${programs.size}${open.join("")}${Object.entries(ended).filter(([, n]) => n).map(([s, n]) => ` · ${n} ${s}`).join("")}`;
+}
+
 /** The status lines. With save, also status.md: only a command that holds the lock saves, so status.md never lags. */
 function status(dir, save) {
   const tasks = read(dir, "tasks");
@@ -1686,10 +1812,11 @@ function status(dir, save) {
     `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${g.question} (default: ${g.default || "none"})`).join("")}`,
     `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens`,
   ];
-  // The open tasks that wait, each with its unmet waits: a line only when one waits.
-  const byId = byIds(tasks);
-  const waiting = tasks.filter((t) => !["merged", "concluded", "abandoned"].includes(t.state)).map((t) => [t, unmetWaits(t, byId)]).filter(([, open]) => open.length);
+  // The open tasks that wait, each with its unmet waits: a line only when one waits. Then the programs: a line only when there is one.
+  const graph = waitGraph(tasks, read(dir, "programs"), read(dir, "gates"));
+  const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, unmetWaits(t, graph)]).filter(([, open]) => open.length);
   if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
+  if (graph.programs.size) lines.push(programsLine(tasks, graph));
   const table = ["", "| Task | State | Size | Round | PR | Title |", "| --- | --- | --- | --- | --- | --- |", ...tasks.map((t) => `| ${t.id} | ${t.state} | ${t.size} | ${t.round} | ${t.pr} | ${t.title} |`)];
   if (save) put(join(dir, "status.md"), [`# ${lines[0]}`, "", ...lines.slice(1).map((l) => `    ${l}`), ...table].join("\n") + "\n");
   return lines.join("\n");
@@ -1959,23 +2086,64 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (size === "investigate" && list(opt.add).includes("build")) refuse("an investigation changes no code, so it takes no build block. Frame the build as its own task: sage task add --size tiny, small or large");
         const why = opt.add ? need(opt.why, "--why for the added blocks") : ""; // refuse before anything is written
         const tags = Object.fromEntries(["priority", "kind"].filter((k) => opt[k] !== undefined).map((k) => [k, tag(k, opt[k])]));
-        if (opt.waits !== undefined) tags.waits = waitsValue({ id: nextId(dir, "T") }, opt.waits, read(dir, "tasks"));
+        const graph = graphOf(dir), next = { id: nextId(dir, "T"), state: "framed" };
+        if (opt.waits !== undefined) tags.waits = waitsValue(next, opt.waits, [...graph.byId.values()]);
+        if (opt.program !== undefined) tags.program = programValue(next, opt.program, graph);
+        noLoop({ ...next, ...tags }, graph);
         const task = frame(dir, need(opt.title, "--title"), size, risk, list(opt.add), tags);
         checkout(dir, project);
-        const at = now(), decided = [...(opt.add ? [{ at, task: task.id, decision: `added ${opt.add}`, why }] : []), ...waitsDecision(task, "", at, "task add")];
+        const at = now(), joined = programDecision(task, "", at, "task add", graph);
+        const decided = [...(opt.add ? [{ at, task: task.id, decision: `added ${opt.add}`, why }] : []), ...waitsDecision(task, "", at, "task add"), ...joined.rows];
         if (decided.length) write(dir, "decisions", [...read(dir, "decisions"), ...decided]);
-        return framed(task);
+        return `${framed(task)}${joined.note}`;
       }
       const { tasks, task } = taskOf(dir, need(sub, "the task id")); // task <T> [set key=value ...]
+      let note = "";
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
-        const planned = planTaskChanges(before, task.id, more, now(), { findings: read(dir, "findings"), ledger: read(dir, "ledger") });
+        const planned = planTaskChanges(before, task.id, more, now(), Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])));
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);
         if (JSON.stringify(planned.runs) !== JSON.stringify(before.runs)) write(dir, "runs", planned.runs);
         write(dir, "tasks", planned.tasks);
         Object.assign(task, planned.task);
+        note = planned.note;
       }
-      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, tasks)}`;
+      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, waitGraph(tasks, read(dir, "programs"), read(dir, "gates")))}${note}`;
+    }
+    case "program": {
+      // program propose writes a program and its breakdown gate on the pilot task, where the board shows it under Needs
+      // you. program propose <PG> proposes it again, after the owner's change or for a new pilot: a new gate.
+      if (sub !== "propose" || more.length) refuse("program takes: propose --name <name> --goal <goal> --pilot <T>, or propose <PG> with --name, --goal or --pilot to propose it again");
+      const [tasks, programs, gates] = ["tasks", "programs", "gates"].map((t) => read(dir, t));
+      const nothing = " Nothing changed.";
+      const old = id === undefined ? undefined : (programs.find((p) => p.id === id) ?? missing(`program ${id}`, programs.map((p) => p.id)));
+      const state = old && programState(gates.find((g) => g.id === old.gate));
+      if (state === "proposed") refuse(`the breakdown gate ${old.gate} of ${old.id} is still open: the owner answers it first. To change the breakdown, the owner answers change, then propose it again.${nothing}`);
+      if (state === "dropped") refuse(`the owner dropped ${old.id} (gate ${old.gate}), and a dropped program does not come back. Propose a new program.${nothing}`);
+      const name = opt.name ?? old?.name ?? need(undefined, "--name");
+      const goal = opt.goal ?? old?.goal ?? need(undefined, "--goal");
+      const pid = old?.id ?? nextId(dir, "PG");
+      const nameWhy = nameProblem(name), goalWhy = nameProblem(goal, 300);
+      if (nameWhy) refuse(`the program's name ${nameWhy}.${nothing}`);
+      if (goalWhy) refuse(`the program's goal ${goalWhy}.${nothing}`);
+      const twin = programs.find((p) => p.id !== pid && looks(p.name) === looks(name));
+      if (twin) refuse(`${twin.id} has that name already: give each program its own name.${nothing}`);
+      const pilot = tasks.find((t) => t.id === (opt.pilot ?? old?.pilot ?? need(undefined, "--pilot"))) ?? missing(`task ${visible(opt.pilot ?? old.pilot)}`, tasks.map((t) => t.id));
+      if (ENDED.includes(pilot.state)) refuse(`${pilot.id} is ${pilot.state}: an ended task is no pilot, as it runs nothing more. Give a task that has not ended.${nothing}`);
+      if (pilot.program && pilot.program !== pid) refuse(`${pilot.id} is in ${pilot.program}, and a task is in one program: take it out first (sage task ${pilot.id} set program=none), or give another pilot.${nothing}`);
+      const at = now();
+      const g = { id: nextId(dir, "G"), task: pilot.id, question: `Approve the breakdown of ${pid} ${name} (pilot ${pilot.id})? Goal: ${goal}`, options: BREAKDOWN, recommendation: "approve", default: "", at };
+      const row = { id: pid, name, goal, pilot: pilot.id, gate: g.id, at: old?.at ?? at };
+      const after = old ? programs.map((p) => (p.id === pid ? row : p)) : [...programs, row];
+      pilot.program = pid;
+      noLoop(pilot, waitGraph(tasks, after, gates));
+      const changes = old ? [old.name !== name && `name ${old.name} → ${name}`, old.goal !== goal && "a new goal", old.pilot !== pilot.id && `pilot ${old.pilot} → ${pilot.id}`].filter(Boolean) : [];
+      const decision = old ? `${pid} proposed again with gate ${g.id}${changes.length ? `: ${changes.join(", ")}` : ""}` : `${pid} proposed: ${name}, pilot ${pilot.id}, gate ${g.id}`;
+      write(dir, "decisions", [...read(dir, "decisions"), { at, task: pilot.id, decision, why: "program propose" }]);
+      write(dir, "programs", after);
+      write(dir, "gates", [...gates, g]);
+      write(dir, "tasks", tasks);
+      return `${pid} proposed · ${name} · pilot ${pilot.id} · ${g.id} open: the owner approves, changes or drops the breakdown. Until approve, no task of ${pid} builds.`;
     }
     case "round": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));
@@ -2015,7 +2183,13 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const candidate = opt.candidate ?? "";
         const run = runFrame(dir, task, role, branch, candidate, env);
         write(dir, "runs", [...runs, run]);
-        return `${run.id} running · ${role} on ${task.id}${branch ? ` · ${branch}` : ""}${candidate ? ` · candidate ${candidate}` : ""}${run.model ? ` · model ${run.model}` : ""}`;
+        // A lead's brief carries the final reports of the tasks that its task waits for (the brief rule): the last lead
+        // or investigate run of each, with its report's path when one is recorded.
+        const upstream = role !== "lead" ? [] : waitsWithState(task, graphOf(dir)).filter((w) => w.id).map(({ id: up }) => {
+          const last = runs.filter((r) => r.task === up && ["lead", "investigate"].includes(r.role)).at(-1);
+          return `${up} ${last?.report ? `${last.id} ${resolve(dir, last.report)}` : "no report recorded"}`;
+        });
+        return `${run.id} running · ${role} on ${task.id}${branch ? ` · ${branch}` : ""}${candidate ? ` · candidate ${candidate}` : ""}${run.model ? ` · model ${run.model}` : ""}${upstream.length ? ` · upstream reports: ${upstream.join(", ")}` : ""}`;
       }
       if (sub === "done") {
         const run = runs.find((r) => r.id === id) ?? missing(`run ${id}`, runs.map((r) => r.id));

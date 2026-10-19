@@ -3990,6 +3990,19 @@ test('T336: core native run creation refuses a lead run while a wait is unmet, a
   assert.equal(tool.createRequestedRun({ ...input, role: 'pe', request: turns[2] }, f.env).run.role, 'pe');
 });
 
+test('T337: core native run creation refuses a lead run while the program breakdown is not approved, as the CLI does, and creates one after', async t => {
+  const f = await runCreationFixture(t);
+  const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); } });
+  const cli = (...args) => tool.sage([...args, '--project', f.options.projectDirectory], f.env);
+  cli('program', 'propose', '--name', 'Codex support', '--goal', 'Codex runs sage too.', '--pilot', 'T1');
+  const input = { ...f.input, project: f.options.projectDirectory, owner: 'test-owner' };
+  const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
+  assert.throws(() => tool.createRequestedRun(input, f.env), { message: 'T1 waits for the breakdown of PG1 (open, gate G1), so it takes no lead run: it starts after the owner approves the breakdown of PG1. Its design and PE may run. No task of PG1 builds before the owner approves its breakdown: ask the owner to answer gate G1.' });
+  assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
+  cli('gate', 'answer', 'G1', '--option', '1');
+  assert.equal(tool.createRequestedRun({ ...input, request: turns[2] }, f.env).run.role, 'lead');
+});
+
 test('T57: historical run receipts preserve a nonzero round and timestamp after clock advancement', async t => {
   const f = await runCreationFixture(t);
   for (const state of ['briefed', 'building', 'reviewing']) f.cli('task', 'T1', 'set', `state=${state}`);
@@ -5415,6 +5428,17 @@ async function nativeTaskUpdateFixture(t) {
   const update = input => updateNativeTask(input, f.native(session), f.options);
   return { ...f, snapshot, request, update };
 }
+
+test('T337: a native task update refuses a move to building while the program breakdown is not approved, as the CLI does', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  f.assignmentCli('task', 'T1', 'set', 'state=briefed');
+  f.assignmentCli('program', 'propose', '--name', 'Codex support', '--goal', 'Codex runs sage too.', '--pilot', 'T1');
+  const tasks = join(f.assignmentLogbook, 'tasks.tsv'), before = readFileSync(tasks, 'utf8');
+  assert.throws(() => f.update(f.request({ state: 'building' })), { code: 'invalid-change' });
+  assert.equal(readFileSync(tasks, 'utf8'), before);
+  f.assignmentCli('gate', 'answer', 'G1', '--option', '1');
+  assert.equal(f.update(f.request({ state: 'building' }, 'a2222222-2222-4222-8222-222222222222')).task.state, 'building');
+});
 
 test('T13: authenticated metadata update and historical retry preserve later task data', async t => {
   const f = await nativeTaskUpdateFixture(t);
