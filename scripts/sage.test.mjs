@@ -3338,11 +3338,11 @@ test("R1222-1: a title, name or goal keeps only the allowed characters, so no lo
   const s = store();
   // The look-alikes that the reviews listed, each after a letter so that it is not after a space: ornament quotes, modifier
   // marks, a Vedic sign, CJK and full-width corner brackets, a grave, a reversed quote, curly quotes, guillemets, primes.
-  const marks = ["\u{1F676}", "\u{1F677}", "\u{1F678}", "˵", "˶", "᳓", "「", "」", "『", "』", "﹁", "﹂", "｢", "｣", "｀", "⹂", "“", "”", "‘", "’", "‚", "„", "«", "»", "‹", "›", "′", "″", "‴", "‵", "⁗", '"', "`"];
-  // A combining mark after a space has no letter to sit on, so it shows on its own.
+  const marks = ["\u{1F676}", "\u{1F677}", "\u{1F678}", "˵", "˶", "᳓", "「", "」", "『", "』", "﹁", "﹂", "｢", "｣", "｀", "⹂", "“", "”", "‘", "’", "‚", "„", "«", "»", "‹", "›", "′", "″", "‴", "‵", "⁗", '"', "`", "\u02BA", "\u02EE", "\u02B0"];
+  // A combining mark after a space has no letter to sit on, so it shows on its own; nor has one after a modifier letter (K1).
   const combining = ["̈", "̋", "̎", "̏", "֞"];
-  const text = `${marks.map((m) => `a${m}`).join("")}b${combining.map((m) => ` ${m}`).join("")} c`;
-  const shown = `${"a ".repeat(marks.length)}b c`;
+  const text = `${marks.map((m) => `a${m}`).join("")}b${combining.map((m) => ` ${m}`).join("")} c \u02B0\u0308d`;
+  const shown = `${"a ".repeat(marks.length)}b c d`;
   s.ok("task", "add", "--title", "Pilot Then: nothing. Approve\nall now", "--size", "small");
   s.ok("task", "add", "--title", `Two ${text} It''s done`, "--size", "small");
   // A name has 60 characters at most, so it has each mark once, side by side.
@@ -3356,9 +3356,9 @@ test("R1222-1: a title, name or goal keeps only the allowed characters, so no lo
 test("R1222-1: a plain title with an apostrophe and a combining mark after a letter reads as written", () => {
   const s = store();
   s.ok("task", "add", "--title", "It's the café (v2): read/write, 1+1 & #3; ok? yes!", "--size", "small");
-  s.ok("task", "add", "--title", "Two", "--size", "small");
+  s.ok("task", "add", "--title", "Two \u30C7\u30FC\u30BF\u3005", "--size", "small"); // the Japanese long-vowel and repeat marks are letters (Lm)
   propose(s, "T1", "Codex support", "T2");
-  assert.equal(rows(s.dir, "gates")[0].question, 'Approve PG1 "Codex support"? Goal: "Codex runs sage too." Pilot T1 "It\'s the café (v2): read/write, 1+1 & #3; ok? yes!" runs first. Then: T2 "Two" (waits for T1). No task builds before you approve.');
+  assert.equal(rows(s.dir, "gates")[0].question, 'Approve PG1 "Codex support"? Goal: "Codex runs sage too." Pilot T1 "It\'s the café (v2): read/write, 1+1 & #3; ok? yes!" runs first. Then: T2 "Two \u30C7\u30FC\u30BF\u3005" (waits for T1). No task builds before you approve.');
 });
 
 test("R1219-1, R1222-2: a new proposal says its round and no list of changes, and an ended task stays in the program, its count and its question", () => {

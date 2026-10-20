@@ -1275,9 +1275,10 @@ const byIds = (tasks) => new Map(tasks.map((t) => [t.id, t]));
 /**
  * The chief's text (a title, name or goal) in quotes that it cannot end, so it adds no sentence to a line that the owner
  * reads (R1217-4, R1222-1). An allow-list: letters, digits, a combining mark directly after a letter or digit, the space,
- * the apostrophe and . , : ; ! ? ( ) / - & + #. Each other character becomes a space; a run of apostrophes is one.
+ * the apostrophe and . , : ; ! ? ( ) / - & + #. Each other character becomes a space; a run of apostrophes is one. The
+ * Spacing Modifier Letters (U+02B0 to U+02FF) are no letters here, as some look like a quote mark (ʺ, ˮ) (K1).
  */
-const quote = (text) => `"${text.replace(/[^\p{L}\p{N}\p{M} '.,:;!?()/&+#-]|(?<![\p{L}\p{N}])\p{M}/gu, " ").replace(/'+/g, "'").replace(/ +/g, " ").trim()}"`;
+const quote = (text) => `"${text.replace(/[^\p{L}\p{N}\p{M} '.,:;!?()/&+#-]|[\u02B0-\u02FF]|(?<!(?![\u02B0-\u02FF])[\p{L}\p{N}])\p{M}/gu, " ").replace(/'+/g, "'").replace(/ +/g, " ").trim()}"`;
 /** The options of a breakdown gate, in this order: the owner answers by number. */
 const BREAKDOWN = "approve|change|drop";
 /** The why of each decision row that program propose writes: sage log and task add refuse it, so no other row has it. */
