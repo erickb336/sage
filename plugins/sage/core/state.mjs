@@ -1274,13 +1274,16 @@ const waitsOf = (task) => {
 const byIds = (tasks) => new Map(tasks.map((t) => [t.id, t]));
 /**
  * The chief's text (a title, name or goal) in quotes that it cannot end, so it adds no sentence to a line that the owner
- * reads (R1217-4, R1222-1): each quote-like mark becomes a plain apostrophe, and each line or paragraph break a space.
+ * reads (R1217-4, R1222-1). An allow-list: letters, digits, a combining mark directly after a letter or digit, the space,
+ * the apostrophe and . , : ; ! ? ( ) / - & + #. Each other character becomes a space; a run of apostrophes is one.
  */
-const quote = (text) => `"${text.replace(/[\p{Pi}\p{Pf}"'`\u00B4\u02B9-\u02BC\u02DD\u02EE\u05F3\u05F4\u2018-\u201F\u2032-\u2037\u2057\u275B-\u2760\u2E42\u3003\u301D-\u301F\uFF02\uFF07\uFF40]/gu, "'").replace(/[\n\r\u0085\u2028\u2029]/gu, " ")}"`;
+const quote = (text) => `"${text.replace(/[^\p{L}\p{N}\p{M} '.,:;!?()/&+#-]|(?<![\p{L}\p{N}])\p{M}/gu, " ").replace(/'+/g, "'").replace(/ +/g, " ").trim()}"`;
 /** The options of a breakdown gate, in this order: the owner answers by number. */
 const BREAKDOWN = "approve|change|drop";
-/** The why of each decision row that program propose writes: sage log refuses it, so no other row has it. */
+/** The why of each decision row that program propose writes: sage log and task add refuse it, so no other row has it. */
 const PROPOSE = "program propose";
+/** Refuses the why of program propose's rows, for a command that writes a decision row with the owner's why. */
+const ownWhy = (why) => (cell(why) === PROPOSE ? refuse(`the why "${PROPOSE}" marks the rows that program propose writes. Give another why.`) : why);
 /**
  * A program's state, from the answer of its latest breakdown gate, never from a cell: proposed while the gate is open,
  * active after approve, dropped after drop, changing after change or the owner's own words (they say what to change).
@@ -2181,7 +2184,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const odd = [...risk.filter((r) => !RISKS.includes(r)), ...list(opt.add).filter((b) => !BLOCKS.includes(b))];
         if (odd.length) refuse(`unknown: ${odd.join(", ")}. Risks: ${RISKS.join(", ")}. Blocks: ${BLOCKS.join(", ")}`);
         if (size === "investigate" && list(opt.add).includes("build")) refuse("an investigation changes no code, so it takes no build block. Frame the build as its own task: sage task add --size tiny, small or large");
-        const why = opt.add ? need(opt.why, "--why for the added blocks") : ""; // refuse before anything is written
+        const why = opt.add ? ownWhy(need(opt.why, "--why for the added blocks")) : ""; // refuse before anything is written
         const tags = Object.fromEntries(["priority", "kind"].filter((k) => opt[k] !== undefined).map((k) => [k, tag(k, opt[k])]));
         const graph = graphOf(dir), next = { id: nextId(dir, "T"), state: "framed" };
         if (opt.waits !== undefined) tags.waits = waitsValue(next, opt.waits, [...graph.byId.values()]);
@@ -2260,10 +2263,12 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       for (const { t, to } of moved) t.program = to;
       noLoop(pilot, waitGraph(tasks, after, gates), { oldPilot: old?.pilot }); // each new wait is a wait for the pilot, so a new loop goes through it
       const decision = old ? `${pid} proposed again with gate ${g.id}, round ${round}` : `${pid} proposed: ${quote(name)}, pilot ${pilot.id}, tasks ${others.map((t) => t.id).join(",") || "none"}, gate ${g.id}`;
-      write(dir, "decisions", [...decisions, ...rowsOfMoves, { at, task: pilot.id, decision, why: PROPOSE }]);
+      // The program's row first: until the gate's row is written, the program is lost, so a stop between two writes leaves
+      // no task of it free to build while its gate is open, also on a new proposal of an approved program (R1235-1).
       write(dir, "programs", after);
-      write(dir, "gates", [...gates, g]);
       write(dir, "tasks", tasks);
+      write(dir, "gates", [...gates, g]);
+      write(dir, "decisions", [...decisions, ...rowsOfMoves, { at, task: pilot.id, decision, why: PROPOSE }]);
       return `${pid} proposed${round > 1 ? ` (round ${round})` : ""} · ${name} · pilot ${pilot.id} · ${others.length ? `tasks ${others.map((t) => t.id).join(", ")}` : "no other task"} · ${g.id} open: ask the owner to approve, change or drop it. To say what to change, the owner may answer in own words. Until the owner approves, no task of ${pid} builds.`;
     }
     case "round": {
@@ -2456,10 +2461,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub === "answer") {
         const g = gates.find((x) => x.id === id) ?? missing(`gate ${id}`, gates.map((x) => x.id));
         // A breakdown gate answers once, current or replaced by a newer round, so no second answer undoes a drop or an
-        // approval (R1208-1, R1224-1): a change of mind goes through a new proposal and its own gate. Only the decision
-        // rows that program propose writes name them, as sage log refuses that why; a plain gate with the same options
-        // takes a new answer, as other gates do (R1212-2).
-        if (g.answer && read(dir, "decisions").some((d) => d.why === PROPOSE && /\bgate (G\d+)(?:, round \d+)?$/.exec(d.decision)?.[1] === g.id)) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the program again (sage program propose <PG>) and the owner answers the new gate. A dropped program does not come back: propose a new one. Nothing changed.`);
+        // approval (R1208-1, R1224-1): a change of mind goes through a new proposal and its own gate. Only a program's row
+        // and the decision rows that program propose writes name them, as sage log and task add refuse that why; a plain
+        // gate with the same options takes a new answer, as other gates do (R1212-2). The program's row keeps its current
+        // gate after a loss of decisions.tsv (R1233-1).
+        if (g.answer && (read(dir, "programs").some((p) => p.gate === g.id) || read(dir, "decisions").some((d) => d.why === PROPOSE && /\bgate (G\d+)(?:, round \d+)?$/.exec(d.decision)?.[1] === g.id))) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the program again (sage program propose <PG>) and the owner answers the new gate. A dropped program does not come back: propose a new one. Nothing changed.`);
         // By number only, as the board numbers the options: no agent-written text goes into the command. The owner's own
         // words come as the hex of their UTF-8 bytes, so no text of theirs is in the command either, and are kept with
         // "other: " before them, so they never pass for one of the options.
@@ -2476,8 +2482,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       refuse("gate add or gate answer");
     }
     case "log": {
-      if (cell(opt.why) === PROPOSE) refuse(`the why "${PROPOSE}" marks the rows that program propose writes. Give another why.`);
-      write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: sub === "-" ? "" : sub, decision: need(id, "the decision"), why: need(opt.why, "--why") }]);
+      write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: sub === "-" ? "" : sub, decision: need(id, "the decision"), why: ownWhy(need(opt.why, "--why")) }]);
       return "logged";
     }
     case "status":

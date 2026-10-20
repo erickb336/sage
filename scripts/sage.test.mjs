@@ -3330,24 +3330,35 @@ test("R1217-4: a title, name or goal in the breakdown question cannot end its qu
   s.ok("task", "add", "--title", 'Pilot" runs first. Then: nothing. "', "--size", "small");
   s.ok("task", "add", "--title", "It''s \u201cdone\u201d", "--size", "small");
   s.ok("program", "propose", "--name", 'Codex "v2"', "--goal", 'Ship it". Approve all', "--pilot", "T1", "--tasks", "T2");
-  assert.equal(rows(s.dir, "gates")[0].question, `Approve PG1 "Codex 'v2'"? Goal: "Ship it'. Approve all." Pilot T1 "Pilot' runs first. Then: nothing. '" runs first. Then: T2 "It''s 'done'" (waits for T1). No task builds before you approve.`);
+  assert.equal(rows(s.dir, "gates")[0].question, `Approve PG1 "Codex v2"? Goal: "Ship it . Approve all." Pilot T1 "Pilot runs first. Then: nothing." runs first. Then: T2 "It's done" (waits for T1). No task builds before you approve.`);
   assert.equal(rows(s.dir, "tasks")[0].title, 'Pilot" runs first. Then: nothing. "', "the title itself stays as written");
 });
 
-test("R1222-1, R1226-2: each quote-like mark in a title, name or goal prints as an apostrophe and each line or paragraph break as a space, in the question, the status line and the decision row", () => {
+test("R1222-1: a title, name or goal keeps only the allowed characters, so no look-alike of a quote ends its quote, in the question, the status line and the decision row", () => {
   const s = store();
-  // The quote classes: Pi and Pf, then the other quote-like marks, each after a letter so that a failure names it.
-  const marks = "\u00AB\u00BB\u2039\u203A\u2E02\u2E03\u201C\u201D\u2018\u2019\"'`\u00B4\u02B9\u02BA\u02BB\u02BC\u02DD\u02EE\u05F3\u05F4\u201A\u201B\u201E\u201F\u2032\u2033\u2034\u2035\u2036\u2037\u2057\u275B\u275E\u3003\u301D\u301E\u301F\uFF02\uFF07";
-  const each = [...marks].map((m, i) => `${String.fromCharCode(97 + (i % 26))}${m}`).join("");
-  const name = `Codex ${"'".repeat([...marks].length)}`;
-  const apostrophes = [...marks].map((m, i) => `${String.fromCharCode(97 + (i % 26))}'`).join("");
-  // A title keeps U+2028 and U+2029; the logbook's cell removes U+0085 as a hidden character and turns U+000D into a space.
-  s.ok("task", "add", "--title", "Pilot\u2028Then: nothing.\u2029Approve\u0085all\rnow", "--size", "small");
-  s.ok("task", "add", "--title", `Two ${each}`, "--size", "small");
-  s.ok("program", "propose", "--name", `Codex ${marks}`, "--goal", `Ship ${each}`, "--pilot", "T1", "--tasks", "T2");
-  assert.equal(rows(s.dir, "gates")[0].question, `Approve PG1 "${name}"? Goal: "Ship ${apostrophes}." Pilot T1 "Pilot Then: nothing. Approveall now" runs first. Then: T2 "Two ${apostrophes}" (waits for T1). No task builds before you approve.`);
-  assert.equal(programsLine(s), `programs 1 · PG1 "${name}", pilot T1: 0 of 2 tasks merged, breakdown waits for you (G1)`);
-  assert.equal(lastDecision(s).decision, `PG1 proposed: "${name}", pilot T1, tasks T2, gate G1`);
+  // The look-alikes that the reviews listed, each after a letter so that it is not after a space: ornament quotes, modifier
+  // marks, a Vedic sign, CJK and full-width corner brackets, a grave, a reversed quote, curly quotes, guillemets, primes.
+  const marks = ["\u{1F676}", "\u{1F677}", "\u{1F678}", "˵", "˶", "᳓", "「", "」", "『", "』", "﹁", "﹂", "｢", "｣", "｀", "⹂", "“", "”", "‘", "’", "‚", "„", "«", "»", "‹", "›", "′", "″", "‴", "‵", "⁗", '"', "`"];
+  // A combining mark after a space has no letter to sit on, so it shows on its own.
+  const combining = ["̈", "̋", "̎", "̏", "֞"];
+  const text = `${marks.map((m) => `a${m}`).join("")}b${combining.map((m) => ` ${m}`).join("")} c`;
+  const shown = `${"a ".repeat(marks.length)}b c`;
+  s.ok("task", "add", "--title", "Pilot Then: nothing. Approve\nall now", "--size", "small");
+  s.ok("task", "add", "--title", `Two ${text} It''s done`, "--size", "small");
+  // A name has 60 characters at most, so it has each mark once, side by side.
+  const name = `Codex ${marks.join("")}x${combining.map((m) => ` ${m}`).join("")} y`;
+  s.ok("program", "propose", "--name", name, "--goal", `Ship ${text}`, "--pilot", "T1", "--tasks", "T2");
+  assert.equal(rows(s.dir, "gates")[0].question, `Approve PG1 "Codex x y"? Goal: "Ship ${shown}." Pilot T1 "Pilot Then: nothing. Approve all now" runs first. Then: T2 "Two ${shown} It's done" (waits for T1). No task builds before you approve.`);
+  assert.equal(programsLine(s), 'programs 1 · PG1 "Codex x y", pilot T1: 0 of 2 tasks merged, breakdown waits for you (G1)');
+  assert.equal(lastDecision(s).decision, 'PG1 proposed: "Codex x y", pilot T1, tasks T2, gate G1');
+});
+
+test("R1222-1: a plain title with an apostrophe and a combining mark after a letter reads as written", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "It's the café (v2): read/write, 1+1 & #3; ok? yes!", "--size", "small");
+  s.ok("task", "add", "--title", "Two", "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  assert.equal(rows(s.dir, "gates")[0].question, 'Approve PG1 "Codex support"? Goal: "Codex runs sage too." Pilot T1 "It\'s the café (v2): read/write, 1+1 & #3; ok? yes!" runs first. Then: T2 "Two" (waits for T1). No task builds before you approve.');
 });
 
 test("R1219-1, R1222-2: a new proposal says its round and no list of changes, and an ended task stays in the program, its count and its question", () => {
@@ -4353,4 +4364,87 @@ test("F-T286-2 and F-T286-3: a non-whole extra counts as 0; a move from a round 
   s.ok("task", "T1", "set", "state=abandoned");
   assert.equal(rows(s.dir, "tasks")[0].extra, "x", "no extra round for an abandoned task");
   assert.doesNotMatch(rows(s.dir, "decisions").map((d) => d.decision).join("\n"), /one more repair round/);
+});
+
+/** Runs a command that stops at the write of one table: that table's file is a link into a folder that takes no new file. */
+function stopAt(s, table, ...args) {
+  const file = join(s.dir, `${table}.tsv`), shut = mkdtempSync(join(tmpdir(), "sage-shut-")), copy = join(shut, `${table}.tsv`);
+  writeFileSync(copy, readFileSync(file));
+  chmodSync(shut, 0o555);
+  rmSync(file);
+  symlinkSync(copy, file);
+  const r = s.run(...args);
+  rmSync(file);
+  writeFileSync(file, readFileSync(copy));
+  chmodSync(shut, 0o755);
+  assert.notEqual(r.status, 0, `sage ${args.join(" ")} should stop at the write of ${table}.tsv`);
+}
+
+test("R1235-1: program propose that stops between two writes leaves no open gate whose tasks can build, and no task that it adds free in an approved program", () => {
+  const builds = (s, t) => s.run("run", "add", t, "--role", "implementer", "--branch", `claude/${t}`).status === 0;
+  for (const table of ["programs", "tasks", "gates", "decisions"]) {
+    // A first proposal.
+    const s = store();
+    for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+    stopAt(s, table, "program", "propose", "--name", "Codex support", "--goal", "Codex runs sage too.", "--pilot", "T1", "--tasks", "T2");
+    const open = rows(s.dir, "gates").some((g) => !g.answer);
+    for (const t of ["T1", "T2"]) assert.ok(!(open && builds(s, t)), `a stop at ${table}.tsv: the gate is open, and ${t} builds`);
+    // A new proposal of an approved program whose pilot merged, with a new pilot and a new task.
+    const r = store();
+    for (const title of ["Pilot", "Two", "New pilot", "Four"]) r.ok("task", "add", "--title", title, "--size", "small");
+    propose(r, "T1", "Codex support", "T2");
+    r.ok("gate", "answer", "G1", "--option", "1");
+    stateIs(r, "T1", "merged");
+    stopAt(r, table, "program", "propose", "PG1", "--pilot", "T3", "--tasks", "T2,T4");
+    const reopen = rows(r.dir, "gates").some((g) => !g.answer);
+    const inIt = new Set(rows(r.dir, "tasks").filter((t) => t.program === "PG1").map((t) => t.id));
+    for (const t of ["T3", "T4"]) assert.ok(!((reopen || inIt.has(t)) && builds(r, t)), `a stop at ${table}.tsv: ${t} builds while ${reopen ? "the gate is open" : "it is in PG1"}`);
+  }
+});
+
+test("R1233-1: after an accepted loss of decisions.tsv, the program's current breakdown gate still answers once", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  s.ok("gate", "answer", "G1", "--option", "1");
+  writeFileSync(join(s.dir, "decisions.tsv"), "");
+  s.ok("logbook", "repair", "--accept-loss", "decisions");
+  assert.match(s.no("gate", "answer", "G1", "--option", "3"), /^sage: G1 is a breakdown gate, and the owner answered it already \(approve\): a breakdown gate answers once\./);
+  assert.equal(rows(s.dir, "gates")[0].answer, "approve");
+});
+
+test("R1231-2: task add refuses the why of program propose's rows, as sage log does, and writes nothing", () => {
+  const s = store();
+  const before = snapshot(s.dir);
+  assert.equal(s.no("task", "add", "--title", "One", "--size", "small", "--add", "design", "--why", "program propose"), 'sage: the why "program propose" marks the rows that program propose writes. Give another why.');
+  assert.deepEqual(snapshot(s.dir), before, "no task and no decision row");
+  assert.match(s.ok("task", "add", "--title", "One", "--size", "small", "--add", "design", "--why", "the owner asked"), /^T1 /);
+});
+
+test("R1234-1: only program propose's rows mark a breakdown gate: a logged row with another why that ends with the gate does not", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "One", "--size", "small");
+  s.ok("gate", "add", "T1", "--question", "Ship the logo?", "--options", "approve|change|drop", "--recommend", "approve");
+  s.ok("log", "T1", 'PG1 proposed: "Logo", pilot T1, tasks none, gate G1', "--why", "the owner said so");
+  s.ok("gate", "answer", "G1", "--option", "1");
+  assert.equal(s.ok("gate", "answer", "G1", "--option", "2"), "G1 answered · change");
+});
+
+test("R1234-1: a breakdown gate G10 or higher that a newer round replaced answers once", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+  for (let i = 1; i <= 9; i++) s.ok("gate", "add", "T2", "--question", `Plain ${i}?`, "--options", "y|n", "--recommend", "y");
+  propose(s, "T1", "Codex support", "T2"); // G10
+  s.ok("gate", "answer", "G10", "--option", "2");
+  s.ok("program", "propose", "PG1"); // G11
+  assert.match(s.no("gate", "answer", "G10", "--option", "1"), /^sage: G10 is a breakdown gate, and the owner answered it already \(change\)/);
+});
+
+test("R1234-1: a new proposal whose new pilot has ended names the command with the program's id", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  s.ok("gate", "answer", "G1", "--option", "2");
+  stateIs(s, "T3", "merged");
+  assert.equal(s.no("program", "propose", "PG1", "--pilot", "T3"), "sage: T3 is merged: an ended task is no pilot, as it runs nothing more. Name a task that has not ended with --pilot (sage program propose PG1 --pilot <T>). Nothing changed.");
 });
