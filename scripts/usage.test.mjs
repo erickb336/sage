@@ -86,7 +86,7 @@ test('T28 mixed legacy accounting and blocked enrichment preserve terminal facts
   const file=join(s.dir,'runs.tsv'),[head,...lines]=readFileSync(file,'utf8').trimEnd().split('\n');
   const keys=head.split('\t'),cells=lines[1].split('\t');cells[keys.indexOf('tokens')]='';cells[keys.indexOf('usage_status')]='';lines[1]=cells.join('\t');writeFileSync(file,[head,...lines].join('\n')+'\n');
   assert.match(s.run('stats'),/usage total · partial measured total; 0 measured, 1 unavailable, 1 legacy-unrecorded/);
-  assert.match(s.run('status'),/usage T1 · partial measured total; 0 measured, 1 unavailable, 1 legacy-unrecorded/);
+  assert.match(s.run('status'),/usage T1 · 0 measured tokens · partial measured total; 0 measured, 1 unavailable, 1 legacy-unrecorded/);
 });
 
 test('T28 declared capability snapshot survives provider registry changes',async t=>{
@@ -146,4 +146,30 @@ test('T28 schema-less usage columns migrate without inventing availability',t=>{
 test('T28 other provider cannot select the Codex registry',async t=>{
   const s=fixture(t);const other=await import('../plugins/sage/skills/sage/sage.mjs');
   const before=s.bytes();assert.throws(()=>other.sage(['run','add','T1','--role','qa',...binding,'--project',join(s.dir,'..','..','project')],{...process.env,SAGE_HOME:join(s.dir,'..'),SAGE_TEST_PIDS:'{}'}),/Unknown usage interface/);assert.deepEqual(s.bytes(),before);
+});
+test('T28 modern run-request recovery never drops existing header columns',t=>{
+  const s=fixture(t);s.run('run','add','T1','--role','qa',...binding);s.run('run','done','R1','--status','done',...unavailable);
+  const before=s.bytes();
+  const input={project:join(s.dir,'..','..','project'),owner:'test-owner',request:randomUUID(),task:'T1',role:'qa',branch:'',candidate:''};
+  const env={...process.env,SAGE_HOME:join(s.dir,'..'),SAGE_TEST_PIDS:'{}'};
+  tool.createRequestedRun(input,env);
+  const folder=join(s.dir,'run-requests'),receipt=JSON.parse(readFileSync(join(folder,readdirSync(folder)[0]),'utf8')).value;
+  const regressed=s.bytes()[0].split('\n').filter(Boolean).map(line=>line.split('\t').slice(0,12).join('\t')).join('\n')+'\n';
+  writeFileSync(join(s.dir,'runs.tsv'),before[0]);
+  writeFileSync(join(s.dir,'review-pending.json'),envelope({schema:3,receipt,tables:{runs:{before:before[0],after:regressed}}}));
+  const pending=readFileSync(join(s.dir,'review-pending.json'),'utf8');
+  assert.throws(()=>tool.createRequestedRun(input,env),/saved run update is damaged/);
+  assert.deepEqual(s.bytes(),before);
+  assert.equal(readFileSync(join(s.dir,'review-pending.json'),'utf8'),pending);
+});
+test('T28 status shows exact per-task measured totals with incomplete accounting',t=>{
+  const s=fixture(t);s.run('task','add','--title','Second','--size','small');
+  s.run('run','add','T1','--role','qa');s.run('run','done','R1','--status','done','--tokens','1000');
+  s.run('run','add','T2','--role','qa');s.run('run','done','R2','--status','done','--tokens','2400');
+  s.run('run','add','T2','--role','qa');s.run('run','done','R3','--status','blocked','--tokens','9000');
+  s.run('run','add','T2','--role','qa',...binding);s.run('run','done','R4','--status','done',...unavailable);
+  const status=s.run('status');
+  assert.match(status,/about 3k tokens · partial measured total; 2 measured, 1 unavailable, 0 legacy-unrecorded/);
+  assert.match(status,/^usage T1 · 1000 measured tokens · 1 measured, 0 unavailable, 0 legacy-unrecorded$/m);
+  assert.match(status,/^usage T2 · 2400 measured tokens · partial measured total; 1 measured, 1 unavailable, 0 legacy-unrecorded$/m);
 });

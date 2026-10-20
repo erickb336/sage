@@ -771,7 +771,8 @@ function validateRunWrite({ reference, result: run }, tables) {
     || cols.some(c => !TABLES.runs.includes(c)) || new Set(cols).size !== cols.length) deny();
   const runs = rowsOf({ cols, lines });
   const after = sheetText(tables.runs.after);
-  if (!TABLES.runs.every(c => after.cols.includes(c) || ADDED.runs.includes(c)) || after.cols.some(c => !TABLES.runs.includes(c)) || new Set(after.cols).size !== after.cols.length) deny();
+  if (!TABLES.runs.every(c => after.cols.includes(c) || ADDED.runs.includes(c)) || after.cols.some(c => !TABLES.runs.includes(c)) || new Set(after.cols).size !== after.cols.length
+    || cols.some(c => !after.cols.includes(c))) deny();
   const expected = [after.cols.join("\t"), ...[...runs, run].map(r => after.cols.map(c => cell(r[c])).join("\t"))].join("\n") + "\n";
   if (runs.some(row => row.id === run.id) || tables.runs.after !== expected) deny();
 }
@@ -1916,7 +1917,11 @@ function status(dir, save) {
   const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, unmetWaits(t, graph)]).filter(([, open]) => open.length);
   if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
   lines.push(...programsLine(tasks, graph));
-  lines.push(...tasks.map(t => `usage ${t.id} · ${usageSummary(runs.filter(r => r.task === t.id))}`));
+  lines.push(...tasks.map(t => {
+    const own = runs.filter(r => r.task === t.id);
+    const measured = own.reduce((n, r) => n + (r.status === "done" && tokenCount(r.tokens) ? Number(r.tokens) : 0), 0);
+    return `usage ${t.id} · ${measured} measured tokens · ${usageSummary(own)}`;
+  }));
   const table = ["", "| Task | State | Size | Round | PR | Title |", "| --- | --- | --- | --- | --- | --- |", ...tasks.map((t) => `| ${t.id} | ${t.state} | ${t.size} | ${t.round} | ${t.pr} | ${t.title} |`)];
   if (save) put(join(dir, "status.md"), [`# ${lines[0]}`, "", ...lines.slice(1).map((l) => `    ${l}`), ...table].join("\n") + "\n");
   return lines.join("\n");
