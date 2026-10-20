@@ -3307,8 +3307,10 @@ test('native current run refuses child tools after assignment or lifecycle chang
   ]) {
     const calls = evaluated;
     const restore = editAssignmentRows(f, table, rows => rows.map(row => row.id === (table === 'runs' ? 'R4' : 'T1') ? { ...row, [field]: value } : row));
+    const rowsBeforeRefusal = ['tasks', 'runs'].map(name => readFileSync(join(f.assignmentLogbook, `${name}.tsv`), 'utf8'));
     await assert.rejects(f.evaluate(policy, f.editInput, childActor), /active run|is held/, `${table}.${field}`);
     await assert.rejects(f.evaluate(policy, { ...f.editInput, tool_name: 'list_mcp_resources', tool_input: {} }, childActor), /active run|is held/);
+    assert.deepEqual(['tasks', 'runs'].map(name => readFileSync(join(f.assignmentLogbook, `${name}.tsv`), 'utf8')), rowsBeforeRefusal, `${table}.${field} refusal changed protected rows`);
     assert.equal(evaluated, calls, `${table}.${field} reached the evaluator`);
     restore();
   }
