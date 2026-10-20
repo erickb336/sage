@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { USAGE_FIELDS, tokenCount, usageText, usageRegistry, usageSnapshot, validUsageSnapshot, usageSummary } from "./usage.mjs";
 import { parseRunTarget } from "./run-target.mjs";
 import { TaskUpdateError } from "./task-update-error.mjs";
 import { recordedWrites, coordinatedWrites, assertNoPendingWrite, RecordedWriteError } from "./recorded-write.mjs";
@@ -26,9 +27,10 @@ import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES
 import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, gateLines, programState, progressOf, progressText, shownGraph, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
-export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
+export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {}, usageInterfaces = [] }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
 const MODELS = [...models];
+const USAGE_INTERFACES = usageRegistry(usageInterfaces);
 
 /** The least route for each size. The chief may add blocks, never remove these. */
 const SIZES = {
@@ -87,7 +89,7 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model"], tasks: ["hold", "extra", "priority", "kind", "waits", "program"], findings: ["run", "class"] };
+const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program"], findings: ["run", "class"] };
 const COMMANDS = ["init", "logbook", "standing", "pages", "task", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
@@ -95,9 +97,10 @@ const OPTIONS = {
   "projects rebuild": ["accept-listing"],
   "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
   "program propose": ["name", "goal", "pilot", "tasks"],
-  "run add": ["role", "branch", "candidate"],
+  "run add": ["role", "branch", "candidate", "usage-interface"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
-  "run done": ["status", "tokens", "report"],
+  "run done": ["status", "tokens", "report", "usage", "usage-source", "usage-evidence"],
+  "run usage": ["tokens", "usage-source", "usage-evidence"],
   "finding add": ["source", "severity", "summary", "key", "run", "class"],
   "finding triage": ["reason"],
   "finding move": ["to", "size"],
@@ -767,7 +770,52 @@ function validateRunWrite({ reference, result: run }, tables) {
   if (!TABLES.runs.every(c => cols.includes(c) || ADDED.runs?.includes(c))
     || cols.some(c => !TABLES.runs.includes(c)) || new Set(cols).size !== cols.length) deny();
   const runs = rowsOf({ cols, lines });
-  if (runs.some(row => row.id === run.id) || tables.runs.after !== tableText("runs", [...runs, run])) deny();
+  const after = sheetText(tables.runs.after);
+  if (!TABLES.runs.every(c => after.cols.includes(c) || ADDED.runs.includes(c)) || after.cols.some(c => !TABLES.runs.includes(c)) || new Set(after.cols).size !== after.cols.length) deny();
+  const expected = [after.cols.join("\t"), ...[...runs, run].map(r => after.cols.map(c => cell(r[c])).join("\t"))].join("\n") + "\n";
+  if (runs.some(row => row.id === run.id) || tables.runs.after !== expected) deny();
+}
+
+const usageReference = (run, opt) => ({ run, tokens: opt.tokens, source: opt["usage-source"], evidence: opt["usage-evidence"] });
+function validateUsageWrite({ reference, result }, tables) {
+  const deny = () => refuse("The saved usage update is damaged. Nothing changed.");
+  if (!reference || Object.keys(reference).sort().join() !== "evidence,run,source,tokens" || !/^R[1-9]\d*$/.test(reference.run)
+    || !tokenCount(reference.tokens) || !usageText(reference.source) || !usageText(reference.evidence)
+    || !result || Object.keys(result).sort().join() !== "at,task" || !/^T[1-9]\d*$/.test(result.task)
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(result.at) || !Number.isFinite(Date.parse(result.at)) || new Date(result.at).toISOString().replace(".000Z", "Z") !== result.at) deny();
+  if (!tables) return;
+  const decode = (table, text) => {
+    const sheet = sheetText(text);
+    if (!TABLES[table].every(c => sheet.cols.includes(c) || ADDED[table]?.includes(c))
+      || sheet.cols.some(c => !TABLES[table].includes(c)) || new Set(sheet.cols).size !== sheet.cols.length) deny();
+    return rowsOf(sheet);
+  };
+  const runs = decode("runs", tables.runs.before), decisions = decode("decisions", tables.decisions.before);
+  const matches = runs.filter(r => r.id === reference.run), run = matches[0];
+  if (matches.length !== 1 || run.task !== result.task || run.status === "running" || run.tokens
+    || !["", "unavailable"].includes(run.usage_status ?? "")) deny();
+  Object.assign(run, { tokens: reference.tokens, usage_status: "measured", usage_source: reference.source, usage_evidence: reference.evidence });
+  decisions.push({ at: result.at, task: result.task, decision: `${reference.run} usage measured`, why: JSON.stringify(reference) });
+  if (tables.runs.after !== tableText("runs", runs) || tables.decisions.after !== tableText("decisions", decisions)) deny();
+}
+const usageWrites = recordedWrites({ schema: 7, tables: ["runs", "decisions"], folder: "usage-requests",
+  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify(reference)).digest("hex") + ".json", validate: validateUsageWrite });
+function enrichUsage(dir, id, opt) {
+  const reference = usageReference(id, opt);
+  validateUsageWrite({ reference, result: { task: "T1", at: now() } });
+  const runs = read(dir, "runs"), matches = runs.filter(r => r.id === id), run = matches[0];
+  if (matches.length !== 1 || run.status === "running") refuse("Usage enrichment needs one ended run. Nothing changed.");
+  const prior = usageWrites.readReceipt(dir, reference);
+  if (prior) {
+    if (run.tokens !== reference.tokens || run.usage_status !== "measured" || run.usage_source !== reference.source || run.usage_evidence !== reference.evidence) refuse("The usage receipt differs from the run. Nothing changed.");
+    return `${id} usage measured (already recorded)`;
+  }
+  if (run.tokens || !["", "unavailable"].includes(run.usage_status)) refuse("A measured count never changes. Nothing changed.");
+  const result = { task: run.task, at: now() }, decisions = read(dir, "decisions");
+  Object.assign(run, { tokens: reference.tokens, usage_status: "measured", usage_source: reference.source, usage_evidence: reference.evidence });
+  decisions.push({ at: result.at, task: run.task, decision: `${id} usage measured`, why: JSON.stringify(reference) });
+  usageWrites.commit(dir, { reference, result }, { runs: tableText("runs", runs), decisions: tableText("decisions", decisions) });
+  return `${id} usage measured`;
 }
 
 const reviewWrites = recordedWrites({ schema: 4, tables: ["tasks", "findings", "ledger", "decisions"], folder: "reviews",
@@ -1848,6 +1896,7 @@ const gateShort = (g, programs) => {
 };
 /** The status lines. With save, also status.md: only a command that holds the lock saves, so status.md never lags. */
 function status(dir, save) {
+  assertNoPendingWrite(dir);
   const tasks = read(dir, "tasks");
   const runs = read(dir, "runs");
   const all = read(dir, "gates"), gates = all.filter((g) => !g.answer);
@@ -1855,18 +1904,19 @@ function status(dir, save) {
   const graph = shownGraph(waitGraph(tasks, read(dir, "programs"), all, read(dir, "decisions")), all);
   const count = {};
   for (const t of tasks) count[t.state] = (count[t.state] ?? 0) + 1;
-  const tokens = runs.reduce((n, r) => n + (Number(r.tokens) || 0), 0);
+  const tokens = runs.reduce((n, r) => n + (r.status === "done" && tokenCount(r.tokens) ? Number(r.tokens) : 0), 0);
   const lines = [
     // The name that the board shows (T305): the display name, the upstream's or origin's repository, the checkout's folder.
     `sage · ${shownName({ name: basename(dir), ...logbookIdentity(dir) })} · ${now().slice(11, 16)} UTC`,
     `tasks   ${tasks.length}${Object.entries(count).map(([s, n]) => ` · ${s} ${n}`).join("")}`,
     `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${gateShort(g, graph.programs)} (default: ${g.default || "none"})`).join("")}`,
-    `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens`,
+    `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens · ${usageSummary(runs)}`,
   ];
   // The open tasks that wait, each with its unmet waits: a line only when one waits. Then the programs: a line only when there is one.
   const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, unmetWaits(t, graph)]).filter(([, open]) => open.length);
   if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
   lines.push(...programsLine(tasks, graph));
+  lines.push(...tasks.map(t => `usage ${t.id} · ${usageSummary(runs.filter(r => r.task === t.id))}`));
   const table = ["", "| Task | State | Size | Round | PR | Title |", "| --- | --- | --- | --- | --- | --- |", ...tasks.map((t) => `| ${t.id} | ${t.state} | ${t.size} | ${t.round} | ${t.pr} | ${t.title} |`)];
   if (save) put(join(dir, "status.md"), [`# ${lines[0]}`, "", ...lines.slice(1).map((l) => `    ${l}`), ...table].join("\n") + "\n");
   return lines.join("\n");
@@ -1883,6 +1933,7 @@ const TOP = 50; // the tasks that sage stats shows in its table, largest review 
  * or its run gave no verdict. Read only; each table is read and indexed once.
  */
 function stats(dir, only) {
+  assertNoPendingWrite(dir);
   const group = (rows, key) => rows.reduce((m, r) => (m.get(r[key])?.push(r) ?? m.set(r[key], [r]), m), new Map());
   const tasks = read(dir, "tasks").filter((t) => !only || t.id === only);
   const runs = group(read(dir, "runs").filter((r) => CHECKERS.includes(r.role)), "task"), findings = group(read(dir, "findings"), "task");
@@ -1908,9 +1959,10 @@ function stats(dir, only) {
     "Tokens in thousands (k), of done runs only. A round is one repair of findings; after round 0 counts the runs of round 1 and later. A cycle is one set of reviews and QA on one head commit.",
     `total · ${rows.length} tasks · ${sum((r) => r.own.length)} review runs (${sum((r) => r.own.filter((x) => x.status === "done" && !tokens(x.tokens)).length)} done without tokens) · ${k(sum((r) => r.tokens))} tokens · ${k(sum((r) => r.later))} after round 0 · ${sum((r) => r.round ?? 0)} rounds · ${sum((r) => r.found.length)} findings`,
     "",
-    "| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |", "| --- | --- | --- | --- | --- | --- | --- |",
-    ...rows.slice(0, TOP).map((r) => `| ${esc(r.t.id)} | ${r.own.length} | ${k(r.tokens)} | ${k(r.later)} | ${r.round ?? "invalid"} | ${counts(r.found.map((f) => f.source))} | ${counts(r.found.map(r.cycle))} |`),
-    // A blank line ends the Markdown table, so that a view does not draw the next line as one of its rows.
+    "| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle | Usage |", "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...rows.slice(0, TOP).map((r) => `| ${esc(r.t.id)} | ${r.own.length} | ${k(r.tokens)} | ${k(r.later)} | ${r.round ?? "invalid"} | ${counts(r.found.map((f) => f.source))} | ${counts(r.found.map(r.cycle))} | ${usageSummary(r.own)} |`),
+    "", `usage total · ${usageSummary(rows.flatMap(r => r.own))}`,
+    ...(rows.some(r => usageSummary(r.own).startsWith("partial")) ? ["Partial totals do not establish which task cost less."] : []),
     ...(more > 0 ? ["", `${more} more tasks not shown; use --task <T>`] : []),
   ].join("\n");
 }
@@ -2076,6 +2128,10 @@ function sage(argv, env = process.env) {
   if ((cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
   const run = () =>
     withLock(dir, () => {
+      if (cmd === "run" && pos[0] === "usage") {
+        const recovered = usageWrites.recover(dir, usageReference(pos[1], opt));
+        if (recovered) { status(dir, true); return `${pos[1]} usage measured`; }
+      }
       ready(dir, skip);
       const out = act(cmd, pos, opt, dir, env, skip, project);
       status(dir, true);
@@ -2325,6 +2381,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const branch = opt.branch === undefined ? "" : branchOf(opt.branch);
         const candidate = opt.candidate ?? "";
         const run = runFrame(dir, task, role, branch, candidate, env);
+        if (opt["usage-interface"] !== undefined) {
+          const entry = USAGE_INTERFACES.get(opt["usage-interface"]);
+          if (!entry) refuse("Unknown usage interface. Nothing changed.");
+          Object.assign(run, usageSnapshot(entry));
+        }
         write(dir, "runs", [...runs, run]);
         // A lead's brief carries the final reports of the tasks that its task waits for (the brief rule): the last lead
         // or investigate run of each, with its report's path when one is recorded.
@@ -2334,15 +2395,27 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         });
         return `${run.id} running · ${role} on ${task.id}${branch ? ` · ${branch}` : ""}${candidate ? ` · candidate ${candidate}` : ""}${run.model ? ` · model ${run.model}` : ""}${upstream.length ? ` · upstream reports: ${upstream.join(", ")}` : ""}`;
       }
+      if (sub === "usage") return enrichUsage(dir, id, opt);
       if (sub === "done") {
         const run = runs.find((r) => r.id === id) ?? missing(`run ${id}`, runs.map((r) => r.id));
         const st = need(opt.status, "--status");
         if (!["done", "blocked", "question", "failed"].includes(st)) refuse("status is done, blocked, question or failed");
         // Any --tokens is a whole number of at most 12 digits, so that a typo cannot make a total that a number cannot hold.
         if (opt.tokens !== undefined && !/^[1-9]\d{0,11}$/.test(opt.tokens)) refuse(`--tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not ${JSON.stringify(opt.tokens)}. Nothing changed.`);
+        const unavailable = opt.usage === "unavailable";
+        if (opt.tokens !== undefined && run.usage_interface && (!usageText(opt["usage-source"]) || !usageText(opt["usage-evidence"]))) refuse("A declared interface needs its measured source and evidence. Nothing changed.");
+        if (opt.usage !== undefined && !unavailable) refuse("--usage is unavailable. Nothing changed.");
+        if (unavailable) {
+          if (opt.tokens !== undefined || st !== "done" || run.status !== "running" || !validUsageSnapshot(run)
+            || run.usage_capability !== "unavailable" || !usageText(opt["usage-source"]) || !usageText(opt["usage-evidence"])
+            || !usageText(opt.report)) refuse("Unavailable usage needs a running run, its unsupported interface snapshot, a report, source and evidence, without tokens. Nothing changed.");
+        } else if (opt["usage-source"] !== undefined || opt["usage-evidence"] !== undefined) {
+          if (!tokenCount(opt.tokens) || !usageText(opt["usage-source"]) || !usageText(opt["usage-evidence"])) refuse("Measured usage needs tokens, source and evidence. Nothing changed.");
+        }
         // A run ends once (T346). A later run done of an ended run, with its own status, only adds the tokens or the report
         // path that the run lacks: the Codex native finish and a re-plan end a run with neither. It replaces nothing.
         if (run.status !== "running") {
+          if ((run.usage_status === "unavailable" && opt.tokens !== undefined) || opt["usage-source"] !== undefined || opt["usage-evidence"] !== undefined) refuse("Use run usage to audit a later measured count. Nothing changed.");
           const flag = (col) => `--${col}`, lacks = ["tokens", "report"].filter((col) => !run[col]);
           const kept = ["tokens", "report"].find((col) => opt[col] !== undefined && run[col]);
           if (kept) refuse(`${run.id} already ended as ${run.status} with its ${kept}, and ${flag(kept)} never replaces it. Nothing changed.`);
@@ -2353,7 +2426,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           return `${run.id} ${st} · added ${adds.join(" and ")}`;
         }
         // A done review or QA run gives its tokens, so that sage stats counts every review's cost (T346).
-        if (st === "done" && CHECKERS.includes(run.role) && opt.tokens === undefined) refuse(`${run.id} is a ${run.role} run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000. Nothing changed.`);
+        if (st === "done" && CHECKERS.includes(run.role) && opt.tokens === undefined && !unavailable) refuse(`${run.id} is a ${run.role} run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000. Nothing changed.`);
+        if (unavailable) Object.assign(run, { usage_status: "unavailable", usage_source: opt["usage-source"], usage_evidence: opt["usage-evidence"] });
+        else if (opt.tokens !== undefined) Object.assign(run, { usage_status: "measured", usage_source: opt["usage-source"] ?? "", usage_evidence: opt["usage-evidence"] ?? "" });
         Object.assign(run, { status: st, tokens: opt.tokens ?? run.tokens, report: opt.report ?? run.report, ended: now() });
         write(dir, "runs", runs);
         return `${run.id} ${st}`;

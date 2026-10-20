@@ -81,7 +81,7 @@ export function nameProblem(name, max = NAME_MAX) {
 /** The tables of a logbook and their columns, in the order that a write gives them. The state tool writes them; the hook guards their files. */
 export const TABLES = {
   tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra", "priority", "kind", "waits", "program"],
-  runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
+  runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model", "usage_provider", "usage_interface", "usage_capability", "usage_binding", "usage_reason", "usage_basis", "usage_status", "usage_source", "usage_evidence"],
   findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status", "run", "class"],
   ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
   gates: ["id", "task", "question", "options", "recommendation", "default", "answer", "at"],
