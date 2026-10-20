@@ -42,7 +42,7 @@ These are not new words. They are fixed phrases inside the lines above, so that 
 - **breakdown**: the content of a program that the owner approves (goal, done condition, tasks, "waits for" links, pilot, cost, questions). In the program line.
 - **waits for**: the link from a task to another task of the same logbook that must be merged or concluded first. In the task line. A circle of such links is a **loop**, and sage refuses it.
 - **pilot**: the one task of a program that runs end to end before any other task builds. In the program line.
-- **done condition**: the count that ends a program, for example "6 of 6 tasks merged, each verified". An abandoned task leaves the count. In the program line.
+- **done condition**: the count that ends a program, for example "6 of 7 merged · T10 abandoned". The count keeps every task of the program and names each abandoned task; the program is done when each task that is not abandoned is merged or concluded. In the program line.
 - **round**: one repair of findings on a task. In the cycle line.
 
 ## Names

@@ -11,7 +11,8 @@ import { closeSync, constants, existsSync, fstatSync, openSync, readSync, readdi
 import { createHash, randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import { projectName as shownName } from "./board-model.mjs";
-import { gateLines, logbookSettings } from "./logbook-fields.mjs";
+import { logbookSettings } from "./logbook-fields.mjs";
+import { checkPrograms, gateLines } from "./program-rules.mjs";
 export function createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock }) {
 
 const FOLDER = /^([a-z0-9-]+)-[0-9a-f]{6}$/;
@@ -134,7 +135,7 @@ function logbooks(root) {
     const checkout = small(join(dir, "checkout.txt"), 4096)?.trim() || null;
     // The owner's settings of the logbook (sage config name= and archived=), as the rich board reads them: a bad value is not used.
     const settings = (() => { try { return logbookSettings(JSON.parse(small(join(dir, "config.json"), 64 * 1024) ?? "{}")); } catch { return logbookSettings(null); } })();
-    const book = { folder, name: FOLDER.exec(folder)[1], dir, checkout, displayName: settings.name, archived: settings.archived, tasks: [], runs: [], gates: [], changed: {}, reviewed: {}, error: null };
+    const book = { folder, name: FOLDER.exec(folder)[1], dir, checkout, displayName: settings.name, archived: settings.archived, tasks: [], runs: [], gates: [], programs: [], changed: {}, reviewed: {}, error: null };
     try {
       const [tasks, runs, gates, ledger, decisions] = Object.keys(FORMAT).map((t) => read(dir, t).map((row) => clean(t, row)));
       for (const [task, at] of [...runs.flatMap((r) => [[r.task, r.started], [r.task, r.ended]]), ...[...gates, ...ledger, ...decisions].map((r) => [r.task, r.at])]) {
@@ -142,7 +143,10 @@ function logbooks(root) {
         if (task && ms > (book.changed[task] ?? -Infinity)) book.changed[task] = ms;
       }
       for (const r of ledger) if (r.task && r.sha) book.reviewed[r.task] = r.sha; // the last one: the reviewed head
-      Object.assign(book, { tasks, runs, gates });
+      // The programs rows mark a breakdown gate (gateLines). A table that cannot be read, or that the rich board's check
+      // refuses (checkPrograms: two rows of one id, a bad cell), marks none, so every gate stays one line.
+      const programs = (() => { try { return checkPrograms(read(dir, "programs")); } catch { return []; } })();
+      Object.assign(book, { tasks, runs, gates, programs });
     } catch (e) {
       book.error = text(e.message.replaceAll(`${dir}/`, "").replaceAll(dir, folder), 120); // the reason, not the long path
     }
@@ -325,8 +329,8 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
   const gateLine = (b, g) => {
     const options = optionsOf(g);
     return [
-      // Only a breakdown gate's question has lines (gateLines): the first after the gate's id, each other on its own line.
-      ...gateLines(g).map((q, i) => (i ? `  ${text(q)}` : `${label(b)} **${g.id}**${g.task ? ` · ${g.task}` : ""} · ${text(q)}`)),
+      // Only a breakdown gate's question has lines (gateLines, by the programs rows): the first after the gate's id, each other on its own line.
+      ...gateLines(g, b.programs).map((q, i) => (i ? `  ${text(q)}` : `${label(b)} **${g.id}**${g.task ? ` · ${g.task}` : ""} · ${text(q)}`)),
       `  Recommended: ${text(g.recommendation) || "none"}. Default: ${text(g.default) || "none"}.`,
       ...(b.home ? [] : [`  Answer it in a session of ${label(b)}: this board does not know its folder.`]),
       ...(options.length ? options.map((o, i) => `  ${i + 1}. ${text(o)}`) : ["  Options: none."]),

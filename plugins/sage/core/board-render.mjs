@@ -3,7 +3,11 @@
 // The page needs no script for its cards, task pages, backlog fold and theme; the picker and the filters need the script.
 import { LINE, PRIORITIES, TASK_KINDS } from "./logbook-fields.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const md = value => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").replace(/[\`*_{}\[\]()<>#+.!|&]/g, c => String.fromCharCode(92) + c);
+// The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
+// Every control (C0, C1 with U+0085) and line or paragraph separator is a space, and every format character (\p{Cf}:
+// U+202E, U+200B, …) goes, as the older board's text() does (F-T233-6). ":" and "@" too, as text() escapes them, so that GFM
+// makes no autolink of a bare URL or an email (R1309-2).
+const md = value => String(value ?? "").replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, " ").replace(/\p{Cf}/gu, "").replace(/[\\`*_{}\[\]()<>#+.!|&~:@]/g, c => String.fromCharCode(92) + c);
 /** Text whose lines one table cell holds with LINE (a breakdown gate's question), in Markdown: its lines joined with join. */
 const mdLines = (value, join = "\n") => String(value ?? "").split(LINE).map(md).join(join);
 const mdBlock = value => String(value ?? "").split(/\r?\n/).map(md).join("\n");
@@ -382,12 +386,19 @@ export function matchProject(name, terms, query) {
 export function cardFits(card, S) {
   return (!S.who || card.provider === S.who) && (!S.priority || (S.priority === "none" ? !card.priority : card.priority === S.priority)) && (!S.kind || card.kind === S.kind);
 }
-export function needCounts(cards, S) {
-  const counts = { all: 0, projects: {} };
+export function needCounts(cards, S, programs) {
+  const counts = { all: 0, projects: {}, programs: 0 };
   for (const card of cards) {
     if (card.needs !== "true" || !cardFits(card, S)) continue;
     counts.projects[card.project] = (counts.projects[card.project] || 0) + 1;
     if (S.project ? card.project === S.project : card.archived === undefined) counts.all++;
+  }
+  // The program items that need you (a stuck program, a lost gate) have no card: programs gives each project's count. They
+  // have no provider, priority or kind, so they count only while no filter is on (F-T233-1).
+  for (const project in programs || {}) {
+    const n = S.who || S.priority || S.kind ? 0 : programs[project];
+    counts.projects[project] = (counts.projects[project] || 0) + n;
+    if (!S.project || S.project === project) { counts.all += n; counts.programs += n; }
   }
   return counts;
 }
@@ -408,12 +419,12 @@ const options=()=>all('#pick-list [role=option]');
 function filter(){
   const list=$('pick-list');
   if(list&&S.project&&!options().some(o=>o.dataset.key===S.project)){S.project='';S.gone=true;save()}
-  const cards=all('.card[data-key]'),need=needCounts(cards.map(c=>c.dataset),S);
+  const cards=all('.card[data-key]'),need=needCounts(cards.map(c=>c.dataset),S,Object.fromEntries(all('[data-program-needs]').map(c=>[c.dataset.pick,Number(c.dataset.programNeeds)])));
   cards.forEach(c=>{const base=(S.project?c.dataset.project===S.project:!c.hasAttribute('data-archived'))&&cardFits(c.dataset,S);c.hidden=!(base&&(!S.needs||c.dataset.needs==='true'))});
   const shown=cards.filter(c=>!c.hidden),sum=key=>shown.reduce((n,c)=>n+Number(c.dataset[key]),0);
   all('[data-col]').forEach(col=>{const visible=all('.card',col).filter(c=>!c.hidden);const count=col.querySelector('.n');if(count)count.textContent=String(visible.length);col.classList.toggle('empty-col',!visible.length);col.classList.toggle('needs-col',visible.some(c=>c.dataset.needs==='true'));const empty=col.querySelector('.empty');if(empty)empty.hidden=visible.length>0;const rest=col.querySelector('.rest');if(rest){const order=all('.card',col).sort((a,b)=>a.dataset.i-b.dataset.i),seen=order.filter(c=>!c.hidden);order.forEach(c=>{const at=seen.indexOf(c);if(at>-1&&at<SHOWN)rest.before(c);else rest.append(c)});const more=Math.max(0,seen.length-SHOWN);rest.hidden=!more;const m=rest.querySelector('[data-more]');if(m)m.textContent=foldText(more)}});
   const set=(id,value)=>{const e=$(id);if(e)e.textContent=String(value)};
-  if(list){set('s-needs',shown.filter(c=>c.dataset.needs==='true').length);set('s-agents',sum('agents'));set('s-inferred',sum('inferred'));set('s-review',sum('review'));set('s-tasks',shown.length);set('needs-count',need.all)}
+  if(list){set('s-needs',shown.filter(c=>c.dataset.needs==='true').length+need.programs);set('s-agents',sum('agents'));set('s-inferred',sum('inferred'));set('s-review',sum('review'));set('s-tasks',shown.length);set('needs-count',need.all)}
   all('[data-filter=needs]').forEach(b=>b.setAttribute('aria-pressed',String(S.needs)));
   all('[data-who]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.who===S.who)));
   for(const f of ['priority','kind']){const e=$('f-'+f);if(e)e.value=S[f]}
@@ -521,7 +532,7 @@ function picker(ctx, model, paths) {
     ? (archivedCount ? `<button type="button" class="morebtn" id="pick-more" data-showarchived>Show ${archivedCount} archived project${archivedCount === 1 ? "" : "s"}</button>` : "")
       + `<div class="nomatch" id="pick-none" hidden><b>No project matches “<span id="pick-qtext"></span>”.</b><br>Search looks at the shown name, the GitHub repository, the folder${paths ? ", its path" : ""} and the logbook key. <button type="button" class="linkbtn" data-clear>Clear the search</button></div>`
     : `<div class="nomatch"><b>No projects yet.</b><br>A project shows here when it has a logbook. Start sage in a project folder to make one.</div>`;
-  const chips = projects.filter(book => book.needsOwner && !book.archived).map(book => `<button class="chip" type="button" id="need-${b64(book.key)}" data-pick="${esc(book.key)}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" title="${esc(book.name)} · ${esc(sub(book))}">${dot(ctx, book.key)}<span class="cn">${esc(book.name)}</span> <span class="badge"><span data-n>${book.needsOwner}</span><span class="vh"> need you</span></span></button>`).join("");
+  const chips = projects.filter(book => book.needsOwner && !book.archived).map(book => `<button class="chip" type="button" id="need-${b64(book.key)}" data-pick="${esc(book.key)}"${book.programNeeds ? ` data-program-needs="${book.programNeeds}"` : ""} data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" title="${esc(book.name)} · ${esc(sub(book))}">${dot(ctx, book.key)}<span class="cn">${esc(book.name)}</span> <span class="badge"><span data-n>${book.needsOwner}</span><span class="vh"> need you</span></span></button>`).join("");
   return `<div class="pick"><button class="chip need" type="button" data-filter="needs" aria-pressed="false">${ICON}Needs you <span class="count" id="needs-count">${model.counts.needsOwner}</span></button>`
     + `<div class="pickwrap"><button class="trigger" type="button" id="pick-trig" aria-haspopup="listbox" aria-expanded="false" aria-controls="pick-pop"><span class="vh">Project: </span><span class="dot none" id="pick-dot" aria-hidden="true"></span><span class="tname" id="pick-name">All projects</span><span class="archtag" id="pick-arch" hidden>Archived</span><span class="chev" aria-hidden="true">▾</span></button>`
     + `<div class="pop" id="pick-pop" hidden><div class="search"><input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project" placeholder="Find a project: name, repo or folder" autocomplete="off" spellcheck="false"><button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span><span class="tap">Close</span></button></div>`
@@ -632,19 +643,80 @@ export function renderTaskText(task) {
   return `**${md(task.id)} ${md(task.title)}**\n${md(task.sourceLabel)} · ${md(task.projectName)} · ${md(task.state)} · ${md(task.size)}${tagText(task)}${task.risk ? ` · risk: ${md(task.risk)}` : ""}${task.pr ? ` · PR ${prUrl(task) ? `[${md(task.pr)}](${mdUrl(prUrl(task))})` : md(task.pr)}` : ""}\n\n**Loop**\n${stepText(task)}\n${nowText(task)}\n${rows}\nRecorded state: ${md(task.state)} · repair round ${md(task.round)} · last commit ${head}\n\n**Brief**\nGoal: ${mdBlock(task.briefFields.goal ?? "not recorded")}\nAcceptance: ${mdBlock(task.briefFields.acceptance ?? "not recorded")}\n\nFull brief:\n${mdBlock(task.brief ?? "No verified brief content is available.")}\n\n**Agent runs**\n${task.runs.map(r => `${md(r.id)} ${providerText(r.evidence?.data.provider, task)} · ${md(r.role)} · ${md(r.status)} · ${md(task.runClocks?.[r.id]?.text ?? runTime(r))} · tokens ${md(r.tokens || "unknown")}`).join("\n") || "No runs recorded."}\n\n**Evidence**\n${task.ledger.map(r => `${md(r.kind)} · cycle ${md(r.cycle)} · ${md(r.sha)} · ${md(r.run)} · ${md(r.at)}`).join("\n") || "No verdicts recorded."}${evidenceArtifacts(task).map(r => `\n\n${md(r.data.label)} · ${md(r.source)} · ${md(r.observedAt)} · ${md(r.data.run ?? "run unknown")} · digest verified\n${mdBlock(r.content.text)}`).join("")}\n\n**Findings**\n${task.findings.map(r => `${md(r.severity)} · ${md(r.summary)} · ${md(r.status)}${where(r)}${r.reason ? ` · ${md(r.reason)}` : ""}`).join("\n") || "No findings recorded."}\n\n**Artifacts**\n${task.artifacts.map(r => `${md(r.data.label)} · ${md(r.data.url ?? (r.content?.verified ? "local artifact; digest verified" : "local artifact; content not verified"))}`).join("\n") || "No artifacts recorded."}\n\n**Latest decisions**\n${task.decisions.map(r => `${md(r.at)} · ${md(r.decision)} · ${md(r.why)}`).join("\n") || "No decisions recorded."}`;
 }
 
+/** A hard break (F1): a chat that joins soft line breaks still shows each line of a block on its own line. */
+const BREAK = "\\\n";
+/** A block of the chat board: its lines with a hard break each, then the quoted lines under them (a quote ends the paragraph, so the line before it takes no break). */
+const block = (lines, quoted = []) => [lines.filter(Boolean).join(BREAK), quoted.length ? quoted.map(line => `> ${line}`).join(BREAK) : ""].filter(Boolean).join("\n");
+/** The quoted lines of a reason: a breakdown gate's stored lines (QF), else one line, then its options and recommendation. */
+const reasonLines = reason => {
+  // A "-" or "=" that starts a stored line is escaped, so the line makes no list, rule or heading in the quote (F-T233-6).
+  const [first, ...rest] = String(reason.text ?? "").split(LINE).map(line => md(line).replace(/^(\s*)([-=])/, "$1\\$2"));
+  return [`${reason.gateId ? `${md(reason.key)} · ` : ""}${first}`, ...rest, ...(reason.options?.length ? [`Options: ${reason.options.map((option, i) => `${i + 1}: ${md(option)}`).join(" · ")}`] : []), ...(reason.recommendation ? [`Recommended: ${md(reason.recommendation)}`] : [])];
+};
+const WAIT_MARK = { never: "⊘", wait: "⧗" };
+/** A program's line in the chat's Programs section, by its state. */
+const programLine = program => {
+  const head = `${md(program.id)} ${md(clamp(program.name))}${program.where ? ` · ${program.where}` : ""}`;
+  const tasks = n => `${n} ${n === 1 ? "task" : "tasks"}`;
+  const pilot = `the pilot ${md(program.pilot)} ${program.pilotState ? "was abandoned" : "is not in the logbook"}`;
+  const next = program.next ? `${md(program.next.id)} \\(${program.next.pilot ? "pilot, " : ""}${md(program.next.word)}\\)` : "no task can move now";
+  return `${head} · ${{
+    proposed: () => `the breakdown waits for you \\(gate ${md(program.gate)}\\) · pilot ${md(program.pilot)}`,
+    changing: () => `the sage revises the breakdown \\(gate ${md(program.gate)}\\)`,
+    lost: () => `${program.gateFound ? `its gate ${md(program.gate)} is not a breakdown gate on its pilot ${md(program.pilot)}` : `its breakdown gate ${md(program.gate)} is not in the logbook`} \\(see Needs you\\)`,
+    dropped: () => `dropped · ${tasks(program.open)} still in it: ask the sage to take each task out of the program`,
+    stuck: () => `stuck: ${pilot} \\(see Needs you\\)`,
+  }[program.state]?.() ?? `${md(program.progressText)} · next: ${next}${program.waiting ? ` · ${program.waiting} ${program.waiting === 1 ? "waits" : "wait"}` : ""}${program.cannotStart.length ? ` · ${program.cannotStart.map(md).join(", ")} cannot start` : ""}`}`;
+};
+
 export function renderBoardText(model) {
   // The chat board uses the page's words: its summary, its column names and its date. A stand-in provider gets one note, not one per card.
   const shown = model.columns.flatMap(column => column.tasks.slice(0, CHAT_SHOWN));
   const standIns = shown.some(task => task.agents.some(agent => !agent.provider));
+  const programTag = task => task.program ? ` · ◫ ${md(clamp(task.program.name ?? task.program.id))}${task.program.pilot ? " \\(pilot\\)" : ""}` : "";
   // A card's question is in the Needs you section above; the card shows its steps and, when nothing needs you, its Now line.
-  const line = task => `**${md(task.id)} ${md(clamp(task.title))}** · ${md(task.sourceLabel)} · ${md(task.projectName)}${task.pr ? ` · PR ${md(task.pr)}` : ""}${tagText(task)}\n${task.agents.map(agent => `${agent.provider ? md(agent.provider) : md(`${title(task.providerStandIn)}*`)} · ${md(agent.role)} at work\n`).join("")}${task.inferredWork ? "Inferred from the open PR.\n" : ""}${task.column === "done" ? "" : `${stepText(task)}\n${task.loop.now.needs ? "" : `Now: ${md(task.loop.now.text)}\n`}`}`.trimEnd();
+  // A card of a program has its tag. A card with a wait has the tasks that it waits for in one line (⊘ when one is never
+  // met), instead of its Now line (R1307-3). Each line ends with a hard break.
+  const line = task => block([`**${md(task.id)} ${md(clamp(task.title))}** · ${md(task.sourceLabel)} · ${md(task.projectName)}${task.pr ? ` · PR ${md(task.pr)}` : ""}${tagText(task)}${programTag(task)}`,
+    ...task.agents.map(agent => `${agent.provider ? md(agent.provider) : md(`${title(task.providerStandIn)}*`)} · ${md(agent.role)} at work`),
+    task.inferredWork ? "Inferred from the open PR." : "",
+    task.waitLine ? `${WAIT_MARK[task.waitLine.never ? "never" : "wait"]} ${md(task.waitLine.text)}` : "",
+    task.column === "done" ? "" : stepText(task),
+    task.column === "done" || task.loop.now.needs || task.waitLine ? "" : `Now: ${md(task.loop.now.text)}`]);
   // Each column shows its first 5 cards in the page's order (needs you first, then the newest activity) and counts the rest.
   const section = column => {
     const name = COLUMN_NAME[column.key] ?? column.name, rest = column.tasks.length - CHAT_SHOWN;
     return `### ${columnMark(column.key)} ${md(name)} (${column.tasks.length})\n${column.tasks.slice(0, CHAT_SHOWN).map(line).join("\n\n") || "No tasks."}${rest > 0 ? `\n\n${rest} more in ${md(name)}: open the board page for all.` : ""}`;
   };
   const counts = model.counts;
-  return `**sage board** · built ${md(day(model.at))} UTC\n🔴 ${counts.needsOwner} needs you · ${counts.recordedAgents} agents at work${counts.inferredWork ? ` · ${counts.inferredWork} inferred PRs` : ""} · 🔁 ${counts.inReview} in review · ${counts.tasks} tasks${standIns ? `\n${md("*")} A stand-in: the run does not record its provider, so the board names the logbook's source.` : ""}\n\n### 🔴 Needs you\n${model.needsOwner.map((task, i) => `**${i + 1} · ${md(task.id)} ${md(clamp(task.title))}**\n${md(task.sourceLabel)} · ${md(task.projectName)}\n${task.reasons.map(reason => `> ${reason.gateId ? `${md(reason.key)} · ` : ""}${mdLines(reason.text, "\n> ")}${reason.options?.length ? `\n> Options: ${reason.options.map((option, i) => `${i + 1}: ${md(option)}`).join(" · ")}` : ""}${reason.recommendation ? `\n> Recommended: ${md(reason.recommendation)}` : ""}`).join("\n")}`).join("\n\n") || "No recorded task needs you."}\n\n${model.columns.map(section).join("\n\n")}\n${model.archived.length ? `\nArchived: ${model.archived.map(book => `${md(book.name)} (${archivedCounts(book)})`).join(", ")}\n` : ""}${[...model.diagnostics.map(d => `Incomplete source: ${md(d.source)}${d.project ? ` · ${md(d.project)}` : ""} · ${md(d.message)}`), ...model.warnings.map(d => `Setting ignored: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`), ...(model.notes ?? []).map(d => `Logbook note: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`)].join("\n")}`;
+  // Needs you: a program's breakdown gate (by the data rule) under its own heading, then every other item under Other: the
+  // program items that no card shows (a stuck program, a lost gate), then the cards. With no breakdown gate, no headings.
+  // A pilot's other reasons are an item under Other, so the approval block holds the breakdown gate alone (F-T233-9).
+  const approvals = model.needsOwner.flatMap(task => task.reasons.filter(reason => reason.breakdown).map(gate => [task, gate]));
+  const others = model.needsOwner.map(task => ({ ...task, reasons: task.reasons.filter(reason => !reason.breakdown) })).filter(task => task.reasons.length);
+  const programNeeds = model.programNeeds ?? [];
+  let n = 0;
+  // The breakdown gate shows its full key, as every other gate does: the owner answers by that key (F-T233-4).
+  const approval = ([task, gate]) => block([`**${++n} · ${md(gate.breakdown.id)} ${md(clamp(gate.breakdown.name))}** · ${md(task.sourceLabel)} · ${md(task.projectName)} · pilot ${md(task.id)} · gate ${md(gate.gateId)}`], reasonLines(gate));
+  const programNeed = need => block([`**${++n} · ${md(clamp(need.title))}** · ${md(need.sourceLabel)} · ${md(need.projectName)}`], [md(need.text)]);
+  const other = task => block([`**${++n} · ${md(task.id)} ${md(clamp(task.title))}** · ${md(task.sourceLabel)} · ${md(task.projectName)}`], task.reasons.flatMap(reason => reasonLines(reason)));
+  const needs = approvals.length
+    ? [`#### ◫ Program approval\n${approvals.map(approval).join("\n\n")}`, ...(others.length || programNeeds.length ? [`#### Other\n${[...programNeeds.map(programNeed), ...others.map(other)].join("\n\n")}`] : [])].join("\n\n")
+    : [...programNeeds.map(programNeed), ...others.map(other)].join("\n\n") || "No recorded task needs you.";
+  // Programs: each program that is not done or dropped, in a line; the done and dropped ones as counts. The project's name
+  // shows when programs of two projects show; the logbook's source when one project has programs in two logbooks (C4).
+  const programs = (model.programs ?? []).filter(program => !program.archived);
+  const groups = new Set(programs.map(program => program.group));
+  const books = group => new Set(programs.filter(program => program.group === group).map(program => program.project)).size;
+  const where = program => [groups.size > 1 ? md(program.projectName) : "", books(program.group) > 1 ? md(program.sourceLabel) : ""].filter(Boolean).join(" · ");
+  // A dropped program with tasks still in it keeps its line, with the next step for them (F-T233-10).
+  const counted = program => program.state === "done" || program.state === "dropped" && !program.open;
+  const ended = ["done", "dropped"].map(state => [state, programs.filter(program => counted(program) && program.state === state).length]).filter(([, count]) => count);
+  const programText = programs.length ? `### ◫ Programs\n${[...programs.filter(program => !counted(program)).map(program => `- ${programLine({ ...program, where: where(program) })}`), ...(ended.length ? [`- ${ended.map(([state, count]) => `${count} ${state}`).join(" · ")}`] : [])].join("\n")}` : "";
+  const top = block([`**sage board** · built ${md(day(model.at))} UTC`, `🔴 ${counts.needsOwner} needs you · ${counts.recordedAgents} agents at work${counts.inferredWork ? ` · ${counts.inferredWork} inferred PRs` : ""} · 🔁 ${counts.inReview} in review · ${counts.tasks} tasks`, standIns ? `${md("*")} A stand-in: the run does not record its provider, so the board names the logbook's source.` : ""]);
+  const end = block([model.archived.length ? `Archived: ${model.archived.map(book => `${md(book.name)} (${archivedCounts(book)})`).join(", ")}` : "",
+    ...model.diagnostics.map(d => `Incomplete source: ${md(d.source)}${d.project ? ` · ${md(d.project)}` : ""} · ${md(d.message)}`), ...model.warnings.map(d => `Setting ignored: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`), ...(model.notes ?? []).map(d => `Logbook note: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`)]);
+  return [top, `### 🔴 Needs you\n${needs}`, programText, ...model.columns.map(section), end].filter(Boolean).join("\n\n");
 }
 export function renderBoardStatus(model) {
   // An archived project's tasks are not in Tasks or Owner: one line counts the archived projects and what needs you there.
