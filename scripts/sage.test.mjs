@@ -3192,11 +3192,11 @@ test("R1204-3: a pilot wait is met only after the pilot is merged or concluded, 
     s.ok("task", "add", "--title", "Pilot", "--size", "small");
     s.ok("task", "add", "--title", "Two", "--size", "small", ...(explicit ? ["--waits", "T1"] : []));
     propose(s, "T1", "Codex support", "T2");
-    // On the pilot's PR before the approval: after it, pr= refuses that PR for T2 (R1273-1).
-    for (const t of ["T1", "T2"]) {
-      s.ok("task", t, "set", "pr=7");
-      for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", t, "--sha", SHA, "--kind", kind, "--pr", "7");
-    }
+    // On the pilot's PR: pr= refuses that PR for T2 (R1279-1), so a logbook of an older sage holds it, as a hand edit does.
+    s.ok("task", "T1", "set", "pr=7");
+    const pr = readFileSync(join(s.dir, "tasks.tsv"), "utf8").split("\n")[0].split("\t").indexOf("pr");
+    byHand(s.dir, "tasks", 0, "T2", (cells) => cells.with(pr, "7"));
+    for (const t of ["T1", "T2"]) for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", t, "--sha", SHA, "--kind", kind);
     s.ok("gate", "answer", "G1", "--option", "1");
     const out = s.no("merge-check", "--sha", SHA, "--pr", "7");
     assert.match(out, / T2 waits for T1 \(framed, the pilot of PG1\): it merges after that task is merged or concluded\. To merge,/, `explicit ${explicit}`);
@@ -3210,8 +3210,8 @@ test("T337: the loop check counts each task's wait for its pilot, at waits=, pro
   const s = store();
   for (const title of ["Pilot", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
   propose(s, "T1", "Codex support", "T2");
+  s.ok("gate", "answer", "G1", "--option", "2"); // waits change and a task joins while the owner asks for changes (R1215-1, R1277-2)
   assert.equal(s.no("task", "T1", "set", "waits=T2"), "sage: these waits make a loop: T1, T2, T1. T2 waits for T1 as the pilot of PG1: each task of a program waits for its pilot. A loop never ends, so sage refuses it. Give T1 other waits. Nothing changed.");
-  s.ok("gate", "answer", "G1", "--option", "2"); // a task joins while the owner asks for changes (R1215-1)
   s.ok("task", "T1", "set", "waits=T3");
   assert.equal(s.no("task", "T3", "set", "program=PG1"), "sage: these waits make a loop: T3, T1, T3. T3 waits for T1 as the pilot of PG1: each task of a program waits for its pilot. A loop never ends, so sage refuses it. T1 waits for T3: clear that wait first (sage task T1 set waits=none). Nothing changed.");
   s.ok("task", "T1", "set", "waits=");
@@ -4649,20 +4649,99 @@ test("R1266-1: after a drop and an accepted loss of gates.tsv, every command rea
   assert.equal(programsLine(s), "program PG1 · dropped · name: Codex support");
 });
 
-test("R1273-1: a task of an approved program does not go on its pilot's PR before the pilot merges, by task set or verdict --pr, with the reason", () => {
+test("R1279-1, R1273-1: no task of a program has or had a PR of its pilot before the pilot merges: by pr=, verdict --pr, program= or program propose, from either side, in every state but dropped", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  const why = (m, n, way, pilot = "T1") => `sage: ${m} and ${pilot}, the pilot of PG1, have or had PR ${n}, and ${m} builds only after ${pilot} is merged or concluded. A task that was ever on a PR stays in its merge check, so PR ${n} could never merge. ${way} Nothing changed.`;
+  const again = (m) => `propose PG1 again after a change answer, with --tasks that do not name ${m}`;
+  // Proposed: a member takes the pilot's PR, and the pilot takes a member's PR, also one that the member had before.
+  s.ok("task", "T1", "set", "pr=7");
+  s.ok("task", "T2", "set", "pr=8");
+  s.ok("task", "T2", "set", "pr=9");
+  const before = snapshot(s.dir);
+  assert.equal(s.no("task", "T2", "set", "pr=7"), why("T2", 7, `Give T2 another PR, or take T2 out of PG1 (${again("T2")}).`));
+  assert.equal(s.no("verdict", "T2", "--sha", SHA, "--kind", "checks-pass", "--pr", "7"), why("T2", 7, `Give T2 another PR, or take T2 out of PG1 (${again("T2")}).`));
+  assert.equal(s.no("task", "T1", "set", "pr=8"), why("T2", 8, `Give T1 another PR, or take T2 out of PG1 (${again("T2")}).`), "T2 had PR 8: it still counts");
+  assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr", "9"), why("T2", 9, `Give T1 another PR, or take T2 out of PG1 (${again("T2")}).`));
+  assert.deepEqual(snapshot(s.dir), before, "a refusal writes nothing");
+  // Changing: a task with a PR that the pilot has or had joins neither by program= nor by a new proposal.
+  s.ok("gate", "answer", "G1", "--option", "2");
+  s.ok("task", "T1", "set", "pr=10"); // T1 had PR 7
+  s.ok("task", "T3", "set", "pr=7");
+  assert.equal(s.no("task", "T3", "set", "program=PG1"), why("T3", 7, "T3 joins PG1 only after T1 is merged or concluded."));
+  assert.equal(s.no("program", "propose", "PG1", "--tasks", "T2,T3"), why("T3", 7, "Leave T3 out of --tasks, or name another pilot with --pilot."));
+  assert.equal(s.no("program", "propose", "PG1", "--pilot", "T3", "--tasks", "T1"), why("T1", 7, "Leave T1 out of --tasks, or name another pilot with --pilot.", "T3"), "a new pilot meets each member's PRs");
+  assert.equal(s.no("task", "T2", "set", "pr=10"), why("T2", 10, `Give T2 another PR, or take T2 out of PG1 (${again("T2")}).`));
+  // Active: the same rule, and the way out is program=none.
+  s.ok("program", "propose", "PG1");
+  s.ok("gate", "answer", "G2", "--option", "1");
+  assert.equal(s.no("task", "T2", "set", "pr=7"), why("T2", 7, "Give T2 another PR, or take T2 out of PG1 (sage task T2 set program=none)."));
+  assert.match(s.ok("task", "T2", "set", "pr=11"), / · PR 11 · /, "another PR is fine");
+  stateIs(s, "T1", "merged");
+  assert.match(s.ok("task", "T2", "set", "pr=7"), / · PR 7 · /, "after the pilot merges, its PR is free");
+  // Dropped: the rule ends with the program.
+  const d = store();
+  for (const title of ["Pilot", "Two"]) d.ok("task", "add", "--title", title, "--size", "small");
+  propose(d, "T1", "Codex support", "T2");
+  d.ok("task", "T1", "set", "pr=7");
+  d.ok("gate", "answer", "G1", "--option", "3");
+  assert.match(d.ok("task", "T2", "set", "pr=7"), / · PR 7 · /);
+});
+
+test("R1277-2: no task of a program changes its waits while the breakdown gate is open, as its question shows them; while the owner asks for changes, they change", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  const before = snapshot(s.dir);
+  for (const t of ["T1", "T2"]) {
+    assert.equal(s.no("task", t, "set", "waits=T3"), `sage: ${t} is in PG1, and the question of its breakdown gate G1 shows the waits of each task, so they do not change while the gate is open. PG1 has an open breakdown gate: ask the owner to answer change, then propose again. Nothing changed.`);
+  }
+  assert.deepEqual(snapshot(s.dir), before, "a refusal writes nothing");
+  s.ok("task", "T2", "set", "waits=none"); // no change: nothing to refuse
+  assert.match(s.ok("task", "T3", "set", "waits=T2"), / · waits T2 /, "a task out of the program changes its waits");
+  s.ok("task", "T3", "set", "waits=none");
+  s.ok("gate", "answer", "G1", "--option", "2");
+  assert.match(s.ok("task", "T2", "set", "waits=T3"), / · waits T3 \(framed\)/);
+  s.ok("program", "propose", "PG1");
+  assert.match(rows(s.dir, "gates")[1].question, / {2}T2 \[waits for T3\]: Two/, "the next proposal shows the change");
+});
+
+test("R1279-2: a new proposal takes each move row's from from the task's cell when no proposal stopped, also after a loss of decisions.tsv", () => {
   const s = store();
   for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
   propose(s, "T1", "Codex support", "T2");
-  s.ok("gate", "answer", "G1", "--option", "1");
-  s.ok("task", "T1", "set", "pr=7");
-  const before = snapshot(s.dir);
-  const why = "sage: PR 7 is the PR of T1, the pilot of PG1, and T2 builds only after T1 is merged or concluded. A task that was ever on a PR stays in its merge check, so T2 would block PR 7 for good. Give T2 its own PR after T1 merges. Nothing changed.";
-  assert.equal(s.no("task", "T2", "set", "pr=7"), why);
-  assert.equal(s.no("verdict", "T2", "--sha", SHA, "--kind", "checks-pass", "--pr", "7"), why);
-  assert.deepEqual(snapshot(s.dir), before, "a refusal writes nothing");
-  assert.match(s.ok("task", "T2", "set", "pr=8"), / · PR 8 · /, "another PR is fine");
-  stateIs(s, "T1", "merged");
-  assert.match(s.ok("task", "T2", "set", "pr=7"), / · PR 7 · /, "after the pilot merges, its PR is free");
+  s.ok("gate", "answer", "G1", "--option", "2");
+  writeFileSync(join(s.dir, "decisions.tsv"), "");
+  s.ok("logbook", "repair", "--accept-loss", "decisions");
+  const from = rows(s.dir, "decisions").length;
+  s.ok("program", "propose", "PG1", "--tasks", "none");
+  assert.deepEqual(newRows(s, from), [["T2", "program PG1 → none"], ["T1", "PG1 proposed again with gate G2, round 2"]]);
+});
+
+test("R1279-2: after a loss of gates.tsv, only a row of the owner's answer reads as a drop; the merge check and the task line read the drop", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  s.ok("gate", "answer", "G1", "--option", "2");
+  // A row with the drop's text but another why is no answer of the owner, so the program is lost, not dropped.
+  const f = join(s.dir, "decisions.tsv"), text = readFileSync(f, "utf8");
+  const answer = text.split("\n").find((l) => l.includes("→ change\tthe user's answer"));
+  writeFileSync(f, `${text.trimEnd()}\n${answer.replace("→ change\tthe user's answer", "→ drop\ttask set")}\n`);
+  writeFileSync(join(s.dir, "gates.tsv"), "");
+  s.ok("logbook", "repair", "--accept-loss", "gates");
+  assert.match(s.ok("task", "T2"), / · waits the breakdown of PG1 \(its gate G1 is not in the logbook\) · /);
+  assert.match(s.ok("program", "propose", "PG1"), /^PG1 proposed · pilot T1 · tasks T2 · G2 open: /, "a dropped program refuses this");
+  // The owner's drop, after the same loss: the merge check and the task line say dropped.
+  const d = store();
+  for (const title of ["Pilot", "Two"]) d.ok("task", "add", "--title", title, "--size", "small");
+  propose(d, "T1", "Codex support", "T2");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) d.ok("verdict", "T2", "--sha", SHA, "--kind", kind, "--pr", "7");
+  d.ok("gate", "answer", "G1", "--option", "3");
+  writeFileSync(join(d.dir, "gates.tsv"), "");
+  d.ok("logbook", "repair", "--accept-loss", "gates");
+  assert.match(d.ok("task", "T2"), / · program PG1 · waits the breakdown of PG1 \(dropped, gate G1\) · unmet the breakdown of PG1$/);
+  assert.match(d.no("merge-check", "--sha", SHA, "--pr", "7"), /T2 waits for the breakdown of PG1 \(dropped, gate G1\)\..* The owner dropped PG1, so its breakdown is never approved: take T2 out of it \(sage task T2 set program=none\), or ask the owner\./);
 });
 
 test("R1270-1: only a question that starts with the breakdown words is a breakdown gate: a plain gate with them inside answers twice and shows on one line; a list mark or a symbol before them does not hide them", () => {

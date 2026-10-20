@@ -1537,13 +1537,18 @@ function planTaskChanges(before, id, changes, at, facts) {
         if (!r.ok) refuse(`${task.id} is not verified on ${head.slice(0, 7)}: ${r.reason}`);
       }
       if (["merged", "concluded", "abandoned"].includes(v)) decided.push({ at: at, task: task.id, decision: `state ${v}`, why: "task set" });
-    } else if (k === "pr") decided.push(...(notHeld(task, "pr="), setPr(task, v, "task set", graph, at)));
+    } else if (k === "pr") {
+      decided.push(...(notHeld(task, "pr="), setPr(task, v, "task set", at)));
+      if (v) apartFromPilot(task, graph, decisions, facts.ledger, "pr");
+    }
     else if (k === "branch") notHeld(task, "branch="), task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
     else if (k === "title") task.title = v;
     else if (k === "priority" || k === "kind") task[k] = tag(k, v);
     else if (k === "waits") {
       const was = task.waits ?? "";
       task.waits = waitsValue(task, v, tasks);
+      const program = graph.programs.get(task.program); // the next proposal shows a change made while the owner asks for changes (R1277-2)
+      if (program?.state === "proposed" && task.waits !== was) refuse(`${task.id} is in ${program.id}, and the question of its breakdown gate ${program.gate} shows the waits of each task, so they do not change while the gate is open. ${program.id} has an open breakdown gate: ask the owner to answer change, then propose again. Nothing changed.`);
       if (task.waits && ENDED.includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task waits for nothing, so it takes no new wait. waits= clears a wait. Nothing changed.`);
       noLoop(task, graph, { own: true });
       decided.push(...waitsDecision(task, was, at, "task set"));
@@ -1551,6 +1556,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       const was = task.program ?? "";
       task.program = programValue(task, v, graph, runs);
       noLoop(task, graph);
+      apartFromPilot(task, graph, decisions, facts.ledger, "join");
       const { rows, note: joined } = programDecision(task, was, at, "task set", graph);
       decided.push(...rows);
       note += joined;
@@ -1588,20 +1594,40 @@ function move(task, to) {
 /**
  * Gives a task its pull request, or clears it with "". An investigation changes no code, so it may only clear one. A
  * change gives its decision row (S1), which the caller writes before the task: a task that was ever on a PR stays in
- * that PR's merge check (prHistory), so a cleared or changed pr= cannot take its verdicts out of the merge. So a task of
- * an approved program never goes on its pilot's PR before the pilot merges or concludes: it would block that PR for good (R1273-1).
+ * that PR's merge check (prHistory), so a cleared or changed pr= cannot take its verdicts out of the merge. The caller
+ * then checks a new PR against the pilot (apartFromPilot).
  */
-function setPr(task, pr, why, { byId, programs }, at = now()) {
+function setPr(task, pr, why, at = now()) {
   if (pr && !builds(task)) refuse(`${task.id} is an investigation: it changes no code, so it has no pull request. A build is its own task: sage task add --size tiny, small or large, then give that task the PR.`);
   if (pr && !PR.test(pr)) refuse(`${JSON.stringify(pr)} is not a pull request number. Give only its digits, with no leading zero, for example pr=5 or --pr 5.`);
-  const program = programs.get(task.program), pilot = program?.pilot !== task.id && byId.get(program?.pilot);
-  if (pr && program?.state === "active" && pilot && !MET.includes(pilot.state) && prNumber(pilot.pr) === prNumber(pr)) {
-    refuse(`PR ${pr} is the PR of ${pilot.id}, the pilot of ${program.id}, and ${task.id} builds only after ${pilot.id} is merged or concluded. A task that was ever on a PR stays in its merge check, so ${task.id} would block PR ${pr} for good. Give ${task.id} its own PR after ${pilot.id} merges. Nothing changed.`);
-  }
   const was = task.pr;
   task.pr = pr;
   // An investigation never has commits on a PR, so the PR that an old logbook gave it leaves no trace when it is cleared.
   return was === pr || !builds(task) ? [] : [{ at, task: task.id, decision: `PR ${was || "none"} → ${pr || "none"}`, why }];
+}
+/** The PR numbers that a task has or ever had: its pr cell, its PR decision rows and its verdicts, as prHistory reads them. */
+const prsOf = (task, decisions, ledger) =>
+  new Set([task.pr, ...decisions.filter((d) => d.task === task.id).flatMap((d) => /^PR (\S+) → (\S+)$/.exec(d.decision)?.slice(1) ?? []), ...ledger.filter((r) => r.task === task.id && r.sha).map((r) => r.pr)].map(prNumber).filter((n) => PR.test(n ?? "")));
+/**
+ * Refuses a task of a program and its pilot that have or ever had one PR, before the pilot is merged or concluded, in
+ * every state of the program but dropped (R1279-1): a task that was ever on a PR stays in its merge check, and the task
+ * builds only after its pilot, so that PR could never merge (R1273-1). task is the task whose PR or program changed: a
+ * member, whose PRs meet the pilot's, or the pilot, whose PRs meet each member's. how names the way out: "pr" (task set
+ * pr= or verdict --pr), "join" (task set program=) or "propose" (program propose).
+ */
+function apartFromPilot(task, { byId, programs }, decisions, ledger, how) {
+  const program = programs.get(task.program);
+  const pilot = program && (program.pilot === task.id ? task : byId.get(program.pilot));
+  if (!pilot || program.state === "dropped" || MET.includes(pilot.state)) return;
+  const pilotPrs = prsOf(pilot, decisions, ledger);
+  const members = pilot === task ? [...byId.values()].filter((t) => t.program === program.id && t.id !== pilot.id) : [task];
+  for (const m of members) {
+    const n = [...prsOf(m, decisions, ledger)].find((n) => pilotPrs.has(n));
+    if (n === undefined) continue;
+    const out = unanswered(program) ? `propose ${program.id} again after a change answer, with --tasks that do not name ${m.id}` : `sage task ${m.id} set program=none`;
+    const way = { pr: `Give ${task.id} another PR, or take ${m.id} out of ${program.id} (${out}).`, join: `${m.id} joins ${program.id} only after ${pilot.id} is merged or concluded.`, propose: `Leave ${m.id} out of --tasks, or name another pilot with --pilot.` }[how];
+    refuse(`${m.id} and ${pilot.id}, the pilot of ${program.id}, have or had PR ${n}, and ${m.id} builds only after ${pilot.id} is merged or concluded. A task that was ever on a PR stays in its merge check, so PR ${n} could never merge. ${way} Nothing changed.`);
+  }
 }
 /** The ids of the tasks that are or ever were on PR pr: by the tasks' pr, the decision rows of setPr, and their verdicts on a commit of the PR. */
 const prHistory = (pr, tasks, decisions, ledger) =>
@@ -2305,7 +2331,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         .filter(([, from, to]) => from !== to && (from === pid || to === pid))
         .map(([t, from, to]) => ({ at, task: t.id, decision: `program ${from || "none"} → ${to || "none"}`, why: PROPOSE }));
       for (const { t, to } of moved) t.program = to;
-      noLoop(pilot, waitGraph(tasks, after, gates, decisions), { oldPilot: old?.pilot }); // each new wait is a wait for the pilot, so a new loop goes through it
+      const graph = waitGraph(tasks, after, gates, decisions);
+      noLoop(pilot, graph, { oldPilot: old?.pilot }); // each new wait is a wait for the pilot, so a new loop goes through it
+      apartFromPilot(pilot, graph, decisions, read(dir, "ledger"), "propose");
       const decision = round > 1 ? `${pid} proposed again with gate ${g.id}, round ${round}` : `${pid} proposed with gate ${g.id}, pilot ${pilot.id}, tasks ${others.map((t) => t.id).join(",") || "none"}, name: ${oneLine(name)}`;
       // The program's row first: until the gate's row is written, the program is lost, so a stop between two writes leaves
       // no task of it free to build while its gate is open, also on a new proposal of an approved program (R1235-1).
@@ -2474,7 +2502,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const backed = opt.run && !check(kind) && read(dir, "ledger").find((r) => r.task === task.id && r.run === opt.run && !check(r.kind));
       if (backed) refuse(`${opt.run} already backs the ${backed.kind} verdict of ${task.id} on ${backed.sha.slice(0, 7) || "its task"}: one run backs one review or QA verdict. Run the review again under a new run.`);
       const sha = opt.sha?.toLowerCase() ?? ""; // as git prints it
-      const decided = opt.pr ? setPr(task, opt.pr, "verdict --pr", graphOf(dir)) : [];
+      const decided = opt.pr ? setPr(task, opt.pr, "verdict --pr") : [];
+      if (opt.pr) apartFromPilot(task, graphOf(dir), read(dir, "decisions"), read(dir, "ledger"), "pr");
       const beforeReview = task.state;
       const backToReview = ["verified", "pr-ready"].includes(beforeReview) && NOT_CLEAN.includes(kind);
       if (backToReview) {
