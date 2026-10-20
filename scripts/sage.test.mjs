@@ -2022,8 +2022,9 @@ test("T72-S6-OPTIONSHELL: gate answer takes an option by its number and records 
   for (const args of [["yes"], ["--option", "4"], ["--option", "0"], ["--option", "yes"], ["--option", "1", "--other-hex", "6f6b"], []]) assert.equal(s.no("gate", "answer", "G1", ...args), how, args.join(" "));
   assert.equal(s.no("gate", "answer", "G1", "--other"), "sage: gate answer takes no --other. Its options: --option, --other-hex, --project.");
   assert.deepEqual(snapshot(s.dir), before, "no file changed");
-  assert.equal(s.ok("gate", "answer", "G1", "--option", "3"), "G1 answered · No  access / later");
-  assert.equal(rows(s.dir, "gates")[0].answer, "No  access / later");
+  // gate add keeps an option on one line with single spaces, as the question (R1258-1), and the answer is that option.
+  assert.equal(s.ok("gate", "answer", "G1", "--option", "3"), "G1 answered · No access / later");
+  assert.equal(rows(s.dir, "gates")[0].answer, "No access / later");
 });
 
 test("T72-S7-HEREDOC: gate answer --other-hex records the owner's own words exactly, marked as other, and runs none of them", () => {
@@ -4497,6 +4498,34 @@ test("R1249-1: gate add makes the question one line, every line break a space; s
   // A plain gate that holds a line break (an older logbook, or a hand edit) still shows on one line.
   byHand(s.dir, "gates", 0, "G1", (cells) => cells.with(2, "Ship it? I recommend: no x"));
   assert.equal(gatesLine(s), "gates   1 open · G1 Ship it? I recommend: no x (default: none)");
+});
+
+test("R1258-1: gate add makes each option, the recommendation and the default one line; the card, the text board, the chat board and status show a plain gate's option on one line", async () => {
+  const s = store();
+  s.ok("task", "add", "--title", "One", "--size", "small");
+  s.ok("gate", "add", "T1", "--question", "Ship it?", "--options", "ship\u2028now|wait\n\rfor Bob", "--recommend", "ship\u2028now", "--default", "wait\u2029for Bob");
+  const [g] = rows(s.dir, "gates");
+  assert.deepEqual([g.options, g.recommendation, g.default], ["ship now|wait for Bob", "ship now", "wait for Bob"]);
+  assert.equal(gatesLine(s), "gates   1 open · G1 Ship it? (default: wait for Bob)");
+  const board = s.ok("board", "this", "--remember", "no");
+  assert.ok(board.includes("ship now") && !/[\u2028\u2029]/.test(board), board);
+  const core = (file) => import(new URL(`../plugins/sage/core/${file}`, import.meta.url).href);
+  const [{ readBoardSources }, { buildBoardModel }, { renderBoardHtml, renderBoardText }] = await Promise.all(["board-reader.mjs", "board-model.mjs", "board-render.mjs"].map(core));
+  const model = buildBoardModel(readBoardSources([{ id: "sage", label: "Sage", path: s.home }]));
+  const html = renderBoardHtml(model, { snapshot: false });
+  assert.ok(html.includes("<b>Needs you:</b> Ship it? I recommend: ship now</span>"), html);
+  assert.ok(renderBoardText(model).includes("> Options: 1: ship now · 2: wait for Bob\n> Recommended: ship now"), renderBoardText(model));
+});
+
+test("R1259-1: in a breakdown question, a wait on an abandoned or lost task says that it is never met", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two", "Fix Bob's login", "Four"]) s.ok("task", "add", "--title", title, "--size", "small");
+  s.ok("task", "T3", "set", "waits=T2");
+  s.ok("task", "T2", "set", "state=abandoned");
+  const waits = readFileSync(join(s.dir, "tasks.tsv"), "utf8").split("\n")[0].split("\t").indexOf("waits");
+  byHand(s.dir, "tasks", 0, "T4", (cells) => cells.with(waits, "T9"));
+  propose(s, "T1", "Codex support", "T3,T4");
+  assert.equal(rows(s.dir, "gates")[0].question, Q("Approve program PG1? No task builds before you approve.", "Name: Codex support", "Goal: Codex runs sage too.", "Pilot, runs first:", "  T1: Pilot", "Then, each after T1:", "  T3 [waits for T2 (abandoned, never met)]: Fix Bob's login", "  T4 [waits for T9 (not in the logbook, never met)]: Four"));
 });
 
 test("R1249-2: gate add refuses a question that reads as a breakdown gate's first line, also after a blank, mark or symbol character and with look-alike letters", () => {

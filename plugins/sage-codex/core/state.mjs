@@ -2276,7 +2276,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       // The question, one part on each line: the fixed text first, then each free text after a fixed label or a task id
       // (the owner, 2026-10-19). An ended task's state or its waits but the pilot come in brackets after the id, and a
       // colon ends the fixed part, so a title cannot pass for a tag (R1249-3): "  T3 [merged]: Fix it", "  T4: Add it".
-      const tag = (t, waits = waitsOf(t).ids.filter((w) => w !== pilot.id)) => (ENDED.includes(t.state) ? t.state : waits.length ? `waits for ${waits.join(", ")}` : "");
+      // A wait on an abandoned or lost task is never met, and says so as status does (R1259-1): "T3 [waits for T2 (abandoned, never met)]".
+      const wait = (w, state = byId.get(w)?.state) => (dead(state) ? `${w} (${state ?? "not in the logbook"}, never met)` : w);
+      const tag = (t, waits = waitsOf(t).ids.filter((w) => w !== pilot.id)) => (ENDED.includes(t.state) ? t.state : waits.length ? `waits for ${waits.map((w) => wait(w)).join(", ")}` : "");
       const item = (t) => `  ${t.id}${tag(t) ? ` [${tag(t)}]` : ""}: ${oneLine(t.title)}`;
       const question = [`Approve program ${pid}${round > 1 ? ` (round ${round})` : ""}? No task builds before you approve.`, `Name: ${oneLine(name)}`, `Goal: ${oneLine(goal)}`,
         "Pilot, runs first:", item(pilot), ...(others.length ? [`Then, each after ${pilot.id}:`, ...others.map(item)] : [])].join(LINE);
@@ -2477,16 +2479,18 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub === "add") {
         // The owner tells options apart by eye, and the recommendation and the default are two of them: options that
         // look the same (case, width or hidden characters) are refused, and so is an option that reads as an own answer.
-        const options = optionsOf({ options: cell(need(opt.options, "--options")) });
+        // Each option, the recommendation and the default are one line, as the question is: a line break is a space (R1258-1).
+        const flatOptions = flat(need(opt.options, "--options"));
+        const options = optionsOf({ options: flatOptions });
         const twin = options.find((o, i) => options.findIndex((x) => looks(x) === looks(o)) !== i);
         if (twin !== undefined) refuse(`two options look the same: ${JSON.stringify(twin)} and ${JSON.stringify(options.find((x) => looks(x) === looks(twin)))}. Make them differ in more than case.`);
         if (options.some((o) => /^other ?:/.test(looks(o)))) refuse(`an option may not start with "other:": it marks an answer in the owner's own words.`);
-        const pick = (v, what) => options.find((o) => o === v.trim()) ?? options.find((o) => looks(o) === looks(v)) ?? (/^[1-9]\d*$/.test(v.trim()) ? options[Number(v) - 1] : undefined) ?? refuse(`${what} is one of the options, by its text or its number (1 to ${options.length}): ${options.map((o) => JSON.stringify(o)).join(", ")}.`);
+        const pick = (raw, what, v = flat(raw)) => options.find((o) => o === v) ?? options.find((o) => looks(o) === looks(v)) ?? (/^[1-9]\d*$/.test(v) ? options[Number(v) - 1] : undefined) ?? refuse(`${what} is one of the options, by its text or its number (1 to ${options.length}): ${options.map((o) => JSON.stringify(o)).join(", ")}.`);
         const recommendation = pick(need(opt.recommend, "--recommend"), "--recommend");
         // Only program propose writes the first line of a breakdown gate, which marks the gate as one (proposalOf).
         const question = flat(need(opt.question, "--question")); // one line, as a title: only a breakdown gate's question has lines (R1249-1)
         if (readsAsBreakdown(question)) refuse(`a question that starts with "Approve program" is a breakdown gate, and only program propose opens one. Ask it in other words.`);
-        const g = { id: nextId(dir, "G"), task: id ?? "", question: need(question, "--question"), options: opt.options, recommendation, default: opt.default === undefined ? "" : pick(opt.default, "--default"), at: now() };
+        const g = { id: nextId(dir, "G"), task: id ?? "", question: need(question, "--question"), options: flatOptions, recommendation, default: opt.default === undefined ? "" : pick(opt.default, "--default"), at: now() };
         write(dir, "gates", [...gates, g]);
         return `${g.id} open · ${g.question}`;
       }
