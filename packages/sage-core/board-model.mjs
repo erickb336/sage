@@ -550,7 +550,7 @@ function agentsOf(sources, groups, groupOf, cards, at) {
 }
 
 /**
- * The tasks of a program in their order: the pilot first, then each task after the tasks of the program that it waits
+ * The tasks of a program in their order, each with its depth (the program page's layers): the pilot first, then each task after the tasks of the program that it waits
  * for, then by id. A hand edit can make a loop of waits that the state tool would refuse: a wait on a task whose depth
  * is still open counts as 0, so a loop ends there (C5). The walk keeps its own stack, so a long chain of waits cannot
  * overflow the call stack (F-T233-5).
@@ -577,7 +577,7 @@ function programOrder(program, own) {
     }
   }
   const number = id => Number(id.slice(1));
-  return own.map(task => [task, depth.get(task.id)]).sort((a, b) => a[1] - b[1] || number(a[0].id) - number(b[0].id)).map(([task]) => task);
+  return own.map(task => [task, depth.get(task.id)]).sort((a, b) => a[1] - b[1] || number(a[0].id) - number(b[0].id));
 }
 
 /**
@@ -591,7 +591,7 @@ function programsOf(source, project, group, graph, cards) {
   return [...graph.programs.values()].map(program => {
     const own = tasks.filter(task => task.program === program.id), progress = progressOf(own), pilotState = graph.byId.get(program.pilot)?.state;
     const state = program.state !== "active" ? program.state : progress.done ? "done" : dead(pilotState) ? "stuck" : "active";
-    const ordered = programOrder(program, own), card = task => cards.get(`${project.key}/${task.id}`);
+    const layered = programOrder(program, own), ordered = layered.map(([task]) => task), card = task => cards.get(`${project.key}/${task.id}`);
     const open = ordered.filter(task => !ENDED.includes(task.state)).map(card).filter(Boolean);
     const moving = open.filter(item => item.waits.every(wait => wait.met)), waiting = open.filter(item => item.waitLine);
     const first = state === "active" ? moving[0] : null;
@@ -601,7 +601,7 @@ function programsOf(source, project, group, graph, cards) {
       : null;
     return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate, gateFound: program.gateFound, open: open.length,
       source: source.id, sourceLabel: source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
-      state, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`),
+      state, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
       next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === program.pilot } : null,
       waiting: waiting.filter(item => !item.waitLine.never).length, cannotStart: waiting.filter(item => item.waitLine.never).map(item => item.id),
       need: need && { ...need, key: `${project.key}/${program.id}`, program: program.id, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived } };

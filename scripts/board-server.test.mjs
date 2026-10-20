@@ -257,7 +257,7 @@ test("T308: the Agents page is a route with the same sign-in, CSP and browser ch
   assert.match(mac.body, /new EventSource\("\/agents\?events=1"\)/);
   for (const [tag, content] of [...mac.body.matchAll(/<(script|style)>([\s\S]*?)<\/\1>/g)].map(m => [m[1], m[2]])) assert.ok(mac.headers["content-security-policy"].includes(`'sha256-${createHash("sha256").update(content).digest("base64")}'`), tag);
   // The task board names the page with its count.
-  assert.match((await read(f, "/", { rawHeaders: ["Host", loopback] })).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/agents">Agents \(1\)<\/a>/);
+  assert.match((await read(f, "/", { rawHeaders: ["Host", loopback] })).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/programs">Programs<\/a><a href="\/agents">Agents \(1\)<\/a>/);
   // Away from the Mac, the page and its stream need the password.
   for (const path of ["/agents", "/agents?events=1"]) {
     const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
@@ -418,4 +418,62 @@ test("a parent rename that names only the destination refreshes the missing boar
   populate(f.root, "Sample recreated source");
   parent.callback("rename", "source");
   await stream.next(p => !p.stale && p.html.includes("Sample recreated source"));
+});
+
+// T368 (T233 C9): the programs list and each program's page. SAMPLE DATA: one program of two tasks, its pilot merged.
+function programs(project, goal = "Sample goal of PG1.") {
+  writeFileSync(join(project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tprogram\nT1\tSample pilot\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tPG1\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tPG1\n`);
+  writeFileSync(join(project, "gates.tsv"), `${HEADERS.gates.replaceAll(" ", "\t")}\nG1\tT1\tApprove program PG1? No task builds before you approve.\tapprove|change|drop\tapprove\t\tapprove\t\n`);
+  writeFileSync(join(project, "programs.tsv"), `id\tname\tgoal\tpilot\tgate\tat\nPG1\tSample program\t${goal}\tT1\tG1\t\n`);
+}
+const programKey = id => Buffer.from(`sample/project-abcdef/${id}`).toString("base64url");
+async function until(f, path, text) {
+  let page;
+  for (let i = 0; i < 100 && !(page = await read(f, path)).body.includes(text); i++) await new Promise(wake => setTimeout(wake, 50));
+  return page;
+}
+
+test("T368 C9: /programs and /program/KEY are routes with the same sign-in and CSP; an unknown key is the not-found page with 404; a bad key is 404", async t => {
+  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] });
+  programs(f.project);
+  const list = await until(f, "/programs", "Sample program");
+  assert.equal(list.status, 200); assert.match(list.headers["content-type"], /^text\/html/);
+  assert.match(list.body, /<a href="\/programs" aria-current="page">Programs<\/a>/);
+  assert.ok(list.body.includes(`<a class="prog" href="/program/${programKey("PG1")}">`) && list.body.includes("1 of 2 merged"));
+  assert.match(list.body, /new EventSource\("\/programs\?events=1"\)/);
+  for (const [tag, content] of [...list.body.matchAll(/<(script|style)>([\s\S]*?)<\/\1>/g)].map(m => [m[1], m[2]])) assert.ok(list.headers["content-security-policy"].includes(`'sha256-${createHash("sha256").update(content).digest("base64")}'`), tag);
+  const page = await read(f, `/program/${programKey("PG1")}`);
+  assert.equal(page.status, 200); assert.ok(page.body.includes("Sample goal of PG1.") && page.body.includes("<h1 class=\"ptitle\"><span aria-hidden=\"true\">◫</span> Sample program</h1>"), page.body.slice(-3000));
+  // The board names the page, and the task page links its program.
+  assert.match((await read(f, "/")).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/programs">Programs<\/a><a href="\/agents">Agents \(0\)<\/a>/);
+  assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back" href="/program/${programKey("PG1")}">◫ Sample program</a>`));
+  const missing = await read(f, `/program/${programKey("PG9")}`);
+  assert.equal(missing.status, 404); assert.match(missing.headers["content-type"], /^text\/html/); assert.ok(missing.body.includes("<b>No program PG9 on the board.</b>"));
+  assert.equal((await read(f, `/program/${programKey("PG9")}`, { method: "HEAD" })).status, 404);
+  assert.equal((await read(f, `/program/${programKey("PG9")}?events=1`)).status, 404, "no stream for an unknown program");
+  for (const path of ["/program/", "/program/_w", `/program/${programKey("PG1")}=`, `/program/${programKey("PG1")}/`, `/program/${programKey("PG1")}?events=2`, "/programs/", "/programs?x=1", "/Programs", `/program/${Buffer.from("a\nb").toString("base64url")}`]) {
+    const result = await read(f, path); assert.equal(result.status, 404, path); assert.doesNotMatch(result.body, /Sample program/, path);
+  }
+  // Away from the Mac, the pages and their streams need the password.
+  for (const path of ["/programs", "/programs?events=1", `/program/${programKey("PG1")}`, `/program/${programKey("PG1")}?events=1`]) {
+    const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
+    assert.equal(refused.status, 401, path); assert.doesNotMatch(refused.body, /Sample program/);
+    assert.equal((await read(f, path, { method: "HEAD", rawHeaders: ["Host", "sample.tailnet.ts.net", "Authorization", f.authorization] })).status, 200, path);
+  }
+  // The program's stream sends its page, and a change of the logbook sends it again.
+  const stream = events(f, `/program/${programKey("PG1")}?events=1`); t.after(() => stream.close());
+  assert.ok((await stream.next()).html.includes("Sample goal of PG1."));
+  programs(f.project, "Sample changed goal.");
+  assert.ok((await stream.next(p => p.html.includes("Sample changed goal."))).html.includes("Sample program"));
+});
+
+test("T368 C9: the size check covers the programs list: a goal that makes it too large keeps the last good board, marked stale", async t => {
+  const f = await fixture(t);
+  programs(f.project);
+  await until(f, "/programs", "Sample goal of PG1.");
+  // A logbook file is at most 4 MB, but each "<" of the goal is 4 bytes of HTML: the programs list passes 8 MB, the task board does not.
+  programs(f.project, "<".repeat(3.9 * 1024 * 1024));
+  const page = await until(f, "/programs", "The board snapshot is unavailable.");
+  assert.ok(page.body.includes("The board snapshot is unavailable.") && page.body.includes("Sample goal of PG1.") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the last good page, with the reason");
+  assert.ok(Buffer.byteLength(page.body) < 8 * 1024 * 1024);
 });
