@@ -94,10 +94,10 @@ const stepLine = task => `<ol class="sline" aria-label="Steps">${task.loop.steps
 const nowNext = (task, next = true) => `<div class="nowline${task.loop.now.needs ? " need" : task.loop.now.stale ? " stale" : ""}">${task.loop.now.needs ? ICON : task.loop.now.stale ? `<span aria-hidden="true">${MARK.stale}</span>` : ""}<span><b>${task.loop.now.needs ? "Needs you" : "Now"}:</b> ${String(task.loop.now.text).split(LINE).map(esc).join("<br>")}</span></div>${next && task.loop.next ? `<div class="nextline"><b>Next:</b> ${esc(task.loop.next)}</div>` : ""}`;
 /** The wait line (T233): the unmet waits of a task, with ⊘ when one is never met, so the task cannot start. */
 const waitHtml = (task, now = false) => task.waitLine ? `<div class="waitline${task.waitLine.never ? " cant" : ""}"><span class="wm" aria-hidden="true">${task.waitLine.never ? "⊘" : "⧗"}</span><span>${now ? "<b>Now:</b> " : ""}${esc(task.waitLine.text)}</span></div>` : "";
-/** A program's progress bar: merged, then abandoned, of the approved total (Q3). An SVG, as the page's CSP allows no style attribute. */
+/** A program's progress bar: merged, then abandoned, of the approved total (Q3). An SVG, as the page's CSP allows no style attribute. The text after it says the same, so a screen reader skips the bar; the abandoned part is striped, not only a colour. */
 const pbar = program => {
   const { merged, total, abandoned } = program.progress, part = n => total ? (100 * n / total).toFixed(2) : "0";
-  return `<div class="prow"><svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="${esc(program.progressText)}"><rect class="m" width="${part(merged)}" height="10"/><rect class="a" x="${part(merged)}" width="${part(abandoned.length)}" height="10"/></svg><b>${esc(program.progressText)}</b></div>`;
+  return `<div class="prow"><svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><rect class="m" width="${part(merged)}" height="10"/><line class="a" x1="${part(merged)}" x2="${part(merged + abandoned.length)}" y1="5" y2="5"/></svg><b>${esc(program.progressText)}</b></div>`;
 };
 const PROGRAM_STATE = { proposed: "breakdown waits for you", changing: "changes asked", active: "active", stuck: "stuck", lost: "breakdown gate lost", done: "done", dropped: "dropped" };
 const programState = state => `<span class="pstate ${known(Object.keys(PROGRAM_STATE), state)}">${esc(PROGRAM_STATE[state] ?? state)}</span>`;
@@ -417,9 +417,9 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
 .needstrip li{padding:9px 12px;border-top:1px solid var(--line);font-size:12.5px;display:grid;grid-template-columns:18px minmax(0,1fr);gap:2px 8px;overflow-wrap:anywhere}
 .needstrip li:first-child{border-top:0}.needstrip .ic{font-weight:700;color:var(--need)}.needstrip .what{font-weight:650}.needstrip .act{grid-column:2;color:var(--muted);font-size:12px}
 .prow{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:12.5px;margin:4px 0}
-.pbar{display:block;height:10px;border-radius:5px;background:var(--panel2);border:1px solid var(--line);min-width:120px;flex:1 1 160px;max-width:360px}.pbar .m{fill:var(--ok)}.pbar .a{fill:var(--faint)}
+.pbar{display:block;height:10px;border-radius:5px;background:var(--panel2);border:1px solid var(--line);min-width:120px;flex:1 1 160px;max-width:360px}.pbar .m{fill:var(--ok)}.pbar .a{stroke:var(--faint);stroke-width:10;stroke-dasharray:.8 .8}
 .pkey{display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin:2px 0 6px}.pkey i{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:4px;border:1px solid var(--line)}
-.pkey i.m{background:var(--ok)}.pkey i.a{background:var(--faint)}.pkey i.o{background:var(--panel2)}
+.pkey i.m{background:var(--ok)}.pkey i.a{background:repeating-linear-gradient(90deg,var(--faint) 0 2px,transparent 2px 4px)}.pkey i.o{background:var(--panel2)}
 .pstate{display:inline-flex;font-size:11px;border-radius:4px;padding:1px 6px;font-weight:650;white-space:nowrap}
 .pstate.active{background:var(--run-soft);color:var(--run)}.pstate.done{background:var(--ok-soft);color:var(--ok)}.pstate.stuck,.pstate.lost{background:var(--need-soft);color:var(--need)}
 .pstate.proposed,.pstate.changing{background:var(--accent-soft);color:var(--accent)}.pstate.dropped,.pstate.other{background:var(--panel2);color:var(--muted)}
@@ -514,10 +514,11 @@ ${itemFits.toString()}
 ${needCounts.toString()}
 const SHOWN=${BACKLOG_SHOWN},foldText=${foldText.toString()};
 const S={project:'',needs:false,who:'',priority:'',kind:'',program:'',open:false,query:'',active:null,archived:false,gone:false};
-// The address keeps the project (p) and the program (pg): a program page links to its tasks on the board with pg.
-function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.program=h.get('pg')||''}catch(e){}}
+// The address keeps the project (p) and the program (pg): a program page links to its tasks on the board with both. A
+// programs page's Needs you chip opens the board with needs=1, which turns the Needs you filter on once.
+function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.program=h.get('pg')||'';if(h.has('needs'))S.needs=h.get('needs')==='1'}catch(e){}}
 fromHash();
-function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#(p|pg)=/.test(location.hash)){const h=new URLSearchParams();if(S.project)h.set('p',S.project);if(S.program)h.set('pg',S.program);const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
+function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#(p|pg|needs)=/.test(location.hash)){const h=new URLSearchParams();if(S.project)h.set('p',S.project);if(S.program)h.set('pg',S.program);const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
 const options=()=>all('#pick-list [role=option]');
 function filter(){
   const list=$('pick-list');
@@ -529,7 +530,7 @@ function filter(){
   const shown=cards.filter(c=>!c.hidden),sum=key=>shown.reduce((n,c)=>n+Number(c.dataset[key]),0);
   all('[data-col]').forEach(col=>{const visible=all('.card',col).filter(c=>!c.hidden);const count=col.querySelector('.n');if(count)count.textContent=String(visible.length);col.classList.toggle('empty-col',!visible.length);col.classList.toggle('needs-col',visible.some(c=>c.dataset.needs==='true'));const empty=col.querySelector('.empty');if(empty)empty.hidden=visible.length>0;const rest=col.querySelector('.rest');if(rest){const order=all('.card',col).sort((a,b)=>a.dataset.i-b.dataset.i),seen=order.filter(c=>!c.hidden);order.forEach(c=>{const at=seen.indexOf(c);if(at>-1&&at<SHOWN)rest.before(c);else rest.append(c)});const more=Math.max(0,seen.length-SHOWN);rest.hidden=!more;const m=rest.querySelector('[data-more]');if(m)m.textContent=foldText(more)}});
   const set=(id,value)=>{const e=$(id);if(e)e.textContent=String(value)};
-  if(list){set('s-needs',shown.filter(c=>c.dataset.needs==='true').length+need.programs);set('s-agents',sum('agents'));set('s-inferred',sum('inferred'));set('s-review',sum('review'));set('s-tasks',shown.length);set('needs-count',need.all)}
+  if(list&&$('board-summary')){set('s-needs',shown.filter(c=>c.dataset.needs==='true').length+need.programs);set('s-agents',sum('agents'));set('s-inferred',sum('inferred'));set('s-review',sum('review'));set('s-tasks',shown.length);set('needs-count',need.all)}
   all('[data-filter=needs]').forEach(b=>b.setAttribute('aria-pressed',String(S.needs)));
   all('[data-who]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.who===S.who)));
   for(const f of ['priority','kind','program']){const e=$('f-'+f);if(e)e.value=S[f]}
@@ -546,6 +547,9 @@ function filter(){
   if(np){np.hidden=!noprog;if(noprog){set('noprog-name',opt.textContent);set('noprog-why',opt.dataset.why);$('noprog-link').href=opt.dataset.href}}
   const none=$('nomatch');if(none)none.hidden=!cards.length||shown.length>0||lacks||noprog;
   const gone=$('gone');if(gone)gone.hidden=!S.gone;
+  // The programs list keeps the chosen project's programs, with the count of each group.
+  let rows=0;all('[data-plist]').forEach(ul=>{const own=all('li[data-project]',ul);own.forEach(li=>li.hidden=!!S.project&&li.dataset.project!==S.project);const n=own.filter(li=>!li.hidden).length,head=ul.closest('details')||ul.previousElementSibling;rows+=n;ul.hidden=!n;if(head){head.hidden=!n;const c=head.querySelector('.n');if(c)c.textContent=String(n)}});
+  const noprograms=$('noprograms');if(noprograms)noprograms.hidden=rows>0;
   draw();
 }
 function draw(){
@@ -582,7 +586,7 @@ document.addEventListener('click',e=>{const t=e.target;
   if(t.closest('[data-showall]')){S.who='';filter();return}
   if(t.closest('[data-reset]')){S.project='';S.needs=false;S.who=S.priority=S.kind=S.program='';save();filter();return}
   if(t.closest('[data-dismiss]')){S.gone=false;filter();return}});
-window.addEventListener('hashchange',()=>{if(/^#(p|pg)=/.test(location.hash)){fromHash();filter()}});
+window.addEventListener('hashchange',()=>{if(/^#(p|pg|needs)=/.test(location.hash)){fromHash();filter()}});
 document.addEventListener('change',e=>{const f=e.target.dataset&&e.target.dataset.f;if(f){S[f]=e.target.value;if(f==='program')save();filter()}
   if(e.target.id==='flip'){const now=getComputedStyle(document.documentElement).getPropertyValue('--scheme').trim();document.documentElement.dataset.theme=now;e.target.checked=false;try{localStorage.setItem('board-theme',now)}catch(x){}}});
 // The list closes when the focus leaves the picker (R1075-5). A press inside the list keeps the focus in the search field,
@@ -623,7 +627,7 @@ stream.onerror=()=>show('bad','Reconnecting · board from '+at());`;
 const ago = (iso, now) => { if (!iso) return "no activity"; const days = Math.floor((Date.parse(now) - Date.parse(iso)) / 86400000); return days <= 0 ? "today" : days === 1 ? "1 day ago" : `${days} days ago`; };
 const LIST_NAME = { needs: "Needs you", active: "Active · last 14 days", idle: "Idle", archived: "Archived" };
 /** The project picker (T305 design B): one button opens a searchable list; the server writes every row, the script filters them. */
-function picker(ctx, model, paths) {
+function picker(ctx, model, paths, board = true) {
   const projects = model.projects ?? [];
   // The checkout paths are search terms only on the Mac's own page; a tunnel viewer and the offline snapshot get none (R1069-2).
   // So is the path tail of two clones; the others see "clone 1", "clone 2" (R1079-1).
@@ -643,11 +647,13 @@ function picker(ctx, model, paths) {
       + `<div class="nomatch" id="pick-none" hidden><b>No project matches “<span id="pick-qtext"></span>”.</b><br>Search looks at the shown name, the GitHub repository, the folder${paths ? ", its path" : ""} and the logbook key. <button type="button" class="linkbtn" data-clear>Clear the search</button></div>`
     : `<div class="nomatch"><b>No projects yet.</b><br>A project shows here when it has a logbook. Start sage in a project folder to make one.</div>`;
   const chips = projects.filter(book => book.needsOwner && !book.archived).map(book => `<button class="chip" type="button" id="need-${b64(book.key)}" data-pick="${esc(book.key)}" data-provider="${esc(book.providers.map(name => name.toLowerCase().replace(/[^a-z0-9-]/g, "-")).join(" "))}" title="${esc(book.name)} · ${esc(sub(book))}">${dot(ctx, book.key)}<span class="cn">${esc(book.name)}</span> <span class="badge"><span data-n>${book.needsOwner}</span><span class="vh"> need you</span></span></button>`).join("");
-  return `<div class="pick"><button class="chip need" type="button" data-filter="needs" aria-pressed="false">${ICON}Needs you <span class="count" id="needs-count">${model.counts.needsOwner}</span></button>`
+  // On a programs page, the Needs you chip opens the board with its Needs you filter on; the project chips are the board's only.
+  const count = `<span class="count" id="needs-count">${model.counts.needsOwner}</span>`;
+  return `<div class="pick">${board ? `<button class="chip need" type="button" data-filter="needs" aria-pressed="false">${ICON}Needs you ${count}</button>` : `<a class="chip need" href="/#needs=1">${ICON}Needs you ${count}</a>`}`
     + `<div class="pickwrap"><button class="trigger" type="button" id="pick-trig" aria-haspopup="listbox" aria-expanded="false" aria-controls="pick-pop"><span class="vh">Project: </span><span class="dot none" id="pick-dot" aria-hidden="true"></span><span class="tname" id="pick-name">All projects</span><span class="archtag" id="pick-arch" hidden>Archived</span><span class="chev" aria-hidden="true">▾</span></button>`
     + `<div class="pop" id="pick-pop" hidden><div class="search"><input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project" placeholder="Find a project: name, repo or folder" autocomplete="off" spellcheck="false"><button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span><span class="tap">Close</span></button></div>`
     + `<div class="list"><ul class="opts" role="listbox" id="pick-list" aria-label="Projects">${items}</ul>${after}</div><div class="vh" id="pick-say" role="status" aria-live="polite"></div><div class="foot"><span>↑ ↓ to move · Enter to choose</span><span>“/” opens</span></div></div></div>`
-    + `<button class="chip" type="button" id="pick-all" data-pick="" hidden>All projects</button><span class="pickchips" id="pick-chips">${chips ? `<span class="vh">Projects that need you:</span>${chips}` : ""}</span></div>`;
+    + (board ? `<button class="chip" type="button" id="pick-all" data-pick="" hidden>All projects</button><span class="pickchips" id="pick-chips">${chips ? `<span class="vh">Projects that need you:</span>${chips}` : ""}</span>` : "") + "</div>";
 }
 
 /** The filter bar (T305 decision 4): who holds the task (a source's provider), its priority and its kind. */
@@ -659,14 +665,15 @@ function programWhere(model) {
   return program => [groups.size > 1 ? program.projectName : "", programs.some(other => other !== program && other.group === program.group && other.project !== program.project) ? `${title(program.sourceLabel)} logbook` : ""].filter(Boolean).join(" · ");
 }
 /**
- * The Program filter (T233): each program that has or had tasks on the board (not a dropped one with no task left), and
+ * The Program filter (T233): each program that has or had tasks on the board (not a dropped one with no task left, unless a card of it shows), and
  * No program. Its value is the base64url of the program's key, never its name. A done program's option carries why no card
  * shows and the link to its page (QD). A programs table that cannot be read leaves the filter off, and says so.
  */
 function programFilter(ctx, model) {
-  const where = programWhere(model), programs = shownPrograms(model).filter(program => program.state !== "dropped" || program.open);
+  const where = programWhere(model), onBoard = program => program.tasks.some(key => ctx.tasks.get(key)?.visible && ctx.tasks.get(key).column);
+  const programs = shownPrograms(model).filter(program => program.state !== "dropped" || program.open || onBoard(program));
   if (!programs.length) return (model.programNeeds ?? []).some(need => need.kind === "programs") ? `<label class="f">Program <select disabled><option>Cannot be read</option></select></label>` : "";
-  const why = program => program.tasks.some(key => ctx.tasks.get(key)?.visible && ctx.tasks.get(key).column) ? "A filter hides its tasks." : program.state === "done" ? "Its tasks ended more than 7 days ago, and the board shows the last 7 days of Done." : "None of its tasks is on the board now.";
+  const why = program => onBoard(program) ? "A filter hides its tasks." : program.state === "done" ? "Its tasks ended more than 7 days ago, and the board shows the last 7 days of Done." : "None of its tasks is on the board now.";
   const option = program => `<option value="${b64(program.key)}" data-project="${esc(program.group)}" data-why="${esc(why(program))}" data-href="${esc(programHref(ctx, program.key))}">${esc(program.id)} ${esc(program.name)}${program.state === "done" ? " (done)" : ""}${where(program) ? ` · ${esc(where(program))}` : ""}</option>`;
   return `<label class="f">Program <select id="f-program" data-f="program"><option value="">Any</option>${programs.map(option).join("")}<option value="none">No program</option></select></label>`;
 }
@@ -675,7 +682,7 @@ function needStrip(ctx, model) {
   const items = model.programNeeds ?? [];
   if (!items.length) return "";
   const item = need => `<li data-need data-project="${esc(need.group)}" data-program="${need.program ? b64(need.key) : ""}"><span class="ic" aria-hidden="true">${need.program ? "◫" : "!"}</span><span class="what">${esc(need.title)} <span class="faint">· ${esc(need.projectName)} · ${esc(title(need.sourceLabel))} logbook</span></span>`
-    + `<span class="act">${esc(need.text)}${need.program && ctx.programs.has(need.key) ? ` <a href="${esc(programHref(ctx, need.key))}">Open the program</a>` : ""}</span></li>`;
+    + `<span class="act">${esc(need.text)}${need.kind === "stuck" ? " Answer in the chat." : ""}${need.program && ctx.programs.has(need.key) ? ` <a href="${esc(programHref(ctx, need.key))}">Open the program</a>` : ""}</span></li>`;
   return `<section class="needstrip" id="needstrip" aria-labelledby="needstrip-h"><h2 id="needstrip-h">${ICON}Needs you, not on a card <span class="n" id="needstrip-n">${items.length}</span></h2><ul>${items.map(item).join("")}</ul></section>`;
 }
 
@@ -712,9 +719,9 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
     const noprog = `<div class="emptyboard" id="noprog" hidden><b>No task of <span id="noprog-name"></span> shows on the board.</b> <span id="noprog-why"></span> <a id="noprog-link" href="">Open the program</a> · <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprov = `<div class="emptyboard" id="noprov" hidden><b>No <span id="noprov-who"></span> logbook in this project.</b> <span id="noprov-name"></span> has tasks only in <span id="noprov-has"></span>. <button class="linkbtn" type="button" data-showall>Show all providers</button></div>`;
     const gone = `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. The board shows all projects. <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
-    body = `<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${shownPrograms(model).length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
+    body = `<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.programs?.length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
       // Offline, the task pages, the programs list and each program's page are sections of the one file (C9).
-      + (snapshot ? `<div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${shownPrograms(model).length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a></div>${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
+      + (snapshot ? `<div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.programs?.length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a></div>${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${task ? `${esc(task.id)} · ` : ""}Sage task board</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(taskKey ? `/?events=1&task=${b64(taskKey)}` : "/?events=1") : ""}</script></body></html>`;
 }
@@ -800,7 +807,7 @@ function programNext(ctx, program) {
 function programRow(ctx, program, where) {
   const approval = program.state === "proposed", needs = NEEDS_PROGRAM.includes(program.state);
   const meta = [`pilot ${program.pilot}`, plural(program.progress.total, "task"), title(program.sourceLabel), where(program)].filter(Boolean).join(" · ");
-  return `<li><a class="prog${approval ? " approval" : needs ? " needs" : ""}" href="${esc(programHref(ctx, program.key))}">${approval ? `<div class="band"><span aria-hidden="true">◫</span>Program approval<span class="bk">· gate ${esc(program.gate)}</span></div>` : ""}`
+  return `<li data-project="${esc(program.group)}"><a class="prog${approval ? " approval" : needs ? " needs" : ""}" href="${esc(programHref(ctx, program.key))}">${approval ? `<div class="band"><span aria-hidden="true">◫</span>Program approval<span class="bk">· gate ${esc(program.gate)}</span></div>` : ""}`
     + `<div class="ph"><h3><span aria-hidden="true">◫</span> ${esc(program.name)}</h3><span class="id">${esc(program.id)}</span>${programState(program.state)}<span class="pmeta">${esc(meta)}</span></div>`
     + `${program.goal ? `<p class="goal">${esc(program.goal)}</p>` : ""}${program.progress.total ? pbar(program) : ""}<div class="nx${needs ? " need" : ""}">${programNext(ctx, program)}</div></a></li>`;
 }
@@ -809,22 +816,26 @@ function programsList(ctx, model, routed) {
   const programs = shownPrograms(model), where = programWhere(model), h = routed ? "h1" : "h2";
   const head = `<${h} class="ptitle">Programs</${h}>`;
   const broken = (model.programNeeds ?? []).filter(need => need.kind === "programs").map(need => `<div class="banner warn">${ICON}<div><b>The programs of ${esc(need.projectName)} cannot be read.</b> ${esc(need.text)} The <a href="${ctx.snapshot ? "#" : "/"}">task board</a> still shows every task, without its program.</div></div>`).join("");
+  if (!programs.length && model.programs?.length) return head + broken + `<div class="emptyboard"><b>Every program is in an archived project.</b> The list shows the programs of the projects that are not archived. A task of an archived project still links to its program's page.</div>`;
   if (!programs.length) return head + broken + (broken ? "" : `<div class="emptyboard"><b>No programs yet.</b> A program starts when you ask for work that needs two or more tasks, where one task waits for another. The sage then proposes a breakdown, and it shows in Needs you for your approval.</div>`);
   const group = ([name, states]) => {
     const list = programs.filter(program => states.includes(program.state));
-    return list.length ? `<h2 class="grp">${name} <span class="n">${list.length}</span></h2><ul class="plist">${list.map(program => programRow(ctx, program, where)).join("")}</ul>` : "";
+    return list.length ? `<h2 class="grp">${name} <span class="n">${list.length}</span></h2><ul class="plist" data-plist>${list.map(program => programRow(ctx, program, where)).join("")}</ul>` : "";
   };
   const dropped = programs.filter(program => program.state === "dropped");
-  return head + broken + [["Needs you", NEEDS_PROGRAM], ["Active", ["active", "changing"]], ["Done", ["done"]]].map(group).join("")
-    + (dropped.length ? `<details class="fold" data-key="dropped"><summary id="sum-dropped">Dropped (${dropped.length})</summary><ul class="plist">${dropped.map(program => programRow(ctx, program, where)).join("")}</ul></details>` : "");
+  const none = `<div class="emptyboard" id="noprograms" hidden><b>No program in this project.</b> <button class="linkbtn" type="button" data-reset>Show all projects</button></div>`;
+  return head + broken + none + [["Needs you", NEEDS_PROGRAM], ["Active", ["active", "changing"]], ["Done", ["done"]]].map(group).join("")
+    + (dropped.length ? `<details class="fold" data-key="dropped"><summary id="sum-dropped">Dropped (<span class="n">${dropped.length}</span>)</summary><ul class="plist" data-plist>${dropped.map(program => programRow(ctx, program, where)).join("")}</ul></details>` : "");
 }
 /** One task of a program on its page: its state word, and its waits, agents, PR, priority and kind under it. */
 function programTask(ctx, task) {
   const ab = task.state === "abandoned", cant = !ab && task.waitLine?.never, needs = task.reasons.length > 0;
   const [cls, word] = MET_WORDS.includes(task.state) ? ["stw-done", `✓ ${task.state}`] : ab ? ["stw-ab", "abandoned"] : cant ? ["stw-cant", "⊘ cannot start"]
     : needs ? ["stw-need", "! needs you"] : task.waitLine ? ["stw-wait", "⧗ waits"] : ["stw-run", taskWord(task)];
-  const waits = task.waits.filter(wait => !wait.breakdown && !(wait.pilot && wait.met)).map(wait => wait.odd ? "⊘ its waits cell has text that is not a task id"
-    : wait.met ? `✓ waits for ${wait.id}, ${wait.word}` : `${wait.never ? "⊘" : "⧗"} waits for ${wait.id} (${wait.word})${wait.never ? ": it cannot start" : ""}`);
+  // A task that waits for the breakdown waits for the pilot after it, as the prototype says: "waits for T30 (pilot, not started)".
+  const program = ctx.programs.get(task.program?.key), pilot = program && !task.program.pilot && ctx.tasks.get(`${program.project}/${program.pilot}`);
+  const waits = task.waits.filter(wait => !(wait.breakdown && !pilot) && !(wait.pilot && wait.met)).map(wait => wait.odd ? "⊘ its waits cell has text that is not a task id"
+    : wait.breakdown ? `⧗ waits for ${pilot.id} (pilot, ${taskWord(pilot)})` : wait.met ? `✓ waits for ${wait.id}, ${wait.word}` : `${wait.never ? "⊘" : "⧗"} waits for ${wait.id} (${wait.word})${wait.never ? ": it cannot start" : ""}`);
   const at = roles(task), sub = [task.program?.pilot ? "pilot" : "", ...waits, at.length ? `${at.join(", ")} at work` : "", task.pr ? `PR ${task.pr}` : "", task.priority, task.kind ? KIND[task.kind][1] : ""].filter(Boolean);
   return `<div class="trow${ab ? " ab" : ""}${cant ? " cant" : ""}${needs ? " needs" : ""}"><span class="id">${esc(task.id)}</span><a class="t" href="${esc(taskHref(ctx, task))}">${esc(task.title)}</a><span class="sw ${cls}">${esc(word)}</span>${sub.length ? `<span class="sub">${esc(sub.join(" · "))}</span>` : ""}</div>`;
 }
@@ -837,7 +848,7 @@ function decisionText(text) {
 function programPage(ctx, program, routed) {
   const tasks = program.tasks.map((key, i) => [ctx.tasks.get(key), program.depths[i]]).filter(([task]) => task), own = tasks.map(([task]) => task);
   const pilot = ctx.tasks.get(`${program.project}/${program.pilot}`), { total, abandoned } = program.progress, h = routed ? "h1" : "h2";
-  const onBoard = program.archived ? "" : `<a class="back" href="${ctx.snapshot ? "" : "/"}#pg=${b64(program.key)}">Its tasks on the board</a>`;
+  const onBoard = program.archived ? "" : `<a class="back" href="${ctx.snapshot ? "" : "/"}#${esc(new URLSearchParams({ p: program.group, pg: b64(program.key) }))}">Its tasks on the board</a>`;
   const top = `<div class="pagebar"><a class="back" href="${ctx.snapshot ? "#programs" : "/programs"}">← Programs</a>${onBoard}</div>`
     + `<div class="ptop"><span class="id">${esc(program.id)}</span> · ${project(ctx, program)} · ${programState(program.state)} · <span class="faint">${esc(title(program.sourceLabel))} logbook</span></div>`
     + `<${h} class="ptitle"><span aria-hidden="true">◫</span> ${esc(program.name)}</${h}>`;
@@ -872,19 +883,21 @@ function programPage(ctx, program, routed) {
   const named = new RegExp(`\\b${program.id}\\b`);
   const log = own.flatMap(task => task.decisions.filter(row => named.test(row.decision) || /^state (merged|concluded|abandoned)$/.test(row.decision) || /^program /.test(row.decision)).map(row => ({ ...row, id: task.id })))
     .sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 8);
-  const decisions = `<section><h3>Latest decisions</h3>${log.length ? `<ol class="log">${log.map(row => `<li><span class="faint">${esc(day(row.at))}</span> ${esc(row.id)} · ${esc(decisionText(row.decision))}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`}</section>`;
+  const decisions = `<section><h3>Latest decisions</h3>${log.length ? `<ol class="log">${log.map(row => `<li><span class="faint">${esc(day(row.at))}</span> ${esc(row.id)} · ${esc(decisionText(row.decision))}${row.why ? `: ${esc(row.why)}` : ""}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`}</section>`;
   return `${top}<div class="detail">${lead}<div class="colL">${order}</div><div class="colR">${decisions}</div></div>`;
 }
 
 /** The served programs list, or one program's page (T233 C9). An unknown program key gives the not-found page. */
-export function renderProgramsHtml(model, { programKey = null, live = false } = {}) {
+export function renderProgramsHtml(model, { programKey = null, live = false, paths = false } = {}) {
   const ctx = context(model, false), at = hhmm(model.at), program = programKey ? ctx.programs.get(programKey) : null;
   const missing = `<div class="pagebar"><a class="back" href="/programs">← Programs</a></div><div class="emptyboard"><b>No program ${esc(String(programKey).split("/").at(-1))} on the board.</b> The logbook may not have it now, or the link is old. Open the <a href="/programs">programs list</a>.</div>`;
   const main = !programKey ? programsList(ctx, model, true) : program ? programPage(ctx, program, true) : missing;
-  const body = `<div class="boardview"><header><h1>Sage board</h1>${pagesNav("programs", model)}${livePill(`Board · ${at}`)}<span class="spacer"></span>${THEME_SWITCH}</header>`
+  // A program that is not on the board has no stream: the server answers its stream with 404 (R1322-3).
+  live = live && (!programKey || !!program);
+  const body = `<div class="boardview"><header><h1>Sage board</h1>${pagesNav("programs", model)}${livePill(`Board · ${at}`)}<span class="spacer"></span>${THEME_SWITCH}${picker(ctx, model, paths, false)}</header>`
     + `<div id="board-content" data-at="${esc(at)}">${banners(model)}<main class="page open" aria-label="${program ? esc(program.id) : "Programs"}">${main}</main></div></div>`;
   const stream = programKey ? `/program/${b64(programKey)}?events=1` : "/programs?events=1";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${program ? `${esc(program.id)} · ` : ""}Sage programs</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(stream, ["board-content", "board-pages"]) : ""}</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${program ? `${esc(program.id)} · ` : ""}Sage programs</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(stream, ["board-content", "board-pages", "pick-list"]) : ""}</script></body></html>`;
 }
 
 const columnMark = key => ({ backlog: "📋", design: "🎨", building: "🔨", review: "🔁", ready: "✅", done: "🏁" }[key]);

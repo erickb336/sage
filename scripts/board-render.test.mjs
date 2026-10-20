@@ -651,7 +651,7 @@ test("T368: Needs you, not on a card: a stuck program and a lost gate, with what
   const html = renderBoardHtml(programsModel(), { snapshot: false });
   const strip = html.slice(html.indexOf('<section class="needstrip"'), html.indexOf("</section>", html.indexOf('<section class="needstrip"')));
   assert.ok(strip.includes('Needs you, not on a card <span class="n" id="needstrip-n">2</span>'), strip);
-  assert.ok(strip.includes(`<span class="what">PG2 Lead build is stuck <span class="faint">· sage (sample) · Claude logbook</span></span><span class="act">The pilot T21 was abandoned. Choose a new pilot, or drop the program. <a href="/program/${B64(KEY("PG2"))}">Open the program</a></span>`), strip);
+  assert.ok(strip.includes(`<span class="what">PG2 Lead build is stuck <span class="faint">· sage (sample) · Claude logbook</span></span><span class="act">The pilot T21 was abandoned. Choose a new pilot, or drop the program. Answer in the chat. <a href="/program/${B64(KEY("PG2"))}">Open the program</a></span>`), strip);
   assert.ok(strip.includes("The breakdown gate G30 of PG7 is not in the logbook"), strip);
   // Offline, the link is the program's anchor in the same file.
   assert.ok(renderBoardHtml(programsModel()).includes(`<a href="#program-${B64(KEY("PG2"))}">Open the program</a>`));
@@ -683,12 +683,12 @@ test("T368: the programs list groups Needs you, Active and Done, folds Dropped, 
   const html = renderProgramsHtml(programsModel());
   assert.deepEqual([...html.matchAll(/<h2 class="grp">([^<]+) <span class="n">(\d+)<\/span><\/h2>/g)].map(m => `${m[1]} ${m[2]}`), ["Needs you 3", "Active 4", "Done 1"]);
   assert.deepEqual([...html.matchAll(/<span class="id">(PG\d+)<\/span>/g)].map(m => m[1]), ["PG2", "PG3", "PG7", "PG1", "PG4", "PG8", "PG9", "PG5", "PG6"]);
-  assert.ok(html.includes('<summary id="sum-dropped">Dropped (1)</summary>'));
+  assert.ok(html.includes('<summary id="sum-dropped">Dropped (<span class="n">1</span>)</summary>'));
   assert.ok(html.includes(`<a class="prog approval" href="/program/${B64(KEY("PG3"))}"><div class="band"><span aria-hidden="true">◫</span>Program approval<span class="bk">· gate G12</span></div>`));
   assert.ok(html.includes('<div class="nx need">The breakdown waits for you. Open it to see the 3 tasks, then answer in the chat.</div>'));
   assert.ok(html.includes('<div class="nx"><b>Next:</b> T12 is in review. <span class="faint">1 more waits.</span> <span class="stw-cant">T11 cannot start.</span></div>'), "Q4: only a task with no unmet wait moves; the others are a count");
   assert.ok(html.includes('<div class="nx">You asked for changes (gate G9). The sage revises the breakdown and proposes it again.</div>'), "QB: a line in the list, not an item of Needs you");
-  assert.ok(html.includes('<svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="3 of 7 merged · T10 abandoned"><rect class="m" width="42.86" height="10"/><rect class="a" x="42.86" width="14.29" height="10"/></svg><b>3 of 7 merged · T10 abandoned</b>'), "Q3: the approved total");
+  assert.ok(html.includes('<svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><rect class="m" width="42.86" height="10"/><line class="a" x1="42.86" x2="57.14" y1="5" y2="5"/></svg><b>3 of 7 merged · T10 abandoned</b>'), "Q3: the approved total");
   assert.ok(html.includes('<a href="/programs" aria-current="page">Programs</a>') && !html.includes("new EventSource"), "no stream unless live");
   assert.ok(renderProgramsHtml(programsModel(), { live: true }).includes('new EventSource("/programs?events=1")'));
   assert.ok(renderProgramsHtml(sample([row("T1", "framed")])).includes("<b>No programs yet.</b>"));
@@ -699,7 +699,7 @@ test("T368: a program's page: goal and progress, what moves next, the tasks in o
   const tables = programsTables();
   tables.decisions.push({ at: "2026-10-14T09:00:00Z", task: "T1", decision: "state merged", why: "sample" }, { at: "2026-10-12T09:00:00Z", task: "T1", decision: "PG1 proposed with gate G1, pilot T1", why: "sage" }, { at: "2026-10-13T09:00:00Z", task: "T1", decision: "state building", why: "sample" });
   const model = programsModel(tables), pg1 = renderProgramsHtml(model, { programKey: KEY("PG1"), live: true });
-  assert.ok(pg1.includes(`<a class="back" href="/programs">← Programs</a><a class="back" href="/#pg=${B64(KEY("PG1"))}">Its tasks on the board</a>`));
+  assert.ok(pg1.includes(`<a class="back" href="/programs">← Programs</a><a class="back" href="/#p=sage-ff5ee2&amp;pg=${B64(KEY("PG1"))}">Its tasks on the board</a>`));
   assert.ok(pg1.includes('<h1 class="ptitle"><span aria-hidden="true">◫</span> Codex support</h1>'));
   assert.ok(pg1.includes(`<p><b>Pilot:</b> <a href="/task/${B64(KEY("T1"))}">T1</a> Sample T1 · <span class="stw-done">merged</span></p><p class="faint">Approved total: 7 tasks (gate G1). Done when every task that is not abandoned is merged or concluded: 6 of the 7.</p>`), pg1);
   assert.ok(pg1.includes('<b>Now:</b> T12 is in review. <span class="faint">1 more waits.</span> <span class="stw-cant">T11 cannot start.</span></span></div><div class="nextline"><b>Then:</b> T13 waits for T12.</div><div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>T11: Waits for T10 (abandoned): it cannot start. Ask the sage to remove the wait, or to drop T11.</span></div>'), pg1);
@@ -707,7 +707,7 @@ test("T368: a program's page: goal and progress, what moves next, the tasks in o
     ["1 · The pilot: it runs end to end first", "T1", "2 · After the pilot merges", "T2", "T3", "T10", "T12", "3 · After the tasks above that they wait for", "T11", "T13"]);
   assert.ok(pg1.includes('<div class="trow cant"><span class="id">T11</span>') && pg1.includes('<span class="sw stw-cant">⊘ cannot start</span><span class="sub">⊘ waits for T10 (abandoned): it cannot start</span>'), pg1);
   assert.ok(pg1.includes('<div class="trow ab"><span class="id">T10</span>'));
-  assert.deepEqual([...pg1.matchAll(/<li><span class="faint">([^<]+)<\/span> (T\d+) · ([^<]+)<\/li>/g)].map(m => `${m[1]} ${m[2]} ${m[3]}`), ["2026-10-14 09:00 T1 state merged", "2026-10-12 09:00 T1 PG1 proposed with gate G1, pilot T1"], "a decision that names the program or ends a task; not a state move");
+  assert.deepEqual([...pg1.matchAll(/<li><span class="faint">([^<]+)<\/span> (T\d+) · ([^<]+)<\/li>/g)].map(m => `${m[1]} ${m[2]} ${m[3]}`), ["2026-10-14 09:00 T1 state merged: sample", "2026-10-12 09:00 T1 PG1 proposed with gate G1, pilot T1: sage"], "a decision that names the program or ends a task, with its reason; not a state move");
   assert.ok(pg1.includes(`new EventSource("/program/${B64(KEY("PG1"))}?events=1")`));
   // PG3 waits for you: the gate's own lines, in the frame, with the band (QF).
   const pg3 = renderProgramsHtml(model, { programKey: KEY("PG3") });
@@ -736,7 +736,7 @@ test("T368 C9: the offline snapshot holds the programs list and each program's p
   assert.ok(html.includes('<nav class="boardtabs" id="board-pages" aria-label="Board pages"><a href="#" aria-current="page">Task board</a><a href="#programs">Programs</a></nav>'));
   assert.ok(html.includes('<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a></div><h2 class="ptitle">Programs</h2>'));
   assert.ok(html.includes(`<a class="prog" href="#program-${B64(KEY("PG1"))}">`) && html.includes(`<section class="page" id="program-${B64(KEY("PG1"))}" aria-label="PG1">`));
-  assert.ok(html.includes(`<a class="back" href="#programs">← Programs</a><a class="back" href="#pg=${B64(KEY("PG1"))}">Its tasks on the board</a>`));
+  assert.ok(html.includes(`<a class="back" href="#programs">← Programs</a><a class="back" href="#p=sage-ff5ee2&amp;pg=${B64(KEY("PG1"))}">Its tasks on the board</a>`));
   assert.ok(html.includes(`<a class="t" href="#task-${B64(KEY("T13"))}">Sample T13</a>`));
 });
 
@@ -752,4 +752,66 @@ test("T368: every logbook text in the program views is escaped: a name, a goal, 
     assert.ok(!html.includes("<img src=x") && !html.includes("<script>alert"), html.slice(0, 100));
     assert.ok(html.includes("&lt;img src=x onerror=alert(1)&gt;"));
   }
+});
+
+// T368 repair round 1 (R1322, R1324, R1325). SAMPLE DATA from scripts/fixtures/board-programs.mjs.
+test("R1324-1: the program page's Latest decisions keeps each decision's reason, as the task page does", () => {
+  const tables = programsTables();
+  tables.decisions.push({ at: "2026-10-15T09:00:00Z", task: "T10", decision: "state abandoned", why: "the sandbox profile moved" }, { at: "2026-10-16T09:00:00Z", task: "T2", decision: "state merged", why: "" });
+  const pg1 = renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") });
+  assert.ok(pg1.includes('<li><span class="faint">2026-10-15 09:00</span> T10 · state abandoned: the sandbox profile moved</li>'), pg1);
+  assert.ok(pg1.includes('<li><span class="faint">2026-10-16 09:00</span> T2 · state merged</li>'), "no reason, no colon");
+});
+
+test("R1324-2: on the page of a program that waits for its breakdown, a task after the pilot says that it waits for the pilot", () => {
+  const pg3 = renderProgramsHtml(programsModel(), { programKey: KEY("PG3") });
+  const row = id => pg3.slice(pg3.indexOf(`<span class="id">${id}</span>`), pg3.indexOf("</div>", pg3.indexOf(`<span class="id">${id}</span>`)));
+  assert.ok(row("T31").includes('<span class="sw stw-wait">⧗ waits</span><span class="sub">⧗ waits for T30 (pilot, not started)</span>'), row("T31"));
+  assert.ok(row("T32").includes('<span class="sub">⧗ waits for T31 (not started) · ⧗ waits for T30 (pilot, not started)</span>'), row("T32"));
+  assert.ok(row("T30").includes('<span class="sub">pilot</span>'), "the pilot itself waits for the breakdown above it");
+});
+
+test("R1324-4: the progress bar is hidden from a screen reader, which reads its text once; the abandoned part and its key are striped", () => {
+  const html = renderProgramsHtml(programsModel(), { programKey: KEY("PG1") });
+  const bar = html.slice(html.indexOf('<div class="prow">'), html.indexOf("</div>", html.indexOf('<div class="prow">')));
+  assert.ok(bar.includes('<svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true">') && !bar.includes("aria-label"), bar);
+  assert.equal(bar.split("3 of 7 merged · T10 abandoned").length, 2, "the text shows once");
+  assert.ok(html.includes(".pbar .a{stroke:var(--faint);stroke-width:10;stroke-dasharray:.8 .8}") && html.includes(".pkey i.a{background:repeating-linear-gradient(90deg,var(--faint) 0 2px,transparent 2px 4px)}"));
+});
+
+test("R1324-5: the programs list, a program page and the not-found page have the Needs you chip and the project picker in the header", () => {
+  const model = programsModel();
+  for (const html of [renderProgramsHtml(model), renderProgramsHtml(model, { programKey: KEY("PG1") }), renderProgramsHtml(model, { programKey: KEY("PG99") })]) {
+    const header = html.slice(html.indexOf("<header>"), html.indexOf("</header>"));
+    assert.ok(header.includes(`<a class="chip need" href="/#needs=1">`) && header.includes('Needs you <span class="count" id="needs-count">4</span></a>'), header);
+    assert.ok(header.includes('<button class="trigger" type="button" id="pick-trig"') && header.includes(`data-key="sage-ff5ee2" data-name="sage (sample)"`), header);
+    assert.ok(!header.includes('id="pick-chips"'), "the project chips are the board's only");
+  }
+  assert.ok(renderProgramsHtml(model).includes('<li data-project="sage-ff5ee2"><a class="prog'), "each row carries its project, for the picker");
+  assert.ok(BOARD_ENHANCEMENT.includes("if(h.has('needs'))S.needs=h.get('needs')==='1'") && BOARD_ENHANCEMENT.includes("if(list&&$('board-summary'))"));
+});
+
+test("R1322-2: the Program filter keeps a dropped program while a card of it shows in Done", () => {
+  const tables = programsTables(), t60 = tables.tasks.find(task => task.id === "T60");
+  t60.state = "merged";
+  tables.decisions.push({ at: "2026-10-19T09:00:00Z", task: "T60", decision: "state merged", why: "sample" });
+  const html = renderBoardHtml(programsModel(tables), { snapshot: false });
+  assert.ok(cardIn(html, "T60").includes(`data-program="${B64(KEY("PG6"))}"`), "T60 shows in Done");
+  assert.ok(html.includes(`<option value="${B64(KEY("PG6"))}" data-project="sage-ff5ee2" data-why="A filter hides its tasks."`), "PG6 is an option");
+  tables.decisions.pop(); tables.decisions.push({ at: "2026-10-01T09:00:00Z", task: "T60", decision: "state merged", why: "sample" });
+  assert.ok(!renderBoardHtml(programsModel(tables), { snapshot: false }).includes(`value="${B64(KEY("PG6"))}"`), "no card on the board: no option");
+});
+
+test("R1322-3: the not-found program page opens no event stream; a found one does", () => {
+  const model = programsModel();
+  assert.ok(!renderProgramsHtml(model, { programKey: KEY("PG99"), live: true }).includes("new EventSource"));
+  assert.ok(renderProgramsHtml(model, { programKey: KEY("PG1"), live: true }).includes("new EventSource"));
+});
+
+test("R1325-2: the offline file has the programs list whenever it has a program's page, also when every program is in an archived project", () => {
+  const source = programsSource(); source.projects[0].archived = true;
+  const html = renderBoardHtml(buildBoardModel([source], { now: PROGRAMS_NOW }));
+  assert.ok(html.includes(`<section class="page" id="program-${B64(KEY("PG1"))}"`) && html.includes('<a class="back" href="#programs">← Programs</a>'));
+  assert.ok(html.includes('<section class="page" id="programs" aria-label="Programs">'), "the link lands");
+  assert.ok(html.includes("<b>Every program is in an archived project.</b>") && !html.includes("No programs yet"));
 });

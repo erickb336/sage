@@ -152,7 +152,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
 
   // The checkout paths go only to the Mac's own page (R1069-2).
   function htmlFor(view, paths = false) {
-    const html = view.agents ? renderAgentsHtml(model, { live: true, paths }) : view.programs || view.program ? renderProgramsHtml(model, { programKey: view.program ?? null, live: true })
+    const html = view.agents ? renderAgentsHtml(model, { live: true, paths }) : view.programs || view.program ? renderProgramsHtml(model, { programKey: view.program ?? null, live: true, paths })
       : renderBoardHtml(model, { taskKey: view.task, snapshot: false, live: true, paths });
     if (Buffer.byteLength(html) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
     return html;

@@ -27,11 +27,22 @@ const PAGES = {
   [`/program/${key("PG1")}`]: () => renderProgramsHtml(model, { programKey: `claude/sage-ff5ee2/PG1` }),
   [`/task/${key("T13")}`]: () => renderBoardHtml(model, { snapshot: false, taskKey: `claude/sage-ff5ee2/T13` }),
 };
-async function open(t, path = "/", { width = 1280, height = 900, colorScheme = "light", hash = "" } = {}) {
+// Two projects, each with the sample programs: the picker and the address have a project to choose (R1322-1, R1324-5).
+const other = programsSource("codex");
+Object.assign(other.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
+const two = buildBoardModel([programsSource(), other], { now: NOW });
+const TWO = {
+  "/": () => renderBoardHtml(two, { snapshot: false }),
+  "/programs": () => renderProgramsHtml(two),
+  [`/program/${key("PG1")}`]: () => renderProgramsHtml(two, { programKey: `claude/sage-ff5ee2/PG1` }),
+};
+async function open(t, path = "/", { width = 1280, height = 900, colorScheme = "light", hash = "", pages = PAGES, project = null } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, colorScheme, ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
-  for (const [at, html] of Object.entries(PAGES)) await context.route(`http://board.test${at}`, route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html() }));
+  for (const [at, html] of Object.entries(pages)) await context.route(`http://board.test${at}`, route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html() }));
+  // A project that the viewer chose before, kept in localStorage.
+  if (project) await context.addInitScript(value => localStorage.setItem("board-project", value), project);
   const page = await context.newPage(), errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   t.after(() => assert.deepEqual(errors, [], "no script error"));
@@ -75,9 +86,35 @@ test("T368 QD: a done program with no card on the board says why, links to its p
 test("T368: a program page's link to its tasks opens the board with the Program filter on", async t => {
   const page = await open(t, `/program/${key("PG1")}`);
   await page.click("text=Its tasks on the board");
-  await page.waitForURL(/#pg=/);
+  await page.waitForURL(/pg=/);
   assert.equal(await page.locator("#f-program").inputValue(), key("PG1"));
   assert.deepEqual((await shownIds(page)).sort(), ["T11", "T12", "T13"]);
+});
+
+test("R1322-1: the link to a program's tasks names its project, so a project chosen before does not hide its cards", async t => {
+  const page = await open(t, `/program/${key("PG1")}`, { pages: TWO, project: "other-abc123" });
+  await page.click("text=Its tasks on the board");
+  await page.waitForURL(/pg=/);
+  assert.equal(await page.locator("#pick-name").textContent(), "sage (sample)");
+  assert.deepEqual((await shownIds(page)).sort(), ["T11", "T12", "T13"]);
+  assert.equal(await visible(page, "#noprog"), false);
+});
+
+test("R1324-5: the programs list's picker keeps one project's programs with their counts; its Needs you chip opens the board with Needs you on", async t => {
+  const page = await open(t, "/programs", { pages: TWO });
+  const rows = () => page.locator("li[data-project]:visible").evaluateAll(list => list.map(li => li.dataset.project));
+  assert.equal((await rows()).length, 16, "both projects' programs (the dropped one is folded)");
+  await page.click("#pick-trig");
+  await page.click('#pick-list [role=option][data-key="other-abc123"]');
+  assert.equal(await page.locator("#pick-name").textContent(), "other (sample)");
+  assert.deepEqual([...new Set(await rows())], ["other-abc123"]);
+  assert.deepEqual(await page.locator("h2.grp").allTextContents(), ["Needs you 3", "Active 4", "Done 1"]);
+  assert.equal(await page.locator("#sum-dropped").textContent(), "Dropped (1)");
+  assert.equal(await page.locator("#needs-count").textContent(), "8", "the count is the server's: a programs page has no cards to count");
+  await page.click("a.chip.need");
+  await page.waitForURL(/needs=1/);
+  assert.equal(await page.locator("[data-filter=needs]").getAttribute("aria-pressed"), "true");
+  assert.ok((await shownIds(page)).length > 0 && (await page.locator(".card[data-key]:not([hidden])").evaluateAll(cards => cards.every(card => card.dataset.needs === "true"))));
 });
 
 for (const [width, height] of [[375, 812], [1280, 900]]) for (const colorScheme of ["light", "dark"]) {
