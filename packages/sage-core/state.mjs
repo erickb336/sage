@@ -1494,7 +1494,7 @@ function planTaskChanges(before, id, changes, at, facts) {
   const matches = tasks.filter(row => row.id === id);
   if (matches.length !== 1) refuse("The task is missing or ambiguous.");
   let note = "";
-  const task = matches[0], decided = [], graph = waitGraph(tasks, facts.programs, facts.gates, decisions);
+  const task = matches[0], decided = [], graph = waitGraph(tasks, facts.programs, facts.gates, decisions), had = prsOf(task, decisions, facts.ledger);
   for (const kv of changes) {
     const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
     if (k === "state") {
@@ -1539,7 +1539,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       if (["merged", "concluded", "abandoned"].includes(v)) decided.push({ at: at, task: task.id, decision: `state ${v}`, why: "task set" });
     } else if (k === "pr") {
       decided.push(...(notHeld(task, "pr="), setPr(task, v, "task set", at)));
-      if (v) apartFromPilot(task, graph, decisions, facts.ledger, "pr");
+      if (v) apartFromPilot(task, graph, [...decisions, ...decided], facts.ledger, "pr", had); // with the PR rows of earlier keys (R1285-1)
     }
     else if (k === "branch") notHeld(task, "branch="), task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
     else if (k === "title") task.title = v;
@@ -1556,7 +1556,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       const was = task.program ?? "";
       task.program = programValue(task, v, graph, runs);
       noLoop(task, graph);
-      apartFromPilot(task, graph, decisions, facts.ledger, "join");
+      apartFromPilot(task, graph, [...decisions, ...decided], facts.ledger, "join");
       const { rows, note: joined } = programDecision(task, was, at, "task set", graph);
       decided.push(...rows);
       note += joined;
@@ -1613,9 +1613,10 @@ const prsOf = (task, decisions, ledger) =>
  * every state of the program but dropped (R1279-1): a task that was ever on a PR stays in its merge check, and the task
  * builds only after its pilot, so that PR could never merge (R1273-1). task is the task whose PR or program changed: a
  * member, whose PRs meet the pilot's, or the pilot, whose PRs meet each member's. how names the way out: "pr" (task set
- * pr= or verdict --pr), "join" (task set program=) or "propose" (program propose).
+ * pr= or verdict --pr), "join" (task set program=) or "propose" (program propose). had (for "pr") is the PRs of task
+ * before the command, which a new PR cannot take out.
  */
-function apartFromPilot(task, { byId, programs }, decisions, ledger, how) {
+function apartFromPilot(task, { byId, programs }, decisions, ledger, how, had) {
   const program = programs.get(task.program);
   const pilot = program && (program.pilot === task.id ? task : byId.get(program.pilot));
   if (!pilot || program.state === "dropped" || MET.includes(pilot.state)) return;
@@ -1625,7 +1626,9 @@ function apartFromPilot(task, { byId, programs }, decisions, ledger, how) {
     const n = [...prsOf(m, decisions, ledger)].find((n) => pilotPrs.has(n));
     if (n === undefined) continue;
     const out = unanswered(program) ? `propose ${program.id} again after a change answer, with --tasks that do not name ${m.id}` : `sage task ${m.id} set program=none`;
-    const way = { pr: `Give ${task.id} another PR, or take ${m.id} out of ${program.id} (${out}).`, join: `${m.id} joins ${program.id} only after ${pilot.id} is merged or concluded.`, propose: `Leave ${m.id} out of --tasks, or name another pilot with --pilot.` }[how];
+    // A PR that the logbook already has for the task stays in its history, so another PR does not help (R1285-2).
+    const pr = !had?.has(n) ? `Give ${task.id} another PR, or take ${m.id} out of ${program.id} (${out}).` : `${task.id} had PR ${n} before, and that stays, so another PR does not help: take ${m.id} out of ${program.id} (${out}).`;
+    const way = { pr, join: `${m.id} joins ${program.id} only after ${pilot.id} is merged or concluded.`, propose: `Leave ${m.id} out of --tasks, or name another pilot with --pilot.` }[how];
     refuse(`${m.id} and ${pilot.id}, the pilot of ${program.id}, have or had PR ${n}, and ${m.id} builds only after ${pilot.id} is merged or concluded. A task that was ever on a PR stays in its merge check, so PR ${n} could never merge. ${way} Nothing changed.`);
   }
 }
@@ -2502,8 +2505,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const backed = opt.run && !check(kind) && read(dir, "ledger").find((r) => r.task === task.id && r.run === opt.run && !check(r.kind));
       if (backed) refuse(`${opt.run} already backs the ${backed.kind} verdict of ${task.id} on ${backed.sha.slice(0, 7) || "its task"}: one run backs one review or QA verdict. Run the review again under a new run.`);
       const sha = opt.sha?.toLowerCase() ?? ""; // as git prints it
+      const had = prsOf(task, read(dir, "decisions"), read(dir, "ledger"));
       const decided = opt.pr ? setPr(task, opt.pr, "verdict --pr") : [];
-      if (opt.pr) apartFromPilot(task, graphOf(dir), read(dir, "decisions"), read(dir, "ledger"), "pr");
+      if (opt.pr) apartFromPilot(task, graphOf(dir), read(dir, "decisions"), read(dir, "ledger"), "pr", had);
       const beforeReview = task.state;
       const backToReview = ["verified", "pr-ready"].includes(beforeReview) && NOT_CLEAN.includes(kind);
       if (backToReview) {

@@ -4689,6 +4689,50 @@ test("R1279-1, R1273-1: no task of a program has or had a PR of its pilot before
   assert.match(d.ok("task", "T2", "set", "pr=7"), / · PR 7 · /);
 });
 
+test("R1285-1: pr= and program= in one task set see the PR rows of the earlier keys of that command", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  s.ok("task", "T1", "set", "pr=7");
+  const before = snapshot(s.dir);
+  assert.equal(s.no("task", "T2", "set", "pr=7", "pr=9"), "sage: T2 and T1, the pilot of PG1, have or had PR 7, and T2 builds only after T1 is merged or concluded. A task that was ever on a PR stays in its merge check, so PR 7 could never merge. Give T2 another PR, or take T2 out of PG1 (propose PG1 again after a change answer, with --tasks that do not name T2). Nothing changed.");
+  assert.deepEqual(snapshot(s.dir), before, "a refusal writes nothing");
+  assert.match(s.ok("task", "T2", "set", "pr=9"), / · PR 9 · /, "the named way out works: the refused command wrote no PR 7");
+  s.ok("gate", "answer", "G1", "--option", "2");
+  assert.equal(s.no("task", "T3", "set", "pr=7", "pr=", "program=PG1"), "sage: T3 and T1, the pilot of PG1, have or had PR 7, and T3 builds only after T1 is merged or concluded. A task that was ever on a PR stays in its merge check, so PR 7 could never merge. T3 joins PG1 only after T1 is merged or concluded. Nothing changed.");
+  assert.equal(rows(s.dir, "tasks")[2].program, "", "nothing changed");
+});
+
+test("R1285-2: when the task had the PR before, the refusal names only the way out that works: take the member out of the program", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  s.ok("gate", "answer", "G1", "--option", "1");
+  // A logbook of an older sage holds T2 on the pilot's PR, as a hand edit does.
+  s.ok("task", "T1", "set", "pr=7");
+  const pr = readFileSync(join(s.dir, "tasks.tsv"), "utf8").split("\n")[0].split("\t").indexOf("pr");
+  byHand(s.dir, "tasks", 0, "T2", (cells) => cells.with(pr, "7"));
+  const why = (t) => `sage: T2 and T1, the pilot of PG1, have or had PR 7, and T2 builds only after T1 is merged or concluded. A task that was ever on a PR stays in its merge check, so PR 7 could never merge. ${t} had PR 7 before, and that stays, so another PR does not help: take T2 out of PG1 (sage task T2 set program=none). Nothing changed.`;
+  assert.equal(s.no("task", "T2", "set", "pr=9"), why("T2"));
+  assert.equal(s.no("task", "T2", "set", "pr=11"), why("T2"), "any other PR is refused the same way");
+  assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr", "8"), why("T1"), "the pilot had PR 7 before too");
+  assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr", "7"), why("T1"), "and has it now");
+  s.ok("task", "T2", "set", "program=none");
+  assert.match(s.ok("task", "T2", "set", "pr=9"), / · PR 9$/, "the named way out works");
+});
+
+test("R1285-3: a verdict row with a PR counts as PR history, also with no decision row", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  s.ok("verdict", "T2", "--sha", SHA, "--kind", "checks-pass");
+  const pr = readFileSync(join(s.dir, "ledger.tsv"), "utf8").split("\n")[0].split("\t").indexOf("pr");
+  byHand(s.dir, "ledger", 0, "T2", (cells) => cells.with(pr, "7")); // a verdict on PR 7, and no decision row of PR 7
+  assert.ok(!readFileSync(join(s.dir, "decisions.tsv"), "utf8").includes("PR "), "no PR decision row");
+  assert.equal(s.no("task", "T1", "set", "pr=7"), "sage: T2 and T1, the pilot of PG1, have or had PR 7, and T2 builds only after T1 is merged or concluded. A task that was ever on a PR stays in its merge check, so PR 7 could never merge. Give T1 another PR, or take T2 out of PG1 (propose PG1 again after a change answer, with --tasks that do not name T2). Nothing changed.");
+  assert.match(s.ok("task", "T1", "set", "pr=8"), / · PR 8 · /, "another PR is fine");
+});
+
 test("R1277-2: no task of a program changes its waits while the breakdown gate is open, as its question shows them; while the owner asks for changes, they change", () => {
   const s = store();
   for (const title of ["Pilot", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
