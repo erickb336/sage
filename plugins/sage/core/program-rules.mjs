@@ -55,7 +55,8 @@ export const programState = (gate, program, decisions) =>
 /** What the waits of the logbook's tasks are read against: the tasks by id, and each program with its state. Built once per logbook. */
 export const waitGraph = (tasks, programs, gates, decisions) => {
   const gateOf = byIds(gates);
-  return { byId: byIds(tasks), programs: new Map(programs.map((p) => [p.id, { ...p, state: programState(gateOf.get(p.gate), p, decisions) }])) };
+  // gateFound: the gate row that the program names is in the logbook, so a lost program says why (R1308-1).
+  return { byId: byIds(tasks), programs: new Map(programs.map((p) => [p.id, { ...p, state: programState(gateOf.get(p.gate), p, decisions), gateFound: gateOf.has(p.gate) }])) };
 };
 /**
  * A task's waits, each with the state of its task (undefined for a task that the logbook lost), then its program's two
@@ -94,13 +95,12 @@ export const breakdownGate = (gate, programs) => {
 /**
  * The wait graph as every printer shows it (the boards and the status line; never a write rule or the merge check): a
  * program is proposed or changing only while its gate is its breakdown gate by the data rule (breakdownGate); else it is
- * lost, so no line says that a breakdown waits for the owner while Needs you shows the gate as a plain gate. Each program
- * also says if its gate row is in the logbook (gateFound), so a lost program says why.
+ * lost, so no line says that a breakdown waits for the owner while Needs you shows the gate as a plain gate.
  */
 export const shownGraph = ({ byId, programs }, gates) => {
   const gateOf = byIds(gates);
   const shown = (p) => (["proposed", "changing"].includes(p.state) && breakdownGate(gateOf.get(p.gate), programs) !== p.id ? "lost" : p.state);
-  return { byId, programs: new Map([...programs].map(([id, p]) => [id, { ...p, state: shown(p), gateFound: gateOf.has(p.gate) }])) };
+  return { byId, programs: new Map([...programs].map(([id, p]) => [id, { ...p, state: shown(p) }])) };
 };
 /**
  * A gate's question as the board and status show it, line by line: only a breakdown gate's question (breakdownGate) has

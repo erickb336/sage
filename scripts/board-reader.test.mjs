@@ -167,10 +167,12 @@ test("T233 C3: the programs table: missing is no rows while no task names a prog
     ["id", `${PROGRAMS}P1\tA\tg\tT1\tG1\t\n`],
     ["pilot", `${PROGRAMS}PG1\tA\tg\tX1\tG1\t\n`],
     ["gate", `${PROGRAMS}PG1\tA\tg\tT1\tgate 1\t\n`],
+    // R1307-1: a row with too few cells says its line in the file (a blank line counts) and its count of cells.
+    ["row", `${PROGRAMS}\nPG1\tA\tg\n`],
   ]) {
     const bad = read([task("T1", "PG1")], text);
     assert.equal(bad.tables.programs, undefined, why);
-    assert.deepEqual(bad.diagnostics, [why === "header" ? "programs: damaged table header" : "programs: damaged program identity, pilot or gate"], why);
+    assert.deepEqual(bad.diagnostics, [{ header: "programs: damaged table header", row: "programs: line 3 has 3 cells, and its header has 6" }[why] ?? "programs: damaged program identity, pilot or gate"], why);
     assert.equal(bad.tables.tasks.length, 1, why);
   }
   // A program cell that is not a program id shows as ?; a good one stays.

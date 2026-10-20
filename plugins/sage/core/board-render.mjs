@@ -5,8 +5,9 @@ import { LINE, PRIORITIES, TASK_KINDS } from "./logbook-fields.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
 // Every control (C0, C1 with U+0085) and line or paragraph separator is a space, and every format character (\p{Cf}:
-// U+202E, U+200B, …) goes, as the older board's text() does (F-T233-6).
-const md = value => String(value ?? "").replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, " ").replace(/\p{Cf}/gu, "").replace(/[\\`*_{}\[\]()<>#+.!|&~]/g, c => String.fromCharCode(92) + c);
+// U+202E, U+200B, …) goes, as the older board's text() does (F-T233-6). ":" and "@" too, as text() escapes them, so that GFM
+// makes no autolink of a bare URL or an email (R1309-2).
+const md = value => String(value ?? "").replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, " ").replace(/\p{Cf}/gu, "").replace(/[\\`*_{}\[\]()<>#+.!|&~:@]/g, c => String.fromCharCode(92) + c);
 /** Text whose lines one table cell holds with LINE (a breakdown gate's question), in Markdown: its lines joined with join. */
 const mdLines = (value, join = "\n") => String(value ?? "").split(LINE).map(md).join(join);
 const mdBlock = value => String(value ?? "").split(/\r?\n/).map(md).join("\n");
@@ -674,13 +675,14 @@ export function renderBoardText(model) {
   const standIns = shown.some(task => task.agents.some(agent => !agent.provider));
   const programTag = task => task.program ? ` · ◫ ${md(clamp(task.program.name ?? task.program.id))}${task.program.pilot ? " \\(pilot\\)" : ""}` : "";
   // A card's question is in the Needs you section above; the card shows its steps and, when nothing needs you, its Now line.
-  // A card of a program has its tag, and the tasks that it waits for in one line (⊘ when one is never met). Each line ends with a hard break.
+  // A card of a program has its tag. A card with a wait has the tasks that it waits for in one line (⊘ when one is never
+  // met), instead of its Now line (R1307-3). Each line ends with a hard break.
   const line = task => block([`**${md(task.id)} ${md(clamp(task.title))}** · ${md(task.sourceLabel)} · ${md(task.projectName)}${task.pr ? ` · PR ${md(task.pr)}` : ""}${tagText(task)}${programTag(task)}`,
     ...task.agents.map(agent => `${agent.provider ? md(agent.provider) : md(`${title(task.providerStandIn)}*`)} · ${md(agent.role)} at work`),
     task.inferredWork ? "Inferred from the open PR." : "",
     task.waitLine ? `${WAIT_MARK[task.waitLine.never ? "never" : "wait"]} ${md(task.waitLine.text)}` : "",
     task.column === "done" ? "" : stepText(task),
-    task.column === "done" || task.loop.now.needs ? "" : `Now: ${md(task.loop.now.text)}`]);
+    task.column === "done" || task.loop.now.needs || task.waitLine ? "" : `Now: ${md(task.loop.now.text)}`]);
   // Each column shows its first 5 cards in the page's order (needs you first, then the newest activity) and counts the rest.
   const section = column => {
     const name = COLUMN_NAME[column.key] ?? column.name, rest = column.tasks.length - CHAT_SHOWN;

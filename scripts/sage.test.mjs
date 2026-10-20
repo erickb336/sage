@@ -2967,7 +2967,8 @@ test("R1208-3: a program's state reads only from a breakdown gate on its pilot; 
     s.ok("gate", "answer", g, "--option", "1");
     byHand(s.dir, "programs", 0, "PG1", (cells) => cells.with(4, g));
     assert.equal(programsLine(s), `program PG1 · pilot T1: 0 of 2 merged · its gate ${g} is not a breakdown gate on its pilot T1 · name: Codex support`, g); // F-T233-2: the row is there
-    assert.match(s.no("run", "add", "T1", "--role", "lead"), /^sage: T1 waits for the breakdown of PG1 /, g);
+    // R1308-1: the refusal says why, as status does: the gate row is there, and it is not a breakdown gate.
+    assert.match(s.no("run", "add", "T1", "--role", "lead"), new RegExp(`^sage: T1 waits for the breakdown of PG1 \\(its gate ${g} is not a breakdown gate\\)`), g);
   }
   byHand(s.dir, "programs", 0, "PG1", (cells) => cells.with(4, "G1"));
   s.ok("gate", "answer", "G1", "--option", "1");

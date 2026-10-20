@@ -377,8 +377,9 @@ function projectGroups(sources) {
     const sub = merged.checkout || remote ? [remote ?? "no GitHub remote", folder && `folder ${folder}`] : [`logbook ${merged.name}`];
     Object.assign(group, {
       // A project that no logbook can name, because every logbook of it is unreadable, is named by its folder, with the
-      // reason (the prototype's failure state). One unreadable logbook does not rename what the others name (F-T305-3).
-      name: all.every(project => project.diagnostics.length) ? merged.name : projectName(merged),
+      // reason (the prototype's failure state). One unreadable logbook does not rename what the others name (F-T305-3), and
+      // a programs table, an observation or an artifact that cannot be read does not make the logbook unreadable (R1307-1).
+      name: all.every(project => unreadable(project).length) ? merged.name : projectName(merged),
       remote, path: merged.checkout ?? null,
       archived: archived.length > 0 && archived.length === trusted.length, problem: problem && plainProblem(problem),
       providers: unique(group.books.map(book => title(standIn(book.source)))),
@@ -607,17 +608,44 @@ function programsOf(source, project, group, graph, cards) {
   });
 }
 
-export function buildBoardModel(sources, { now = new Date().toISOString() } = {}) {
+// A logbook problem that needs the owner (R1307-1, R1307-2): a programs table that the board cannot read, and a logbook
+// that it cannot read (its folder, or a table but programs). An observation, an artifact or a checkout file that cannot be
+// read is a line under the board only: every task shows. Each reason says the file and the line, as the reader gives them.
+const TABLE_FILE = /^(tasks|runs|findings|ledger|gates|decisions|programs): (.*)$/;
+const unreadable = project => project.diagnostics.filter(message => !/^(programs|observations|checkout|artifact [^:]*): /.test(message));
+function reasonOf(message) {
+  const [, name, rest] = TABLE_FILE.exec(message) ?? [];
+  if (!name) return title(plainProblem(message));
+  return /^E[A-Z]+$/.test(rest) ? `${name}.tsv ${PLAIN[rest] ?? "cannot be read"}` : /^line \d/.test(rest) ? `${name}.tsv ${rest}` : `${name}.tsv: ${rest}`;
+}
+function logbookNeeds(source, project, group) {
+  const item = (kind, needTitle, text) => ({ kind, title: needTitle, text, key: `${project.key}/${kind}`, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived });
+  const programs = project.diagnostics.find(message => message.startsWith("programs: ")), lost = unreadable(project);
+  const others = group.books.filter(book => book.project !== project && book.project.tables.tasks).map(book => title(book.source.label));
+  const tables = lost.map(message => TABLE_FILE.exec(message)?.[1]).filter(Boolean);
+  const shows = project.tables.tasks === undefined ? others.length ? `The board shows only the ${others.join(" and ")} logbook of ${group.name}.` : `The board shows no task of ${group.name}.`
+    : `The board shows its tasks without the rows of ${tables.map(name => `${name}.tsv`).join(", ")}.`;
+  return [
+    ...(programs ? [item("programs", "The programs table cannot be read", `${reasonOf(programs)}. The board shows the tasks without their programs. Ask the sage to repair the logbook.`)] : []),
+    ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${lost.map(reasonOf).join(". ")}. ${shows} Ask the sage to repair the logbook.`)] : []),
+  ];
+}
+/** A logbook whose programs table cannot be read shows its tasks with no program (R1307-1): no tag, and no program wait. */
+const withoutPrograms = project => project.tables.programs || !project.tables.tasks ? project : { ...project, tables: { ...project.tables, tasks: project.tables.tasks.map(task => ({ ...task, program: "" })) } };
+
+export function buildBoardModel(input, { now = new Date().toISOString() } = {}) {
   const at = time(now);
   if (at === null) throw new TypeError("board time must be an ISO date");
+  const sources = input.map(source => ({ ...source, projects: source.projects.map(withoutPrograms) }));
   const { groups, notes } = projectGroups(sources);
   const groupOf = new Map(groups.flatMap(group => group.books.map(book => [book.project.key, group])));
   const graphs = new Map(sources.flatMap(source => source.projects.map(project => [project.key, graphOf(project)])));
   const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, groupOf.get(project.key), task, at, graphs.get(project.key)))));
   const byKey = new Map(tasks.map(task => [task.key, task]));
   const programs = sources.flatMap(source => source.projects.flatMap(project => programsOf(source, project, groupOf.get(project.key), graphs.get(project.key), byKey)));
-  // What needs the owner that no card shows: a stuck program, a lost breakdown gate. An archived project's leave the counts, as its tasks do.
-  const programNeeds = programs.filter(program => program.need).map(program => program.need), liveNeeds = programNeeds.filter(need => !need.archived);
+  // What needs the owner that no card shows: a stuck program, a lost breakdown gate, a table or a logbook that the board
+  // cannot read. An archived project's leave the counts, as its tasks do.
+  const programNeeds = [...programs.filter(program => program.need).map(program => program.need), ...sources.flatMap(source => source.projects.flatMap(project => logbookNeeds(source, project, groupOf.get(project.key))))], liveNeeds = programNeeds.filter(need => !need.archived);
   const recent = task => task.lastActivity ? Date.parse(task.lastActivity) : 0;
   // An archived project's tasks leave the columns and the counts; the archived group lists the project, with what needs you there.
   // Needs you first, then the newest activity. A priority sorts each column but Done, which stays newest first.
@@ -630,7 +658,7 @@ export function buildBoardModel(sources, { now = new Date().toISOString() } = {}
   const LISTS = ["needs", "active", "idle", "archived"];
   const projects = groups.map(group => {
     const own = tasks.filter(task => task.group === group.key), live = shown.filter(task => task.group === group.key);
-    // programNeeds: the program items in needsOwner, which no card holds, so the page script adds them to its own counts (F-T233-1).
+    // programNeeds: the items in needsOwner that no card holds (a program's, a table's or a logbook's), so the page script adds them to its own counts (F-T233-1).
     const last = Math.max(0, ...own.map(recent)), extra = programNeeds.filter(need => need.group === group.key).length, needsOwner = live.filter(task => task.reasons.length).length + extra;
     return { key: group.key, name: group.name, sub: group.sub, pathSub: group.pathSub ?? null, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, programNeeds: extra, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
       list: group.archived ? "archived" : needsOwner ? "needs" : last && at - last <= ACTIVE_DAYS * 86400000 ? "active" : "idle" };

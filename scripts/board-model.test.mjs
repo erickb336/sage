@@ -512,13 +512,14 @@ test("T305: the picker's list puts needs you first, then active in the last 14 d
     { key: "claude/gone-cccccc", name: "gone-cccccc", checkout: "/sample/work/gone", archived: true, diagnostics: [], tables: { tasks: [task("T1", "framed")] } },
     { key: "claude/broken-dddddd", name: "broken-dddddd", checkout: "/sample/work/broken", diagnostics: ["tasks: damaged table header"], tables: {} },
   ] }], { now });
-  assert.deepEqual(withActivity.projects.map(project => [project.list, project.name, project.needsOwner]), [["needs", "seacc (Council Record)", 1], ["active", "fresh", 0], ["idle", "old", 0], ["idle", "broken-dddddd", 0], ["archived", "gone", 0]]);
-  const sdc = withActivity.projects[0];
+  // R1307-2: a logbook that the board cannot read needs you: it is an item of Needs you, so its project is in the needs list.
+  assert.deepEqual(withActivity.projects.map(project => [project.list, project.name, project.needsOwner]), [["needs", "broken-dddddd", 1], ["needs", "seacc (Council Record)", 1], ["active", "fresh", 0], ["idle", "old", 0], ["archived", "gone", 0]]);
+  const sdc = withActivity.projects[1];
   assert.equal(sdc.sub, "sample-org/seacc · folder product-demos");
   assert.deepEqual(sdc.terms, ["seacc (Council Record)", "sample-org/seacc", "sample-owner/seacc", "product-demos", "product-demos-1c0254", "claude/product-demos-1c0254"]);
   assert.deepEqual(sdc.paths, ["/sample/work/sdc/product-demos"], "R1069-2: the paths are apart from the terms");
-  assert.deepEqual(withActivity.projects.map(project => project.sub), ["sample-org/seacc · folder product-demos", "no GitHub remote · folder fresh", "sample-owner/old · folder old", "no GitHub remote · folder broken", "no GitHub remote · folder gone"], "F-T305-11: no GitHub remote comes first, so the line never cuts it off; R1071-6: owner/repo, not the owner alone");
-  assert.equal(withActivity.projects[3].problem, "tasks: damaged table header", "an unreadable logbook is named by its folder, with the reason");
+  assert.deepEqual(withActivity.projects.map(project => project.sub), ["no GitHub remote · folder broken", "sample-org/seacc · folder product-demos", "no GitHub remote · folder fresh", "sample-owner/old · folder old", "no GitHub remote · folder gone"], "F-T305-11: no GitHub remote comes first, so the line never cuts it off; R1071-6: owner/repo, not the owner alone");
+  assert.equal(withActivity.projects[0].problem, "tasks: damaged table header", "an unreadable logbook is named by its folder, with the reason");
 });
 
 // T233: programs on the board. SAMPLE DATA from scripts/fixtures/board-programs.mjs.

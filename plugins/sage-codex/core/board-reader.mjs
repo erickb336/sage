@@ -41,13 +41,14 @@ function regularBytes(file, budget) {
 const regular = (file, budget) => new TextDecoder("utf-8", { fatal: true }).decode(regularBytes(file, budget));
 
 function table(file, name, budget) {
-  const [header, ...lines] = regular(file, budget).replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
+  // Each line keeps its number in the file, so a damaged row says where it is (R1307-1).
+  const [[header] = [], ...lines] = regular(file, budget).replace(/^\uFEFF/, "").split(/\r?\n/).map((line, i) => [line, i + 1]).filter(([line]) => line);
   const columns = header?.split("\t") ?? [];
   if (new Set(columns).size !== columns.length || !TABLES[name].split(" ").every(c => columns.includes(c))) throw new Error("damaged table header");
   const identities = new Set();
-  const rows = lines.map(line => {
+  const rows = lines.map(([line, number]) => {
     const cells = line.split("\t");
-    if (cells.length !== columns.length) throw new Error("damaged table row");
+    if (cells.length !== columns.length) throw new Error(`line ${number} has ${cells.length} cell${cells.length === 1 ? "" : "s"}, and its header has ${columns.length}`);
     const row = Object.fromEntries(columns.map((column, i) => [column, cells[i]]));
     if (name === "tasks") {
       if (!TASK_ID.test(row.id) || identities.has(row.id) || !TASK_STATES.has(row.state)) throw new Error("damaged task identity or state");
