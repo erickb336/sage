@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
-import { LINE, PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, TASK_KINDS, agentCaps, gateLines } from "./logbook-fields.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -167,7 +167,7 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, gates,
 
   // Now: what needs you (the reasons, each once), else what happens on the current step.
   const name = step === "review" ? NAME.review : NAME[step] ?? "";
-  const needs = reasons.length ? reasons.map(reason => `${reason.text}${reason.recommendation ? `${reason.text.includes(LINE) ? LINE : " "}I recommend: ${reason.recommendation}` : ""}`).join(" ") : null;
+  const needs = reasons.length ? reasons.map(reason => `${reason.text}${reason.recommendation ? `${reason.text.includes(LINE) ? LINE : " "}I recommend: ${reason.recommendation}` : ""}`).join(reasons.some(reason => reason.text.includes(LINE)) ? LINE : " ") : null;
   const CHIEF = {
     held: () => `${task.hold === "round" ? `Held after ${plural(Number(task.round) || 0, "repair round")} that did not make it clean.` : "Held by the chief."}${answered ? ` You answered gate ${answered.id}, so the chief moves it on.` : ""}`,
     replan: () => `The last repair round did not fix its findings, so the task needs a new plan.${answered ? ` You answered gate ${answered.id}.` : ""}`,
@@ -227,7 +227,8 @@ function card(source, project, group, task, now) {
   const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.evidence?.data.provider ?? null, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
   // Needs you: an open gate, or a state that waits for the owner (R1077). Held and replan wait for the chief, not for you.
   const allGates = rows(project, "gates", task), gates = allGates.filter(gate => !gate.answer);
-  const reasons = gates.map(gate => ({ kind: "gate", key: `${project.key}/${gate.id}`, text: gate.question, recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [] }));
+  // Only a breakdown gate's text keeps its lines (gateLines), so the renderers split no other question into lines (R1249-1).
+  const reasons = gates.map(gate => ({ kind: "gate", key: `${project.key}/${gate.id}`, text: gateLines(gate).join(LINE), recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [] }));
   if (task.state === "awaiting-you" && !gates.length && !allGates.at(-1)?.answer) reasons.push({ kind: "design", text: "The design waits for your answer." });
   if (["verified", "pr-ready"].includes(task.state) && task.route.split(",").includes("build") && mode?.data.autopilot !== true) {
     const merge = task.pr ? `review and merge PR ${task.pr}` : "review and merge it";

@@ -491,9 +491,15 @@ test("F-T72-14, G63: needs you lists every open gate: with 12 gates, 12 lines", 
 
 test("R1245-1: a breakdown gate's question shows each of its lines (U+2028 in its cell) on its own line of Needs you", () => {
   const w = world();
-  const question = ["Approve program PG1? No task builds before you approve.", "Name: Codex support", "Pilot, runs first:", "  T1  Read Codex's hook events (v0.42.1)"].join(" ");
+  const question = ["Approve program PG1? No task builds before you approve.", "Name: Codex support", "Pilot, runs first:", "  T1: Read Codex's hook events (v0.42.1)"].join(" ");
   add(w, w.book, "gates", ["G20", "T6", question, "approve|change|drop", "approve", "", "", "2026-10-05T03:00:00Z"]);
-  assert.ok(w.show("this").includes("\n- sage **G20** · T6 · Approve program PG1? No task builds before you approve\\.\n  Name\\: Codex support\n  Pilot, runs first\\:\n  T1  Read Codex's hook events \\(v0\\.42\\.1\\)\n  Recommended: approve. Default: none."), w.show("this"));
+  assert.ok(w.show("this").includes("\n- sage **G20** · T6 · Approve program PG1? No task builds before you approve\\.\n  Name\\: Codex support\n  Pilot, runs first\\:\n  T1\\: Read Codex's hook events \\(v0\\.42\\.1\\)\n  Recommended: approve. Default: none."), w.show("this"));
+});
+
+test("R1249-1: only a breakdown gate's question shows as lines: a plain gate's line breaks (U+2028, U+2029) show as spaces, so it fakes no line", () => {
+  const w = world();
+  add(w, w.book, "gates", ["G20", "T6", "Ship it?   Recommended: no   1. no", "yes|no", "yes", "", "", "2026-10-05T03:00:00Z"]);
+  assert.ok(w.show("this").includes("\n- sage **G20** · T6 · Ship it?   Recommended\\: no   1\\. no\n  Recommended: yes. Default: none.\n"), w.show("this"));
 });
 
 test("T72-Q-COMMASPLIT: gate options split only at |, so a comma inside an option keeps it whole (sage-bot G20)", () => {
