@@ -27,7 +27,10 @@ const PAGES = {
   "/programs": () => renderProgramsHtml(model),
   [`/program/${key("PG1")}`]: () => renderProgramsHtml(model, { programKey: `claude/sage-ff5ee2/PG1` }),
   [`/task/${key("T13")}`]: () => renderBoardHtml(model, { snapshot: false, taskKey: `claude/sage-ff5ee2/T13` }),
+  "/snapshot": () => renderBoardHtml(model),
 };
+// The offline snapshot holds its task, programs and program pages; an address hash opens each (R1347-1).
+const SNAPSHOT_PAGES = [`#task-${key("T13")}`, "#programs", `#program-${key("PG1")}`];
 // Two projects, each with the sample programs: the picker and the address have a project to choose (R1322-1, R1324-5).
 const other = programsSource("codex");
 Object.assign(other.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
@@ -121,16 +124,21 @@ test("R1324-5: the programs list's picker keeps one project's programs with thei
 });
 
 for (const [width, height] of [[375, 812], [1280, 900]]) for (const theme of ["light", "dark"]) {
-  test(`T368, T349: no sideways scroll at ${width} px, ${theme}: the board, the programs list, a program page and a task page; the page shell is edge to edge below 700 px`, async t => {
-    for (const path of Object.keys(PAGES)) {
-      const page = await open(t, path, { width, height, theme });
-      await expectTheme(page, theme, path);
+  test(`T368, T349, R1347-1: no sideways scroll at ${width} px, ${theme}: the board, the programs list, a program page, a task page and the snapshot's pages; the page shell is edge to edge below 700 px`, async t => {
+    for (const [path, hash] of [...Object.keys(PAGES).map(path => [path, ""]), ...SNAPSHOT_PAGES.map(hash => ["/snapshot", hash])]) {
+      const at = path + hash, page = await open(t, path, { width, height, theme });
+      // The snapshot's page hides the board header and its switch, so the hash comes after the theme.
+      if (hash) await page.evaluate(value => { location.hash = value; }, hash);
+      await expectTheme(page, theme, at);
       const { scroll, client } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
-      assert.ok(scroll <= client, `${path}: ${scroll} > ${client}`);
-      // The shell: the rounded panel that holds the page, inset 8 px or more on a wide screen, the whole width on a phone.
-      const [left, right, radius] = await page.locator(".boardview, body > main.page").first().evaluate(element => { const box = element.getBoundingClientRect(); return [Math.round(box.left), Math.round(box.right), getComputedStyle(element).borderTopLeftRadius]; });
-      if (width === 375) assert.deepEqual([left, right, radius], [0, 375, "0px"], path);
-      else assert.ok(left >= 8 && right <= client - 8 && radius === "20px", `${path}: ${left} to ${right}, radius ${radius}`);
+      assert.ok(scroll <= client, `${at}: ${scroll} > ${client}`);
+      // The shell: the rounded panel on the shell colour that holds the page, inset 8 px or more on a wide screen, the whole width on a phone.
+      const shells = page.locator(".boardview:visible, body > main.page:visible, #pages > .page:visible");
+      assert.equal(await shells.count(), 1, `${at}: one shell shows`);
+      const [left, right, radius, back] = await shells.evaluate(element => { const box = element.getBoundingClientRect(), style = getComputedStyle(element); return [Math.round(box.left), Math.round(box.right), style.borderTopLeftRadius, style.backgroundColor]; });
+      assert.equal(back, await page.evaluate(() => { const probe = document.body.appendChild(document.createElement("i")); probe.style.color = "var(--shell)"; const color = getComputedStyle(probe).color; probe.remove(); return color; }), `${at}: the shell colour`);
+      if (width === 375) assert.deepEqual([left, right, radius], [0, 375, "0px"], at);
+      else assert.ok(left >= 8 && right <= client - 8 && radius === "20px", `${at}: ${left} to ${right}, radius ${radius}`);
     }
   });
 }

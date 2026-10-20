@@ -819,12 +819,12 @@ test("R1325-2: the offline file has the programs list whenever it has a program'
 
 test("T349: each board page keeps the CSP: one bare style element, no style attribute, and CSS that loads nothing", async () => {
   const { contrastPages } = await import("./fixtures/contrast.mjs");
-  const { model, pages } = contrastPages();
-  for (const [name, html] of Object.entries({ ...pages, snapshot: renderBoardHtml(model) })) {
+  const { pages } = contrastPages();
+  for (const [name, html] of Object.entries(pages)) {
     const styles = [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)];
     assert.deepEqual(styles.map(match => match[0].slice(0, 7)), ["<style>"], `${name}: one style element with no attribute`);
     assert.ok(!/\sstyle=/.test(html), `${name}: no style attribute, which the CSP blocks`);
     assert.ok(!/url\(|@import|@font-face/.test(styles[0][1]), `${name}: the CSS loads no file, font or sheet`);
-    assert.ok(styles[0][1].includes(".boardview,body>main.page{background:var(--shell)"), `${name}: the board CSS`);
+    assert.ok(styles[0][1].includes(".boardview,body>main.page,#pages>.page{background:var(--shell)"), `${name}: the board CSS`);
   }
 });

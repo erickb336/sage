@@ -209,8 +209,8 @@ test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 co
   assert.ok(["board light provider on a pill", "board light provider on an alternate pill", "board dark legend alternate pill", "task light earlier head", "task dark earlier head"].every(kind => results.includes(kind)));
 });
 
-test("T349: every text on the board, a task page, the programs list, a program page and the Agents page meets AA contrast, dark and light, at 375 and 1280 px", async t => {
-  const { pages } = contrastPages(), low = [], seen = new Set();
+test("T349, R1347-1: every text on the board, a task page, the programs list, a program page, the Agents page and the snapshot's task and program pages meets AA contrast, dark and light, at 375 and 1280 px", async t => {
+  const { pages, targets } = contrastPages(), low = [], seen = new Set();
   for (const width of [375, 1280]) {
     // A dark system: the measure does not depend on the default theme, which other tests check.
     const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
@@ -220,18 +220,80 @@ test("T349: every text on the board, a task page, the programs list, a program p
       const page = await context.newPage();
       await page.setContent(html);
       for (const theme of ["dark", "light"]) {
+        await page.evaluate(() => { location.hash = ""; });
         if (theme === "light") await page.locator("label[for=flip]").click();
         assert.equal((await shownTheme(page))[0], theme);
-        for (const item of await page.evaluate(measureContrast)) {
-          seen.add(`${name} ${item.kind}`);
-          if (item.ratio < item.need) low.push(`${name} ${width} px ${theme}: ${item.kind} "${item.text}" ${item.ratio} < ${item.need}`);
+        // The snapshot's own pages open by their hash, after the switch: an open page hides the board header.
+        for (const [view, hash] of [[name, ""], ...(name === "snapshot" ? Object.entries(targets) : [])]) {
+          await page.evaluate(value => { location.hash = value; }, hash);
+          for (const item of await page.evaluate(measureContrast)) {
+            seen.add(`${view} ${item.kind}`);
+            if (item.ratio < item.need) low.push(`${view} ${width} px ${theme}: ${item.kind} "${item.text}" ${item.ratio} < ${item.need}`);
+          }
         }
       }
     }
   }
   assert.deepEqual(low, []);
+  assert.ok(["snapshot task h3", "snapshot programs h3", "snapshot program div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("snapshot ")).join(", "));
   // The texts of the two contrast bugs that T349 fixed are among the measured ones.
   assert.ok(["agents span.ptag.ptag-claude", "agents span.ptag.ptag-codex", "agents span.faint", "board span.n", "program div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("agents")).join(", "));
+});
+
+// R1349-1, R1349-2: each control, and the chosen tab and Who pill, stands out 3:1 from what is behind it (WCAG 1.4.11).
+const CONTROLS = [["theme switch", "label.theme", "edge"], ["project picker", ".trigger", "edge"], ["filter", "select", "edge"], ["chosen tab", ".boardtabs a[aria-current=page]", "edge"], ["chosen Who pill", ".seg button[aria-pressed=true]", "edge"]];
+test("R1349-1, R1349-2: the theme switch, the picker, the filters, the chosen tab and the chosen Who pill reach 3:1 against their shell or tray, dark and light", async t => {
+  const { pages } = contrastPages(), low = [], seen = new Set();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
+  t.after(() => context.close());
+  await context.route("**/*", route => route.abort());
+  for (const name of ["board", "programs"]) {
+    const page = await context.newPage();
+    await page.setContent(pages[name]);
+    for (const theme of ["dark", "light"]) {
+      if (theme === "light") await page.locator("label[for=flip]").click();
+      assert.equal((await shownTheme(page))[0], theme);
+      // The programs list has no filters: it shows the switch, the picker and the tabs.
+      const list = CONTROLS.filter(([, selector]) => name === "board" || ["label.theme", ".trigger", ".boardtabs a[aria-current=page]"].includes(selector));
+      for (const item of (await page.evaluate(measureContrast, list)).flat()) {
+        seen.add(item.kind);
+        if (item.ratio < 3) low.push(`${name} ${theme}: ${item.kind} "${item.text}" ${item.ratio} < 3`);
+      }
+    }
+  }
+  assert.deepEqual(low, []);
+  assert.deepEqual([...seen].sort(), CONTROLS.map(([kind]) => kind).sort());
+});
+
+test("R1347-3: in forced colours, the cards, task page sections, program cards and the rules keep an outline, and a card that needs you keeps its frame", async t => {
+  const { pages } = contrastPages();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark", forcedColors: "active", reducedMotion: "reduce" });
+  t.after(() => context.close());
+  await context.route("**/*", route => route.abort());
+  const page = await context.newPage(), seen = [];
+  for (const [name, selector] of [["board", "a.card:not(.needs)"], ["board", "a.card.needs"], ["task", ".detail section"], ["programs", "a.prog"], ["agents", ".rules"]]) {
+    await page.setContent(pages[name]);
+    const edge = await page.locator(selector).first().evaluate(element => { const style = getComputedStyle(element); return { shadow: style.boxShadow, border: `${style.borderTopWidth} ${style.borderTopStyle}`, color: style.borderTopColor, outline: `${style.outlineWidth} ${style.outlineStyle}` }; });
+    // The emulation is real: the browser drops each box shadow, so only a border or an outline draws an edge.
+    assert.equal(edge.shadow, "none", `${name} ${selector}: forced colours drop the shadow`);
+    assert.equal(edge.border, "1px solid", `${name} ${selector}: a border`);
+    assert.ok(!/rgba\(0, 0, 0, 0\)|transparent/.test(edge.color), `${name} ${selector}: the border shows (${edge.color})`);
+    seen.push(`${selector} ${edge.outline}`);
+  }
+  assert.equal(seen[1], "a.card.needs 3px double", "the needs frame");
+  assert.equal(seen[0], "a.card:not(.needs) 0px none", "a plain card has no frame");
+});
+
+test("R1349: the contrast helper's edge measure takes the better of a control's fill and its border", async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.setContent('<div id="tray"><span id="flat">Sample</span><span id="edged">Sample</span><span id="filled">Sample</span></div>');
+  await page.addStyleTag({ content: "#tray{background:#f0f0f1}span{background:#fff;border:1px solid transparent}#edged{border-color:#87878d}#filled{background:#555;border:0}" });
+  const [[flat], [edged], [filled]] = await page.evaluate(measureContrast, [["flat", "#flat", "edge"], ["edged", "#edged", "edge"], ["filled", "#filled", "edge"]]);
+  assert.ok(flat.ratio < 1.2, `white on the tray with no edge: ${flat.ratio}`);
+  assert.ok(edged.ratio >= 3 && edged.ratio < 3.3, `the edge colour: ${edged.ratio}`);
+  assert.ok(filled.ratio > 6, `a dark fill with no border: ${filled.ratio}`);
 });
 
 test("T349: the contrast helper takes the worst stop of a gradient, and refuses an image", async t => {

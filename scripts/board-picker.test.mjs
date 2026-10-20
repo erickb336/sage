@@ -233,6 +233,21 @@ test("T305 R1023-4, T349: the board is dark on a light and a dark system until y
   }
 });
 
+test("R1347-2: a saved dark choice loads dark, and one flip shows light and saves light", async t => {
+  for (const system of ["light", "dark"]) {
+    const page = await open(t, { system });
+    await page.evaluate(() => localStorage.setItem("board-theme", "dark"));
+    await reload(page, renderBoardHtml(sample(), { snapshot: false }));
+    assert.equal(await page.locator("html").getAttribute("data-theme"), "dark", `the saved choice on a ${system} system`);
+    await expectTheme(page, "dark", `a saved dark choice on a ${system} system`);
+    await page.locator("label[for=flip]").click();
+    await expectTheme(page, "light", `one flip on a ${system} system`);
+    assert.equal(await page.evaluate(() => localStorage.getItem("board-theme")), "light");
+    await reload(page, renderBoardHtml(sample(), { snapshot: false }));
+    await expectTheme(page, "light", `the saved light choice after a reload on a ${system} system`);
+  }
+});
+
 test("T349: storage that throws still shows the dark theme, and so does the offline snapshot with scripts off on a light system", async t => {
   const blocked = await open(t, { system: "light", init: () => Object.defineProperty(window, "localStorage", { get() { throw new Error("sample: storage blocked"); } }) });
   await expectTheme(blocked, "dark", "no storage");

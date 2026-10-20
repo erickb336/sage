@@ -8,6 +8,7 @@ import * as render from "../../packages/sage-core/board-render.mjs";
 import { NOW, programsSource } from "./board-programs.mjs";
 
 const { renderAgentsHtml, renderBoardHtml, renderProgramsHtml } = render;
+const b64 = value => Buffer.from(value).toString("base64url");
 /** The value of one theme token as the board's CSS sets it, for example themeToken("light", "--bg"). */
 export const themeToken = (theme, name) => (theme === "light" ? render.LIGHT : render.DARK).split(";").find(item => item.startsWith(`${name}:`)).slice(name.length + 1);
 /** The theme that the page shows now: its --scheme ("dark" or "light") and its --bg token. */
@@ -23,6 +24,8 @@ export async function expectTheme(page, theme, message = "") {
  * Runs in the page (pass it to page.evaluate). With a list of [kind, selector], it measures each visible element of each
  * selector and throws when a selector finds none. With no list, it measures every visible element with its own text.
  * Each result: { kind, text, ratio, need }, where need is 3 for large text (24 px, or 18.66 px bold) and 4.5 otherwise.
+ * A list item [kind, selector, "edge"] measures the control itself (WCAG 1.4.11, need 3): the better of its fill and its
+ * border against the colour behind it.
  */
 export function measureContrast(list = null) {
   const rgba = text => { const v = text.match(/[\d.]+/g).map(Number); return [v[0], v[1], v[2], v[3] ?? 1]; };
@@ -54,11 +57,17 @@ export function measureContrast(list = null) {
     const worst = Math.min(...backs(element).map(back => ratio(over([...color.slice(0, 3), color[3] * opacity], back), back)));
     return { kind, text: element.textContent.trim().slice(0, 60), ratio: Math.round(worst * 100) / 100, need };
   };
+  const edge = (kind, element) => {
+    const style = getComputedStyle(element), looks = [rgba(style.backgroundColor)];
+    if (parseFloat(style.borderTopWidth) > 0) looks.push(rgba(style.borderTopColor));
+    const worst = Math.min(...backs(element.parentElement).map(back => Math.max(...looks.map(look => ratio(over(look, back), back)))));
+    return { kind, text: element.textContent.trim().slice(0, 60), ratio: Math.round(worst * 100) / 100, need: 3 };
+  };
   const shown = element => element.getClientRects().length && element.checkVisibility({ visibilityProperty: true, opacityProperty: true }) && !element.closest(".vh");
-  if (list) return list.map(([kind, selector]) => {
+  if (list) return list.map(([kind, selector, part = "text"]) => {
     const elements = [...document.querySelectorAll(selector)].filter(element => element.getClientRects().length);
-    if (!elements.length) throw new Error(`No sample ${kind} text`);
-    return elements.map(element => measure(kind, element));
+    if (!elements.length) throw new Error(`No sample ${kind} ${part}`);
+    return elements.map(element => (part === "edge" ? edge : measure)(kind, element));
   });
   return [...document.querySelectorAll("body *")]
     .filter(element => !["SCRIPT", "STYLE", "OPTION"].includes(element.tagName) && !(element instanceof SVGElement) && [...element.childNodes].some(node => node.nodeType === 3 && node.textContent.trim()) && shown(element))
@@ -67,7 +76,8 @@ export function measureContrast(list = null) {
 
 /**
  * The SAMPLE DATA pages of the contrast tests, from the T233 fixture logbook: the board, a task page, the programs list,
- * a program page waiting for approval, and the Agents page with a lead, its helpers, a stuck agent and both providers.
+ * a program page waiting for approval, the Agents page with a lead, its helpers, a stuck agent and both providers, and
+ * the offline snapshot. The snapshot holds its task and program pages; targets gives the address hash that opens each.
  */
 export function contrastPages() {
   const source = programsSource(), codex = programsSource("codex", { gates: [], runs: [] }), tables = source.projects[0].tables;
@@ -95,6 +105,8 @@ export function contrastPages() {
       programs: renderProgramsHtml(model),
       program: renderProgramsHtml(model, { programKey: program.key }),
       agents: renderAgentsHtml(model),
+      snapshot: renderBoardHtml(model),
     },
+    targets: { "snapshot task": `#task-${b64(task.key)}`, "snapshot programs": "#programs", "snapshot program": `#program-${b64(program.key)}` },
   };
 }
