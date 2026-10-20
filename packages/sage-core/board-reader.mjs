@@ -4,7 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
-import { PROGRAM_ID, TASK_ID } from "./program-rules.mjs";
+import { PROGRAM_ID, TASK_ID, checkPrograms } from "./program-rules.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
 const MAX_FILE = 4 * 1024 * 1024;
@@ -45,7 +45,7 @@ function table(file, name, budget) {
   const columns = header?.split("\t") ?? [];
   if (new Set(columns).size !== columns.length || !TABLES[name].split(" ").every(c => columns.includes(c))) throw new Error("damaged table header");
   const identities = new Set();
-  return lines.map(line => {
+  const rows = lines.map(line => {
     const cells = line.split("\t");
     if (cells.length !== columns.length) throw new Error("damaged table row");
     const row = Object.fromEntries(columns.map((column, i) => [column, cells[i]]));
@@ -55,13 +55,11 @@ function table(file, name, budget) {
       // A program cell that is not a program id shows as "?", as the older board shows a bad id: no hand-edited text reaches the board.
       if (row.program && !PROGRAM_ID.test(row.program)) row.program = "?";
     }
-    if (name === "programs") {
-      // Two rows of one id make the table unreadable, as the state tool refuses it; so does a bad id, pilot or gate cell.
-      if (!PROGRAM_ID.test(row.id) || identities.has(row.id) || !TASK_ID.test(row.pilot) || !/^G[1-9]\d*$/.test(row.gate)) throw new Error("damaged program identity, pilot or gate");
-      identities.add(row.id);
-    }
     return row;
   });
+  // Two rows of one id make the programs table unreadable, as the state tool refuses it; so does a bad id, pilot or gate
+  // cell. The older board (board.mjs) reads it with the same check.
+  return name === "programs" ? checkPrograms(rows) : rows;
 }
 
 const REPOSITORY = String.raw`([A-Za-z0-9][A-Za-z0-9-]*)\/([\w-][\w.-]*?)`;

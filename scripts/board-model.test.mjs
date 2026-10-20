@@ -608,3 +608,38 @@ test("T233 C4: PG1 in the Claude and the Codex logbook of one project stays two 
   assert.deepEqual(both.map(item => [item.key, item.name, item.progressText]), [["claude/sage-ff5ee2/PG1", "Codex support", "3 of 7 merged · T10 abandoned"], ["codex/sage-ff5ee2/PG1", "Codex own", "0 of 2 merged"]]);
   assert.deepEqual(model.tasks.find(item => item.key === "codex/sage-ff5ee2/T2").waitLine, { never: true, text: "Waits for T1 (not in the logbook) and T5 (pilot, not started): it cannot start." }, "the Claude logbook's merged T1 meets no wait of the Codex logbook");
 });
+
+test("F-T233-5: a long chain of waits with no loop, in reverse order, gives its order with no stack overflow, and the loop guard still holds", () => {
+  // 6000 tasks: T6000 waits for T5999, … T2 waits for T1, the pilot. The rows come last task first, so the walk starts at the deep end.
+  const one = programsTables().tasks[0], N = 6000;
+  const tasks = Array.from({ length: N }, (_, i) => ({ ...one, id: `T${N - i}`, state: "framed", program: "PG1", waits: N - i > 1 ? `T${N - i - 1}` : "" }));
+  const tables = { tasks, gates: [{ id: "G1", task: "T1", question: "Approve program PG1? No task builds before you approve.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "approve", at: "" }],
+    programs: [{ id: "PG1", name: "Chain", goal: "g", pilot: "T1", gate: "G1", at: "" }], decisions: [] };
+  const chain = programOf(programsModel([programsSource("claude", tables)]), "PG1");
+  assert.equal(chain.tasks.length, N);
+  assert.deepEqual([chain.tasks[0], chain.tasks[1], chain.tasks.at(-1)].map(key => key.split("/").at(-1)), ["T1", "T2", `T${N}`]);
+  assert.ok(chain.tasks.every((key, i) => key.endsWith(`/T${i + 1}`)), "each task after the task that it waits for");
+  assert.equal(chain.next.id, "T1");
+  // The loop guard of C5 still holds with the walk: the sample loop T81 ↔ T82 keeps its order.
+  assert.deepEqual(programOf(programsModel(), "PG8").tasks.map(key => key.split("/").at(-1)), ["T80", "T82", "T83", "T81"]);
+});
+
+test("F-T233-2, F-T233-3: the model counts a lost program whose gate is open on a card once, on that gate; with the gate row gone it is its own item", () => {
+  const plain = programsTables();
+  plain.gates.find(gate => gate.id === "G12").options = "yes|no";
+  const model = programsModel([programsSource("claude", plain)]);
+  assert.deepEqual([programOf(model, "PG3").state, programOf(model, "PG3").gateFound], ["lost", true]);
+  assert.deepEqual(model.programNeeds.map(need => need.program), ["PG2", "PG7"], "no item of its own for PG3");
+  assert.equal(cardOf(model, "T30").reasons[0].text.split("\u2028").at(-1), "The gate G12 of PG3 is not a breakdown gate on its pilot T30: ask the sage to repair the logbook, or to propose PG3 again.");
+  assert.equal(model.counts.needsOwner, 4);
+  // A hand edit of the question alone (F-T233-3): the state tool's state is proposed, but every printer reads lost.
+  const edited = programsTables();
+  edited.gates.find(gate => gate.id === "G12").question = "Ship it?";
+  const shown = programsModel([programsSource("claude", edited)]);
+  assert.equal(programOf(shown, "PG3").state, "lost");
+  assert.deepEqual(cardOf(shown, "T32").waitLine, { never: true, text: "Waits for the PG3 breakdown, whose gate G12 is not a breakdown gate: it cannot start." });
+  // The gate answered: no card holds it, so the program is its own item, with the same words.
+  const answered = programsTables();
+  Object.assign(answered.gates.find(gate => gate.id === "G12"), { options: "yes|no", answer: "yes" });
+  assert.deepEqual(programsModel([programsSource("claude", answered)]).programNeeds.find(need => need.program === "PG3").title, "The gate G12 of PG3 is not a breakdown gate on its pilot T30");
+});

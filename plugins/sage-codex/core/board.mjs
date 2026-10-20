@@ -12,7 +12,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import { projectName as shownName } from "./board-model.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
-import { gateLines } from "./program-rules.mjs";
+import { checkPrograms, gateLines } from "./program-rules.mjs";
 export function createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock }) {
 
 const FOLDER = /^([a-z0-9-]+)-[0-9a-f]{6}$/;
@@ -143,8 +143,9 @@ function logbooks(root) {
         if (task && ms > (book.changed[task] ?? -Infinity)) book.changed[task] = ms;
       }
       for (const r of ledger) if (r.task && r.sha) book.reviewed[r.task] = r.sha; // the last one: the reviewed head
-      // The programs rows mark a breakdown gate (gateLines). A table that cannot be read marks none, so every gate stays one line.
-      const programs = (() => { try { return read(dir, "programs"); } catch { return []; } })();
+      // The programs rows mark a breakdown gate (gateLines). A table that cannot be read, or that the rich board's check
+      // refuses (checkPrograms: two rows of one id, a bad cell), marks none, so every gate stays one line.
+      const programs = (() => { try { return checkPrograms(read(dir, "programs")); } catch { return []; } })();
       Object.assign(book, { tasks, runs, gates, programs });
     } catch (e) {
       book.error = text(e.message.replaceAll(`${dir}/`, "").replaceAll(dir, folder), 120); // the reason, not the long path

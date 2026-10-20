@@ -14,6 +14,19 @@ export const MET = ["merged", "concluded"];
 export const ENDED = [...MET, "abandoned"];
 export const TASK_ID = /^T[1-9]\d*$/;
 export const PROGRAM_ID = /^PG[1-9]\d*$/;
+export const GATE_ID = /^G[1-9]\d*$/;
+/**
+ * The programs table as both boards read it (C3, T233): two rows of one id, or a bad id, pilot or gate cell, make it
+ * unreadable (it throws), as the state tool never writes such a table. So no board marks a gate from a damaged table.
+ */
+export const checkPrograms = (rows) => {
+  const ids = new Set();
+  for (const row of rows) {
+    if (!PROGRAM_ID.test(row.id) || ids.has(row.id) || !TASK_ID.test(row.pilot) || !GATE_ID.test(row.gate)) throw new Error("damaged program identity, pilot or gate");
+    ids.add(row.id);
+  }
+  return rows;
+};
 /** The words of a waits value, as a write and a read split them: by commas or spaces. */
 export const waitWords = (value) => String(value ?? "").split(/[\s,]+/).filter(Boolean);
 /**
@@ -74,9 +87,20 @@ export function dead(state) {
  */
 export const breakdownGate = (gate, programs) => {
   const id = proposalOf(gate);
-  if (!id || gate.options !== BREAKDOWN) return undefined;
+  if (!id || gate?.options !== BREAKDOWN) return undefined;
   for (const p of programs?.values() ?? []) if (p.id === id && p.gate === gate.id && p.pilot === gate.task) return id;
   return undefined;
+};
+/**
+ * The wait graph as every printer shows it (the boards and the status line; never a write rule or the merge check): a
+ * program is proposed or changing only while its gate is its breakdown gate by the data rule (breakdownGate); else it is
+ * lost, so no line says that a breakdown waits for the owner while Needs you shows the gate as a plain gate. Each program
+ * also says if its gate row is in the logbook (gateFound), so a lost program says why.
+ */
+export const shownGraph = ({ byId, programs }, gates) => {
+  const gateOf = byIds(gates);
+  const shown = (p) => (["proposed", "changing"].includes(p.state) && breakdownGate(gateOf.get(p.gate), programs) !== p.id ? "lost" : p.state);
+  return { byId, programs: new Map([...programs].map(([id, p]) => [id, { ...p, state: shown(p), gateFound: gateOf.has(p.gate) }])) };
 };
 /**
  * A gate's question as the board and status show it, line by line: only a breakdown gate's question (breakdownGate) has

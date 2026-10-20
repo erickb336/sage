@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
-import { ENDED, MET, breakdownGate, dead, gateLines, progressOf, progressText, waitGraph, waitsOf, waitsWithState } from "./program-rules.mjs";
+import { ENDED, MET, breakdownGate, dead, gateLines, progressOf, progressText, shownGraph, waitGraph, waitsOf, waitsWithState } from "./program-rules.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -221,8 +221,11 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, gates,
 const WAIT_WORD = { backlog: "not started", design: "in design", building: "building", review: "in review", ready: "ready to merge" };
 /** A task state as a wait names it: "merged", "in review", or "not in the logbook" for a task that the logbook lost. */
 const stateWord = state => state === undefined ? "not in the logbook" : ["merged", "concluded", "abandoned"].includes(state) ? state : WAIT_WORD[COLUMNS.find(([, , states]) => states.includes(state))?.[0]] ?? state;
-/** The graph of one logbook's waits and programs: its tasks by id and each program with its state. */
-const graphOf = project => waitGraph((project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)), project.tables.programs ?? [], project.tables.gates ?? [], project.tables.decisions ?? []);
+/** The graph of one logbook's waits and programs: its tasks by id and each program with its state, as every printer shows it (shownGraph). */
+const graphOf = project => shownGraph(waitGraph((project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)), project.tables.programs ?? [], project.tables.gates ?? [], project.tables.decisions ?? []), project.tables.gates ?? []);
+/** Why a lost program is lost, in the words of each line that names it: its gate row is gone, or the row is not its breakdown gate. */
+const lostWhy = program => program.gateFound ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`;
+const LOST_FIX = id => `ask the sage to repair the logbook, or to propose ${id} again.`;
 /**
  * Each wait of a task, with its state: a task (met when merged or concluded; never met when abandoned or lost), the pilot
  * of its program, the breakdown that the owner has not approved (never met when dropped or lost), or a waits cell with
@@ -230,14 +233,14 @@ const graphOf = project => waitGraph((project.tables.tasks ?? []).filter(task =>
  */
 const waitsFor = (task, graph) => waitsWithState(task, graph).map(wait =>
   wait.odd ? { odd: true, met: false, never: true }
-  : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
+  : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state, gateFound: !!wait.program.gateFound }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
   : { id: wait.id, state: wait.state ?? null, word: stateWord(wait.state), pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) });
 const BREAKDOWN_WAIT = {
   proposed: (id, gate) => `your approval of the ${id} breakdown (gate ${gate})`,
   changing: (id, gate) => `the new breakdown of ${id}: you asked for changes (gate ${gate})`,
   dropped: (id, gate) => `the ${id} breakdown, which you dropped (gate ${gate})`,
 };
-const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.gate ? `whose gate ${wait.breakdown.gate} is not in the logbook` : "which is not in the logbook"}`
+const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : wait.breakdown.gate ? `whose gate ${wait.breakdown.gate} is not in the logbook` : "which is not in the logbook"}`
   : `${wait.id} (${wait.pilot ? "pilot, " : ""}${wait.word})`;
 /**
  * The card's wait line, or null when nothing waits: each unmet wait (only the breakdown, when it waits for one), and
@@ -268,9 +271,11 @@ function card(source, project, group, task, now, graph) {
   const allGates = rows(project, "gates", task), gates = allGates.filter(gate => !gate.answer);
   // Only a breakdown gate keeps its lines (gateLines), and only by the data rule (breakdownGate: a programs row names it,
   // on its pilot, with the breakdown options): the renderers split no other question into lines (R1249-1, the owner's Q1).
+  // An open gate that a lost program names (F-T233-2) says so on its own line of the question, so Needs you counts that problem once.
   const reasons = gates.map(gate => {
     const breakdown = breakdownGate(gate, graph.programs);
-    return { kind: "gate", key: `${project.key}/${gate.id}`, text: gateLines(gate, graph.programs).join(LINE), recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
+    const lost = [...graph.programs.values()].filter(program => program.state === "lost" && program.gate === gate.id).map(program => `${lostWhy(program)}: ${LOST_FIX(program.id)}`);
+    return { kind: "gate", key: `${project.key}/${gate.id}`, text: [...gateLines(gate, graph.programs), ...lost].join(LINE), recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
       breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.programs.get(breakdown).name } : null };
   });
   if (task.state === "awaiting-you" && !gates.length && !allGates.at(-1)?.answer) reasons.push({ kind: "design", text: "The design waits for your answer." });
@@ -545,24 +550,33 @@ function agentsOf(sources, groups, groupOf, cards, at) {
 
 /**
  * The tasks of a program in their order: the pilot first, then each task after the tasks of the program that it waits
- * for, then by id. A hand edit can make a loop of waits that the state tool would refuse, so each task is marked before
- * its waits are read: a loop ends there (C5).
+ * for, then by id. A hand edit can make a loop of waits that the state tool would refuse: a wait on a task whose depth
+ * is still open counts as 0, so a loop ends there (C5). The walk keeps its own stack, so a long chain of waits cannot
+ * overflow the call stack (F-T233-5).
  */
 function programOrder(program, own) {
-  const byId = new Map(own.map(task => [task.id, task])), depth = new Map();
+  const byId = new Map(own.map(task => [task.id, task])), depth = new Map(), open = new Set();
   const pilot = byId.has(program.pilot);
-  const of = task => {
-    if (depth.has(task.id)) return depth.get(task.id);
-    depth.set(task.id, 0);
-    if (task.id === program.pilot) return 0;
-    const ups = waitsOf(task).ids.filter(id => byId.has(id)).map(id => of(byId.get(id)));
-    if (pilot) ups.push(0);
-    const d = ups.length ? 1 + Math.max(...ups) : 0;
-    depth.set(task.id, d);
-    return d;
-  };
+  const upsOf = task => task.id === program.pilot ? [] : waitsOf(task).ids.filter(id => byId.has(id));
+  for (const start of own) {
+    if (depth.has(start.id)) continue;
+    const stack = [[start, upsOf(start), 0]];
+    open.add(start.id);
+    while (stack.length) {
+      const top = stack.at(-1), [task, ups] = top;
+      const next = ups[top[2]++];
+      if (next !== undefined) {
+        if (!depth.has(next) && !open.has(next)) { open.add(next); stack.push([byId.get(next), upsOf(byId.get(next)), 0]); }
+        continue;
+      }
+      const values = [...ups.map(id => depth.get(id) ?? 0), ...(pilot && task.id !== program.pilot ? [0] : [])];
+      depth.set(task.id, values.length ? 1 + Math.max(...values) : 0);
+      open.delete(task.id);
+      stack.pop();
+    }
+  }
   const number = id => Number(id.slice(1));
-  return own.map(task => [task, of(task)]).sort((a, b) => a[1] - b[1] || number(a[0].id) - number(b[0].id)).map(([task]) => task);
+  return own.map(task => [task, depth.get(task.id)]).sort((a, b) => a[1] - b[1] || number(a[0].id) - number(b[0].id)).map(([task]) => task);
 }
 
 /**
@@ -572,7 +586,7 @@ function programOrder(program, own) {
  * (a stuck program; a breakdown gate that the logbook lost, QA). A changing program needs no one until its new gate (QB).
  */
 function programsOf(source, project, group, graph, cards) {
-  const tasks = [...graph.byId.values()], gates = new Set((project.tables.gates ?? []).map(gate => gate.id));
+  const tasks = [...graph.byId.values()], gates = new Map((project.tables.gates ?? []).map(gate => [gate.id, gate]));
   return [...graph.programs.values()].map(program => {
     const own = tasks.filter(task => task.program === program.id), progress = progressOf(own), pilotState = graph.byId.get(program.pilot)?.state;
     const state = program.state !== "active" ? program.state : progress.done ? "done" : dead(pilotState) ? "stuck" : "active";
@@ -581,9 +595,10 @@ function programsOf(source, project, group, graph, cards) {
     const moving = open.filter(item => item.waits.every(wait => wait.met)), waiting = open.filter(item => item.waitLine);
     const first = state === "active" ? moving[0] : null;
     const need = state === "stuck" ? { kind: "stuck", title: `${program.id} ${program.name} is stuck`, text: `The pilot ${program.pilot} ${pilotState ? "was abandoned" : "is not in the logbook"}. Choose a new pilot, or drop the program.` }
-      : state === "lost" ? { kind: "lost", title: gates.has(program.gate) ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`, text: `Ask the sage to repair the logbook, or to propose ${program.id} again.` }
+      // A lost program whose gate is open on a card that shows says so on that gate (card), so the problem counts once.
+      : state === "lost" && !(gates.get(program.gate) && !gates.get(program.gate).answer && card({ id: gates.get(program.gate).task })?.visible) ? { kind: "lost", title: lostWhy(program), text: title(LOST_FIX(program.id)) }
       : null;
-    return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate,
+    return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate, gateFound: program.gateFound, open: open.length,
       source: source.id, sourceLabel: source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
       state, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`),
       next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === program.pilot } : null,
@@ -615,8 +630,9 @@ export function buildBoardModel(sources, { now = new Date().toISOString() } = {}
   const LISTS = ["needs", "active", "idle", "archived"];
   const projects = groups.map(group => {
     const own = tasks.filter(task => task.group === group.key), live = shown.filter(task => task.group === group.key);
-    const last = Math.max(0, ...own.map(recent)), needsOwner = live.filter(task => task.reasons.length).length + programNeeds.filter(need => need.group === group.key).length;
-    return { key: group.key, name: group.name, sub: group.sub, pathSub: group.pathSub ?? null, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
+    // programNeeds: the program items in needsOwner, which no card holds, so the page script adds them to its own counts (F-T233-1).
+    const last = Math.max(0, ...own.map(recent)), extra = programNeeds.filter(need => need.group === group.key).length, needsOwner = live.filter(task => task.reasons.length).length + extra;
+    return { key: group.key, name: group.name, sub: group.sub, pathSub: group.pathSub ?? null, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, programNeeds: extra, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
       list: group.archived ? "archived" : needsOwner ? "needs" : last && at - last <= ACTIVE_DAYS * 86400000 ? "active" : "idle" };
   }).sort((a, b) => LISTS.indexOf(a.list) - LISTS.indexOf(b.list) || (a.list === "needs" ? b.needsOwner - a.needsOwner : 0) || (Date.parse(b.lastActivity ?? 0) || 0) - (Date.parse(a.lastActivity ?? 0) || 0) || a.name.localeCompare(b.name));
   const archived = projects.filter(project => project.archived).map(project => ({ key: project.key, name: project.name, tasks: project.tasks, needsOwner: project.needsOwner }));

@@ -374,7 +374,7 @@ test("R1245-1: a breakdown gate's lines (U+2028 in its cell) show as lines on th
   const data = sample([row("T1", "framed", { program: "PG1" })], { programs: [{ id: "PG1", name: "Codex support", goal: "Sample", pilot: "T1", gate: "G1", at }], gates: [{ id: "G1", task: "T1", question, options: "approve|change|drop", recommendation: "approve", answer: "" }] });
   const html = renderBoardHtml(data, { snapshot: false });
   assert.ok(html.includes("<b>Needs you:</b> Approve program PG1? No task builds before you approve.<br>Name: Codex support<br>Pilot, runs first:<br>  T1: &lt;b&gt;Ship&lt;/b&gt; it: 100% done<br>I recommend: approve</span>"), html);
-  assert.ok(renderBoardText(data).includes("#### ◫ Program approval\n**1 · PG1 Codex support** · sample · project · pilot T1 · gate G1\n> Approve program PG1? No task builds before you approve\\.\\\n> Name: Codex support\\\n> Pilot, runs first:\\\n>   T1: \\<b\\>Ship\\</b\\> it: 100% done\\\n> Options: 1: approve"), renderBoardText(data));
+  assert.ok(renderBoardText(data).includes("#### ◫ Program approval\n**1 · PG1 Codex support** · sample · project · pilot T1 · gate G1\n> sample/project-abcdef/G1 · Approve program PG1? No task builds before you approve\\.\\\n> Name: Codex support\\\n> Pilot, runs first:\\\n>   T1: \\<b\\>Ship\\</b\\> it: 100% done\\\n> Options: 1: approve"), renderBoardText(data));
   assert.ok(renderTaskText(data.tasks[0]).includes("Needs you: Approve program PG1? No task builds before you approve\\.\nName: Codex support\nPilot, runs first:\n  T1: \\<b\\>Ship\\</b\\> it: 100% done\nI recommend: approve"), renderTaskText(data.tasks[0]));
 });
 
@@ -423,12 +423,12 @@ test("T305 F-T305-9: under a filter, the Needs you chip and each project's chip 
   const card = (project, priority, provider = "claude", extra = {}) => ({ project, priority, provider, kind: "ui", needs: "true", ...extra });
   const cards = [card("a", "P0"), card("a", "P1"), card("b", "P1", "codex"), card("b", "P2"), card("c", "P0", "claude", { needs: "false" }), card("old", "P1", "claude", { archived: "" })];
   const none = { project: "", who: "", priority: "", kind: "" };
-  assert.deepEqual(needCounts(cards, none), { all: 4, projects: { a: 2, b: 2, old: 1 } });
-  assert.deepEqual(needCounts(cards, { ...none, priority: "P1" }), { all: 2, projects: { a: 1, b: 1, old: 1 } });
-  assert.deepEqual(needCounts(cards, { ...none, who: "codex" }), { all: 1, projects: { b: 1 } });
-  assert.deepEqual(needCounts(cards, { ...none, priority: "none" }), { all: 0, projects: {} });
-  assert.deepEqual(needCounts(cards, { ...none, project: "old", priority: "P1" }), { all: 1, projects: { a: 1, b: 1, old: 1 } }, "a chosen archived project counts its own");
-  assert.ok(BOARD_ENHANCEMENT.includes("function needCounts(cards, S)") && BOARD_ENHANCEMENT.includes("set('needs-count',need.all)") && BOARD_ENHANCEMENT.includes("const n=need.projects[c.dataset.pick]||0"), "the page counts with this function");
+  assert.deepEqual(needCounts(cards, none), { all: 4, programs: 0, projects: { a: 2, b: 2, old: 1 } });
+  assert.deepEqual(needCounts(cards, { ...none, priority: "P1" }), { all: 2, programs: 0, projects: { a: 1, b: 1, old: 1 } });
+  assert.deepEqual(needCounts(cards, { ...none, who: "codex" }), { all: 1, programs: 0, projects: { b: 1 } });
+  assert.deepEqual(needCounts(cards, { ...none, priority: "none" }), { all: 0, programs: 0, projects: {} });
+  assert.deepEqual(needCounts(cards, { ...none, project: "old", priority: "P1" }), { all: 1, programs: 0, projects: { a: 1, b: 1, old: 1 } }, "a chosen archived project counts its own");
+  assert.ok(BOARD_ENHANCEMENT.includes("function needCounts(cards, S, programs)") && BOARD_ENHANCEMENT.includes("set('needs-count',need.all)") && BOARD_ENHANCEMENT.includes("const n=need.projects[c.dataset.pick]||0"), "the page counts with this function");
 });
 
 test("T305: the live pill is no live region; a hidden status line is there for a failure only; the 6 columns fit at 701 to 1180 px", () => {
@@ -450,8 +450,8 @@ const breaksOf = text => text.split("\n").flatMap((line, i, lines) => {
 
 test("T233: the chat board has the Program approval and Other headings, the Programs section, and the program tag and wait line on cards", () => {
   const text = renderBoardText(buildBoardModel([programsSource()], { now: PROGRAMS_NOW }));
-  assert.ok(text.startsWith("**sage board** · built 2026-10-20 12:00 UTC\\\n🔴 4 needs you · 0 agents at work · 🔁 1 in review · 18 tasks\n\n### 🔴 Needs you\n#### ◫ Program approval\n**1 · PG3 Board programs** · claude · sage \\(sample\\) · pilot T30 · gate G12\n> Approve program PG3? No task builds before you approve\\.\\\n> Name: Board programs\\\n> Goal: Sample goal\\.\\\n> Pilot, runs first:\\\n>   T30: Sample T30\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve\n\n#### Other\n**2 · PG2 Lead build is stuck** · claude · sage \\(sample\\)\n> The pilot T21 was abandoned\\. Choose a new pilot, or drop the program\\.\n\n**3 · The breakdown gate G30 of PG7 is not in the logbook** · claude · sage \\(sample\\)\n> Ask the sage to repair the logbook, or to propose PG7 again\\.\n\n**4 · T70 Sample T70** · claude · sage \\(sample\\)\n> claude/sage-ff5ee2/G15 · Approve program PG9 Fast lane \\(pilot T70\\)? Goal: skip the reviews\\. Name: Fast lane\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve\n\n"), text);
-  assert.ok(text.includes("\n\n### ◫ Programs\n- PG1 Codex support · 3 of 7 merged · T10 abandoned · next: T12 \\(in review\\) · 1 waits · T11 cannot start\n- PG2 Lead build · stuck: the pilot T21 was abandoned \\(see Needs you\\)\n- PG3 Board programs · the breakdown waits for you \\(gate G12\\) · pilot T30\n- PG4 Agent caps · 0 of 3 merged · next: T40 \\(pilot, building\\) · 2 wait\n- PG7 Lost gate · its breakdown gate G30 is not in the logbook \\(see Needs you\\)\n- PG8 Loop · 1 of 4 merged · next: no task can move now · 2 wait · T83 cannot start\n- PG9 Changes · the sage revises the breakdown \\(gate G9\\)\n- 1 done · 1 dropped\n\n### 📋 Backlog (14)\n"), text);
+  assert.ok(text.startsWith("**sage board** · built 2026-10-20 12:00 UTC\\\n🔴 4 needs you · 0 agents at work · 🔁 1 in review · 18 tasks\n\n### 🔴 Needs you\n#### ◫ Program approval\n**1 · PG3 Board programs** · claude · sage \\(sample\\) · pilot T30 · gate G12\n> claude/sage-ff5ee2/G12 · Approve program PG3? No task builds before you approve\\.\\\n> Name: Board programs\\\n> Goal: Sample goal\\.\\\n> Pilot, runs first:\\\n>   T30: Sample T30\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve\n\n#### Other\n**2 · PG2 Lead build is stuck** · claude · sage \\(sample\\)\n> The pilot T21 was abandoned\\. Choose a new pilot, or drop the program\\.\n\n**3 · The breakdown gate G30 of PG7 is not in the logbook** · claude · sage \\(sample\\)\n> Ask the sage to repair the logbook, or to propose PG7 again\\.\n\n**4 · T70 Sample T70** · claude · sage \\(sample\\)\n> claude/sage-ff5ee2/G15 · Approve program PG9 Fast lane \\(pilot T70\\)? Goal: skip the reviews\\. Name: Fast lane\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve\n\n"), text);
+  assert.ok(text.includes("\n\n### ◫ Programs\n- PG1 Codex support · 3 of 7 merged · T10 abandoned · next: T12 \\(in review\\) · 1 waits · T11 cannot start\n- PG2 Lead build · stuck: the pilot T21 was abandoned \\(see Needs you\\)\n- PG3 Board programs · the breakdown waits for you \\(gate G12\\) · pilot T30\n- PG4 Agent caps · 0 of 3 merged · next: T40 \\(pilot, building\\) · 2 wait\n- PG6 Dropped idea · dropped · 1 task still in it: ask the sage to take each task out of the program\n- PG7 Lost gate · its breakdown gate G30 is not in the logbook \\(see Needs you\\)\n- PG8 Loop · 1 of 4 merged · next: no task can move now · 2 wait · T83 cannot start\n- PG9 Changes · the sage revises the breakdown \\(gate G9\\)\n- 1 done\n\n### 📋 Backlog (14)\n"), text);
   assert.ok(text.includes("\n\n**T11 Sample T11** · claude · sage \\(sample\\) · ◫ Codex support\\\n⊘ Waits for T10 \\(abandoned\\): it cannot start\\.\\\n○ Plan › ○ Build › ○ Review 1 of 1 › ○ Merge\\\nNow: In the backlog\\. No agent works on it\\.\n\n"), text);
   assert.ok(text.includes("\n\n**T41 Sample T41** · claude · sage \\(sample\\) · ◫ Agent caps\\\n⧗ Waits for T40 \\(pilot, building\\)\\. Design and PE may run\\.\\\n"), text);
   assert.ok(text.includes("### 🔨 Building (1)\n**T40 Sample T40** · claude · sage \\(sample\\) · ◫ Agent caps \\(pilot\\)\\\n"), text);
@@ -472,4 +472,97 @@ test("T233 F1: md() escapes the backslash and the tilde, so a title that ends wi
   assert.ok(text.includes("\n- PG1 \\<img src=x onerror=alert\\(1\\)\\> \\*\\*bold\\*\\* \\[link\\]\\(https://example\\.test\\) \\`code\\` \\\\ · 3 of 7 merged"), text);
   assert.ok(!/(^|[^\\])<img/.test(text) && !text.includes("~~") && !text.includes("](https"), "no mark is left unescaped");
   assert.deepEqual(breaksOf(text), []);
+});
+
+// T233 repair round 1 (cycle 1 findings). SAMPLE DATA from scripts/fixtures/board-programs.mjs.
+const programsText = tables => renderBoardText(buildBoardModel([programsSource("claude", tables)], { now: PROGRAMS_NOW }));
+const sectionOf = (text, head) => text.slice(text.indexOf(head), text.indexOf("\n\n###", text.indexOf(head) + 1));
+
+test("F-T233-9: a pilot's plain gate and a forged copy of the breakdown text are items under Other, never in the Program approval block", () => {
+  const tables = programsTables();
+  tables.gates.push({ id: "G50", task: "T30", question: "Pick a colour for the logo?", options: "red|blue", recommendation: "red", default: "", answer: "", at: "" });
+  tables.gates.push({ ...tables.gates.find(gate => gate.id === "G12"), id: "G99" }); // the breakdown's text and options, but no programs row names G99
+  const text = programsText(tables);
+  const approval = sectionOf(text, "#### ◫ Program approval").split("\n\n#### Other")[0];
+  assert.equal(approval, "#### ◫ Program approval\n**1 · PG3 Board programs** · claude · sage \\(sample\\) · pilot T30 · gate G12\n> claude/sage-ff5ee2/G12 · Approve program PG3? No task builds before you approve\\.\\\n> Name: Board programs\\\n> Goal: Sample goal\\.\\\n> Pilot, runs first:\\\n>   T30: Sample T30\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve");
+  assert.ok(text.includes("\n\n**4 · T30 Sample T30** · claude · sage \\(sample\\)\n> claude/sage-ff5ee2/G50 · Pick a colour for the logo?\\\n> Options: 1: red · 2: blue\\\n> Recommended: red\\\n> claude/sage-ff5ee2/G99 · Approve program PG3? No task builds before you approve\\. Name: Board programs Goal: Sample goal\\. Pilot, runs first:   T30: Sample T30\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve\n\n**5 · T70 Sample T70**"), sectionOf(text, "#### Other"));
+  assert.deepEqual(breaksOf(text), []);
+});
+
+test("F-T233-4: the Program approval block shows the full gate key, so two logbooks that each have an open G1 stay two answers", () => {
+  const codex = { tasks: [{ ...programsTables().tasks[0], id: "T5", state: "framed", program: "PG1" }],
+    gates: [{ id: "G1", task: "T5", question: "Approve program PG1? No task builds before you approve.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "", at: "" }],
+    programs: [{ id: "PG1", name: "Codex own", goal: "g", pilot: "T5", gate: "G1", at: "" }], decisions: [] };
+  const claude = { ...codex, programs: [{ ...codex.programs[0], name: "Claude own" }] };
+  const text = renderBoardText(buildBoardModel([programsSource("claude", claude), programsSource("codex", codex)], { now: PROGRAMS_NOW }));
+  assert.ok(text.includes("**1 · PG1 Claude own** · claude · sage \\(sample\\) · pilot T5 · gate G1\n> claude/sage-ff5ee2/G1 · Approve program PG1? No task builds before you approve\\.\\\n"), text);
+  assert.ok(text.includes("**2 · PG1 Codex own** · codex · sage \\(sample\\) · pilot T5 · gate G1\n> codex/sage-ff5ee2/G1 · Approve program PG1? No task builds before you approve\\.\\\n"), text);
+});
+
+test("F-T233-1: the page counts the program items that need you, which no card holds: each project's chip carries them, and needCounts adds them while no filter is on", () => {
+  const model = buildBoardModel([programsSource()], { now: PROGRAMS_NOW });
+  const group = model.projects[0].key;
+  assert.deepEqual([model.counts.needsOwner, model.projects[0].needsOwner, model.projects[0].programNeeds], [4, 4, 2]);
+  const html = renderBoardHtml(model, { snapshot: false });
+  assert.ok(html.includes(`data-pick="${group}" data-program-needs="2"`), "the chip carries the project's program items");
+  assert.ok(BOARD_ENHANCEMENT.includes("need=needCounts(cards.map(c=>c.dataset),S,Object.fromEntries(all('[data-program-needs]').map(c=>[c.dataset.pick,Number(c.dataset.programNeeds)])))"), "the page script passes them");
+  assert.ok(BOARD_ENHANCEMENT.includes("set('s-needs',shown.filter(c=>c.dataset.needs==='true').length+need.programs)"));
+  // The page's cards: T30 and T70 need you. With the program items, the page says 4, as the chat does.
+  const cards = [{ project: group, needs: "true", provider: "claude", priority: "", kind: "" }, { project: group, needs: "true", provider: "claude", priority: "", kind: "" }];
+  const none = { project: "", who: "", priority: "", kind: "" }, programs = { [group]: 2 };
+  assert.deepEqual(needCounts(cards, none, programs), { all: 4, programs: 2, projects: { [group]: 4 } });
+  assert.deepEqual(needCounts([], { ...none, project: group }, programs), { all: 2, programs: 2, projects: { [group]: 2 } }, "a project with only program items keeps its chip");
+  assert.deepEqual(needCounts([], { ...none, project: "other" }, programs), { all: 0, programs: 0, projects: { [group]: 2 } });
+  assert.deepEqual(needCounts(cards, { ...none, priority: "P1" }, programs), { all: 0, programs: 0, projects: { [group]: 0 } }, "a program item has no priority");
+});
+
+test("F-T233-6: md() drops format characters and makes controls and separators a space, and a line that starts with a block mark stays text", () => {
+  const tables = programsTables();
+  tables.programs[2].name = "Evil\u202eEXE\u200bzero\u2028line\u2029para\u0085next\u009bend";
+  tables.gates.find(gate => gate.id === "G12").question = ["Approve program PG3? No task builds before you approve.", "===", "---", "- item", "  = two", "Goal: \u202eflip"].join("\u2028");
+  const text = programsText(tables);
+  const approval = sectionOf(text, "#### ◫ Program approval");
+  assert.ok(approval.startsWith("#### ◫ Program approval\n**1 · PG3 EvilEXEzero line para next end** · claude"), approval);
+  assert.ok(approval.includes("\\\n> \\===\\\n> \\---\\\n> \\- item\\\n>   \\= two\\\n> Goal: flip\\\n"), approval);
+  assert.ok(text.includes("\n- PG3 EvilEXEzero line para next end · the breakdown waits for you"), sectionOf(text, "### ◫ Programs"));
+  assert.ok(!/[\u202e\u200b\u2028\u2029\u0085\u009b]/.test(text), "no hidden or format character reaches the chat");
+  assert.deepEqual(breaksOf(text), []);
+});
+
+test("F-T233-10: a dropped program that still has open tasks has its own Programs line, with the next step; one with none is a count", () => {
+  const text = programsText(programsTables());
+  assert.ok(text.includes("\n- PG6 Dropped idea · dropped · 1 task still in it: ask the sage to take each task out of the program\n"), sectionOf(text, "### ◫ Programs"));
+  const out = programsTables();
+  out.tasks.find(item => item.id === "T60").program = "";
+  const empty = programsText(out);
+  assert.ok(!empty.includes("PG6") && empty.includes("\n- 1 done · 1 dropped\n"), sectionOf(empty, "### ◫ Programs"));
+});
+
+test("F-T233-2, F-T233-3, F-T233-7: a program whose gate is not its breakdown gate by the data rule says so in one way on every line, and Needs you shows that problem once", () => {
+  // F-T233-2: G12 is a plain gate (yes|no) that PG3 names: the Programs line and the gate's own item agree, and it counts once.
+  const plain = programsTables();
+  plain.gates.find(gate => gate.id === "G12").options = "yes|no";
+  const model = buildBoardModel([programsSource("claude", plain)], { now: PROGRAMS_NOW }), text = renderBoardText(model);
+  assert.ok(text.includes("\n- PG3 Board programs · its gate G12 is not a breakdown gate on its pilot T30 \\(see Needs you\\)\n"), sectionOf(text, "### ◫ Programs"));
+  assert.ok(text.includes("\n> claude/sage-ff5ee2/G12 · Approve program PG3? No task builds before you approve\\. Name: Board programs Goal: Sample goal\\. Pilot, runs first:   T30: Sample T30\\\n> The gate G12 of PG3 is not a breakdown gate on its pilot T30: ask the sage to repair the logbook, or to propose PG3 again\\.\\\n> Options: 1: yes · 2: no\\\n"), sectionOf(text, "### 🔴 Needs you"));
+  assert.equal(text.split("G12 of PG3").length, 2, "one item says it");
+  assert.equal(model.counts.needsOwner, 4, "T30, T70 and the two other program items: G12 counts once");
+  // F-T233-3: a hand edit changes G12's question; its options and pilot stay. No line says that the breakdown waits for you.
+  const edited = programsTables();
+  edited.gates.find(gate => gate.id === "G12").question = "Ship it?";
+  const shipped = programsText(edited);
+  assert.ok(!shipped.includes("breakdown waits for you") && !shipped.includes("Program approval"), shipped);
+  assert.ok(shipped.includes("\n- PG3 Board programs · its gate G12 is not a breakdown gate on its pilot T30 \\(see Needs you\\)\n"));
+  assert.ok(shipped.includes("\n> claude/sage-ff5ee2/G12 · Ship it?\\\n> The gate G12 of PG3 is not a breakdown gate on its pilot T30: ask the sage to repair the logbook, or to propose PG3 again\\.\\\n"));
+  assert.ok(shipped.includes("⊘ Waits for the PG3 breakdown, whose gate G12 is not a breakdown gate: it cannot start\\."), "the cards agree");
+  // F-T233-7: PG1 and PG2 both name G1, whose text names PG2: G1 is PG2's breakdown, and PG1 is lost, never "waits for you".
+  const one = programsTables().tasks[0];
+  const twin = {
+    tasks: [{ ...one, id: "T1", state: "framed", program: "PG1" }, { ...one, id: "T2", state: "framed", program: "PG2" }],
+    gates: [{ id: "G1", task: "T1", question: "Approve program PG2? No task builds before you approve.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "", at: "" }],
+    programs: [{ id: "PG1", name: "First", goal: "g", pilot: "T1", gate: "G1", at: "" }, { id: "PG2", name: "Second", goal: "g", pilot: "T1", gate: "G1", at: "" }], decisions: [] };
+  const both = programsText(twin);
+  assert.ok(both.includes("\n- PG1 First · its gate G1 is not a breakdown gate on its pilot T1 \\(see Needs you\\)\n- PG2 Second · the breakdown waits for you \\(gate G1\\) · pilot T1"), sectionOf(both, "### ◫ Programs"));
+  assert.ok(both.includes("**1 · PG2 Second** · claude · sage \\(sample\\) · pilot T1 · gate G1\n> claude/sage-ff5ee2/G1 · Approve program PG2? No task builds before you approve\\.\\\n> The gate G1 of PG1 is not a breakdown gate on its pilot T1: ask the sage to repair the logbook, or to propose PG1 again\\.\\\n"), both);
+  assert.equal(both.split("breakdown waits for you").length, 2, "only PG2's breakdown waits for you");
 });
