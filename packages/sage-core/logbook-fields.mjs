@@ -41,6 +41,8 @@ export function agentCaps(config) {
  * flag shows as a black flag.
  */
 export const HIDDEN = /[\0-\x08\x0b-\x1f\x7f-\x9f\u061c\u200b\u200e\u200f\u2060\ufeff\ufe00-\ufe0e\u202a-\u202e\u2066-\u2069\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]|(?<![\p{Extended_Pictographic}0-9#*])\ufe0f|(?<![\p{L}\p{M}](?=[\u200c\u200d]\p{L})|[\p{Extended_Pictographic}\p{Emoji_Modifier}]\ufe0f?(?=\u200d\p{Extended_Pictographic}))[\u200c\u200d]/gu;
+/** The line break inside one table cell, as a breakdown gate's question holds its lines (U+2028): the board shows each line. */
+export const LINE = "\u2028";
 /**
  * The characters that show as nothing although Unicode gives them a visible class: the combining grapheme joiner (U+034F),
  * the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0) and the braille blank (U+2800). Also the line and paragraph

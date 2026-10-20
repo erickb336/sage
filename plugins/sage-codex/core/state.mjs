@@ -22,7 +22,7 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
-import { AGENT_CAPS, FINDING_CLASSES, HIDDEN, NAME_MAX, PRIORITIES, TABLES, TASK_KINDS, countOf, nameProblem } from "./logbook-fields.mjs";
+import { AGENT_CAPS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, TABLES, TASK_KINDS, countOf, nameProblem } from "./logbook-fields.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {} }) {
@@ -1273,18 +1273,20 @@ const waitsOf = (task) => {
 /** The tasks by id, built once by a caller that looks up many waits, so a merge check stays linear. */
 const byIds = (tasks) => new Map(tasks.map((t) => [t.id, t]));
 /**
- * The chief's text (a title, name or goal) in quotes that it cannot end, so it adds no sentence to a line that the owner
- * reads (R1217-4, R1222-1). An allow-list: letters, digits, a combining mark directly after a letter or digit, the space,
- * the apostrophe and . , : ; ! ? ( ) / - & + #. Each other character becomes a space; a run of apostrophes is one. The
- * Spacing Modifier Letters (U+02B0 to U+02FF) are no letters here, as some look like a quote mark (ʺ, ˮ) (K1).
+ * The chief's text (a title, name or goal) as the rest of a line after a fixed label, never in quotes (the owner,
+ * 2026-10-19): every character but a line break (which becomes a space) and a hidden character, with single spaces. So it
+ * adds no line, and "(no title)" stands for a text with nothing left.
  */
-const quote = (text) => `"${text.replace(/[^\p{L}\p{N}\p{M} '.,:;!?()/&+#-]|[\u02B0-\u02FF]|(?<!(?![\u02B0-\u02FF])[\p{L}\p{N}])\p{M}/gu, " ").replace(/'+/g, "'").replace(/ +/g, " ").trim()}"`;
+const oneLine = (text) => cell(String(text ?? "").replace(/[\n\r\u0085\u2028\u2029]/g, " ")).replace(/ {2,}/g, " ") || "(no title)";
+/**
+ * The program of a breakdown gate, from its question's fixed first line, which only program propose writes (gate add
+ * refuses it). It survives a stop between writes and a lost programs or decisions table (R1240-2).
+ */
+const proposalOf = (gate) => /^Approve program (PG[1-9]\d*)[ ?]/.exec(gate?.question ?? "")?.[1];
 /** The options of a breakdown gate, in this order: the owner answers by number. */
 const BREAKDOWN = "approve|change|drop";
-/** The why of each decision row that program propose writes: sage log and task add refuse it, so no other row has it. */
+/** The why of each decision row that program propose writes. */
 const PROPOSE = "program propose";
-/** Refuses the why of program propose's rows, for a command that writes a decision row with the owner's why. */
-const ownWhy = (why) => (cell(why) === PROPOSE ? refuse(`the why "${PROPOSE}" marks the rows that program propose writes. Give another why.`) : why);
 /**
  * A program's state, from the answer of its latest breakdown gate, never from a cell: proposed while the gate is open,
  * active after approve, dropped after drop, changing after change or the owner's own words (they say what to change).
@@ -1437,8 +1439,8 @@ const notStarted = (task, pid, runs, when = "the owner approves its breakdown") 
 };
 /**
  * A program value as its cell holds it: a PG<n> of this logbook, or "" (none or an empty value takes the task out). It
- * refuses another word, a program that the logbook does not have or that the owner dropped, an ended task joining one,
- * any task joining one whose breakdown gate is open, as its question would not name the task (R1215-1), a started task
+ * refuses another word, a program that the logbook does not have or that the owner dropped, an ended task joining or
+ * leaving one (R1242-3), any task joining one whose breakdown gate is open, as its question would not name the task (R1215-1), a started task
  * joining one before its pilot is merged (notStarted), the pilot leaving its program (unless the owner dropped it), and
  * any task leaving a program before the owner approves or drops it (R1204-1). The caller then refuses a loop through the pilot.
  */
@@ -1446,6 +1448,7 @@ function programValue(task, value, { programs, byId }, runs = []) {
   const id = value === "none" ? "" : value;
   const nothing = " Nothing changed.";
   if (id === (task.program ?? "")) return id;
+  if (ENDED.includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task joins no program and leaves none, so its program keeps it in its count.${nothing}`);
   const was = programs.get(task.program);
   if (was?.pilot === task.id && was.state !== "dropped") refuse(`${task.id} is the pilot of ${was.id}, so it stays in ${was.id}: propose a new pilot first (sage program propose ${was.id} --pilot <T>).${nothing}`);
   if (unanswered(was)) refuse(`${task.id} is in ${was.id}, and the owner has not approved or dropped its breakdown (gate ${was.gate}), so ${task.id} stays in it. To leave ${task.id} out, propose ${was.id} again after a change answer, with --tasks that do not name it.${nothing}`);
@@ -1453,7 +1456,6 @@ function programValue(task, value, { programs, byId }, runs = []) {
   if (!PROGRAM_ID.test(id)) refuse(`program takes a program id such as PG1, or none to take the task out; not "${visible(id)}".${nothing}`);
   const program = programs.get(id) ?? missing(`program ${id}`, [...programs.keys()]);
   if (program.state === "dropped") refuse(`the owner dropped ${id} (gate ${program.gate}), so it takes no task. Propose a new program (sage program propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>).${nothing}`);
-  if (ENDED.includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task joins no program. program=none takes a task out.${nothing}`);
   if (program.state === "proposed") refuse(`the breakdown gate ${program.gate} of ${id} is open, and its question does not name ${task.id}, so no task joins ${id} before the owner answers it. Ask the owner to answer change, then propose ${id} again with --tasks that name ${task.id}.${nothing}`);
   if (program.state !== "active") notStarted(task, id, runs);
   else if (!MET.includes(byId.get(program.pilot)?.state)) notStarted(task, id, runs, `its pilot ${program.pilot} is merged or concluded`);
@@ -1833,10 +1835,11 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
 }
 
 /**
- * The programs line of status: each program with its name, its progress (its merged or concluded tasks of those not
- * abandoned; an abandoned task leaves the count, the owner 2026-10-19), its pilot and what it waits for. A done or dropped
- * program keeps its name and count, and a dropped one names the next step for the tasks still in it. The tasks are
- * grouped by program once, so the line is linear in the tasks (R1208-5).
+ * The program lines of status, one for each program: its progress (its merged or concluded tasks of those not abandoned;
+ * an abandoned task leaves the count, the owner 2026-10-19), its pilot and what it waits for, then its name last, after a
+ * label, so the name cannot pass for the status. A done or dropped program keeps its name and count, and a dropped one
+ * names the next step for its tasks that have not ended. The tasks are grouped by program once, so the lines are linear
+ * in the tasks (R1208-5).
  */
 function programsLine(tasks, { byId, programs }) {
   const of = new Map();
@@ -1845,14 +1848,16 @@ function programsLine(tasks, { byId, programs }) {
     const own = of.get(p.id) ?? [], gone = own.filter((t) => t.state === "abandoned").length;
     const counted = own.length - gone, met = own.filter((t) => MET.includes(t.state)).length;
     const progress = `${met} of ${counted} tasks merged${gone ? `, ${gone} abandoned` : ""}`;
-    if (p.state === "dropped") return `${p.id} ${quote(p.name)} dropped${own.length ? `: ${own.length} ${own.length === 1 ? "task" : "tasks"} still in it, take each out with program=none` : ""}`;
-    if (p.state === "active" && counted && met === counted) return `${p.id} ${quote(p.name)} done, ${progress}`;
+    const open = own.filter((t) => !ENDED.includes(t.state)).length;
     const pilot = byId.get(p.pilot)?.state;
-    if (p.state === "active" && dead(pilot)) return `${p.id} ${quote(p.name)}: ${progress}, pilot ${p.pilot} ${pilot ?? "not in the logbook"}: propose a new pilot`;
     const why = { proposed: `, breakdown waits for you (${p.gate})`, changing: `, you asked for changes (${p.gate}): the sage proposes again`, lost: `, its breakdown gate ${p.gate} is not in the logbook` }[p.state] ?? "";
-    return `${p.id} ${quote(p.name)}, pilot ${p.pilot}: ${progress}${why}`;
+    const line = p.state === "dropped" ? `dropped${open ? `: ${open} ${open === 1 ? "task" : "tasks"} still in it, take each out with program=none` : ""}`
+      : p.state === "active" && counted && met === counted ? `done, ${progress}`
+      : p.state === "active" && dead(pilot) ? `${progress}, pilot ${p.pilot} ${pilot ?? "not in the logbook"}: propose a new pilot`
+      : `pilot ${p.pilot}: ${progress}${why}`;
+    return `program ${p.id} · ${line} · name: ${oneLine(p.name)}`;
   });
-  return `programs ${programs.size} · ${each.join(" · ")}`;
+  return each;
 }
 
 /** The status lines. With save, also status.md: only a command that holds the lock saves, so status.md never lags. */
@@ -1867,14 +1872,14 @@ function status(dir, save) {
     // The name that the board shows (T305): the display name, the upstream's or origin's repository, the checkout's folder.
     `sage · ${shownName({ name: basename(dir), ...logbookIdentity(dir) })} · ${now().slice(11, 16)} UTC`,
     `tasks   ${tasks.length}${Object.entries(count).map(([s, n]) => ` · ${s} ${n}`).join("")}`,
-    `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${g.question} (default: ${g.default || "none"})`).join("")}`,
+    `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${g.question.replaceAll(LINE, " / ")} (default: ${g.default || "none"})`).join("")}`,
     `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens`,
   ];
   // The open tasks that wait, each with its unmet waits: a line only when one waits. Then the programs: a line only when there is one.
   const graph = waitGraph(tasks, read(dir, "programs"), read(dir, "gates"));
   const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, unmetWaits(t, graph)]).filter(([, open]) => open.length);
   if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
-  if (graph.programs.size) lines.push(programsLine(tasks, graph));
+  lines.push(...programsLine(tasks, graph));
   const table = ["", "| Task | State | Size | Round | PR | Title |", "| --- | --- | --- | --- | --- | --- |", ...tasks.map((t) => `| ${t.id} | ${t.state} | ${t.size} | ${t.round} | ${t.pr} | ${t.title} |`)];
   if (save) put(join(dir, "status.md"), [`# ${lines[0]}`, "", ...lines.slice(1).map((l) => `    ${l}`), ...table].join("\n") + "\n");
   return lines.join("\n");
@@ -2185,7 +2190,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const odd = [...risk.filter((r) => !RISKS.includes(r)), ...list(opt.add).filter((b) => !BLOCKS.includes(b))];
         if (odd.length) refuse(`unknown: ${odd.join(", ")}. Risks: ${RISKS.join(", ")}. Blocks: ${BLOCKS.join(", ")}`);
         if (size === "investigate" && list(opt.add).includes("build")) refuse("an investigation changes no code, so it takes no build block. Frame the build as its own task: sage task add --size tiny, small or large");
-        const why = opt.add ? ownWhy(need(opt.why, "--why for the added blocks")) : ""; // refuse before anything is written
+        const why = opt.add ? need(opt.why, "--why for the added blocks") : ""; // refuse before anything is written
         const tags = Object.fromEntries(["priority", "kind"].filter((k) => opt[k] !== undefined).map((k) => [k, tag(k, opt[k])]));
         const graph = graphOf(dir), next = { id: nextId(dir, "T"), state: "framed" };
         if (opt.waits !== undefined) tags.waits = waitsValue(next, opt.waits, [...graph.byId.values()]);
@@ -2218,7 +2223,10 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub !== "propose" || more.length) refuse("program takes: propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>, or propose <PG> with --name, --goal, --pilot or --tasks to propose it again");
       const [tasks, programs, gates, runs, decisions] = ["tasks", "programs", "gates", "runs", "decisions"].map((t) => read(dir, t));
       const nothing = " Nothing changed.";
-      const old = id === undefined ? undefined : (programs.find((p) => p.id === id) ?? missing(`program ${id}`, programs.map((p) => p.id)));
+      // A program of that name whose gate is not in the logbook is a propose that stopped before it wrote the gate: the
+      // same command finishes it (R1246-2).
+      const unfinished = id === undefined && opt.name !== undefined ? programs.find((p) => looks(p.name) === looks(opt.name) && !gates.some((g) => g.id === p.gate)) : undefined;
+      const old = unfinished ?? (id === undefined ? undefined : (programs.find((p) => p.id === id) ?? missing(`program ${id}`, programs.map((p) => p.id))));
       const state = old && programState(gates.find((g) => g.id === old.gate), old);
       if (state === "proposed") refuse(`the breakdown gate ${old.gate} of ${old.id} is still open: the owner answers it first. To change the breakdown, the owner answers change, then propose it again.${nothing}`);
       if (state === "dropped") refuse(`the owner dropped ${old.id} (gate ${old.gate}), and a dropped program does not come back. Propose a new program.${nothing}`);
@@ -2250,27 +2258,30 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         notStarted(t, pid, runs);
       }
       const at = now();
-      const round = decisions.filter((d) => d.decision.startsWith(`${pid} proposed`)).length + 1;
+      const round = gates.filter((g) => proposalOf(g) === pid).length + 1;
       // Each task that joins or leaves; the pilot's move is the proposal's own.
       const members = new Set([pilot.id, ...others.map((t) => t.id)]);
       const moved = tasks.map((t) => ({ t, to: members.has(t.id) ? pid : t.program === pid ? "" : t.program })).filter(({ t, to }) => to !== (t.program ?? ""));
-      const quoted = (t) => `${t.id} ${quote(t.title)}`;
-      const item = (t) => `${quoted(t)} (${ENDED.includes(t.state) ? t.state : `waits for ${[...new Set([pilot.id, ...waitsOf(t).ids])].join(", ")}`})`;
-      const question = `Approve ${pid} ${quote(name)}${round > 1 ? ` (round ${round})` : ""}? Goal: ${quote(/[.!?]$/.test(goal) ? goal : `${goal}.`)} Pilot ${quoted(pilot)} runs first.${others.length ? ` Then: ${others.map(item).join(", ")}.` : ""} No task builds before you approve.`;
+      // The question, one part on each line: the fixed text first, then each free text after a fixed label or a task id,
+      // and an ended task's state or its waits but the pilot at the end, in brackets (the owner, 2026-10-19).
+      const tag = (t, waits = waitsOf(t).ids.filter((w) => w !== pilot.id)) => (ENDED.includes(t.state) ? t.state : waits.length ? `waits for ${waits.join(", ")}` : "");
+      const item = (t) => `  ${t.id}  ${oneLine(t.title)}${tag(t) ? `  [${tag(t)}]` : ""}`;
+      const question = [`Approve program ${pid}${round > 1 ? ` (round ${round})` : ""}? No task builds before you approve.`, `Name: ${oneLine(name)}`, `Goal: ${oneLine(goal)}`,
+        "Pilot, runs first:", item(pilot), ...(others.length ? [`Then, each after ${pilot.id}:`, ...others.map(item)] : [])].join(LINE);
       const g = { id: nextId(dir, "G"), task: pilot.id, question, options: BREAKDOWN, recommendation: "approve", default: "", at };
       const row = { id: pid, name, goal, pilot: pilot.id, gate: g.id, at: old?.at ?? at };
       const after = old ? programs.map((p) => (p.id === pid ? row : p)) : [...programs, row];
       const rowsOfMoves = moved.filter(({ t }) => t !== pilot).map(({ t, to }) => ({ at, task: t.id, decision: `program ${t.program || "none"} → ${to || "none"}`, why: PROPOSE }));
       for (const { t, to } of moved) t.program = to;
       noLoop(pilot, waitGraph(tasks, after, gates), { oldPilot: old?.pilot }); // each new wait is a wait for the pilot, so a new loop goes through it
-      const decision = old ? `${pid} proposed again with gate ${g.id}, round ${round}` : `${pid} proposed: ${quote(name)}, pilot ${pilot.id}, tasks ${others.map((t) => t.id).join(",") || "none"}, gate ${g.id}`;
+      const decision = round > 1 ? `${pid} proposed again with gate ${g.id}, round ${round}` : `${pid} proposed with gate ${g.id}, pilot ${pilot.id}, tasks ${others.map((t) => t.id).join(",") || "none"}, name: ${oneLine(name)}`;
       // The program's row first: until the gate's row is written, the program is lost, so a stop between two writes leaves
       // no task of it free to build while its gate is open, also on a new proposal of an approved program (R1235-1).
       write(dir, "programs", after);
       write(dir, "tasks", tasks);
       write(dir, "gates", [...gates, g]);
       write(dir, "decisions", [...decisions, ...rowsOfMoves, { at, task: pilot.id, decision, why: PROPOSE }]);
-      return `${pid} proposed${round > 1 ? ` (round ${round})` : ""} · ${name} · pilot ${pilot.id} · ${others.length ? `tasks ${others.map((t) => t.id).join(", ")}` : "no other task"} · ${g.id} open: ask the owner to approve, change or drop it. To say what to change, the owner may answer in own words. Until the owner approves, no task of ${pid} builds.`;
+      return `${pid} proposed${round > 1 ? ` (round ${round})` : ""} · pilot ${pilot.id} · ${others.length ? `tasks ${others.map((t) => t.id).join(", ")}` : "no other task"} · ${g.id} open: ask the owner to approve, change or drop it. To say what to change, the owner may answer in own words. Until the owner approves, no task of ${pid} builds.`;
     }
     case "round": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));
@@ -2455,6 +2466,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (options.some((o) => /^other ?:/.test(looks(o)))) refuse(`an option may not start with "other:": it marks an answer in the owner's own words.`);
         const pick = (v, what) => options.find((o) => o === v.trim()) ?? options.find((o) => looks(o) === looks(v)) ?? (/^[1-9]\d*$/.test(v.trim()) ? options[Number(v) - 1] : undefined) ?? refuse(`${what} is one of the options, by its text or its number (1 to ${options.length}): ${options.map((o) => JSON.stringify(o)).join(", ")}.`);
         const recommendation = pick(need(opt.recommend, "--recommend"), "--recommend");
+        // Only program propose writes the first line of a breakdown gate, which marks the gate as one (proposalOf).
+        if (/^approve program\b/.test(looks(cell(opt.question ?? "")))) refuse(`a question that starts with "Approve program" is a breakdown gate, and only program propose opens one. Ask it in other words.`);
         const g = { id: nextId(dir, "G"), task: id ?? "", question: need(opt.question, "--question"), options: opt.options, recommendation, default: opt.default === undefined ? "" : pick(opt.default, "--default"), at: now() };
         write(dir, "gates", [...gates, g]);
         return `${g.id} open · ${g.question}`;
@@ -2462,11 +2475,10 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub === "answer") {
         const g = gates.find((x) => x.id === id) ?? missing(`gate ${id}`, gates.map((x) => x.id));
         // A breakdown gate answers once, current or replaced by a newer round, so no second answer undoes a drop or an
-        // approval (R1208-1, R1224-1): a change of mind goes through a new proposal and its own gate. Only a program's row
-        // and the decision rows that program propose writes name them, as sage log and task add refuse that why; a plain
-        // gate with the same options takes a new answer, as other gates do (R1212-2). The program's row keeps its current
-        // gate after a loss of decisions.tsv (R1233-1).
-        if (g.answer && (read(dir, "programs").some((p) => p.gate === g.id) || read(dir, "decisions").some((d) => d.why === PROPOSE && /\bgate (G\d+)(?:, round \d+)?$/.exec(d.decision)?.[1] === g.id))) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the program again (sage program propose <PG>) and the owner answers the new gate. A dropped program does not come back: propose a new one. Nothing changed.`);
+        // approval (R1208-1, R1224-1): a change of mind goes through a new proposal and its own gate. Its own question
+        // marks it, so this holds after a stop between writes and after a lost table (R1240-2); a plain gate with the
+        // same options takes a new answer, as other gates do (R1212-2).
+        if (g.answer && proposalOf(g)) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the program again (sage program propose <PG>) and the owner answers the new gate. A dropped program does not come back: propose a new one. Nothing changed.`);
         // By number only, as the board numbers the options: no agent-written text goes into the command. The owner's own
         // words come as the hex of their UTF-8 bytes, so no text of theirs is in the command either, and are kept with
         // "other: " before them, so they never pass for one of the options.
@@ -2483,7 +2495,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       refuse("gate add or gate answer");
     }
     case "log": {
-      write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: sub === "-" ? "" : sub, decision: need(id, "the decision"), why: ownWhy(need(opt.why, "--why")) }]);
+      write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: sub === "-" ? "" : sub, decision: need(id, "the decision"), why: need(opt.why, "--why") }]);
       return "logged";
     }
     case "status":

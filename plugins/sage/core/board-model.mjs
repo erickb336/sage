@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
-import { PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -167,7 +167,7 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, gates,
 
   // Now: what needs you (the reasons, each once), else what happens on the current step.
   const name = step === "review" ? NAME.review : NAME[step] ?? "";
-  const needs = reasons.length ? reasons.map(reason => `${reason.text}${reason.recommendation ? ` I recommend: ${reason.recommendation}` : ""}`).join(" ") : null;
+  const needs = reasons.length ? reasons.map(reason => `${reason.text}${reason.recommendation ? `${reason.text.includes(LINE) ? LINE : " "}I recommend: ${reason.recommendation}` : ""}`).join(" ") : null;
   const CHIEF = {
     held: () => `${task.hold === "round" ? `Held after ${plural(Number(task.round) || 0, "repair round")} that did not make it clean.` : "Held by the chief."}${answered ? ` You answered gate ${answered.id}, so the chief moves it on.` : ""}`,
     replan: () => `The last repair round did not fix its findings, so the task needs a new plan.${answered ? ` You answered gate ${answered.id}.` : ""}`,

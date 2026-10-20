@@ -11,7 +11,7 @@ import { closeSync, constants, existsSync, fstatSync, openSync, readSync, readdi
 import { createHash, randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import { projectName as shownName } from "./board-model.mjs";
-import { logbookSettings } from "./logbook-fields.mjs";
+import { LINE, logbookSettings } from "./logbook-fields.mjs";
 export function createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock }) {
 
 const FOLDER = /^([a-z0-9-]+)-[0-9a-f]{6}$/;
@@ -325,7 +325,8 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
   const gateLine = (b, g) => {
     const options = optionsOf(g);
     return [
-      `${label(b)} **${g.id}**${g.task ? ` · ${g.task}` : ""} · ${text(g.question)}`,
+      // A breakdown gate's question has lines (LINE): the first after the gate's id, each other on its own line.
+      ...g.question.split(LINE).map((q, i) => (i ? `  ${text(q)}` : `${label(b)} **${g.id}**${g.task ? ` · ${g.task}` : ""} · ${text(q)}`)),
       `  Recommended: ${text(g.recommendation) || "none"}. Default: ${text(g.default) || "none"}.`,
       ...(b.home ? [] : [`  Answer it in a session of ${label(b)}: this board does not know its folder.`]),
       ...(options.length ? options.map((o, i) => `  ${i + 1}. ${text(o)}`) : ["  Options: none."]),

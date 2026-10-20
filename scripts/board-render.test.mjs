@@ -368,6 +368,15 @@ test("T305 R1056-2: a backlog card shows only its step line; a card in another c
   assert.ok(page.includes("<b>Now:</b> In the backlog. No agent works on it.") && page.includes("<b>Next:</b> The build."), "the task page keeps both lines");
 });
 
+test("R1245-1: a breakdown gate's lines (U+2028 in its cell) show as lines on the card, in the text board and on the task text, with the recommendation on a line of its own", () => {
+  const question = ["Approve program PG1? No task builds before you approve.", "Name: Codex support", "Pilot, runs first:", "  T1  <b>Ship</b> it: 100% done"].join(" ");
+  const data = sample([row("T1", "framed")], { gates: [{ id: "G1", task: "T1", question, options: "approve|change|drop", recommendation: "approve", answer: "" }] });
+  const html = renderBoardHtml(data, { snapshot: false });
+  assert.ok(html.includes("<b>Needs you:</b> Approve program PG1? No task builds before you approve.<br>Name: Codex support<br>Pilot, runs first:<br>  T1  &lt;b&gt;Ship&lt;/b&gt; it: 100% done<br>I recommend: approve</span>"), html);
+  assert.ok(renderBoardText(data).includes("> sample/project-abcdef/G1 · Approve program PG1? No task builds before you approve\\.\n> Name: Codex support\n> Pilot, runs first:\n>   T1  \\<b\\>Ship\\</b\\> it: 100% done\n> Options: 1: approve"), renderBoardText(data));
+  assert.ok(renderTaskText(data.tasks[0]).includes("Needs you: Approve program PG1? No task builds before you approve\\.\nName: Codex support\nPilot, runs first:\n  T1  \\<b\\>Ship\\</b\\> it: 100% done\nI recommend: approve"), renderTaskText(data.tasks[0]));
+});
+
 test("T305 F-T305-4: a backlog card that needs you keeps its Needs you line with the question", () => {
   const data = sample([row("T1", "framed"), row("T2", "framed")], { gates: [{ id: "G1", task: "T2", question: "Sample: start with design A or B?", options: "A|B", recommendation: "A", answer: "" }] });
   const html = renderBoardHtml(data, { snapshot: false });
