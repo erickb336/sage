@@ -493,6 +493,10 @@ test("R1245-1: a breakdown gate's question shows each of its lines (U+2028 in it
   const w = world();
   const question = ["Approve program PG1? No task builds before you approve.", "Name: Codex support", "Pilot, runs first:", "  T1: Read Codex's hook events (v0.42.1)"].join(" ");
   add(w, w.book, "gates", ["G20", "T6", question, "approve|change|drop", "approve", "", "", "2026-10-05T03:00:00Z"]);
+  // Without a programs row that names it, the gate is a plain gate: one line (T233 Q1).
+  assert.ok(w.show("this").includes("\n- sage **G20** · T6 · Approve program PG1? No task builds before you approve\\. Name\\: Codex support Pilot, runs first\\:   T1\\: Read Codex's hook events \\(v0\\.42\\.1\\)\n  Recommended: approve. Default: none."), w.show("this"));
+  // A programs row names G20 on its pilot T6: the breakdown gate shows each of its lines.
+  writeFileSync(join(w.home, w.book, "programs.tsv"), "id\tname\tgoal\tpilot\tgate\tat\nPG1\tCodex support\tSample goal\tT6\tG20\t2026-10-05T03:00:00Z\n");
   assert.ok(w.show("this").includes("\n- sage **G20** · T6 · Approve program PG1? No task builds before you approve\\.\n  Name\\: Codex support\n  Pilot, runs first\\:\n  T1\\: Read Codex's hook events \\(v0\\.42\\.1\\)\n  Recommended: approve. Default: none."), w.show("this"));
 });
 

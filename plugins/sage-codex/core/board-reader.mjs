@@ -4,6 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
+import { PROGRAM_ID, TASK_ID } from "./program-rules.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
 const MAX_FILE = 4 * 1024 * 1024;
@@ -16,6 +17,7 @@ const TABLES = {
   ledger: "task pr sha kind cycle run at",
   gates: "id task question options recommendation default answer at",
   decisions: "at task decision why",
+  programs: "id name goal pilot gate at",
 };
 
 function regularBytes(file, budget) {
@@ -48,7 +50,14 @@ function table(file, name, budget) {
     if (cells.length !== columns.length) throw new Error("damaged table row");
     const row = Object.fromEntries(columns.map((column, i) => [column, cells[i]]));
     if (name === "tasks") {
-      if (!/^T[1-9]\d*$/.test(row.id) || identities.has(row.id) || !TASK_STATES.has(row.state)) throw new Error("damaged task identity or state");
+      if (!TASK_ID.test(row.id) || identities.has(row.id) || !TASK_STATES.has(row.state)) throw new Error("damaged task identity or state");
+      identities.add(row.id);
+      // A program cell that is not a program id shows as "?", as the older board shows a bad id: no hand-edited text reaches the board.
+      if (row.program && !PROGRAM_ID.test(row.program)) row.program = "?";
+    }
+    if (name === "programs") {
+      // Two rows of one id make the table unreadable, as the state tool refuses it; so does a bad id, pilot or gate cell.
+      if (!PROGRAM_ID.test(row.id) || identities.has(row.id) || !TASK_ID.test(row.pilot) || !/^G[1-9]\d*$/.test(row.gate)) throw new Error("damaged program identity, pilot or gate");
       identities.add(row.id);
     }
     return row;
@@ -174,7 +183,12 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
         const directory = join(source.path, entry.name), before = lstatSync(directory);
         for (const name of Object.keys(TABLES)) {
           try { project.tables[name] = table(join(source.path, entry.name, `${name}.tsv`), name, budget); }
-          catch (error) { project.diagnostics.push(`${name}: ${error.code ?? error.message}`); }
+          catch (error) {
+            // A logbook from before programs has no programs table: that is a table with no rows while no task names a
+            // program (the state tool's namesProgram rule). Once one does, a missing table is a diagnostic, as for any table.
+            if (name === "programs" && error.code === "ENOENT" && !(project.tables.tasks ?? []).some(task => task.program)) project.tables.programs = [];
+            else project.diagnostics.push(`${name}: ${error.code ?? error.message}`);
+          }
         }
         try { project.observations = validateObservations(parseJson(regular(join(directory, "observations.json"), budget)), { now }); }
         catch (error) {

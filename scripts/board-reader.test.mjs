@@ -131,3 +131,49 @@ test("damaged task identities and states are diagnostics, and repeated artifacts
   assert.ok(Object.keys(result.contents).length < records.length);
   assert.ok(Object.values(result.contents).reduce((bytes, content) => bytes + Buffer.byteLength(content.text ?? ""), 0) <= 16 * 1024 * 1024);
 });
+
+test("T233 C3: the programs table: missing is no rows while no task names a program, else a diagnostic; a damaged header, two rows of one id, or a bad pilot or gate cell make it unreadable; a bad program cell shows as ?", t => {
+  const root = mkdtempSync(join(tmpdir(), "sage-board-reader-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const HEAD = "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\twaits\tprogram\n";
+  const task = (id, program = "", waits = "") => `${id}\tSample\tsmall\t\tbuild\tframed\t\t\t0\t\t${waits}\t${program}\n`;
+  const EMPTY = { runs: "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\n", findings: "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\n", ledger: "task\tpr\tsha\tkind\tcycle\trun\tat\n", gates: "id\ttask\tquestion\toptions\trecommendation\tdefault\tanswer\tat\n", decisions: "at\ttask\tdecision\twhy\n" };
+  const read = (tasks, programs) => {
+    const path = mkdtempSync(join(root, "source-")), project = join(path, "sample-abcdef");
+    mkdirSync(project);
+    writeFileSync(join(project, "tasks.tsv"), HEAD + tasks.join(""));
+    for (const [table, text] of Object.entries(EMPTY)) writeFileSync(join(project, `${table}.tsv`), text);
+    if (programs !== undefined) writeFileSync(join(project, "programs.tsv"), programs);
+    return readBoardSources([{ id: "one", path }])[0].projects[0];
+  };
+  const PROGRAMS = "id\tname\tgoal\tpilot\tgate\tat\n";
+  // A logbook from before programs: no programs table, and no task names a program.
+  const old = read([task("T1")]);
+  assert.deepEqual(old.diagnostics, []);
+  assert.deepEqual(old.tables.programs, []);
+  // A task names a program, and the table is missing: a diagnostic.
+  const lost = read([task("T1", "PG1")]);
+  assert.deepEqual(lost.diagnostics, ["programs: ENOENT"]);
+  assert.equal(lost.tables.programs, undefined);
+  // A good table: its rows as stored, also a name with marks (the renderers escape it).
+  const good = read([task("T1", "PG1"), task("T2", "PG1", "T1")], `${PROGRAMS}PG1\t<b>Codex</b> *support*\tSample goal\tT1\tG1\t2026-10-20T10:00:00Z\n`);
+  assert.deepEqual(good.diagnostics, []);
+  assert.deepEqual(good.tables.programs, [{ id: "PG1", name: "<b>Codex</b> *support*", goal: "Sample goal", pilot: "T1", gate: "G1", at: "2026-10-20T10:00:00Z" }]);
+  assert.equal(good.tables.tasks[1].waits, "T1");
+  // Unreadable: a damaged header, two rows of one id, a bad id, pilot or gate cell. The other tables stay readable.
+  for (const [why, text] of [
+    ["header", "id\tname\tgoal\tpilot\n"],
+    ["twice", `${PROGRAMS}PG1\tA\tg\tT1\tG1\t\nPG1\tB\tg\tT2\tG2\t\n`],
+    ["id", `${PROGRAMS}P1\tA\tg\tT1\tG1\t\n`],
+    ["pilot", `${PROGRAMS}PG1\tA\tg\tX1\tG1\t\n`],
+    ["gate", `${PROGRAMS}PG1\tA\tg\tT1\tgate 1\t\n`],
+  ]) {
+    const bad = read([task("T1", "PG1")], text);
+    assert.equal(bad.tables.programs, undefined, why);
+    assert.deepEqual(bad.diagnostics, [why === "header" ? "programs: damaged table header" : "programs: damaged program identity, pilot or gate"], why);
+    assert.equal(bad.tables.tasks.length, 1, why);
+  }
+  // A program cell that is not a program id shows as ?; a good one stays.
+  const cell = read([task("T1", "<img src=x>"), task("T2", "PG1")], `${PROGRAMS}PG1\tA\tg\tT2\tG1\t\n`);
+  assert.deepEqual(cell.tables.tasks.map(row => row.program), ["?", "PG1"]);
+});

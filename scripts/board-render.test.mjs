@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus, needCounts, BOARD_ENHANCEMENT } from "../packages/sage-core/board-render.mjs";
+import { NOW as PROGRAMS_NOW, programsSource, programsTables } from "./fixtures/board-programs.mjs";
 function model() {
   return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [{ key: "sample/project-abcdef", name: "project-abcdef", diagnostics: [], tables: { tasks: [{ id: "T1", title: "<script>alert(1)</script> & [sample](https://example.test)", size: "small", risk: "auth", route: "build,code-review,qa", state: "held", branch: "", pr: "", round: "1", keys: "" }], gates: [{ id: "G1", task: "T1", question: "Sample: go on?", answer: "" }] } }] }], { now: "2026-10-08T20:00:00Z" });
 }
@@ -205,13 +206,13 @@ test("T218: the chat board shows 5 cards a column in the page's order, with the 
   assert.ok([...title].length <= 80 && [...title].length >= 75, title);
   assert.ok(title.endsWith("…"));
   // F-T218-12: the page's date, summary words and column names; one note for the provider stand-in.
-  assert.ok(text.startsWith("**sage board** · built 2026-10-08 20:00 UTC\n🔴 1 needs you · 1 agents at work · 🔁 1 in review · 49 tasks\n"));
+  assert.ok(text.startsWith("**sage board** · built 2026-10-08 20:00 UTC\\\n🔴 1 needs you · 1 agents at work · 🔁 1 in review · 49 tasks\\\n"));
   assert.ok(text.includes("### 🏁 Done, last 7 days (0)"));
-  assert.ok(text.includes("**T41 Sample T41** · sample · project · PR 3\n✓ Plan › ✓ Build › ▷ Review 1 of 1 › ○ Merge\nNow: No agent works on review cycle 1 of 1 now\\. The board does not know the PR's last commit\\."), text.slice(text.indexOf("**T41"), text.indexOf("**T41") + 200));
+  assert.ok(text.includes("**T41 Sample T41** · sample · project · PR 3\\\n✓ Plan › ✓ Build › ▷ Review 1 of 1 › ○ Merge\\\nNow: No agent works on review cycle 1 of 1 now\\. The board does not know the PR's last commit\\."), text.slice(text.indexOf("**T41"), text.indexOf("**T41") + 200));
   assert.ok(!text.includes("? checks"));
   assert.ok(!text.includes("logbook source)"));
   assert.equal(text.split("A stand-in: the run does not record its provider").length, 2);
-  assert.ok(text.includes("**T50 Sample T50** · sample · project\nSample\\* · implementer at work"));
+  assert.ok(text.includes("**T50 Sample T50** · sample · project\\\nSample\\* · implementer at work"));
   assert.ok(text.length < 3000, `${text.length} characters`);
 });
 
@@ -235,8 +236,8 @@ test("T314: a card and a task page show the display name, the priority and the k
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks[0].key });
   assert.ok(page.includes('<span class="tag prio" title="P1, second priority">P1<span class="vh">, second priority</span></span><span class="tag kind"><span aria-hidden="true">✱</span>Bug fix</span>'), "the task page has the tags too");
   const text = renderBoardText(data);
-  assert.ok(text.includes("**T1 Sample T1** · sample · seacc \\(Council Record\\) · P1 · Bug fix\n"), text);
-  assert.ok(text.includes("\nArchived: Old \\<app\\> (2 tasks · 1 needs you)\n"), text);
+  assert.ok(text.includes("**T1 Sample T1** · sample · seacc \\(Council Record\\) · P1 · Bug fix\\\n"), text);
+  assert.ok(text.includes("\n\nArchived: Old \\<app\\> (2 tasks · 1 needs you)"), text);
   assert.ok(!text.includes("· Old \\<app\\>\n"), "an archived task is not on the chat board");
 });
 
@@ -267,7 +268,7 @@ test("T314 R1040-3: the empty-board text shows only with no task at all; tasks o
 test("T314 R1042-3 R1042-2: each chat diagnostic names its project, and an ignored setting is a warning line, not an incomplete source", () => {
   const model = twoBooks([row("T1", "framed")], [], { diagnostics: ["runs: EACCES"], warnings: ["config: archived is not true or false"] });
   const text = renderBoardText(model);
-  assert.ok(text.endsWith("\nIncomplete source: sample · sample/live-abcdef · its runs file has no read permission\nSetting ignored: sample · sample/live-abcdef · config: archived is not true or false"), text);
+  assert.ok(text.endsWith("\nIncomplete source: sample · sample/live-abcdef · its runs file has no read permission\\\nSetting ignored: sample · sample/live-abcdef · config: archived is not true or false"), text);
   const html = renderBoardHtml(model);
   assert.ok(html.includes("<b>Settings ignored.</b> The board shows these projects without them.<ul class=\"diag\"><li>sample · sample/live-abcdef · config: archived is not true or false</li></ul>"));
 });
@@ -370,10 +371,10 @@ test("T305 R1056-2: a backlog card shows only its step line; a card in another c
 
 test("R1245-1: a breakdown gate's lines (U+2028 in its cell) show as lines on the card, in the text board and on the task text, with the recommendation on a line of its own", () => {
   const question = ["Approve program PG1? No task builds before you approve.", "Name: Codex support", "Pilot, runs first:", "  T1: <b>Ship</b> it: 100% done"].join(" ");
-  const data = sample([row("T1", "framed")], { gates: [{ id: "G1", task: "T1", question, options: "approve|change|drop", recommendation: "approve", answer: "" }] });
+  const data = sample([row("T1", "framed", { program: "PG1" })], { programs: [{ id: "PG1", name: "Codex support", goal: "Sample", pilot: "T1", gate: "G1", at }], gates: [{ id: "G1", task: "T1", question, options: "approve|change|drop", recommendation: "approve", answer: "" }] });
   const html = renderBoardHtml(data, { snapshot: false });
   assert.ok(html.includes("<b>Needs you:</b> Approve program PG1? No task builds before you approve.<br>Name: Codex support<br>Pilot, runs first:<br>  T1: &lt;b&gt;Ship&lt;/b&gt; it: 100% done<br>I recommend: approve</span>"), html);
-  assert.ok(renderBoardText(data).includes("> sample/project-abcdef/G1 · Approve program PG1? No task builds before you approve\\.\n> Name: Codex support\n> Pilot, runs first:\n>   T1: \\<b\\>Ship\\</b\\> it: 100% done\n> Options: 1: approve"), renderBoardText(data));
+  assert.ok(renderBoardText(data).includes("#### ◫ Program approval\n**1 · PG1 Codex support** · sample · project · pilot T1 · gate G1\n> Approve program PG1? No task builds before you approve\\.\\\n> Name: Codex support\\\n> Pilot, runs first:\\\n>   T1: \\<b\\>Ship\\</b\\> it: 100% done\\\n> Options: 1: approve"), renderBoardText(data));
   assert.ok(renderTaskText(data.tasks[0]).includes("Needs you: Approve program PG1? No task builds before you approve\\.\nName: Codex support\nPilot, runs first:\n  T1: \\<b\\>Ship\\</b\\> it: 100% done\nI recommend: approve"), renderTaskText(data.tasks[0]));
 });
 
@@ -382,13 +383,13 @@ test("R1249-1: only a breakdown gate's question shows as lines: a plain gate's l
   const data = sample([row("T1", "framed")], { gates: [{ id: "G1", task: "T1", question, options: "yes|no", recommendation: "yes", answer: "" }] });
   const html = renderBoardHtml(data, { snapshot: false });
   assert.ok(html.includes("<b>Needs you:</b> Ship it? I recommend: no 1. no I recommend: yes</span>"), html);
-  assert.ok(renderBoardText(data).includes("> sample/project-abcdef/G1 · Ship it? I recommend: no 1\\. no\n> Options: 1: yes · 2: no\n> Recommended: yes"), renderBoardText(data));
+  assert.ok(renderBoardText(data).includes("> sample/project-abcdef/G1 · Ship it? I recommend: no 1\\. no\\\n> Options: 1: yes · 2: no\\\n> Recommended: yes"), renderBoardText(data));
   assert.ok(renderTaskText(data.tasks[0]).includes("Needs you: Ship it? I recommend: no 1\\. no I recommend: yes\n"), renderTaskText(data.tasks[0]));
 });
 
 test("R1249-1: a plain gate beside a breakdown gate on one task keeps its own line, not the breakdown's recommendation line", () => {
   const breakdown = ["Approve program PG1? No task builds before you approve.", "Pilot, runs first:", "  T1: Ship it"].join(" ");
-  const data = sample([row("T1", "framed")], { gates: [{ id: "G1", task: "T1", question: breakdown, options: "approve|change|drop", recommendation: "approve", answer: "" }, { id: "G2", task: "T1", question: "Logo A or B?", options: "A|B", recommendation: "A", answer: "" }] });
+  const data = sample([row("T1", "framed", { program: "PG1" })], { programs: [{ id: "PG1", name: "Codex support", goal: "Sample", pilot: "T1", gate: "G1", at }], gates: [{ id: "G1", task: "T1", question: breakdown, options: "approve|change|drop", recommendation: "approve", answer: "" }, { id: "G2", task: "T1", question: "Logo A or B?", options: "A|B", recommendation: "A", answer: "" }] });
   assert.ok(renderBoardHtml(data, { snapshot: false }).includes("<br>  T1: Ship it<br>I recommend: approve<br>Logo A or B? I recommend: A</span>"));
 });
 
@@ -435,4 +436,40 @@ test("T305: the live pill is no live region; a hidden status line is there for a
   assert.ok(html.includes('<span class="livepill" id="live-state"><span class="ld" aria-hidden="true"></span><span class="lt">Board · 20:00</span></span><span class="vh" id="live-alert" role="status"></span>'));
   assert.ok(html.includes("const alert=$('live-alert');if(alert)alert.textContent=kind==='bad'?text:''"));
   assert.ok(html.includes("@media (min-width:701px) and (max-width:1180px){\n .board{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr));overflow-x:visible}"));
+});
+
+// T233: the chat board's programs (PR A). SAMPLE DATA from scripts/fixtures/board-programs.mjs.
+/** The lines of one block that break the F1 rule: each line before another line of its block ends with a hard break (an odd count of backslashes), but not the line before a quote or a heading. */
+const breaksOf = text => text.split("\n").flatMap((line, i, lines) => {
+  const next = lines[i + 1];
+  if (!line || !next || line.startsWith("#") || line.startsWith("- ")) return [];
+  const odd = (/(\\+)$/.exec(line)?.[1].length ?? 0) % 2 === 1;
+  const quote = next.startsWith("> ") && !line.startsWith("> ");
+  return odd === !quote ? [] : [line];
+});
+
+test("T233: the chat board has the Program approval and Other headings, the Programs section, and the program tag and wait line on cards", () => {
+  const text = renderBoardText(buildBoardModel([programsSource()], { now: PROGRAMS_NOW }));
+  assert.ok(text.startsWith("**sage board** · built 2026-10-20 12:00 UTC\\\n🔴 4 needs you · 0 agents at work · 🔁 1 in review · 18 tasks\n\n### 🔴 Needs you\n#### ◫ Program approval\n**1 · PG3 Board programs** · claude · sage \\(sample\\) · pilot T30 · gate G12\n> Approve program PG3? No task builds before you approve\\.\\\n> Name: Board programs\\\n> Goal: Sample goal\\.\\\n> Pilot, runs first:\\\n>   T30: Sample T30\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve\n\n#### Other\n**2 · PG2 Lead build is stuck** · claude · sage \\(sample\\)\n> The pilot T21 was abandoned\\. Choose a new pilot, or drop the program\\.\n\n**3 · The breakdown gate G30 of PG7 is not in the logbook** · claude · sage \\(sample\\)\n> Ask the sage to repair the logbook, or to propose PG7 again\\.\n\n**4 · T70 Sample T70** · claude · sage \\(sample\\)\n> claude/sage-ff5ee2/G15 · Approve program PG9 Fast lane \\(pilot T70\\)? Goal: skip the reviews\\. Name: Fast lane\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve\n\n"), text);
+  assert.ok(text.includes("\n\n### ◫ Programs\n- PG1 Codex support · 3 of 7 merged · T10 abandoned · next: T12 \\(in review\\) · 1 waits · T11 cannot start\n- PG2 Lead build · stuck: the pilot T21 was abandoned \\(see Needs you\\)\n- PG3 Board programs · the breakdown waits for you \\(gate G12\\) · pilot T30\n- PG4 Agent caps · 0 of 3 merged · next: T40 \\(pilot, building\\) · 2 wait\n- PG7 Lost gate · its breakdown gate G30 is not in the logbook \\(see Needs you\\)\n- PG8 Loop · 1 of 4 merged · next: no task can move now · 2 wait · T83 cannot start\n- PG9 Changes · the sage revises the breakdown \\(gate G9\\)\n- 1 done · 1 dropped\n\n### 📋 Backlog (14)\n"), text);
+  assert.ok(text.includes("\n\n**T11 Sample T11** · claude · sage \\(sample\\) · ◫ Codex support\\\n⊘ Waits for T10 \\(abandoned\\): it cannot start\\.\\\n○ Plan › ○ Build › ○ Review 1 of 1 › ○ Merge\\\nNow: In the backlog\\. No agent works on it\\.\n\n"), text);
+  assert.ok(text.includes("\n\n**T41 Sample T41** · claude · sage \\(sample\\) · ◫ Agent caps\\\n⧗ Waits for T40 \\(pilot, building\\)\\. Design and PE may run\\.\\\n"), text);
+  assert.ok(text.includes("### 🔨 Building (1)\n**T40 Sample T40** · claude · sage \\(sample\\) · ◫ Agent caps \\(pilot\\)\\\n"), text);
+  assert.deepEqual(breaksOf(text), [], "one hard break per line of a block");
+  // With no breakdown gate, no headings; with no program, no Programs section.
+  const plain = renderBoardText(sample([row("T1", "framed")], { gates: [{ id: "G1", task: "T1", question: "Ship it?", options: "yes|no", answer: "" }] }));
+  assert.ok(plain.includes("### 🔴 Needs you\n**1 · T1 Sample T1** · sample · project\n> sample/project-abcdef/G1 · Ship it?\\\n> Options: 1: yes · 2: no\n\n### 📋 Backlog (1)\n"), plain);
+  assert.ok(!plain.includes("####") && !plain.includes("Programs"), plain);
+  assert.deepEqual(breaksOf(plain), []);
+});
+
+test("T233 F1: md() escapes the backslash and the tilde, so a title that ends with a backslash keeps the hard break; a program name with Markdown and HTML marks stays text", () => {
+  const tables = programsTables();
+  tables.tasks.find(item => item.id === "T13").title = "Strike ~~this~~ out \\";
+  tables.programs[0].name = "<img src=x onerror=alert(1)> **bold** [link](https://example.test) `code` \\";
+  const text = renderBoardText(buildBoardModel([programsSource("claude", tables)], { now: PROGRAMS_NOW }));
+  assert.ok(text.includes("**T13 Strike \\~\\~this\\~\\~ out \\\\** · claude · sage \\(sample\\) · ◫ \\<img src=x onerror=alert\\(1\\)\\> \\*\\*bold\\*\\* \\[link\\]\\(https://example\\.test\\) \\`code\\` \\\\\\\n⧗ Waits for T12"), text);
+  assert.ok(text.includes("\n- PG1 \\<img src=x onerror=alert\\(1\\)\\> \\*\\*bold\\*\\* \\[link\\]\\(https://example\\.test\\) \\`code\\` \\\\ · 3 of 7 merged"), text);
+  assert.ok(!/(^|[^\\])<img/.test(text) && !text.includes("~~") && !text.includes("](https"), "no mark is left unescaped");
+  assert.deepEqual(breaksOf(text), []);
 });

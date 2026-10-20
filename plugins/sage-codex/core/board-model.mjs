@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
-import { LINE, PRIORITIES, TASK_KINDS, agentCaps, gateLines } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
+import { ENDED, MET, breakdownGate, dead, gateLines, progressOf, progressText, waitGraph, waitsOf, waitsWithState } from "./program-rules.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -214,7 +215,45 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, gates,
 }
 
 
-function card(source, project, group, task, now) {
+// Programs (T233). A program's key is its logbook's key, a slash and its id, as a task's key is: PG1 of the Claude logbook
+// and PG1 of the Codex logbook of one project are two programs. Waits resolve inside the task's own logbook, with the
+// state tool's rules (program-rules.mjs), so the board and the status line never disagree.
+const WAIT_WORD = { backlog: "not started", design: "in design", building: "building", review: "in review", ready: "ready to merge" };
+/** A task state as a wait names it: "merged", "in review", or "not in the logbook" for a task that the logbook lost. */
+const stateWord = state => state === undefined ? "not in the logbook" : ["merged", "concluded", "abandoned"].includes(state) ? state : WAIT_WORD[COLUMNS.find(([, , states]) => states.includes(state))?.[0]] ?? state;
+/** The graph of one logbook's waits and programs: its tasks by id and each program with its state. */
+const graphOf = project => waitGraph((project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)), project.tables.programs ?? [], project.tables.gates ?? [], project.tables.decisions ?? []);
+/**
+ * Each wait of a task, with its state: a task (met when merged or concluded; never met when abandoned or lost), the pilot
+ * of its program, the breakdown that the owner has not approved (never met when dropped or lost), or a waits cell with
+ * text that is not a task id (never met, and its text is never shown).
+ */
+const waitsFor = (task, graph) => waitsWithState(task, graph).map(wait =>
+  wait.odd ? { odd: true, met: false, never: true }
+  : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
+  : { id: wait.id, state: wait.state ?? null, word: stateWord(wait.state), pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) });
+const BREAKDOWN_WAIT = {
+  proposed: (id, gate) => `your approval of the ${id} breakdown (gate ${gate})`,
+  changing: (id, gate) => `the new breakdown of ${id}: you asked for changes (gate ${gate})`,
+  dropped: (id, gate) => `the ${id} breakdown, which you dropped (gate ${gate})`,
+};
+const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.gate ? `whose gate ${wait.breakdown.gate} is not in the logbook` : "which is not in the logbook"}`
+  : `${wait.id} (${wait.pilot ? "pilot, " : ""}${wait.word})`;
+/**
+ * The card's wait line, or null when nothing waits: each unmet wait (only the breakdown, when it waits for one), and
+ * whether the task cannot start, as a wait of it is never met. A task in design may run its design and PE meanwhile.
+ */
+function waitLine(task, waits, column) {
+  let open = ENDED.includes(task.state) ? [] : waits.filter(wait => !wait.met);
+  if (open.some(wait => wait.breakdown)) open = open.filter(wait => wait.breakdown);
+  if (!open.length) return null;
+  // Odd text in the waits cell is never shown: a sentence says that the cell needs new waits, and the task cannot start.
+  const never = open.some(wait => wait.never), named = open.filter(wait => !wait.odd), odd = named.length < open.length ? " Its waits cell has text that is not a task id: the sage sets its waits again." : "";
+  if (!named.length) return { never, text: `It cannot start.${odd}` };
+  return { never, text: `Waits for ${and(named.map(waitName))}${never ? ": it cannot start." : "."}${odd}${!never && column === "design" ? " Design and PE may run." : ""}` };
+}
+
+function card(source, project, group, task, now, graph) {
   const records = (project.observations?.records ?? []).filter(record => record.task === task.id && time(record.observedAt) !== null && time(record.observedAt) <= now);
   const pr = latest(records, "pr", data => String(data.number) === task.pr);
   const completion = latest(records, "completion", data => data.state === task.state);
@@ -227,8 +266,13 @@ function card(source, project, group, task, now) {
   const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.evidence?.data.provider ?? null, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
   // Needs you: an open gate, or a state that waits for the owner (R1077). Held and replan wait for the chief, not for you.
   const allGates = rows(project, "gates", task), gates = allGates.filter(gate => !gate.answer);
-  // Only a breakdown gate's text keeps its lines (gateLines), so the renderers split no other question into lines (R1249-1).
-  const reasons = gates.map(gate => ({ kind: "gate", key: `${project.key}/${gate.id}`, text: gateLines(gate).join(LINE), recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [] }));
+  // Only a breakdown gate keeps its lines (gateLines), and only by the data rule (breakdownGate: a programs row names it,
+  // on its pilot, with the breakdown options): the renderers split no other question into lines (R1249-1, the owner's Q1).
+  const reasons = gates.map(gate => {
+    const breakdown = breakdownGate(gate, graph.programs);
+    return { kind: "gate", key: `${project.key}/${gate.id}`, text: gateLines(gate, graph.programs).join(LINE), recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
+      breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.programs.get(breakdown).name } : null };
+  });
   if (task.state === "awaiting-you" && !gates.length && !allGates.at(-1)?.answer) reasons.push({ kind: "design", text: "The design waits for your answer." });
   if (["verified", "pr-ready"].includes(task.state) && task.route.split(",").includes("build") && mode?.data.autopilot !== true) {
     const merge = task.pr ? `review and merge PR ${task.pr}` : "review and merge it";
@@ -270,6 +314,7 @@ function card(source, project, group, task, now) {
   const inferred = pr?.data.state === "open" && task.branch.startsWith("codex/") && !agents.length;
   if (inferred && !["merged", "concluded", "abandoned"].includes(task.state)) reasons.push({ kind: "review-wait", text: "The PR has inferred provider work and waits for review." });
   const column = COLUMNS.find(([, , states]) => states.includes(task.state))?.[0] ?? null;
+  const program = task.program ? graph.programs.get(task.program) : null, waits = waitsFor(task, graph);
   const completionDecision = rows(project, "decisions", task).filter(row => row.decision === `state ${task.state}`).at(-1);
   const completedAt = completion ? time(completion.data.at) : ["merged", "concluded", "abandoned"].includes(task.state) ? time(completionDecision?.at) : null;
   const brief = project.contents?.[latest(records, "artifact", data => data.type === "brief")?.id]?.text ?? null;
@@ -280,7 +325,7 @@ function card(source, project, group, task, now) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: moves.find(({ move }) => move[2] === task.id && move[3] === row.key)?.row.task ?? null })),
     ...moves.filter(({ row }) => row.task === task.id).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
 }
 
 const title = value => String(value ?? "").charAt(0).toUpperCase() + String(value ?? "").slice(1);
@@ -498,12 +543,66 @@ function agentsOf(sources, groups, groupOf, cards, at) {
     rules: { quiet: AGENT_QUIET_MS / 60_000, factor: LONG_FACTOR, basis: LONG_BASIS } };
 }
 
+/**
+ * The tasks of a program in their order: the pilot first, then each task after the tasks of the program that it waits
+ * for, then by id. A hand edit can make a loop of waits that the state tool would refuse, so each task is marked before
+ * its waits are read: a loop ends there (C5).
+ */
+function programOrder(program, own) {
+  const byId = new Map(own.map(task => [task.id, task])), depth = new Map();
+  const pilot = byId.has(program.pilot);
+  const of = task => {
+    if (depth.has(task.id)) return depth.get(task.id);
+    depth.set(task.id, 0);
+    if (task.id === program.pilot) return 0;
+    const ups = waitsOf(task).ids.filter(id => byId.has(id)).map(id => of(byId.get(id)));
+    if (pilot) ups.push(0);
+    const d = ups.length ? 1 + Math.max(...ups) : 0;
+    depth.set(task.id, d);
+    return d;
+  };
+  const number = id => Number(id.slice(1));
+  return own.map(task => [task, of(task)]).sort((a, b) => a[1] - b[1] || number(a[0].id) - number(b[0].id)).map(([task]) => task);
+}
+
+/**
+ * The programs of one logbook (T233): each with its state (the state tool's, plus done, and stuck when the pilot of an
+ * active program is abandoned or lost), its progress (Q3), its tasks in order, what moves next (Q4: only a task with no
+ * unmet wait; the tasks that wait are a count), the tasks that cannot start, and what needs the owner that no card shows
+ * (a stuck program; a breakdown gate that the logbook lost, QA). A changing program needs no one until its new gate (QB).
+ */
+function programsOf(source, project, group, graph, cards) {
+  const tasks = [...graph.byId.values()], gates = new Set((project.tables.gates ?? []).map(gate => gate.id));
+  return [...graph.programs.values()].map(program => {
+    const own = tasks.filter(task => task.program === program.id), progress = progressOf(own), pilotState = graph.byId.get(program.pilot)?.state;
+    const state = program.state !== "active" ? program.state : progress.done ? "done" : dead(pilotState) ? "stuck" : "active";
+    const ordered = programOrder(program, own), card = task => cards.get(`${project.key}/${task.id}`);
+    const open = ordered.filter(task => !ENDED.includes(task.state)).map(card).filter(Boolean);
+    const moving = open.filter(item => item.waits.every(wait => wait.met)), waiting = open.filter(item => item.waitLine);
+    const first = state === "active" ? moving[0] : null;
+    const need = state === "stuck" ? { kind: "stuck", title: `${program.id} ${program.name} is stuck`, text: `The pilot ${program.pilot} ${pilotState ? "was abandoned" : "is not in the logbook"}. Choose a new pilot, or drop the program.` }
+      : state === "lost" ? { kind: "lost", title: gates.has(program.gate) ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`, text: `Ask the sage to repair the logbook, or to propose ${program.id} again.` }
+      : null;
+    return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate,
+      source: source.id, sourceLabel: source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
+      state, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`),
+      next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === program.pilot } : null,
+      waiting: waiting.filter(item => !item.waitLine.never).length, cannotStart: waiting.filter(item => item.waitLine.never).map(item => item.id),
+      need: need && { ...need, key: `${project.key}/${program.id}`, program: program.id, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived } };
+  });
+}
+
 export function buildBoardModel(sources, { now = new Date().toISOString() } = {}) {
   const at = time(now);
   if (at === null) throw new TypeError("board time must be an ISO date");
   const { groups, notes } = projectGroups(sources);
   const groupOf = new Map(groups.flatMap(group => group.books.map(book => [book.project.key, group])));
-  const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, groupOf.get(project.key), task, at))));
+  const graphs = new Map(sources.flatMap(source => source.projects.map(project => [project.key, graphOf(project)])));
+  const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, groupOf.get(project.key), task, at, graphs.get(project.key)))));
+  const byKey = new Map(tasks.map(task => [task.key, task]));
+  const programs = sources.flatMap(source => source.projects.flatMap(project => programsOf(source, project, groupOf.get(project.key), graphs.get(project.key), byKey)));
+  // What needs the owner that no card shows: a stuck program, a lost breakdown gate. An archived project's leave the counts, as its tasks do.
+  const programNeeds = programs.filter(program => program.need).map(program => program.need), liveNeeds = programNeeds.filter(need => !need.archived);
   const recent = task => task.lastActivity ? Date.parse(task.lastActivity) : 0;
   // An archived project's tasks leave the columns and the counts; the archived group lists the project, with what needs you there.
   // Needs you first, then the newest activity. A priority sorts each column but Done, which stays newest first.
@@ -516,11 +615,11 @@ export function buildBoardModel(sources, { now = new Date().toISOString() } = {}
   const LISTS = ["needs", "active", "idle", "archived"];
   const projects = groups.map(group => {
     const own = tasks.filter(task => task.group === group.key), live = shown.filter(task => task.group === group.key);
-    const last = Math.max(0, ...own.map(recent)), needsOwner = live.filter(task => task.reasons.length).length;
+    const last = Math.max(0, ...own.map(recent)), needsOwner = live.filter(task => task.reasons.length).length + programNeeds.filter(need => need.group === group.key).length;
     return { key: group.key, name: group.name, sub: group.sub, pathSub: group.pathSub ?? null, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
       list: group.archived ? "archived" : needsOwner ? "needs" : last && at - last <= ACTIVE_DAYS * 86400000 ? "active" : "idle" };
   }).sort((a, b) => LISTS.indexOf(a.list) - LISTS.indexOf(b.list) || (a.list === "needs" ? b.needsOwner - a.needsOwner : 0) || (Date.parse(b.lastActivity ?? 0) || 0) - (Date.parse(a.lastActivity ?? 0) || 0) || a.name.localeCompare(b.name));
   const archived = projects.filter(project => project.archived).map(project => ({ key: project.key, name: project.name, tasks: project.tasks, needsOwner: project.needsOwner }));
-  const agents = agentsOf(sources, groups, groupOf, new Map(tasks.map(task => [task.key, task])), at);
-  return { at: new Date(at).toISOString(), tasks, projects, notes, agents, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
+  const agents = agentsOf(sources, groups, groupOf, byKey, at);
+  return { at: new Date(at).toISOString(), tasks, programs, programNeeds: liveNeeds, projects, notes, agents, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length + liveNeeds.length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
 }
