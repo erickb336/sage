@@ -3,7 +3,7 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { lstatSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
-import { readBoardSources, buildBoardModel, renderBoardHtml, renderAgentsHtml } from "../core/index.mjs";
+import { readBoardSources, buildBoardModel, renderBoardHtml, renderAgentsHtml, renderProgramsHtml } from "../core/index.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
@@ -40,6 +40,10 @@ function route(target) {
   if (target === "/") return { task: null, events: false };
   // The Agents page (T308) and its live stream.
   if (target === "/agents" || target === "/agents?events=1") return { task: null, agents: true, events: target !== "/agents" };
+  // The programs list and each program's page (T233 C9), with their live streams. KEY is the base64url of the program key.
+  if (target === "/programs" || target === "/programs?events=1") return { task: null, programs: true, events: target !== "/programs" };
+  const program = /^\/program\/([A-Za-z0-9_-]+)(\?events=1)?$/.exec(target);
+  if (program) { const key = taskKey(program[1]); return key ? { task: null, program: key, events: !!program[2] } : null; }
   const page = /^\/task\/([A-Za-z0-9_-]+)$/.exec(target);
   if (page) { const key = taskKey(page[1]); return key ? { task: key, events: false } : null; }
   const stream = /^\/\?events=1(?:&task=([A-Za-z0-9_-]+))?$/.exec(target);
@@ -147,8 +151,9 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   }
 
   // The checkout paths go only to the Mac's own page (R1069-2).
-  function htmlFor(key, paths = false, agents = false) {
-    const html = agents ? renderAgentsHtml(model, { live: true, paths }) : renderBoardHtml(model, { taskKey: key, snapshot: false, live: true, paths });
+  function htmlFor(view, paths = false) {
+    const html = view.agents ? renderAgentsHtml(model, { live: true, paths }) : view.programs || view.program ? renderProgramsHtml(model, { programKey: view.program ?? null, live: true, paths })
+      : renderBoardHtml(model, { taskKey: view.task, snapshot: false, live: true, paths });
     if (Buffer.byteLength(html) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
     return html;
   }
@@ -178,7 +183,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   // so a file event that changes nothing on the page sends nothing, and the page keeps its state.
   function publish(client) {
     try {
-      const payload = { revision: String(revision), html: htmlFor(client.task, client.paths, client.agents), stale: model.stale, diagnostics: model.diagnostics };
+      const payload = { revision: String(revision), html: htmlFor(client, client.paths), stale: model.stale, diagnostics: model.diagnostics };
       const sent = digest(JSON.stringify([payload.html, payload.stale, payload.diagnostics])).toString("base64");
       if (client.sent === sent) return;
       client.sent = sent;
@@ -256,9 +261,11 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       }
       next = { ...buildBoardModel(read, { now: clock() }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
-      // Validate the complete HTML before replacing a good snapshot.
-      const preview = renderBoardHtml(next, { snapshot: false, live: true });
-      if (Buffer.byteLength(preview) > MAX_HTML || Buffer.byteLength(renderAgentsHtml(next, { live: true })) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
+      // Validate the complete HTML before replacing a good snapshot: the board, the Agents page, the programs list and each
+      // program's page (R1334-3: a program page lists merged tasks that the board no longer shows).
+      const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderProgramsHtml(next, { live: true }),
+        ...next.programs.map(program => () => renderProgramsHtml(next, { programKey: program.key, live: true }))];
+      if (pages.some(render => Buffer.byteLength(render()) > MAX_HTML)) throw new RangeError("board rendering exceeds the size limit");
     } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
     if (!next.diagnostics.length) { lastGood = next; model = { ...next, stale: false }; }
     else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp };
@@ -290,19 +297,22 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
     const selected = route(request.url);
     if (!selected || selected.task && !model.tasks.some(task => task.key === selected.task)) return fail(404, "This board page does not exist.");
+    // An unknown program gets the not-found page of the design, with status 404; its stream does not exist.
+    const missing = selected.program && !model.programs.some(program => program.key === selected.program);
+    if (missing && selected.events) return fail(404, "This board page does not exist.");
     if (selected.events) {
       if (clients.size >= MAX_CLIENTS && request.method !== "HEAD") return fail(503, "There are too many open board streams.");
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
       if (request.method === "HEAD") return response.end();
       response.flushHeaders();
-      const client = { response, task: selected.task, agents: !!selected.agents, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
+      const client = { response, task: selected.task, agents: !!selected.agents, programs: !!selected.programs, program: selected.program ?? null, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
     }
     try {
-      const html = htmlFor(selected.task, mac, selected.agents);
+      const html = htmlFor(selected, mac);
       securityHeaders(response, html);
-      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html) });
+      response.writeHead(missing ? 404 : 200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html) });
       response.end(request.method === "HEAD" ? undefined : html);
     } catch { fail(503, "The board snapshot is unavailable."); }
   });
