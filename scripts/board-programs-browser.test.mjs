@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { after, before, test } from "node:test";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderBoardHtml, renderProgramsHtml } from "../packages/sage-core/board-render.mjs";
-import { NOW, programsSource } from "./fixtures/board-programs.mjs";
+import { NOW, programsSource, programsTables } from "./fixtures/board-programs.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -126,3 +126,27 @@ for (const [width, height] of [[375, 812], [1280, 900]]) for (const colorScheme 
     }
   });
 }
+
+// R1334-1, R1334-2: long program names (SAMPLE DATA). PG1 (T13's program) gets 41 characters, PG2 (T22's) gets 108.
+const MID = "Provider neutral board core for all tools", LONG = `${"Long program name ".repeat(5)}that ends here now`;
+const named = programsTables();
+for (const row of named.programs) row.name = { PG1: MID, PG2: LONG }[row.id] ?? row.name;
+const long = buildBoardModel([programsSource("claude", named)], { now: NOW });
+const LONG_PAGES = {
+  "/": () => renderBoardHtml(long, { snapshot: false }),
+  [`/task/${key("T13")}`]: () => renderBoardHtml(long, { snapshot: false, taskKey: "claude/sage-ff5ee2/T13" }),
+  [`/task/${key("T22")}`]: () => renderBoardHtml(long, { snapshot: false, taskKey: "claude/sage-ff5ee2/T22" }),
+};
+test("R1334-1, R1334-2: at 375 px, a 41- and a 108-character program name make no sideways scroll, and the theme switch stays on screen", async t => {
+  assert.deepEqual([MID.length, LONG.length], [41, 108]);
+  const full = { [`/task/${key("T13")}`]: MID, [`/task/${key("T22")}`]: LONG };
+  for (const path of Object.keys(LONG_PAGES)) {
+    const page = await open(t, path, { width: 375, height: 812, pages: LONG_PAGES });
+    const { scroll, client } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+    assert.ok(scroll <= client, `${path}: ${scroll} > ${client}`);
+    const theme = await page.locator("label.theme").boundingBox();
+    assert.ok(theme.x >= 0 && theme.x + theme.width <= client, `${path}: the theme switch ends at ${theme.x + theme.width}, past ${client}`);
+    if (full[path]) assert.equal(await page.locator(".pagebar a.plink").getAttribute("title"), full[path], `${path}: the title has the full name`);
+    else assert.ok((await page.locator("#f-program option").allTextContents()).some(text => text.includes(LONG)), "the Program filter lists the full name");
+  }
+});

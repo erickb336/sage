@@ -421,8 +421,8 @@ test("a parent rename that names only the destination refreshes the missing boar
 });
 
 // T368 (T233 C9): the programs list and each program's page. SAMPLE DATA: one program of two tasks, its pilot merged.
-function programs(project, goal = "Sample goal of PG1.") {
-  writeFileSync(join(project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tprogram\nT1\tSample pilot\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tPG1\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tPG1\n`);
+function programs(project, goal = "Sample goal of PG1.", pilot = "Sample pilot") {
+  writeFileSync(join(project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tprogram\nT1\t${pilot}\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tPG1\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tPG1\n`);
   writeFileSync(join(project, "gates.tsv"), `${HEADERS.gates.replaceAll(" ", "\t")}\nG1\tT1\tApprove program PG1? No task builds before you approve.\tapprove|change|drop\tapprove\t\tapprove\t\n`);
   writeFileSync(join(project, "programs.tsv"), `id\tname\tgoal\tpilot\tgate\tat\nPG1\tSample program\t${goal}\tT1\tG1\t\n`);
 }
@@ -446,7 +446,7 @@ test("T368 C9: /programs and /program/KEY are routes with the same sign-in and C
   assert.equal(page.status, 200); assert.ok(page.body.includes("Sample goal of PG1.") && page.body.includes("<h1 class=\"ptitle\"><span aria-hidden=\"true\">◫</span> Sample program</h1>"), page.body.slice(-3000));
   // The board names the page, and the task page links its program.
   assert.match((await read(f, "/")).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/programs">Programs<\/a><a href="\/agents">Agents \(0\)<\/a>/);
-  assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back" href="/program/${programKey("PG1")}">◫ Sample program</a>`));
+  assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back plink" href="/program/${programKey("PG1")}" title="Sample program">◫ <span class="cn">Sample program</span></a>`));
   const missing = await read(f, `/program/${programKey("PG9")}`);
   assert.equal(missing.status, 404); assert.match(missing.headers["content-type"], /^text\/html/); assert.ok(missing.body.includes("<b>No program PG9 on the board.</b>"));
   assert.equal((await read(f, `/program/${programKey("PG9")}`, { method: "HEAD" })).status, 404);
@@ -476,4 +476,20 @@ test("T368 C9: the size check covers the programs list: a goal that makes it too
   const page = await until(f, "/programs", "The board snapshot is unavailable.");
   assert.ok(page.body.includes("The board snapshot is unavailable.") && page.body.includes("Sample goal of PG1.") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the last good page, with the reason");
   assert.ok(Buffer.byteLength(page.body) < 8 * 1024 * 1024);
+});
+
+test("R1334-3: the size check covers each program page: a merged task's title that makes it too large keeps the last good page and its stream, marked stale", async t => {
+  const f = await fixture(t);
+  programs(f.project);
+  const path = `/program/${programKey("PG1")}`;
+  await until(f, path, "Sample pilot");
+  const stream = events(f, `${path}?events=1`); t.after(() => stream.close());
+  assert.equal((await stream.next()).stale, false);
+  // The merged pilot T1 is not on the board, and the programs list does not name it; its program page lists it, and each "<" is 4 bytes of HTML.
+  programs(f.project, "Sample goal of PG1.", "<".repeat(3.9 * 1024 * 1024));
+  const page = await until(f, path, "The board snapshot is unavailable.");
+  assert.equal(page.status, 200);
+  assert.ok(page.body.includes("Sample pilot") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the last good page, with the reason");
+  const stale = await stream.next(p => p.stale);
+  assert.ok(stale.html.includes("Sample pilot") && !stale.html.includes("&lt;&lt;&lt;&lt;"), "the stream stays open and sends the last good page");
 });

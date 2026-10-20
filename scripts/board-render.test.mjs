@@ -721,7 +721,7 @@ test("T368: a program's page: goal and progress, what moves next, the tasks in o
 test("T368: the task page shows its program with the progress, each wait with its state, and the tasks that wait for it", () => {
   const model = programsModel(), page = id => renderBoardHtml(model, { snapshot: false, taskKey: KEY(id) });
   const t13 = page("T13");
-  assert.ok(t13.includes(`<a class="back" href="/program/${B64(KEY("PG1"))}">◫ Codex support</a>`));
+  assert.ok(t13.includes(`<a class="back plink" href="/program/${B64(KEY("PG1"))}" title="Codex support">◫ <span class="cn">Codex support</span></a>`));
   assert.ok(t13.includes(`<section><h3>Program</h3><p><a href="/program/${B64(KEY("PG1"))}"><span aria-hidden="true">◫</span> PG1 Codex support</a> · <span class="pstate active">active</span></p>`), t13);
   assert.ok(t13.includes(`<h3>Waits for <span class="n">2</span></h3><ul class="vlist"><li class="v-wait"><span class="g" aria-hidden="true">⧗</span><a href="/task/${B64(KEY("T12"))}">T12</a> Sample T12 · <span class="faint">in review: not met</span></li><li class="v-done"><span class="g" aria-hidden="true">✓</span><a href="/task/${B64(KEY("T1"))}">T1</a> Sample T1 · pilot · <span class="stw-done">merged: met</span>`), t13);
   assert.ok(t13.includes('<b>Now:</b> Waits for T12 (in review).</span></div><div class="nextline"><b>Next:</b> Starts when T12 merges.</div>'), t13);

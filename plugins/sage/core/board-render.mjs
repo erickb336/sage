@@ -212,7 +212,12 @@ function nowWaits(task) {
     : `Starts when ${open.map(wait => wait.breakdown ? "you approve the breakdown" : `${wait.id} merges`).join(" and ")}.${task.column === "design" ? " Its design and PE may run before." : ""}`;
   return `${waitHtml(task, true)}<div class="nextline"><b>Next:</b> ${esc(next)}</div>`;
 }
-const programLink = (ctx, task) => task.program && ctx.programs.has(task.program.key) ? `<a class="back" href="${esc(programHref(ctx, task.program.key))}">◫ ${esc(task.program.name ?? task.program.id)}</a>` : "";
+// A long program name ends with an ellipsis, and its title has the full name, so the page bar keeps its width (R1334-1).
+const programLink = (ctx, task) => {
+  if (!task.program || !ctx.programs.has(task.program.key)) return "";
+  const name = task.program.name ?? task.program.id;
+  return `<a class="back plink" href="${esc(programHref(ctx, task.program.key))}" title="${esc(name)}">◫ <span class="cn">${esc(name)}</span></a>`;
+};
 
 /** A task page. Offline it is a section of the board file with its own way back; at its route it is the main content. */
 function page(ctx, task, { routed = false } = {}) {
@@ -300,7 +305,7 @@ body:has(#flip:focus-visible) .theme{outline:2px solid var(--accent);outline-off
 .nomatch{padding:14px 10px;color:var(--muted)}.nomatch b{color:var(--text)}
 .foot{border-top:1px solid var(--line);padding:6px 10px;color:var(--muted);font-size:11.5px;display:flex;gap:10px;flex-wrap:wrap}
 .fbar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 20px 0}
-.f{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.f{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;max-width:100%;min-width:0}.f select{min-width:0;text-overflow:ellipsis}
 select{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 6px;min-height:32px;max-width:100%}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex:none}
 .seg button{border:0;background:var(--panel);padding:5px 10px;cursor:pointer;min-height:30px}.seg button+button{border-left:1px solid var(--line)}
@@ -355,6 +360,7 @@ details.rest>summary::before{content:"▸ "}details.rest[open]>summary::before{c
 body:has(.page:target) .boardview{display:none}
 .pagebar{display:flex;align-items:center;gap:12px;margin-bottom:12px}
 .back{display:inline-flex;align-items:center;min-height:24px;min-width:24px;padding:2px 4px 2px 0;color:var(--accent);text-decoration:none;font-weight:600}
+.plink{min-width:0;gap:4px}.pagebar>:not(.plink,.spacer){flex:none}.plink .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .ptop{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--muted);font-size:12.5px}
 .ptitle{font-size:20px;margin:8px 0 14px;font-weight:650;line-height:1.3;overflow-wrap:anywhere}
 .detail{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:16px 24px;align-items:start}

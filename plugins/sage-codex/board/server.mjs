@@ -261,9 +261,11 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       }
       next = { ...buildBoardModel(read, { now: clock() }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
-      // Validate the complete HTML before replacing a good snapshot.
-      const preview = renderBoardHtml(next, { snapshot: false, live: true });
-      if ([preview, renderAgentsHtml(next, { live: true }), renderProgramsHtml(next, { live: true })].some(html => Buffer.byteLength(html) > MAX_HTML)) throw new RangeError("board rendering exceeds the size limit");
+      // Validate the complete HTML before replacing a good snapshot: the board, the Agents page, the programs list and each
+      // program's page (R1334-3: a program page lists merged tasks that the board no longer shows).
+      const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderProgramsHtml(next, { live: true }),
+        ...next.programs.map(program => () => renderProgramsHtml(next, { programKey: program.key, live: true }))];
+      if (pages.some(render => Buffer.byteLength(render()) > MAX_HTML)) throw new RangeError("board rendering exceeds the size limit");
     } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
     if (!next.diagnostics.length) { lastGood = next; model = { ...next, stale: false }; }
     else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp };
