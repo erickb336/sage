@@ -11,6 +11,7 @@ import { after, before, test } from "node:test";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderBoardHtml, renderProgramsHtml } from "../packages/sage-core/board-render.mjs";
 import { NOW, programsSource, programsTables } from "./fixtures/board-programs.mjs";
+import { expectTheme } from "./fixtures/contrast.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -36,8 +37,9 @@ const TWO = {
   "/programs": () => renderProgramsHtml(two),
   [`/program/${key("PG1")}`]: () => renderProgramsHtml(two, { programKey: `claude/sage-ff5ee2/PG1` }),
 };
-async function open(t, path = "/", { width = 1280, height = 900, colorScheme = "light", hash = "", pages = PAGES, project = null } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, colorScheme, ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
+/** A page at the made-up origin. The theme is dark; theme "light" flips the switch, as a person does. */
+async function open(t, path = "/", { width = 1280, height = 900, theme = "dark", hash = "", pages = PAGES, project = null } = {}) {
+  const context = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   for (const [at, html] of Object.entries(pages)) await context.route(`http://board.test${at}`, route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html() }));
@@ -47,6 +49,7 @@ async function open(t, path = "/", { width = 1280, height = 900, colorScheme = "
   page.on("pageerror", error => errors.push(String(error)));
   t.after(() => assert.deepEqual(errors, [], "no script error"));
   await page.goto(`http://board.test${path}${hash}`);
+  if (theme === "light") await page.locator("label[for=flip]").click();
   return page;
 }
 const shownIds = page => page.locator(".card[data-key]:not([hidden]) .id").allTextContents();
@@ -117,12 +120,17 @@ test("R1324-5: the programs list's picker keeps one project's programs with thei
   assert.ok((await shownIds(page)).length > 0 && (await page.locator(".card[data-key]:not([hidden])").evaluateAll(cards => cards.every(card => card.dataset.needs === "true"))));
 });
 
-for (const [width, height] of [[375, 812], [1280, 900]]) for (const colorScheme of ["light", "dark"]) {
-  test(`T368: no sideways scroll at ${width} px, ${colorScheme}: the board, the programs list, a program page and a task page`, async t => {
+for (const [width, height] of [[375, 812], [1280, 900]]) for (const theme of ["light", "dark"]) {
+  test(`T368, T349: no sideways scroll at ${width} px, ${theme}: the board, the programs list, a program page and a task page; the page shell is edge to edge below 700 px`, async t => {
     for (const path of Object.keys(PAGES)) {
-      const page = await open(t, path, { width, height, colorScheme });
+      const page = await open(t, path, { width, height, theme });
+      await expectTheme(page, theme, path);
       const { scroll, client } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       assert.ok(scroll <= client, `${path}: ${scroll} > ${client}`);
+      // The shell: the rounded panel that holds the page, inset 8 px or more on a wide screen, the whole width on a phone.
+      const [left, right, radius] = await page.locator(".boardview, body > main.page").first().evaluate(element => { const box = element.getBoundingClientRect(); return [Math.round(box.left), Math.round(box.right), getComputedStyle(element).borderTopLeftRadius]; });
+      if (width === 375) assert.deepEqual([left, right, radius], [0, 375, "0px"], path);
+      else assert.ok(left >= 8 && right <= client - 8 && radius === "20px", `${path}: ${left} to ${right}, radius ${radius}`);
     }
   });
 }
