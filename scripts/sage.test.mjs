@@ -308,7 +308,7 @@ test("T266-LEAD-SHOWN: status counts a lead run like any run, and the board show
   s.ok("task", "add", "--title", "t", "--size", "small");
   s.ok("run", "add", "T1", "--role", "lead");
   s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1");
-  assert.match(s.ok("status"), /^agents {2}2 runs · 2 running · about 0k tokens$/m);
+  assert.match(s.ok("status"), /^agents {2}2 runs · 2 running · about 0k tokens · 0 measured, 0 unavailable, 0 legacy-unrecorded$/m);
   const board = s.ok("board", "this", "--remember", "no");
   assert.match(board, /^- T1 lead · \d+ min$/m, board);
   assert.match(board, /^- T1 implementer · \d+ min$/m, board);
@@ -1713,7 +1713,7 @@ test("unknown-columns: a logbook that a newer sage wrote refuses every write com
 
   writeFileSync(tasks, readFileSync(tasks, "utf8").replace("\tsprint\tlater\n", "\n")); // the same with a new column in runs.tsv, as T6 would add
   const runs = join(s.dir, "runs.tsv");
-  writeFileSync(runs, readFileSync(runs, "utf8").replace("\tmodel\n", "\tmodel\tsaved\n"));
+  writeFileSync(runs, readFileSync(runs, "utf8").replace(/^(.*)$/m, "$1\tsaved"));
   assert.match(s.no("log", "-", "x", "--why", "y"), /runs\.tsv has columns that this version of sage does not know \(saved\)/);
 
   writeFileSync(join(s.home, "config.json"), JSON.stringify({ max_rounds: 4, max_programs: 2 })); // a newer version's setting stays too
@@ -1729,7 +1729,7 @@ test("unknown-options: a command refuses an option that it does not take, and an
   assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--cycles", "2"), "sage: verdict takes no --cycles. Its options: --sha, --kind, --cycle, --pr, --run, --project.");
   assert.equal(s.no("merge-check", "--sha", SHA, "--cycle", "1"), "sage: merge-check takes no --cycle. Its options: --sha, --pr, --cycles, --head, --project.");
   assert.equal(s.no("task", "T1", "set", "state=briefed", "--branch", "b"), "sage: task takes no --branch. Its options: --project.");
-  assert.equal(s.no("run", "done", "R1", "--role", "qa"), "sage: run done takes no --role. Its options: --status, --tokens, --report, --project.");
+  assert.equal(s.no("run", "done", "R1", "--role", "qa"), "sage: run done takes no --role. Its options: --status, --tokens, --report, --usage, --usage-source, --usage-evidence, --project.");
   // F-R57-3: a missing value never takes the next option as its value. The harness adds --project <path> last.
   assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr"), "sage: --pr needs a value. A value that starts with -- goes after =: --pr=<value>.");
   assert.equal(s.no("task", "add", "--size", "small", "--title", "--risk", "data"), "sage: --title needs a value. A value that starts with -- goes after =: --title=<value>.");
@@ -2484,13 +2484,14 @@ test("T346: sage stats gives each task's review runs, tokens, tokens after round
     "Tokens in thousands (k), of done runs only. A round is one repair of findings; after round 0 counts the runs of round 1 and later. A cycle is one set of reviews and QA on one head commit.",
     "total · 3 tasks · 6 review runs (1 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 6 findings",
     "",
-    "| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
-    "| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |",
-    "| T2 | 3 | 0k | 0k | 0 | __proto__: 1 · a\\|b: 1 · constructor: 1 | none: 3 |",
-    "| T3 | 0 | 0k | 0k | invalid | none | none |",
+    "| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle | Usage |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 | 3 measured, 0 unavailable, 0 legacy-unrecorded |",
+    "| T2 | 3 | 0k | 0k | 0 | __proto__: 1 · a\\|b: 1 · constructor: 1 | none: 3 | partial measured total; 1 measured, 0 unavailable, 1 legacy-unrecorded |",
+    "| T3 | 0 | 0k | 0k | invalid | none | none | 0 measured, 0 unavailable, 0 legacy-unrecorded |",
+    "", "usage total · partial measured total; 4 measured, 0 unavailable, 1 legacy-unrecorded", "Partial totals do not establish which task cost less.",
   ].join("\n"));
-  assert.equal(s.ok("stats", "--task", "T1").split("\n").slice(1).join("\n"), "total · 1 tasks · 3 review runs (0 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 3 findings\n\n| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |\n| --- | --- | --- | --- | --- | --- | --- |\n| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 |");
+  assert.equal(s.ok("stats", "--task", "T1").split("\n").slice(1).join("\n"), "total · 1 tasks · 3 review runs (0 done without tokens) · 1502k tokens · 1500k after round 0 · 1 rounds · 3 findings\n\n| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle | Usage |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| T1 | 3 | 1502k | 1500k | 1 | code-reviewer: 1 · qa: 2 | cycle 1: 1 · cycle 2: 1 · none: 1 | 3 measured, 0 unavailable, 0 legacy-unrecorded |\n\nusage total · 3 measured, 0 unavailable, 0 legacy-unrecorded");
   assert.deepEqual(files(), before, "stats writes no table and no status.md");
   assert.equal(s.no("stats", "--task", "T9"), "sage: no task T9. The latest: T1, T2, T3.");
   assert.match(s.no("stats", "--since", "2026-10-01"), /^sage: stats takes no --since\./);
@@ -2507,7 +2508,7 @@ test("T346: sage stats shows findings with no review runs, and review runs with 
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
   s.ok("finding", "add", "T1", "--source", "checks", "--severity", "medium", "--summary", "the checks fail"); // the chief's finding, no run
-  assert.equal(s.ok("stats").split("\n").slice(1).join("\n"), "total · 1 tasks · 0 review runs (0 done without tokens) · 0k tokens · 0k after round 0 · 0 rounds · 1 findings\n\n| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle |\n| --- | --- | --- | --- | --- | --- | --- |\n| T1 | 0 | 0k | 0k | 0 | checks: 1 | none: 1 |");
+  assert.equal(s.ok("stats").split("\n").slice(1).join("\n"), "total · 1 tasks · 0 review runs (0 done without tokens) · 0k tokens · 0k after round 0 · 0 rounds · 1 findings\n\n| Task | Review runs | Review tokens | After round 0 | Rounds | Findings by role | Findings by cycle | Usage |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| T1 | 0 | 0k | 0k | 0 | checks: 1 | none: 1 | 0 measured, 0 unavailable, 0 legacy-unrecorded |\n\nusage total · 0 measured, 0 unavailable, 0 legacy-unrecorded");
   const r = store();
   r.ok("task", "add", "--title", "a", "--size", "small");
   r.ok("run", "add", "T1", "--role", "qa");
@@ -2536,7 +2537,7 @@ test("T346: sage stats sorts by review tokens, counts a tokens cell of 1 to 12 d
   assert.deepEqual(table(out.join("\n")).slice(0, 2), ["| T52 | 1 | 52k", "| T51 | 1 | 51k"]);
   assert.equal(table(out.join("\n")).length, 50);
   assert.deepEqual(out.slice(-3), [out.at(-3), "", "2 more tasks not shown; use --task <T>"], "a blank line ends the table before the line after it");
-  assert.match(out.at(-3), /^\| T\d+ \| /);
+  assert.equal(out.at(-3), "Partial totals do not establish which task cost less.");
 });
 
 /** Sets a task's state by hand, as the end of its route would: the waits tests need upstream tasks in each state. */
@@ -2614,7 +2615,7 @@ test("T336: a wait is met only when its task is merged or concluded; an abandone
     const run = s.ok("run", "add", "T2", "--role", "lead");
     assert.match(run, /^R\d+ running · lead on T2/, state);
     s.ok("run", "done", run.split(" ")[0], "--status", "done");
-    assert.equal(s.ok("status").split("\n").length, 4, `${state}: no waits line when no task waits`);
+    assert.equal(s.ok("status").split("\n").length, 6, `${state}: two usage lines, no waits line when no task waits`);
   }
   byHand(s.dir, "tasks", 0, "T1", () => null); // a hand edit loses the upstream row: the wait is never met
   assert.match(s.no("run", "add", "T2", "--role", "lead"), /^sage: T2 waits for T1 \(not in the logbook, never met\), so .* T1 is abandoned or not in the logbook, so that wait is never met/);
@@ -2879,7 +2880,7 @@ test("T337: a logbook made before programs has no programs.tsv: it passes the in
   stateIs(s, "T1", "verified");
   const file = join(s.dir, "programs.tsv");
   rmSync(file, { force: true }); // the logbook of a sage before T337
-  assert.equal(s.ok("status").split("\n").length, 4, "it reads as no programs: no programs line");
+  assert.equal(s.ok("status").split("\n").length, 5, "one usage line; it reads as no programs: no programs line");
   assert.match(s.ok("task", "T1", "set", "title=b"), /^T1 verified · /);
   assert.equal(s.ok("merge-check", "--sha", SHA), "T1 may merge: 1 clean cycle on this SHA");
   const { logbookView } = await import(LIB);
@@ -3809,8 +3810,8 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   assert.match(o.ok("status"), /agents  1 runs · 0 running · about 1k tokens/);
   assert.equal(o.ok("run", "add", "T1", "--role", "qa"), "R2 running · qa on T1 · model sonnet");
   const [head, ...lines] = readFileSync(file, "utf8").trim().split("\n");
-  assert.equal(head, "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel");
-  assert.equal(lines[0], "R1\tT1\timplementer\t0\t\tb/1\tdone\t900\t\t2026-10-01T00:00:00Z\t2026-10-01T01:00:00Z\t");
+  assert.equal(head, "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel\tusage_provider\tusage_interface\tusage_capability\tusage_binding\tusage_reason\tusage_basis\tusage_status\tusage_source\tusage_evidence");
+  assert.equal(lines[0], "R1\tT1\timplementer\t0\t\tb/1\tdone\t900\t\t2026-10-01T00:00:00Z\t2026-10-01T01:00:00Z" + "\t".repeat(10));
   assert.match(lines[1], /^R2\tT1\tqa\t0\t\t\trunning\t\t\t\S+\t\tsonnet$/);
   assert.equal(o.no("run", "done", "R1", "--status", "done"), "sage: R1 already ended as done: a run ends once. A later run done --status done may only add --report, which it lacks. Nothing changed.");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) o.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
