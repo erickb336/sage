@@ -634,8 +634,8 @@ function firstCreation({ owner, repo, branch, sha }) {
 const READS = { status: () => true, "merge-check": () => true, logbook: (pos) => pos[0] !== "repair", standing: (pos) => pos[0] !== "add", config: (pos) => !pos.length };
 const READ_FORM = "node <path to skills/sage/sage.mjs> <status, merge-check, logbook, standing or config> [--project <path>], as one plain command: no quote, variable, ;, &&, ||, |, `, $(, >, < or newline, and config with no key=value";
 const PLAIN = /^[\w./=:@,+-]+(?:[ \t]+[\w./=:@,+-]+)*$/;
-/** The logbook's files by name (S2). */
-const TABLES = ["tasks.tsv", "runs.tsv", "findings.tsv", "gates.tsv", "ledger.tsv", "decisions.tsv", "config.json", "standing.md", "status.md"];
+/** The logbook's files by name (S2), from the core's one list, so a new table is guarded too (K2). Without the core it is undefined, and a check that uses it throws, so the hook refuses. */
+const TABLES = boardPolicy.LOGBOOK_FILES;
 /** All the text of a tool call's input, one string per field. */
 const fields = (v) => (typeof v === "string" ? [v] : v && typeof v === "object" ? Object.values(v).flatMap(fields) : []);
 /** Text as APFS compares names: it ignores case and Unicode form, and folds compatibility forms (ſ is s, ﬆ is st). */
@@ -1014,7 +1014,7 @@ const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: 
  */
 const LEAD_READ_MAX = 4 * 1024 * 1024;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
-const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task); run done <a run of these roles on its task>; finding add <its task> (no --key); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round or of an earlier one; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch=, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, while its lead run runs";
+const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task); run done <a run of these roles on its task>; finding add <its task> (no --key; --run only of a run that it added, and --class); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round or of an earlier one; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch=, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, while its lead run runs";
 /** Each key=value of task set: a key at most once, and each value as the lead may set it on this task (F-T273-2, F-T273-7). */
 const LEAD_PAIRS = {
   branch: (branch) => branch !== "", // the state tool takes only a branch of the task; a lead never clears it (T275)
@@ -1247,7 +1247,8 @@ const LEAD_WRITES = {
     if (stopped.unreadable) return `${id}'s helper gave a report that the hook cannot read (${stopped.problem ?? "an old record"}): the sage ends this run (F-T289-15, F-T289-23).`;
     return gap(run.role, view, task, ctx) ?? true;
   },
-  "finding add": ([, t], opt, own) => t === own && opt.key === undefined,
+  // --run names the run whose report holds the finding: a run that this lead added (T346).
+  "finding add": ([, t], opt, own, view, task, ctx) => t === own && opt.key === undefined && (opt.run === undefined || ownRun(ctx, opt.run)),
   // Never a finding triaged ask (F-T284-10); while repairing, only a fix finding of the round: a new one waits for the
   // next round (F-T284-8, F-T284-12).
   "finding close": ([, t, key], opt, own, view, task, ctx) => {

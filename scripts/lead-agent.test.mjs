@@ -325,7 +325,7 @@ const REPAIR = (low) => [...BUILT, `< R3 FINDINGS: - K1 medium a.mjs:1 the token
 // The sage's triage of a finding that the lead calls a repeat: fix, never a dismissal (F-T301-55).
 const repeatFix = (key) => sageSays("sage finding triage <T> <K> fix", { "<K>": key }, "Never dismiss a finding because the lead names it");
 /** The finding's row: its key, severity, triage and status. */
-const findingOf = (p, key) => readFileSync(join(p.chief("logbook"), "findings.tsv"), "utf8").split("\n").map((row) => row.split("\t")).find((cells) => cells[1] === key);
+const findingOf = (p, key) => readFileSync(join(p.chief("logbook"), "findings.tsv"), "utf8").split("\n").map((row) => row.split("\t")).find((cells) => cells[1] === key)?.slice(0, 9); // task to status: the columns before run and class (T346)
 
 test("T301 D1, F-T301-55: a fix that the re-check did not confirm is never moved; the sage triages its repeat fix, never a dismissal, the task goes back to reviewing, and round re-plans it", () => {
   const p = project();

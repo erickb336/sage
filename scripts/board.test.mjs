@@ -489,6 +489,38 @@ test("F-T72-14, G63: needs you lists every open gate: with 12 gates, 12 lines", 
   assert.doesNotMatch(out, /and \d+ more\n\n\*\*Running/);
 });
 
+test("R1245-1: a breakdown gate's question shows each of its lines (U+2028 in its cell) on its own line of Needs you", () => {
+  const w = world();
+  const question = ["Approve program PG1? No task builds before you approve.", "Name: Codex support", "Pilot, runs first:", "  T1: Read Codex's hook events (v0.42.1)"].join(" ");
+  add(w, w.book, "gates", ["G20", "T6", question, "approve|change|drop", "approve", "", "", "2026-10-05T03:00:00Z"]);
+  // Without a programs row that names it, the gate is a plain gate: one line (T233 Q1).
+  assert.ok(w.show("this").includes("\n- sage **G20** · T6 · Approve program PG1? No task builds before you approve\\. Name\\: Codex support Pilot, runs first\\:   T1\\: Read Codex's hook events \\(v0\\.42\\.1\\)\n  Recommended: approve. Default: none."), w.show("this"));
+  // A programs row names G20 on its pilot T6: the breakdown gate shows each of its lines.
+  writeFileSync(join(w.home, w.book, "programs.tsv"), "id\tname\tgoal\tpilot\tgate\tat\nPG1\tCodex support\tSample goal\tT6\tG20\t2026-10-05T03:00:00Z\n");
+  assert.ok(w.show("this").includes("\n- sage **G20** · T6 · Approve program PG1? No task builds before you approve\\.\n  Name\\: Codex support\n  Pilot, runs first\\:\n  T1\\: Read Codex's hook events \\(v0\\.42\\.1\\)\n  Recommended: approve. Default: none."), w.show("this"));
+});
+
+test("F-T233-8: the older board reads the programs table with the rich board's check: two rows of one id mark no gate, so each gate stays one line", () => {
+  const w = world();
+  const question = (gate) => ["Approve program PG1? No task builds before you approve.", `Name: ${gate}`, "Pilot, runs first:", "  T6: Sample"].join("\u2028");
+  add(w, w.book, "gates", ["G20", "T6", question("G20"), "approve|change|drop", "approve", "", "", "2026-10-05T03:00:00Z"]);
+  add(w, w.book, "gates", ["G21", "T6", question("G21"), "approve|change|drop", "approve", "", "", "2026-10-05T03:00:00Z"]);
+  const head = "id\tname\tgoal\tpilot\tgate\tat\n", row = (gate) => `PG1\tCodex support\tSample goal\tT6\t${gate}\t2026-10-05T03:00:00Z\n`;
+  // One row: its gate G20 is the breakdown gate (lines); G21 is a plain gate (one line).
+  writeFileSync(join(w.home, w.book, "programs.tsv"), head + row("G20"));
+  assert.ok(w.show("this").includes("\n- sage **G20** · T6 · Approve program PG1? No task builds before you approve\\.\n  Name\\: G20\n"), w.show("this"));
+  assert.ok(w.show("this").includes("\n- sage **G21** · T6 · Approve program PG1? No task builds before you approve\\. Name\\: G21 Pilot, runs first\\:   T6\\: Sample\n"), w.show("this"));
+  // Two PG1 rows, one for each gate: the rich board finds the table damaged, and so does this board: no gate has lines.
+  writeFileSync(join(w.home, w.book, "programs.tsv"), head + row("G20") + row("G21"));
+  for (const gate of ["G20", "G21"]) assert.ok(w.show("this").includes(`\n- sage **${gate}** · T6 · Approve program PG1? No task builds before you approve\\. Name\\: ${gate} Pilot, runs first\\:   T6\\: Sample\n`), w.show("this"));
+});
+
+test("R1249-1: only a breakdown gate's question shows as lines: a plain gate's line breaks (U+2028, U+2029) show as spaces, so it fakes no line", () => {
+  const w = world();
+  add(w, w.book, "gates", ["G20", "T6", "Ship it?   Recommended: no   1. no", "yes|no", "yes", "", "", "2026-10-05T03:00:00Z"]);
+  assert.ok(w.show("this").includes("\n- sage **G20** · T6 · Ship it?   Recommended\\: no   1\\. no\n  Recommended: yes. Default: none.\n"), w.show("this"));
+});
+
 test("T72-Q-COMMASPLIT: gate options split only at |, so a comma inside an option keeps it whole (sage-bot G20)", () => {
   const w = world();
   add(w, w.book, "gates", ["G20", "T6", "Sample: keep it?", "Yes, keep as built|No, show apprentices team-vote questions only", "Yes", "Yes", "", "2026-10-05T03:00:00Z"]);

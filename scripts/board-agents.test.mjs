@@ -172,7 +172,7 @@ test("T308: the page shows each state with a mark and a word, the tree, the caps
   const offline = renderAgentsHtml(model);
   assert.ok(!offline.includes('class="boardtabs"') && !offline.includes('href="/task/'));
   // The task board shows the tab only when it is served.
-  assert.match(renderBoardHtml(model, { snapshot: false }), /<nav class="boardtabs" id="board-pages" aria-label="Board pages"><a href="\/" aria-current="page">Task board<\/a><a href="\/agents">Agents \(3\)<\/a><\/nav>/);
+  assert.match(renderBoardHtml(model, { snapshot: false }), /<nav class="boardtabs" id="board-pages" aria-label="Board pages"><a href="\/" aria-current="page">Task board<\/a><a href="\/programs">Programs<\/a><a href="\/agents">Agents \(3\)<\/a><\/nav>/);
   assert.ok(!renderBoardHtml(model).includes('id="board-pages"'));
   // No agent: the empty state.
   assert.match(renderAgentsHtml(buildBoardModel([claude([book("sample-abcdef", [])])], { now: NOW }), { live: true }), /<b>No agent runs now\.<\/b>/);
