@@ -50,11 +50,14 @@ export function createControllerTransport({generation, send, profile = {}, initi
   if (owns(selected, 'approvalPolicy') && !['untrusted', 'on-failure', 'on-request', 'never'].includes(selected.approvalPolicy)) throw new TypeError('Invalid approval policy');
   if (owns(selected, 'sandbox') && !['read-only', 'workspace-write', 'danger-full-access'].includes(selected.sandbox)) throw new TypeError('Invalid sandbox');
   const pending = new Map();
+  let resolveClosed;
+  const connectionClosed = new Promise(resolve => { resolveClosed = resolve; });
   let closed = false, initializing = false, initialized = false;
   let nextId = initialRequestId;
   function disconnect(reason = 'disconnected') {
     closed = true;
     const error = uncertain(String(reason));
+    resolveClosed(error);
     for (const entry of pending.values()) entry.reject(error);
     pending.clear();
   }
@@ -84,7 +87,10 @@ export function createControllerTransport({generation, send, profile = {}, initi
     initializing = true;
     const result = await request('initialize', {clientInfo: {name: 'sage_controller', version: '0.1.0'}, capabilities: {experimentalApi: true}});
     if (closed) throw uncertain('closed during initialization');
-    await transmit({method: 'initialized'});
+    await Promise.race([
+      transmit({method: 'initialized'}),
+      connectionClosed.then(error => { throw error; }),
+    ]);
     if (closed) throw uncertain('initialized notification failed');
     initialized = true;
     return result;

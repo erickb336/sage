@@ -224,3 +224,31 @@ for (const emittedAtMs of [null, '1792540800000', 1.5, 9007199254740992]) {
     assert.throws(() => f.transport.startThread(), /closed/);
   });
 }
+
+test('disconnect settles initialization before a blocked notification writer finishes', async () => {
+  let finishSend;
+  const notificationSend = new Promise(resolve => { finishSend = resolve; });
+  const sent = [];
+  const transport = createControllerTransport({generation: 'g', send(message) {
+    sent.push(message);
+    if (message.method === 'initialized') return notificationSend;
+  }});
+  let outcome = 'pending';
+  const initialized = transport.initialize().then(
+    () => { outcome = 'fulfilled'; },
+    error => { outcome = error.code; },
+  );
+  transport.receive({id: 0, result: {}}, 'g');
+  await Promise.resolve();
+  assert.deepEqual(sent.at(-1), {method: 'initialized'});
+  transport.disconnect('owned connection terminated');
+  try {
+    // Drain the promise reactions, without resolving the controlled writer or using a clock.
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    assert.equal(outcome, 'uncertain');
+    assert.throws(() => transport.startThread(), /closed/);
+  } finally {
+    finishSend();
+    await initialized;
+  }
+});
