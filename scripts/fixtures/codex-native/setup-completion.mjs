@@ -19,7 +19,7 @@ export function fixtureInterruptDecision(input, context, enabled) {
 }
 
 // Test-only configuration in setupCapture's fresh profile. No installed configuration changes.
-export async function setupCompletion(root, { failedSpawn = false, followupCapacity = false, capacityFailure = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, patchProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, nestedReport = false, interruption = false, readTask = false, updateTask = false, resumedFailure = false, workflow, env = process.env } = {}) {
+export async function setupCompletion(root, { omitStop = false, failedSpawn = false, followupCapacity = false, capacityFailure = false, commandProbe = false, denyCommand = false, childMessageProbe = false, roleEditProbe = false, patchProbe = false, writer = false, leadOwnership = false, followup = false, createTask = false, createRun = false, acceptReview = false, nestedReport = false, interruption = false, readTask = false, updateTask = false, resumedFailure = false, unpreparedFollowup = false, protectedProbe = false, workflow, env = process.env } = {}) {
   cpSync(new URL("./policy-diagnostic.mjs", import.meta.url), join(root, "policy-diagnostic.mjs"));
   cpSync(new URL("../../../plugins/sage-codex", import.meta.url), join(root, "plugin"), { recursive: true });
   const options = { directory: join(root, "admission"), project: "native-fixture",
@@ -78,7 +78,7 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
     import { patchEditDecision } from './plugin/runtime/file-policy.mjs';
     const options = ${JSON.stringify(options)};
     const interruptDecision = ${fixtureInterruptDecision.toString()};
-    const allowed = new Set([...(${JSON.stringify(workflow)} ? ['mcp__sage_preparation__sage_read_task','mcp__sage_preparation__sage_update_task'] : []),...(${JSON.stringify(acceptReview || nestedReport)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun || interruption)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup || followupCapacity)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
+    const allowed = new Set([...(${JSON.stringify(protectedProbe || workflow)} ? ["mcp__sage_preparation__sage_read_task","mcp__sage_preparation__sage_update_task"] : []),...(${JSON.stringify(acceptReview || nestedReport)} ? ['mcp__sage_preparation__sage_accept_review'] : []),...(${JSON.stringify(createTask || createRun)} ? ['mcp__sage_preparation__sage_create_task'] : []), ...(${JSON.stringify(createRun || interruption)} ? ['mcp__sage_preparation__sage_create_run'] : []), ...(${JSON.stringify(followup || followupCapacity || unpreparedFollowup)} ? ['collaborationfollowup_task'] : []), 'collaborationspawn_agent', 'collaborationlist_agents', 'collaborationwait_agent',
       ...(${JSON.stringify(nestedReport)} ? ['mcp__sage_preparation__sage_read_recorded_report'] : []), 'list_mcp_resources', 'mcp__sage_preparation__sage_read_assignment', 'mcp__sage_preparation__sage_prepare_task', 'mcp__sage_preparation__sage_read_report', 'mcp__sage_preparation__sage_record_report', 'mcp__sage_preparation__sage_finish_run']);
     serveHooks({mode: options, loadPolicy: async () => {
       const policy = createNativePolicy(options, (input, context) => {
@@ -150,8 +150,8 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
   const config = [["sage_fixture", "completion-hooks.mjs"], ["sage_preparation", "completion-preparation.mjs"]]
     .map(([name, file]) => `[mcp_servers.${name}]\nrequired=true\ncommand=${JSON.stringify(process.execPath)}\nargs=[${JSON.stringify(join(root, file))}]\nenv={SAGE_TEST_MACHINE_ID="native-fixture"}\n`).join("")
     + '[mcp_servers.sage_preparation.tools.sage_read_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_create_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_prepare_task]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_report]\napproval_mode="approve"\n';
-  const receiptConfig = (updateTask || workflow ? '[mcp_servers.sage_preparation.tools.sage_update_task]\napproval_mode="approve"\n' : "") + (nestedReport ? '[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n' : "") + '[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
-  const { readAssignmentTurn, readNativeRecovery, readInitialSession, readChildTurn } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
+  const receiptConfig = (updateTask || protectedProbe || workflow ? '[mcp_servers.sage_preparation.tools.sage_update_task]\napproval_mode="approve"\n' : "") + (nestedReport ? '[mcp_servers.sage_preparation.tools.sage_read_recorded_report]\napproval_mode="approve"\n' : "") + '[mcp_servers.sage_preparation.tools.sage_accept_review]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_finish_run]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_read_assignment]\napproval_mode="approve"\n[mcp_servers.sage_preparation.tools.sage_record_report]\napproval_mode="approve"\n';
+  const { readAssignmentTurn, readNativeRecovery, readNativeCompletion, readInitialSession, readChildTurn } = await import(pathToFileURL(join(root, "plugin/runtime/identity.mjs")));
   return { verifyUnmanagedIdentity({ parent, child, start, stop }) {
     const receipts=readFileSync(join(root,"stop-receipts.jsonl"),"utf8").trim().split("\n").map(JSON.parse);
     assert.equal(receipts.length,1);
@@ -165,6 +165,21 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
     assert.equal(start.agent_id,child);assert.equal(start.session_id,parent);
     assert.equal(stop.agent_id,child);assert.equal(stop.session_id,parent);assert.equal(stop.turn_id,found.turn);
     return {session:found.metadata.session_id,parent:found.metadata.parent_thread_id,child:found.metadata.id,turn:found.turn,path:found.metadata.agent_path};
+  }, readCompletionObservations: session => readObservations(join(options.observationsRoot,session)), completionRecoveryEvidence(child) {
+    const state=readAdmission(options.directory);
+    const bindings=state.bindings.filter(row=>row.child===child);
+    assert.equal(bindings.length,2);
+    return bindings.map(bound=>{
+      const rows=readObservations(join(options.observationsRoot,bound.session.slice(6)));
+      const paths=rows.filter(row=>row.kind==="child-transcript"&&row.child===child&&row.turn===bound.turn);
+      assert.equal(paths.length,1);
+      const start=rows.find(row=>row.kind==="child-start"&&row.child===child);assert(start);
+      const reservation=state.reservations.find(row=>row.assignment.id===bound.assignment);assert(reservation);
+      const native=readNativeCompletion(paths[0].transcript,{sessionsDir:options.sessionsDir},{session:bound.session.slice(6),child,parent:bound.issuer,path:start.path,author:"/root",turn:bound.turn,taskHash:reservation.dispatch.taskHash});
+      assert(native);assert.equal(native.turn,bound.turn);
+      assert.deepEqual(state.completions.find(row=>row.assignment===bound.assignment),bound);
+      return native;
+    });
   }, reviewTarget, verifyNestedAssignments(expected) {
     const state=readAdmission(options.directory);
     for(const {child,parent,path,message} of expected) {
@@ -237,8 +252,9 @@ export async function setupCompletion(root, { failedSpawn = false, followupCapac
       unlinkSync(file);
       assert.equal(existsSync(file), false);
     }, readJournal: () => readAdmission(options.directory),
-    readStops: () => readFileSync(join(root, "stop-receipts.jsonl"), "utf8").trim().split("\n").map(JSON.parse),
+    readStops: () => !existsSync(join(root,"stop-receipts.jsonl")) ? [] : readFileSync(join(root, "stop-receipts.jsonl"), "utf8").trim().split("\n").map(JSON.parse),
     hook(event) {
+      if (omitStop && event === "SubagentStop") return [];
       if (event === "SubagentStart") return []; // Exercise no-tool initial transcript binding.
       const fields = event === "UserPromptSubmit"
         ? ["cwd", "hook_event_name", "model", "permission_mode", "prompt", "session_id", "transcript_path", "turn_id"]

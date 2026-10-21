@@ -49,12 +49,36 @@ A task's priority and kind are optional, and the board shows them as tags on its
 
 `config name=` and `config archived=` set keys of the project's own logbook, never the config for all projects. Set them in a config command of their own, and only when the owner asks. The name is the project's name on the board: 1 to 60 characters, with no space at an end or two together, and no control, format or hidden character. `name=` alone removes it. Without a name, the board shows the repository name of the checkout's `upstream` remote, then of `origin`, then the folder. `archived=yes` folds the project into the board's Archived group, which shows only a count of its tasks and of what needs the owner there; `archived=no` brings it back.
 
+## Waits
+
+```sh
+node "$SAGE_CLI" task add --title "Describe the task" --size small --waits T7,T9 --project "$PROJECT"
+node "$SAGE_CLI" task T8 set waits=T7 --project "$PROJECT"
+node "$SAGE_CLI" task T8 set waits= --project "$PROJECT"
+```
+
+A task may wait for other tasks of the same logbook. A wait is met when that task is merged or concluded; an abandoned task never meets it, so remove or change the wait, or ask the owner. While a wait is unmet, the task takes no lead, implementer, investigate or arena-judge run (also through native run creation) and no `state=building` or `state=merged`, and the merge check refuses it; its designer and pe runs, and review and QA runs, go on. A wait on a task of the same pull request (`--pr`, or else the same recorded PR) is met at the merge check when that task passes too; a task of another pull request, or an abandoned one, never meets it. When the waiting task is not on that pull request, the refusal names the `pr=` to set. The tool refuses a word that is not a task id, a duplicate, the task itself, more than 20 tasks, a task that the logbook does not have, and a loop. Each change writes a decision row.
+
+## Programs
+
+```sh
+node "$SAGE_CLI" program propose --name "Codex support" --goal "Codex runs sage too." --pilot T7 --tasks T8,T9 --project "$PROJECT"
+node "$SAGE_CLI" program propose PG1 --tasks T8 --project "$PROJECT"
+node "$SAGE_CLI" program propose PG1 --pilot T9 --project "$PROJECT"
+node "$SAGE_CLI" task add --title "Describe the task" --size small --program PG1 --waits T7 --project "$PROJECT"
+node "$SAGE_CLI" task T8 set program=PG1 --project "$PROJECT"
+node "$SAGE_CLI" task T8 set program=none --project "$PROJECT"
+```
+
+A program groups the tasks of one request with one goal and one pilot task. Frame every task first, then propose once: `program propose` puts the pilot and the `--tasks` in the program and opens the breakdown gate on the pilot task (approve, change, drop). The gate's question names each task with its title and what it waits for, one part on each line; show it to the owner. The state comes from the answer of that gate on the pilot task: proposed, active (done when its tasks ended), dropped (drop), or changing (change, or the owner's own words, which say what to change). Any other gate reads as lost. A breakdown gate (its question starts with `Approve program PG<n>`, which only `program propose` writes) answers once, also after a newer round replaced it. Until the owner approves, no task of the program takes a lead, implementer, investigate or arena-judge run (also through native run creation) or a move to building, merged or concluded (also through the native task update), and the merge check refuses it. After the approval, each task but the pilot waits for the pilot in the same way, until the pilot is merged or concluded; a pilot wait never passes in the same merge. Designer and pe runs, and review and QA runs, go on. After change, `program propose <PG>` proposes again with a new gate that says its round; tell the owner what changed. `--tasks` gives the new list, and an ended task stays in the program. The name, the goal and each title come after a fixed label or a task id, with no quotes, and print as written: each line break prints as a space, so no text adds a line. An ended task neither joins nor leaves a program. No task leaves a program before the owner approves or drops it, and the pilot stays until a new pilot is proposed. No task joins while the breakdown gate is open: ask the owner to answer change, then propose again with `--tasks` that name it. A task that joins or leaves after the approval needs no new gate: tell the owner. A task that has started joins only after the pilot is merged or concluded. No task of the program changes its waits while the breakdown gate is open: ask the owner to answer change, then propose again. No task of a program has or had a pull request of its pilot before the pilot is merged or concluded, in every state but dropped: `pr=`, `verdict --pr`, `program=` and `program propose` refuse it from either side, also for a PR that a task had before, and name the way out. The tool refuses a bad or used name, a name of the form PG<n>, an empty goal or one over 300 characters, an ended pilot or task, one in another program, a started task that joins a program that the owner has not approved, an unknown or dropped program, and a loop through a pilot, which it names with the wait to clear. `status` shows each program with its name, pilot and progress, also when it is done or dropped.
+
 ## Findings and evidence
 
 Only the chief runs writes. Start a separate run for each actual specialist assignment with its exact role (`implementer`, `code-reviewer`, `security-reviewer`, `ux-reviewer`, `qa`). Roles and tasks must satisfy the CLI's existing rules. Do not rename unsupported design or investigation work to evade a refusal.
 
 ```sh
-node "$SAGE_CLI" finding add T7 --source code-reviewer --severity medium --summary "Reproducible problem" --project "$PROJECT"
+node "$SAGE_CLI" run done R3 --status done --tokens 52000 --project "$PROJECT"
+node "$SAGE_CLI" finding add T7 --source code-reviewer --severity medium --summary "Reproducible problem" --run R3 --class state-edge --project "$PROJECT"
 node "$SAGE_CLI" finding triage T7 F-T7-1 fix --project "$PROJECT"
 node "$SAGE_CLI" round T7 --project "$PROJECT"
 node "$SAGE_CLI" finding close T7 F-T7-1 --project "$PROJECT"
@@ -63,6 +87,8 @@ node "$SAGE_CLI" verdict T7 --kind review-clean --sha "$HEAD_SHA" --run R3 --cyc
 node "$SAGE_CLI" verdict T7 --kind qa-pass --sha "$HEAD_SHA" --run R4 --cycle 1 --project "$PROJECT"
 node "$SAGE_CLI" merge-check --sha "$HEAD_SHA" --project "$PROJECT"
 ```
+
+A done review, QA or evidence-review run needs `--tokens` with its tokens as a whole number; any `--tokens` has 1 to 12 digits. A run ends once: a later `run done` of an ended run, with the same `--status`, only adds the `--tokens` or the `--report` that it lacks (a Codex native finish and a re-plan end a run with neither); it never replaces a value, and any other call is refused. `finding add` takes `--run`, the run whose report holds the finding (a run of that task), and `--class`, one of state-edge, speed, copy, layout, security or other; both are optional. `stats [--task T7]` prints a guide line, a total line, and one table of the 50 tasks with the most review tokens, largest first: each task's review runs, review tokens in thousands (done runs only), the tokens after round 0 (its runs of repair round 1 or later), rounds and findings by role and by cycle; then "N more tasks not shown; use --task <T>" when there are more. With no review runs and no findings it prints "No review runs yet."; it reads only.
 
 Use the full 40-character checked commit as `HEAD_SHA`. Record medium/high findings before a problem verdict (`findings` for a review, `qa-fail` for QA). Security and UX clean kinds are `security-clean` and `ux-clean`. Checks use `checks-pass` or `checks-fail`. Investigation verdicts use `evidence-clean` or `findings` without a commit. Record only an outcome that actually happened. A manual verdict's `--run` field is not native reviewer authentication.
 

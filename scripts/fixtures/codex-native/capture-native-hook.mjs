@@ -7,6 +7,7 @@ const root=dirname(fileURLToPath(import.meta.url));
 const input=JSON.parse(readFileSync(0,'utf8'));
 const record=Object.fromEntries(['hook_event_name','session_id','agent_id','turn_id','tool_name','tool_use_id'].filter(k=>typeof input[k]==='string').map(k=>[k,input[k]]));
 if(input.hook_event_name==='SessionStart' && typeof input.source==='string')record.source=input.source;
+if(['protected_read','protected_update','protected_finish'].includes(input.tool_use_id))record.toolInput=input.tool_input;
 if(input.tool_name==='Bash') {
  record.toolInputShape=Object.fromEntries(Object.entries(input.tool_input??{}).map(([key,value])=>[key,typeof value]));
  record.fixedCommandMatched=input.tool_input?.command==='printf sage-native-command-ok; pwd';

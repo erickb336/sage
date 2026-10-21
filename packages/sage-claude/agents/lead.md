@@ -40,7 +40,7 @@ In this file, `sage` stands for `node <path to skills/sage/sage.mjs>`, the absol
 
 - reads: `sage status`, `sage standing`, `sage logbook`;
 - runs: `sage run add <T> --role <role> --branch <branch>` (the branch only for the implementer) and `sage run done <R> --status done --tokens <n>`, for the five roles above; `sage run done <R> --status failed` for a helper that gave no report;
-- findings: `sage finding add <T> --source <role> --severity <severity> --summary=<word>`, `sage finding triage <T> <K> fix`, `sage finding triage <T> <K> dismiss --reason=<word>` (a low finding that is no fix key of the round or of an earlier one) and `sage finding close <T> <K>`;
+- findings: `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, `sage finding triage <T> <K> fix`, `sage finding triage <T> <K> dismiss --reason=<word>` (a low finding that is no fix key of the round or of an earlier one) and `sage finding close <T> <K>`;
 - verdicts: `sage verdict <T> --sha <sha> --kind <kind> --cycle <n> --pr <n> --run <R>`, for a review or QA only;
 - the round: `sage round <T>`;
 - the task: `sage task <T> set state=<state>`, with `branch=<branch>` and `pr=<n>`.
@@ -76,7 +76,7 @@ You move from repairing to reviewing only after you close each fix key of the ro
 1. `sage run add <T> --role <role>`. It prints the run id: `R<n> running · <role> on <T>`. The hook sees this line, and only then is the run yours. When the line names a model, pass it as the `model` of the Agent call. Add a run only when you can start its helper now: not when 3 of your helpers run.
 2. Start the helper with the Agent tool: `subagent_type` `sage:<role>`, `name` `R<n>` (the run id), `run_in_background` true, and a full brief. The brief has all ten fields, GOAL to STANDING. STANDING is the output of `sage standing`, word for word. REPORT asks for the report of the `sage:report` skill. Never name a helper `main` or `lead-T<n>`.
 3. Wait for the helper's completion notice. Do not end while a helper runs.
-4. For a review or QA, also a re-check: record each finding of its report with `sage finding add <T> --source <role> --severity <severity> --summary=<word>`, with the helper's role as `--source` and the same severity. A medium or high finding goes on to triage (step 4 of the steps). For each low finding, do one of these:
+4. For a review or QA, also a re-check: record each finding of its report with `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, with the helper's role as `--source`, the same severity, the helper's run as `--run`, and the problem's class: state-edge, speed, copy, layout, security or other. A medium or high finding goes on to triage (step 4 of the steps). For each low finding, do one of these:
    - dismiss it with a reason (`sage finding triage <T> <K> dismiss --reason=<word>`), when it is not worth a fix;
    - triage it fix, when a round comes, so that it joins that round;
    - when it needs a fix and no round comes, list it and end blocked (see "When you end blocked"), after the cycle or the re-check.
@@ -159,11 +159,11 @@ $ sage run add T1 --role qa
 > R4 sage:qa
 < R3 FINDINGS: - K1 medium src/form.js:12 an empty name saves a blank row
 < R4 PASS: - Q1 low src/form.js:30 the error text has a typo
-$ sage finding add T1 --source code-reviewer --severity medium --summary=empty-name-saves-a-row
+$ sage finding add T1 --source code-reviewer --severity medium --summary=empty-name-saves-a-row --run R3 --class state-edge
 → F-T1-1 open · medium · T1
 $ sage run done R3 --status done --tokens 52000
 $ sage verdict T1 --sha <sha> --kind findings --cycle 1 --pr 12 --run R3
-$ sage finding add T1 --source qa --severity low --summary=typo-in-error-text
+$ sage finding add T1 --source qa --severity low --summary=typo-in-error-text --run R4 --class copy
 → F-T1-2 open · low · T1
 $ sage run done R4 --status done --tokens 38000
 $ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R4
@@ -206,7 +206,7 @@ $ sage run add T1 --role qa
 → R10 running · qa on T1
 > R10 sage:qa
 < R10 PASS: - Q2 low README.md:40 a sentence of 31 words
-$ sage finding add T1 --source qa --severity low --summary=long-sentence
+$ sage finding add T1 --source qa --severity low --summary=long-sentence --run R10 --class copy
 → F-T1-3 open · low · T1
 $ sage finding triage T1 F-T1-3 dismiss --reason=style-only
 $ sage run done R10 --status done --tokens 36000
@@ -243,7 +243,7 @@ $ sage run add T1 --role qa
 < R4 PASS: - Q1 low src/form.js:8 the name field has no label for screen readers
 $ sage run done R3 --status done --tokens 50000
 $ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R3
-$ sage finding add T1 --source qa --severity low --summary=name-field-has-no-label
+$ sage finding add T1 --source qa --severity low --summary=name-field-has-no-label --run R4 --class layout
 → F-T1-1 open · low · T1
 $ sage run done R4 --status done --tokens 38000
 $ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R4

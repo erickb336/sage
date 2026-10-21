@@ -29,3 +29,15 @@ For a run created through this manual workflow, confirmed owner interruption is 
 After compaction or restart, read current task/run records, reports, branch/head and host status. A stored run or old mode note does not authenticate a live child. If continuity is uncertain, require explicit owner re-entry and resolve ownership before dispatch. Do not send new child input to manufacture a terminal result.
 
 The manual logbook does not replace protected native preparation, report, review or completion receipts. Never switch to it as a workaround for a protected API denial. Preserve the chosen Codex model. Advice is optional; this workflow changes no hooks, settings or enforcement defaults.
+
+## Review usage without a host measurement
+
+Keep actual token counts when the execution interface supplies them. A retrieval error does not make usage unavailable.
+
+The chief can declare `--usage-interface collaboration-tools` when adding a manual run. This records the provider's fixed capability description. It is a chief declaration, not host attestation. The `app-server` interface exposes usage and cannot select this exception. Native and older runs have no declared interface and cannot select it either.
+
+For the declared unsupported interface, end the run with `--usage unavailable`, `--usage-source`, `--usage-evidence` and `--report`. Give the actual capability evidence. Do not put zero or a word in `--tokens`. The exception changes no report, review, ownership or native completion check.
+
+If a measurement arrives later, use `run usage <R> --tokens <n> --usage-source <source> --usage-evidence <reference>`. This command records an audited enrichment. It preserves the terminal status, timestamp and report. An exact retry adds nothing. A conflicting count or source refuses. Previously blocked runs remain blocked.
+
+Status and stats show measured, unavailable and legacy-unrecorded completed runs. A partial total does not establish that one task costs less than another.
