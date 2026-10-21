@@ -1,3 +1,5 @@
+import {isAbsolute} from 'node:path';
+
 // These are launch requirements, not evidence that an external process applied them.
 export const REQUIRED_CONTROLLER_CONFIG = Object.freeze({
   'agents.enabled': false,
@@ -43,8 +45,9 @@ const owns = (value, key) => Object.hasOwn(value, key);
 function uncertain(reason) { return Object.assign(new Error(`Connection closed; outcome uncertain: ${reason}`), {code: 'uncertain'}); }
 
 /** Owns one already-established connection. No spawning, effects or task acceptance. */
-export function createControllerTransport({generation, send, profile = {}, initialRequestId = 0}) {
+export function createControllerTransport({generation, send, profile = {}, initialRequestId = 0, inspectionCwd}) {
   if (!nonempty(generation) || typeof send !== 'function' || !validId(initialRequestId)) throw new TypeError('Invalid connection configuration');
+  if (inspectionCwd !== undefined && (!nonempty(inspectionCwd) || !isAbsolute(inspectionCwd))) throw new TypeError('Invalid inspection cwd');
   const selected = object(profile, ['model', 'approvalPolicy', 'sandbox']);
   if (owns(selected, 'model') && !nonempty(selected.model)) throw new TypeError('Invalid model');
   if (owns(selected, 'approvalPolicy') && !['untrusted', 'on-failure', 'on-request', 'never'].includes(selected.approvalPolicy)) throw new TypeError('Invalid approval policy');
@@ -94,6 +97,11 @@ export function createControllerTransport({generation, send, profile = {}, initi
     if (closed) throw uncertain('initialized notification failed');
     initialized = true;
     return result;
+  }
+  function readConfiguration(...args) {
+    requireReady();
+    if (args.length || inspectionCwd === undefined) throw new Error('Fixed inspection cwd required; no arguments allowed');
+    return request('config/read', {cwd: inspectionCwd, includeLayers: true});
   }
   function startThread(params = {}) {
     requireReady();
@@ -152,5 +160,5 @@ export function createControllerTransport({generation, send, profile = {}, initi
       throw uncertain(error.message);
     }
   }
-  return Object.freeze({initialize, startThread, resumeThread, startTurn, receive, disconnect});
+  return Object.freeze({initialize, startThread, resumeThread, startTurn, readConfiguration, receive, disconnect});
 }

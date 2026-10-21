@@ -252,3 +252,12 @@ test('disconnect settles initialization before a blocked notification writer fin
     await initialized;
   }
 });
+
+test('configuration read uses immutable fixed inspection cwd and rejects caller arguments', async () => {
+  const f = fixture({inspectionCwd: '/fixture/project'}); await ready(f);
+  assert.throws(() => f.transport.readConfiguration({cwd: '/other'}));
+  const read = f.transport.readConfiguration();
+  assert.deepEqual(f.sent.at(-1), {id: 1, method: 'config/read', params: {cwd: '/fixture/project', includeLayers: true}});
+  f.reply(1, {config: {model: 'selected'}}); assert.deepEqual(await read, {config: {model: 'selected'}});
+  const unavailable = fixture(); await ready(unavailable); assert.throws(() => unavailable.transport.readConfiguration(), /inspection/);
+});
