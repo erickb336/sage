@@ -5,14 +5,14 @@ import {spawn} from 'node:child_process';
 import {readFileSync,writeFileSync,mkdirSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
-export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,completion=false,recovery=false,failedSpawn=false,followupCapacity=false,capacityFailure=false,commandProbe=false,denyCommand=false,childMessageProbe=false,roleEditProbe=false,patchProbe=false,writer=false,leadOwnership=false,followup=false,createTask=false,createRun=false,acceptReview=false,nestedReport=false,interruption=false,readTask=false,updateTask=false,resumedFailure=false,unpreparedFollowup=false,protectedProbe=false,captureSessionStart=false,deadlineMs=120_000}){
+export async function setupCapture({root,codexHome,workspace,env,binary,denySpawn=false,completion=false,recovery=false,omitStop=false,failedSpawn=false,followupCapacity=false,capacityFailure=false,commandProbe=false,denyCommand=false,childMessageProbe=false,roleEditProbe=false,patchProbe=false,writer=false,leadOwnership=false,followup=false,createTask=false,createRun=false,acceptReview=false,nestedReport=false,interruption=false,readTask=false,updateTask=false,resumedFailure=false,unpreparedFollowup=false,protectedProbe=false,captureSessionStart=false,deadlineMs=120_000}){
  assert(/^[A-Za-z0-9/._-]+$/.test(realpathSync(root)), "unsafe_probe_root");
  assert.equal(realpathSync(codexHome),join(realpathSync(root),'codex'));
  mkdirSync(join(root,'events'));
  const script=join(root,'capture.mjs');
  writeFileSync(script,readFileSync(new URL('./capture-native-hook.mjs',import.meta.url)));
  const command=`node ${JSON.stringify(script)}${denySpawn ? " --deny-spawn" : ""}`;
- const integrated = completion ? await setupCompletion(root, {failedSpawn,followupCapacity,capacityFailure,commandProbe,denyCommand,childMessageProbe,roleEditProbe,patchProbe,writer,leadOwnership,followup,createTask,createRun,acceptReview,nestedReport,interruption,readTask,updateTask,resumedFailure,unpreparedFollowup,protectedProbe,env}) : null;
+ const integrated = completion ? await setupCompletion(root, {omitStop,failedSpawn,followupCapacity,capacityFailure,commandProbe,denyCommand,childMessageProbe,roleEditProbe,patchProbe,writer,leadOwnership,followup,createTask,createRun,acceptReview,nestedReport,interruption,readTask,updateTask,resumedFailure,unpreparedFollowup,protectedProbe,env}) : null;
  const baseConfig = integrated?.config ?? '';
  const blocker = join(root, 'block-first-stop.mjs');
  if(completion) writeFileSync(blocker, readFileSync(new URL('./block-first-stop.mjs', import.meta.url)));
@@ -26,8 +26,8 @@ export async function setupCapture({root,codexHome,workspace,env,binary,denySpaw
  let hooks;
  const inspect=r=>{
   assert.equal(r.data.length,1);assert.equal(r.data[0].errors.length,0);
-  const hs=r.data[0].hooks;assert.equal(hs.length,(completion?(recovery?9:10):4)+(captureSessionStart?1:0));
-  assert.deepEqual(hs.map(h=>h.eventName).sort(),[...(captureSessionStart?['sessionStart']:[]),'preToolUse','postToolUse','subagentStart','subagentStop',...(completion?['preToolUse','postToolUse','subagentStop',...(!recovery?['subagentStop']:[]),'userPromptSubmit','userPromptSubmit']:[])].sort());
+  const hs=r.data[0].hooks;assert.equal(hs.length,(completion?(omitStop?8:recovery?9:10):4)+(captureSessionStart?1:0));
+  assert.deepEqual(hs.map(h=>h.eventName).sort(),[...(captureSessionStart?['sessionStart']:[]),'preToolUse','postToolUse','subagentStart','subagentStop',...(completion?['preToolUse','postToolUse',...(!omitStop?['subagentStop']:[]),...(!recovery?['subagentStop']:[]),'userPromptSubmit','userPromptSubmit']:[])].sort());
 
   assert(hs.every(h=>(completion||h.command===command)&&h.enabled&&h.sourcePath===join(codexHome,'hooks.json')));
   return hs;

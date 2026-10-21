@@ -41,6 +41,15 @@ export function agentCaps(config) {
  * flag shows as a black flag.
  */
 export const HIDDEN = /[\0-\x08\x0b-\x1f\x7f-\x9f\u061c\u200b\u200e\u200f\u2060\ufeff\ufe00-\ufe0e\u202a-\u202e\u2066-\u2069\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]|(?<![\p{Extended_Pictographic}0-9#*])\ufe0f|(?<![\p{L}\p{M}](?=[\u200c\u200d]\p{L})|[\p{Extended_Pictographic}\p{Emoji_Modifier}]\ufe0f?(?=\u200d\p{Extended_Pictographic}))[\u200c\u200d]/gu;
+/** The line break inside one table cell, as a breakdown gate's question holds its lines (U+2028): the board shows each line (gateLines in program-rules.mjs). */
+export const LINE = "\u2028";
+/** Every line break: line feed, carriage return, next line (U+0085) and the line and paragraph separators. A text of one line has none. */
+export const BREAKS = /[\n\r\u0085\u2028\u2029]/g;
+/**
+ * The program of a breakdown gate, from its question's fixed first line, which only program propose writes (gate add
+ * refuses it). It survives a stop between writes and a lost programs or decisions table (R1240-2).
+ */
+export const proposalOf = (gate) => /^Approve program (PG[1-9]\d*)[ ?]/.exec(gate?.question ?? "")?.[1];
 /**
  * The characters that show as nothing although Unicode gives them a visible class: the combining grapheme joiner (U+034F),
  * the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0) and the braille blank (U+2800). Also the line and paragraph
@@ -51,15 +60,15 @@ const BLANK = /[\u034f\u115f\u1160\u3164\uffa0\u2800\u2028\u2029]/u;
 const MARKS_MAX = 3;
 
 /**
- * Why a display name is refused, or null when it is good: 1 to 60 characters in the composed form (NFC), no space at an
+ * Why a display name (or a program's goal, with max 300) is refused, or null when it is good: 1 to max (60) characters in the composed form (NFC), no space at an
  * end or two together, no control, format, private-use, unassigned, blank or hidden character, at most 3 combining marks
  * in a row, and one visible character or more. A joiner or non-joiner stays where HIDDEN keeps it (between two letters,
  * or after an emoji before an emoji), so a Persian name or a joined emoji is good.
  */
-export function nameProblem(name) {
+export function nameProblem(name, max = NAME_MAX) {
   if (typeof name !== "string") return "is not text";
   const length = [...name].length;
-  if (!length || length > NAME_MAX) return `has ${length} characters: give 1 to ${NAME_MAX}`;
+  if (!length || length > max) return `has ${length} characters: give 1 to ${max}`;
   if (name.normalize("NFC") !== name) return "is not in the composed Unicode form (NFC)";
   if (/^\s|\s$|\s\s/u.test(name)) return "has a space at its start or end, or two spaces together";
   // HIDDEN removes each joiner that it does not keep: a joiner that is left after it is one that HIDDEN keeps.
@@ -71,12 +80,13 @@ export function nameProblem(name) {
 
 /** The tables of a logbook and their columns, in the order that a write gives them. The state tool writes them; the hook guards their files. */
 export const TABLES = {
-  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra", "priority", "kind", "waits"],
-  runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model"],
+  tasks: ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold", "extra", "priority", "kind", "waits", "program"],
+  runs: ["id", "task", "role", "round", "candidate", "branch", "status", "tokens", "report", "started", "ended", "model", "usage_provider", "usage_interface", "usage_capability", "usage_binding", "usage_reason", "usage_basis", "usage_status", "usage_source", "usage_evidence"],
   findings: ["task", "key", "round", "source", "severity", "summary", "triage", "reason", "status", "run", "class"],
   ledger: ["task", "pr", "sha", "kind", "cycle", "run", "at"],
   gates: ["id", "task", "question", "options", "recommendation", "default", "answer", "at"],
   decisions: ["at", "task", "decision", "why"],
+  programs: ["id", "name", "goal", "pilot", "gate", "at"],
 };
 /** Every file of a logbook that only the state tool writes, by name: each table and the logbook's other records (K2). */
 export const LOGBOOK_FILES = [...Object.keys(TABLES).map((t) => `${t}.tsv`), "config.json", "standing.md", "status.md", "observations.json"];
