@@ -1,0 +1,19 @@
+# Native request binding
+
+This pure boundary stages immutable native request data for a later evaluator. It grants no effect authority.
+
+`createNativeRequestBinding({connectionGeneration, threadId, turnId, assignment, namespace, tool, validateArguments})` returns `stage(eventJson, sourceGeneration)` and `close()` only. The trusted controller supplies these identities. Its assignment is a new explicit record, not an authenticated core admission receipt. Assignment fields are `id`, `task`, `run`, `actor`, `role`, `lead`, `worktree`, and `admissionGeneration`. Identity strings are nonempty; the canonical chief-of-staff role can have a null lead. The unit does not certify hierarchy, canonical paths, admission generation or task state.
+
+Each binding covers one connection, active turn and assignment revision. Close the old binding before replacement. Cross-object exclusion and durable replay require later coordination.
+
+The native JSON envelope is exactly `{id,msg:{type,callId,turnId,startedAtMs,namespace,tool,arguments}}`. Type is `dynamic_tool_call_request`. The envelope ID is a string, including the empty string. It is retained as data, not an authority key. Call ID is nonempty and at most 4096 UTF-8 bytes. Trusted identity strings have the same byte cap. An oversized call ID closes the binding before retention. Turn, namespace and tool must match the binding. Timestamp is a safe integer. Native wire events have no thread ID; the trusted connection supplies it.
+
+The required synchronous validator receives frozen arguments. It must reject extra fields and validate the complete action-specific schema. Model arguments never merge into trusted identity. The callback is trusted synchronous validation code. It returns plain JSON data or throws, and owns any asynchronous resource it creates. It is never an effect handler. Recognizable declared async and generator functions refuse before invocation. This check does not prove that arbitrary bound or wrapped trusted functions are synchronous. An incomplete callback remains a caller defect; constructor acceptance is no independent attestation.
+
+A successful stage returns frozen version-1 data with trusted context, event ID, call ID, timestamp and typed arguments. It carries no authorization, acceptance or execution status. A downstream evaluator must still enforce permissions, ownership, task state, gates, durable intent and actual protected effects.
+
+The input must be a JSON string. The byte limit is 1 MiB; snapshot depth is at most 64 object/array levels. Typed output has the same snapshot limits. Input accessors do not enter JSON parsing. Trusted context and validator output reject accessors, custom prototypes, cycles and non-JSON values. Returned Promises and thenables refuse without reads of their constructor, then or species hooks. This boundary does not handle their rejections. The trusted validator owns those rejections and any other asynchronous work it creates. Arbitrary thenable methods are never invoked. This does not promise purity against arbitrary Proxy traps or duplicate-key detection in JSON.parse.
+
+Identified call IDs are consumed before full envelope or argument validation. Refusal does not release them. Wrong generations cannot consume current IDs. Reentrant requests refuse; close during validation invalidates its result. The replay set retains at most 4 MiB of call ID bytes, plus bounded Set and string overhead. After 1024 consumed IDs, the next distinct request closes the binding rather than evicting replay history. Close is terminal and idempotent. Invalid JSON and oversized input cannot reliably identify a call ID and do not consume one.
+
+This unit performs no IO, model work, process launch, downstream callback, logbook mutation or publication. It does not replace trusted native context, protected admission, durable recovery or full Sage support. Defaults and installed behavior remain unchanged.
