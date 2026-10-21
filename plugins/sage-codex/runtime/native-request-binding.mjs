@@ -95,8 +95,8 @@ export function createNativeRequestBinding(options) {
     try {
       const output = validateArguments(input);
       if (types.isPromise(output)) {
-        // Observe native Promise rejection without looking up a caller-controlled then.
-        Promise.prototype.then.call(output, undefined, () => {});
+        // Trusted synchronous validators own any asynchronous work they create.
+        // Do not observe invalid output through constructor/then/species hooks.
         throw new TypeError('Argument validation must be synchronous');
       }
       const typed = snapshot(record(output));

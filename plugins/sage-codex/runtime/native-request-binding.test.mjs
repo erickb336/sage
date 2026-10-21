@@ -90,11 +90,11 @@ test('reentrant validation cannot stage and close during validation invalidates 
   assert.throws(() => stage(closing, event())); closing.close(); assert.throws(() => stage(closing, event('next')));
 });
 
-test('async validators and returned promises or thenables cannot stage or leak rejected promises', async () => {
+test('async validators and invalid asynchronous output refuse under the synchronous contract', async () => {
   let invoked = 0, thenCalls = 0;
   assert.throws(() => api.createNativeRequestBinding(options({validateArguments: async () => { invoked++; return {}; }})));
   assert.equal(invoked, 0);
-  for (const make of [() => Promise.reject(Error('validator rejected')), () => ({then() { thenCalls++; }}), () => Object.defineProperty({}, 'then', {get() { thenCalls++; return () => {}; }})]) {
+  for (const make of [() => { const output = Promise.reject(Error('test-owned rejection')); output.catch(() => {}); return output; }, () => ({then() { thenCalls++; }}), () => Object.defineProperty({}, 'then', {get() { thenCalls++; return () => {}; }})]) {
     const binding = api.createNativeRequestBinding(options({validateArguments: make})); assert.throws(() => stage(binding, event()));
   }
   await Promise.resolve(); assert.equal(thenCalls, 0);
@@ -134,4 +134,34 @@ test('canonical chief role permits null lead and oversized typed strings refuse 
   assert.equal(received.length, 0);
   received.push(stage(api.createNativeRequestBinding(options()), event()));
   assert.equal(received[0].arguments.value, 'sample');
+});
+
+
+test('Promise refusal does not read own constructor accessors on test-owned fixtures', () => {
+  for (const rejected of [false, true]) {
+    const output = rejected ? Promise.reject(Error('test-owned rejection')) : Promise.resolve('sample');
+    // The test owns this rejection before it installs hostile properties.
+    output.catch(() => {});
+    let reads = 0;
+    Object.defineProperty(output, 'constructor', {get() { reads++; throw Error('constructor hook'); }});
+    const binding = api.createNativeRequestBinding(options({validateArguments: () => output}));
+    const delivered = [];
+    assert.throws(() => delivered.push(stage(binding, event())));
+    assert.equal(reads, 0); assert.equal(delivered.length, 0);
+  }
+});
+
+test('Promise refusal does not read subclass species on test-owned fixtures', () => {
+  for (const rejected of [false, true]) {
+    class FixturePromise extends Promise {}
+    const output = rejected ? FixturePromise.reject(Error('test-owned subclass rejection')) : FixturePromise.resolve('sample');
+    // Attach the fixture handler before making species hostile.
+    output.catch(() => {});
+    let reads = 0;
+    Object.defineProperty(FixturePromise, Symbol.species, {get() { reads++; throw Error('species hook'); }});
+    const binding = api.createNativeRequestBinding(options({validateArguments: () => output}));
+    const delivered = [];
+    assert.throws(() => delivered.push(stage(binding, event())));
+    assert.equal(reads, 0); assert.equal(delivered.length, 0);
+  }
 });
