@@ -14,6 +14,7 @@ import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderBoardHtml } from "../packages/sage-core/board-render.mjs";
 import { writeSampleLogbooks } from "./board-sample.mjs";
+import { expectTheme } from "./fixtures/contrast.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -33,19 +34,22 @@ function sample(change = () => {}) {
 }
 const rename = (id, title) => read => { for (const project of read.flatMap(source => source.projects)) for (const task of project.tables.tasks ?? []) if (task.id === id && project.key.startsWith("claude/sage-")) task.title = title; };
 
-async function open(t, { width = 1440, height = 1000, colorScheme = "dark", live = false, html = null } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, colorScheme, ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
+/** A page of the board. The theme is dark; theme "light" flips the switch, so the page saves light as a person does. */
+async function open(t, { width = 1440, height = 1000, theme = "dark", system = "light", live = false, html = null, init = null } = {}) {
+  const context = await browser.newContext({ viewport: { width, height }, colorScheme: system, reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   t.after(() => assert.deepEqual(errors, [], "no script error"));
+  if (init) await page.addInitScript(init);
   if (live) await page.addInitScript(() => { window.EventSource = class extends EventTarget { constructor() { super(); window.sampleBoardStream = this; } close() {} }; });
   // A made-up origin, so that the page has its own storage; only the page itself is served, every other request fails.
   page.sampleHtml = html ?? renderBoardHtml(sample(), { snapshot: false, live });
   await context.route("http://board.test/", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: page.sampleHtml }));
   await page.goto("http://board.test/");
+  if (theme === "light") await page.locator("label[for=flip]").click();
   return page;
 }
 /** Loads the page again with this HTML at the same origin (the hash stays only when it is in the address). */
@@ -207,30 +211,59 @@ test("T305 R1023-5: the live pill is no live region; only a failure goes to the 
   assert.equal(await page.locator("#live-alert").textContent(), "");
 });
 
-test("T305 R1023-4: the theme follows the system, a choice applies before the first paint, and the switch names the other theme", async t => {
-  for (const colorScheme of ["light", "dark"]) {
-    const page = await open(t, { colorScheme });
-    const background = () => page.locator("body").evaluate(body => getComputedStyle(body).backgroundColor);
-    assert.equal(await background(), colorScheme === "light" ? "rgb(247, 247, 245)" : "rgb(18, 18, 18)");
-    assert.equal(await page.locator("label[for=flip]").innerText(), colorScheme === "light" ? "Dark theme" : "Light theme");
+test("T305 R1023-4, T349: the board is dark on a light and a dark system until you choose; a flip saves light, a saved choice applies before the first paint, and the switch names the other theme", async t => {
+  for (const system of ["light", "dark"]) {
+    const page = await open(t, { system });
+    await expectTheme(page, "dark", `a ${system} system with no choice`);
+    assert.equal(await page.locator("label[for=flip]").innerText(), "Light theme");
     await page.locator("label[for=flip]").click();
-    const other = colorScheme === "light" ? "dark" : "light";
-    assert.equal(await page.locator("html").getAttribute("data-theme"), other);
-    assert.equal(await page.evaluate(() => localStorage.getItem("board-theme")), other);
-    assert.equal(await page.locator("label[for=flip]").innerText(), colorScheme === "light" ? "Light theme" : "Dark theme");
-    // A new load: the head script sets the saved theme before the body exists, so no frame shows the system theme.
+    assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
+    assert.equal(await page.evaluate(() => localStorage.getItem("board-theme")), "light");
+    assert.equal(await page.locator("label[for=flip]").innerText(), "Dark theme");
+    // A new load: the head script sets the saved theme before the body exists, so no frame shows the dark default.
     await page.addInitScript(() => {
       window.sampleThemeAtBody = "body not seen";
       new MutationObserver((_, observer) => { if (document.body) { window.sampleThemeAtBody = document.documentElement.dataset.theme ?? "none"; observer.disconnect(); } }).observe(document, { childList: true, subtree: true });
     });
     await reload(page, renderBoardHtml(sample(), { snapshot: false }));
-    assert.equal(await page.evaluate(() => window.sampleThemeAtBody), other);
-    assert.equal(await background(), other === "light" ? "rgb(247, 247, 245)" : "rgb(18, 18, 18)");
+    assert.equal(await page.evaluate(() => window.sampleThemeAtBody), "light");
+    await expectTheme(page, "light", `a saved light choice on a ${system} system`);
+    await page.locator("label[for=flip]").click();
+    assert.equal(await page.evaluate(() => localStorage.getItem("board-theme")), "dark", "a flip back saves dark");
   }
 });
 
+test("R1347-2: a saved dark choice loads dark, and one flip shows light and saves light", async t => {
+  for (const system of ["light", "dark"]) {
+    const page = await open(t, { system });
+    await page.evaluate(() => localStorage.setItem("board-theme", "dark"));
+    await reload(page, renderBoardHtml(sample(), { snapshot: false }));
+    assert.equal(await page.locator("html").getAttribute("data-theme"), "dark", `the saved choice on a ${system} system`);
+    await expectTheme(page, "dark", `a saved dark choice on a ${system} system`);
+    await page.locator("label[for=flip]").click();
+    await expectTheme(page, "light", `one flip on a ${system} system`);
+    assert.equal(await page.evaluate(() => localStorage.getItem("board-theme")), "light");
+    await reload(page, renderBoardHtml(sample(), { snapshot: false }));
+    await expectTheme(page, "light", `the saved light choice after a reload on a ${system} system`);
+  }
+});
+
+test("T349: storage that throws still shows the dark theme, and so does the offline snapshot with scripts off on a light system", async t => {
+  const blocked = await open(t, { system: "light", init: () => Object.defineProperty(window, "localStorage", { get() { throw new Error("sample: storage blocked"); } }) });
+  await expectTheme(blocked, "dark", "no storage");
+  assert.equal(await blocked.locator("label[for=flip]").innerText(), "Light theme");
+  const context = await browser.newContext({ javaScriptEnabled: false, colorScheme: "light", reducedMotion: "reduce" });
+  t.after(() => context.close());
+  await context.route("**/*", route => route.abort());
+  const offline = await context.newPage();
+  await offline.setContent(renderBoardHtml(sample()));
+  await expectTheme(offline, "dark", "the snapshot with scripts off");
+  await offline.locator("label[for=flip]").click();
+  await expectTheme(offline, "light", "the switch works with scripts off");
+});
+
 test("T305 F-T305-8: at 375 px a tap on Close closes the sheet and gives focus back; the button says Close, not Esc", async t => {
-  const phone = await open(t, { width: 375, height: 812, colorScheme: "light" });
+  const phone = await open(t, { width: 375, height: 812, theme: "light" });
   await phone.locator("#pick-trig").tap();
   const close = phone.getByRole("button", { name: "Close the project list" });
   assert.equal(await close.innerText(), "Close");
@@ -269,15 +302,15 @@ test("T305 F-T305-9 and F-T305-6: under each filter the project chips add up to 
 });
 
 test("T305: at 375 px the list is a bottom sheet and the chips wrap; at 1024 px no column is cut off; in both themes", async t => {
-  for (const colorScheme of ["light", "dark"]) {
-    const phone = await open(t, { width: 375, height: 812, colorScheme });
+  for (const theme of ["light", "dark"]) {
+    const phone = await open(t, { width: 375, height: 812, theme });
     assert.equal(await phone.evaluate(() => document.documentElement.scrollWidth), 375, "no sideways page scroll");
     const chips = await phone.locator("#pick-chips .chip").evaluateAll(list => list.map(chip => chip.getBoundingClientRect()).map(box => [Math.round(box.left), Math.round(box.right)]));
     assert.ok(chips.length >= 3 && chips.every(([left, right]) => left >= 0 && right <= 375), JSON.stringify(chips));
     await phone.locator("#pick-trig").click();
     const sheet = await phone.locator("#pick-pop").boundingBox();
     assert.deepEqual([Math.round(sheet.x), Math.round(sheet.width), Math.round(sheet.y + sheet.height)], [0, 375, 812], "a sheet at the bottom, as wide as the screen");
-    const laptop = await open(t, { width: 1024, height: 768, colorScheme });
+    const laptop = await open(t, { width: 1024, height: 768, theme });
     const columns = await laptop.locator("[data-col]").evaluateAll(list => list.map(column => column.getBoundingClientRect().right));
     assert.equal(columns.length, 6);
     assert.ok(columns.every(right => right <= 1024), JSON.stringify(columns));
@@ -359,7 +392,7 @@ test("R1075-5, R1071-4, R1075-6: the list closes when the focus leaves it; only 
 });
 
 test("R1075-7: at 375 px each chip, filter, the picker button and the Archived summary are 44 px high; a stand-in's reason shows on focus", async t => {
-  const phone = await open(t, { width: 375, height: 812, colorScheme: "light" });
+  const phone = await open(t, { width: 375, height: 812, theme: "light" });
   const heights = await phone.evaluate(() => [".pick .chip:not([hidden])", "#pick-trig", ".fbar select", ".fbar .seg button", "#sum-archived"].map(selector => [selector, Math.min(...[...document.querySelectorAll(selector)].filter(e => e.getClientRects().length).map(e => e.getBoundingClientRect().height))]));
   for (const [selector, height] of heights) assert.ok(height >= 44, `${selector}: ${height} px`);
   const model = sample(), task = model.tasks.find(item => item.agents.some(agent => !agent.provider));
@@ -373,7 +406,7 @@ test("R1075-7: at 375 px each chip, filter, the picker button and the Archived s
 });
 
 test("R1080-1: at 375 px every touch target on the board and on each task page takes a tap in a 44 by 44 px square", async t => {
-  const model = sample(), phone = await open(t, { width: 375, height: 812, colorScheme: "light" });
+  const model = sample(), phone = await open(t, { width: 375, height: 812, theme: "light" });
   const small = [];
   for (const key of [null, ...model.tasks.map(task => task.key)]) {
     await reload(phone, renderBoardHtml(model, { snapshot: false, taskKey: key }));
@@ -396,9 +429,9 @@ test("R1080-1: at 375 px every touch target on the board and on each task page t
 test("R1093-1: at 375 px no tall header stays on screen, and at every width a card that Shift+Tab focuses is not under a part that stays on screen", async t => {
   // The sticky part: every shown element that stays on screen when the page scrolls, as high as its lowest bottom.
   const stuck = page => page.evaluate(() => Math.max(0, ...[...document.querySelectorAll("body *")].filter(e => ["sticky", "fixed"].includes(getComputedStyle(e).position) && e.getClientRects().length).map(e => e.getBoundingClientRect().bottom)));
-  for (const [width, colorScheme] of [[375, "light"], [375, "dark"], [800, "light"], [1440, "dark"]]) {
-    const page = await open(t, { width, height: 812, colorScheme });
-    const label = `${width} px ${colorScheme}`;
+  for (const [width, theme] of [[375, "light"], [375, "dark"], [800, "light"], [1440, "dark"]]) {
+    const page = await open(t, { width, height: 812, theme });
+    const label = `${width} px ${theme}`;
     if (width === 375) {
       assert.ok(await page.locator("#pick-chips .chip:not([hidden])").count() >= 4, "4 or more need-you chips");
       assert.ok(await stuck(page) < 120, `${label}: the sticky part is ${await stuck(page)} px high`);

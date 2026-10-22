@@ -11,6 +11,7 @@ import { after, before, test } from "node:test";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderBoardHtml, renderProgramsHtml } from "../packages/sage-core/board-render.mjs";
 import { NOW, programsSource, programsTables } from "./fixtures/board-programs.mjs";
+import { expectTheme } from "./fixtures/contrast.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -26,7 +27,10 @@ const PAGES = {
   "/programs": () => renderProgramsHtml(model),
   [`/program/${key("PG1")}`]: () => renderProgramsHtml(model, { programKey: `claude/sage-ff5ee2/PG1` }),
   [`/task/${key("T13")}`]: () => renderBoardHtml(model, { snapshot: false, taskKey: `claude/sage-ff5ee2/T13` }),
+  "/snapshot": () => renderBoardHtml(model),
 };
+// The offline snapshot holds its task, programs and program pages; an address hash opens each (R1347-1).
+const SNAPSHOT_PAGES = [`#task-${key("T13")}`, "#programs", `#program-${key("PG1")}`];
 // Two projects, each with the sample programs: the picker and the address have a project to choose (R1322-1, R1324-5).
 const other = programsSource("codex");
 Object.assign(other.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
@@ -36,8 +40,9 @@ const TWO = {
   "/programs": () => renderProgramsHtml(two),
   [`/program/${key("PG1")}`]: () => renderProgramsHtml(two, { programKey: `claude/sage-ff5ee2/PG1` }),
 };
-async function open(t, path = "/", { width = 1280, height = 900, colorScheme = "light", hash = "", pages = PAGES, project = null } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, colorScheme, ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
+/** A page at the made-up origin. The theme is dark; theme "light" flips the switch, as a person does. */
+async function open(t, path = "/", { width = 1280, height = 900, theme = "dark", hash = "", pages = PAGES, project = null } = {}) {
+  const context = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   for (const [at, html] of Object.entries(pages)) await context.route(`http://board.test${at}`, route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html() }));
@@ -47,6 +52,7 @@ async function open(t, path = "/", { width = 1280, height = 900, colorScheme = "
   page.on("pageerror", error => errors.push(String(error)));
   t.after(() => assert.deepEqual(errors, [], "no script error"));
   await page.goto(`http://board.test${path}${hash}`);
+  if (theme === "light") await page.locator("label[for=flip]").click();
   return page;
 }
 const shownIds = page => page.locator(".card[data-key]:not([hidden]) .id").allTextContents();
@@ -117,12 +123,22 @@ test("R1324-5: the programs list's picker keeps one project's programs with thei
   assert.ok((await shownIds(page)).length > 0 && (await page.locator(".card[data-key]:not([hidden])").evaluateAll(cards => cards.every(card => card.dataset.needs === "true"))));
 });
 
-for (const [width, height] of [[375, 812], [1280, 900]]) for (const colorScheme of ["light", "dark"]) {
-  test(`T368: no sideways scroll at ${width} px, ${colorScheme}: the board, the programs list, a program page and a task page`, async t => {
-    for (const path of Object.keys(PAGES)) {
-      const page = await open(t, path, { width, height, colorScheme });
+for (const [width, height] of [[375, 812], [1280, 900]]) for (const theme of ["light", "dark"]) {
+  test(`T368, T349, R1347-1: no sideways scroll at ${width} px, ${theme}: the board, the programs list, a program page, a task page and the snapshot's pages; the page shell is edge to edge below 700 px`, async t => {
+    for (const [path, hash] of [...Object.keys(PAGES).map(path => [path, ""]), ...SNAPSHOT_PAGES.map(hash => ["/snapshot", hash])]) {
+      const at = path + hash, page = await open(t, path, { width, height, theme });
+      // The snapshot's page hides the board header and its switch, so the hash comes after the theme.
+      if (hash) await page.evaluate(value => { location.hash = value; }, hash);
+      await expectTheme(page, theme, at);
       const { scroll, client } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
-      assert.ok(scroll <= client, `${path}: ${scroll} > ${client}`);
+      assert.ok(scroll <= client, `${at}: ${scroll} > ${client}`);
+      // The shell: the rounded panel on the shell colour that holds the page, inset 8 px or more on a wide screen, the whole width on a phone.
+      const shells = page.locator(".boardview:visible, body > main.page:visible, #pages > .page:visible");
+      assert.equal(await shells.count(), 1, `${at}: one shell shows`);
+      const [left, right, radius, back] = await shells.evaluate(element => { const box = element.getBoundingClientRect(), style = getComputedStyle(element); return [Math.round(box.left), Math.round(box.right), style.borderTopLeftRadius, style.backgroundColor]; });
+      assert.equal(back, await page.evaluate(() => { const probe = document.body.appendChild(document.createElement("i")); probe.style.color = "var(--shell)"; const color = getComputedStyle(probe).color; probe.remove(); return color; }), `${at}: the shell colour`);
+      if (width === 375) assert.deepEqual([left, right, radius], [0, 375, "0px"], at);
+      else assert.ok(left >= 8 && right <= client - 8 && radius === "20px", `${at}: ${left} to ${right}, radius ${radius}`);
     }
   });
 }

@@ -342,19 +342,20 @@ test("T305: the filter bar has Who from the sources, Priority P0 to P3 or none, 
   assert.ok(html.includes('<span class="who" title="The logbook that holds this task">Codex</span>'), "each card names the provider whose logbook holds it");
 });
 
-test("T305: the theme follows the system until you choose, a choice applies in the head, and the switch names the theme it switches to", async () => {
+test("T305, T349: the theme is dark until you choose light, a choice applies in the head, and the switch names the theme it switches to", async () => {
   const { THEME_HEAD } = await import("../packages/sage-core/board-render.mjs");
   const html = renderBoardHtml(providers());
   assert.ok(html.indexOf(`<script>${THEME_HEAD}</script>`) < html.indexOf("<style>"), "the saved theme applies before the first paint");
   assert.ok(html.includes('<input type="checkbox" id="flip" class="vh"><label class="chip theme" for="flip"><span class="to-light">Light theme</span><span class="to-dark">Dark theme</span></label>'));
-  assert.ok(html.includes("@media (prefers-color-scheme:light){:root:not([data-theme]):not(:has(#flip:checked)){--bg:#f7f7f5"));
-  assert.ok(html.includes(":root[data-theme=light]:not(:has(#flip:checked)) .to-light,:root[data-theme=dark]:has(#flip:checked) .to-light{display:none}"));
+  assert.ok(html.includes(":root[data-theme=light]:not(:has(#flip:checked)),:root:not([data-theme=light]):has(#flip:checked){--bg:#f0f0f1;"), "light shows for a light choice, or for a flipped dark or no choice");
+  assert.ok(html.includes(":root[data-theme=light]:not(:has(#flip:checked)) .to-light,:root:not([data-theme=light]):has(#flip:checked) .to-light{display:none}"));
+  assert.ok(!html.includes("prefers-color-scheme"), "the system theme does not choose the theme");
   const store = new Map([["board-theme", "light"]]), root = { dataset: {} };
   new Function("localStorage", "document", THEME_HEAD)({ getItem: key => store.get(key) ?? null }, { documentElement: root });
   assert.equal(root.dataset.theme, "light");
   const none = { dataset: {} };
   new Function("localStorage", "document", THEME_HEAD)({ getItem: () => { throw new Error("blocked"); } }, { documentElement: none });
-  assert.equal(none.dataset.theme, undefined, "no storage: the system theme");
+  assert.equal(none.dataset.theme, undefined, "no storage: no choice, so the dark default");
 });
 
 test("T305 R1056-2: a backlog card shows only its step line; a card in another column and the task page keep Now and Next", () => {
@@ -814,4 +815,16 @@ test("R1325-2: the offline file has the programs list whenever it has a program'
   assert.ok(html.includes(`<section class="page" id="program-${B64(KEY("PG1"))}"`) && html.includes('<a class="back" href="#programs">← Programs</a>'));
   assert.ok(html.includes('<section class="page" id="programs" aria-label="Programs">'), "the link lands");
   assert.ok(html.includes("<b>Every program is in an archived project.</b>") && !html.includes("No programs yet"));
+});
+
+test("T349: each board page keeps the CSP: one bare style element, no style attribute, and CSS that loads nothing", async () => {
+  const { contrastPages } = await import("./fixtures/contrast.mjs");
+  const { pages } = contrastPages();
+  for (const [name, html] of Object.entries(pages)) {
+    const styles = [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)];
+    assert.deepEqual(styles.map(match => match[0].slice(0, 7)), ["<style>"], `${name}: one style element with no attribute`);
+    assert.ok(!/\sstyle=/.test(html), `${name}: no style attribute, which the CSP blocks`);
+    assert.ok(!/url\(|@import|@font-face/.test(styles[0][1]), `${name}: the CSS loads no file, font or sheet`);
+    assert.ok(styles[0][1].includes(".boardview,body>main.page,#pages>.page{background:var(--shell)"), `${name}: the board CSS`);
+  }
 });

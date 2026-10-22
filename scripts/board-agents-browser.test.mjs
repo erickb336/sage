@@ -14,6 +14,7 @@ import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderAgentsHtml } from "../packages/sage-core/board-render.mjs";
 import { writeSampleLogbooks } from "./board-sample.mjs";
+import { expectTheme } from "./fixtures/contrast.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -31,8 +32,9 @@ function sample(change = () => {}, now = NOW) {
   return buildBoardModel(read, { now });
 }
 
-async function open(t, { width = 1440, height = 900, colorScheme = "dark" } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, colorScheme, ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
+/** The Agents page. The theme is dark; theme "light" flips the switch, as a person does. */
+async function open(t, { width = 1440, height = 900, theme = "dark" } = {}) {
+  const context = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
   t.after(() => context.close());
   // A made-up origin; only the two pages are served, every other request fails.
   await context.route("**/*", route => route.abort());
@@ -44,6 +46,7 @@ async function open(t, { width = 1440, height = 900, colorScheme = "dark" } = {}
   t.after(() => assert.deepEqual(errors, [], "no script error"));
   await page.addInitScript(() => { window.EventSource = class extends EventTarget { constructor() { super(); window.sampleBoardStream = this; } close() {} }; });
   await page.goto("http://board.test/agents");
+  if (theme === "light") await page.locator("label[for=flip]").click();
   return page;
 }
 const focused = page => page.evaluate(() => document.activeElement?.id || document.activeElement?.textContent?.trim().slice(0, 40));
@@ -51,11 +54,11 @@ async function push(page, model) {
   await page.evaluate(html => window.sampleBoardStream.dispatchEvent(new MessageEvent("board", { data: JSON.stringify({ html, stale: false }) })), renderAgentsHtml(model, { live: true }));
 }
 
-for (const width of [375, 1440]) for (const colorScheme of ["light", "dark"]) {
-  test(`T308: the Agents page at ${width} px, ${colorScheme}: no sideways scroll, each state with its mark and word, the theme`, async t => {
-    const page = await open(t, { width, colorScheme });
+for (const width of [375, 1440]) for (const theme of ["light", "dark"]) {
+  test(`T308: the Agents page at ${width} px, ${theme}: no sideways scroll, each state with its mark and word, the theme`, async t => {
+    const page = await open(t, { width, theme });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width, "no sideways scroll");
-    assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), colorScheme === "light" ? "rgb(247, 247, 245)" : "rgb(18, 18, 18)");
+    await expectTheme(page, theme);
     assert.deepEqual(await page.locator(".group h2").allTextContents(), ["order-chaser", "sage", "Council Record (sample)", "recipes"], "the projects with a problem first");
     assert.deepEqual([...new Set(await page.locator(".st").allTextContents())].sort(), ["!may be stuck", "●working", "○running", "■helper stopped, run still open", "▲running long", "◷waiting for its helpers"].sort());
     for (const word of await page.locator(".st").all()) assert.equal(await word.isVisible(), true);

@@ -12,6 +12,7 @@ import { after, before, test } from "node:test";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderBoardHtml } from "../packages/sage-core/board-render.mjs";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
+import { contrastPages, measureContrast, shownTheme, themeToken } from "./fixtures/contrast.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -55,7 +56,7 @@ function model({ gamma = null, delta = false, current = false, rich = false } = 
 }
 
 async function pageFor(t, { live = false, snapshot = !live, scripts = true, phone = false, current = false } = {}) {
-  const context = await browser.newContext({ javaScriptEnabled: scripts, colorScheme: "dark", viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
+  const context = await browser.newContext({ javaScriptEnabled: scripts, colorScheme: "dark", reducedMotion: "reduce", viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   const page = await context.newPage();
@@ -91,7 +92,7 @@ const picked = page => page.locator("#pick-name").textContent();
 test("T205, T305: real DOM keeps the chosen project, the needs filter and the theme across live project and count changes", async t => {
   const page = await pageFor(t, { live: true });
   assert.deepEqual(await visibleCards(page), ["T1 · Sample alpha queued", "T2 · Sample alpha review", "T3 · Sample beta held", "T4 · Sample beta work"]);
-  assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#121212", "a dark system: the dark theme");
+  assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), themeToken("dark", "--bg"), "no choice: the dark theme");
   await page.locator("label[for=flip]").click();
   await pick(page, "alpha");
   await needsButton(page).click();
@@ -104,7 +105,7 @@ test("T205, T305: real DOM keeps the chosen project, the needs filter and the th
   assert.equal(await summary(page), "1 needs you 0 agents at work 1 in review 1 tasks");
   assert.deepEqual(await visibleCards(page), ["T2 · Sample alpha review"]);
   assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
-  assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#f7f7f5");
+  assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), themeToken("light", "--bg"));
 
   // This option did not exist when the script first ran; a direct listener on the old options cannot handle it.
   await pick(page, "gamma");
@@ -179,43 +180,14 @@ test("T218: offline task pages, the backlog fold and the theme work with scripts
   await folded.getByText("Show 3 more tasks").click();
   assert.equal(await folded.locator("a.card:visible").count(), 9);
   await plain.locator("label[for=flip]").click();
-  assert.equal(await plain.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), "#f7f7f5");
+  assert.equal(await plain.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), themeToken("light", "--bg"));
 });
 
-/** The contrast of every visible element of each [kind, selector] on the colour that the page paints behind it (opacity included). */
-async function contrast(page, list) {
-  return page.evaluate(list => {
-    const rgba = text => {
-      const values = text.match(/[\d.]+/g).map(Number);
-      return [...values.slice(0, 3), values[3] ?? 1];
-    };
-    const over = (front, back) => front.slice(0, 3).map((value, i) => value * front[3] + back[i] * (1 - front[3]));
-    const luminance = rgb => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, i) => sum + value * [0.2126, 0.7152, 0.0722][i], 0);
-    return list.map(([kind, selector]) => {
-      const elements = [...document.querySelectorAll(selector)].filter(element => element.getClientRects().length);
-      if (!elements.length) throw new Error(`No sample ${kind} text`);
-      return elements.map(element => {
-        const backgrounds = [];
-        let opacity = 1;
-        for (let node = element; node; node = node.parentElement) {
-          const style = getComputedStyle(node);
-          if (style.backgroundImage !== "none") throw new Error(`An image needs a separate contrast check: ${kind}`);
-          backgrounds.push(rgba(style.backgroundColor));
-          opacity *= Number(style.opacity);
-        }
-        const background = backgrounds.reverse().reduce((color, layer) => over(layer, color), [255, 255, 255]);
-        const color = rgba(getComputedStyle(element).color);
-        const foreground = over([...color.slice(0, 3), color[3] * opacity], background);
-        const values = [luminance(foreground), luminance(background)].sort((a, b) => a - b);
-        return { kind, text: element.textContent, foreground, background, ratio: (values[1] + 0.05) / (values[0] + 0.05) };
-      });
-    });
-  }, list);
-}
+const contrast = (page, list) => page.evaluate(measureContrast, list);
 
 test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 contrast on the page, column and card in both themes", async t => {
   const data = model({ current: true, rich: true }), task = data.tasks.find(item => item.id === "T2");
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark" });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   const results = [];
@@ -235,6 +207,105 @@ test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 co
   }
   assert.ok(results.includes("task light review role") && results.includes("board dark step not started") && results.includes("board light fold in a column"));
   assert.ok(["board light provider on a pill", "board light provider on an alternate pill", "board dark legend alternate pill", "task light earlier head", "task dark earlier head"].every(kind => results.includes(kind)));
+});
+
+test("T349, R1347-1: every text on the board, a task page, the programs list, a program page, the Agents page and the snapshot's task and program pages meets AA contrast, dark and light, at 375 and 1280 px", async t => {
+  const { pages, targets } = contrastPages(), low = [], seen = new Set();
+  for (const width of [375, 1280]) {
+    // A dark system: the measure does not depend on the default theme, which other tests check.
+    const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
+    t.after(() => context.close());
+    await context.route("**/*", route => route.abort());
+    for (const [name, html] of Object.entries(pages)) {
+      const page = await context.newPage();
+      await page.setContent(html);
+      for (const theme of ["dark", "light"]) {
+        await page.evaluate(() => { location.hash = ""; });
+        if (theme === "light") await page.locator("label[for=flip]").click();
+        assert.equal((await shownTheme(page))[0], theme);
+        // The snapshot's own pages open by their hash, after the switch: an open page hides the board header.
+        for (const [view, hash] of [[name, ""], ...(name === "snapshot" ? Object.entries(targets) : [])]) {
+          await page.evaluate(value => { location.hash = value; }, hash);
+          for (const item of await page.evaluate(measureContrast)) {
+            seen.add(`${view} ${item.kind}`);
+            if (item.ratio < item.need) low.push(`${view} ${width} px ${theme}: ${item.kind} "${item.text}" ${item.ratio} < ${item.need}`);
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual(low, []);
+  assert.ok(["snapshot task h3", "snapshot programs h3", "snapshot program div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("snapshot ")).join(", "));
+  // The texts of the two contrast bugs that T349 fixed are among the measured ones.
+  assert.ok(["agents span.ptag.ptag-claude", "agents span.ptag.ptag-codex", "agents span.faint", "board span.n", "program div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("agents")).join(", "));
+});
+
+// R1349-1, R1349-2: each control, and the chosen tab and Who pill, stands out 3:1 from what is behind it (WCAG 1.4.11).
+const CONTROLS = [["theme switch", "label.theme", "edge"], ["project picker", ".trigger", "edge"], ["filter", "select", "edge"], ["chosen tab", ".boardtabs a[aria-current=page]", "edge"], ["chosen Who pill", ".seg button[aria-pressed=true]", "edge"]];
+test("R1349-1, R1349-2: the theme switch, the picker, the filters, the chosen tab and the chosen Who pill reach 3:1 against their shell or tray, dark and light", async t => {
+  const { pages } = contrastPages(), low = [], seen = new Set();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
+  t.after(() => context.close());
+  await context.route("**/*", route => route.abort());
+  for (const name of ["board", "programs"]) {
+    const page = await context.newPage();
+    await page.setContent(pages[name]);
+    for (const theme of ["dark", "light"]) {
+      if (theme === "light") await page.locator("label[for=flip]").click();
+      assert.equal((await shownTheme(page))[0], theme);
+      // The programs list has no filters: it shows the switch, the picker and the tabs.
+      const list = CONTROLS.filter(([, selector]) => name === "board" || ["label.theme", ".trigger", ".boardtabs a[aria-current=page]"].includes(selector));
+      for (const item of (await page.evaluate(measureContrast, list)).flat()) {
+        seen.add(item.kind);
+        if (item.ratio < 3) low.push(`${name} ${theme}: ${item.kind} "${item.text}" ${item.ratio} < 3`);
+      }
+    }
+  }
+  assert.deepEqual(low, []);
+  assert.deepEqual([...seen].sort(), CONTROLS.map(([kind]) => kind).sort());
+});
+
+test("R1347-3: in forced colours, the cards, task page sections, program cards and the rules keep an outline, and a card that needs you keeps its frame", async t => {
+  const { pages } = contrastPages();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark", forcedColors: "active", reducedMotion: "reduce" });
+  t.after(() => context.close());
+  await context.route("**/*", route => route.abort());
+  const page = await context.newPage(), seen = [];
+  for (const [name, selector] of [["board", "a.card:not(.needs)"], ["board", "a.card.needs"], ["task", ".detail section"], ["programs", "a.prog"], ["agents", ".rules"]]) {
+    await page.setContent(pages[name]);
+    const edge = await page.locator(selector).first().evaluate(element => { const style = getComputedStyle(element); return { shadow: style.boxShadow, border: `${style.borderTopWidth} ${style.borderTopStyle}`, color: style.borderTopColor, outline: `${style.outlineWidth} ${style.outlineStyle}` }; });
+    // The emulation is real: the browser drops each box shadow, so only a border or an outline draws an edge.
+    assert.equal(edge.shadow, "none", `${name} ${selector}: forced colours drop the shadow`);
+    assert.equal(edge.border, "1px solid", `${name} ${selector}: a border`);
+    assert.ok(!/rgba\(0, 0, 0, 0\)|transparent/.test(edge.color), `${name} ${selector}: the border shows (${edge.color})`);
+    seen.push(`${selector} ${edge.outline}`);
+  }
+  assert.equal(seen[1], "a.card.needs 3px double", "the needs frame");
+  assert.equal(seen[0], "a.card:not(.needs) 0px none", "a plain card has no frame");
+});
+
+test("R1349: the contrast helper's edge measure takes the better of a control's fill and its border", async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.setContent('<div id="tray"><span id="flat">Sample</span><span id="edged">Sample</span><span id="filled">Sample</span></div>');
+  await page.addStyleTag({ content: "#tray{background:#f0f0f1}span{background:#fff;border:1px solid transparent}#edged{border-color:#87878d}#filled{background:#555;border:0}" });
+  const [[flat], [edged], [filled]] = await page.evaluate(measureContrast, [["flat", "#flat", "edge"], ["edged", "#edged", "edge"], ["filled", "#filled", "edge"]]);
+  assert.ok(flat.ratio < 1.2, `white on the tray with no edge: ${flat.ratio}`);
+  assert.ok(edged.ratio >= 3 && edged.ratio < 3.3, `the edge colour: ${edged.ratio}`);
+  assert.ok(filled.ratio > 6, `a dark fill with no border: ${filled.ratio}`);
+});
+
+test("T349: the contrast helper takes the worst stop of a gradient, and refuses an image", async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.setContent('<p id="even">Sample</p><p id="half">Sample</p><p id="image">Sample</p>');
+  await page.addStyleTag({ content: "p{color:#000}#even{background:linear-gradient(#fff,#eee)}#half{background:linear-gradient(90deg,#fff,#555)}#image{background:url(data:image/gif;base64,R0lGODlhAQABAAAAACw=)}" });
+  const [[even], [half]] = await page.evaluate(measureContrast, [["even", "#even"], ["half", "#half"]]);
+  assert.ok(even.ratio >= 17, `black on a light gradient: ${even.ratio}`);
+  assert.ok(half.ratio < 4.5, `black on a gradient that ends dark grey fails: ${half.ratio}`);
+  await assert.rejects(page.evaluate(measureContrast, [["image", "#image"]]), /An image needs a separate contrast check/);
 });
 
 test("T218 F-T218-9, F-T218-7 and F-T218-13: chips only with scripts, the stand-in legend on both views, and a 24 px way back", async t => {
@@ -351,7 +422,7 @@ test("T205: real browser authenticates pages and live streams, watches files, an
   assert.doesNotMatch(initial.headers()["content-security-policy"], /unsafe-inline/);
   await page.getByText("Live · updated", { exact: false }).waitFor();
   assert.deepEqual(await visibleCards(page), ["T1 · Sample served task", "T2 · Sample held task"]);
-  assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).backgroundColor), "rgb(18, 18, 18)");
+  assert.deepEqual(await shownTheme(page), ["dark", themeToken("dark", "--bg")]);
   assert.deepEqual(await page.evaluate(() => window.samplePolicyViolations), []);
   assert.ok(responses.some(response => response.path === "/?events=1" && response.status === 200));
   assert.equal(readFileSync(taskFile, "utf8"), table("Sample served task"));
