@@ -24,7 +24,7 @@ import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
-import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, gateLines, programState, progressOf, progressText, shownGraph, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
+import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, namedText, programState, progressOf, progressText, shownGraph, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {}, usageInterfaces = [] }) {
@@ -1319,8 +1319,8 @@ const unanswered = (program) => ["proposed", "changing"].includes(program?.state
 const graphOf = (dir) => waitGraph(...["tasks", "programs", "gates", "decisions"].map((t) => read(dir, t)));
 const ODD = "the waits cell has text that is not a task id";
 /** A program's breakdown that is not approved, for a waits line. */
-const breakdownOf = ({ id, state, gate, gateFound }) => `the breakdown of ${id} (${{ proposed: `open, gate ${gate}`, changing: `changes asked, gate ${gate}`, dropped: `dropped, gate ${gate}` }[state] ?? (gateFound ? `its gate ${gate} is not a breakdown gate` : gate ? `its gate ${gate} is not in the logbook` : "not in the logbook")})`;
-const waitList = (open) => open.map(({ id, state, odd, pilot, program }) => (odd ? ODD : program ? breakdownOf(program) : `${id} (${state ?? "not in the logbook"}${pilot ? `, the pilot of ${pilot}` : ""}${dead(state) ? ", never met" : ""})`)).join(", ");
+const breakdownOf = ({ id, state, gate, gateFound, named }) => `the breakdown of ${id} (${{ proposed: `open, gate ${gate}`, changing: `changes asked, gate ${gate}`, dropped: `dropped, gate ${gate}` }[state] ?? (named !== undefined ? `its gate ${gate} ${namedText(named, id)}` : gateFound ? `its gate ${gate} is not a breakdown gate` : gate ? `its gate ${gate} is not in the logbook` : "not in the logbook")})`;
+const waitList = (open) => open.map(({ id, state, odd, pilot, program, loop }) => (odd ? ODD : program ? breakdownOf(program) : `${id} (${state ?? "not in the logbook"}${pilot ? `, the pilot of ${pilot}` : ""}${loop ? ", in a loop of waits, never met" : dead(state) ? ", never met" : ""})`)).join(", ");
 /**
  * When a task with these unmet waits goes on: after its tasks are merged or concluded, and after the owner approves its
  * breakdown. A dropped or lost breakdown is never approved, so it gives no clause, and "" is a task that never goes on (R1206-2).
@@ -1354,6 +1354,11 @@ const waitsMet = (task, graph, what) => {
   const end = { "move to merged": "merged", "move to concluded": "concluded" }[what], when = until(open);
   const after = `${when ? `: ${end ? `it moves to ${end}` : "it starts"} after ${when}.` : "."}${end ? "" : " Its design and PE may run."}`;
   refuse(`${task.id} waits for ${waitList(open)}, so it takes no ${what}${after}${waitFix(task, open)}`);
+};
+/** The wait graph of a logbook as the printers show it (shownGraph), for the task line: the same waits as the board and status. */
+const shownOf = (dir, tasks) => {
+  const gates = read(dir, "gates");
+  return shownGraph(waitGraph(tasks, read(dir, "programs"), gates, read(dir, "decisions")), gates);
 };
 /** A task's waits for a printed line: each with its task's state, then the unmet ones. */
 const waitsText = (task, graph) => {
@@ -1865,21 +1870,19 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
  * The program lines of status, one for each program: its progress (progressText: its merged or concluded tasks of all its
  * tasks, and each abandoned task by id, the owner's Q3), its pilot and what it waits for, then its name last, after a
  * label, so the name cannot pass for the status. A done or dropped program keeps its name and count, and a dropped one
- * names the next step for its tasks that have not ended. The tasks are grouped by program once, so the lines are linear
- * in the tasks (R1208-5).
+ * names the next step for its tasks that have not ended. A program whose pilot is abandoned or lost is stuck, also before
+ * its approval, as on the board. The graph has the tasks by program (shownGraph), so the lines are linear in the tasks (R1208-5).
  */
-function programsLine(tasks, { byId, programs }) {
-  const of = new Map();
-  for (const t of tasks) if (t.program) (of.get(t.program) ?? of.set(t.program, []).get(t.program)).push(t);
+function programsLine({ byId, programs, byProgram }) {
   const each = [...programs.values()].map((p) => {
-    const own = of.get(p.id) ?? [], progress = progressOf(own), text = progressText(progress);
+    const own = byProgram.get(p.id) ?? [], progress = progressOf(own), text = progressText(progress);
     const open = own.filter((t) => !ENDED.includes(t.state)).length;
     const pilot = byId.get(p.pilot)?.state;
     // The board's words for each state (F-T233-11), and why a lost program is lost (F-T233-2).
-    const why = { proposed: ` · breakdown waits for you (${p.gate})`, changing: ` · you asked for changes (${p.gate}): the sage revises the breakdown`, lost: p.gateFound ? ` · its gate ${p.gate} is not a breakdown gate on its pilot ${p.pilot}` : ` · its breakdown gate ${p.gate} is not in the logbook` }[p.state] ?? "";
+    const why = { proposed: ` · breakdown waits for you (${p.gate})`, changing: ` · you asked for changes (${p.gate}): the sage revises the breakdown`, lost: p.named !== undefined ? ` · its gate ${p.gate} ${namedText(p.named, p.id)}` : p.gateFound ? ` · its gate ${p.gate} is not a breakdown gate on its pilot ${p.pilot}` : ` · its breakdown gate ${p.gate} is not in the logbook` }[p.state] ?? "";
     const line = p.state === "dropped" ? `dropped${open ? `: ${open} ${open === 1 ? "task" : "tasks"} still in it, take each out with program=none` : ""}`
       : p.state === "active" && progress.done ? `done, ${text}`
-      : p.state === "active" && dead(pilot) ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the program`
+      : ["active", "proposed", "changing"].includes(p.state) && dead(pilot) ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the program`
       : `pilot ${p.pilot}: ${text}${why}`;
     return `program ${p.id} · ${line} · name: ${oneLine(p.name)}`;
   });
@@ -1916,9 +1919,12 @@ function status(dir, save) {
   // The open tasks that wait, each with its unmet waits: a line only when one waits. Then the programs: a line only when there is one.
   const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, unmetWaits(t, graph)]).filter(([, open]) => open.length);
   if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
-  lines.push(...programsLine(tasks, graph));
+  lines.push(...programsLine(graph));
+  // The runs by task, once, so the usage lines are linear in the runs.
+  const runsOf = new Map();
+  for (const r of runs) (runsOf.get(r.task) ?? runsOf.set(r.task, []).get(r.task)).push(r);
   lines.push(...tasks.map(t => {
-    const own = runs.filter(r => r.task === t.id);
+    const own = runsOf.get(t.id) ?? [];
     const measured = own.reduce((n, r) => n + (r.status === "done" && tokenCount(r.tokens) ? Number(r.tokens) : 0), 0);
     return `usage ${t.id} · ${measured} measured tokens · ${usageSummary(own)}`;
   }));
@@ -2261,7 +2267,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         Object.assign(task, planned.task);
         note = planned.note;
       }
-      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, waitGraph(tasks, read(dir, "programs"), read(dir, "gates"), read(dir, "decisions")))}${note}`;
+      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, shownOf(dir, tasks))}${note}`;
     }
     case "program": {
       // program propose writes a program, puts its pilot and its other tasks in it, and opens its breakdown gate on the
@@ -2277,7 +2283,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const old = unfinished ?? (id === undefined ? undefined : (programs.find((p) => p.id === id) ?? missing(`program ${id}`, programs.map((p) => p.id))));
       // A propose that stopped before it wrote its gate wrote no decision rows either (stopped).
       const stopped = old && !gates.some((g) => g.id === old.gate);
-      const state = old && programState(gates.find((g) => g.id === old.gate), old, decisions);
+      const state = old && programState(gates.find((g) => g.id === old.gate), old, droppedBy(decisions));
       if (state === "proposed") refuse(`the breakdown gate ${old.gate} of ${old.id} is still open: the owner answers it first. To change the breakdown, the owner answers change, then propose it again.${nothing}`);
       if (state === "dropped") refuse(`the owner dropped ${old.id}${stopped ? "" : ` (gate ${old.gate})`}, and a dropped program does not come back. Propose a new program.${nothing}`);
       const name = opt.name ?? old?.name ?? need(undefined, "--name");

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
 import { NOW as PROGRAMS_NOW, programsSource, programsTables } from "./fixtures/board-programs.mjs";
+import { shownGraph, unmetWaits, waitGraph } from "../packages/sage-core/program-rules.mjs";
 const now = "2026-10-08T20:00:00.000Z";
 const head = "a".repeat(40), old = "b".repeat(40);
 const task = (id, state, extra = {}) => ({ id, title: "Sample", size: "small", risk: "", route: "build,code-review,qa", state, branch: "", pr: "", round: "0", keys: "", ...extra });
@@ -561,11 +562,14 @@ test("T233: each program's state and progress (Q3), and what moves next (Q4: onl
   assert.deepEqual(programOf(model, "PG1").tasks.map(key => key.split("/").at(-1)), ["T1", "T2", "T3", "T10", "T12", "T11", "T13"], "the pilot first, then each task after what it waits for, then by id");
 });
 
-test("T233 C5: a loop of waits from a hand edit ends: the order marks each task once, and no task of the loop moves", () => {
+test("T233 C5, T383: a loop of waits from a hand edit ends: the order marks each task once; each task of the loop cannot start, with a repair line", () => {
   const model = programsModel(), loop = programOf(model, "PG8");
   assert.deepEqual(loop.tasks.map(key => key.split("/").at(-1)), ["T80", "T82", "T83", "T81"]);
-  assert.deepEqual([loop.next, loop.waiting, loop.cannotStart], [null, 2, ["T83"]]);
-  assert.deepEqual(cardOf(model, "T81").waitLine, { never: false, text: "Waits for T82 (not started)." });
+  assert.deepEqual([loop.next, loop.waiting, loop.cannotStart], [null, 0, ["T82", "T83", "T81"]]);
+  assert.deepEqual(cardOf(model, "T81").waitLine, { never: true, text: "Waits for T82 (not started, in a loop): it cannot start. Its waits make a loop, which never ends: the sage sets its waits again." });
+  assert.deepEqual(cardOf(model, "T81").waits[0], { id: "T82", state: "framed", word: "not started, in a loop", pilot: false, met: false, never: true, loop: true });
+  // A wait on a task of no loop stays a plain wait: T13 waits for T12, which is in review.
+  assert.deepEqual(cardOf(model, "T13").waitLine, { never: false, text: "Waits for T12 (in review)." });
 });
 
 test("T233 Q1, QA, QC, C8: only a breakdown gate by data gets the program mark (sample T70 gets none); a stuck program and a lost gate need you with no card, and count", () => {
@@ -638,9 +642,123 @@ test("F-T233-2, F-T233-3: the model counts a lost program whose gate is open on 
   edited.gates.find(gate => gate.id === "G12").question = "Ship it?";
   const shown = programsModel([programsSource("claude", edited)]);
   assert.equal(programOf(shown, "PG3").state, "lost");
-  assert.deepEqual(cardOf(shown, "T32").waitLine, { never: true, text: "Waits for the PG3 breakdown, whose gate G12 is not a breakdown gate: it cannot start." });
+  assert.deepEqual(cardOf(shown, "T32").waitLine, { never: true, text: "Waits for the PG3 breakdown, whose gate G12 names no program in its question: it cannot start." }, "T383 item 12: the reason names the question");
   // The gate answered: no card holds it, so the program is its own item, with the same words.
   const answered = programsTables();
   Object.assign(answered.gates.find(gate => gate.id === "G12"), { options: "yes|no", answer: "yes" });
   assert.deepEqual(programsModel([programsSource("claude", answered)]).programNeeds.find(need => need.program === "PG3").title, "The gate G12 of PG3 is not a breakdown gate on its pilot T30");
+});
+
+// T383: the board's data rules on damaged or hand-edited logbooks, and its cost on large ones. SAMPLE DATA from scripts/fixtures/board-programs.mjs.
+const needsOf = model => model.programNeeds.map(need => [need.kind, need.title, need.text]);
+const STUCK_PG2 = ["stuck", "PG2 Lead build is stuck", "The pilot T21 was abandoned. Choose a new pilot, or drop the program."];
+const LOST_PG7 = ["lost", "The breakdown gate G30 of PG7 is not in the logbook", "Ask the sage to repair the logbook, or to propose PG7 again."];
+const edited = edit => { const tables = programsTables(); edit(tables); return programsModel([programsSource("claude", tables)]); };
+
+test("T383 item 2: a lost program whose gate is open on an abandoned task stays in Needs you, as no card in Needs you holds that gate", () => {
+  const model = edited(tables => {
+    tables.gates.find(gate => gate.id === "G12").options = "yes|no";
+    tables.tasks.find(task => task.id === "T30").state = "abandoned";
+  });
+  assert.deepEqual(needsOf(model), [STUCK_PG2, ["lost", "The gate G12 of PG3 is not a breakdown gate on its pilot T30", "Ask the sage to repair the logbook, or to propose PG3 again."], LOST_PG7]);
+  assert.equal(model.counts.needsOwner, 4, "T70 and the three items; T30 is abandoned, so it has no card in Needs you");
+});
+
+test("T383 items 4 and 13: a proposed or changing program whose pilot is abandoned or not in the logbook is stuck: a Needs you item, not a breakdown that waits for you", () => {
+  const abandoned = edited(tables => { tables.tasks.find(task => task.id === "T30").state = "abandoned"; });
+  assert.equal(programOf(abandoned, "PG3").state, "stuck");
+  assert.deepEqual(needsOf(abandoned), [STUCK_PG2, ["stuck", "PG3 Board programs is stuck", "The pilot T30 was abandoned. Choose a new pilot, or drop the program."], LOST_PG7]);
+  const missing = edited(tables => { tables.tasks = tables.tasks.filter(task => task.id !== "T30"); });
+  assert.deepEqual(needsOf(missing)[1], ["stuck", "PG3 Board programs is stuck", "The pilot T30 is not in the logbook. Choose a new pilot, or drop the program."]);
+  const changing = edited(tables => { tables.tasks.find(task => task.id === "T90").state = "abandoned"; });
+  assert.equal(programOf(changing, "PG9").state, "stuck", "changing too");
+  assert.equal(programOf(programsModel(), "PG3").state, "proposed", "a live pilot keeps its program proposed");
+});
+
+test("T383 item 7: when tasks.tsv and programs.tsv of one logbook both fail, or every table has one error code, one item says why", () => {
+  const broken = diagnostics => { const source = programsSource(); Object.assign(source.projects[0], { tables: {}, diagnostics }); return buildBoardModel([source], { now: PROGRAMS_NOW }); };
+  assert.deepEqual(needsOf(broken(["tasks: line 14 has 9 cells, and its header has 16", "programs: line 2: the pilot of PG1 is not a task id"])), [
+    ["logbook", "The Claude logbook cannot be read", "tasks.tsv line 14 has 9 cells, and its header has 16. programs.tsv line 2: the pilot of PG1 is not a task id. The board shows no task of sage-ff5ee2. Ask the sage to repair the logbook."]]);
+  const folder = broken(["tasks", "runs", "findings", "ledger", "gates", "decisions", "programs"].map(name => `${name}: EACCES`));
+  assert.deepEqual(needsOf(folder), [["logbook", "The Claude logbook cannot be read", "Its folder has no read permission. The board shows no task of sage-ff5ee2. Ask the sage to repair the logbook."]]);
+  assert.equal(folder.counts.needsOwner, 1);
+  // With its tasks readable, the programs table keeps its own item.
+  const source = programsSource(); source.projects[0].diagnostics = ["programs: line 2: the pilot of PG1 is not a task id"]; delete source.projects[0].tables.programs;
+  assert.deepEqual(needsOf(buildBoardModel([source], { now: PROGRAMS_NOW })).map(([kind]) => kind), ["programs"]);
+});
+
+test("T383 item 9: a live task whose program row is missing, or whose program cell is not a program id, is a Needs you item; an ended one is not", () => {
+  const model = edited(tables => {
+    const one = tables.tasks[0];
+    tables.tasks.push({ ...one, id: "T95", state: "framed", program: "PG20" }, { ...one, id: "T96", state: "building", program: "PG20" }, { ...one, id: "T97", state: "framed", program: "?" }, { ...one, id: "T98", state: "merged", program: "PG21" });
+  });
+  assert.deepEqual(needsOf(model).slice(2), [
+    ["missing", "The program PG20 is not in the logbook", "T95 and T96 name PG20, so they cannot start. Ask the sage to repair the logbook, or to take each task out of the program."],
+    ["missing", "A program cell is not a program id", "The program cell of T97 is not a program id, so it cannot start. Ask the sage to repair the logbook, or to take the task out of the program."]]);
+  assert.equal(model.counts.needsOwner, 6);
+});
+
+test("T383 item 10: a provider root that cannot be read is a counted Needs you item; a root that does not exist is not", () => {
+  const root = (diagnostics) => ({ id: "codex", label: "codex", provider: null, config: {}, diagnostics, projects: [], hooks: { present: false, slots: [], helpers: [], problem: null } });
+  const model = buildBoardModel([programsSource(), root(["EACCES"])], { now: PROGRAMS_NOW });
+  assert.deepEqual(needsOf(model).at(-1), ["source", "The Codex logbooks cannot be read", "Its folder has no read permission. The board shows no Codex logbook. Check that the board can read the folder."]);
+  assert.equal(model.counts.needsOwner, 5, "T30, T70, two program items and the root");
+  for (const quiet of [["ENOENT"], ["config: invalid JSON"]]) assert.equal(buildBoardModel([programsSource(), root(quiet)], { now: PROGRAMS_NOW }).counts.needsOwner, 4, quiet[0]);
+});
+
+test("T383 item 12: a gate on the pilot with the breakdown options, whose question names no program or another, is lost by its question, in those words", () => {
+  const other = edited(tables => { tables.gates.find(gate => gate.id === "G12").question = "Approve program PG4? No task builds before you approve."; });
+  assert.equal(cardOf(other, "T30").reasons[0].text.split("\u2028").at(-1), "The gate G12 of PG3 names PG4 in its question, not PG3: ask the sage to repair the logbook, or to propose PG3 again.");
+  assert.deepEqual(cardOf(other, "T32").waitLine, { never: true, text: "Waits for the PG3 breakdown, whose gate G12 names PG4 in its question, not PG3: it cannot start." });
+  const none = edited(tables => { Object.assign(tables.gates.find(gate => gate.id === "G12"), { question: "Ship it?", answer: "yes" }); });
+  assert.deepEqual(none.programNeeds.find(need => need.program === "PG3").title, "The gate G12 of PG3 names no program in its question");
+});
+
+/**
+ * Work units of fn, counted, not timed (T383 item 14): each element that an array method or an array, Map or Set
+ * iterator visits while fn runs. The prototypes are restored after it.
+ */
+function work(fn) {
+  let units = 0;
+  const saved = [];
+  const patch = (proto, name, make) => { saved.push([proto, name, proto[name]]); proto[name] = make(proto[name]); };
+  for (const name of ["filter", "map", "find", "findIndex", "findLast", "findLastIndex", "some", "every", "forEach", "reduce", "flatMap", "includes", "indexOf", "slice", "sort"]) {
+    patch(Array.prototype, name, original => function (...args) { units += this.length; return original.apply(this, args); });
+  }
+  for (const proto of [Array.prototype, Map.prototype, Set.prototype]) for (const name of ["values", "keys", "entries", Symbol.iterator]) {
+    patch(proto, name, original => function () { const it = original.call(this); return { next: () => { units++; return it.next(); }, [Symbol.iterator]() { return this; } }; });
+  }
+  try { fn(); } finally { for (let i = saved.length - 1; i >= 0; i--) saved[i][0][saved[i][1]] = saved[i][2]; }
+  return units;
+}
+/** A large SAMPLE logbook: n tasks in n/2 programs, half approved and half proposed (an odd task is the pilot), with a run, a verdict, a decision and a finding each. */
+function large(n) {
+  const one = programsTables().tasks[0], at = "2026-10-20T10:00:00Z", tasks = [], gates = [], programs = [], runs = [], ledger = [], decisions = [], findings = [];
+  for (let i = 1; i <= n; i++) {
+    const pg = `PG${Math.ceil(i / 2)}`, pilot = i % 2 === 1;
+    tasks.push({ ...one, id: `T${i}`, state: pilot ? "merged" : "reviewing", pr: String(i), program: pg, waits: i > 2 && !pilot ? `T${i - 2}` : "" });
+    if (pilot) {
+      gates.push({ id: `G${i}`, task: `T${i}`, question: `Approve program ${pg}? No task builds before you approve.`, options: "approve|change|drop", recommendation: "approve", default: "", answer: i % 4 === 1 ? "approve" : "", at });
+      programs.push({ id: pg, name: `Sample ${pg}`, goal: "g", pilot: `T${i}`, gate: `G${i}`, at });
+    }
+    runs.push({ id: `R${i}`, task: `T${i}`, role: "implementer", round: "0", candidate: "", branch: "", status: "done", tokens: "1000", report: "", started: at, ended: at });
+    ledger.push({ task: `T${i}`, pr: String(i), sha: "a".repeat(40), kind: "checks-pass", cycle: "1", run: `R${i}`, at });
+    decisions.push({ at, task: `T${i}`, decision: "state reviewing", why: "sample" });
+    findings.push({ task: `T${i}`, key: "F-1", round: "1", source: "code-review", severity: "low", summary: "Sample", triage: "", reason: "", status: "open" });
+  }
+  return { tasks, gates, programs, runs, ledger, decisions, findings };
+}
+
+// A quadratic step gives about 4 times the work for twice the rows; 2.5 leaves room for a sort (n log n) and fixed costs.
+test("T383 item 14: the board model is linear in a large logbook: twice the rows is about twice the work", () => {
+  const board = n => work(() => buildBoardModel([programsSource("claude", large(n))], { now: PROGRAMS_NOW }));
+  const [small, big] = [board(400), board(800)];
+  assert.ok(big / small < 2.5, `the board's work: ${small} units for 400 tasks, ${big} for 800 (linear is about 2 times)`);
+});
+
+test("T383 item 14: the printers' wait graph (status and the task line) is linear in a large logbook", () => {
+  // The status line and the task line read the waits with the same rules: the graph, and each task's unmet waits.
+  const rules = n => { const t = large(n); return work(() => { const graph = shownGraph(waitGraph(t.tasks, t.programs, t.gates, t.decisions), t.gates); for (const task of t.tasks) unmetWaits(task, graph); }); };
+  const [few, many] = [rules(400), rules(800)];
+  assert.ok(many / few < 2.5, `the rules' work: ${few} units for 400 tasks, ${many} for 800`);
 });
