@@ -413,7 +413,7 @@ details.fold>summary{cursor:pointer;color:var(--accent);font-size:12px;margin:2p
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}img{max-width:100%;height:auto}figure{margin:6px 0}
 .legend{padding:0 20px 18px;color:var(--muted);font-size:12px;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
 .legend>span{display:inline-flex;gap:5px;align-items:center;flex-wrap:wrap}.page .legend{padding:14px 0 0}
-.emptyboard{border:1px dashed var(--line);border-radius:10px;padding:12px;margin:0 20px 12px;font-size:12px;color:var(--muted)}
+.emptyboard{border:1px dashed var(--line);border-radius:10px;padding:12px;margin:0 20px 12px;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 .emptyboard b{color:var(--text);display:block;margin-bottom:2px}
 .linkbtn{background:none;border:0;padding:0;margin-top:6px;font:inherit;color:var(--accent);text-decoration:underline;cursor:pointer}
 .boardtabs{display:inline-flex;border:0;background:var(--panel2);border-radius:10px;padding:3px;gap:2px;flex:none}
@@ -557,7 +557,9 @@ const S={project:'',needs:false,who:'',priority:'',kind:'',program:'',open:false
 // The address keeps the project (p) and the program (pg): a program page links to its tasks on the board with both. A
 // programs page's Needs you chip opens the board with needs=1, which turns the Needs you filter on once: the board then
 // takes needs=1 out of the address, so a reload does not turn the filter on again.
-function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.program=h.get('pg')||'';if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs');const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
+// A Program filter of a program in another project ends when you choose a project, also in the address (R1371-2).
+function ownProgram(){const o=S.program&&S.program!=='none'&&S.project&&all('#f-program option').find(o=>o.value===S.program);if(o&&o.dataset.project!==S.project){S.program='';return true}return false}
+function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.program=h.get('pg')||'';if(ownProgram())save();if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs');const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
 fromHash();
 function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#(p|pg|needs)=/.test(location.hash)){const h=new URLSearchParams();if(S.project)h.set('p',S.project);if(S.program)h.set('pg',S.program);const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
 const options=()=>all('#pick-list [role=option]');
@@ -611,7 +613,7 @@ function draw(){
   S.keys=shown.map(o=>o.dataset.key);
 }
 // A Program filter of another project ends when you choose a project: its cards would never show there.
-function choose(key){const o=S.program&&S.program!=='none'&&key&&all('#f-program option').find(o=>o.value===S.program);if(o&&o.dataset.project!==key)S.program='';S.project=key;S.open=false;S.query='';S.active=null;S.gone=false;save();filter();const t=$('pick-trig');if(t)t.focus()}
+function choose(key){S.project=key;ownProgram();S.open=false;S.query='';S.active=null;S.gone=false;save();filter();const t=$('pick-trig');if(t)t.focus()}
 function openList(){S.open=true;S.query='';S.active=null;draw();const q=$('pick-q');if(q)q.focus()}
 function closeList(focus){S.open=false;draw();if(focus){const t=$('pick-trig');if(t)t.focus()}}
 document.addEventListener('click',e=>{const t=e.target;
@@ -884,10 +886,11 @@ function programTask(ctx, task) {
   const [cls, word] = MET_WORDS.includes(task.state) ? ["stw-done", `✓ ${task.state}`] : ab ? ["stw-ab", "abandoned"] : cant ? ["stw-cant", "⊘ cannot start"]
     : needs ? ["stw-need", "! needs you"] : task.waitLine ? ["stw-wait", "⧗ waits"] : ["stw-run", taskWord(task)];
   // A task that waits for the breakdown waits for the pilot after it, as the prototype says: "waits for T30 (pilot, not started)",
-  // and only once when its waits cell names the pilot too. A breakdown that is never met (dropped or lost) is named itself.
+  // and only once when its waits cell names the pilot too. A breakdown that is never met (dropped or lost) is named itself,
+  // and so is a wait for a pilot that is never met (abandoned): that task cannot start (R1368-2).
   const program = ctx.programs.get(task.program?.key), pilot = program && !task.program.pilot && ctx.tasks.get(`${program.project}/${program.pilot}`);
-  const viaPilot = !!pilot && task.waits.some(wait => wait.breakdown && !wait.never);
-  const waits = task.waits.filter(wait => !(wait.breakdown && !pilot) && !(wait.pilot && wait.met) && !(viaPilot && wait.id === pilot.id)).map(wait => wait.odd ? "⊘ its waits cell has text that is not a task id"
+  const ownPilot = pilot && task.waits.find(wait => wait.id === pilot.id), viaPilot = !!pilot && !ownPilot?.never && task.waits.some(wait => wait.breakdown && !wait.never);
+  const waits = task.waits.filter(wait => !(wait.breakdown && (!pilot || !wait.never && !viaPilot)) && !(wait.pilot && wait.met) && !(viaPilot && wait === ownPilot)).map(wait => wait.odd ? "⊘ its waits cell has text that is not a task id"
     : wait.breakdown ? wait.never ? `⊘ waits for the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : `⧗ waits for ${pilot.id} (pilot, ${taskWord(pilot)})`
     : wait.met ? `✓ waits for ${wait.id}, ${wait.word}` : `${wait.never ? "⊘" : "⧗"} waits for ${wait.id} (${wait.word})${wait.never ? ": it cannot start" : ""}`);
   const at = roles(task), sub = [task.program?.pilot ? "pilot" : "", ...waits, at.length ? `${at.join(", ")} at work` : "", task.pr ? `PR ${task.pr}` : "", task.priority, task.kind ? KIND[task.kind][1] : ""].filter(Boolean);
@@ -905,15 +908,19 @@ const shortDay = iso => { const [, m, d] = /^\d{4}-(\d{2})-(\d{2})/.exec(String(
 const TOOL_WHY = ["", "task set", "program propose", "the user's answer", "the user's own words"];
 /**
  * A program's decision in the prototype's short form (T374): "T9 merged: PR 66", "PG1 proposed: Codex support, pilot T7,
- * gate G7", "PG1 breakdown answered: approve", "T5 joined PG1". Any other decision keeps its own words, after its task.
+ * gate G7", "G7 answered: approve", "T5 joined PG1". Any other decision keeps its own words, after its task. A proposal
+ * writes its own row on the pilot and a move row for each other task that it takes in: its own row is its one line, so
+ * those move rows show nothing (null) (R1368-1).
  */
 function decisionLine(program, row, task) {
   const why = TOOL_WHY.includes(String(row.why ?? "")) ? "" : String(row.why), text = String(row.decision), because = line => why ? `${line}: ${why}` : line;
   const state = /^state (merged|concluded|abandoned)$/.exec(text), moved = /^program (\S+) → (\S+)$/.exec(text), arrow = text.lastIndexOf(" → ");
+  const proposed = row.why === "program propose" && new RegExp(`^${program.id} proposed (again )?with gate (G[1-9]\\d*)(?:, pilot (\\S+), tasks \\S+, name: (.*)|, round (\\d+))$`).exec(text);
   if (state) return because(`${row.id}${row.id === program.pilot ? " (pilot)" : ""} ${state[1]}${!why && state[1] === "merged" && task.pr ? `: PR ${task.pr}` : ""}`);
-  if (moved && row.why === "program propose" && moved[2] === program.id) return `${program.id} proposed: ${program.name}, pilot ${program.pilot}, gate ${program.gate}`;
+  if (proposed) return proposed[1] ? `${program.id} proposed again: ${program.name}, gate ${proposed[2]}, round ${proposed[5]}` : `${program.id} proposed: ${proposed[4]}, pilot ${proposed[3]}, gate ${proposed[2]}`;
+  if (moved && row.why === "program propose" && moved[2] === program.id) return null;
   if (moved) return because(`${row.id} ${moved[2] === program.id ? "joined" : "left"} ${program.id}`);
-  if (text.startsWith(`Approve program ${program.id}?`) && arrow >= 0) return `${program.id} breakdown answered: ${text.slice(arrow + 3)}`;
+  if (text.startsWith(`Approve program ${program.id}?`) && arrow >= 0) return `${program.gate} answered: ${text.slice(arrow + 3)}`;
   return because(`${row.id}: ${decisionText(text)}`);
 }
 /** A program's page: its goal and progress (or its breakdown while it waits for you), what moves next, its tasks in order, and its latest decisions. */
@@ -932,9 +939,9 @@ function programPage(ctx, program, routed) {
       + `${breakdownBody(reason)}</section>`;
   } else {
     const pilotLine = `<p><b>Pilot:</b> ${pilot ? `<a href="${esc(taskHref(ctx, pilot))}">${esc(pilot.id)}</a> ${esc(pilot.title)} · <span class="${MET_WORDS.includes(pilot.state) ? "stw-done" : pilot.state === "abandoned" ? "stw-cant" : "stw-run"}">${esc(taskWord(pilot))}</span>${roles(pilot).length ? ` · the ${esc(roles(pilot).join(" and the "))} at work` : ""}` : `${esc(program.pilot)} · <span class="stw-cant">not in the logbook</span>`}</p>`;
-    const rule = { dropped: `You dropped the breakdown (gate ${program.gate}).`, changing: `You asked for changes (gate ${program.gate}). The sage revises the breakdown and proposes it again.`, lost: lostText(program) }[program.state]
+    const rule = { dropped: `You dropped the breakdown (gate ${program.gate}).`, changing: `You asked for changes (gate ${program.gate}). The sage revises the breakdown and proposes it again.`, lost: "" }[program.state]
       ?? `Approved total: ${plural(total, "task")} (gate ${program.gate}). Done when every task that is not abandoned is merged or concluded${abandoned.length ? `: ${total - abandoned.length} of the ${total}` : ""}.`;
-    lead = `<section class="wide"><h3>Goal and progress</h3>${program.goal ? `<p>${esc(program.goal)}</p>` : ""}${total ? `${pbar(program)}<div class="pkey" aria-hidden="true"><span><i class="m"></i>merged</span><span><i class="a"></i>abandoned</span><span><i class="o"></i>open</span></div>` : ""}${pilotLine}<p class="faint">${esc(rule)}</p></section>`;
+    lead = `<section class="wide"><h3>Goal and progress</h3>${program.goal ? `<p>${esc(program.goal)}</p>` : ""}${total ? `${pbar(program)}<div class="pkey" aria-hidden="true"><span><i class="m"></i>merged</span><span><i class="a"></i>abandoned</span><span><i class="o"></i>open</span></div>` : ""}${pilotLine}${rule ? `<p class="faint">${esc(rule)}</p>` : ""}</section>`;
     // "T13 can start when T12 merges.": each task that waits for the task that moves next, with each of its unmet waits.
     const next = nextOf(ctx, program), then = next.first ? (ctx.waitedBy.get(next.first.key) ?? []).filter(task => task.program?.key === program.key && !ENDED_STATES.includes(task.state) && !task.waitLine?.never)
       .map(task => { const ids = task.waits.filter(wait => !wait.met && wait.id).map(wait => wait.id); return `${task.id} can start when ${ids.join(" and ")} ${ids.length === 1 ? "merges" : "merge"}.`; }) : [];
@@ -947,7 +954,7 @@ function programPage(ctx, program, routed) {
       lost: () => `<div class="nowline need">${ICON}<span><b>Needs you:</b> ${esc(lostText(program))}</span></div>`,
       changing: () => `<div class="nowline"><span><b>Now:</b> the sage revises the breakdown. No task builds before you approve the new one.</span></div>`,
       done: () => `<div class="nowline"><span>Nothing: every task that is not abandoned is merged or concluded.</span></div>`,
-      dropped: () => program.open ? `<div class="nowline"><span><b>Next:</b> ${esc(droppedNext(program))}</span></div>` : "",
+      dropped: () => program.open ? `<div class="nowline"><span>${esc(droppedNext(program))}</span></div>` : "",
       active: () => `<div class="nowline"><span><b>Now:</b> ${next.html}</span></div>${then.length ? `<div class="nextline"><b>Then:</b> ${esc(then.join(" "))}</div>` : ""}${cannot}${moving.length ? `<div class="nextline">Also moving: ${esc(moving.map(task => `${task.id} (${taskWord(task)})`).join(", "))}.</div>` : ""}`,
     }[program.state];
     const said = body?.();
@@ -959,11 +966,11 @@ function programPage(ctx, program, routed) {
   const order = total ? `<section><h3>Tasks in order <span class="n">${total}</span></h3><ol class="layers">${layers}</ol><p class="faint">The order: the pilot first, then each task after the tasks that it waits for, then by number.</p></section>` : `<section><h3>Tasks in order</h3><div class="empty">No task is in it.</div></section>`;
   // The latest decisions of its tasks that name the program, move a task in or out, or end a task.
   const named = new RegExp(`\\b${program.id}\\b`);
-  // A proposal writes one row for each task that it moves in: its line shows once.
-  const lines = own.flatMap(task => task.decisions.filter(row => named.test(row.decision) || /^state (merged|concluded|abandoned)$/.test(row.decision) || /^program /.test(row.decision)).map(row => ({ at: row.at, text: decisionLine(program, { ...row, id: task.id }, task) })))
-    .sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  const log = lines.filter((row, i) => lines.findIndex(other => other.text === row.text && other.at === row.at) === i).slice(0, 8);
-  const decisions = `<section><h3>Latest decisions</h3>${log.length ? `<ol class="log">${log.map(row => `<li><span class="faint" title="${esc(day(row.at))} UTC">${esc(shortDay(row.at))}</span> ${esc(row.text)}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`}</section>`;
+  const log = own.flatMap(task => task.decisions.filter(row => named.test(row.decision) || /^state (merged|concluded|abandoned)$/.test(row.decision) || /^program /.test(row.decision)).map(row => ({ at: row.at, text: decisionLine(program, { ...row, id: task.id }, task) })))
+    .filter(row => row.text !== null).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 8);
+  // A time that is not a date gets no date and no title (R1371-4).
+  const when = at => shortDay(at) ? `<span class="faint" title="${esc(day(at))} UTC">${esc(shortDay(at))}</span> ` : "";
+  const decisions = `<section><h3>Latest decisions</h3>${log.length ? `<ol class="log">${log.map(row => `<li>${when(row.at)}${esc(row.text)}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`}</section>`;
   return `${top}<div class="detail">${lead}<div class="colL">${order}</div><div class="colR">${decisions}</div></div>`;
 }
 
@@ -972,7 +979,9 @@ export function renderProgramsHtml(model, { programKey = null, live = false, pat
   const ctx = context(model, false), at = hhmm(model.at), program = programKey ? ctx.programs.get(programKey) : null;
   // The address can hold any text: the page names the program only when the key ends in a program id (T375).
   const asked = String(programKey).split("/"), id = asked.length > 1 && PROGRAM_ID.test(asked.at(-1)) ? asked.at(-1) : null;
-  const missing = `<div class="pagebar"><a class="back" href="/programs">← Programs</a></div><h1 class="ptitle">Program not found</h1><div class="emptyboard"><b>No program ${id ? `${esc(id)} ` : ""}on the board.</b> The logbook may not have it now, or the link is old. Open the <a href="/programs">programs list</a>.</div>`;
+  // A long id wraps, and shows its first 12 characters (R1371-1).
+  const shown = id && id.length > 12 ? `${id.slice(0, 11)}…` : id;
+  const missing = `<div class="pagebar"><a class="back" href="/programs">← Programs</a></div><h1 class="ptitle">Program not found</h1><div class="emptyboard"><b>No program ${shown ? `${esc(shown)} ` : ""}on the board.</b> The logbook may not have it now, or the link is old. Open the <a href="/programs">programs list</a>.</div>`;
   const main = !programKey ? programsList(ctx, model, true) : program ? programPage(ctx, program, true) : missing;
   // A program that is not on the board has no stream: the server answers its stream with 404 (R1322-3).
   live = live && (!programKey || !!program);

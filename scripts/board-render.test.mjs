@@ -862,7 +862,7 @@ test("T374-5: the programs pages refresh their Needs you count with each live up
 
 test("T374-6, T374-9: a dropped program's page says the next step; a stuck program's line in the list has a Next label", () => {
   const model = programsModel();
-  assert.ok(renderProgramsHtml(model, { programKey: KEY("PG6") }).includes('<section class="wide"><h3>Next</h3><div class="nowline"><span><b>Next:</b> 1 task still in it: ask the sage to take each task out of the program.</span></div></section>'));
+  assert.ok(renderProgramsHtml(model, { programKey: KEY("PG6") }).includes('<section class="wide"><h3>Next</h3><div class="nowline"><span>1 task still in it: ask the sage to take each task out of the program.</span></div></section>'), "R1370-2: no second Next under the heading");
   assert.ok(renderProgramsHtml(model).includes('<div class="nx need"><b>Next:</b> The pilot T21 was abandoned. Choose a new pilot, or drop the program.</div>'));
 });
 
@@ -871,16 +871,47 @@ test("T374-8: a project of the model has no programNeeds field: the page script 
   assert.deepEqual([Object.hasOwn(model.projects[0], "programNeeds"), model.programNeeds.length, model.projects[0].needsOwner], [false, 2, 4]);
 });
 
-test("T374-10: a program page's Latest decisions are in the short form, with short dates: a proposal once, an answer, a merge with its PR", () => {
+const decisionsOf = html => [...html.matchAll(/<li><span class="faint" title="([^"]+)">([^<]+)<\/span> ([^<]+)<\/li>/g)].map(m => `${m[2]} ${m[3]} (${m[1]})`);
+test("T374-10, R1368-1, R1370-1: a program page's Latest decisions are in the short form, with short dates: a proposal once, an answer with its gate, a merge with its PR", () => {
   const tables = programsTables(), question = tables.gates.find(gate => gate.id === "G1").question;
   tables.tasks.find(task => task.id === "T2").pr = "66";
+  // The rows that the state tool's program propose writes: a move row for each task but the pilot, then the pilot's own row.
   tables.decisions.push(
-    { at: "2026-10-10T09:00:00Z", task: "T1", decision: "program none → PG1", why: "program propose" }, { at: "2026-10-10T09:00:00Z", task: "T2", decision: "program none → PG1", why: "program propose" },
+    { at: "2026-10-10T09:00:00Z", task: "T2", decision: "program none → PG1", why: "program propose" }, { at: "2026-10-10T09:00:00Z", task: "T3", decision: "program none → PG1", why: "program propose" },
+    { at: "2026-10-10T09:00:00Z", task: "T1", decision: "PG1 proposed with gate G1, pilot T1, tasks T2,T3, name: Codex support", why: "program propose" },
     { at: "2026-10-12T09:00:00Z", task: "T1", decision: `${question} → approve`, why: "the user's answer" },
     { at: "2026-10-17T09:00:00Z", task: "T2", decision: "state merged", why: "task set" }, { at: "2026-10-18T09:00:00Z", task: "T3", decision: "program PG1 → none", why: "sample: moved out" });
   const pg1 = renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") });
-  assert.deepEqual([...pg1.matchAll(/<li><span class="faint" title="([^"]+)">([^<]+)<\/span> ([^<]+)<\/li>/g)].map(m => `${m[2]} ${m[3]} (${m[1]})`), [
-    "18 Oct T3 left PG1: sample: moved out (2026-10-18 09:00 UTC)", "17 Oct T2 merged: PR 66 (2026-10-17 09:00 UTC)", "12 Oct PG1 breakdown answered: approve (2026-10-12 09:00 UTC)", "10 Oct PG1 proposed: Codex support, pilot T1, gate G1 (2026-10-10 09:00 UTC)"]);
+  assert.deepEqual(decisionsOf(pg1), [
+    "18 Oct T3 left PG1: sample: moved out (2026-10-18 09:00 UTC)", "17 Oct T2 merged: PR 66 (2026-10-17 09:00 UTC)", "12 Oct G1 answered: approve (2026-10-12 09:00 UTC)", "10 Oct PG1 proposed: Codex support, pilot T1, gate G1 (2026-10-10 09:00 UTC)"]);
+});
+
+test("R1368-1: a program with only its pilot shows its proposal once, and a new proposal says its round", () => {
+  const tables = programsTables();
+  tables.decisions.push({ at: "2026-10-10T09:00:00Z", task: "T90", decision: "PG9 proposed with gate G9, pilot T90, tasks none, name: Changes", why: "program propose" },
+    { at: "2026-10-11T09:00:00Z", task: "T90", decision: "PG9 proposed again with gate G9, round 2", why: "program propose" });
+  assert.deepEqual(decisionsOf(renderProgramsHtml(programsModel(tables), { programKey: KEY("PG9") })), ["11 Oct PG9 proposed again: Changes, gate G9, round 2 (2026-10-11 09:00 UTC)", "10 Oct PG9 proposed: Changes, pilot T90, gate G9 (2026-10-10 09:00 UTC)"]);
+});
+
+test("R1371-4: a decision whose time is not a date shows no date and no title", () => {
+  const tables = programsTables();
+  tables.decisions.push({ at: "garbage", task: "T1", decision: "state merged", why: "sample" });
+  const pg1 = renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") });
+  assert.ok(pg1.includes("<li>T1 (pilot) merged: sample</li>"), pg1.slice(pg1.indexOf("Latest decisions")));
+  assert.ok(!pg1.includes("garbage"));
+});
+
+test("R1368-2: in a proposed program, a task that waits for an abandoned or a missing pilot cannot start, and says so once", () => {
+  const sub = drop => { const tables = programsTables(); tables.tasks.find(task => task.id === "T31").waits = "T30"; drop(tables); return rowOf(renderProgramsHtml(programsModel(tables), { programKey: KEY("PG3") }), "T31"); };
+  const abandoned = sub(tables => { tables.tasks.find(task => task.id === "T30").state = "abandoned"; }), missing = sub(tables => tables.tasks.splice(tables.tasks.findIndex(task => task.id === "T30"), 1));
+  assert.ok(abandoned.endsWith('<span class="sub">⊘ waits for T30 (abandoned): it cannot start</span>'), abandoned);
+  assert.ok(missing.endsWith('<span class="sub">⊘ waits for T30 (not in the logbook): it cannot start</span>'), missing);
+});
+
+test("R1371-5: a lost program's page says what is wrong once, under Needs you", () => {
+  const pg7 = renderProgramsHtml(programsModel(), { programKey: KEY("PG7") });
+  assert.equal(pg7.split("The breakdown gate G30 of PG7 is not in the logbook. Ask the sage to repair the logbook, or to propose PG7 again.").length, 2, pg7);
+  assert.ok(pg7.includes("<b>Needs you:</b> The breakdown gate G30 of PG7 is not in the logbook."));
 });
 
 test("T375: the not-found program page has its heading and title, and names the id only when the key ends in a program id", () => {
@@ -891,6 +922,7 @@ test("T375: the not-found program page has its heading and title, and names the 
   }
   assert.ok(page(KEY("PG99")).includes("<b>No program PG99 on the board.</b>"));
   for (const key of ["claude/sage-ff5ee2/<b>x</b>", "PG12", "claude/sage-ff5ee2/PG0"]) assert.ok(page(key).includes("<b>No program on the board.</b>"), key);
+  assert.ok(page(`claude/sage-ff5ee2/PG${"1".repeat(400)}`).includes("<b>No program PG111111111… on the board.</b>"), "R1371-1: a long id shows its first 12 characters");
 });
 
 test("T378-18: the offline snapshot's task, programs and program pages each have a theme switch after the way back", () => {

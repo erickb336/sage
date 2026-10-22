@@ -37,6 +37,7 @@ const PAGES = {
   "/programs": () => renderProgramsHtml(model, { live: true }),
   [`/program/${key("PG1")}`]: () => renderProgramsHtml(model, { programKey: KEY("PG1"), live: true }),
   [`/program/${key("PG3")}`]: () => renderProgramsHtml(model, { programKey: KEY("PG3") }),
+  "/program/long": () => renderProgramsHtml(model, { programKey: `claude/sage-ff5ee2/PG${"1".repeat(400)}` }),
   [`/task/${key("T13")}`]: () => renderBoardHtml(model, { snapshot: false, taskKey: KEY("T13") }),
   [`/task/${key("T22")}`]: () => renderBoardHtml(model, { snapshot: false, taskKey: KEY("T22") }),
   [`/task/${key("T41")}`]: () => renderBoardHtml(model, { snapshot: false, taskKey: KEY("T41") }),
@@ -81,6 +82,18 @@ test("T374-7: a project change clears a Program filter whose program is in anoth
   assert.equal(await page.locator("#f-program").inputValue(), "", "the filter of the other project ends");
   assert.equal(await page.evaluate(() => location.hash), "#p=other-abc123");
   assert.ok((await page.locator(".card[data-key]:not([hidden])").count()) > 0, "the new project's cards show");
+});
+
+test("R1371-2: an address with a Program filter of another project drops the filter: the chosen project's cards show", async t => {
+  const page = await open(t, `/two#p=other-abc123&pg=${key("PG1")}`);
+  assert.equal(await page.locator("#f-program").inputValue(), "");
+  assert.equal(await page.evaluate(() => location.hash), "#p=other-abc123");
+  assert.ok((await page.locator(".card[data-key]:not([hidden])").count()) > 0, "the project's cards show");
+});
+
+test("R1371-1: at 375 px the not-found page of a very long program id has no sideways scroll", async t => {
+  const page = await open(t, "/program/long", { width: 375, height: 812 });
+  assert.ok(await noSideways(page), `${await page.evaluate(() => document.documentElement.scrollWidth)} px wide`);
 });
 
 test("T374-5: a live refresh updates the Needs you count on /programs and /program/KEY", async t => {
