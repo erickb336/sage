@@ -893,6 +893,32 @@ test("R1368-1: a program with only its pilot shows its proposal once, and a new 
   assert.deepEqual(decisionsOf(renderProgramsHtml(programsModel(tables), { programKey: KEY("PG9") })), ["11 Oct PG9 proposed again: Changes, gate G9, round 2 (2026-10-11 09:00 UTC)", "10 Oct PG9 proposed: Changes, pilot T90, gate G9 (2026-10-10 09:00 UTC)"]);
 });
 
+test("R1375-1, R1375-3, R1375-4: over three rounds each answer names its own gate, a task that a later round takes in joins, and an older round has no name", () => {
+  const tables = programsTables(), question = tables.gates.find(gate => gate.id === "G1").question, round = n => question.replace("Approve program PG1?", `Approve program PG1 (round ${n})?`);
+  Object.assign(tables.programs.find(row => row.id === "PG1"), { gate: "G21", name: "Codex support v2" });
+  // The rows in the forms that the state tool writes: program propose (rounds 1 to 3, round 2 takes in T11) and two answers.
+  tables.decisions.push(
+    { at: "2026-10-10T09:00:00Z", task: "T2", decision: "program none → PG1", why: "program propose" },
+    { at: "2026-10-10T09:00:00Z", task: "T1", decision: "PG1 proposed with gate G1, pilot T1, tasks T2, name: Codex support", why: "program propose" },
+    { at: "2026-10-11T09:00:00Z", task: "T1", decision: `${question} → change`, why: "the user's answer" },
+    { at: "2026-10-12T09:00:00Z", task: "T11", decision: "program none → PG1", why: "program propose" },
+    { at: "2026-10-12T09:00:00Z", task: "T1", decision: "PG1 proposed again with gate G20, round 2", why: "program propose" },
+    { at: "2026-10-13T09:00:00Z", task: "T1", decision: `${round(2)} → change`, why: "the user's answer" },
+    { at: "2026-10-14T09:00:00Z", task: "T1", decision: "PG1 proposed again with gate G21, round 3", why: "program propose" });
+  assert.deepEqual(decisionsOf(renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") })), [
+    "14 Oct PG1 proposed again: Codex support v2, gate G21, round 3 (2026-10-14 09:00 UTC)", "13 Oct G20 answered: change (2026-10-13 09:00 UTC)",
+    "12 Oct PG1 proposed again: gate G20, round 2 (2026-10-12 09:00 UTC)", "12 Oct T11 joined PG1 (2026-10-12 09:00 UTC)", "11 Oct G1 answered: change (2026-10-11 09:00 UTC)",
+    "10 Oct PG1 proposed: Codex support, pilot T1, gate G1 (2026-10-10 09:00 UTC)"]);
+});
+
+test("R1378-2, R1378-3: a decision with no valid time, also a day that its month does not have, goes last and shows no date", () => {
+  const tables = programsTables();
+  tables.decisions.push({ at: "2026-02-99T00:00:00Z", task: "T1", decision: "state merged", why: "sample one" }, { at: "unknown", task: "T2", decision: "state merged", why: "sample two" },
+    { at: "2026-10-10T09:00:00Z", task: "T3", decision: "state merged", why: "sample three" });
+  const pg1 = renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") }), items = [...pg1.matchAll(/<li>(.*?)<\/li>/g)].map(m => m[1]).filter(item => item.includes("sample"));
+  assert.deepEqual(items, ['<span class="faint" title="2026-10-10 09:00 UTC">10 Oct</span> T3 merged: sample three', "T1 (pilot) merged: sample one", "T2 merged: sample two"]);
+});
+
 test("R1371-4: a decision whose time is not a date shows no date and no title", () => {
   const tables = programsTables();
   tables.decisions.push({ at: "garbage", task: "T1", decision: "state merged", why: "sample" });

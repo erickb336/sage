@@ -91,6 +91,15 @@ test("R1371-2: an address with a Program filter of another project drops the fil
   assert.ok((await page.locator(".card[data-key]:not([hidden])").count()) > 0, "the project's cards show");
 });
 
+test("R1371-2 (reopened): with needs=1 also in the address, in any order, the Program filter of another project goes and the address keeps only the project", async t => {
+  for (const hash of [`p=other-abc123&pg=${key("PG1")}&needs=1`, `needs=1&pg=${key("PG1")}&p=other-abc123`]) {
+    const page = await open(t, `/two#${hash}`);
+    assert.equal(await page.locator("#f-program").inputValue(), "", hash);
+    assert.equal(await page.evaluate(() => location.hash), "#p=other-abc123", hash);
+    assert.equal(await page.locator("[data-filter=needs]").getAttribute("aria-pressed"), "true", hash);
+  }
+});
+
 test("R1371-1: at 375 px the not-found page of a very long program id has no sideways scroll", async t => {
   const page = await open(t, "/program/long", { width: 375, height: 812 });
   assert.ok(await noSideways(page), `${await page.evaluate(() => document.documentElement.scrollWidth)} px wide`);

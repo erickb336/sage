@@ -559,7 +559,7 @@ const S={project:'',needs:false,who:'',priority:'',kind:'',program:'',open:false
 // takes needs=1 out of the address, so a reload does not turn the filter on again.
 // A Program filter of a program in another project ends when you choose a project, also in the address (R1371-2).
 function ownProgram(){const o=S.program&&S.program!=='none'&&S.project&&all('#f-program option').find(o=>o.value===S.program);if(o&&o.dataset.project!==S.project){S.program='';return true}return false}
-function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.program=h.get('pg')||'';if(ownProgram())save();if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs');const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
+function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.program=h.get('pg')||'';if(ownProgram()){h.delete('pg');save()}if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs');const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
 fromHash();
 function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#(p|pg|needs)=/.test(location.hash)){const h=new URLSearchParams();if(S.project)h.set('p',S.project);if(S.program)h.set('pg',S.program);const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
 const options=()=>all('#pick-list [role=option]');
@@ -903,25 +903,36 @@ function decisionText(text) {
 }
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** A short date, "12 Oct", from an ISO time; the full time is the title. */
-const shortDay = iso => { const [, m, d] = /^\d{4}-(\d{2})-(\d{2})/.exec(String(iso ?? "")) ?? []; return m && MONTHS[m - 1] ? `${Number(d)} ${MONTHS[m - 1]}` : ""; };
+const shortDay = iso => {
+  const [, y, m, d] = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? "")) ?? [], date = new Date(Date.UTC(y, m - 1, d));
+  // A day that the month does not have, such as 2026-02-30, is not a date (R1378-3).
+  return y && date.getUTCMonth() === m - 1 && date.getUTCDate() === Number(d) ? `${Number(d)} ${MONTHS[m - 1]}` : "";
+};
 // The reasons that the state tool writes itself say nothing to the owner, so the short form leaves them out.
 const TOOL_WHY = ["", "task set", "program propose", "the user's answer", "the user's own words"];
 /**
  * A program's decision in the prototype's short form (T374): "T9 merged: PR 66", "PG1 proposed: Codex support, pilot T7,
  * gate G7", "G7 answered: approve", "T5 joined PG1". Any other decision keeps its own words, after its task. A proposal
  * writes its own row on the pilot and a move row for each other task that it takes in: its own row is its one line, so
- * those move rows show nothing (null) (R1368-1).
+ * those move rows show nothing (null) (R1368-1). A later round names no tasks, so its move rows show (R1375-3). The
+ * rounds: each proposal row of the program, by round, with its time and gate; an answer names the gate of its own round.
  */
-function decisionLine(program, row, task) {
+function decisionLine(program, row, task, rounds) {
   const why = TOOL_WHY.includes(String(row.why ?? "")) ? "" : String(row.why), text = String(row.decision), because = line => why ? `${line}: ${why}` : line;
   const state = /^state (merged|concluded|abandoned)$/.exec(text), moved = /^program (\S+) → (\S+)$/.exec(text), arrow = text.lastIndexOf(" → ");
-  const proposed = row.why === "program propose" && new RegExp(`^${program.id} proposed (again )?with gate (G[1-9]\\d*)(?:, pilot (\\S+), tasks \\S+, name: (.*)|, round (\\d+))$`).exec(text);
+  const proposed = proposal(program, row), answer = arrow >= 0 && new RegExp(`^Approve program ${program.id}(?: \\(round ([1-9]\\d*)\\))?\\?`).exec(text);
   if (state) return because(`${row.id}${row.id === program.pilot ? " (pilot)" : ""} ${state[1]}${!why && state[1] === "merged" && task.pr ? `: PR ${task.pr}` : ""}`);
-  if (proposed) return proposed[1] ? `${program.id} proposed again: ${program.name}, gate ${proposed[2]}, round ${proposed[5]}` : `${program.id} proposed: ${proposed[4]}, pilot ${proposed[3]}, gate ${proposed[2]}`;
-  if (moved && row.why === "program propose" && moved[2] === program.id) return null;
+  // An older round's row has no name, so its line has none; the program's name is the name of its latest round (R1375-4).
+  if (proposed) return proposed.round > 1 ? `${program.id} proposed again: ${proposed.gate === program.gate ? `${program.name}, ` : ""}gate ${proposed.gate}, round ${proposed.round}` : `${program.id} proposed: ${proposed.name}, pilot ${proposed.pilot}, gate ${proposed.gate}`;
+  if (moved && row.why === "program propose" && moved[2] === program.id && rounds.get(1)?.at === row.at) return null;
   if (moved) return because(`${row.id} ${moved[2] === program.id ? "joined" : "left"} ${program.id}`);
-  if (text.startsWith(`Approve program ${program.id}?`) && arrow >= 0) return `${program.gate} answered: ${text.slice(arrow + 3)}`;
+  if (answer) { const gate = rounds.get(Number(answer[1] ?? 1))?.gate; return `${gate ?? `${program.id}${answer[1] ? ` round ${answer[1]}` : ""}`} answered: ${text.slice(arrow + 3)}`; }
   return because(`${row.id}: ${decisionText(text)}`);
+}
+/** A proposal row of the program, in the forms that the state tool's program propose writes, or null. */
+function proposal(program, row) {
+  const m = row.why === "program propose" && new RegExp(`^${program.id} proposed (?:with gate (G[1-9]\\d*), pilot (\\S+), tasks \\S+, name: (.*)|again with gate (G[1-9]\\d*), round ([1-9]\\d*))$`).exec(String(row.decision));
+  return m ? (m[1] ? { round: 1, gate: m[1], pilot: m[2], name: m[3], at: row.at } : { round: Number(m[5]), gate: m[4], at: row.at }) : null;
 }
 /** A program's page: its goal and progress (or its breakdown while it waits for you), what moves next, its tasks in order, and its latest decisions. */
 function programPage(ctx, program, routed) {
@@ -966,8 +977,11 @@ function programPage(ctx, program, routed) {
   const order = total ? `<section><h3>Tasks in order <span class="n">${total}</span></h3><ol class="layers">${layers}</ol><p class="faint">The order: the pilot first, then each task after the tasks that it waits for, then by number.</p></section>` : `<section><h3>Tasks in order</h3><div class="empty">No task is in it.</div></section>`;
   // The latest decisions of its tasks that name the program, move a task in or out, or end a task.
   const named = new RegExp(`\\b${program.id}\\b`);
-  const log = own.flatMap(task => task.decisions.filter(row => named.test(row.decision) || /^state (merged|concluded|abandoned)$/.test(row.decision) || /^program /.test(row.decision)).map(row => ({ at: row.at, text: decisionLine(program, { ...row, id: task.id }, task) })))
-    .filter(row => row.text !== null).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 8);
+  const rounds = new Map(own.flatMap(task => task.decisions.map(row => proposal(program, row)).filter(Boolean)).map(round => [round.round, round]));
+  // The newest first; a row with no valid time goes last, in its own order (R1378-2).
+  const dated = row => shortDay(row.at) ? 1 : 0;
+  const log = own.flatMap(task => task.decisions.filter(row => named.test(row.decision) || /^state (merged|concluded|abandoned)$/.test(row.decision) || /^program /.test(row.decision)).map(row => ({ at: row.at, text: decisionLine(program, { ...row, id: task.id }, task, rounds) })))
+    .filter(row => row.text !== null).sort((a, b) => dated(b) - dated(a) || (dated(a) ? String(b.at).localeCompare(String(a.at)) : 0)).slice(0, 8);
   // A time that is not a date gets no date and no title (R1371-4).
   const when = at => shortDay(at) ? `<span class="faint" title="${esc(day(at))} UTC">${esc(shortDay(at))}</span> ` : "";
   const decisions = `<section><h3>Latest decisions</h3>${log.length ? `<ol class="log">${log.map(row => `<li>${when(row.at)}${esc(row.text)}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`}</section>`;
