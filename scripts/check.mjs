@@ -11,6 +11,8 @@ import { fingerprint, overrides } from "./sync-pstack.mjs";
 import { withoutPrinciplesTable } from "./principles-table.mjs";
 import { files as graphics } from "./graphics.mjs";
 import { packageBoundaryProblems } from "./package-boundaries.mjs";
+import { docFiles, linkProblems, readmeProblems } from "./readme-checks.mjs";
+import { SHOTS, SHOTS_RECORD, sampleHash } from "./board-shots.mjs";
 
 const problems = [];
 try { problems.push(...packageBoundaryProblems(ROOT)); }
@@ -123,16 +125,24 @@ for (const [f, svg] of drawn) {
   if ((small * PHONE) / width < 7) problems.push(`docs/assets/${f}: a ${small} px text is ${((small * PHONE) / width).toFixed(1)} px on a phone; make it ${Math.ceil((7 * width) / PHONE)} px or more`);
 }
 for (const f of readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg") && !drawn.has(f))) problems.push(`docs/assets/${f}: scripts/graphics.mjs does not draw it; draw it there, or delete it`);
-// The README shows each graphic in the reader's theme, with an alt text, inside a link to the SVG's file page, so that
+// The README (or, for the pstack graphic, CONTRIBUTING.md) shows each graphic in the reader's theme, with an alt text, inside a link to the SVG's file page, so that
 // a tap opens it. Not to the raw SVG ("?raw=true"): GitHub's in-page navigation fails on the redirect to it and shows
 // "Error loading page". The <a> line stands alone: on the same line as <picture>, GitHub makes it a paragraph and drops
 // the dark version.
 const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+const contributing = existsSync(join(ROOT, "CONTRIBUTING.md")) ? readFileSync(join(ROOT, "CONTRIBUTING.md"), "utf8") : "";
 for (const name of new Set([...drawn.keys()].map((f) => f.replace(/-(light|dark)\.svg$/, "")))) {
   const svg = (theme) => `docs/assets/${name}-${theme}\\.svg`;
   const shown = new RegExp(`<a href="${svg("light")}">\\n<picture>\\n\\s*<source media="\\(prefers-color-scheme: dark\\)" srcset="${svg("dark")}">\\n\\s*<img alt="[^"]+" src="${svg("light")}"[^>]*>\\n</picture>\\n</a>\\n`);
-  if (!shown.test(readme)) problems.push(`README.md: show ${name} as <a href="docs/assets/${name}-light.svg">, then <picture> with its dark <source> and an <img> with alt text, each on its own line`);
+  if (!shown.test(readme) && !shown.test(contributing)) problems.push(`README.md: show ${name} as <a href="docs/assets/${name}-light.svg">, then <picture> with its dark <source> and an <img> with alt text, each on its own line`);
 }
+
+// The README is a short front page, and every relative link of the README and the docs resolves (T381).
+problems.push(...readmeProblems(readme), ...linkProblems(ROOT));
+// The board screenshots come from scripts/board-shots.mjs with its sample logbook: both files exist, and the record
+// names the sample that they show. It compares no pixels, so a renderer change does not fail the check by itself.
+for (const f of [...Object.values(SHOTS), SHOTS_RECORD]) if (!existsSync(join(ROOT, f))) problems.push(`${f}: missing; run node scripts/board-shots.mjs (see CONTRIBUTING.md)`);
+if (existsSync(join(ROOT, SHOTS_RECORD)) && JSON.parse(readFileSync(join(ROOT, SHOTS_RECORD), "utf8")).sample !== sampleHash()) problems.push(`${SHOTS_RECORD}: the sample logbook changed after the board screenshots; run node scripts/board-shots.mjs (see CONTRIBUTING.md)`);
 
 // sage's words (writing/dictionary.md): no flagged word in the text that a person reads. The generated skills are left
 // out: their words come from the principles, pstack and the dictionary itself. Code is left out too: its names stay.
@@ -141,8 +151,8 @@ try { dictionary = checkWords(parseSource(readFileSync(join(ROOT, "writing/dicti
 const readByPeople = [
   ...agents.map((f) => `plugins/sage/agents/${f}`),
   ...readdirSync(skillsDir).map((d) => `plugins/sage/skills/${d}/SKILL.md`).filter((f) => existsSync(join(ROOT, f)) && !readFileSync(join(ROOT, f), "utf8").includes(GENERATED)),
-  "README.md",
-  "docs/design/sage-mode.html",
+  // The README and the docs: every page that docFiles reads for links, except the internal Codex probe notes.
+  ...docFiles(ROOT).filter((f) => !f.startsWith("docs/verification/")),
   ...["packages/sage-codex/runtime", "plugins/sage-codex/runtime"].flatMap(root =>
     ["automatic-workflow-design.md", "claude-parity-audit.md"].map(name => `${root}/${name}`)),
   ...readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg")).map((f) => `docs/assets/${f}`),

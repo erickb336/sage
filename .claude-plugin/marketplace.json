@@ -1,6 +1,6 @@
 {
   "name": "sage",
-  "description": "Principles, a writing standard (80% of Simplified Technical English) and skills for coding agents.",
+  "description": "sage mode for Claude Code: a session becomes your chief of staff, and a team of agents designs, builds, reviews and tests your work. Also principles, a writing standard and skills for coding agents. Codex support in progress.",
   "owner": {
     "name": "Erick Benitez-Ramos"
   },
@@ -8,7 +8,7 @@
     {
       "name": "sage",
       "source": "./plugins/sage",
-      "description": "Working principles and a writing standard (80% of Simplified Technical English) as skills."
+      "description": "sage mode: your chief of staff and a team of agents that design, build, review and test, with the rules held in code. Also working principles and a writing standard (80% of Simplified Technical English) as skills."
     }
   ]
 }

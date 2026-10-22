@@ -263,14 +263,16 @@ test("a flagged word in a graphic says that its fix goes in scripts/graphics.mjs
   assert.match(r.stderr, /✗ docs\/assets\/loop-light\.svg:58: "Store" is a flagged word; say logbook \(writing\/dictionary\.md\); fix it in scripts\/graphics\.mjs/);
 });
 
-test("a title on the design page and a Mermaid label there fail the check", () => {
+test("a title on the design page and a Mermaid label there fail the check; the same word in a code block passes", () => {
   const c = copy();
-  const page = c.read("docs/design/sage-mode.html");
-  c.write("docs/design/sage-mode.html", page.replace('S[("Logbook', 'S[("Store').replace("<main>", '<main><p title="the store">x</p>'));
+  const page = c.read("docs/design/sage-mode.md");
+  c.write("docs/design/sage-mode.md", page.replace('S[("Logbook', 'S[("Store').replace("## 1. Where it fits", '<p title="the store">x</p>\n\n## 1. Where it fits').replace("```text\nGOAL", "```text\nstore\nGOAL"));
   const r = c.run("check");
-  const lineOf = (text) => page.slice(0, page.indexOf(text)).split("\n").length;
-  assert.match(r.stderr, new RegExp(`✗ docs/design/sage-mode\\.html:${lineOf('S[("Logbook')}: "Store" is a flagged word`));
-  assert.match(r.stderr, new RegExp(`✗ docs/design/sage-mode\\.html:${lineOf("<main>")}: "store" is a flagged word`));
+  const after = c.read("docs/design/sage-mode.md");
+  const lineOf = (text) => after.slice(0, after.indexOf(text)).split("\n").length;
+  assert.match(r.stderr, new RegExp(`✗ docs/design/sage-mode\\.md:${lineOf('S[("Store')}: "Store" is a flagged word`));
+  assert.match(r.stderr, new RegExp(`✗ docs/design/sage-mode\\.md:${lineOf('<p title="the store">')}: "store" is a flagged word`));
+  assert.doesNotMatch(r.stderr, new RegExp(`sage-mode\\.md:${lineOf("store\nGOAL")}:`), "a word in a text code block passes");
 });
 
 test("a README without its end marker gives one line from build and from check, not a stack trace", () => {

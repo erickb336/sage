@@ -84,6 +84,8 @@ function indentedCode(text) {
 function prose(text, html) {
   const t = text.replace(/^---\n[\s\S]*?\n---(?:\n|$)/, (front) => front.replace(/^(description:)(.*)$/m, (all, key, value) => `${key} ${yamlText(value)}`));
   return (html ? t : indentedCode(t))
+    // A Mermaid diagram in Markdown is text that a person reads, as in a page: its fences go, and its labels' quotes are syntax.
+    .replace(/^([ \t]*)(`{3,}|~{3,})mermaid[ \t]*\n([\s\S]*?)^[ \t]*\2[ \t]*$/gm, (m, indent, fence, body) => `${blank(`${indent}${fence}mermaid`)}\n${body.replace(/"/g, " ")}${blank(fence)}`)
     .replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1/gm, blank) // fenced code blocks
     .replace(/(?<=(?:^|[^\\])(?:\\\\)*)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, blank) // code spans, with one backtick or more, not escaped (\`)
     .replace(/<pre class="mermaid">[\s\S]*?<\/pre>/g, (m) => m.replace(/"/g, " ")) // a Mermaid label's quotes are syntax

@@ -1,0 +1,135 @@
+# Using sage
+
+This page is the user guide to sage mode in Claude Code. It gives the rules behind the README's [quick start](../../README.md#quick-start) and [What to say](../../README.md#what-to-say): the switch phrases, when the chief asks you, how to update, stop and uninstall sage, and what to do when something goes wrong.
+
+In sage's words, the **chief** is the main session in sage mode: your chief of staff. The README's [Concepts](../../README.md#concepts) table gives every word.
+
+## The switch phrases
+
+Sage mode and autopilot switch only on an exact phrase, sent as a message of its own:
+
+| Send this, alone | What happens |
+| --- | --- |
+| `sage mode` or `sage mode on` | The session becomes your chief of staff. Send your request in the next message. |
+| `sage mode off` | A normal session again. Autopilot goes off too. |
+| `autopilot on` | While sage mode is on: verified pull requests merge by themselves after their clean cycles. |
+| `autopilot off` | Verified pull requests wait for you again. |
+| `sage help` | A list of every phrase, and whether sage mode and autopilot are on now. It switches nothing. |
+
+A switch needs the exact phrase as the whole message. The hook removes the spaces and line breaks at the ends, ignores the letter case, and allows one full stop at the end. Nothing else counts: no other words, no question mark, no quote mark or bullet, no look-alike letter and no hidden character. So "sage mode. Fix the crash" switches nothing: send "sage mode" first, then the request. A message that is near a phrase switches nothing, and the hook gives the chief a note with the exact phrase to ask you for. Near means that the message names sage mode or autopilot with an on or off word (such as on, off, stop or pause), or starts with one of them. A mention in a sentence without such a word gets no note, so you can talk about the modes freely. Autopilot turns on only while sage mode is on, and "sage mode off" also turns autopilot off.
+
+Only your own text counts. Claude Code does not tell the hook who wrote a prompt, so the hook reads the frames that Claude Code puts around text that you did not type: an agent's report, a task notification, a message from another session and a system reminder. Text inside them never switches a mode, also when it is exactly a phrase. When Claude Code joins your message to one of them, your text before the first frame and after the last frame is your message. Text between two frames counts as agent text, because an agent can close its frames early and open new ones. A message that you send while Claude works counts as a message of its own when it is a whole system reminder after the last other frame. It can switch only autopilot off, because an agent can write the same shape and the hook cannot tell the two apart: "autopilot off" there works as it does alone, and "sage mode off" there turns autopilot off but keeps sage mode on, because sage mode off drops the hook's guards. Send "sage mode off" again when Claude is idle. An on phrase there switches nothing; send it again when Claude is idle. A message near a phrase gets one of two notes: a firm one when it starts like a phrase, and a softer one when it only mentions sage mode or autopilot in a sentence. The chief tells you only when your message was not a question. A phrase that changes nothing, such as "sage mode off" when sage mode is already off, gives no note. "sage help" also tells you these rules. A queued message before another frame switches nothing. When the hook cannot read the frames, for example a frame that does not close, nothing in that prompt switches. When that prompt, or a queued message before another frame, has a phrase, the chief asks you to send it again as a message alone.
+
+## When the chief asks you
+
+The chief interrupts you at most once per task. It puts all the product questions of the task in that one batch, and each part comes with a recommendation and a default. A product question is one whose answer you would notice: what you see, which data is kept, who can do what. Four exceptions can interrupt you again:
+
+- An irreversible action always gets its own yes.
+- A new fact that changes an earlier answer can bring the question back.
+- A large task's design gets your approval after the PE check.
+- An escalation: the work finds something that the chief cannot decide alone. For example:
+  - The task is held or needs a new plan.
+  - An agent stops at a new product question.
+  - A finding needs a decision.
+  - The arena candidates do not converge.
+
+Engineering choices, such as file formats and names, are the chief's. It decides them and logs them.
+
+You answer in your own words, or pick an option. When you do not answer, the work behind the question waits; the rest goes on.
+
+## The lead and the models
+
+Each task with a build gets one lead. The chief records a lead run and starts the lead in the background with the name `lead-T<n>`. The lead runs the build, the cycles and the repair rounds with at most 3 helpers at once, leaves the task at verifying, and gives the chief one report. The lead and each helper take a slot of the project's agent cap (`max_agents`, 4 by default), so with the default cap one lead runs at a time. The lead records each finding of its helpers. A medium or high one goes to a repair round. A low one is dismissed with a reason, joins a round, or goes to the chief to move to a follow-up task. A tiny task has no review or QA, so its lead runs only the implementer. When the lead cannot clear a finding itself (a low one with no round, a new one from a round's re-check, or a fix that the re-check does not confirm), it ends blocked, and so it does in any state that its file does not name. The chief then reads the logbook and decides. Its only state moves there are repairing to reviewing (a fix that the re-check did not confirm gets the next round, or a replan) and reviewing to verifying (the checks passed). It may move a low or new finding to a follow-up task, and it starts a fresh lead, which goes on from the logbook. The chief keeps what only it does: your questions, the checks verdict after `gh pr checks`, the move to verified, the follow-up tasks, and the merge. So the chat shows a few lines for each pull request, not every report. An investigation has no pull request, so the chief runs it without a lead.
+
+sage uses balanced model defaults. Sonnet handles UX review, tiny implementation and code review, and QA for tiny and small tasks. Opus handles the other configurable roles and sizes. An optional `model.<role>.risk` setting overrides the size choice when the task has a risk flag.
+
+## Waits and programs
+
+> **Warning:** before you use waits or programs, update sage (see [To update sage](#to-update-sage)) and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
+
+**A task can wait for other tasks.** Ask the chief, for example "T8 waits for T7". The task builds and merges only after each task that it waits for is merged or concluded. Its design and PE check can run meanwhile. A wait on an abandoned task is never met, so the chief asks you to remove or change it.
+
+### Programs
+
+A program is one request that sage runs as several tasks for one goal, with one pilot task. You approve its breakdown before any task of it builds.
+
+- The chief frames every task first. Then it asks you one question: the goal, the pilot, and each task with what it waits for.
+- You answer approve, change or drop. To say what to change, answer in your own words.
+- No task of the program builds before you approve.
+- The pilot runs end to end and merges first. Each other task builds and merges only after the pilot.
+- After change, the chief proposes again and tells you what changed. After drop, it takes each task out of the program.
+
+The board shows each program on its Programs tab: see [Programs on the board](board.md#programs-on-the-board). The full rules are in [Rules held in code](../design/rules-in-code.md#waits-and-programs).
+
+## Start every session in sage mode
+
+To make every session in a folder start in sage mode, put this in the folder's `.claude/settings.json`:
+
+```json
+{ "agent": "sage:chief-of-staff" }
+```
+
+## To update sage
+
+Run this command in a terminal:
+
+```sh
+claude plugin update sage@sage
+```
+
+The update applies to every running session at its next event: each hook event runs the newest installed sage. This holds for sessions that started on this version of sage or a later one. A new hook event or matcher needs a restart, and so do the instructions that a session already read (its skills and agent texts). When you are not sure, start a new session.
+
+## Stop a running task
+
+- **To stop one task or agent**, tell the chief in your own words, for example "stop the run on T3". There is no fixed phrase. The chief stops the agent, and the agent's slot frees when it ends.
+- **To stop merges now**, send `autopilot off` alone. Pull requests then wait for you.
+- **To stop the chief's current turn**, press Esc in Claude Code, as in any session.
+- **To leave sage mode**, send `sage mode off` alone. Ask the chief to stop the running agents first, if you want them to stop too.
+
+Nothing reaches main without a pull request, so a stopped task leaves at most a branch and an open pull request. Close or delete them on GitHub when you do not want them.
+
+## Uninstall sage
+
+1. If you set up the board server or the Remote Control server, stop them first:
+   - The board: run the `board --stop` command that the board line in the chat gives you. For the login service, see [Optional login startup](../../packages/sage-board/README.md#optional-login-startup).
+   - Remote Control: send `/sage:remote-control server off`, then `/sage:remote-control off`.
+2. Remove the plugin, in a terminal:
+
+   ```sh
+   claude plugin uninstall sage@sage
+   ```
+
+3. Remove the marketplace:
+
+   ```sh
+   claude plugin marketplace remove sage
+   ```
+
+4. Start a new session. A session that was open still has sage's instructions.
+
+The uninstall does not remove your logbooks or your pages. They are plain files in the folders below. Delete them yourself when you no longer want the record.
+
+## Where sage keeps things
+
+- **The logbook** of each project: `~/.claude/sage/<project>-<hash>/`. It holds the tasks, the agent runs, the findings, the verdicts, your answers and the decision trail. So you can leave and come back from another device, and a new session continues the work.
+- **The hook's state**: `~/.claude/sage/.hooks/`. It keeps the mode, autopilot and the agent slots.
+- **The pages** of each task: `~/sage-worktrees/<project>-<hash>/pages/<task>/`, outside the logbook. Agents save their research pages and designs there. The chief makes the folder and prints its path.
+- **The board's config**: `~/.config/sage-board/`, when you use the board server.
+
+## Troubleshooting
+
+| You see | What to do |
+| --- | --- |
+| Sage mode did not switch on | Send `sage mode` alone, with no other words, then the request in a new message. Send `sage help` to see every phrase and whether sage mode is on. |
+| The chief says that your message was near a phrase | The hook found a phrase with other words, a question mark or a quote mark. Send the exact phrase alone. |
+| A phrase did nothing while Claude worked | A message sent while Claude works can switch only autopilot off. Send the phrase again when Claude is idle. |
+| A new version of sage has no effect | Start a new session (see [To update sage](#to-update-sage)). |
+| A push or a merge is refused | This is the hook. An agent pushes only `git push origin <branch>` on its own branch, and never merges. The refusal names the form that passes. Ask the chief what it needs. |
+| No pull request opens | Check that `gh` is installed and logged in (`gh auth status`), and that the project has a GitHub remote. Without a remote, the work stops at a verified branch. |
+| A task waits and nothing moves | Send `show board`. An open question under "Needs you" holds the task until you answer. A task of a program waits for your approval of the breakdown, then for its pilot. |
+| A pull request does not merge | A merge needs its clean cycles on the exact head commit. A new commit starts again from cycle 1. |
+| The board line says that the server is not running | The line says why: for example a busy port, or an older board server on the port. See the [board service guide](../../packages/sage-board/README.md). |
+| `board --install --login-file` refuses | It needs a `node` command on PATH that does not change at an upgrade. Put a `node` link to your Node in a folder that you own and that is on PATH (for example `~/.local/bin/node`), then run the install again. |
+| The board asks for a password on the phone | Set it once in Terminal on the Mac, with the `board --set-password` command that the board line gives. |
+
+For a question that this page does not answer, send `/sage:sage-help` and your question, for example `/sage:sage-help how do I see the board?`.

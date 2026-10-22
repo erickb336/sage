@@ -121,7 +121,7 @@ A hook gives each principle at the moment that it applies, so the user seldom lo
 | The user wants a normal session again | Send the off phrase of sage mode ([What to say](https://github.com/erickb336/sage/blob/main/README.md#what-to-say)). |
 | A task waits and nothing moves | Show the board: an open question under "Needs you" holds the task until the user answers. A task in the held state waits for the user: for an answer to a product question, or, after 3 repair rounds that did not make it clean, for the user to choose what comes next. The chief asks one question with options, a recommendation and a default; the user picks one or answers in their own words. A task in the replan state waits for a new plan. A task of a program waits for the user's approval of the program's breakdown (a question under "Needs you" on its pilot task), then for its pilot to merge; `status` shows what each task waits for. Link [the chief's instructions](https://github.com/erickb336/sage/blob/main/plugins/sage/agents/chief-of-staff.md), step 4 (an escalation when the tool says held or replan). |
 | A pull request does not merge | A merge needs its clean cycles on the exact head commit. A new commit starts again from cycle 1 ([A task's life](https://github.com/erickb336/sage/blob/main/README.md#a-tasks-life)). Tell the chief what to do with it in your own words. |
-| An agent must stop | There is no fixed phrase: the user tells the chief in their own words. Give this example as the prompt, letter for letter: "stop the run on T3" (the user replaces T3 with the task id). The agent's slot frees as soon as the agent ends, fails or is stopped ([Rules held in code](https://github.com/erickb336/sage/blob/main/README.md#rules-held-in-code)). |
+| An agent must stop | There is no fixed phrase: the user tells the chief in their own words. Give this example as the prompt, letter for letter: "stop the run on T3" (the user replaces T3 with the task id). The agent's slot frees as soon as the agent ends, fails or is stopped ([Rules held in code](https://github.com/erickb336/sage/blob/main/docs/design/rules-in-code.md)). |
 | A new version of sage has no effect | Start a new session ([Quick start](https://github.com/erickb336/sage/blob/main/README.md#quick-start), "To update sage"). |
 
 ## Where sage keeps things
@@ -132,13 +132,13 @@ This section has no read: the README and the chief's instructions name state-too
 - **The hook's state**, in `~/.claude/sage/.hooks/`: the modes, autopilot and the agent slots.
 - **The pages folder** of each task, in `~/sage-worktrees/<project>-<hash>/pages/<task>/`, outside the logbook: research pages, designs and findings pages.
 
-To see the exact folders, the user sends this prompt, in the form of the README's Quick start (replace T3 with the task id):
+To see the exact folders, the user first sends the on phrase of sage mode as a message of its own, as in the README's Quick start, then this prompt (replace T3 with the task id):
 
 ```
-sage mode. Make the pages folder of T3, and print its path and the path of this project's logbook.
+Make the pages folder of T3, and print its path and the path of this project's logbook.
 ```
 
-Link [How it works](https://github.com/erickb336/sage/blob/main/README.md#how-it-works): the paths are below the loop graphic.
+Link [Where sage keeps things](https://github.com/erickb336/sage/blob/main/docs/guide/using-sage.md#where-sage-keeps-things).
 
 ## Close calls
 
