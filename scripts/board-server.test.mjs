@@ -446,7 +446,7 @@ test("T368 C9: /programs and /program/KEY are routes with the same sign-in and C
   assert.equal(page.status, 200); assert.ok(page.body.includes("Sample goal of PG1.") && page.body.includes("<h1 class=\"ptitle\"><span aria-hidden=\"true\">◫</span> Sample program</h1>"), page.body.slice(-3000));
   // The board names the page, and the task page links its program.
   assert.match((await read(f, "/")).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/programs">Programs<\/a><a href="\/agents">Agents \(0\)<\/a>/);
-  assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back plink" href="/program/${programKey("PG1")}" title="Sample program">◫ <span class="cn">Sample program</span></a>`));
+  assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back plink" href="/program/${programKey("PG1")}" title="Sample program">◫ <span class="cn">Sample program</span><span class="pid">PG1</span></a>`));
   const missing = await read(f, `/program/${programKey("PG9")}`);
   assert.equal(missing.status, 404); assert.match(missing.headers["content-type"], /^text\/html/); assert.ok(missing.body.includes("<b>No program PG9 on the board.</b>"));
   assert.equal((await read(f, `/program/${programKey("PG9")}`, { method: "HEAD" })).status, 404);
