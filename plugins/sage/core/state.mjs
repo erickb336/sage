@@ -2103,9 +2103,11 @@ function sage(argv, env = process.env) {
     if (pos.length) {
       const file = join(sageRoot(env), "config.json");
       mkdirSync(sageRoot(env), { recursive: true });
-      const st = lstatSync(file, { throwIfNoEntry: false });
-      fileOrNone(file);
-      swap(file, JSON.stringify({ ...saved(env), ...set }, null, 2) + "\n"); // a key of a newer version stays
+      withLock(sageRoot(env), () => {
+        const st = lstatSync(file, { throwIfNoEntry: false });
+        fileOrNone(file);
+        swap(file, JSON.stringify({ ...saved(env), ...set }, null, 2) + "\n"); // a key of a newer version stays
+      });
     }
     const c = { ...config(env), ...set };
     const models = Object.keys(c).filter((k) => MODEL.test(k));
