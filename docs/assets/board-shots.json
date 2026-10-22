@@ -1,4 +1,7 @@
 {
-  "sample": "65f0ed5306531c0fc7590848b00227498cd1869a132d2755519b61e06a98dec1",
-  "source": "scripts/fixtures/board-programs.mjs"
+  "sample": "8187f99cd80c0ac212a5db631a390756dac99218274329881fdd6b10dfb8fe73",
+  "sources": [
+    "scripts/fixtures/board-programs.mjs",
+    "scripts/fixtures/board-walkthrough.mjs"
+  ]
 }

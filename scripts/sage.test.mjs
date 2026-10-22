@@ -2850,7 +2850,7 @@ test("R1130-1, R1140-2, R1140-3, R1157-2, R1157-3, T381: the rules page and the 
   for (const row of [...rule, ...change]) assert.ok(row.includes(pair), "each place teaches the pair");
   const readme = read("README.md");
   assert.ok(!readme.includes("no build of its own"), "no option to record states that did not happen");
-  assert.ok(readme.includes("**To update sage**") && read("docs/guide/using-sage.md").includes("## To update sage"), "the section that the line names");
+  assert.ok(read("docs/guide/using-sage.md").includes("\n## To update sage\n"), "the section that the line names");
   assert.match(readme, /> \*\*Warning:\*\* before you use waits or programs, update sage and restart every session that was already open\./, "the upgrade warning stays on the front page");
 });
 

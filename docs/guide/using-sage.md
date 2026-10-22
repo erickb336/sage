@@ -2,7 +2,7 @@
 
 This page is the user guide to sage mode in Claude Code. It gives the rules behind the README's [quick start](../../README.md#quick-start) and [What to say](../../README.md#what-to-say): the switch phrases, when the chief asks you, how to update, stop and uninstall sage, and what to do when something goes wrong.
 
-In sage's words, the **chief** is the main session in sage mode: your chief of staff. The README's [Concepts](../../README.md#concepts) table gives every word.
+In sage's words, the **chief** is the main session in sage mode: your chief of staff. The [Concepts](concepts.md) page gives every word.
 
 ## The switch phrases
 
@@ -15,6 +15,13 @@ Sage mode and autopilot switch only on an exact phrase, sent as a message of its
 | `autopilot on` | While sage mode is on: verified pull requests merge by themselves after their clean cycles. |
 | `autopilot off` | Verified pull requests wait for you again. |
 | `sage help` | A list of every phrase, and whether sage mode and autopilot are on now. It switches nothing. |
+
+<a href="../assets/tip-start-light.svg">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/tip-start-dark.svg">
+  <img alt="The toad sage's tip: send “sage mode” alone to switch it on, and “sage mode off” alone to switch it off. With any other words, it does nothing." src="../assets/tip-start-light.svg" width="100%">
+</picture>
+</a>
 
 A switch needs the exact phrase as the whole message. The hook removes the spaces and line breaks at the ends, ignores the letter case, and allows one full stop at the end. Nothing else counts: no other words, no question mark, no quote mark or bullet, no look-alike letter and no hidden character. So "sage mode. Fix the crash" switches nothing: send "sage mode" first, then the request. A message that is near a phrase switches nothing, and the hook gives the chief a note with the exact phrase to ask you for. Near means that the message names sage mode or autopilot with an on or off word (such as on, off, stop or pause), or starts with one of them. A mention in a sentence without such a word gets no note, so you can talk about the modes freely. Autopilot turns on only while sage mode is on, and "sage mode off" also turns autopilot off.
 

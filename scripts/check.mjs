@@ -1,6 +1,6 @@
 // Checks the sources and that the generated files match them. Fails with a list of every problem.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { GENERATED, ROOT, outputs, filesUnder, parseSource } from "./build.mjs";
 import { checkWords, flaggedWords, yamlText } from "./dictionary.mjs";
 import { MOMENTS } from "../plugins/sage/hooks/principles-hook.mjs";
@@ -9,6 +9,7 @@ import { TASK_KINDS } from "../packages/sage-core/logbook-fields.mjs";
 import { BRIEF_FIELDS, FINDING_FORM, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
 import { fingerprint, overrides } from "./sync-pstack.mjs";
 import { withoutPrinciplesTable } from "./principles-table.mjs";
+import { PRINCIPLES_PAGE } from "./dictionary.mjs";
 import { files as graphics } from "./graphics.mjs";
 import { packageBoundaryProblems } from "./package-boundaries.mjs";
 import { docFiles, linkProblems, readmeProblems } from "./readme-checks.mjs";
@@ -125,16 +126,18 @@ for (const [f, svg] of drawn) {
   if ((small * PHONE) / width < 7) problems.push(`docs/assets/${f}: a ${small} px text is ${((small * PHONE) / width).toFixed(1)} px on a phone; make it ${Math.ceil((7 * width) / PHONE)} px or more`);
 }
 for (const f of readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg") && !drawn.has(f))) problems.push(`docs/assets/${f}: scripts/graphics.mjs does not draw it; draw it there, or delete it`);
-// The README (or, for the pstack graphic, CONTRIBUTING.md) shows each graphic in the reader's theme, with an alt text, inside a link to the SVG's file page, so that
-// a tap opens it. Not to the raw SVG ("?raw=true"): GitHub's in-page navigation fails on the redirect to it and shows
-// "Error loading page". The <a> line stands alone: on the same line as <picture>, GitHub makes it a paragraph and drops
-// the dark version.
+// A page of the README or the docs shows each graphic in the reader's theme, with an alt text, inside a link to the SVG's
+// file page, so that a tap opens it. Not to the raw SVG ("?raw=true"): GitHub's in-page navigation fails on the redirect
+// to it and shows "Error loading page". The <a> line stands alone: on the same line as <picture>, GitHub makes it a
+// paragraph and drops the dark version.
 const readme = readFileSync(join(ROOT, "README.md"), "utf8");
-const contributing = existsSync(join(ROOT, "CONTRIBUTING.md")) ? readFileSync(join(ROOT, "CONTRIBUTING.md"), "utf8") : "";
+const pages = docFiles(ROOT).map((f) => [relative(dirname(join(ROOT, f)), join(ROOT, "docs/assets")).replace(/\\/g, "/"), readFileSync(join(ROOT, f), "utf8")]);
 for (const name of new Set([...drawn.keys()].map((f) => f.replace(/-(light|dark)\.svg$/, "")))) {
-  const svg = (theme) => `docs/assets/${name}-${theme}\\.svg`;
-  const shown = new RegExp(`<a href="${svg("light")}">\\n<picture>\\n\\s*<source media="\\(prefers-color-scheme: dark\\)" srcset="${svg("dark")}">\\n\\s*<img alt="[^"]+" src="${svg("light")}"[^>]*>\\n</picture>\\n</a>\\n`);
-  if (!shown.test(readme) && !shown.test(contributing)) problems.push(`README.md: show ${name} as <a href="docs/assets/${name}-light.svg">, then <picture> with its dark <source> and an <img> with alt text, each on its own line`);
+  const shown = ([assets, text]) => {
+    const svg = (theme) => `${assets.replace(/[.]/g, "\\.")}/${name}-${theme}\\.svg`;
+    return new RegExp(`<a href="${svg("light")}">\\n<picture>\\n\\s*<source media="\\(prefers-color-scheme: dark\\)" srcset="${svg("dark")}">\\n\\s*<img alt="[^"]+" src="${svg("light")}"[^>]*>\\n</picture>\\n</a>\\n`).test(text);
+  };
+  if (!pages.some(shown)) problems.push(`docs/assets/${name}-light.svg: no page shows it; show it in the README or a docs page as <a href="<path>/${name}-light.svg">, then <picture> with its dark <source> and an <img> with alt text, each on its own line`);
 }
 
 // The README is a short front page, and every relative link of the README and the docs resolves (T381).
@@ -159,8 +162,8 @@ const readByPeople = [
 ];
 for (const f of dictionary ? readByPeople : []) {
   const text = readFileSync(join(ROOT, f), "utf8");
-  // The README's principles table is generated from the principles, like the generated skills that this check leaves out.
-  const found = flaggedWords(f === "README.md" ? withoutPrinciplesTable(text) : text, dictionary, { html: !f.endsWith(".md") });
+  // The principles table is generated from the principles, like the generated skills that this check leaves out.
+  const found = flaggedWords(f === PRINCIPLES_PAGE ? withoutPrinciplesTable(text) : text, dictionary, { html: !f.endsWith(".md") });
   // A graphic's text comes from scripts/graphics.mjs, and nobody edits an SVG by hand.
   for (const h of found) problems.push(`${f}:${h.line}: "${h.word}" is a flagged word${h.use.length ? `; say ${h.use.join(" or ")}` : ""} (writing/dictionary.md)${f.startsWith("docs/assets/") ? "; fix it in scripts/graphics.mjs, then run npm run graphics" : ""}`);
 }

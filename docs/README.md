@@ -5,10 +5,14 @@ This is the index of sage's documentation, by reader. Start with the [README](..
 ## If you are new
 
 - [README](../README.md): what sage is, its status, the requirements and the quick start.
+- [Learn sage in 5 minutes](guide/learn-sage.md): one small task from your first message to a merged pull request.
+- [How sage works](guide/how-it-works.md): the loops, the team, the routes and a task's life.
+- [FAQ and credits](guide/faq.md): cost, safety, which projects fit, and the work that sage comes from.
 - [Dry run 1](runs/dry-run-1.md): the first recorded run of sage mode, with its cost (4 Oct 2026, before the fixes that came from it).
 
 ## If you use sage
 
+- [Concepts](guide/concepts.md) and [Principles](guide/principles.md): sage's words, and the rules that every session gets.
 - [Using sage](guide/using-sage.md): the switch phrases, when the chief asks you, how to update, stop and uninstall sage, and troubleshooting.
 - [The board](guide/board.md): the columns, the cards, Needs you, the Agents page and programs.
 - [Remote Control](guide/remote-control.md): follow and start sessions from your phone.

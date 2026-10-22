@@ -4,6 +4,16 @@ This page tells you how to change sage: which files are sources, how to build an
 
 To report a security problem, do not open an issue: see [SECURITY.md](SECURITY.md).
 
+## The folders
+
+| Path | What it is |
+| --- | --- |
+| `packages/` | The sources: shared core, the Claude Code and Codex parts, and the board server. |
+| `plugins/sage/`, `plugins/sage-codex/` | The built plugins for Claude Code and Codex. Never edit them by hand. |
+| `principles/`, `upstream/pstack/`, `writing/`, `preferences/` | The principles (sage's and pstack's), the writing standard, the dictionary and the author's working preferences. |
+| `docs/` | The guides, the design pages, the dry run report and the README's graphics: see the [docs index](docs/README.md). |
+| `scripts/` | The build, the checks, the tests, and the scripts that draw the graphics and take the board screenshots. |
+
 ## Sources and build output
 
 Edit only the sources. The build makes everything else, and `npm run check` fails when a built file differs from its sources.
@@ -13,7 +23,7 @@ Edit only the sources. The build makes everything else, and `npm run check` fail
 | `principles/`, `writing/`, `preferences/` | `plugins/sage/` and `plugins/sage-codex/` (the built plugins) |
 | `packages/` (shared code, and each provider's hooks, agents and skills) | `instructions/core.md` (built from `preferences/` and `writing/`) |
 | `scripts/graphics.mjs` (draws the README's graphics) | `docs/assets/*.svg` (drawn by the script) |
-| `scripts/board-shots.mjs` (takes the board screenshots) | `docs/assets/board-*.png` (taken by the script) |
+| `scripts/board-shots.mjs` (takes the board screenshots) | `docs/assets/board-*.png` and `learn-*.png` (taken by the script) |
 | | `upstream/pstack/` (`npm run sync` owns it) |
 
 To override a pstack principle, add `principles/<name>.md` with `source: pstack principle-<name>` and its `upstream:` fingerprint.
@@ -53,13 +63,14 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
 
 ## The README and the docs
 
-- The README is a short front page. `npm run check` holds it to a line budget, at most 5 What's new items, a first screen that answers what sage is, and relative links that resolve. A longer text goes into a page under `docs/`, listed in the [docs index](docs/README.md).
+- The README is a short front page. `npm run check` holds it to 150 lines, at most 5 What's new items, a first screen that answers what sage is, and relative links that resolve. A longer text goes into a page under `docs/`, listed in the [docs index](docs/README.md).
 - Each change for users goes into [CHANGELOG.md](CHANGELOG.md), newest first. The README's What's new keeps only the last five.
+- The word table of [Concepts](docs/guide/concepts.md) and the table of [Principles](docs/guide/principles.md) come from the build: edit `writing/dictionary.md` or the principles, then run `npm run build`.
 - Write at about 80% of Simplified Technical English ([writing/ste-80.md](writing/ste-80.md)), with sage's words from [writing/dictionary.md](writing/dictionary.md). `npm run check` fails on a flagged word.
 
 ## The board screenshots
 
-The README's board screenshots come from `scripts/board-shots.mjs`. It renders the built board with a fixed sample logbook (made-up data, from `scripts/fixtures/board-programs.mjs`) in Playwright's Chromium, in light and dark. Playwright is not a dependency of sage, so give it through `NODE_PATH`:
+The board screenshots of the README and of [Learn sage in 5 minutes](docs/guide/learn-sage.md) come from `scripts/board-shots.mjs`. It renders the built board with fixed sample logbooks (made-up data, from `scripts/fixtures/board-programs.mjs` and `scripts/fixtures/board-walkthrough.mjs`) in Playwright's Chromium. Each shot carries a SAMPLE DATA label. Playwright is not a dependency of sage, so give it through `NODE_PATH`:
 
 ```sh
 NODE_PATH=<folder with playwright in node_modules> node scripts/board-shots.mjs

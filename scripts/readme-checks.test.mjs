@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./build.mjs";
-import { countedLines, linkProblems, readmeProblems, slug } from "./readme-checks.mjs";
+import { linkProblems, readmeProblems, slug } from "./readme-checks.mjs";
 
 const NEWS = (n) => ["## What's new", "", ...Array.from({ length: n }, (_, i) => `- **Change ${i + 1}.** One line.`), "", "All changes are in [CHANGELOG.md](CHANGELOG.md).", ""];
 const README = (lines = {}) => [
@@ -32,13 +32,11 @@ test("a sixth What's new item, a missing changelog link and a first screen witho
   assert.deepEqual(readmeProblems(late), ["README.md: the first screen (the first 10 lines with text) needs a link to #status", "README.md: the first screen (the first 10 lines with text) needs a link to #quick-start"]);
 });
 
-test("the line budget counts lines with text, and not the two tables that the build writes", () => {
-  const table = (start, end) => [start, "", ...Array.from({ length: 300 }, (_, i) => `| row ${i} | text |`), "", end];
-  const generated = README({ more: [...table("<!-- The word table comes from writing/dictionary.md: edit it there, then run npm run build. -->", "<!-- The end of the word table. -->"), ...table("<!-- The principles table comes from principles/ and upstream/pstack/: edit them there, then run npm run build. -->", "<!-- The end of the principles table. -->")] });
-  assert.equal(countedLines(generated), countedLines(README()), "the generated rows and their markers do not count");
-  assert.equal(countedLines("a\n\n  \nb\n"), 2, "blank lines do not count");
-  const long = README({ more: Array.from({ length: 250 }, (_, i) => `Line ${i}.`) });
-  assert.match(readmeProblems(long).join("\n"), /^README\.md: \d+ lines of text; keep it at 260 or fewer/);
+test("the line budget counts every line of the raw file, blank ones too", () => {
+  const at = (n) => README({ more: Array.from({ length: n - README().split("\n").length + 1 }, () => "") });
+  assert.equal(at(150).split("\n").length - 1, 150);
+  assert.deepEqual(readmeProblems(at(150)), [], "150 lines pass");
+  assert.deepEqual(readmeProblems(at(151)), ["README.md: 151 lines; keep it at 150 or fewer. Move reference material to a page under docs/"]);
 });
 
 test("GitHub's anchors: lower case, no punctuation, a hyphen for each space", () => {
@@ -49,7 +47,7 @@ test("GitHub's anchors: lower case, no punctuation, a hyphen for each space", ()
   assert.equal(slug("The `sage` skill"), "the-sage-skill");
 });
 
-test("a relative link to a missing file or a missing anchor is a problem; a web link, code and a present anchor are not", (t) => {
+test("a relative link, or a link to the main branch on GitHub, to a missing file or a missing anchor is a problem; another web link, code and a present anchor are not", (t) => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-links-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, "docs"));
@@ -61,6 +59,7 @@ test("a relative link to a missing file or a missing anchor is a problem; a web 
     "# Top",
     "",
     "[no file](docs/missing.md) [no anchor](docs/guide.md#nothing) <a href=\"#nowhere\">x</a> [out](../outside.md)",
+    "[main](https://github.com/erickb336/sage/blob/main/docs/guide.md#step) [main, no anchor](https://github.com/erickb336/sage/blob/main/docs/guide.md#gone) [main, no file](https://github.com/erickb336/sage/blob/main/gone.md)",
     "",
     "```",
     "[fenced](missing.md)",
@@ -69,8 +68,10 @@ test("a relative link to a missing file or a missing anchor is a problem; a web 
   assert.deepEqual(linkProblems(dir, ["README.md"]), [
     "README.md:6: docs/missing.md does not exist",
     "README.md:6: docs/guide.md#nothing names #nothing, which docs/guide.md does not have",
-    "README.md:6: ../outside.md leaves the repository",
     "README.md:6: #nowhere names #nowhere, which README.md does not have",
+    "README.md:6: ../outside.md leaves the repository",
+    "README.md:7: https://github.com/erickb336/sage/blob/main/docs/guide.md#gone names #gone, which docs/guide.md does not have",
+    "README.md:7: https://github.com/erickb336/sage/blob/main/gone.md does not exist",
   ]);
 });
 
@@ -80,7 +81,7 @@ test("npm run check fails on a README with 6 What's new items, a missing screens
   cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   const readme = readFileSync(join(dir, "README.md"), "utf8");
-  writeFileSync(join(dir, "README.md"), readme.replace("\n\nAll changes, with their dates,", "\n- **A sixth change.** One line.\n\nAll changes, with their dates,"));
+  writeFileSync(join(dir, "README.md"), readme.replace("\n\nAll changes: [CHANGELOG.md]", "\n- **A sixth change.** One line.\n- **A fifth.** One line.\n\nAll changes: [CHANGELOG.md]"));
   rmSync(join(dir, "docs/assets/board-dark.png"));
   writeFileSync(join(dir, "docs/assets/board-shots.json"), JSON.stringify({ sample: "0".repeat(64) }));
   const r = spawnSync("node", [join(dir, "scripts/check.mjs")], { encoding: "utf8" });

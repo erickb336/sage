@@ -566,63 +566,6 @@ function loop(t, id) {
 /** A world panel in the reader's theme, with the world's defs and arrowheads. */
 const panel = (t, id, W, H, body, label) => worldSvg(W, H, id, [worldDefs(id), markers(id, t)].join("\n"), body, label, { rx: 24, bg: t.bg, border: t.border });
 
-/** Learn sage in 5 minutes: one session in a chat card, and five numbered notes. Sample data. */
-function walkthrough(t, id) {
-  const W = 1100, px = 36, py = 36, pw = 500, nx = 600, size = SMALL, lh = 1.4, LH = size * lh;
-  let by = py + 84;
-  const b = [
-    ["you", 1, ["sage mode"]],
-    ["you", 0, ["Ramen Finder: add a", "favourites list, and fix this", "week's crash."]],
-    ["chief", 2, ["T1 favourites: large · data", "T2 crash: small · input", "T2 starts now."]],
-    ["chief", 3, ["One question for T1: sync favourites", "across devices? Recommended and", "default if no answer: not now."]],
-    ["you", 0, ["not now"]],
-    ["chief", 4, ["T2: build → code review →", "security review → QA.", "Repair round 1: an empty search", "still crashed. Fixed in 4787c81."]],
-    ["chief", 5, ["T2 verified. QA ran the app: PASS.", "Not checked: the tablet layout.", "→ PR #41 is ready for you."]],
-  ].map(([side, n, lines]) => {
-    const w = Math.max(...lines.map((l) => tw(l, size, side === "you"))) + 36, h = f1(22 + lines.length * LH);
-    const bubble = { side, n, lines, x: side === "you" ? px + pw - 22 - w : px + 22, y: f1(by), w, h, mid: f1(by + h / 2) };
-    by += h + 18;
-    return bubble;
-  });
-  const ph = f1(by - py + 6), H = Math.round(py + ph + 36);
-  const notes = [
-    [1, "Switch it on", ["Send “sage mode” as a message", "of its own, then say what you want."]],
-    [2, "The chief frames each task", ["A size, risk flags and a route.", "A flag such as input adds the", "security review to a code change."]],
-    [3, "One batch of questions, at most", ["One interruption per task. Each", "product question has a", "recommendation and a default."]],
-    [4, "The team works", ["Fresh agents build, review and test.", "Findings go back for a repair."]],
-    [5, "You get results, not code", ["Evidence, what was not checked,", "and a pull request to merge."]],
-  ];
-  let end = 150;
-  const placed = notes.map(([n, title, lines]) => {
-    const target = b.find((x) => x.n === n), y = f1(Math.max(target.mid - 14, end + 30));
-    end = y + 40 + (lines.length - 1) * LH;
-    return { n, title, lines, y, target };
-  });
-  const body = [
-    backdrop(t, id, W, H, { moon: [nx + 44, 84, 130], seeds: [14, 63, 9], far: [H - 140, 60, 200, 70, 140], near: [H, 90, 240, 80, 170], pagodas: [[1040, H - 20, 0.8, 1.6]], mist: [140, 280, H - 170], mistK: 0.6 }),
-    // The chat card.
-    `<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="24" fill="${t.edge}" opacity="${t.glowOp}" filter="url(#${id}-glow)"/>`,
-    rect(px, py, pw, ph, { rx: 24, fill: t.tile, stroke: t.edge, sw: 1.5 }),
-    `<circle cx="${px + 30}" cy="${py + 34}" r="7" fill="${EMBER.orange}" filter="url(#${id}-glow)"/>`,
-    text(px + 48, py + 42, "sage mode · ~/workspace", { size, fill: t.muted, mono: true }),
-    path(`M${px} ${py + 62} L ${px + pw} ${py + 62}`, { stroke: t.line, sw: 1 }),
-    ...b.map(({ side, lines, x, y, w, h }) => (side === "you" ? `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="16" fill="url(#${id}-chief)"/>` : rect(x, y, w, h, { rx: 16, fill: t.chip, stroke: t.line, sw: 1 })) +
-      text(x + 18, f1(y + 33), lines, { size, lh, fill: side === "you" ? "#160902" : t.ink, weight: side === "you" ? 600 : 400 })),
-    // The notes: the toad sage's emblem on top, then five numbered steps, each tied to its message.
-    emblem(nx + 44, 84, 44, id),
-    text(nx + 104, 78, "One session, step by step", { size: 24, weight: 800, fill: t.ink }),
-    text(nx + 104, 110, "an illustration with sample data", { size, fill: t.muted }),
-    ...placed.map(({ n, title, lines, y, target }) => [
-      path(`M${nx - 2} ${y - 8} C ${nx - 30} ${y - 8}, ${target.x + target.w + 36} ${target.mid}, ${target.x + target.w + 8} ${target.mid}`, { stroke: t.edge, sw: 1.6, dash: "3 5", opacity: 0.8 }),
-      circle(nx + 18, y - 8, 18, { fill: "#0A0604", stroke: EMBER.gold, sw: 2 }),
-      text(nx + 18, f1(y - 0.5), String(n), { size, weight: 800, fill: EMBER.gold, anchor: "middle" }),
-      text(nx + 48, y, title, { size: 24, weight: 800, fill: t.ink }),
-      text(nx + 48, y + 32, lines, { size, fill: t.muted, lh }),
-    ].join("")),
-  ].join("\n");
-  return panel(t, id, W, H, body, "Learn sage in 5 minutes: an illustrative sage mode session about a made-up app, Ramen Finder, with numbered notes. You: sage mode. Then you: Ramen Finder: add a favourites list, and fix this week's crash. The chief frames T1, favourites, large, with the data flag, and T2, the crash, small, with the input flag, and starts T2. It asks one question for T1: sync favourites across devices? Recommended, and the default if you don't answer: not now. You answer: not now. T2 goes through build, code review, security review and QA; repair round 1 fixes an empty search that still crashed. T2 is verified: QA ran the app and passed. Not checked: the tablet layout. Pull request 41 is ready for you. The notes: 1, switch it on: send sage mode as a message of its own. 2, the chief frames each task. 3, one batch of product questions at most, in one interruption per task. 4, the team works. 5, you get results, not code.");
-}
-
 /** Routes: the least route for each size of task. */
 function routes(t, id) {
   const W = 1100, size = SMALL, ph = 48, gap = 26, x0 = 272;
@@ -767,7 +710,7 @@ const tip = (lines, label) => (t, id) => {
 };
 
 const GRAPHICS = {
-  hero, loop, walkthrough, routes, lifecycle, arena, pstack,
+  hero, loop, routes, lifecycle, arena, pstack,
   "tip-start": tip(["Send “sage mode” alone to switch it on,", "and “sage mode off” alone to switch it off.", "With any other words, it does nothing."], "The toad sage's tip: send sage mode alone to switch it on, and sage mode off alone to switch it off. With any other words, it does nothing."),
   "tip-try": tip(["Try it on one small, real bug, from your phone.", "Then look at the result, not the code."], "The toad sage's tip: try it on one small, real bug from your phone, then look at the result, not the code."),
   "tip-seal": tip(["Seal the lesson: give a mistake that comes back twice", "a lasting fix. A test or a check in code first; a principle", "or a standing order only when code cannot hold it.", "That's how the dojo gets stronger."], "The toad sage's tip: seal the lesson. Give a mistake that comes back twice a lasting fix: a test or a check in code first; a principle or a standing order only when code cannot hold it. That is how the dojo gets stronger."),

@@ -1,35 +1,26 @@
-// The README's limits and the docs' relative links, for `npm run check` (T381). The README is a short front page: a
-// line budget, at most 5 What's new items, and a first screen that says what sage is, its status and where to start.
-// Every relative link in the README and the docs resolves to a file, and every #anchor to a heading or an id. A local
-// check, not a link checker such as lychee: it needs no download and no network, and web links stay unchecked.
+// The README's limits and the docs' links, for `npm run check` (T381). The README is a short front page: a line
+// budget, at most 5 What's new items, and a first screen that says what sage is, its status and where to start.
+// Every relative link in the README and the docs resolves to a file, and every #anchor to a heading or an id; so does
+// each link to this repository's main branch on GitHub. A local check, not a link checker such as lychee: it needs no
+// download and no network, and other web links stay unchecked.
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { TABLE_END, TABLE_START } from "./dictionary.mjs";
 
-/** The README's budget. Lines count when they hold text, outside the two tables that the build writes. */
-export const MAX_LINES = 260;
-export const MAX_BYTES = 40_000;
+/** The README's budget: every line of the raw file counts, also a blank one. */
+export const MAX_LINES = 150;
+export const MAX_BYTES = 15_000;
 export const MAX_NEWS = 5;
-const PRINCIPLES = ["<!-- The principles table comes from", "<!-- The end of the principles table. -->"];
+/** A link to a file on this repository's main branch, which the check reads as a path from the root. */
+const GITHUB = /^https:\/\/github\.com\/erickb336\/sage\/blob\/main\//;
 
 /** The first screen, as the README guide defines it: the first 10 lines that are not blank and not a lone tag. */
 export const firstScreen = (text) => text.split("\n").filter((l) => !/^\s*(<\/?(a|picture|p)( [^>]*)?>|<source [^>]*>)?\s*$/.test(l)).slice(0, 10);
 
-/** The lines that count for the budget: not blank, and outside the generated tables. */
-export function countedLines(text) {
-  let generated = false;
-  return text.split("\n").filter((l) => {
-    if (l.startsWith(TABLE_START) || l.startsWith(PRINCIPLES[0])) generated = true;
-    if (l.startsWith(TABLE_END) || l.startsWith(PRINCIPLES[1])) { generated = false; return false; }
-    return !generated && l.trim() !== "";
-  }).length;
-}
-
 /** The problems of a README's text: its budget, its What's new list and its first screen. */
 export function readmeProblems(text) {
   const problems = [];
-  const lines = countedLines(text), bytes = Buffer.byteLength(text);
-  if (lines > MAX_LINES) problems.push(`README.md: ${lines} lines of text; keep it at ${MAX_LINES} or fewer (the generated tables do not count). Move reference material to a page under docs/`);
+  const lines = text.split("\n").length - (text.endsWith("\n") ? 1 : 0), bytes = Buffer.byteLength(text);
+  if (lines > MAX_LINES) problems.push(`README.md: ${lines} lines; keep it at ${MAX_LINES} or fewer. Move reference material to a page under docs/`);
   if (bytes > MAX_BYTES) problems.push(`README.md: ${bytes} bytes; keep it at ${MAX_BYTES} or fewer. Move reference material to a page under docs/`);
   const news = /^## What's new\n([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(text)?.[1];
   if (news === undefined) problems.push("README.md: no \"## What's new\" section");
@@ -69,15 +60,17 @@ const withoutCode = (text) => text.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?
 export function links(text) {
   const t = withoutCode(text), out = [];
   const line = (i) => t.slice(0, i).split("\n").length;
-  for (const m of t.matchAll(/\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g)) out.push({ target: m[1], line: line(m.index) });
-  for (const m of t.matchAll(/\s(?:href|src|srcset)="([^"]+)"/g)) out.push({ target: m[1], line: line(m.index) });
-  return out;
+  for (const m of t.matchAll(/\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g)) out.push({ target: m[1], at: m.index });
+  for (const m of t.matchAll(/\s(?:href|src|srcset)="([^"]+)"/g)) out.push({ target: m[1], at: m.index });
+  // In the order of the text, so that the problems come in the order in which a reader meets them.
+  return out.sort((a, b) => a.at - b.at).map(({ target, at }) => ({ target, line: line(at) }));
 }
 
-/** The Markdown files whose links the check reads: the root's own pages, the docs and the board's guide. */
+/** The Markdown files whose links the check reads: the root's own pages, the docs, the board's guide, and the help
+ * skill, which links the docs on GitHub. */
 export function docFiles(root) {
   const under = (dir) => readdirSync(join(root, dir), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? under(join(dir, e.name)) : e.name.endsWith(".md") ? [join(dir, e.name)] : []));
-  return [...["README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md"].filter((f) => existsSync(join(root, f))), ...under("docs"), "packages/sage-board/README.md"].filter((f) => existsSync(join(root, f)));
+  return [...["README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md"].filter((f) => existsSync(join(root, f))), ...under("docs"), "packages/sage-board/README.md", "packages/sage-claude/skills/sage-help/SKILL.md"].filter((f) => existsSync(join(root, f)));
 }
 
 /** Each relative link that does not resolve: a missing file, or an #anchor that the target page does not have. */
@@ -86,13 +79,15 @@ export function linkProblems(root, files = docFiles(root)) {
   const anchorsOf = (file) => cache.get(file) ?? cache.set(file, anchors(readFileSync(file, "utf8"))).get(file);
   for (const file of files) {
     const text = readFileSync(join(root, file), "utf8");
-    for (const { target, line } of links(text)) {
+    for (const link of links(text)) {
+      const { line } = link, onMain = GITHUB.test(link.target);
+      const target = onMain ? link.target.replace(GITHUB, "/") : link.target;
       if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) continue; // a web link, mailto: and the like
       const [path, anchor] = target.split("#");
-      const to = path ? join(root, dirname(file), decodeURIComponent(path)) : join(root, file);
+      const to = path ? join(root, path.startsWith("/") ? "" : dirname(file), decodeURIComponent(path)) : join(root, file);
       if (!relative(root, to) || relative(root, to).startsWith("..")) { problems.push(`${file}:${line}: ${target} leaves the repository`); continue; }
-      if (!existsSync(to)) { problems.push(`${file}:${line}: ${target} does not exist`); continue; }
-      if (anchor && to.endsWith(".md") && statSync(to).isFile() && !anchorsOf(to).has(anchor)) problems.push(`${file}:${line}: ${target} names #${anchor}, which ${relative(root, to)} does not have`);
+      if (!existsSync(to)) { problems.push(`${file}:${line}: ${link.target} does not exist`); continue; }
+      if (anchor && to.endsWith(".md") && statSync(to).isFile() && !anchorsOf(to).has(anchor)) problems.push(`${file}:${line}: ${link.target} names #${anchor}, which ${relative(root, to)} does not have`);
     }
   }
   return problems;
