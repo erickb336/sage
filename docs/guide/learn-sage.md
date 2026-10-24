@@ -41,6 +41,8 @@ What the app shows for an empty search is a product choice, so the chief asks yo
 
 <img alt="The board with SAMPLE DATA: T1 in Backlog, with the step line Plan, Build, Review 1 of 1 and Merge, and a Needs you box that asks what an empty search shows, with the recommendation: a hint to type a name." src="../assets/learn-asks.png" width="400">
 
+The step line on the card shows where T1 is: Plan, then the steps of its route, then Merge. In Plan, the chief frames the task and writes the brief for the agents. The `!` mark says that Plan needs you, because gate G1 is open.
+
 `show board` prints the question in the chat too:
 
 > claude/ramen-finder-a1b2c3/G1 · An empty search: what does Ramen Finder show?\
@@ -55,7 +57,7 @@ The chief starts one lead for the task's pull request: an agent that runs the bu
 
 <img alt="The board with SAMPLE DATA: T1 in Building, with the step line Plan done and Build running, and the lead and the implementer at work." src="../assets/learn-building.png" width="400">
 
-You can leave. The logbook keeps the state, so a later session continues the work. You can also follow and steer it from your phone with [Remote Control](remote-control.md).
+You can leave. The logbook keeps the state, so a later session on the same Mac continues the work. You can also follow and steer it from your phone with [Remote Control](remote-control.md).
 
 ### 5. Reviews and QA check it
 
@@ -63,7 +65,7 @@ The implementer opens pull request #41. Fresh agents review it: a code reviewer,
 
 One full set of fresh reviews and QA on one commit is a cycle, and a new commit starts again from cycle 1. T1 needs 1 clean cycle, so its step line shows "Review 1 of 1".
 
-A small task needs 1 clean cycle; a large task, or a task with a risk flag, needs 2 before autopilot merges it. A tiny task has no review and no QA, so it has no cycle: it is clean when its checks pass.
+A small task needs 1 clean cycle; a large task, or a task with a risk flag, needs 2 before autopilot merges it. A tiny task without a risk flag has no review and no QA, so it has no cycle: it is clean when its checks pass.
 
 ### 6. The result comes to you
 
@@ -77,7 +79,7 @@ You look at the result, not the code. Autopilot is off by default, so you merge.
 
 ### 7. Merged
 
-You merge PR #41 on GitHub. The chief then records the merge in the logbook, and the board moves T1 to Done:
+You merge PR #41 on GitHub. The chief does not watch GitHub, so tell it in the chat that you merged the pull request. The chief then records the merge in the logbook, and the board moves T1 to Done:
 
 <img alt="The board with SAMPLE DATA: T1 in Done, last 7 days, with PR 41." src="../assets/learn-merged.png" width="400">
 

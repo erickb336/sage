@@ -2946,7 +2946,7 @@ test("T337: a program's state comes from its breakdown gate's answer: proposed, 
   assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 3 merged · breakdown waits for you (G1) · name: Codex support");
   s.ok("gate", "answer", "G1", "--option", "2");
   s.ok("task", "add", "--title", "Four", "--size", "small", "--program", "PG1"); // a task joins while the owner asks for changes: the next proposal names it
-  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 4 merged · you asked for changes (G1): the sage revises the breakdown · name: Codex support");
+  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 4 merged · you asked for changes (G1): the chief revises the breakdown · name: Codex support");
   assert.match(s.no("run", "add", "T2", "--role", "lead"), / The owner asked for changes to the breakdown of PG1: propose it again \(sage program propose PG1, with --name, --goal or --pilot when they change\), and the owner answers the new gate\.$/);
   // A re-proposal builds the question again from the program's tasks, and says its round.
   assert.equal(s.ok("program", "propose", "PG1", "--goal", "Codex runs every sage step."), `PG1 proposed (round 2) · pilot T1 · tasks T2, T3, T4 · G2 open: ${ASK} Until the owner approves, no task of PG1 builds.`);
@@ -2955,7 +2955,7 @@ test("T337: a program's state comes from its breakdown gate's answer: proposed, 
   assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 4 merged · breakdown waits for you (G2) · name: Codex support");
   // The owner's own words say what to change: the program is changing, never dropped by them.
   s.ok("gate", "answer", "G2", "--other-hex", Buffer.from("leave out the board", "utf8").toString("hex"));
-  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 4 merged · you asked for changes (G2): the sage revises the breakdown · name: Codex support");
+  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 4 merged · you asked for changes (G2): the chief revises the breakdown · name: Codex support");
   assert.match(s.ok("program", "propose", "PG1", "--tasks", "T2 T4"), /^PG1 proposed \(round 3\) · pilot T1 · tasks T2, T4 · G3 open/);
   assert.deepEqual(rows(s.dir, "decisions").slice(-2).map((d) => [d.task, d.decision]), [["T3", "program PG1 → none"], ["T1", "PG1 proposed again with gate G3, round 3"]]);
   s.ok("gate", "answer", "G3", "--option", "1");
@@ -3004,7 +3004,7 @@ test("F-T233-11: status uses the board's phrase for a stuck program and for a ch
   for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
   propose(s, "T1", "Codex support", "T2");
   s.ok("gate", "answer", "G1", "--option", "2");
-  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 2 merged · you asked for changes (G1): the sage revises the breakdown · name: Codex support");
+  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 2 merged · you asked for changes (G1): the chief revises the breakdown · name: Codex support");
   s.ok("program", "propose", "PG1");
   s.ok("gate", "answer", "G2", "--option", "1");
   stateIs(s, "T1", "abandoned");
@@ -3090,6 +3090,9 @@ test("T337: program propose refuses a bad name or goal, a name in use or like a 
   let before = files();
   const first = [
     [p("--name", "", "--goal", "g", "--pilot", "T1"), `sage: the program's name has 0 characters: give 1 to 60.${nothing}`],
+    // R1450-2: a blank name never reaches the board as "Program PG2, : ...".
+    [p("--name", " ", "--goal", "g", "--pilot", "T1"), `sage: the program's name has a space at its start or end, or two spaces together.${nothing}`],
+    [p("--name", "⠀", "--goal", "g", "--pilot", "T1"), `sage: the program's name has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark).${nothing}`],
     [p("--name", "x".repeat(61), "--goal", "g", "--pilot", "T1"), `sage: the program's name has 61 characters: give 1 to 60.${nothing}`],
     [p("--name", "a\tb", "--goal", "g", "--pilot", "T1"), `sage: the program's name has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark).${nothing}`],
     [p("--name", "PG7", "--goal", "g", "--pilot", "T1"), `sage: the program's name looks like a program id (PG7), so a line could name the wrong program: give it a name of words, such as Codex support.${nothing}`],
