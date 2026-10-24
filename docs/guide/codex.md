@@ -15,13 +15,13 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The stop check | Yes | No, until native captures prove it |
 | sage mode: the chief, the team, agent caps, report checks, the push and merge rules | Yes | Not enabled. Parts are built and tested, but they are not switched on in the installed plugin |
 | Autopilot | Yes | No |
-| The switch phrases (`sage mode`, `show board`) | Yes | No: use the manual skill commands |
+| The phrases (`sage mode`, `autopilot on`, `show board`) | Yes | No: use the manual skill commands |
 
 The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. The chat board in Codex shows only the Codex logbook. The browser board shows both by default, and each card says which provider's logbook holds it.
 
 ## What you need
 
-- Codex CLI. sage's plugin discovery was checked with Codex CLI 0.159.2 on Linux and 0.160.0 on macOS. A discovery check does not prove that each hook runs in a real session.
+- Codex CLI. sage's plugin discovery was checked with Codex CLI 0.159.2 on Linux and 0.160.0 on macOS. CI runs the tests on Linux, but no real install or session of sage is tested on Linux yet. A discovery check does not prove that each hook runs in a real session.
 - Node.js 20 or later.
 - git, and a clone of this repository.
 

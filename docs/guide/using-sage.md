@@ -35,7 +35,7 @@ These words work inside a request. They switch nothing:
 <a href="../assets/tip-start-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/tip-start-dark.svg">
-  <img alt="The toad sage's tip: send “sage mode” alone to switch it on, and “sage mode off” alone to switch it off. With any other words, it does nothing." src="../assets/tip-start-light.svg" width="100%">
+  <img alt="The toad sage's tip: to switch sage mode on, send the words sage mode alone, with no quote marks. To switch it off, send the words sage mode off alone. With any other words, the message switches nothing." src="../assets/tip-start-light.svg" width="100%">
 </picture>
 </a>
 
@@ -221,7 +221,7 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 
    When the command fails with "Cannot find module", the version is wrong. List the folders with `ls ~/.claude/plugins/cache/sage/sage/`, and use the one that matches the "Version:" line. If you already uninstalled sage, `claude plugin list` shows no version: use a folder from that list.
 
-   If you already deleted the plugin cache, reinstall sage, do this step, then uninstall again. Ctrl+C and `launchctl` do not stop a server that the board phrase started, because it runs detached. Only a server that you installed as a login service also needs step 2.
+   If you already deleted the plugin cache, reinstall sage with both commands of the [Quick start](../../README.md#quick-start) (`claude plugin marketplace add erickb336/sage`, then `claude plugin install sage@sage`), do this step, then uninstall again. Ctrl+C and `launchctl` do not stop a server that the board phrase started, because it runs detached. Only a server that you installed as a login service also needs step 2.
 
 2. If you installed the board's login service, stop it and remove its login file. The login file starts the board at each login until you remove it:
 
@@ -259,7 +259,7 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 
 Claude Code keeps the plugin files in `~/.claude/plugins/cache/sage/` after the uninstall. It removes each version 14 days later, but only while another plugin is still installed ([plugin loading](https://code.claude.com/docs/en/plugins/loading)). To remove them at once, delete that folder, but only after step 1: the stop command is in it.
 
-The uninstall does not remove your logbooks, your pages or the board's config. They are plain files in the folders below. Delete them yourself when you no longer want the record.
+The uninstall keeps your logbooks, the task pages in each project's pages folder and the board's config; only step 3 deletes the board's offline pages. They are plain files in the folders below. Delete them yourself when you no longer want the record.
 
 ## Where sage keeps things
 
