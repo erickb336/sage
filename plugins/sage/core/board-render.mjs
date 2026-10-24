@@ -2,7 +2,7 @@
 // The look is the T218 design (approved 2026-10-11) with the T305 picker, filter bar and step line (approved 2026-10-18).
 // The page needs no script for its cards, task pages, backlog fold and theme; the picker and the filters need the script.
 import { LINE, PRIORITIES, TASK_KINDS } from "./logbook-fields.mjs";
-import { namedText } from "./program-rules.mjs";
+import { namedText, PROGRAM_ID } from "./program-rules.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
 // Every control (C0, C1 with U+0085) and line or paragraph separator is a space, and every format character (\p{Cf}:
@@ -184,11 +184,12 @@ const WORD_OF = { backlog: "not started", design: "in design", building: "buildi
 /** A task's state as its row on the program page says it: the end state, else the word of its column. */
 const taskWord = task => ["merged", "concluded", "abandoned"].includes(task.state) ? task.state : WORD_OF[task.column] ?? task.state;
 const BREAKDOWN_STATE = { proposed: "waits for your approval", changing: "you asked for changes: the sage revises it", dropped: "you dropped it" };
+const breakdownWhy = ({ id, state, gate, gateFound, named }) => BREAKDOWN_STATE[state] ?? (named !== undefined ? `its gate ${gate} ${namedText(named, id)}` : gateFound ? `its gate ${gate} is not a breakdown gate` : `its gate ${gate} is not in the logbook`);
 /** One wait of a task, with its state (T233): met, not met, or never met. */
 function waitItem(ctx, task, wait) {
   if (wait.odd) return `<li class="v-stale"><span class="g" aria-hidden="true">⊘</span>Text in the waits cell that is not a task id · <span class="stw-cant">never met</span>: the sage sets the waits again.</li>`;
   if (wait.breakdown) {
-    const { id, gate, state, gateFound, named } = wait.breakdown, why = BREAKDOWN_STATE[state] ?? (named !== undefined ? `its gate ${gate} ${namedText(named, id)}` : gateFound ? `its gate ${gate} is not a breakdown gate` : `its gate ${gate} is not in the logbook`);
+    const { id, gate } = wait.breakdown, why = breakdownWhy(wait.breakdown);
     return `<li class="${wait.never ? "v-stale" : "v-wait"}"><span class="g" aria-hidden="true">${wait.never ? "⊘" : "⧗"}</span>The breakdown of ${esc(id)}${gate ? ` (gate ${esc(gate)})` : ""}: ${esc(why)} · <span class="${wait.never ? "stw-cant" : "faint"}">${wait.never ? "never met" : "not met"}</span></li>`;
   }
   const other = ctx.tasks.get(`${task.project}/${wait.id}`);
@@ -217,7 +218,8 @@ function nowWaits(task) {
 const programLink = (ctx, task) => {
   if (!task.program || !ctx.programs.has(task.program.key)) return "";
   const name = task.program.name ?? task.program.id;
-  return `<a class="back plink" href="${esc(programHref(ctx, task.program.key))}" title="${esc(name)}">◫ <span class="cn">${esc(name)}</span></a>`;
+  // At phone width the bar shows the program's id, not a name cut to a letter or two (T374).
+  return `<a class="back plink" href="${esc(programHref(ctx, task.program.key))}" title="${esc(name)}">◫ <span class="cn">${esc(name)}</span><span class="pid">${esc(task.program.id)}</span></a>`;
 };
 
 /** A task page. Offline it is a section of the board file with its own way back; at its route it is the main content. */
@@ -231,7 +233,7 @@ function page(ctx, task, { routed = false } = {}) {
     + `<div class="detail"><section class="wide"><h3>Where in the loop</h3>${stepLine(task)}${nowWaits(task)}${stepRows(task)}${agents(ctx, task, " nowagents")}${meta(task)}<p class="faint">To change the priority or the kind, ask the sage in the chat. The board is read-only.</p></section>`
     + `<div class="colL"><section><h3>Brief</h3>${brief}</section><section><h3>Agent runs <span class="n">${task.runs.length}</span></h3>${runsTable(task)}</section><section><h3>Findings <span class="n">${task.findings.filter(row => row.status === "open").length} open</span></h3>${findings(task)}</section></div>`
     + `<div class="colR">${programSections(ctx, task)}<section><h3>Evidence <span class="n">${task.ledger.length}</span></h3>${evidence(task)}</section><section><h3>Latest decisions</h3>${decisions}</section><section><h3>Artifacts</h3>${artifacts(task)}</section></div></div>${legend(null)}`;
-  return routed ? content : `<section class="page" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="#">← Board</a>${programLink(ctx, task)}</div>${content}</section>`;
+  return routed ? content : `<section class="page" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="#">← Board</a>${programLink(ctx, task)}<span class="spacer"></span>${themeSwitch(`flip-${anchor(task)}`)}</div>${content}</section>`;
 }
 
 /** The marks of the board and the task page, with one visible sentence for the dotted stand-in values (F-T218-7). */
@@ -284,7 +286,7 @@ export const DARK = "--bg:#0c0c0d;--shell:#121213;--panel:#232326;--panel2:#1818
 // --p2 and --p6 are text colours of the provider tag on the Agents page: darker than before, for 4.5:1.
 export const LIGHT = "--bg:#f0f0f1;--shell:#fcfcfc;--panel:#ffffff;--panel2:#f0f0f1;--text:#0a0a0a;--muted:#57575c;--faint:#626267;--line:#e5e5e7;--edge:#87878d;--accent:#2a5fe6;--accent-soft:#edf2ff;--ink:#323137;--ink2:#201e25;--ink-fg:#fafafa;--link:#2a5fe6;--need:#bf3a0c;--need-soft:#fff0e8;--ok:#16794a;--ok-soft:#e6f5ed;--run:#5a3fc9;--run-soft:#f1eefc;--warn:#875800;--warn-soft:#fbf2df;--p0:#4f4fd0;--p1:#0b7f75;--p2:#9a4a06;--p3:#b83f70;--p4:#2a7f3f;--p5:#7a6c00;--p6:#1a63b0;--p7:#7f45b8;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:0 0 0 1px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.06);--shellshadow:0 1px 0 rgba(0,0,0,.04),0 2px 1px -1px rgba(0,0,0,.05),0 0 0 1px #ececec;--pop:0 4px 42px rgba(0,0,0,.06),0 2px 6px rgba(0,0,0,.05),0 0 0 1px rgba(0,0,0,.06);--pill:0 0 0 .5px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.08),0 2px 8px -2px rgba(0,0,0,.06);--lift:0 8px 20px -8px rgba(0,0,0,.16);--ease:cubic-bezier(.22,1,.36,1);--fast:160ms;--scheme:light;color-scheme:light";
 /** A rule for the times that the light theme shows: a light choice, or a flipped dark (or no) choice. */
-const whenLight = (suffix, body) => `:root[data-theme=light]:not(:has(#flip:checked))${suffix},:root:not([data-theme=light]):has(#flip:checked)${suffix}{${body}}`;
+const whenLight = (suffix, body) => `:root[data-theme=light]:not(:has(.flip:checked))${suffix},:root:not([data-theme=light]):has(.flip:checked)${suffix}{${body}}`;
 const THEME_CSS = `:root{${DARK}}${whenLight("", LIGHT)}.to-dark{display:none}${whenLight(" .to-light", "display:none")}${whenLight(" .to-dark", "display:inline")}`;
 export const THEME_HEAD = "try{const t=localStorage.getItem('board-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}";
 
@@ -300,7 +302,7 @@ h1{font-size:15px;margin:0;font-weight:600;letter-spacing:-.01em}.spacer{flex:1}
 .chip[aria-pressed="true"]{background:linear-gradient(var(--ink),var(--ink2));border-color:transparent;color:var(--ink-fg);box-shadow:0 0 0 1px var(--ink2),0 2px 4px rgba(0,0,0,.12)}
 .chip.need[aria-pressed="true"]{background:var(--need);border-color:var(--need);color:var(--panel)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-body:has(#flip:focus-visible) .theme{outline:2px solid var(--accent);outline-offset:2px}
+.flip:focus-visible+.theme{outline:2px solid var(--accent);outline-offset:2px}
 .count{font-weight:700}.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;background:var(--accent)}.dot.none{background:var(--faint)}
 .dot.p0{background:var(--p0)}.dot.p1{background:var(--p1)}.dot.p2{background:var(--p2)}.dot.p3{background:var(--p3)}.dot.p4{background:var(--p4)}.dot.p5{background:var(--p5)}.dot.p6{background:var(--p6)}.dot.p7{background:var(--p7)}
 .badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--need-soft);color:var(--need);font-size:11px;font-weight:700}
@@ -385,9 +387,9 @@ details.rest>summary::before{content:"▸ "}details.rest[open]>summary::before{c
 .page{display:none;max-width:1100px;margin:0 auto;padding:18px 20px 40px}.page:target,.page.open{display:block}
 .boardview,body>main.page,#pages>.page{background:var(--shell);border-radius:20px;margin:8px;box-shadow:var(--shellshadow)}body>main.page,#pages>.page{margin:8px auto}
 body:has(.page:target) .boardview{display:none}
-.pagebar{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.pagebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px}
 .back{display:inline-flex;align-items:center;min-height:24px;min-width:24px;padding:2px 4px 2px 0;color:var(--text);text-decoration:none;font-weight:600}
-.plink{min-width:0;gap:4px;color:var(--text)}.pagebar>:not(.plink,.spacer){flex:none}.plink .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.plink{min-width:0;gap:4px;color:var(--text)}.pagebar>:not(.plink,.spacer){flex:none}.plink .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.plink .pid{display:none}
 .ptop{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--muted);font-size:12.5px}
 .ptitle{font-size:22px;margin:8px 0 14px;font-weight:600;letter-spacing:-.02em;line-height:1.3;overflow-wrap:anywhere}
 .detail{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:14px 18px;align-items:start}
@@ -411,7 +413,7 @@ details.fold>summary{cursor:pointer;color:var(--accent);font-size:12px;margin:2p
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}img{max-width:100%;height:auto}figure{margin:6px 0}
 .legend{padding:0 20px 18px;color:var(--muted);font-size:12px;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
 .legend>span{display:inline-flex;gap:5px;align-items:center;flex-wrap:wrap}.page .legend{padding:14px 0 0}
-.emptyboard{border:1px dashed var(--line);border-radius:10px;padding:12px;margin:0 20px 12px;font-size:12px;color:var(--muted)}
+.emptyboard{border:1px dashed var(--line);border-radius:10px;padding:12px;margin:0 20px 12px;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 .emptyboard b{color:var(--text);display:block;margin-bottom:2px}
 .linkbtn{background:none;border:0;padding:0;margin-top:6px;font:inherit;color:var(--accent);text-decoration:underline;cursor:pointer}
 .boardtabs{display:inline-flex;border:0;background:var(--panel2);border-radius:10px;padding:3px;gap:2px;flex:none}
@@ -437,12 +439,12 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:0 0 6px}im
 .arow.flag{background:linear-gradient(90deg,var(--need-soft),transparent 60%)}.arow.flagw{background:linear-gradient(90deg,var(--warn-soft),transparent 60%)}
 .rules{margin:4px 20px 28px;padding:11px 13px;border:1px solid transparent;border-radius:16px;box-shadow:var(--ring);background:var(--panel);font-size:12px;color:var(--muted)}
 .rules h2{margin:0 0 6px;font-size:12.5px;color:var(--text)}.rules ul{margin:0;padding-left:18px}.rules li{margin:2px 0}.rules b{color:var(--text)}
-.tag.prog{color:var(--text);background:var(--accent-soft);font-weight:550}.tag.prog .pm{color:var(--accent)}.tag.pilot{color:var(--accent);background:var(--accent-soft);font-weight:650}
+.tag.prog{color:var(--text);background:var(--accent-soft);font-weight:550;overflow-wrap:anywhere;max-width:100%}.tag.prog .pm{color:var(--accent)}.tag.pilot{color:var(--accent);background:var(--accent-soft);font-weight:650}
 .waitline{display:flex;gap:6px;align-items:flex-start;font-size:12.5px;margin:4px 0 2px;color:var(--text);overflow-wrap:anywhere}.waitline .wm{color:var(--muted);flex:none;font-weight:700;width:12px;text-align:center}
 .waitline.cant{background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:5px 8px;font-weight:600}.waitline.cant .wm{color:var(--warn)}
 .card.approval,a.card.approval:hover,a.prog.approval,a.prog.approval:hover{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 0 5px var(--accent-soft);padding-top:0;overflow:hidden}.card.approval{margin:6px 6px 11px}a.prog.approval{margin:6px}
 .band{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:-1px -10px 8px;padding:5px 10px;background:var(--accent);color:var(--panel);font-size:11.5px;font-weight:700;letter-spacing:.02em}.band .bk{font-weight:500;opacity:.92}
-.detail section.approval{padding-top:0;margin:0}.detail section.approval .band{margin:-1px -13px 10px;padding:6px 13px}
+.detail section.approval{padding-top:0;margin:0}.detail section.approval .band{margin:-1px -14px 10px;padding:6px 14px}
 .q{font-size:12.5px;margin:4px 0;overflow-wrap:anywhere}.q b{font-weight:650}
 .answer{font-size:12px;margin-top:8px;padding:7px 9px;border-radius:8px;background:var(--panel2);overflow-wrap:anywhere}.answer b{color:var(--text)}
 .needstrip{margin:0 20px 12px;border-radius:18px;background:var(--panel2);padding:5px;box-shadow:inset 0 0 0 1px var(--need);overflow:hidden}
@@ -469,7 +471,8 @@ a.prog:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}a.pro
 .prog .goal{margin:4px 0 8px;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}.prog .nx{font-size:12.5px;margin-top:6px;overflow-wrap:anywhere}
 .prog .nx.need{background:var(--need-soft);color:var(--need);border-radius:6px;padding:5px 8px;font-weight:600}.pmeta{color:var(--muted);font-size:12px;margin-left:auto}
 .page .emptyboard,.page .banner{margin:0 0 10px}
-@media (forced-colors:active){:is(.card,a.prog,.trow).needs:not(:focus-visible),.needstrip{outline:3px double CanvasText;outline-offset:1px}}
+@media (forced-colors:active){:is(.card,a.prog,.trow).needs:not(:focus-visible),.needstrip{outline:3px double CanvasText;outline-offset:1px}
+ .boardtabs a[aria-current="page"],.seg button[aria-pressed="true"]{border:2px solid Highlight}.trow{border:1px solid CanvasText}}
 @media (max-width:1116px){body>main.page,#pages>.page{margin:8px}}
 @media (min-width:701px) and (max-width:1180px){
  .board{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr));overflow-x:visible}
@@ -484,6 +487,7 @@ a.prog:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}a.pro
  .col{min-height:0}.col.needs-col{order:-1}.col.empty-col{display:none}
  .page{padding:14px 16px 32px}.detail{grid-template-columns:1fr}.ptitle{font-size:19px}
  .boardview,body>main.page,#pages>.page{margin:0;border-radius:0;box-shadow:none}
+ .plink .cn{display:none}.plink .pid{display:inline}
  .needstrip{margin:0 16px 12px}.trow{grid-template-columns:3em minmax(0,1fr)}.trow .sw{grid-column:2}.pmeta{margin-left:0}
  .caps{padding:0 16px 10px}.agentsview{padding:0 16px 8px}.rules{margin:4px 16px 24px}
  .arow{grid-template-columns:minmax(0,1fr)}.rside{text-align:left;align-items:flex-start;flex-direction:row;flex-wrap:wrap;gap:4px 10px;max-width:none}
@@ -551,8 +555,11 @@ ${needCounts.toString()}
 const SHOWN=${BACKLOG_SHOWN},foldText=${foldText.toString()};
 const S={project:'',needs:false,who:'',priority:'',kind:'',program:'',open:false,query:'',active:null,archived:false,gone:false};
 // The address keeps the project (p) and the program (pg): a program page links to its tasks on the board with both. A
-// programs page's Needs you chip opens the board with needs=1, which turns the Needs you filter on once.
-function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.program=h.get('pg')||'';if(h.has('needs'))S.needs=h.get('needs')==='1'}catch(e){}}
+// programs page's Needs you chip opens the board with needs=1, which turns the Needs you filter on once: the board then
+// takes needs=1 out of the address, so a reload does not turn the filter on again.
+// A Program filter of a program in another project ends when you choose a project, also in the address (R1371-2).
+function ownProgram(){const o=S.program&&S.program!=='none'&&S.project&&all('#f-program option').find(o=>o.value===S.program);if(o&&o.dataset.project!==S.project){S.program='';return true}return false}
+function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.program=h.get('pg')||'';if(ownProgram()){h.delete('pg');save()}if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs');const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
 fromHash();
 function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#(p|pg|needs)=/.test(location.hash)){const h=new URLSearchParams();if(S.project)h.set('p',S.project);if(S.program)h.set('pg',S.program);const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
 const options=()=>all('#pick-list [role=option]');
@@ -605,7 +612,8 @@ function draw(){
   const act=shown.find(o=>o.dataset.key===S.active);if(act&&S.open){input.setAttribute('aria-activedescendant',act.id);if(act.scrollIntoView)act.scrollIntoView({block:'nearest'})}else input.removeAttribute('aria-activedescendant');
   S.keys=shown.map(o=>o.dataset.key);
 }
-function choose(key){S.project=key;S.open=false;S.query='';S.active=null;S.gone=false;save();filter();const t=$('pick-trig');if(t)t.focus()}
+// A Program filter of another project ends when you choose a project: its cards would never show there.
+function choose(key){S.project=key;ownProgram();S.open=false;S.query='';S.active=null;S.gone=false;save();filter();const t=$('pick-trig');if(t)t.focus()}
 function openList(){S.open=true;S.query='';S.active=null;draw();const q=$('pick-q');if(q)q.focus()}
 function closeList(focus){S.open=false;draw();if(focus){const t=$('pick-trig');if(t)t.focus()}}
 document.addEventListener('click',e=>{const t=e.target;
@@ -624,7 +632,9 @@ document.addEventListener('click',e=>{const t=e.target;
   if(t.closest('[data-dismiss]')){S.gone=false;filter();return}});
 window.addEventListener('hashchange',()=>{if(/^#(p|pg|needs)=/.test(location.hash)){fromHash();filter()}});
 document.addEventListener('change',e=>{const f=e.target.dataset&&e.target.dataset.f;if(f){S[f]=e.target.value;if(f==='program')save();filter()}
-  if(e.target.id==='flip'){const now=getComputedStyle(document.documentElement).getPropertyValue('--scheme').trim();document.documentElement.dataset.theme=now;e.target.checked=false;try{localStorage.setItem('board-theme',now)}catch(x){}}});
+  if(e.target.classList&&e.target.classList.contains('flip')){const now=getComputedStyle(document.documentElement).getPropertyValue('--scheme').trim();document.documentElement.dataset.theme=now;e.target.checked=false;try{localStorage.setItem('board-theme',now)}catch(x){}}});
+// A theme chosen in another tab of the board shows here too.
+window.addEventListener('storage',e=>{if(e.key==='board-theme'&&(e.newValue==='light'||e.newValue==='dark'))document.documentElement.dataset.theme=e.newValue});
 // The list closes when the focus leaves the picker (R1075-5). A press inside the list keeps the focus in the search field,
 // so a click on a row or a button still lands.
 document.addEventListener('focusout',e=>{const w=$('pick-pop')&&$('pick-pop').parentNode;if(S.open&&w&&w.contains(e.target)&&!(e.relatedTarget&&w.contains(e.relatedTarget)))closeList(false)});
@@ -676,7 +686,7 @@ function picker(ctx, model, paths, board = true) {
     if (!books.length) return "";
     return `<li role="presentation" data-list="${list}"><div class="grp" id="pick-g-${list}"><span>${LIST_NAME[list]}</span><span class="n">${books.length}</span></div><ul role="group" aria-labelledby="pick-g-${list}">${books.map(option).join("")}</ul></li>`;
   };
-  const items = projects.length ? `<li role="option" id="pick-o-all" class="opt" data-key="" data-name="All projects" aria-selected="false"><span class="dot none" aria-hidden="true"></span><span class="nm">All projects</span><span class="meta">${projects.filter(book => !book.archived).length} projects</span></li>${["needs", "active", "idle", "archived"].map(group).join("")}` : "";
+  const items = projects.length ? `<li role="option" id="pick-o-all" class="opt" data-key="" data-name="All projects" aria-selected="false"><span class="dot none" aria-hidden="true"></span><span class="nm">All projects</span><span class="meta">${plural(projects.filter(book => !book.archived).length, "project")}</span></li>${["needs", "active", "idle", "archived"].map(group).join("")}` : "";
   const archivedCount = projects.filter(book => book.list === "archived").length;
   const after = projects.length
     ? (archivedCount ? `<button type="button" class="morebtn" id="pick-more" data-showarchived>Show ${archivedCount} archived project${archivedCount === 1 ? "" : "s"}</button>` : "")
@@ -717,8 +727,11 @@ function programFilter(ctx, model) {
 function needStrip(ctx, model) {
   const items = model.programNeeds ?? [];
   if (!items.length) return "";
-  const item = need => `<li data-need data-project="${esc(need.group)}" data-program="${need.program ? b64(need.key) : ""}"><span class="ic" aria-hidden="true">${need.program ? "◫" : "!"}</span><span class="what">${esc(need.title)} <span class="faint">· ${esc(need.projectName)} · ${esc(title(need.sourceLabel))} logbook</span></span>`
-    + `<span class="act">${esc(need.text)}${need.kind === "stuck" ? " Answer in the chat." : ""}${need.program && ctx.programs.has(need.key) ? ` <a href="${esc(programHref(ctx, need.key))}">Open the program</a>` : ""}</span></li>`;
+  // A stuck program says its name and why in one line, "PG2 Lead build: the pilot T21 was abandoned. …" (T374).
+  const stuck = need => need.kind === "stuck" && ctx.programs.get(need.key);
+  const what = need => stuck(need) ? `${stuck(need).id} ${stuck(need).name}: ${need.text.charAt(0).toLowerCase()}${need.text.slice(1)}` : need.title;
+  const item = need => `<li data-need data-project="${esc(need.group)}" data-program="${need.program ? b64(need.key) : ""}"><span class="ic" aria-hidden="true">${need.program ? "◫" : "!"}</span><span class="what">${esc(what(need))} <span class="faint">· ${esc(need.projectName)} · ${esc(title(need.sourceLabel))} logbook</span></span>`
+    + `<span class="act">${stuck(need) ? "Answer in the chat." : esc(need.text)}${need.program && ctx.programs.has(need.key) ? ` <a href="${esc(programHref(ctx, need.key))}">Open the program</a>` : ""}</span></li>`;
   return `<section class="needstrip" id="needstrip" aria-labelledby="needstrip-h"><h2 id="needstrip-h">${ICON}Needs you, not on a card <span class="n" id="needstrip-n">${items.length}</span></h2><ul>${items.map(item).join("")}</ul></section>`;
 }
 
@@ -734,7 +747,9 @@ function filterBar(ctx, model) {
 
 /** The live pill, and a hidden status line that announces only a failure (R1023-5). */
 const livePill = text => `<span class="livepill" id="live-state"><span class="ld" aria-hidden="true"></span><span class="lt">${esc(text)}</span></span><span class="vh" id="live-alert" role="status"></span>`;
-const THEME_SWITCH = `<input type="checkbox" id="flip" class="vh"><label class="chip theme" for="flip"><span class="to-light">Light theme</span><span class="to-dark">Dark theme</span></label>`;
+/** The theme switch. The offline snapshot gives each of its pages its own (T378): a page hides the board's header. Any checked switch flips the theme. */
+const themeSwitch = (id = "flip") => `<input type="checkbox" id="${id}" class="vh flip"><label class="chip theme" for="${id}"><span class="to-light">Light theme</span><span class="to-dark">Dark theme</span></label>`;
+const THEME_SWITCH = themeSwitch();
 
 export function renderBoardHtml(model, { taskKey = null, snapshot = true, live = false, paths = false } = {}) {
   const task = taskKey ? model.tasks.find(task => task.key === taskKey) : null;
@@ -757,7 +772,7 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
     const gone = `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. The board shows all projects. <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
     body = `<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.programs?.length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
       // Offline, the task pages, the programs list and each program's page are sections of the one file (C9).
-      + (snapshot ? `<div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.programs?.length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a></div>${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
+      + (snapshot ? `<div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.programs?.length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-programs")}</div>${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${task ? `${esc(task.id)} · ` : ""}Sage task board</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(taskKey ? `/?events=1&task=${b64(taskKey)}` : "/?events=1") : ""}</script></body></html>`;
 }
@@ -828,6 +843,7 @@ function nextOf(ctx, program) {
     + (program.waiting ? ` <span class="faint">${program.waiting} more ${program.waiting === 1 ? "waits" : "wait"}.</span>` : "")
     + (program.cannotStart.length ? ` <span class="stw-cant">${esc(program.cannotStart.join(", "))} cannot start.</span>` : "") };
 }
+const droppedNext = program => program.open ? `${plural(program.open, "task")} still in it: ask the sage to take each task out of the program.` : "No task is in it.";
 /** The line under a program in the list, by its state: what you do, what the sage does, or what moves next. A changing program is a line here, not an item of Needs you (QB). */
 function programNext(ctx, program) {
   const fixed = {
@@ -836,9 +852,10 @@ function programNext(ctx, program) {
     lost: lostText(program),
     changing: `You asked for changes (gate ${program.gate}). The sage revises the breakdown and proposes it again.`,
     done: "Nothing: every task that is not abandoned is merged or concluded.",
-    dropped: program.open ? `${plural(program.open, "task")} still in it: ask the sage to take each task out of the program.` : "No task is in it.",
+    dropped: droppedNext(program),
   }[program.state];
-  return fixed === undefined ? `<b>Next:</b> ${nextOf(ctx, program).html}` : esc(fixed);
+  // A stuck program's line says what you do next, as the prototype labels it (T374).
+  return fixed === undefined ? `<b>Next:</b> ${nextOf(ctx, program).html}` : `${program.state === "stuck" ? "<b>Next:</b> " : ""}${esc(fixed)}`;
 }
 function programRow(ctx, program, where) {
   const approval = program.state === "proposed", needs = NEEDS_PROGRAM.includes(program.state);
@@ -868,10 +885,14 @@ function programTask(ctx, task) {
   const ab = task.state === "abandoned", cant = !ab && task.waitLine?.never, needs = task.reasons.length > 0;
   const [cls, word] = MET_WORDS.includes(task.state) ? ["stw-done", `✓ ${task.state}`] : ab ? ["stw-ab", "abandoned"] : cant ? ["stw-cant", "⊘ cannot start"]
     : needs ? ["stw-need", "! needs you"] : task.waitLine ? ["stw-wait", "⧗ waits"] : ["stw-run", taskWord(task)];
-  // A task that waits for the breakdown waits for the pilot after it, as the prototype says: "waits for T30 (pilot, not started)".
+  // A task that waits for the breakdown waits for the pilot after it, as the prototype says: "waits for T30 (pilot, not started)",
+  // and only once when its waits cell names the pilot too. A breakdown that is never met (dropped or lost) is named itself,
+  // and so is a wait for a pilot that is never met (abandoned): that task cannot start (R1368-2).
   const program = ctx.programs.get(task.program?.key), pilot = program && !task.program.pilot && ctx.tasks.get(`${program.project}/${program.pilot}`);
-  const waits = task.waits.filter(wait => !(wait.breakdown && !pilot) && !(wait.pilot && wait.met)).map(wait => wait.odd ? "⊘ its waits cell has text that is not a task id"
-    : wait.breakdown ? `⧗ waits for ${pilot.id} (pilot, ${taskWord(pilot)})` : wait.met ? `✓ waits for ${wait.id}, ${wait.word}` : `${wait.never ? "⊘" : "⧗"} waits for ${wait.id} (${wait.word})${wait.never ? ": it cannot start" : ""}`);
+  const ownPilot = pilot && task.waits.find(wait => wait.id === pilot.id), viaPilot = !!pilot && !ownPilot?.never && task.waits.some(wait => wait.breakdown && !wait.never);
+  const waits = task.waits.filter(wait => !(wait.breakdown && (!pilot || !wait.never && !viaPilot)) && !(wait.pilot && wait.met) && !(viaPilot && wait === ownPilot)).map(wait => wait.odd ? "⊘ its waits cell has text that is not a task id"
+    : wait.breakdown ? wait.never ? `⊘ waits for the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : `⧗ waits for ${pilot.id} (pilot, ${taskWord(pilot)})`
+    : wait.met ? `✓ waits for ${wait.id}, ${wait.word}` : `${wait.never ? "⊘" : "⧗"} waits for ${wait.id} (${wait.word})${wait.never ? ": it cannot start" : ""}`);
   const at = roles(task), sub = [task.program?.pilot ? "pilot" : "", ...waits, at.length ? `${at.join(", ")} at work` : "", task.pr ? `PR ${task.pr}` : "", task.priority, task.kind ? KIND[task.kind][1] : ""].filter(Boolean);
   return `<div class="trow${ab ? " ab" : ""}${cant ? " cant" : ""}${needs ? " needs" : ""}"><span class="id">${esc(task.id)}</span><a class="t" href="${esc(taskHref(ctx, task))}">${esc(task.title)}</a><span class="sw ${cls}">${esc(word)}</span>${sub.length ? `<span class="sub">${esc(sub.join(" · "))}</span>` : ""}</div>`;
 }
@@ -880,12 +901,45 @@ function decisionText(text) {
   const lines = String(text ?? "").split(LINE), last = lines.at(-1), arrow = last.lastIndexOf(" → ");
   return lines.length > 1 ? `${lines[0]}${arrow >= 0 ? ` …${last.slice(arrow)}` : ""}` : lines[0];
 }
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** A short date, "12 Oct", from an ISO time; the full time is the title. */
+const shortDay = iso => {
+  const [, y, m, d] = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? "")) ?? [], date = new Date(Date.UTC(y, m - 1, d));
+  // A day that the month does not have, such as 2026-02-30, is not a date (R1378-3).
+  return y && date.getUTCMonth() === m - 1 && date.getUTCDate() === Number(d) ? `${Number(d)} ${MONTHS[m - 1]}` : "";
+};
+// The reasons that the state tool writes itself say nothing to the owner, so the short form leaves them out.
+const TOOL_WHY = ["", "task set", "program propose", "the user's answer", "the user's own words"];
+/**
+ * A program's decision in the prototype's short form (T374): "T9 merged: PR 66", "PG1 proposed: Codex support, pilot T7,
+ * gate G7", "G7 answered: approve", "T5 joined PG1". Any other decision keeps its own words, after its task. A proposal
+ * writes its own row on the pilot and a move row for each other task that it takes in: its own row is its one line, so
+ * those move rows show nothing (null) (R1368-1). A later round names no tasks, so its move rows show (R1375-3). The
+ * rounds: each proposal row of the program, by round, with its time and gate; an answer names the gate of its own round.
+ */
+function decisionLine(program, row, task, rounds) {
+  const why = TOOL_WHY.includes(String(row.why ?? "")) ? "" : String(row.why), text = String(row.decision), because = line => why ? `${line}: ${why}` : line;
+  const state = /^state (merged|concluded|abandoned)$/.exec(text), moved = /^program (\S+) → (\S+)$/.exec(text), arrow = text.lastIndexOf(" → ");
+  const proposed = proposal(program, row), answer = arrow >= 0 && new RegExp(`^Approve program ${program.id}(?: \\(round ([1-9]\\d*)\\))?\\?`).exec(text);
+  if (state) return because(`${row.id}${row.id === program.pilot ? " (pilot)" : ""} ${state[1]}${!why && state[1] === "merged" && task.pr ? `: PR ${task.pr}` : ""}`);
+  // An older round's row has no name, so its line has none; the program's name is the name of its latest round (R1375-4).
+  if (proposed) return proposed.round > 1 ? `${program.id} proposed again: ${proposed.gate === program.gate ? `${program.name}, ` : ""}gate ${proposed.gate}, round ${proposed.round}` : `${program.id} proposed: ${proposed.name}, pilot ${proposed.pilot}, gate ${proposed.gate}`;
+  if (moved && row.why === "program propose" && moved[2] === program.id && rounds.get(1)?.at === row.at) return null;
+  if (moved) return because(`${row.id} ${moved[2] === program.id ? "joined" : "left"} ${program.id}`);
+  if (answer) { const gate = rounds.get(Number(answer[1] ?? 1))?.gate; return `${gate ?? `${program.id}${answer[1] ? ` round ${answer[1]}` : ""}`} answered: ${text.slice(arrow + 3)}`; }
+  return because(`${row.id}: ${decisionText(text)}`);
+}
+/** A proposal row of the program, in the forms that the state tool's program propose writes, or null. */
+function proposal(program, row) {
+  const m = row.why === "program propose" && new RegExp(`^${program.id} proposed (?:with gate (G[1-9]\\d*), pilot (\\S+), tasks \\S+, name: (.*)|again with gate (G[1-9]\\d*), round ([1-9]\\d*))$`).exec(String(row.decision));
+  return m ? (m[1] ? { round: 1, gate: m[1], pilot: m[2], name: m[3], at: row.at } : { round: Number(m[5]), gate: m[4], at: row.at }) : null;
+}
 /** A program's page: its goal and progress (or its breakdown while it waits for you), what moves next, its tasks in order, and its latest decisions. */
 function programPage(ctx, program, routed) {
   const tasks = program.tasks.map((key, i) => [ctx.tasks.get(key), program.depths[i]]).filter(([task]) => task), own = tasks.map(([task]) => task);
   const pilot = ctx.tasks.get(`${program.project}/${program.pilot}`), { total, abandoned } = program.progress, h = routed ? "h1" : "h2";
   const onBoard = program.archived ? "" : `<a class="back" href="${ctx.snapshot ? "" : "/"}#${esc(new URLSearchParams({ p: program.group, pg: b64(program.key) }))}">Its tasks on the board</a>`;
-  const top = `<div class="pagebar"><a class="back" href="${ctx.snapshot ? "#programs" : "/programs"}">← Programs</a>${onBoard}</div>`
+  const top = `<div class="pagebar"><a class="back" href="${ctx.snapshot ? "#programs" : "/programs"}">← Programs</a>${onBoard}${ctx.snapshot ? `<span class="spacer"></span>${themeSwitch(`flip-${programAnchor(program.key)}`)}` : ""}</div>`
     + `<div class="ptop"><span class="id">${esc(program.id)}</span> · ${project(ctx, program)} · ${programState(program.state)} · <span class="faint">${esc(title(program.sourceLabel))} logbook</span></div>`
     + `<${h} class="ptitle"><span aria-hidden="true">◫</span> ${esc(program.name)}</${h}>`;
   let lead;
@@ -896,20 +950,26 @@ function programPage(ctx, program, routed) {
       + `${breakdownBody(reason)}</section>`;
   } else {
     const pilotLine = `<p><b>Pilot:</b> ${pilot ? `<a href="${esc(taskHref(ctx, pilot))}">${esc(pilot.id)}</a> ${esc(pilot.title)} · <span class="${MET_WORDS.includes(pilot.state) ? "stw-done" : pilot.state === "abandoned" ? "stw-cant" : "stw-run"}">${esc(taskWord(pilot))}</span>${roles(pilot).length ? ` · the ${esc(roles(pilot).join(" and the "))} at work` : ""}` : `${esc(program.pilot)} · <span class="stw-cant">not in the logbook</span>`}</p>`;
-    const rule = { dropped: `You dropped the breakdown (gate ${program.gate}).`, changing: `You asked for changes (gate ${program.gate}). The sage revises the breakdown and proposes it again.`, lost: lostText(program) }[program.state]
+    const rule = { dropped: `You dropped the breakdown (gate ${program.gate}).`, changing: `You asked for changes (gate ${program.gate}). The sage revises the breakdown and proposes it again.`, lost: "" }[program.state]
       ?? `Approved total: ${plural(total, "task")} (gate ${program.gate}). Done when every task that is not abandoned is merged or concluded${abandoned.length ? `: ${total - abandoned.length} of the ${total}` : ""}.`;
-    lead = `<section class="wide"><h3>Goal and progress</h3>${program.goal ? `<p>${esc(program.goal)}</p>` : ""}${total ? `${pbar(program)}<div class="pkey" aria-hidden="true"><span><i class="m"></i>merged</span><span><i class="a"></i>abandoned</span><span><i class="o"></i>open</span></div>` : ""}${pilotLine}<p class="faint">${esc(rule)}</p></section>`;
-    const next = nextOf(ctx, program), then = next.first ? (ctx.waitedBy.get(next.first.key) ?? []).filter(task => task.program?.key === program.key && !ENDED_STATES.includes(task.state)).map(task => task.id) : [];
+    lead = `<section class="wide"><h3>Goal and progress</h3>${program.goal ? `<p>${esc(program.goal)}</p>` : ""}${total ? `${pbar(program)}<div class="pkey" aria-hidden="true"><span><i class="m"></i>merged</span><span><i class="a"></i>abandoned</span><span><i class="o"></i>open</span></div>` : ""}${pilotLine}${rule ? `<p class="faint">${esc(rule)}</p>` : ""}</section>`;
+    // "T13 can start when T12 merges.": each task that waits for the task that moves next, with each of its unmet waits.
+    const next = nextOf(ctx, program), then = next.first ? (ctx.waitedBy.get(next.first.key) ?? []).filter(task => task.program?.key === program.key && !ENDED_STATES.includes(task.state) && !task.waitLine?.never)
+      .map(task => { const ids = task.waits.filter(wait => !wait.met && wait.id).map(wait => wait.id); return `${task.id} can start when ${ids.join(" and ")} ${ids.length === 1 ? "merges" : "merge"}.`; }) : [];
     const moving = own.filter(task => task !== next.first && !ENDED_STATES.includes(task.state) && !task.waitLine);
-    const cannot = own.filter(task => task.waitLine?.never && !ENDED_STATES.includes(task.state)).map(task => `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${esc(task.id)}: ${esc(task.waitLine.text)} Ask the sage to remove the wait, or to drop ${esc(task.id)}.</span></div>`).join("");
+    // "T11 cannot start: it waits for T10, which was abandoned." Each wait that is never met, in the prototype's words.
+    const never = wait => wait.odd ? "its waits cell has text that is not a task id" : wait.breakdown ? `the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : `${wait.id}, which ${wait.state ? `was ${wait.word}` : "is not in the logbook"}`;
+    const cannot = own.filter(task => task.waitLine?.never && !ENDED_STATES.includes(task.state)).map(task => `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${esc(task.id)} cannot start: it waits for ${esc(task.waits.filter(wait => wait.never).map(never).join(" and "))}. Ask the sage to remove the wait, or to drop ${esc(task.id)}.</span></div>`).join("");
     const body = {
       stuck: () => `<div class="nowline need">${ICON}<span><b>Needs you:</b> ${esc(program.need?.text ?? "")}</span></div><div class="answer"><b>Answer in the chat:</b> a new pilot (a task of the program), or drop the program.</div>`,
       lost: () => `<div class="nowline need">${ICON}<span><b>Needs you:</b> ${esc(lostText(program))}</span></div>`,
       changing: () => `<div class="nowline"><span><b>Now:</b> the sage revises the breakdown. No task builds before you approve the new one.</span></div>`,
       done: () => `<div class="nowline"><span>Nothing: every task that is not abandoned is merged or concluded.</span></div>`,
-      active: () => `<div class="nowline"><span><b>Now:</b> ${next.html}</span></div>${then.length ? `<div class="nextline"><b>Then:</b> ${esc(then.join(", "))} ${then.length === 1 ? "waits" : "wait"} for ${esc(next.first.id)}.</div>` : ""}${cannot}${moving.length ? `<div class="nextline">Also moving: ${esc(moving.map(task => `${task.id} (${taskWord(task)})`).join(", "))}.</div>` : ""}`,
+      dropped: () => program.open ? `<div class="nowline"><span>${esc(droppedNext(program))}</span></div>` : "",
+      active: () => `<div class="nowline"><span><b>Now:</b> ${next.html}</span></div>${then.length ? `<div class="nextline"><b>Then:</b> ${esc(then.join(" "))}</div>` : ""}${cannot}${moving.length ? `<div class="nextline">Also moving: ${esc(moving.map(task => `${task.id} (${taskWord(task)})`).join(", "))}.</div>` : ""}`,
     }[program.state];
-    if (body) lead += `<section class="wide"><h3>Next</h3>${body()}</section>`;
+    const said = body?.();
+    if (said) lead += `<section class="wide"><h3>Next</h3>${said}</section>`;
   }
   const max = Math.max(0, ...tasks.map(([, depth]) => depth)), hasPilot = !!pilot;
   const head = depth => depth === 0 ? hasPilot ? "1 · The pilot: it runs end to end first" : "1 · First" : depth === 1 && hasPilot ? "2 · After the pilot merges" : `${depth + 1} · After the tasks above that they wait for`;
@@ -917,23 +977,32 @@ function programPage(ctx, program, routed) {
   const order = total ? `<section><h3>Tasks in order <span class="n">${total}</span></h3><ol class="layers">${layers}</ol><p class="faint">The order: the pilot first, then each task after the tasks that it waits for, then by number.</p></section>` : `<section><h3>Tasks in order</h3><div class="empty">No task is in it.</div></section>`;
   // The latest decisions of its tasks that name the program, move a task in or out, or end a task.
   const named = new RegExp(`\\b${program.id}\\b`);
-  const log = own.flatMap(task => task.decisions.filter(row => named.test(row.decision) || /^state (merged|concluded|abandoned)$/.test(row.decision) || /^program /.test(row.decision)).map(row => ({ ...row, id: task.id })))
-    .sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 8);
-  const decisions = `<section><h3>Latest decisions</h3>${log.length ? `<ol class="log">${log.map(row => `<li><span class="faint">${esc(day(row.at))}</span> ${esc(row.id)} · ${esc(decisionText(row.decision))}${row.why ? `: ${esc(row.why)}` : ""}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`}</section>`;
+  const rounds = new Map(own.flatMap(task => task.decisions.map(row => proposal(program, row)).filter(Boolean)).map(round => [round.round, round]));
+  // The newest first; a row with no valid time goes last, in its own order (R1378-2).
+  const dated = row => shortDay(row.at) ? 1 : 0;
+  const log = own.flatMap(task => task.decisions.filter(row => named.test(row.decision) || /^state (merged|concluded|abandoned)$/.test(row.decision) || /^program /.test(row.decision)).map(row => ({ at: row.at, text: decisionLine(program, { ...row, id: task.id }, task, rounds) })))
+    .filter(row => row.text !== null).sort((a, b) => dated(b) - dated(a) || (dated(a) ? String(b.at).localeCompare(String(a.at)) : 0)).slice(0, 8);
+  // A time that is not a date gets no date and no title (R1371-4).
+  const when = at => shortDay(at) ? `<span class="faint" title="${esc(day(at))} UTC">${esc(shortDay(at))}</span> ` : "";
+  const decisions = `<section><h3>Latest decisions</h3>${log.length ? `<ol class="log">${log.map(row => `<li>${when(row.at)}${esc(row.text)}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`}</section>`;
   return `${top}<div class="detail">${lead}<div class="colL">${order}</div><div class="colR">${decisions}</div></div>`;
 }
 
 /** The served programs list, or one program's page (T233 C9). An unknown program key gives the not-found page. */
 export function renderProgramsHtml(model, { programKey = null, live = false, paths = false } = {}) {
   const ctx = context(model, false), at = hhmm(model.at), program = programKey ? ctx.programs.get(programKey) : null;
-  const missing = `<div class="pagebar"><a class="back" href="/programs">← Programs</a></div><div class="emptyboard"><b>No program ${esc(String(programKey).split("/").at(-1))} on the board.</b> The logbook may not have it now, or the link is old. Open the <a href="/programs">programs list</a>.</div>`;
+  // The address can hold any text: the page names the program only when the key ends in a program id (T375).
+  const asked = String(programKey).split("/"), id = asked.length > 1 && PROGRAM_ID.test(asked.at(-1)) ? asked.at(-1) : null;
+  // A long id wraps, and shows its first 12 characters (R1371-1).
+  const shown = id && id.length > 12 ? `${id.slice(0, 11)}…` : id;
+  const missing = `<div class="pagebar"><a class="back" href="/programs">← Programs</a></div><h1 class="ptitle">Program not found</h1><div class="emptyboard"><b>No program ${shown ? `${esc(shown)} ` : ""}on the board.</b> The logbook may not have it now, or the link is old. Open the <a href="/programs">programs list</a>.</div>`;
   const main = !programKey ? programsList(ctx, model, true) : program ? programPage(ctx, program, true) : missing;
   // A program that is not on the board has no stream: the server answers its stream with 404 (R1322-3).
   live = live && (!programKey || !!program);
   const body = `<div class="boardview"><header><h1>Sage board</h1>${pagesNav("programs", model)}${livePill(`Board · ${at}`)}<span class="spacer"></span>${THEME_SWITCH}${picker(ctx, model, paths, false)}</header>`
-    + `<div id="board-content" data-at="${esc(at)}">${banners(model)}<main class="page open" aria-label="${program ? esc(program.id) : "Programs"}">${main}</main></div></div>`;
+    + `<div id="board-content" data-at="${esc(at)}">${banners(model)}<main class="page open" aria-label="${program ? esc(program.id) : programKey ? "Program not found" : "Programs"}">${main}</main></div></div>`;
   const stream = programKey ? `/program/${b64(programKey)}?events=1` : "/programs?events=1";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${program ? `${esc(program.id)} · ` : ""}Sage programs</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(stream, ["board-content", "board-pages", "pick-list"]) : ""}</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${program ? `${esc(program.id)} · ` : programKey ? "Program not found · " : ""}Sage programs</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(stream, ["board-content", "board-pages", "pick-list", "needs-count"]) : ""}</script></body></html>`;
 }
 
 const columnMark = key => ({ backlog: "📋", design: "🎨", building: "🔨", review: "🔁", ready: "✅", done: "🏁" }[key]);
@@ -986,12 +1055,12 @@ export function renderBoardText(model) {
   const programTag = task => task.program ? ` · ◫ ${md(clamp(task.program.name ?? task.program.id))}${task.program.pilot ? " \\(pilot\\)" : ""}` : "";
   // A card's question is in the Needs you section above; the card shows its steps and, when nothing needs you, its Now line.
   // A card of a program has its tag. A card with a wait has the tasks that it waits for in one line (⊘ when one is never
-  // met), instead of its Now line (R1307-3). Each line ends with a hard break.
+  // met), instead of its Now line and in its place, after the step line (R1307-3, T374). Each line ends with a hard break.
   const line = task => block([`**${md(task.id)} ${md(clamp(task.title))}** · ${md(task.sourceLabel)} · ${md(task.projectName)}${task.pr ? ` · PR ${md(task.pr)}` : ""}${tagText(task)}${programTag(task)}`,
     ...task.agents.map(agent => `${agent.provider ? md(agent.provider) : md(`${title(task.providerStandIn)}*`)} · ${md(agent.role)} at work`),
     task.inferredWork ? "Inferred from the open PR." : "",
-    task.waitLine ? `${WAIT_MARK[task.waitLine.never ? "never" : "wait"]} ${md(task.waitLine.text)}` : "",
     task.column === "done" ? "" : stepText(task),
+    task.waitLine ? `${WAIT_MARK[task.waitLine.never ? "never" : "wait"]} ${md(task.waitLine.text)}` : "",
     task.column === "done" || task.loop.now.needs || task.waitLine ? "" : `Now: ${md(task.loop.now.text)}`]);
   // Each column shows its first 5 cards in the page's order (needs you first, then the newest activity) and counts the rest.
   const section = column => {
