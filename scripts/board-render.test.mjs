@@ -694,7 +694,7 @@ test("T368: the programs list groups Needs you, Active and Done, folds Dropped, 
   assert.ok(html.includes('<svg class="pbar" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><rect class="m" width="42.86" height="10"/><line class="a" x1="42.86" x2="57.14" y1="5" y2="5"/></svg><b>3 of 7 merged · T10 abandoned</b>'), "Q3: the approved total");
   assert.ok(html.includes('<a href="/programs" aria-current="page">Programs</a>') && !html.includes("new EventSource"), "no stream unless live");
   assert.ok(renderProgramsHtml(programsModel(), { live: true }).includes('new EventSource("/programs?events=1")'));
-  assert.ok(renderProgramsHtml(sample([row("T1", "framed")])).includes("<b>No programs yet.</b>"));
+  assert.ok(renderProgramsHtml(sample([row("T1", "framed")])).includes("<b>No programs yet.</b> A program starts when you ask for work that needs two or more tasks, where one task waits for another. The chief then proposes a breakdown, and it shows in Needs you for your approval.</div>"), "R1449-1: the chief proposes");
   assert.ok(renderProgramsHtml(buildBoardModel([noPrograms()], { now: PROGRAMS_NOW })).includes("<b>The programs of sage (sample) cannot be read.</b> programs.tsv line 3 has 4 cells"));
 });
 
