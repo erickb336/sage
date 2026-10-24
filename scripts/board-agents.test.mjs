@@ -165,7 +165,7 @@ test("T308: the page shows each state with a mark and a word, the tree, the caps
   assert.match(html, new RegExp(`<a class="t" id="al-[\\w-]+" href="/task/${Buffer.from("claude/sample-abcdef/T1").toString("base64url")}"><span class="id">T1</span> &lt;img`));
   assert.match(html, /<span class="cap full">.*sample 2 of 2 · at cap<\/span>/);
   assert.match(html, /model opus<\/span><span>running 50 min<\/span><span>last activity 1 min ago/);
-  assert.match(html, /<b>1 run has no hook record\.<\/b> The logbook says R9 \(sample\) runs/);
+  assert.ok(html.includes('<b>1 run has no hook record.</b> The logbook says R9 (sample) runs, but no agent slot holds it. Each row stays, marked "may be stuck", until the chief ends the run.</div>'), "R1449-1: the chief ends the run");
   assert.match(html, /<b class="needn">1<\/b> needs a look/);
   assert.match(html, /<a href="\/agents" aria-current="page">Agents \(3\)<\/a>/);
   // Offline (no server), there is no tab and no task link.
