@@ -1,8 +1,8 @@
 import '../../../scripts/test-env.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync, readFileSync, chmodSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync, readFileSync, chmodSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -146,4 +146,48 @@ test('an unanswered task gate refuses before submission and its answer permits p
   assert.equal(f.puts(),0);assert.equal(f.invoke('status').publications.T1,undefined);
   f.core('gate','answer','G1','--option','1');
   assert.equal(f.invoke('publish',{task:'T1',sha:f.head}).publication.outcome,'merged');assert.equal(f.puts(),1);
+});
+
+function freshStatusFixture(t) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'sage-fresh-status-')));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const project = join(base, 'project'); mkdirSync(project);
+  const env = { ...process.env, SAGE_HOME: join(base, 'home'), SAGE_TEST_PIDS: '{}' };
+  const evidence = join(base, 'owner.md'); writeFileSync(evidence, 'SIMULATED direct owner instruction.');
+  const call = (action, extra = {}) => spawnSync(process.execPath, [cli], { env, encoding: 'utf8',
+    input: JSON.stringify({ action, project, session: 'fresh-session', ...extra }) });
+  const snapshot = () => readdirSync(base, { recursive: true }).sort();
+  return { base, project, env, evidence, call, snapshot, dir: tool.storeDir(project, env) };
+}
+test('T36 fresh status succeeds without creating a missing Sage root or project logbook',t=>{
+  for (const existingRoot of [false, true]) {
+    const f = freshStatusFixture(t);
+    if (existingRoot) mkdirSync(f.env.SAGE_HOME);
+    const before = f.snapshot();
+    const result = f.call('status');
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { project: f.project, session: 'fresh-session',
+      sage: false, autopilot: false, publisherVerified: false, publications: {} });
+    assert.deepEqual(f.snapshot(), before);
+    const mutation = f.call('owner', { text: 'sage mode on', directOwner: true, evidence: f.evidence });
+    assert.equal(mutation.status, 1); assert.match(mutation.stderr, /ENOENT/);
+    assert.deepEqual(f.snapshot(), before);
+  }
+});
+test('T36 fresh status preserves invalid storage errors without writes',t=>{
+  for (const kind of ['root-file', 'dangling-root', 'dangling-logbook', 'malformed-state']) {
+    const f = freshStatusFixture(t);
+    if (kind === 'root-file') writeFileSync(f.env.SAGE_HOME, 'not a directory');
+    else if (kind === 'dangling-root') symlinkSync(join(f.base, 'missing'), f.env.SAGE_HOME);
+    else {
+      mkdirSync(f.env.SAGE_HOME);
+      if (kind === 'dangling-logbook') symlinkSync(join(f.base, 'missing'), f.dir);
+      else { mkdirSync(f.dir); writeFileSync(join(f.dir, 'codex-workflow.json'), 'malformed JSON'); }
+    }
+    const before = f.snapshot();
+    const result = f.call('status');
+    assert.equal(result.status, 1, kind); assert.equal(result.stdout, '');
+    assert.match(result.stderr, kind === 'malformed-state' ? /JSON/ : /ENOENT|ENOTDIR/, kind);
+    assert.deepEqual(f.snapshot(), before);
+  }
 });

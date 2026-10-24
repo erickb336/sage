@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exactPhrase, PHRASES, readAdmission } from "sage-core";
 import { tool } from "./sage.mjs";
@@ -50,6 +50,13 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
     || !text(input.project) || !isAbsolute(input.project) || !/^[A-Za-z0-9:_-]{1,256}$/.test(input.session ?? "")) fail("Invalid workflow request");
   const project = realpathSync(tool.projectRoot(realpathSync(input.project)));
   const dir = tool.storeDir(project, env);
+  if (input.action === "status" && !lstatSync(dir, { throwIfNoEntry: false })) {
+    // A missing leaf can hide a dangling ancestor link. Validate the existing ancestor before reporting off.
+    let ancestor = dirname(dir);
+    while (!lstatSync(ancestor, { throwIfNoEntry: false })) ancestor = dirname(ancestor);
+    if (realpathSync(ancestor) !== ancestor || !lstatSync(ancestor).isDirectory()) fail("Invalid logbook location");
+    return { project, session: input.session, sage: false, autopilot: false, publisherVerified: false, publications: {} };
+  }
   if (realpathSync(dir) !== dir) fail("Invalid logbook location");
   const file = join(dir, "codex-workflow.json");
   const sessionKey = hash(input.session);
