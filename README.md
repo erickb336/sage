@@ -88,7 +88,7 @@ Send each phrase alone, as the whole message.
 | `show status` | Where each task is: running, waiting for you, verified. |
 | `show board` | The board in the chat, and the address of the board page. |
 | `autopilot on` / `autopilot off` | Verified pull requests merge by themselves, or wait for you again. Off by default. |
-| `sage mode off` | A normal session again. Autopilot goes off too. |
+| `sage mode off` | A normal session again, except in a folder that [starts every session in sage mode](docs/guide/using-sage.md#start-every-session-in-sage-mode). Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
 Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase).

@@ -11,7 +11,7 @@ Send each phrase as a message of its own. Sage mode and autopilot switch only on
 | Send this, alone | What happens |
 | --- | --- |
 | `sage mode` or `sage mode on` | The session becomes your chief of staff. Send your request in the next message. |
-| `sage mode off` | A normal session again. Autopilot goes off too. |
+| `sage mode off` | A normal session again. Autopilot goes off too. In a folder that starts every session in sage mode, see [Start every session in sage mode](#start-every-session-in-sage-mode). |
 | `autopilot on` | While sage mode is on: verified pull requests merge by themselves after their clean cycles. |
 | `autopilot off` | Verified pull requests wait for you again. |
 | `sage help` | A list of every phrase, and whether sage mode and autopilot are on now. It switches nothing. |
@@ -182,6 +182,8 @@ To make every session in a folder start in sage mode, put this in the folder's `
 { "agent": "sage:chief-of-staff" }
 ```
 
+In such a session, `sage mode off` does not give a normal session. The session stays the chief, and sage mode comes back on at its next event. To leave sage mode, remove the line and start a new session.
+
 ## To update sage
 
 Run this command in a terminal:
@@ -199,7 +201,7 @@ A new hook event or matcher needs a restart, and so do the instructions that a s
 - **To stop one task or agent**, tell the chief in your own words, for example "stop the run on T3". There is no fixed phrase. The chief stops the agent, and the agent's slot frees when it ends.
 - **To stop merges now**, send `autopilot off` alone. Pull requests then wait for you.
 - **To stop the chief's current turn**, press Esc in Claude Code, as in any session.
-- **To leave sage mode**, send `sage mode off` alone. Ask the chief to stop the running agents first, if you want them to stop too.
+- **To leave sage mode**, send `sage mode off` alone. Ask the chief to stop the running agents first, if you want them to stop too. In a folder that starts every session in sage mode, see [Start every session in sage mode](#start-every-session-in-sage-mode).
 
 Nothing reaches main without a pull request, so a stopped task leaves at most a branch and an open pull request. Close or delete them on GitHub when you do not want them.
 
