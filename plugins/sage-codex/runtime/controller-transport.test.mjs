@@ -4,7 +4,7 @@ const module = await import('./controller-transport.mjs').catch(error => {
   if (error.code === 'ERR_MODULE_NOT_FOUND') return {};
   throw error;
 });
-const {createControllerTransport, REQUIRED_CONTROLLER_CONFIG} = module;
+const {createControllerTransport, OWNED_CONTROLLER_CONFIG} = module;
 beforeEach(() => assert.equal(typeof createControllerTransport, 'function', 'controller transport must exist'));
 
 function fixture(options = {}) {
@@ -31,25 +31,36 @@ test('initialization orders notification after acceptance, and refusal never ini
   assert.throws(() => f.transport.startThread(), /not initialized/);
 });
 
-test('restricted start and every resumed turn preserve selected profile without resume environments', async () => {
-  const profile = {model: 'chosen-model', approvalPolicy: 'never', sandbox: 'read-only'};
-  const f = fixture({profile}); profile.model = 'mutated';
+test('owned thread start carries instructions, keeps the owner selection, and turns name their exact targets', async () => {
+  const f = fixture();
   await ready(f);
-  const start = f.transport.startThread({cwd: '/project', ephemeral: true});
-  assert.deepEqual(f.sent.at(-1), {id: 1, method: 'thread/start', params: {model: 'chosen-model', approvalPolicy: 'never', sandbox: 'read-only', cwd: '/project', ephemeral: true, environments: []}});
+  const start = f.transport.startThread({cwd: '/project', ephemeral: true, developerInstructions: 'Chief instructions.'});
+  assert.deepEqual(f.sent.at(-1), {id: 1, method: 'thread/start', params: {cwd: '/project', ephemeral: true, developerInstructions: 'Chief instructions.'}});
   f.reply(1, {thread: {id: 'thread-a'}}); await start;
-  const resume = f.transport.resumeThread({threadId: 'thread-a'});
-  assert.deepEqual(f.sent.at(-1), {id: 2, method: 'thread/resume', params: {model: 'chosen-model', approvalPolicy: 'never', sandbox: 'read-only', threadId: 'thread-a'}});
-  f.reply(2, {thread: {id: 'thread-a'}}); await resume;
   for (const text of ['first', 'second']) {
     const input = [{type: 'text', text}];
     const turn = f.transport.startTurn({threadId: 'thread-a', input}); input[0].text = 'mutated';
     const request = f.sent.at(-1);
-    assert.deepEqual(request.params, {threadId: 'thread-a', input: [{type: 'text', text}], environments: []});
+    assert.deepEqual(request.params, {threadId: 'thread-a', input: [{type: 'text', text}]});
     f.reply(request.id, {turn: {id: text}}); assert.deepEqual(await turn, {turn: {id: text}});
   }
-  assert.deepEqual(REQUIRED_CONTROLLER_CONFIG, {'agents.enabled': false, 'features.multi_agent': false, 'features.multi_agent_v2': false, 'features.goals': false, web_search: 'disabled', 'features.plugins': false, 'features.apps': false, 'features.remote_plugin': false});
-  assert.throws(() => { REQUIRED_CONTROLLER_CONFIG.web_search = 'live'; }, TypeError);
+  const interrupted = f.transport.interruptTurn({threadId: 'thread-a', turnId: 'second'});
+  assert.deepEqual(f.sent.at(-1), {id: 4, method: 'turn/interrupt', params: {threadId: 'thread-a', turnId: 'second'}});
+  f.reply(4, {}); assert.deepEqual(await interrupted, {});
+  for (const params of [{threadId: 'thread-a'}, {threadId: '', turnId: 'x'}, {threadId: 'thread-a', turnId: 'x', extra: 1}]) assert.throws(() => f.transport.interruptTurn(params));
+  assert.equal(f.sent.length, 6);
+  assert.deepEqual(OWNED_CONTROLLER_CONFIG, {'agents.enabled': true, 'features.multi_agent': false, 'features.multi_agent_v2': true, 'features.goals': false, web_search: 'disabled', 'features.plugins': false, 'features.apps': false, 'features.remote_plugin': false});
+  assert.throws(() => { OWNED_CONTROLLER_CONFIG.web_search = 'live'; }, TypeError);
+});
+
+test('developer instructions must be non-empty text of at most 256 KiB with no NUL', async () => {
+  const f = fixture(); await ready(f);
+  for (const developerInstructions of ['', 'a\0b', 'é'.repeat(128 * 1024 + 1), 7]) assert.throws(() => f.transport.startThread({developerInstructions}), /instructions/);
+  assert.equal(f.sent.length, 2);
+  const limit = 'a'.repeat(256 * 1024);
+  const accepted = f.transport.startThread({developerInstructions: limit});
+  assert.equal(f.sent.at(-1).params.developerInstructions.length, 256 * 1024);
+  f.reply(1, {}); assert.deepEqual(await accepted, {});
 });
 
 test('mixed ID types and reordered responses settle only their exact requests', async () => {
@@ -91,15 +102,16 @@ test('duplicate reply closes remaining work; notifications are immutable observa
 
 test('server requests receive protocol refusal and cannot execute effects', async () => {
   const f = fixture(); await ready(f);
-  assert.deepEqual(f.transport.receive({id: 0, method: 'item/tool/call', params: {tool: 'write'}}, 'connection-1'), {kind: 'server-request-refused'});
+  assert.deepEqual(f.transport.receive({id: 0, method: 'item/tool/call', params: {tool: 'write'}}, 'connection-1'),
+    {kind: 'server-request-refused', method: 'item/tool/call', request: {id: 0, method: 'item/tool/call', params: {tool: 'write'}}});
   assert.deepEqual(f.sent.at(-1), {id: 0, error: {code: -32601, message: 'Controller transport does not handle server requests'}});
   const start = f.transport.startThread(); f.reply(1, {thread: {id: 'safe'}}); await start;
 });
 
 test('caller overrides and non-JSON input fail before send, with valid paired control', async () => {
   const f = fixture(); await ready(f);
-  for (const params of [{environments: []}, {config: {}}, {dynamicTools: []}, {model: 'other'}]) assert.throws(() => f.transport.startThread(params));
-  assert.throws(() => f.transport.resumeThread({threadId: 'a', environments: []}));
+  for (const params of [{environments: []}, {config: {}}, {dynamicTools: []}, {model: 'other'}, {sandbox: 'danger-full-access'}, {approvalPolicy: 'never'}]) assert.throws(() => f.transport.startThread(params));
+  assert.equal(f.transport.resumeThread, undefined);
   for (const params of [{threadId: 'a', input: [], environments: []}, {threadId: 'a', input: [{type: 'image', imageUrl: 'x'}]}, {threadId: 'a', input: [{type: 'text', text: undefined}]}]) assert.throws(() => f.transport.startTurn(params));
   assert.equal(f.sent.length, 2);
   const accepted = f.transport.startThread(); f.reply(1, {}); assert.deepEqual(await accepted, {});
@@ -160,7 +172,8 @@ test('negative integer request IDs remain distinct from strings and server reque
   const init = f.transport.initialize();
   assert.equal(f.sent[0].id, -1);
   f.reply(-1, {}); await init;
-  assert.deepEqual(f.transport.receive({id: -1, method: 'item/tool/call', params: {}}, 'connection-1'), {kind: 'server-request-refused'});
+  assert.deepEqual(f.transport.receive({id: -1, method: 'item/tool/call', params: {}}, 'connection-1'),
+    {kind: 'server-request-refused', method: 'item/tool/call', request: {id: -1, method: 'item/tool/call', params: {}}});
   assert.deepEqual(f.sent.at(-1), {id: -1, error: {code: -32601, message: 'Controller transport does not handle server requests'}});
   const pending = f.transport.startThread();
   assert.equal(f.sent.at(-1).id, 0);
@@ -193,7 +206,7 @@ test('initialization waits for successful notification delivery before accepting
   assert.deepEqual(await initialized, {userAgent: 'fixture'});
   assert.equal(settled, true);
   const started = transport.startThread();
-  assert.deepEqual(sent.at(-1), {id: 1, method: 'thread/start', params: {environments: []}});
+  assert.deepEqual(sent.at(-1), {id: 1, method: 'thread/start', params: {}});
   transport.receive({id: 1, result: {thread: {id: 'ready'}}}, 'g');
   assert.deepEqual(await started, {thread: {id: 'ready'}});
 });

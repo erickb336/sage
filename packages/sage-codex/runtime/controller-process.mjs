@@ -1,6 +1,8 @@
 import {spawn as nativeSpawn} from 'node:child_process';
+import {realpathSync} from 'node:fs';
 import {isAbsolute} from 'node:path';
-import {createControllerTransport, REQUIRED_CONTROLLER_CONFIG} from './controller-transport.mjs';
+import {createControllerTransport, OWNED_CONTROLLER_CONFIG} from './controller-transport.mjs';
+import {bindPolicy, bindTask, bindTurnText, turnOutcome} from './controller-binding.mjs';
 
 // Limits bound one wire frame and retained stderr bytes, not total process output.
 const DEFAULT_FRAME_BYTES = 1024 * 1024;
@@ -10,18 +12,28 @@ function positive(value, name) {
   return value;
 }
 const defaultSchedule = (callback, delay) => { const timer = setTimeout(callback, delay); return () => clearTimeout(timer); };
+export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owned-controller', '--strict-config',
+  ...Object.entries(OWNED_CONTROLLER_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])]);
 
-/** Trusted launch inputs only. This owner exposes no model work or effect API. */
+/**
+ * Trusted launch inputs only. One process launches the owned controller entry, binds one task to one root thread
+ * after the policy check, and runs one turn at a time. It keeps every notification and refused server request, and
+ * gives each turn an honest terminal result: EOF, a crash, a fence or a timeout never count as completed.
+ */
 export function createControllerProcess(options, {spawn = nativeSpawn, schedule = defaultSchedule} = {}) {
   if (!options || Object.getPrototypeOf(options) !== Object.prototype) throw new TypeError('Trusted launch options required');
-  const allowed = ['executable', 'cwd', 'env', 'startupTimeoutMs', 'inspectionTimeoutMs', 'stopGraceMs', 'maxFrameBytes', 'maxDiagnosticBytes'];
+  const allowed = ['executable', 'executableSha256', 'cwd', 'env', 'startupTimeoutMs', 'inspectionTimeoutMs', 'stopGraceMs', 'maxFrameBytes', 'maxDiagnosticBytes',
+    'turnTimeoutMs', 'interruptGraceMs', 'maxEvents', 'maxEventBytes', 'onEvent'];
   for (const key of Reflect.ownKeys(options)) {
     const descriptor = Object.getOwnPropertyDescriptor(options, key);
     if (!allowed.includes(key) || !('value' in descriptor)) throw new TypeError('Unsupported launch option');
   }
-  const {executable, cwd, env, startupTimeoutMs = 10000, inspectionTimeoutMs = 10000, stopGraceMs = 1000,
-    maxFrameBytes = DEFAULT_FRAME_BYTES, maxDiagnosticBytes = DEFAULT_DIAGNOSTIC_BYTES} = options;
+  const {executable, executableSha256, cwd, env, startupTimeoutMs = 10000, inspectionTimeoutMs = 10000, stopGraceMs = 1000,
+    maxFrameBytes = DEFAULT_FRAME_BYTES, maxDiagnosticBytes = DEFAULT_DIAGNOSTIC_BYTES,
+    turnTimeoutMs = 2 * 60 * 60 * 1000, interruptGraceMs = 10000, maxEvents = 20000, maxEventBytes = 64 * 1024 * 1024, onEvent} = options;
   if (typeof executable !== 'string' || !isAbsolute(executable) || typeof cwd !== 'string' || !isAbsolute(cwd)) throw new TypeError('Trusted absolute executable and canonical cwd required');
+  if (typeof executableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(executableSha256)) throw new TypeError('Executable sha256 required');
+  if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Invalid event callback');
   if (!env || Object.getPrototypeOf(env) !== Object.prototype) throw new TypeError('Explicit trusted environment required');
   const environment = {};
   for (const key of Reflect.ownKeys(env)) {
@@ -30,17 +42,20 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     Object.defineProperty(environment, key, {value: descriptor.value, enumerable: true});
   }
   Object.freeze(environment);
-  for (const [name, value] of Object.entries({startupTimeoutMs, inspectionTimeoutMs, stopGraceMs, maxFrameBytes, maxDiagnosticBytes})) positive(value, name);
+  for (const [name, value] of Object.entries({startupTimeoutMs, inspectionTimeoutMs, stopGraceMs, maxFrameBytes, maxDiagnosticBytes,
+    turnTimeoutMs, interruptGraceMs, maxEvents, maxEventBytes})) positive(value, name);
   if (typeof spawn !== 'function' || typeof schedule !== 'function') throw new TypeError('Invalid process dependencies');
-  let child, connection, attempted = false, fenced = false, childClosed = false, exitCode = null, exitSignal = null;
+  let child, connection, attempted = false, fenced = false, fenceReason = null, childClosed = false, exitCode = null, exitSignal = null;
   let phase = 'idle', stopPromise, inspectionPromise, diagnosticBytes = 0, diagnosticsTruncated = false;
-  const streamClosures = new Set(), observations = new Set(), signals = [];
+  let initialized = null, threadRequested = false, binding = null, turn = null;
+  const streamClosures = new Set(), observations = new Set(), signals = [], events = [];
+  let eventBytes = 0;
   let buffered = Buffer.alloc(0);
   const decoder = new TextDecoder('utf-8', {fatal: true});
   let text = '';
   function status() {
     return Object.freeze({state: phase, processClosed: childClosed, streamsClosed: streamClosures.size === 3,
-      exitCode, exitSignal, diagnosticBytes, diagnosticsTruncated, signals: Object.freeze([...signals])});
+      exitCode, exitSignal, reason: fenceReason, diagnosticBytes, diagnosticsTruncated, signals: Object.freeze([...signals])});
   }
   function terminal() { return childClosed && streamClosures.size === 3; }
   function notify() {
@@ -49,8 +64,10 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
   }
   function fence(reason) {
     fenced = true;
+    fenceReason ??= reason;
     connection?.disconnect(reason);
     if (!terminal()) phase = 'unresolved';
+    if (turn) { advance(turn, {type: 'lost', reason: fenceReason}); settle(); }
   }
   function waitBounded(milliseconds) {
     if (terminal()) return Promise.resolve(true);
@@ -64,13 +81,37 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
       observe();
     });
   }
+  function advance(current, message) { current.state = turnOutcome(current.state, message); }
+  // Decide only after a whole read, so that conflicting terminals in one read give uncertain.
+  function settle() {
+    if (!turn?.state.result) return;
+    const current = turn;
+    turn = null;
+    for (const cancel of current.cancels) cancel();
+    if (current.state.result === 'uncertain' && !fenced) fence('Turn outcome uncertain');
+    const {result, turnId, lastAgentMessage, error, timedOut} = current.state;
+    current.resolve(Object.freeze({state: result, task: binding.task, run: binding.run, threadId: binding.threadId, turnId,
+      bindingHash: binding.bindingHash, inputSha256: current.inputSha256, lastAgentMessage, error, timedOut,
+      eventCount: events.length, status: status()}));
+  }
+  function observe(received, bytes) {
+    if (received.kind === 'reply') return;
+    if (events.length >= maxEvents || eventBytes + bytes > maxEventBytes) { fence('Event limit exceeded'); return; }
+    eventBytes += bytes;
+    const notification = received.kind === 'observation';
+    const message = notification ? received.notification : received.request;
+    const event = Object.freeze({seq: events.length + 1, kind: notification ? 'notification' : 'server-request-refused', method: message.method, message});
+    events.push(event);
+    if (onEvent) { try { onEvent(event); } catch { fence('Event callback failed'); return; } }
+    if (turn) advance(turn, {type: 'event', event});
+  }
   function parse(chunk) {
     if (fenced) return;
     try {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       // Split bytes before decoding so frame limits count UTF-8 bytes.
       let offset = 0;
-      while (offset < bytes.length) {
+      while (offset < bytes.length && !fenced) {
         const newline = bytes.indexOf(10, offset);
         const end = newline === -1 ? bytes.length : newline;
         const segment = bytes.subarray(offset, end);
@@ -79,11 +120,14 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
         text += decoder.decode(segment, {stream: true});
         if (newline === -1) break;
         text += decoder.decode();
-        connection.receive(text, 'owned-process');
-        buffered = Buffer.alloc(0); text = '';
+        const length = buffered.length;
+        buffered = Buffer.alloc(0);
+        const line = text; text = '';
+        observe(connection.receive(line, 'owned-process'), length);
         offset = newline + 1;
       }
     } catch { fence('Invalid or oversized protocol frame'); }
+    settle();
   }
   function write(message) {
     if (fenced) return Promise.reject(new Error('Process requests fenced'));
@@ -99,9 +143,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     attempted = true; phase = 'starting';
     return (async () => {
       try {
-        const args = ['app-server', '--stdio', '--strict-config'];
-        for (const [key, value] of Object.entries(REQUIRED_CONTROLLER_CONFIG)) args.push('-c', `${key}=${JSON.stringify(value)}`);
-        child = spawn(executable, args, {cwd, env: environment, shell: false, stdio: ['pipe', 'pipe', 'pipe']});
+        child = spawn(executable, [...OWNED_LAUNCH_ARGS], {cwd, env: environment, shell: false, stdio: ['pipe', 'pipe', 'pipe']});
         connection = createControllerTransport({generation: 'owned-process', send: write, inspectionCwd: cwd});
         child.on('error', () => fence('Owned process error'));
         child.on('close', (code, signal) => { childClosed = true; exitCode = code; exitSignal = signal; fence('Owned process closed'); notify(); });
@@ -123,7 +165,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
         });
         let cancel;
         const deadline = new Promise((_, reject) => { cancel = schedule(() => { fence('Startup observation expired'); reject(new Error('Startup observation expired')); }, startupTimeoutMs); });
-        try { await Promise.race([connection.initialize(), deadline]); }
+        try { initialized = await Promise.race([connection.initialize(), deadline]); }
         finally { cancel(); }
         if (fenced) throw new Error('Startup fenced');
         phase = 'ready'; return status();
@@ -146,11 +188,80 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     })();
     return inspectionPromise;
   }
+  /** Binds one task to one root thread. No turn can start unless the effective policy passed. */
+  async function openThread(input) {
+    if (threadRequested) throw new Error('This process already bound its one task and root thread');
+    threadRequested = true;
+    if (phase !== 'ready' || fenced || stopPromise) throw new Error('Process not ready for a thread');
+    try {
+      const task = bindTask(input, cwd);
+      if (realpathSync(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
+      const config = await inspect();
+      const thread = await connection.startThread({cwd, ephemeral: true, developerInstructions: input.instructions});
+      binding = bindPolicy({binary: {path: executable, sha256: executableSha256}, args: OWNED_LAUNCH_ARGS, initialize: initialized, config, thread, task});
+      return Object.freeze({state: 'bound', policy: binding});
+    } catch (error) {
+      const state = error.code === 'uncertain' ? 'uncertain' : 'refused';
+      const code = error.rpcError ? 'rpc' : (error.code ?? 'refused');
+      const detail = Object.freeze(error.rpcError ? {...error.rpcError} : {message: error.message});
+      return Object.freeze({state, code, error: detail, status: await stop()});
+    }
+  }
+  function requestInterrupt(current) {
+    if (current.interruptRequested) return;
+    current.interruptRequested = true;
+    current.cancels.push(schedule(() => { if (turn !== current) return; advance(current, {type: 'lost', reason: 'No terminal event within the interrupt grace'}); settle(); }, interruptGraceMs));
+    if (current.state.turnId) sendInterrupt(current);
+  }
+  function sendInterrupt(current) {
+    // The grace timer decides the outcome; an interrupt refusal or a closed connection changes nothing here.
+    try { connection.interruptTurn({threadId: binding.threadId, turnId: current.state.turnId}).catch(() => {}); } catch { /* fenced */ }
+  }
+  /** Runs one turn on the bound root thread. Resolves with the frozen terminal result. */
+  function runTurn(text) {
+    if (!binding) return Promise.reject(new Error('No bound root thread'));
+    if (turn) return Promise.reject(new Error('A turn is already active'));
+    if (fenced || stopPromise) return Promise.reject(new Error('Process fenced; no new turn'));
+    let inputSha256;
+    try { inputSha256 = bindTurnText(text); } catch (error) { return Promise.reject(error); }
+    const current = {state: Object.freeze({threadId: binding.threadId}), inputSha256, cancels: [], interruptRequested: false};
+    const promise = new Promise(resolve => { current.resolve = resolve; });
+    current.promise = promise;
+    turn = current;
+    current.cancels.push(schedule(() => { if (turn !== current) return; advance(current, {type: 'deadline'}); requestInterrupt(current); }, turnTimeoutMs));
+    let pending;
+    try { pending = connection.startTurn({threadId: binding.threadId, input: [{type: 'text', text}]}); }
+    catch (error) { advance(current, {type: 'lost', reason: error.message}); settle(); return promise; }
+    pending.then(reply => {
+      if (turn !== current) return;
+      const turnId = reply?.turn?.id;
+      if (typeof turnId !== 'string' || turnId === '') advance(current, {type: 'lost', reason: 'The turn/start reply has no turn id'});
+      else {
+        advance(current, {type: 'reply', turnId});
+        if (current.interruptRequested) sendInterrupt(current);
+      }
+      settle();
+    }, error => {
+      if (turn !== current) return;
+      advance(current, error.code === 'refused' ? {type: 'refused', error: error.rpcError} : {type: 'lost', reason: error.message});
+      settle();
+    });
+    return promise;
+  }
+  /** Asks the active turn to stop. Resolves with that turn's result: interrupted, or uncertain after the grace. */
+  function interrupt() {
+    if (!turn) return Promise.reject(new Error('No active turn'));
+    const current = turn;
+    requestInterrupt(current);
+    return current.promise;
+  }
   function stop() {
     if (stopPromise) return stopPromise;
-    fence('Stop requested');
-    if (!child) { phase = 'stopped'; stopPromise = Promise.resolve(status()); return stopPromise; }
     stopPromise = (async () => {
+      // EOF alone gives no terminal event, so an active turn is interrupted first.
+      if (turn) { const current = turn; requestInterrupt(current); await current.promise; }
+      fence('Stop requested');
+      if (!child) { phase = 'stopped'; return status(); }
       try { child.stdin.end(); } catch { /* Owned handle remains unresolved until observed. */ }
       for (const signal of ['SIGTERM', 'SIGKILL']) {
         if (await waitBounded(stopGraceMs)) return status();
@@ -162,5 +273,6 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     })();
     return stopPromise;
   }
-  return Object.freeze({start, inspect, stop, status});
+  function eventsCopy() { return Object.freeze([...events]); }
+  return Object.freeze({start, inspect, openThread, runTurn, interrupt, stop, status, events: eventsCopy});
 }
