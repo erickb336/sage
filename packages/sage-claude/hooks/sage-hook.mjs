@@ -949,7 +949,7 @@ function chiefMemoryWrite(input) {
 }
 /** The word with which a command tool's input writes a logbook file, or undefined. sage: in sage mode a logbook file's name counts too. */
 function shellWrite(ti, sage, cwd) {
-  const text = commandFields(ti);
+  const text = runFields(ti);
   const all = text.join("\n");
   const words = partsOf(all);
   if (!text.some(t => writes(t, cwd)) || stateToolOnly(typeof ti.command === "string" ? ti.command : "")) return undefined;
@@ -1408,7 +1408,7 @@ function agentCheck(input, file, slots) {
   if (ti.dangerouslyDisableSandbox) return "an agent never runs a command outside the sandbox (dangerouslyDisableSandbox).";
   const command = typeof ti.command === "string" ? ti.command : "";
   const cwd = input.cwd ?? process.cwd();
-  const texts = commandFields({ ...ti, description: undefined }); // a description runs nothing
+  const texts = runFields(ti);
   const named = texts.map((t) => runsNamed(t, cwd)).find(Boolean);
   if (named) {
     if (texts.some((t) => /sage-pr\.mjs/i.test(unquote(t)))) return "only the chief runs the PR script (sage-pr.mjs).";
@@ -1429,9 +1429,8 @@ function agentCheck(input, file, slots) {
     if (input.agent_type === "sage:lead") return twice ? `--${twice} is given twice (T275).` : leadProblem(input, cmd, pos, opt, slots);
     return `"${[cmd, ...pos.slice(0, 1)].join(" ")}" writes the logbook, or is not a read command of the state tool.`;
   }
-  const text = commandFields(ti);
-  if (!text.some(t => writes(t, cwd))) return undefined;
-  const word = nearLogbook(text.join("\n"), roots, cwd) ?? text.map((t) => linksNear(t, roots[1], cwd)).find(Boolean);
+  if (!texts.some(t => writes(t, cwd))) return undefined;
+  const word = nearLogbook(texts.join("\n"), roots, cwd) ?? texts.map((t) => linksNear(t, roots[1], cwd)).find(Boolean);
   const hint = word && /\$\?/.test(word) ? " The hook does not expand $?, so its ? is a pattern character: to show an exit code, write || echo FAIL or ; echo done after the command instead." : "";
   return word && `an agent never writes, moves or removes a logbook file from the shell, and never writes near one with a pattern, a variable or a link to it. ${quoted(word)} makes this command near the logbook: change or remove it.${hint}`;
 }
@@ -1653,7 +1652,7 @@ function boardProblem(input) {
     return reach.config || reach.above ? BOARD_CONFIG : undefined;
   }
   if (!SHELL_TOOLS.test(tool)) return undefined;
-  for (const text of commandFields({ ...ti, description: undefined, ...(terminal ? { cwd: undefined } : {}) })) {
+  for (const text of runFields(terminal ? { ...ti, cwd: undefined } : ti)) {
     let read;
     try { read = boardCommands(text, cwd, uncertain); } catch {
       // The hook cannot read the line: it refuses one that names the board or a config (fail closed).
@@ -1731,6 +1730,9 @@ const expansionProblem = (command, cwd, options) => sharedCommands.expansionProb
 function commandFields(ti) {
   return fields(Array.isArray(ti.command) ? { ...ti, command: ti.command.join(" ") } : ti);
 }
+
+/** The fields that a command tool runs: every field but the description, because a description runs nothing (T386). */
+const runFields = (ti) => commandFields({ ...ti, description: undefined });
 
 /** PowerShell expansions cannot be judged by the shared shell reader. Refuse protected words conservatively. */
 function powerShellProblem(command) {

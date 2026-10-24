@@ -1,9 +1,8 @@
 // Standalone browser check of the T233 program views (T368): the Program filter, the Needs you strip and its counts, the
 // address that keeps the program, and no sideways scroll on the board, the programs list, a program page and a task page
-// at 375 and 1280 px, light and dark. SAMPLE DATA from scripts/fixtures/board-programs.mjs. Like board-picker.test.mjs, it
-// needs Playwright through NODE_PATH and is not in the default test command. It runs Playwright's bundled Chromium
-// (PLAYWRIGHT_BROWSERS_PATH), or the headless shell at BOARD_BROWSER_PATH; never an installed Chrome.
-// Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$SCRATCH/browsers" node --test scripts/board-programs-browser.test.mjs
+// at 375 and 1280 px, light and dark. SAMPLE DATA from scripts/fixtures/board-programs.mjs. It runs in
+// `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
+// BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -118,7 +117,8 @@ test("R1324-5: the programs list's picker keeps one project's programs with thei
   assert.equal(await page.locator("#sum-dropped").textContent(), "Dropped (1)");
   assert.equal(await page.locator("#needs-count").textContent(), "8", "the count is the server's: a programs page has no cards to count");
   await page.click("a.chip.need");
-  await page.waitForURL(/needs=1/);
+  // The board takes needs=1 out of the address as it loads (T374), so wait for the board itself, not for needs=1.
+  await page.waitForURL(url => url.pathname === "/");
   assert.equal(await page.locator("[data-filter=needs]").getAttribute("aria-pressed"), "true");
   assert.ok((await shownIds(page)).length > 0 && (await page.locator(".card[data-key]:not([hidden])").evaluateAll(cards => cards.every(card => card.dataset.needs === "true"))));
 });
