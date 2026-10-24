@@ -70,9 +70,12 @@ export function createBoardConfig(path, { sources, port = 43123, allowedHosts = 
   const config = validateBoardConfig({ version: 1, sources, port, allowedHosts, ...(pagesDir ? { pagesDir } : {}) }, path);
   noLinkedParents(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  try { writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx", mode: 0o600 }); }
+  catch (error) { throw error.code === "EEXIST" ? new TypeError(existingConfig(path)) : error; }
   return config;
 }
+/** Setup never changes a config that exists: the line names the file and the way to change it. */
+const existingConfig = path => `the board config ${path} exists, and setup does not change it. To change its "port" or another setting, first run ${boardCommand("--stop", path, {}, true)} while the file still names the port of the running board, then edit that file, then ask for the board again. To set the board up again, remove the file first.`;
 /**
  * The standard logbook roots of the current user, as each provider's state tool computes them: SAGE_HOME, when it is
  * set, is the one root of every provider. A missing root stays listed: the server attaches when it appears. The board
@@ -118,10 +121,10 @@ async function setPassword(configPath, input, prompt, terminal) {
 
 /** A non-secret name of one board config, from its real path: the server sends it, and ensure and stop compare it. */
 export const configId = configPath => createHash("sha256").update(`sage-board-config:${realpathSync(configPath)}`).digest("hex").slice(0, 16);
-/** A command that a shell runs as pasted: this file's full path, and --config when it is not the default one. */
-function boardCommand(option, configPath, env) {
+/** A command that a shell runs as pasted: this file's full path, and --config when the owner gave it or it is not the default one. */
+function boardCommand(option, configPath, env, explicit = false) {
   const quote = text => /[^\w@%+=:,./-]/.test(text) ? `"${text.replace(/(["\\$`])/g, "\\$1")}"` : text;
-  return ["node", quote(fileURLToPath(import.meta.url)), "board", option, ...(configPath === defaultConfigPath(env) ? [] : ["--config", quote(configPath)])].join(" ");
+  return ["node", quote(fileURLToPath(import.meta.url)), "board", option, ...(!explicit && configPath === defaultConfigPath(env) ? [] : ["--config", quote(configPath)])].join(" ");
 }
 
 /**
@@ -240,7 +243,7 @@ function parse(argv) {
   return { options, value: values[0] ?? "all" };
 }
 export async function runBoardCli(argv, { output = line => process.stdout.write(`${line}\n`), env = process.env, input = process.stdin, terminal = Boolean(input.isTTY), prompt = process.stderr, kill = (pid, signal) => process.kill(pid, signal) } = {}) {
-  const { options, value } = parse(argv);
+  const { options, value } = parse(argv), explicit = options.config !== undefined;
   options.config ??= defaultConfigPath(env);
   if (options.scope && (options.serve || options.setup || options.ensure || options.stop || options["set-password"] || options.install)) throw new TypeError("--scope is only for a task lookup");
   // --ensure first sets the board up when its config is missing, with the settings that --setup takes.
@@ -249,8 +252,8 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
     if (value !== "all" || options.sources?.length > 65536 || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("setup takes --config, with optional sources, port, pages and allowed-hosts");
     if (options.port && !/^[1-9]\d*$/.test(options.port)) throw new TypeError("port must be a positive integer");
     createBoardConfig(options.config, { sources: options.sources ? parseJson(options.sources) : standardSources(env), port: options.port ? Number(options.port) : 43123, pagesDir: options.pages, allowedHosts: options["allowed-hosts"] ? parseJson(options["allowed-hosts"]) : [] });
-    if (options.setup) { output(`Board config created: ${boundedPath(options.config)}. Access from outside this Mac stays off until you set a board password: run in a terminal ${boardCommand("--set-password", boundedPath(options.config), env)}`); return null; }
-  } else if (options.sources || options.pages || options.port || options["allowed-hosts"]) throw new TypeError(options.ensure ? "the board config exists: change its settings in the file" : "source and service settings require --setup");
+    if (options.setup) { output(`Board config created: ${boundedPath(options.config)}. Access from outside this Mac stays off until you set a board password: run in a terminal ${boardCommand("--set-password", boundedPath(options.config), env, explicit)}`); return null; }
+  } else if (options.sources || options.pages || options.port || options["allowed-hosts"]) throw new TypeError(options.ensure ? existingConfig(boundedPath(options.config)) : "source and service settings require --setup");
   if (options.ensure) {
     if (value !== "all" || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("ensure takes --config, and the setup settings for a new config");
     output(await ensureBoard(boundedPath(options.config), readBoardConfig(options.config), env)); return null;
