@@ -144,7 +144,7 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
     // The config exists, so a setup setting is refused rather than ignored.
     const settings = await board(CLI, ["--ensure", "--port", String(port)], env);
     assert.equal(settings.status, 1);
-    assert.match(settings.stderr, /the board config exists/);
+    assert.equal(settings.stderr, `sage board: the board config ${config} exists, and setup does not change it. To change its "port" or another setting, edit that file, then run node ${CLI} board --stop --config ${config} and ask for the board again. To set the board up again, remove the file first.\n`);
   } finally { await stop(dir, port); }
 });
 

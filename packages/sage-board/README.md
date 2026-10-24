@@ -36,13 +36,15 @@ Set the password yourself, in Terminal on the Mac:
 node <path to board/cli.mjs> board --set-password
 ```
 
-`board --ensure` and `board --setup` print this command with its full path. It asks twice with the echo off and needs 12 characters or more. The configuration file keeps only a salted scrypt hash. The command refuses when its input is not a terminal. Restart a running server after a change.
+`board --ensure` and `board --setup` print this command with its full path. `board --setup` adds the `--config` that you gave it, so the command sets the password of that config. It asks twice with the echo off and needs 12 characters or more. The configuration file keeps only a salted scrypt hash. The command refuses when its input is not a terminal. Restart a running server after a change.
 
 The terminal check accepts any pseudo-terminal, so it alone does not stop an agent. The sage hook in Claude Code adds a second barrier: it refuses the ordinary command shapes by which a session or an agent runs `--set-password`, or reads, copies or replaces the configuration file. An agent runs as your own user, so a script that builds the command or the path while it runs can still pass the hook. Full protection needs the sandbox (tasks T97 to T99).
 
 Until you set a password, every request that is not from the Mac itself gets status 403 and the text "Access from outside this Mac is off until the owner sets a board password on the Mac." The text names no path; the exact command is only in the output of `board --ensure` on the Mac. A configuration from before this change can still have a random `secret`. It still loads, and a server of this version ignores it; `--set-password` removes it from the file. A server that started before the update can still take the secret, so `board --ensure` says that a restart is needed until you stop that server.
 
 The default port is 43123. Setup accepts `--port` from 1024 to 65535. A busy port causes an error; the service does not choose another port.
+
+Setup never changes a config that exists: it stops with an error that names the file. To change the port of an existing config, edit `"port"` in the file, then restart the board with `board --stop` and `board --ensure`. To set the board up again from the start, remove the file first; this also removes the board password.
 
 The stable installation copies only board and core sources. It does not depend on a provider plugin cache. Stop the foreground service with Ctrl+C.
 

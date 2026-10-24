@@ -26,7 +26,21 @@ test("T229: standalone config has no secret and no password, private mode and no
   assert.equal(statSync(config).mode & 0o777, 0o600);
   assert.deepEqual(readBoardConfig(config), value);
   assert.throws(() => createBoardConfig(join(root, "settings.json"), { sources: [{ id: "sample", path: root }] }), /outside logbook roots/);
-  assert.throws(() => createBoardConfig(config, { sources: [{ id: "sample", path: root }] }), /EEXIST/);
+  assert.throws(() => createBoardConfig(config, { sources: [{ id: "sample", path: root }] }), /exists, and setup does not change it/);
+});
+test("T395: setup on an existing config names the file and says how to change its port, and leaves the file as it was", async t => {
+  const { config } = fixture(t), before = readFileSync(config, "utf8");
+  const cli = fileURLToPath(new URL("../packages/sage-board/cli.mjs", import.meta.url));
+  await assert.rejects(runBoardCli(["board", "--setup", "--config", config, "--port", "43200"], { output: () => {} }), {
+    message: `the board config ${config} exists, and setup does not change it. To change its "port" or another setting, edit that file, then run node ${cli} board --stop --config ${config} and ask for the board again. To set the board up again, remove the file first.`,
+  });
+  assert.equal(readFileSync(config, "utf8"), before);
+});
+test("T395: setup with --config prints the set-password command with that --config, also when it is the default path of this HOME", async t => {
+  const { dir, root } = fixture(t), home = join(dir, "home"), config = join(home, ".config/sage-board/board.json"), lines = [];
+  const cli = fileURLToPath(new URL("../packages/sage-board/cli.mjs", import.meta.url));
+  await runBoardCli(["board", "--setup", "--config", config, "--sources", JSON.stringify([{ id: "sample", path: root }])], { output: line => lines.push(line), env: { HOME: home } });
+  assert.deepEqual(lines, [`Board config created: ${config}. Access from outside this Mac stays off until you set a board password: run in a terminal node ${cli} board --set-password --config ${config}`]);
 });
 test("standalone HTML export includes task detail, prints its path and does not overwrite", async t => {
   const { dir, config, value } = fixture(t), lines = [];
