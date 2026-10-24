@@ -9,6 +9,7 @@ const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
 const digest = text => createHash("sha256").update(text).digest();
 const unavailable = [{ source: "board", message: "The board snapshot is unavailable." }];
+const TOO_LARGE = { source: "board", message: "The page that you opened is too large to show (over 8 MB), so the board shows this page instead." };
 const own = (object, name) => Object.hasOwn(object, name);
 
 function authority(value) {
@@ -151,11 +152,21 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   }
 
   // The checkout paths go only to the Mac's own page (R1069-2).
-  function htmlFor(view, paths = false) {
-    const html = view.agents ? renderAgentsHtml(model, { live: true, paths }) : view.programs || view.program ? renderProgramsHtml(model, { programKey: view.program ?? null, live: true, paths })
-      : renderBoardHtml(model, { taskKey: view.task, snapshot: false, live: true, paths });
-    if (Buffer.byteLength(html) > MAX_HTML) throw new RangeError("board rendering exceeds the size limit");
-    return html;
+  const render = (state, view, paths) => view.agents ? renderAgentsHtml(state, { live: true, paths }) : view.programs || view.program ? renderProgramsHtml(state, { programKey: view.program ?? null, live: true, paths })
+    : renderBoardHtml(state, { taskKey: view.task, snapshot: false, live: true, paths });
+  const fits = html => Buffer.byteLength(html) <= MAX_HTML;
+  /**
+   * A page with its stale mark and its diagnostics. The refresh checks the shared pages (the board, the Agents page and
+   * the programs list), so a good snapshot has them. One rule for a single page (a task page or a program page) that is
+   * too large (T383): its address shows its parent page (the board, or the programs list) from the same snapshot, with a
+   * note. It needs no older copy, so it holds also at the first start, and one large page never stops the rest of the board.
+   */
+  function pageFor(view, paths = false) {
+    const html = render(model, view, paths);
+    if (fits(html)) return { html, stale: model.stale, diagnostics: model.diagnostics };
+    const parent = { ...model, diagnostics: [...model.diagnostics, TOO_LARGE] }, other = render(parent, { programs: !!view.program }, paths);
+    if (!fits(other)) throw new RangeError("board rendering exceeds the size limit");
+    return { html: other, stale: model.stale, diagnostics: parent.diagnostics };
   }
 
   function removeClient(client) {
@@ -183,7 +194,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   // so a file event that changes nothing on the page sends nothing, and the page keeps its state.
   function publish(client) {
     try {
-      const payload = { revision: String(revision), html: htmlFor(client, client.paths), stale: model.stale, diagnostics: model.diagnostics };
+      const payload = { revision: String(revision), ...pageFor(client, client.paths) };
       const sent = digest(JSON.stringify([payload.html, payload.stale, payload.diagnostics])).toString("base64");
       if (client.sent === sent) return;
       client.sent = sent;
@@ -261,10 +272,9 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       }
       next = { ...buildBoardModel(read, { now: clock() }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
-      // Validate the complete HTML before replacing a good snapshot: the board, the Agents page, the programs list and each
-      // program's page (R1334-3: a program page lists merged tasks that the board no longer shows).
-      const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderProgramsHtml(next, { live: true }),
-        ...next.programs.map(program => () => renderProgramsHtml(next, { programKey: program.key, live: true }))];
+      // Validate the shared pages before replacing a good snapshot: the board, the Agents page and the programs list. A task
+      // page or a program page is checked when it is sent (pageFor), so the refresh renders 3 pages, not one per program.
+      const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderProgramsHtml(next, { live: true })];
       if (pages.some(render => Buffer.byteLength(render()) > MAX_HTML)) throw new RangeError("board rendering exceeds the size limit");
     } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
     if (!next.diagnostics.length) { lastGood = next; model = { ...next, stale: false }; }
@@ -310,7 +320,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       return;
     }
     try {
-      const html = htmlFor(selected, mac);
+      const { html } = pageFor(selected, mac);
       securityHeaders(response, html);
       response.writeHead(missing ? 404 : 200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html) });
       response.end(request.method === "HEAD" ? undefined : html);

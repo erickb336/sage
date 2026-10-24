@@ -2877,6 +2877,25 @@ const programsLine = (s) => s.ok("status").split("\n").filter((l) => l.startsWit
 const OPEN = "the breakdown of PG1 (open, gate G1)";
 const APPROVE = " No task of PG1 builds before the owner approves its breakdown: ask the owner to answer gate G1.";
 
+test("T383 items 3, 4 and 5: the task line and status read the waits as the board does: a hand-edited breakdown question, a proposal whose pilot is abandoned, a loop of waits", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two", "Three"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2,T3");
+  // Item 3: a hand edit of the gate's question. The state tool's state stays proposed, but the task line reads it as the board does.
+  let question;
+  byHand(s.dir, "gates", 0, "G1", (cells) => { question = cells[2]; cells[2] = "Ship it?"; return cells; });
+  assert.equal(s.ok("task", "T2"), "T2 framed · small · round 0 · route build,code-review,qa · program PG1 · waits the breakdown of PG1 (its gate G1 names no program in its question) · unmet the breakdown of PG1");
+  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 3 merged · its gate G1 names no program in its question · name: Codex support");
+  // Item 4: the question again, and the pilot abandoned by hand: the breakdown cannot be answered on a live task, so the program is stuck.
+  byHand(s.dir, "gates", 0, "G1", (cells) => { cells[2] = question; return cells; });
+  byHand(s.dir, "tasks", 0, "T1", (cells) => { cells[5] = "abandoned"; return cells; });
+  assert.equal(programsLine(s), "program PG1 · 0 of 3 merged · T1 abandoned · pilot T1 abandoned: choose a new pilot, or drop the program · name: Codex support");
+  // Item 5: a loop of waits from a hand edit: each wait of the loop is never met.
+  byHand(s.dir, "tasks", 0, "T2", (cells) => { cells[14] = "T3"; return cells; });
+  byHand(s.dir, "tasks", 0, "T3", (cells) => { cells[14] = "T2"; return cells; });
+  assert.match(s.ok("status"), /\n {0}waits {3}2 waiting · T2 for T3 \(framed, in a loop of waits, never met\), the breakdown of PG1 \(open, gate G1\) · T3 for T2 \(framed, in a loop of waits, never met\), /);
+});
+
 test("T337: a logbook made before programs has no programs.tsv: it passes the integrity check and the merge check, and only program propose writes the file", async () => {
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
@@ -2997,18 +3016,18 @@ test("F-T233-3, F-T233-7: status says that a breakdown waits for the owner only 
   for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
   propose(s, "T1", "Codex support", "T2");
   assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 2 merged · breakdown waits for you (G1) · name: Codex support");
-  // A hand edit changes G1's question; its options and pilot stay. Status reads it as lost, as the boards do.
+  // A hand edit changes G1's question; its options and pilot stay. Status reads it as lost, as the boards do, and names the question (T383 item 12).
   byHand(s.dir, "gates", 0, "G1", (cells) => cells.with(2, "Ship it?"));
-  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 2 merged · its gate G1 is not a breakdown gate on its pilot T1 · name: Codex support");
+  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 2 merged · its gate G1 names no program in its question · name: Codex support");
   const status = s.ok("status");
   assert.ok(status.includes(" · G1 Ship it? (default: none)") && !status.includes("breakdown waits for you") && !status.includes("(breakdown,"), status);
-  assert.ok(status.includes(" · T2 for the breakdown of PG1 (its gate G1 is not a breakdown gate)"), status);
+  assert.ok(status.includes(" · T2 for the breakdown of PG1 (its gate G1 names no program in its question)"), status);
   // The state tool's rule is the same as before: the gate is open on the pilot with the breakdown options, so no build runs.
   assert.match(s.no("run", "add", "T2", "--role", "lead"), /^sage: T2 waits for the breakdown of PG1 \(open, gate G1\)/);  // F-T233-7: two programs rows name G1, whose question names PG2: G1 is PG2's breakdown gate, and PG1 never waits for you.
   byHand(s.dir, "gates", 0, "G1", (cells) => cells.with(2, "Approve program PG2? No task builds before you approve."));
   const f = join(s.dir, "programs.tsv"), [head, row] = readFileSync(f, "utf8").trimEnd().split("\n"), name = head.split("\t").indexOf("name");
   writeFileSync(f, `${[head, row, row.split("\t").with(0, "PG2").with(name, "Second").join("\t")].join("\n")}\n`);
-  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 2 merged · its gate G1 is not a breakdown gate on its pilot T1 · name: Codex support\nprogram PG2 · pilot T1: 0 of 0 merged · breakdown waits for you (G1) · name: Second");
+  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 2 merged · its gate G1 names PG2 in its question, not PG1 · name: Codex support\nprogram PG2 · pilot T1: 0 of 0 merged · breakdown waits for you (G1) · name: Second");
 });
 
 test("R1208-3: the integrity check refuses a programs file with two rows for one program id", () => {

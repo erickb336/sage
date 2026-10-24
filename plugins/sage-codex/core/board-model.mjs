@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
-import { ENDED, MET, breakdownGate, dead, gateLines, progressOf, progressText, shownGraph, waitGraph, waitsOf, waitsWithState } from "./program-rules.mjs";
+import { ENDED, MET, breakdownGate, dead, gateLines, namedText, progressOf, progressText, shownGraph, waitGraph, waitsOf, waitsWithState } from "./program-rules.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -16,7 +16,28 @@ const CLEAN = { checks: "checks-pass", "code-review": "review-clean", "security-
 const FAILED = { checks: ["checks-fail"], qa: ["qa-fail"], "code-review": ["findings"], "security-review": ["findings"], "ux-review": ["findings"], "evidence-review": ["findings"] };
 const RUN_ROLE = { "code-review": "code-reviewer", "security-review": "security-reviewer", "ux-review": "ux-reviewer" };
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
-const rows = (project, name, task) => (project.tables[name] ?? []).filter(row => row.task === task.id);
+/**
+ * fn of a list, computed once for each list (a table or the observations) in one build: so each card reads only its own
+ * rows, and the model stays linear in the rows (T383). Each build starts new caches, so no build reads an older index.
+ */
+let build = 0;
+const once = fn => { let cache, at = -1; return list => { if (at !== build) [cache, at] = [new WeakMap(), build]; if (!cache.has(list)) cache.set(list, fn(list)); return cache.get(list); }; };
+const byTask = once(list => { const index = new Map(); for (const row of list) (index.get(row.task) ?? index.set(row.task, []).get(row.task)).push(row); return index; });
+const NONE = [];
+const rows = (project, name, task) => byTask(project.tables[name] ?? NONE).get(task.id) ?? NONE;
+/** The newest run record of each run, by its id. */
+const runRecords = once(records => new Map(records.filter(record => record.kind === "run").map(record => [record.data.run, record])));
+/** N8: the move decisions of a logbook, by the task they leave and by the task they go to. */
+const movesOf = once(decisions => {
+  const from = new Map(), to = new Map();
+  for (const row of decisions) {
+    const move = /^(F-\S+) moved to (T[1-9]\d*) as (F-\S+):/.exec(row.decision ?? "");
+    if (!move) continue;
+    (from.get(row.task) ?? from.set(row.task, []).get(row.task)).push({ row, move });
+    (to.get(move[2]) ?? to.set(move[2], []).get(move[2])).push({ row, move });
+  }
+  return { from, to };
+});
 // N1: the name that stands in for a run's provider when the run does not record it: the source's provider, else its label.
 const standIn = source => source.provider ?? source.label ?? source.id;
 // N9: a project's name: the owner's display name, else the repository name of its upstream remote, then of its origin,
@@ -223,24 +244,35 @@ const WAIT_WORD = { backlog: "not started", design: "in design", building: "buil
 const stateWord = state => state === undefined ? "not in the logbook" : ["merged", "concluded", "abandoned"].includes(state) ? state : WAIT_WORD[COLUMNS.find(([, , states]) => states.includes(state))?.[0]] ?? state;
 /** The graph of one logbook's waits and programs: its tasks by id and each program with its state, as every printer shows it (shownGraph). */
 const graphOf = project => shownGraph(waitGraph((project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)), project.tables.programs ?? [], project.tables.gates ?? [], project.tables.decisions ?? []), project.tables.gates ?? []);
-/** Why a lost program is lost, in the words of each line that names it: its gate row is gone, or the row is not its breakdown gate. */
-const lostWhy = program => program.gateFound ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`;
+/**
+ * Why a lost program is lost, in the words of each line that names it: its gate row is gone; the gate is on its pilot with
+ * the breakdown options, but its question names no program or another (named, shownGraph); or the row is not its breakdown gate.
+ */
+const lostWhy = program => !program.gateFound ? `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`
+  : program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}`
+  : `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}`;
 const LOST_FIX = id => `ask the sage to repair the logbook, or to propose ${id} again.`;
 /**
  * Each wait of a task, with its state: a task (met when merged or concluded; never met when abandoned or lost), the pilot
  * of its program, the breakdown that the owner has not approved (never met when dropped or lost), or a waits cell with
- * text that is not a task id (never met, and its text is never shown).
+ * text that is not a task id (never met, and its text is never shown). A breakdown whose pilot is abandoned or lost
+ * makes its program stuck (programsOf), so a task waits for that pilot instead, as in an active program: it cannot start.
  */
-const waitsFor = (task, graph) => waitsWithState(task, graph).map(wait =>
+const waitsFor = (task, graph) => waitsWithState(task, graph).flatMap(wait => {
+  const pilot = wait.program?.pilot;
+  if (!["proposed", "changing"].includes(wait.program?.state) || !dead(graph.byId.get(pilot)?.state)) return [wait];
+  return pilot === task.id || waitsOf(task).ids.includes(pilot) ? [] : [{ id: pilot, state: graph.byId.get(pilot)?.state, pilot: wait.program.id }];
+}).map(wait =>
   wait.odd ? { odd: true, met: false, never: true }
-  : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state, gateFound: !!wait.program.gateFound }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
-  : { id: wait.id, state: wait.state ?? null, word: stateWord(wait.state), pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) });
+  : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state, gateFound: !!wait.program.gateFound, ...(wait.program.named !== undefined && { named: wait.program.named }) }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
+  // A wait of a loop of waits (a hand edit) is never met, as no task of the loop can start first.
+  : { id: wait.id, state: wait.state ?? null, word: `${stateWord(wait.state)}${wait.loop ? ", in a loop" : ""}`, pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) || !!wait.loop, ...(wait.loop && { loop: true }) });
 const BREAKDOWN_WAIT = {
   proposed: (id, gate) => `your approval of the ${id} breakdown (gate ${gate})`,
   changing: (id, gate) => `the new breakdown of ${id}: you asked for changes (gate ${gate})`,
   dropped: (id, gate) => `the ${id} breakdown, which you dropped (gate ${gate})`,
 };
-const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : wait.breakdown.gate ? `whose gate ${wait.breakdown.gate} is not in the logbook` : "which is not in the logbook"}`
+const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.named !== undefined ? `whose gate ${wait.breakdown.gate} ${namedText(wait.breakdown.named, wait.breakdown.id)}` : wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : wait.breakdown.gate ? `whose gate ${wait.breakdown.gate} is not in the logbook` : "which is not in the logbook"}`
   : `${wait.id} (${wait.pilot ? "pilot, " : ""}${wait.word})`;
 /**
  * The card's wait line, or null when nothing waits: each unmet wait (only the breakdown, when it waits for one), and
@@ -252,12 +284,13 @@ function waitLine(task, waits, column) {
   if (!open.length) return null;
   // Odd text in the waits cell is never shown: a sentence says that the cell needs new waits, and the task cannot start.
   const never = open.some(wait => wait.never), named = open.filter(wait => !wait.odd), odd = named.length < open.length ? " Its waits cell has text that is not a task id: the sage sets its waits again." : "";
+  const loop = open.some(wait => wait.loop) ? " Its waits make a loop, which never ends: the sage sets its waits again." : "";
   if (!named.length) return { never, text: `It cannot start.${odd}` };
-  return { never, text: `Waits for ${and(named.map(waitName))}${never ? ": it cannot start." : "."}${odd}${!never && column === "design" ? " Design and PE may run." : ""}` };
+  return { never, text: `Waits for ${and(named.map(waitName))}${never ? ": it cannot start." : "."}${odd}${loop}${!never && column === "design" ? " Design and PE may run." : ""}` };
 }
 
 function card(source, project, group, task, now, graph) {
-  const records = (project.observations?.records ?? []).filter(record => record.task === task.id && time(record.observedAt) !== null && time(record.observedAt) <= now);
+  const records = (byTask(project.observations?.records ?? NONE).get(task.id) ?? NONE).filter(record => time(record.observedAt) !== null && time(record.observedAt) <= now);
   const pr = latest(records, "pr", data => String(data.number) === task.pr);
   const completion = latest(records, "completion", data => data.state === task.state);
   const mode = latest(records, "mode");
@@ -274,7 +307,7 @@ function card(source, project, group, task, now, graph) {
   // An open gate that a lost program names (F-T233-2) says so on its own line of the question, so Needs you counts that problem once.
   const reasons = gates.map(gate => {
     const breakdown = breakdownGate(gate, graph.programs);
-    const lost = [...graph.programs.values()].filter(program => program.state === "lost" && program.gate === gate.id).map(program => `${lostWhy(program)}: ${LOST_FIX(program.id)}`);
+    const lost = (graph.byGate.get(gate.id) ?? []).filter(program => program.state === "lost").map(program => `${lostWhy(program)}: ${LOST_FIX(program.id)}`);
     return { kind: "gate", key: `${project.key}/${gate.id}`, text: [...gateLines(gate, graph.programs), ...lost].join(LINE), recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
       breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.programs.get(breakdown).name } : null };
   });
@@ -324,11 +357,11 @@ function card(source, project, group, task, now, graph) {
   const completedAt = completion ? time(completion.data.at) : ["merged", "concluded", "abandoned"].includes(task.state) ? time(completionDecision?.at) : null;
   const brief = project.contents?.[latest(records, "artifact", data => data.type === "brief")?.id]?.text ?? null;
   // N8: a moved finding leaves its task; the move decision on the old task names the new task and key.
-  const moves = (project.tables.decisions ?? []).map(row => ({ row, move: /^(F-\S+) moved to (T[1-9]\d*) as (F-\S+):/.exec(row.decision ?? "") })).filter(item => item.move);
-  const found = (to, key) => (project.tables.findings ?? []).find(row => row.task === to && row.key === key);
+  const moves = movesOf(project.tables.decisions ?? NONE);
+  const found = (to, key) => rows(project, "findings", { id: to }).find(row => row.key === key);
   const findings = [
-    ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: moves.find(({ move }) => move[2] === task.id && move[3] === row.key)?.row.task ?? null })),
-    ...moves.filter(({ row }) => row.task === task.id).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
+    ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: (moves.to.get(task.id) ?? NONE).find(({ move }) => move[3] === row.key)?.row.task ?? null })),
+    ...(moves.from.get(task.id) ?? NONE).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
   return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
 }
@@ -466,7 +499,7 @@ function agentsOf(sources, groups, groupOf, cards, at) {
     const leadKey = item => sha256(`${item.book.logbook}:${item.run.id}`);
     const taken = new Set();
     const row = (item, extra) => {
-      const record = item && (item.book.observations?.records ?? []).filter(r => r.kind === "run" && r.data.run === item.run.id).at(-1);
+      const record = item && runRecords(item.book.observations?.records ?? NONE).get(item.run.id);
       const group = item ? groupOf.get(item.book.key) : groupNamed(extra.slot?.project);
       const card = item ? cards.get(`${item.book.key}/${item.run.task}`) : null;
       rows.push({ key: `${source.id}/${item ? `${item.book.name}/${item.run.id}` : extra.slot.name}`, source: source.id, runId: item?.run.id ?? extra.slot?.run ?? null, run: item?.run ?? null,
@@ -487,7 +520,7 @@ function agentsOf(sources, groups, groupOf, cards, at) {
     for (const item of runs.filter(item => !taken.has(item))) {
       const note = notes.filter(note => note.run === item.run.id && runs.some(lead => lead.book === item.book && lead.run.role === "lead" && leadKey(lead) === note.lead));
       const stopped = note.find(note => note.stopped);
-      const prov = String((item.book.observations?.records ?? []).filter(r => r.kind === "run" && r.data.run === item.run.id).at(-1)?.data.provider ?? source.provider ?? standIn(source)).toLowerCase();
+      const prov = String(runRecords(item.book.observations?.records ?? NONE).get(item.run.id)?.data.provider ?? source.provider ?? standIn(source)).toLowerCase();
       const how = NO_SLOT_NOTES.includes(prov) ? "logbook" : !known ? "unknown" : stopped ? "stopped" : "noslot";
       row(item, { slot: null, activity: null, how, stoppedAt: stopped?.at ?? null, leadKey: item.run.role === "lead" ? leadKey(item) : null, helperOf: note[0]?.lead ?? null });
     }
@@ -582,24 +615,26 @@ function programOrder(program, own) {
 
 /**
  * The programs of one logbook (T233): each with its state (the state tool's, plus done, and stuck when the pilot of an
- * active program is abandoned or lost), its progress (Q3), its tasks in order, what moves next (Q4: only a task with no
- * unmet wait; the tasks that wait are a count), the tasks that cannot start, and what needs the owner that no card shows
- * (a stuck program; a breakdown gate that the logbook lost, QA). A changing program needs no one until its new gate (QB).
+ * active, proposed or changing program is abandoned or lost: no card shows its breakdown gate then), its progress (Q3),
+ * its tasks in order, what moves next (Q4: only a task with no unmet wait; the tasks that wait are a count), the tasks
+ * that cannot start, and what needs the owner that no card shows (a stuck program; a breakdown gate that the logbook
+ * lost, QA). A changing program needs no one until its new gate (QB).
  */
 function programsOf(source, project, group, graph, cards) {
-  const tasks = [...graph.byId.values()], gates = new Map((project.tables.gates ?? []).map(gate => [gate.id, gate]));
+  const gates = new Map((project.tables.gates ?? []).map(gate => [gate.id, gate]));
   return [...graph.programs.values()].map(program => {
-    const own = tasks.filter(task => task.program === program.id), progress = progressOf(own), pilotState = graph.byId.get(program.pilot)?.state;
-    const state = program.state !== "active" ? program.state : progress.done ? "done" : dead(pilotState) ? "stuck" : "active";
+    const own = graph.byProgram.get(program.id) ?? [], progress = progressOf(own), pilotState = graph.byId.get(program.pilot)?.state;
+    const state = program.state === "active" ? progress.done ? "done" : dead(pilotState) ? "stuck" : "active"
+      : ["proposed", "changing"].includes(program.state) && dead(pilotState) ? "stuck" : program.state;
     const layered = programOrder(program, own), ordered = layered.map(([task]) => task), card = task => cards.get(`${project.key}/${task.id}`);
     const open = ordered.filter(task => !ENDED.includes(task.state)).map(card).filter(Boolean);
     const moving = open.filter(item => item.waits.every(wait => wait.met)), waiting = open.filter(item => item.waitLine);
     const first = state === "active" ? moving[0] : null;
     const need = state === "stuck" ? { kind: "stuck", title: `${program.id} ${program.name} is stuck`, text: `The pilot ${program.pilot} ${pilotState ? "was abandoned" : "is not in the logbook"}. Choose a new pilot, or drop the program.` }
-      // A lost program whose gate is open on a card that shows says so on that gate (card), so the problem counts once.
-      : state === "lost" && !(gates.get(program.gate) && !gates.get(program.gate).answer && card({ id: gates.get(program.gate).task })?.visible) ? { kind: "lost", title: lostWhy(program), text: title(LOST_FIX(program.id)) }
+      // A lost program whose gate is open on a card in Needs you says so on that gate (card), so the problem counts once.
+      : state === "lost" && !(gates.get(program.gate) && !gates.get(program.gate).answer && inNeeds(card({ id: gates.get(program.gate).task }))) ? { kind: "lost", title: lostWhy(program), text: title(LOST_FIX(program.id)) }
       : null;
-    return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate, gateFound: program.gateFound, open: open.length,
+    return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate, gateFound: program.gateFound, ...(program.named !== undefined && { named: program.named }), open: open.length,
       source: source.id, sourceLabel: source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
       state, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
       next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === program.pilot } : null,
@@ -608,10 +643,39 @@ function programsOf(source, project, group, graph, cards) {
   });
 }
 
+/** A card in Needs you when it has a reason: one on a column (not ended, or done in the last 7 days), as needsOwner reads it. */
+const inNeeds = card => !!card?.visible && !!card.column;
+/**
+ * The programs that live tasks name but the logbook does not have (a lost programs row, or a program cell that is not a
+ * program id, "?"): one item each, as the tasks cannot start and no program line shows it.
+ */
+function missingPrograms(source, project, group, graph) {
+  const items = [];
+  for (const [id, own] of graph.byProgram) {
+    const live = own.filter(task => !ENDED.includes(task.state)).map(task => task.id);
+    if (graph.programs.has(id) || !live.length) continue;
+    const one = live.length === 1, names = id === "?" ? `The program cell of ${and(live)} ${one ? "is" : "are"} not a program id` : `${and(live)} ${one ? "names" : "name"} ${id}`;
+    items.push({ kind: "missing", title: id === "?" ? "A program cell is not a program id" : `The program ${id} is not in the logbook`,
+      text: `${names}, so ${one ? "it cannot" : "they cannot"} start. Ask the sage to repair the logbook, or to take ${one ? "the task" : "each task"} out of the program.`,
+      key: `${project.key}/${id}`, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived });
+  }
+  return items;
+}
+/**
+ * A provider's root that the board cannot read (not a missing root: that is not set up yet) is one item, as it hides
+ * every logbook of that provider. A config file that cannot be read is a line under the board only.
+ */
+function sourceNeeds(source) {
+  const problems = source.diagnostics.filter(message => message !== "ENOENT" && !message.startsWith("config: "));
+  return problems.length ? [{ kind: "source", title: `The ${title(source.label)} logbooks cannot be read`, text: `${problems.map(message => title(plainProblem(message))).join(". ")}. The board shows no ${title(source.label)} logbook. Check that the board can read the folder.`,
+    key: `${source.id}/source`, source: source.id, sourceLabel: source.label, projectName: "every project", group: null, archived: false }] : [];
+}
+
 // A logbook problem that needs the owner (R1307-1, R1307-2): a programs table that the board cannot read, and a logbook
 // that it cannot read (its folder, or a table but programs). An observation, an artifact or a checkout file that cannot be
 // read is a line under the board only: every task shows. Each reason says the file and the line, as the reader gives them.
-const TABLE_FILE = /^(tasks|runs|findings|ledger|gates|decisions|programs): (.*)$/;
+const TABLE_NAMES = ["tasks", "runs", "findings", "ledger", "gates", "decisions", "programs"];
+const TABLE_FILE = new RegExp(`^(${TABLE_NAMES.join("|")}): (.*)$`);
 const unreadable = project => project.diagnostics.filter(message => !/^(programs|observations|checkout|artifact [^:]*): /.test(message));
 function reasonOf(message) {
   const [, name, rest] = TABLE_FILE.exec(message) ?? [];
@@ -623,11 +687,16 @@ function logbookNeeds(source, project, group) {
   const programs = project.diagnostics.find(message => message.startsWith("programs: ")), lost = unreadable(project);
   const others = group.books.filter(book => book.project !== project && book.project.tables.tasks).map(book => title(book.source.label));
   const tables = lost.map(message => TABLE_FILE.exec(message)?.[1]).filter(Boolean);
-  const shows = project.tables.tasks === undefined ? others.length ? `The board shows only the ${others.join(" and ")} logbook of ${group.name}.` : `The board shows no task of ${group.name}.`
+  // With no tasks, the board shows no program either: one item says why, with the programs table's reason too (T383).
+  const noTasks = project.tables.tasks === undefined, why = [...lost, ...(noTasks && programs ? [programs] : [])];
+  const shows = noTasks ? others.length ? `The board shows only the ${others.join(" and ")} logbook of ${group.name}.` : `The board shows no task of ${group.name}.`
     : `The board shows its tasks without the rows of ${tables.map(name => `${name}.tsv`).join(", ")}.`;
+  // Every table with one error code (a folder with no read permission): the folder is the reason, once.
+  const codes = new Set(why.map(message => TABLE_FILE.exec(message)?.[2]));
+  const folder = why.length === TABLE_NAMES.length && codes.size === 1 && /^E[A-Z]+$/.test([...codes][0]) ? `Its folder ${PLAIN[[...codes][0]] ?? "cannot be read"}` : null;
   return [
-    ...(programs ? [item("programs", "The programs table cannot be read", `${reasonOf(programs)}. The board shows the tasks without their programs. Ask the sage to repair the logbook.`)] : []),
-    ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${lost.map(reasonOf).join(". ")}. ${shows} Ask the sage to repair the logbook.`)] : []),
+    ...(programs && !noTasks ? [item("programs", "The programs table cannot be read", `${reasonOf(programs)}. The board shows the tasks without their programs. Ask the sage to repair the logbook.`)] : []),
+    ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the sage to repair the logbook.`)] : []),
   ];
 }
 /** A logbook whose programs table cannot be read shows its tasks with no program (R1307-1): no tag, and no program wait. */
@@ -636,6 +705,7 @@ const withoutPrograms = project => project.tables.programs || !project.tables.ta
 export function buildBoardModel(input, { now = new Date().toISOString() } = {}) {
   const at = time(now);
   if (at === null) throw new TypeError("board time must be an ISO date");
+  build++;
   const sources = input.map(source => ({ ...source, projects: source.projects.map(withoutPrograms) }));
   const { groups, notes } = projectGroups(sources);
   const groupOf = new Map(groups.flatMap(group => group.books.map(book => [book.project.key, group])));
@@ -645,7 +715,9 @@ export function buildBoardModel(input, { now = new Date().toISOString() } = {}) 
   const programs = sources.flatMap(source => source.projects.flatMap(project => programsOf(source, project, groupOf.get(project.key), graphs.get(project.key), byKey)));
   // What needs the owner that no card shows: a stuck program, a lost breakdown gate, a table or a logbook that the board
   // cannot read. An archived project's leave the counts, as its tasks do.
-  const programNeeds = [...programs.filter(program => program.need).map(program => program.need), ...sources.flatMap(source => source.projects.flatMap(project => logbookNeeds(source, project, groupOf.get(project.key))))], liveNeeds = programNeeds.filter(need => !need.archived);
+  const programNeeds = [...programs.filter(program => program.need).map(program => program.need),
+    ...sources.flatMap(source => source.projects.flatMap(project => missingPrograms(source, project, groupOf.get(project.key), graphs.get(project.key)))),
+    ...sources.flatMap(source => [...sourceNeeds(source), ...source.projects.flatMap(project => logbookNeeds(source, project, groupOf.get(project.key)))])], liveNeeds = programNeeds.filter(need => !need.archived);
   const recent = task => task.lastActivity ? Date.parse(task.lastActivity) : 0;
   // An archived project's tasks leave the columns and the counts; the archived group lists the project, with what needs you there.
   // Needs you first, then the newest activity. A priority sorts each column but Done, which stays newest first.
@@ -658,9 +730,8 @@ export function buildBoardModel(input, { now = new Date().toISOString() } = {}) 
   const LISTS = ["needs", "active", "idle", "archived"];
   const projects = groups.map(group => {
     const own = tasks.filter(task => task.group === group.key), live = shown.filter(task => task.group === group.key);
-    // programNeeds: the items in needsOwner that no card holds (a program's, a table's or a logbook's), so the page script adds them to its own counts (F-T233-1).
     const last = Math.max(0, ...own.map(recent)), extra = programNeeds.filter(need => need.group === group.key).length, needsOwner = live.filter(task => task.reasons.length).length + extra;
-    return { key: group.key, name: group.name, sub: group.sub, pathSub: group.pathSub ?? null, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, programNeeds: extra, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
+    return { key: group.key, name: group.name, sub: group.sub, pathSub: group.pathSub ?? null, terms: group.terms, paths: group.paths, books: group.books.map(book => book.project.key), providers: group.providers, archived: group.archived, problem: group.problem, tasks: own.length, needsOwner, agents: live.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), lastActivity: last ? new Date(last).toISOString() : null,
       list: group.archived ? "archived" : needsOwner ? "needs" : last && at - last <= ACTIVE_DAYS * 86400000 ? "active" : "idle" };
   }).sort((a, b) => LISTS.indexOf(a.list) - LISTS.indexOf(b.list) || (a.list === "needs" ? b.needsOwner - a.needsOwner : 0) || (Date.parse(b.lastActivity ?? 0) || 0) - (Date.parse(a.lastActivity ?? 0) || 0) || a.name.localeCompare(b.name));
   const archived = projects.filter(project => project.archived).map(project => ({ key: project.key, name: project.name, tasks: project.tasks, needsOwner: project.needsOwner }));

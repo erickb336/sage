@@ -58,9 +58,9 @@ function table(file, name, budget) {
     }
     return row;
   });
-  // Two rows of one id make the programs table unreadable, as the state tool refuses it; so does a bad id, pilot or gate
-  // cell. The older board (board.mjs) reads it with the same check.
-  return name === "programs" ? checkPrograms(rows) : rows;
+  // Two rows of one id or of one gate make the programs table unreadable, as the state tool refuses it; so does a bad id,
+  // pilot or gate cell. The error names the row's line. The older board (board.mjs) reads it with the same check.
+  return name === "programs" ? checkPrograms(rows, lines.map(([, number]) => number)) : rows;
 }
 
 const REPOSITORY = String.raw`([A-Za-z0-9][A-Za-z0-9-]*)\/([\w-][\w.-]*?)`;
