@@ -255,9 +255,14 @@ const LOST_FIX = id => `ask the sage to repair the logbook, or to propose ${id} 
 /**
  * Each wait of a task, with its state: a task (met when merged or concluded; never met when abandoned or lost), the pilot
  * of its program, the breakdown that the owner has not approved (never met when dropped or lost), or a waits cell with
- * text that is not a task id (never met, and its text is never shown).
+ * text that is not a task id (never met, and its text is never shown). A breakdown whose pilot is abandoned or lost
+ * makes its program stuck (programsOf), so a task waits for that pilot instead, as in an active program: it cannot start.
  */
-const waitsFor = (task, graph) => waitsWithState(task, graph).map(wait =>
+const waitsFor = (task, graph) => waitsWithState(task, graph).flatMap(wait => {
+  const pilot = wait.program?.pilot;
+  if (!["proposed", "changing"].includes(wait.program?.state) || !dead(graph.byId.get(pilot)?.state)) return [wait];
+  return pilot === task.id || waitsOf(task).ids.includes(pilot) ? [] : [{ id: pilot, state: graph.byId.get(pilot)?.state, pilot: wait.program.id }];
+}).map(wait =>
   wait.odd ? { odd: true, met: false, never: true }
   : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state, gateFound: !!wait.program.gateFound, ...(wait.program.named !== undefined && { named: wait.program.named }) }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
   // A wait of a loop of waits (a hand edit) is never met, as no task of the loop can start first.

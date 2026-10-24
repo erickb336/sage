@@ -978,3 +978,16 @@ test("T383 item 10: an unreadable provider root shows as a numbered item of the 
   assert.ok(text.includes("\n**4 · The Codex logbooks cannot be read** · codex · every project\n> Its folder has no read permission\\. The board shows no Codex logbook\\. Check that the board can read the folder\\.\n"), sectionOf(text, "### 🔴 Needs you"));
   assert.equal(text.split("\n")[1].split(" · ")[0], "🔴 5 needs you");
 });
+
+test("T383 item 4: in a proposed program whose pilot is abandoned or not in the logbook, each member cannot start, also one with no waits cell", () => {
+  const rowOf = (html, id) => { const at = html.indexOf(`<span class="id">${id}</span>`); return html.slice(at, html.indexOf("</div>", at)); };
+  const page = edit => { const tables = programsTables(); edit(tables); return renderProgramsHtml(programsModel(tables), { programKey: KEY("PG3") }); };
+  const abandoned = page(tables => { tables.tasks.find(task => task.id === "T30").state = "abandoned"; });
+  assert.ok(rowOf(abandoned, "T31").includes('<span class="sw stw-cant">⊘ cannot start</span><span class="sub">⊘ waits for T30 (abandoned): it cannot start</span>'), rowOf(abandoned, "T31"));
+  assert.ok(rowOf(abandoned, "T32").includes('<span class="sw stw-cant">⊘ cannot start</span><span class="sub">⧗ waits for T31 (not started) · ⊘ waits for T30 (abandoned): it cannot start</span>'), rowOf(abandoned, "T32"));
+  const missing = page(tables => { tables.tasks = tables.tasks.filter(task => task.id !== "T30"); });
+  assert.ok(rowOf(missing, "T31").includes('<span class="sw stw-cant">⊘ cannot start</span><span class="sub">⊘ waits for T30 (not in the logbook): it cannot start</span>'), rowOf(missing, "T31"));
+  assert.ok(rowOf(missing, "T32").includes('<span class="sw stw-cant">⊘ cannot start</span>'), rowOf(missing, "T32"));
+  // A live pilot keeps the wait that can be met.
+  assert.ok(rowOf(renderProgramsHtml(programsModel(), { programKey: KEY("PG3") }), "T31").includes('<span class="sw stw-wait">⧗ waits</span><span class="sub">⧗ waits for T30 (pilot, not started)</span>'));
+});
