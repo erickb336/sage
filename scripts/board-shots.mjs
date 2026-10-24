@@ -9,7 +9,7 @@
 // dependency of sage: give it through NODE_PATH.
 // Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" node scripts/board-shots.mjs
 import { createHash } from "node:crypto";
-import { realpathSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderBoardHtml } from "../packages/sage-core/board-render.mjs";
 import { NOW, programsSource } from "./fixtures/board-programs.mjs";
 import { NOW as WALK_NOW, STAGES, walkthroughSource } from "./fixtures/board-walkthrough.mjs";
+import { isMain } from "./is-main.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const SHOTS = { light: "docs/assets/board-light.png", dark: "docs/assets/board-dark.png", ...Object.fromEntries(Object.keys(STAGES).map((stage) => [stage, `docs/assets/learn-${stage}.png`])) };
@@ -69,5 +70,4 @@ async function main() {
   console.log(`✓ ${Object.values(SHOTS).join(", ")} and ${SHOTS_RECORD}`);
 }
 
-// Real paths, so that a run through a link (/tmp on macOS) takes the shots too.
-if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) await main();
+if (isMain(import.meta.url)) await main();
