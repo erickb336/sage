@@ -1,6 +1,5 @@
-// Standalone browser check. Provide Playwright through NODE_PATH; do not add it to the default test command.
-// It runs Playwright's bundled Chromium (PLAYWRIGHT_BROWSERS_PATH), or the headless shell at BOARD_BROWSER_PATH; never an installed Chrome.
-// Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$SCRATCH/browsers" node --test scripts/board-enhancement.test.mjs
+// Standalone browser check. It runs in `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium,
+// or the headless shell at BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
