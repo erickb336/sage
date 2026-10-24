@@ -160,19 +160,21 @@ test("T233 C3: the programs table: missing is no rows while no task names a prog
   assert.deepEqual(good.diagnostics, []);
   assert.deepEqual(good.tables.programs, [{ id: "PG1", name: "<b>Codex</b> *support*", goal: "Sample goal", pilot: "T1", gate: "G1", at: "2026-10-20T10:00:00Z" }]);
   assert.equal(good.tables.tasks[1].waits, "T1");
-  // Unreadable: a damaged header, two rows of one id, a bad id, pilot or gate cell. The other tables stay readable.
-  for (const [why, text] of [
-    ["header", "id\tname\tgoal\tpilot\n"],
-    ["twice", `${PROGRAMS}PG1\tA\tg\tT1\tG1\t\nPG1\tB\tg\tT2\tG2\t\n`],
-    ["id", `${PROGRAMS}P1\tA\tg\tT1\tG1\t\n`],
-    ["pilot", `${PROGRAMS}PG1\tA\tg\tX1\tG1\t\n`],
-    ["gate", `${PROGRAMS}PG1\tA\tg\tT1\tgate 1\t\n`],
+  // Unreadable: a damaged header, two rows of one id or of one gate (T383 item 1), a bad id, pilot or gate cell. The other
+  // tables stay readable. Each error names the row's line in the file (a blank line counts) and its id when it is one (T383 item 8).
+  for (const [why, text, message] of [
+    ["header", "id\tname\tgoal\tpilot\n", "damaged table header"],
+    ["twice", `${PROGRAMS}PG1\tA\tg\tT1\tG1\t\n\nPG1\tB\tg\tT2\tG2\t\n`, "line 4 has the program PG1 again (first on line 2)"],
+    ["one gate", `${PROGRAMS}PG1\tA\tg\tT1\tG1\t\nPG2\tB\tg\tT1\tG1\t\n`, "line 3: PG2 names the gate G1 of PG1"],
+    ["id", `${PROGRAMS}P1 <b>\tA\tg\tT1\tG1\t\n`, "line 2 has a program id that is not PG and a number"],
+    ["pilot", `${PROGRAMS}PG1\tA\tg\tX1\tG1\t\n`, "line 2: the pilot of PG1 is not a task id"],
+    ["gate", `${PROGRAMS}PG1\tA\tg\tT1\tgate 1\t\n`, "line 2: the gate of PG1 is not a gate id"],
     // R1307-1: a row with too few cells says its line in the file (a blank line counts) and its count of cells.
-    ["row", `${PROGRAMS}\nPG1\tA\tg\n`],
+    ["row", `${PROGRAMS}\nPG1\tA\tg\n`, "line 3 has 3 cells, and its header has 6"],
   ]) {
     const bad = read([task("T1", "PG1")], text);
     assert.equal(bad.tables.programs, undefined, why);
-    assert.deepEqual(bad.diagnostics, [{ header: "programs: damaged table header", row: "programs: line 3 has 3 cells, and its header has 6" }[why] ?? "programs: damaged program identity, pilot or gate"], why);
+    assert.deepEqual(bad.diagnostics, [`programs: ${message}`], why);
     assert.equal(bad.tables.tasks.length, 1, why);
   }
   // A program cell that is not a program id shows as ?; a good one stays.

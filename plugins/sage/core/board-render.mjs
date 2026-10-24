@@ -2,7 +2,7 @@
 // The look is the T218 design (approved 2026-10-11) with the T305 picker, filter bar and step line (approved 2026-10-18).
 // The page needs no script for its cards, task pages, backlog fold and theme; the picker and the filters need the script.
 import { LINE, PRIORITIES, TASK_KINDS } from "./logbook-fields.mjs";
-import { PROGRAM_ID } from "./program-rules.mjs";
+import { namedText, PROGRAM_ID } from "./program-rules.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
 // Every control (C0, C1 with U+0085) and line or paragraph separator is a space, and every format character (\p{Cf}:
@@ -184,7 +184,7 @@ const WORD_OF = { backlog: "not started", design: "in design", building: "buildi
 /** A task's state as its row on the program page says it: the end state, else the word of its column. */
 const taskWord = task => ["merged", "concluded", "abandoned"].includes(task.state) ? task.state : WORD_OF[task.column] ?? task.state;
 const BREAKDOWN_STATE = { proposed: "waits for your approval", changing: "you asked for changes: the sage revises it", dropped: "you dropped it" };
-const breakdownWhy = ({ state, gate, gateFound }) => BREAKDOWN_STATE[state] ?? (gateFound ? `its gate ${gate} is not a breakdown gate` : `its gate ${gate} is not in the logbook`);
+const breakdownWhy = ({ id, state, gate, gateFound, named }) => BREAKDOWN_STATE[state] ?? (named !== undefined ? `its gate ${gate} ${namedText(named, id)}` : gateFound ? `its gate ${gate} is not a breakdown gate` : `its gate ${gate} is not in the logbook`);
 /** One wait of a task, with its state (T233): met, not met, or never met. */
 function waitItem(ctx, task, wait) {
   if (wait.odd) return `<li class="v-stale"><span class="g" aria-hidden="true">⊘</span>Text in the waits cell that is not a task id · <span class="stw-cant">never met</span>: the sage sets the waits again.</li>`;
@@ -835,7 +835,7 @@ export function renderAgentsHtml(model, { live = false, paths = false } = {}) {
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const MET_WORDS = ["merged", "concluded"], ENDED_STATES = [...MET_WORDS, "abandoned"], NEEDS_PROGRAM = ["proposed", "stuck", "lost"];
 const roles = task => task ? [...new Set(task.agents.filter(agent => !agent.stale).map(agent => agent.role))] : [];
-const lostText = program => `${program.gateFound ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`}. Ask the sage to repair the logbook, or to propose ${program.id} again.`;
+const lostText = program => `${program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}` : program.gateFound ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`}. Ask the sage to repair the logbook, or to propose ${program.id} again.`;
 /** What moves next in an active program (Q4): the first task with no unmet wait, then the count of the tasks that wait and those that cannot start. */
 function nextOf(ctx, program) {
   const task = program.next && ctx.tasks.get(program.next.key), at = roles(task);
@@ -1042,7 +1042,7 @@ const programLine = program => {
   return `${head} · ${{
     proposed: () => `the breakdown waits for you \\(gate ${md(program.gate)}\\) · pilot ${md(program.pilot)}`,
     changing: () => `the sage revises the breakdown \\(gate ${md(program.gate)}\\)`,
-    lost: () => `${program.gateFound ? `its gate ${md(program.gate)} is not a breakdown gate on its pilot ${md(program.pilot)}` : `its breakdown gate ${md(program.gate)} is not in the logbook`} \\(see Needs you\\)`,
+    lost: () => `${program.named !== undefined ? `its gate ${md(program.gate)} ${md(namedText(program.named, program.id))}` : program.gateFound ? `its gate ${md(program.gate)} is not a breakdown gate on its pilot ${md(program.pilot)}` : `its breakdown gate ${md(program.gate)} is not in the logbook`} \\(see Needs you\\)`,
     dropped: () => `dropped · ${tasks(program.open)} still in it: ask the sage to take each task out of the program`,
     stuck: () => `stuck: ${pilot} \\(see Needs you\\)`,
   }[program.state]?.() ?? `${md(program.progressText)} · next: ${next}${program.waiting ? ` · ${program.waiting} ${program.waiting === 1 ? "waits" : "wait"}` : ""}${program.cannotStart.length ? ` · ${program.cannotStart.map(md).join(", ")} cannot start` : ""}`}`;
@@ -1092,7 +1092,8 @@ export function renderBoardText(model) {
   const counted = program => program.state === "done" || program.state === "dropped" && !program.open;
   const ended = ["done", "dropped"].map(state => [state, programs.filter(program => counted(program) && program.state === state).length]).filter(([, count]) => count);
   const programText = programs.length ? `### ◫ Programs\n${[...programs.filter(program => !counted(program)).map(program => `- ${programLine({ ...program, where: where(program) })}`), ...(ended.length ? [`- ${ended.map(([state, count]) => `${count} ${state}`).join(" · ")}: open the board's Programs tab`] : [])].join("\n")}` : "";
-  const top = block([`**sage board** · built ${md(day(model.at))} UTC`, `🔴 ${counts.needsOwner} needs you · ${counts.recordedAgents} agents at work${counts.inferredWork ? ` · ${counts.inferredWork} inferred PRs` : ""} · 🔁 ${counts.inReview} in review · ${counts.tasks} tasks`, standIns ? `${md("*")} A stand-in: the run does not record its provider, so the board names the logbook's source.` : ""]);
+  // The count is the number of the numbered items above (n), so a pilot with a breakdown gate and another reason counts twice, as it shows.
+  const top = block([`**sage board** · built ${md(day(model.at))} UTC`, `🔴 ${n} needs you · ${counts.recordedAgents} agents at work${counts.inferredWork ? ` · ${counts.inferredWork} inferred PRs` : ""} · 🔁 ${counts.inReview} in review · ${counts.tasks} tasks`, standIns ? `${md("*")} A stand-in: the run does not record its provider, so the board names the logbook's source.` : ""]);
   const end = block([model.archived.length ? `Archived: ${model.archived.map(book => `${md(book.name)} (${archivedCounts(book)})`).join(", ")}` : "",
     ...model.diagnostics.map(d => `Incomplete source: ${md(d.source)}${d.project ? ` · ${md(d.project)}` : ""} · ${md(d.message)}`), ...model.warnings.map(d => `Setting ignored: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`), ...(model.notes ?? []).map(d => `Logbook note: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`)]);
   return [top, `### 🔴 Needs you\n${needs}`, programText, ...model.columns.map(section), end].filter(Boolean).join("\n\n");
@@ -1101,5 +1102,5 @@ export function renderBoardStatus(model) {
   // An archived project's tasks are not in Tasks or Owner: one line counts the archived projects and what needs you there.
   const states = new Map(); for (const task of model.tasks.filter(task => !task.archived)) states.set(task.state, (states.get(task.state) ?? 0) + 1);
   const archivedNeeds = model.archived.reduce((n, book) => n + book.needsOwner, 0);
-  return `Tasks: ${[...states].map(([state,n]) => `${state} ${n}`).join(" · ") || "none recorded"}\nAgents: ${model.counts.recordedAgents} recorded running · ${model.counts.inferredWork} inferred PRs\nOwner: ${model.counts.needsOwner} tasks need you\n${model.archived.length ? `Archived: ${model.archived.length} project${model.archived.length === 1 ? "" : "s"} · ${archivedNeeds} task${archivedNeeds === 1 ? "" : "s"} need${archivedNeeds === 1 ? "s" : ""} you\n` : ""}Budget this week: unknown; no provider observation available${model.diagnostics.length ? `\nSources: ${model.diagnostics.length} diagnostics; counts may be incomplete` : ""}`;
+  return `Tasks: ${[...states].map(([state,n]) => `${state} ${n}`).join(" · ") || "none recorded"}\nAgents: ${model.counts.recordedAgents} recorded running · ${model.counts.inferredWork} inferred PRs\nOwner: ${model.counts.needsOwner} need you\n${model.archived.length ? `Archived: ${model.archived.length} project${model.archived.length === 1 ? "" : "s"} · ${archivedNeeds} need you\n` : ""}Budget this week: unknown; no provider observation available${model.diagnostics.length ? `\nSources: ${model.diagnostics.length} diagnostics; counts may be incomplete` : ""}`;
 }

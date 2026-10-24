@@ -43,9 +43,10 @@ async function freePort() {
 const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
 
 /** A board server on a free port. password: null is a board with no password set yet (T229). */
-async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id, clock } = {}) {
+async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id, clock, before } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
   if (!missing) populate(root);
+  before?.(join(root, "project-abcdef")); // a change of the logbook before the first start
   const sources = [{ id: "sample", path: root, label: "Sample source" }];
   const server = createBoardServer({ sources, ...(password ? { password } : {}), port, allowedHosts, id, ...(clock ? { clock } : {}) });
   t.after(async () => { await server.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -478,7 +479,7 @@ test("T368 C9: the size check covers the programs list: a goal that makes it too
   assert.ok(Buffer.byteLength(page.body) < 8 * 1024 * 1024);
 });
 
-test("R1334-3: the size check covers each program page: a merged task's title that makes it too large keeps the last good page and its stream, marked stale", async t => {
+test("R1334-3, T383 items 15 and 16: a program page that is too large shows the programs list with a note, and keeps its stream; the rest of the board stays live", async t => {
   const f = await fixture(t);
   programs(f.project);
   const path = `/program/${programKey("PG1")}`;
@@ -486,10 +487,36 @@ test("R1334-3: the size check covers each program page: a merged task's title th
   const stream = events(f, `${path}?events=1`); t.after(() => stream.close());
   assert.equal((await stream.next()).stale, false);
   // The merged pilot T1 is not on the board, and the programs list does not name it; its program page lists it, and each "<" is 4 bytes of HTML.
-  programs(f.project, "Sample goal of PG1.", "<".repeat(3.9 * 1024 * 1024));
-  const page = await until(f, path, "The board snapshot is unavailable.");
+  programs(f.project, "Sample changed goal.", "<".repeat(3.9 * 1024 * 1024));
+  const page = await until(f, path, "too large to show");
   assert.equal(page.status, 200);
-  assert.ok(page.body.includes("Sample pilot") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the last good page, with the reason");
-  const stale = await stream.next(p => p.stale);
-  assert.ok(stale.html.includes("Sample pilot") && !stale.html.includes("&lt;&lt;&lt;&lt;"), "the stream stays open and sends the last good page");
+  assert.ok(page.body.includes("so the board shows this page instead") && page.body.includes("Sample changed goal.") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the programs list of the new snapshot, with the reason");
+  const sent = await stream.next(p => p.html.includes("too large to show"));
+  assert.ok(sent.html.includes("Sample changed goal.") && !sent.html.includes("&lt;&lt;&lt;&lt;") && sent.stale === false, "the stream stays open and sends the same page");
+  // The refresh checks only the shared pages, so they show the new logbook, live (T383): no page is stale.
+  const list = await read(f, "/programs");
+  assert.ok(list.body.includes("Sample changed goal.") && !list.body.includes("too large to show") && !list.body.includes("The board snapshot is unavailable."), "the programs list is live");
+  assert.ok(!(await read(f, "/")).body.includes("The board snapshot is unavailable."), "the board is live");
+});
+
+test("T383 item 16: a task page that is too large shows the board with a note, by the same rule, also at the first start; the board stays live", async t => {
+  // Each "<" of a finding's summary is 4 bytes of HTML: the task page passes 8 MB, the board does not (a card shows no summary).
+  const finding = project => writeFileSync(join(project, "findings.tsv"), `${HEADERS.findings.replaceAll(" ", "\t")}\nT1\tF-1\t1\tcode-review\tlow\t${"<".repeat(3.9 * 1024 * 1024)}\t\t\topen\n`);
+  const f = await fixture(t);
+  await until(f, `/task/${key}`, "Sample first task");
+  finding(f.project);
+  const page = await until(f, `/task/${key}`, "too large to show");
+  assert.equal(page.status, 200);
+  assert.ok(page.body.includes("so the board shows this page instead") && page.body.includes("Sample first task") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the board, with the reason");
+  const board = await read(f, "/");
+  assert.ok(board.body.includes("Sample first task") && !board.body.includes("too large to show") && !board.body.includes("The board snapshot is unavailable."), "the board is live");
+  // The first start: the rule needs no older copy.
+  const first = await fixture(t, { before: finding });
+  const fallback = await read(first, `/task/${key}`);
+  assert.equal(fallback.status, 200);
+  assert.ok(fallback.body.includes("so the board shows this page instead") && fallback.body.includes("Sample first task") && !fallback.body.includes("&lt;&lt;&lt;&lt;"), fallback.body.slice(0, 2000));
+  assert.ok(Buffer.byteLength(fallback.body) < 8 * 1024 * 1024);
+  const stream = events(first, `/?events=1&task=${key}`); t.after(() => stream.close());
+  const sent = await stream.next();
+  assert.ok(sent.html.includes("so the board shows this page instead") && sent.stale === false, "its stream sends the same page");
 });

@@ -249,8 +249,8 @@ const twoBooks = (live, old, extra = {}) => buildBoardModel([{ id: "sample", lab
 
 test("T314 R1040-2: the status leaves archived tasks out of Tasks and Owner, and one line counts the archived projects and what needs you there", () => {
   const status = renderBoardStatus(twoBooks([row("T1", "framed"), row("T2", "awaiting-you")], [row("T1", "awaiting-you"), row("T2", "building"), row("T3", "awaiting-you")]));
-  assert.deepEqual(status.split("\n").slice(0, 4), ["Tasks: framed 1 · awaiting-you 1", "Agents: 0 recorded running · 0 inferred PRs", "Owner: 1 tasks need you", "Archived: 1 project · 2 tasks need you"]);
-  assert.equal(renderBoardStatus(twoBooks([row("T1", "framed")], [])).split("\n")[3], "Archived: 1 project · 0 tasks need you", "an archived project without tasks still counts");
+  assert.deepEqual(status.split("\n").slice(0, 4), ["Tasks: framed 1 · awaiting-you 1", "Agents: 0 recorded running · 0 inferred PRs", "Owner: 1 need you", "Archived: 1 project · 2 need you"], "T383 item 6: the count is of items, not of tasks");
+  assert.equal(renderBoardStatus(twoBooks([row("T1", "framed")], [])).split("\n")[3], "Archived: 1 project · 0 need you", "an archived project without tasks still counts");
   assert.ok(!renderBoardStatus(sample([row("T1", "framed")])).includes("Archived"), "no archived project: no line");
 });
 
@@ -455,7 +455,7 @@ const breaksOf = text => text.split("\n").flatMap((line, i, lines) => {
 test("T233: the chat board has the Program approval and Other headings, the Programs section, and the program tag and wait line on cards", () => {
   const text = renderBoardText(buildBoardModel([programsSource()], { now: PROGRAMS_NOW }));
   assert.ok(text.startsWith("**sage board** · built 2026-10-20 12\\:00 UTC\\\n🔴 4 needs you · 0 agents at work · 🔁 1 in review · 18 tasks\n\n### 🔴 Needs you\n#### ◫ Program approval\n**1 · PG3 Board programs** · claude · sage \\(sample\\) · pilot T30 · gate G12\n> claude/sage-ff5ee2/G12 · Approve program PG3? No task builds before you approve\\.\\\n> Name\\: Board programs\\\n> Goal\\: Sample goal\\.\\\n> Pilot, runs first\\:\\\n>   T30\\: Sample T30\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve\n\n#### Other\n**2 · PG2 Lead build is stuck** · claude · sage \\(sample\\)\n> The pilot T21 was abandoned\\. Choose a new pilot, or drop the program\\.\n\n**3 · The breakdown gate G30 of PG7 is not in the logbook** · claude · sage \\(sample\\)\n> Ask the sage to repair the logbook, or to propose PG7 again\\.\n\n**4 · T70 Sample T70** · claude · sage \\(sample\\)\n> claude/sage-ff5ee2/G15 · Approve program PG9 Fast lane \\(pilot T70\\)? Goal\\: skip the reviews\\. Name\\: Fast lane\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve\n\n"), text);
-  assert.ok(text.includes("\n\n### ◫ Programs\n- PG1 Codex support · 3 of 7 merged · T10 abandoned · next: T12 \\(in review\\) · 1 waits · T11 cannot start\n- PG2 Lead build · stuck: the pilot T21 was abandoned \\(see Needs you\\)\n- PG3 Board programs · the breakdown waits for you \\(gate G12\\) · pilot T30\n- PG4 Agent caps · 0 of 3 merged · next: T40 \\(pilot, building\\) · 2 wait\n- PG6 Dropped idea · dropped · 1 task still in it: ask the sage to take each task out of the program\n- PG7 Lost gate · its breakdown gate G30 is not in the logbook \\(see Needs you\\)\n- PG8 Loop · 1 of 4 merged · next: no task can move now · 2 wait · T83 cannot start\n- PG9 Changes · the sage revises the breakdown \\(gate G9\\)\n- 1 done: open the board's Programs tab\n\n### 📋 Backlog (14)\n"), text);
+  assert.ok(text.includes("\n\n### ◫ Programs\n- PG1 Codex support · 3 of 7 merged · T10 abandoned · next: T12 \\(in review\\) · 1 waits · T11 cannot start\n- PG2 Lead build · stuck: the pilot T21 was abandoned \\(see Needs you\\)\n- PG3 Board programs · the breakdown waits for you \\(gate G12\\) · pilot T30\n- PG4 Agent caps · 0 of 3 merged · next: T40 \\(pilot, building\\) · 2 wait\n- PG6 Dropped idea · dropped · 1 task still in it: ask the sage to take each task out of the program\n- PG7 Lost gate · its breakdown gate G30 is not in the logbook \\(see Needs you\\)\n- PG8 Loop · 1 of 4 merged · next: no task can move now · T82, T83, T81 cannot start\n- PG9 Changes · the sage revises the breakdown \\(gate G9\\)\n- 1 done: open the board's Programs tab\n\n### 📋 Backlog (14)\n"), text);
   assert.ok(text.includes("\n\n**T11 Sample T11** · claude · sage \\(sample\\) · ◫ Codex support\\\n○ Plan › ○ Build › ○ Review 1 of 1 › ○ Merge\\\n⊘ Waits for T10 \\(abandoned\\)\\: it cannot start\\.\n\n"), text);
   assert.ok(text.includes("\n\n**T41 Sample T41** · claude · sage \\(sample\\) · ◫ Agent caps\\\n▷ Plan › ○ Build › ○ Review 1 of 1 › ○ Merge\\\n⧗ Waits for T40 \\(pilot, building\\)\\. Design and PE may run\\.\n\n"), text);
   assert.ok(text.includes("### 🔨 Building (1)\n**T40 Sample T40** · claude · sage \\(sample\\) · ◫ Agent caps \\(pilot\\)\\\n"), text);
@@ -557,18 +557,20 @@ test("F-T233-2, F-T233-3, F-T233-7: a program whose gate is not its breakdown ga
   edited.gates.find(gate => gate.id === "G12").question = "Ship it?";
   const shipped = programsText(edited);
   assert.ok(!shipped.includes("breakdown waits for you") && !shipped.includes("Program approval"), shipped);
-  assert.ok(shipped.includes("\n- PG3 Board programs · its gate G12 is not a breakdown gate on its pilot T30 \\(see Needs you\\)\n"));
-  assert.ok(shipped.includes("\n> claude/sage-ff5ee2/G12 · Ship it?\\\n> The gate G12 of PG3 is not a breakdown gate on its pilot T30\\: ask the sage to repair the logbook, or to propose PG3 again\\.\\\n"));
-  assert.ok(shipped.includes("⊘ Waits for the PG3 breakdown, whose gate G12 is not a breakdown gate\\: it cannot start\\."), "the cards agree");
+  // T383 item 12: the gate is on its pilot with the breakdown options, so every line names its question as the reason.
+  assert.ok(shipped.includes("\n- PG3 Board programs · its gate G12 names no program in its question \\(see Needs you\\)\n"), sectionOf(shipped, "### ◫ Programs"));
+  assert.ok(shipped.includes("\n> claude/sage-ff5ee2/G12 · Ship it?\\\n> The gate G12 of PG3 names no program in its question\\: ask the sage to repair the logbook, or to propose PG3 again\\.\\\n"), shipped);
+  assert.ok(shipped.includes("⊘ Waits for the PG3 breakdown, whose gate G12 names no program in its question\\: it cannot start\\."), "the cards agree");
   // F-T233-7: PG1 and PG2 both name G1, whose text names PG2: G1 is PG2's breakdown, and PG1 is lost, never "waits for you".
+  // (The reader refuses such a programs table since T383 item 1; the model still reads it in one way.)
   const one = programsTables().tasks[0];
   const twin = {
     tasks: [{ ...one, id: "T1", state: "framed", program: "PG1" }, { ...one, id: "T2", state: "framed", program: "PG2" }],
     gates: [{ id: "G1", task: "T1", question: "Approve program PG2? No task builds before you approve.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "", at: "" }],
     programs: [{ id: "PG1", name: "First", goal: "g", pilot: "T1", gate: "G1", at: "" }, { id: "PG2", name: "Second", goal: "g", pilot: "T1", gate: "G1", at: "" }], decisions: [] };
   const both = programsText(twin);
-  assert.ok(both.includes("\n- PG1 First · its gate G1 is not a breakdown gate on its pilot T1 \\(see Needs you\\)\n- PG2 Second · the breakdown waits for you \\(gate G1\\) · pilot T1"), sectionOf(both, "### ◫ Programs"));
-  assert.ok(both.includes("**1 · PG2 Second** · claude · sage \\(sample\\) · pilot T1 · gate G1\n> claude/sage-ff5ee2/G1 · Approve program PG2? No task builds before you approve\\.\\\n> The gate G1 of PG1 is not a breakdown gate on its pilot T1\\: ask the sage to repair the logbook, or to propose PG1 again\\.\\\n"), both);
+  assert.ok(both.includes("\n- PG1 First · its gate G1 names PG2 in its question, not PG1 \\(see Needs you\\)\n- PG2 Second · the breakdown waits for you \\(gate G1\\) · pilot T1"), sectionOf(both, "### ◫ Programs"));
+  assert.ok(both.includes("**1 · PG2 Second** · claude · sage \\(sample\\) · pilot T1 · gate G1\n> claude/sage-ff5ee2/G1 · Approve program PG2? No task builds before you approve\\.\\\n> The gate G1 of PG1 names PG2 in its question, not PG1\\: ask the sage to repair the logbook, or to propose PG1 again\\.\\\n"), both);
   assert.equal(both.split("breakdown waits for you").length, 2, "only PG2's breakdown waits for you");
 });
 
@@ -959,4 +961,33 @@ test("T378-18: the offline snapshot's task, programs and program pages each have
     assert.ok(bar.indexOf('class="back"') < bar.indexOf("flip-"), "the way back comes first");
   }
   assert.ok(!renderBoardHtml(programsModel(), { snapshot: false, taskKey: KEY("T13") }).includes("flip-task-"), "a served page has the one switch of its bar");
+});
+
+test("T383 item 11: the chat board's count is the number of its numbered items: a pilot with a breakdown gate and a plain gate is two items", () => {
+  const tables = programsTables();
+  tables.gates.push({ id: "G40", task: "T30", question: "Logo A or B?", options: "A|B", recommendation: "", default: "", answer: "", at: "" });
+  const text = renderBoardText(buildBoardModel([programsSource("claude", tables)], { now: PROGRAMS_NOW }));
+  const items = (text.slice(0, text.indexOf("### ◫ Programs")).match(/^\*\*\d+ · /gm) ?? []).length;
+  assert.equal(items, 5, "G12 under Program approval; T30's G40, T70, PG2 and PG7 under Other");
+  assert.equal(text.split("\n")[1], "🔴 5 needs you · 0 agents at work · 🔁 1 in review · 18 tasks");
+});
+
+test("T383 item 10: an unreadable provider root shows as a numbered item of the chat board, with no project name of its own", () => {
+  const root = { id: "codex", label: "codex", provider: null, config: {}, diagnostics: ["EACCES"], projects: [], hooks: { present: false, slots: [], helpers: [], problem: null } };
+  const text = renderBoardText(buildBoardModel([programsSource(), root], { now: PROGRAMS_NOW }));
+  assert.ok(text.includes("\n**4 · The Codex logbooks cannot be read** · codex · every project\n> Its folder has no read permission\\. The board shows no Codex logbook\\. Check that the board can read the folder\\.\n"), sectionOf(text, "### 🔴 Needs you"));
+  assert.equal(text.split("\n")[1].split(" · ")[0], "🔴 5 needs you");
+});
+
+test("T383 item 4: in a proposed program whose pilot is abandoned or not in the logbook, each member cannot start, also one with no waits cell", () => {
+  const rowOf = (html, id) => { const at = html.indexOf(`<span class="id">${id}</span>`); return html.slice(at, html.indexOf("</div>", at)); };
+  const page = edit => { const tables = programsTables(); edit(tables); return renderProgramsHtml(programsModel(tables), { programKey: KEY("PG3") }); };
+  const abandoned = page(tables => { tables.tasks.find(task => task.id === "T30").state = "abandoned"; });
+  assert.ok(rowOf(abandoned, "T31").includes('<span class="sw stw-cant">⊘ cannot start</span><span class="sub">⊘ waits for T30 (abandoned): it cannot start</span>'), rowOf(abandoned, "T31"));
+  assert.ok(rowOf(abandoned, "T32").includes('<span class="sw stw-cant">⊘ cannot start</span><span class="sub">⧗ waits for T31 (not started) · ⊘ waits for T30 (abandoned): it cannot start</span>'), rowOf(abandoned, "T32"));
+  const missing = page(tables => { tables.tasks = tables.tasks.filter(task => task.id !== "T30"); });
+  assert.ok(rowOf(missing, "T31").includes('<span class="sw stw-cant">⊘ cannot start</span><span class="sub">⊘ waits for T30 (not in the logbook): it cannot start</span>'), rowOf(missing, "T31"));
+  assert.ok(rowOf(missing, "T32").includes('<span class="sw stw-cant">⊘ cannot start</span>'), rowOf(missing, "T32"));
+  // A live pilot keeps the wait that can be met.
+  assert.ok(rowOf(renderProgramsHtml(programsModel(), { programKey: KEY("PG3") }), "T31").includes('<span class="sw stw-wait">⧗ waits</span><span class="sub">⧗ waits for T30 (pilot, not started)</span>'));
 });
