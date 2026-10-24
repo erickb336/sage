@@ -1,7 +1,7 @@
 // Render only the shared model. Agent text never becomes HTML markup: it goes through esc(), and links through safeUrl().
 // The look is the T218 design (approved 2026-10-11) with the T305 picker, filter bar and step line (approved 2026-10-18).
 // The page needs no script for its cards, task pages, backlog fold and theme; the picker and the filters need the script.
-import { LINE, PRIORITIES, TASK_KINDS } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, TASK_KINDS, proposalOf } from "./logbook-fields.mjs";
 import { namedText, PROGRAM_ID } from "./program-rules.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
@@ -233,7 +233,7 @@ function page(ctx, task, { routed = false } = {}) {
     + `<div class="detail"><section class="wide"><h3>Where in the loop</h3>${stepLine(task)}${nowWaits(task)}${stepRows(task)}${agents(ctx, task, " nowagents")}${meta(task)}<p class="faint">To change the priority or the kind, ask the chief in the chat. The board is read-only.</p></section>`
     + `<div class="colL"><section><h3>Brief</h3>${brief}</section><section><h3>Agent runs <span class="n">${task.runs.length}</span></h3>${runsTable(task)}</section><section><h3>Findings <span class="n">${task.findings.filter(row => row.status === "open").length} open</span></h3>${findings(task)}</section></div>`
     + `<div class="colR">${programSections(ctx, task)}<section><h3>Evidence <span class="n">${task.ledger.length}</span></h3>${evidence(task)}</section><section><h3>Latest decisions</h3>${decisions}</section><section><h3>Artifacts</h3>${artifacts(task)}</section></div></div>${legend(null)}`;
-  return routed ? content : `<section class="page" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="#">← Board</a>${programLink(ctx, task)}<span class="spacer"></span>${themeSwitch(`flip-${anchor(task)}`)}</div>${content}</section>`;
+  return routed ? content : `<section class="page" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="#">← Board</a>${programLink(ctx, task)}<span class="spacer"></span>${themeSwitch(`flip-${anchor(task)}`, true)}</div>${content}</section>`;
 }
 
 /** The marks of the board and the task page, with one visible sentence for the dotted stand-in values (F-T218-7). */
@@ -303,6 +303,7 @@ h1{font-size:15px;margin:0;font-weight:600;letter-spacing:-.01em}.spacer{flex:1}
 .chip.need[aria-pressed="true"]{background:var(--need);border-color:var(--need);color:var(--panel)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .flip:focus-visible+.theme{outline:2px solid var(--accent);outline-offset:2px}
+.chip.unflip{display:none}:root:has(.flip:checked) .chip.unflip{display:inline-flex}:root:has(.flip:checked) :is(.flip,.theme):has(~.unflip){display:none}
 .count{font-weight:700}.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;background:var(--accent)}.dot.none{background:var(--faint)}
 .dot.p0{background:var(--p0)}.dot.p1{background:var(--p1)}.dot.p2{background:var(--p2)}.dot.p3{background:var(--p3)}.dot.p4{background:var(--p4)}.dot.p5{background:var(--p5)}.dot.p6{background:var(--p6)}.dot.p7{background:var(--p7)}
 .badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--need-soft);color:var(--need);font-size:11px;font-weight:700}
@@ -747,8 +748,13 @@ function filterBar(ctx, model) {
 
 /** The live pill, and a hidden status line that announces only a failure (R1023-5). */
 const livePill = text => `<span class="livepill" id="live-state"><span class="ld" aria-hidden="true"></span><span class="lt">${esc(text)}</span></span><span class="vh" id="live-alert" role="status"></span>`;
-/** The theme switch. The offline snapshot gives each of its pages its own (T378): a page hides the board's header. Any checked switch flips the theme. */
-const themeSwitch = (id = "flip") => `<input type="checkbox" id="${id}" class="vh flip"><label class="chip theme" for="${id}"><span class="to-light">Light theme</span><span class="to-dark">Dark theme</span></label>`;
+/**
+ * The theme switch. The offline snapshot gives each of its pages its own (T378): a page hides the board's header. Any
+ * checked switch flips the theme. Without scripts, a flipped snapshot shows a reset button in each switch's place: it
+ * clears every switch of the form "themes", so each page's switch flips the theme back (R1384-2).
+ */
+const THEME_WORDS = '<span class="to-light">Light theme</span><span class="to-dark">Dark theme</span>';
+const themeSwitch = (id = "flip", snapshot = false) => `<input type="checkbox" id="${id}" class="vh flip"${snapshot ? ' form="themes"' : ""}><label class="chip theme" for="${id}">${THEME_WORDS}</label>${snapshot ? `<button type="reset" form="themes" class="chip theme unflip">${THEME_WORDS}</button>` : ""}`;
 const THEME_SWITCH = themeSwitch();
 
 export function renderBoardHtml(model, { taskKey = null, snapshot = true, live = false, paths = false } = {}) {
@@ -758,7 +764,7 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
   // Without scripts, a live page keeps this text; the live script changes it at once. Only a failure is announced (R1023-5).
   const pill = livePill(`${snapshot ? "Snapshot" : "Board"} · ${at}`);
   // The theme switch sits in the header or the page bar, so the way back comes before it in focus order (F-T218-14).
-  const theme = THEME_SWITCH;
+  const theme = snapshot && !task ? themeSwitch("flip", true) : THEME_SWITCH;
   let body;
   if (task) body = `<main class="page open" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="${snapshot ? "#" : "/"}">← Board</a>${programLink(ctx, task)}${pill}<span class="spacer"></span>${theme}</div><div id="board-content" data-at="${esc(at)}">${banners(model)}${page(ctx, task, { routed: true })}</div></main>`;
   else {
@@ -772,7 +778,7 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
     const gone = `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. The board shows all projects. <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
     body = `<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.programs?.length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
       // Offline, the task pages, the programs list and each program's page are sections of the one file (C9).
-      + (snapshot ? `<div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.programs?.length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-programs")}</div>${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
+      + (snapshot ? `<form id="themes" hidden></form><div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.programs?.length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-programs", true)}</div>${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${task ? `${esc(task.id)} · ` : ""}Sage task board</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(taskKey ? `/?events=1&task=${b64(taskKey)}` : "/?events=1") : ""}</script></body></html>`;
 }
@@ -897,9 +903,18 @@ function programTask(ctx, task) {
   return `<div class="trow${ab ? " ab" : ""}${cant ? " cant" : ""}${needs ? " needs" : ""}"><span class="id">${esc(task.id)}</span><a class="t" href="${esc(taskHref(ctx, task))}">${esc(task.title)}</a><span class="sw ${cls}">${esc(word)}</span>${sub.length ? `<span class="sub">${esc(sub.join(" · "))}</span>` : ""}</div>`;
 }
 /** A decision as one line: a breakdown gate's answer keeps its first line and the answer. */
-function decisionText(text) {
-  const lines = String(text ?? "").split(LINE), last = lines.at(-1), arrow = last.lastIndexOf(" → ");
-  return lines.length > 1 ? `${lines[0]}${arrow >= 0 ? ` …${last.slice(arrow)}` : ""}` : lines[0];
+function decisionText(ctx, project, text) {
+  const lines = text.split(LINE), answer = answerOf(ctx, project, text);
+  return lines.length > 1 && answer !== null ? `${lines[0]} … → ${answer}` : lines[0];
+}
+/**
+ * The answer of a breakdown gate's decision row ("<question> → <answer>"): the text after the gate's own question, so
+ * the owner's own words keep each " → " in them (F-T384-1). Without the gate's row, the text after the last arrow; null
+ * when the text has no arrow.
+ */
+function answerOf(ctx, project, text) {
+  const question = ctx.programs.get(`${project}/${proposalOf({ question: text })}`)?.questions.find(asked => text.startsWith(`${asked} → `)), arrow = text.lastIndexOf(" → ");
+  return question !== undefined ? text.slice(question.length + 3) : arrow >= 0 ? text.slice(arrow + 3) : null;
 }
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** A short date, "12 Oct", from an ISO time; the full time is the title. */
@@ -917,17 +932,17 @@ const TOOL_WHY = ["", "task set", "program propose", "the user's answer", "the u
  * those move rows show nothing (null) (R1368-1). A later round names no tasks, so its move rows show (R1375-3). The
  * rounds: each proposal row of the program, by round, with its time and gate; an answer names the gate of its own round.
  */
-function decisionLine(program, row, task, rounds) {
+function decisionLine(ctx, program, row, task, rounds) {
   const why = TOOL_WHY.includes(String(row.why ?? "")) ? "" : String(row.why), text = String(row.decision), because = line => why ? `${line}: ${why}` : line;
-  const state = /^state (merged|concluded|abandoned)$/.exec(text), moved = /^program (\S+) → (\S+)$/.exec(text), arrow = text.lastIndexOf(" → ");
-  const proposed = proposal(program, row), answer = arrow >= 0 && new RegExp(`^Approve program ${program.id}(?: \\(round ([1-9]\\d*)\\))?\\?`).exec(text);
+  const state = /^state (merged|concluded|abandoned)$/.exec(text), moved = /^program (\S+) → (\S+)$/.exec(text), arrow = text.includes(" → ");
+  const proposed = proposal(program, row), answer = arrow && new RegExp(`^Approve program ${program.id}(?: \\(round ([1-9]\\d*)\\))?\\?`).exec(text);
   if (state) return because(`${row.id}${row.id === program.pilot ? " (pilot)" : ""} ${state[1]}${!why && state[1] === "merged" && task.pr ? `: PR ${task.pr}` : ""}`);
   // An older round's row has no name, so its line has none; the program's name is the name of its latest round (R1375-4).
   if (proposed) return proposed.round > 1 ? `${program.id} proposed again: ${proposed.gate === program.gate ? `${program.name}, ` : ""}gate ${proposed.gate}, round ${proposed.round}` : `${program.id} proposed: ${proposed.name}, pilot ${proposed.pilot}, gate ${proposed.gate}`;
   if (moved && row.why === "program propose" && moved[2] === program.id && rounds.get(1)?.at === row.at) return null;
   if (moved) return because(`${row.id} ${moved[2] === program.id ? "joined" : "left"} ${program.id}`);
-  if (answer) { const gate = rounds.get(Number(answer[1] ?? 1))?.gate; return `${gate ?? `${program.id}${answer[1] ? ` round ${answer[1]}` : ""}`} answered: ${text.slice(arrow + 3)}`; }
-  return because(`${row.id}: ${decisionText(text)}`);
+  if (answer) { const gate = rounds.get(Number(answer[1] ?? 1))?.gate; return `${gate ?? `${program.id}${answer[1] ? ` round ${answer[1]}` : ""}`} answered: ${answerOf(ctx, program.project, text)}`; }
+  return because(`${row.id}: ${decisionText(ctx, program.project, text)}`);
 }
 /** A proposal row of the program, in the forms that the state tool's program propose writes, or null. */
 function proposal(program, row) {
@@ -939,7 +954,7 @@ function programPage(ctx, program, routed) {
   const tasks = program.tasks.map((key, i) => [ctx.tasks.get(key), program.depths[i]]).filter(([task]) => task), own = tasks.map(([task]) => task);
   const pilot = ctx.tasks.get(`${program.project}/${program.pilot}`), { total, abandoned } = program.progress, h = routed ? "h1" : "h2";
   const onBoard = program.archived ? "" : `<a class="back" href="${ctx.snapshot ? "" : "/"}#${esc(new URLSearchParams({ p: program.group, pg: b64(program.key) }))}">Its tasks on the board</a>`;
-  const top = `<div class="pagebar"><a class="back" href="${ctx.snapshot ? "#programs" : "/programs"}">← Programs</a>${onBoard}${ctx.snapshot ? `<span class="spacer"></span>${themeSwitch(`flip-${programAnchor(program.key)}`)}` : ""}</div>`
+  const top = `<div class="pagebar"><a class="back" href="${ctx.snapshot ? "#programs" : "/programs"}">← Programs</a>${onBoard}${ctx.snapshot ? `<span class="spacer"></span>${themeSwitch(`flip-${programAnchor(program.key)}`, true)}` : ""}</div>`
     + `<div class="ptop"><span class="id">${esc(program.id)}</span> · ${project(ctx, program)} · ${programState(program.state)} · <span class="faint">${esc(title(program.sourceLabel))} logbook</span></div>`
     + `<${h} class="ptitle"><span aria-hidden="true">◫</span> ${esc(program.name)}</${h}>`;
   let lead;
@@ -980,7 +995,7 @@ function programPage(ctx, program, routed) {
   const rounds = new Map(own.flatMap(task => task.decisions.map(row => proposal(program, row)).filter(Boolean)).map(round => [round.round, round]));
   // The newest first; a row with no valid time goes last, in its own order (R1378-2).
   const dated = row => shortDay(row.at) ? 1 : 0;
-  const log = own.flatMap(task => task.decisions.filter(row => named.test(row.decision) || /^state (merged|concluded|abandoned)$/.test(row.decision) || /^program /.test(row.decision)).map(row => ({ at: row.at, text: decisionLine(program, { ...row, id: task.id }, task, rounds) })))
+  const log = own.flatMap(task => task.decisions.filter(row => named.test(row.decision) || /^state (merged|concluded|abandoned)$/.test(row.decision)).map(row => ({ at: row.at, text: decisionLine(ctx, program, { ...row, id: task.id }, task, rounds) })))
     .filter(row => row.text !== null).sort((a, b) => dated(b) - dated(a) || (dated(a) ? String(b.at).localeCompare(String(a.at)) : 0)).slice(0, 8);
   // A time that is not a date gets no date and no title (R1371-4).
   const when = at => shortDay(at) ? `<span class="faint" title="${esc(day(at))} UTC">${esc(shortDay(at))}</span> ` : "";

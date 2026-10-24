@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
-import { LINE, PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
 import { ENDED, MET, breakdownGate, dead, gateLines, namedText, progressOf, progressText, shownGraph, waitGraph, waitsOf, waitsWithState } from "./program-rules.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
@@ -622,6 +622,9 @@ function programOrder(program, own) {
  */
 function programsOf(source, project, group, graph, cards) {
   const gates = new Map((project.tables.gates ?? []).map(gate => [gate.id, gate]));
+  // The questions of each program's breakdown gates, by program id, read once: the page cuts them off the answer rows (F-T384-1).
+  const questions = new Map();
+  for (const gate of gates.values()) { const id = proposalOf(gate); if (id) questions.set(id, [...questions.get(id) ?? [], gate.question]); }
   return [...graph.programs.values()].map(program => {
     const own = graph.byProgram.get(program.id) ?? [], progress = progressOf(own), pilotState = graph.byId.get(program.pilot)?.state;
     const state = program.state === "active" ? progress.done ? "done" : dead(pilotState) ? "stuck" : "active"
@@ -634,7 +637,7 @@ function programsOf(source, project, group, graph, cards) {
       // A lost program whose gate is open on a card in Needs you says so on that gate (card), so the problem counts once.
       : state === "lost" && !(gates.get(program.gate) && !gates.get(program.gate).answer && inNeeds(card({ id: gates.get(program.gate).task }))) ? { kind: "lost", title: lostWhy(program), text: title(LOST_FIX(program.id)) }
       : null;
-    return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate, gateFound: program.gateFound, ...(program.named !== undefined && { named: program.named }), open: open.length,
+    return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate, gateFound: program.gateFound, questions: questions.get(program.id) ?? [], ...(program.named !== undefined && { named: program.named }), open: open.length,
       source: source.id, sourceLabel: source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
       state, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
       next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === program.pilot } : null,

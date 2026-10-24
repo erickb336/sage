@@ -173,6 +173,24 @@ test("T378-18: the offline snapshot's task, programs and program pages each flip
   }
 });
 
+test("R1384-2: with scripts off, the offline snapshot's switches flip the theme together: a second page's switch flips it back", async t => {
+  const ctx = await browser.newContext({ javaScriptEnabled: false, colorScheme: "light", reducedMotion: "reduce" });
+  t.after(() => ctx.close());
+  await ctx.route("**/*", route => route.abort());
+  await ctx.route("http://board.test/snapshot", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: PAGES["/snapshot"]() }));
+  const page = await ctx.newPage(), switchOf = id => page.locator(`${id} .theme:visible`);
+  await page.goto("http://board.test/snapshot#programs");
+  await expectTheme(page, "dark", "programs");
+  await switchOf("#programs").click();
+  await expectTheme(page, "light", "flipped on the programs page");
+  for (const [id, now, words] of [[`#program-${key("PG1")}`, "dark", "Light theme"], [`#task-${key("T13")}`, "light", "Dark theme"], ["header", "dark", "Light theme"]]) {
+    await page.evaluate(hash => { location.hash = hash; }, id === "header" ? "" : id);
+    await switchOf(id).click();
+    await expectTheme(page, now, id);
+    assert.equal(await switchOf(id).innerText(), words, `${id}: the switch names the other theme`);
+  }
+});
+
 test("T378-19: the program approval band spans its section edge to edge", async t => {
   const page = await open(t, `/program/${key("PG3")}`);
   const [band, section] = await page.locator("section.approval").evaluate(element => [element.querySelector(".band").getBoundingClientRect(), element.getBoundingClientRect()].map(box => [Math.round(box.left), Math.round(box.right)]));
