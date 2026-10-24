@@ -30,7 +30,7 @@ export function principlesTable(rows) {
     "",
     "| Principle | Apply when |",
     "| --- | --- |",
-    ...rows.map((r) => `| ${r.id}<br>${r.text} | ${cell(r.applyWhen)} |`), // two columns, so that the table fits a phone
+    ...rows.map((r) => `| ${r.id}<br>*${r.text}* | ${cell(r.applyWhen)} |`), // two columns, so that the table fits a phone
     "",
     "Every principle except sage's own is pstack's, by Lauren Tan (MIT). Under each name, one of three notes says where its text comes from:",
     "",

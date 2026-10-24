@@ -44,7 +44,7 @@ test("npm run check fails when a principle's applyWhen changes and the principle
   assert.equal(r.status, 1);
   assert.match(r.stderr, /✗ docs\/guide\/principles\.md: out of date; run npm run build/);
   assert.equal(c.run("build").status, 0);
-  assert.match(c.read("docs/guide/principles.md"), /\n\| fix-root-causes<br>pstack, adapted \| a test fails for a reason nobody knows \|\n/);
+  assert.match(c.read("docs/guide/principles.md"), /\n\| fix-root-causes<br>\*pstack, adapted\* \| a test fails for a reason nobody knows \|\n/);
   const after = c.run("check");
   assert.equal(after.status, 0, after.stderr);
 });
@@ -57,7 +57,7 @@ test("a sync: a new pstack principle gets its row from the build, and a changed 
   assert.equal(c.run("check").status, 1);
   assert.equal(c.run("build").status, 0);
   const readme = c.read("docs/guide/principles.md");
-  assert.match(readme, /\n\| name-the-thing<br>pstack \| a value has no name \|\n/);
+  assert.match(readme, /\n\| name-the-thing<br>\*pstack\* \| a value has no name \|\n/);
   assert.match(readme, /There are 26 principles: 25 are pstack's, by Lauren Tan \(MIT\), and 1 is sage's own\./);
   assert.match(readme, /<summary><strong>All 26 principles<\/strong><\/summary>/);
   const after = c.run("check");
@@ -67,7 +67,7 @@ test("a sync: a new pstack principle gets its row from the build, and a changed 
 
 test("npm run check fails when the principles page's table is edited by hand", (t) => {
   const c = copy(t);
-  c.write("docs/guide/principles.md", c.read("docs/guide/principles.md").replace("| fix-root-causes<br>pstack, adapted | debugging a failure or repairing a finding |", "| fix-root-causes<br>mine | debugging a failure or repairing a finding |"));
+  c.write("docs/guide/principles.md", c.read("docs/guide/principles.md").replace("| fix-root-causes<br>*pstack, adapted* | debugging a failure or repairing a finding |", "| fix-root-causes<br>*mine* | debugging a failure or repairing a finding |"));
   const r = c.run("check");
   assert.equal(r.status, 1);
   assert.match(r.stderr, /✗ docs\/guide\/principles\.md: out of date; run npm run build/);
