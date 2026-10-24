@@ -37,7 +37,11 @@ There are 25 principles: 24 are pstack's, by Lauren Tan (MIT), and 1 is sage's o
 | test-behavior-not-implementation | writing, changing or keeping a test | pstack, adapted |
 | type-system-discipline | designing types, reviewing a function signature, or writing code in any statically-typed language | pstack |
 
-Every principle except sage's own is pstack's, by Lauren Tan (MIT). "pstack" is pstack's text as it is, from `upstream/pstack/`. "pstack, adapted" means that sage changed the wording: it is shorter, and it follows sage's writing standard. Its `upstream:` fingerprint records which pstack text it was checked against. "sage's own" has no pstack source.
+Every principle except sage's own is pstack's, by Lauren Tan (MIT). The Text column has three values:
+
+- "pstack" is pstack's text as it is, from `upstream/pstack/`.
+- "pstack, adapted" means that sage changed the wording: it is shorter, and it follows sage's writing standard. Its `upstream:` fingerprint records which pstack text it was checked against.
+- "sage's own" has no pstack source.
 
 </details>
 

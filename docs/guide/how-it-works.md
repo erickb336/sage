@@ -77,4 +77,6 @@ When a design has no clear answer, the chief can run an **arena**. You can also 
 </picture>
 </a>
 
-N candidates (3 by default) get the same brief, each with a different angle. A judge scores them against a rubric that they do not see, and grafts the best parts into one final version. That version goes through reviews and QA like any build. The candidates never merge.
+N candidates (3 by default) get the same brief, each with a different angle. A judge scores them against a rubric that they do not see, and grafts the best parts into one final version.
+
+That version goes through reviews and QA like any build. The candidates never merge.

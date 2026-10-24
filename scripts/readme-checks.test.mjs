@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./build.mjs";
-import { anchors, linkProblems, readmeProblems, slug } from "./readme-checks.mjs";
+import { anchors, linkProblems, paragraphProblems, readmeProblems, slug } from "./readme-checks.mjs";
 
 const NEWS = (n) => ["## What's new", "", ...Array.from({ length: n }, (_, i) => `- **Change ${i + 1}.** One line.`), "", "All changes are in [CHANGELOG.md](CHANGELOG.md).", ""];
 const README = (lines = {}) => [
@@ -30,6 +30,21 @@ test("a sixth What's new item, a missing changelog link and a first screen witho
   // Ten lines of text before the status line push its links off the first screen.
   const late = README().replace("**Status:**", `${Array.from({ length: 10 }, (_, i) => `Line ${i}.`).join("\n")}\n**Status:**`);
   assert.deepEqual(readmeProblems(late), ["README.md: the first screen (the first 10 lines with text) needs a link to #status", "README.md: the first screen (the first 10 lines with text) needs a link to #quick-start"]);
+});
+
+test("a paragraph of 4 sentences is a problem at its first line; 3 sentences, code, lists, tables and quotes are not", () => {
+  const page = [
+    "# Page", "",
+    "One. Two? Three!", "",
+    "First `a. b. c.` and [a link](x.md#a.b) and v1.2 and README.md.", "Second line. Third. Fourth \"quoted.\"", "",
+    "```", "One. Two. Three. Four.", "```", "",
+    "- One. Two. Three. Four.", "  Five. Six.", "",
+    "| A | B |", "| --- | --- |", "| One. Two. | Three. Four. |", "",
+    "> One. Two. Three. Four.", "",
+    "    One. Two. Three. Four.", "",
+  ].join("\n");
+  assert.deepEqual(paragraphProblems("docs/guide/x.md", page), ["docs/guide/x.md:5: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
+  assert.deepEqual(paragraphProblems("README.md", "One. Two. Three.\nFour.\n\nFive.\n"), ["README.md:1: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
 });
 
 test("the line budget counts every line of the raw file, blank ones too", () => {
@@ -106,8 +121,11 @@ test("npm run check fails on a README with 6 What's new items, a missing screens
   writeFileSync(join(dir, "README.md"), readme.replace("\n\nAll changes: [CHANGELOG.md]", `${extra}\n\nAll changes: [CHANGELOG.md]`));
   rmSync(join(dir, "docs/assets/board-dark.png"));
   writeFileSync(join(dir, "docs/assets/board-shots.json"), JSON.stringify({ sample: "0".repeat(64) }));
+  const faq = readFileSync(join(dir, "docs/guide/faq.md"), "utf8");
+  writeFileSync(join(dir, "docs/guide/faq.md"), `${faq.trimEnd()}\n\nOne. Two. Three. Four.\n`);
   const r = spawnSync("node", [join(dir, "scripts/check.mjs")], { encoding: "utf8" });
   assert.equal(r.status, 1);
+  assert.match(r.stderr, new RegExp(`^✗ docs/guide/faq\\.md:${faq.trimEnd().split("\n").length + 2}: a paragraph of 4 sentences; keep it at 3 or fewer`, "m"));
   assert.match(r.stderr, /^✗ README\.md: What's new has 6 items; keep the last 5, and move the others to CHANGELOG\.md$/m);
   assert.match(r.stderr, /^✗ docs\/assets\/board-dark\.png: missing; run node scripts\/board-shots\.mjs \(see CONTRIBUTING\.md\)$/m);
   assert.match(r.stderr, /^✗ docs\/assets\/board-shots\.json: the sample logbook changed after the board screenshots; run node scripts\/board-shots\.mjs/m);

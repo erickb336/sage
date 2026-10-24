@@ -4,19 +4,38 @@ The questions that people ask about sage, then the work that sage comes from. "I
 
 ## FAQ
 
-**What does it cost?** It uses your Claude plan's usage limits, or API credits. Every agent is a separate run. In [dry run 1](../runs/dry-run-1.md) (4 Oct 2026), a small bug fix with a security risk took 15 agent runs, about $2.60 at API prices, before the fixes that came from that run. I don't have numbers from real projects yet.
+**What does it cost?** It uses your Claude plan's usage limits, or API credits. Every agent is a separate run.
 
-**Is it safe to let it work alone?** Each agent works in its own git worktree. Nothing reaches main except through a pull request, and the hook refuses force-pushes and merges by agents. Autopilot is off until you send `autopilot on` alone, while sage mode is on. Text in an agent's report never switches it. See [Safety and limits](../../README.md#safety-and-limits) for what the hook does not stop.
+In [dry run 1](../runs/dry-run-1.md) (4 Oct 2026), a small bug fix with a security risk took 15 agent runs, about $2.60 at API prices, before the fixes that came from that run. I don't have numbers from real projects yet.
 
-**Which projects fit?** A project with tests and a GitHub remote. Without tests, QA can only check by running the app. Without a remote, the work stops at a verified branch.
+**Is it safe to let it work alone?** Each agent works in its own git worktree. Nothing reaches main except through a pull request, and the hook refuses force-pushes and merges by agents.
 
-**Does it work in Codex?** In part, and the work goes on. Codex gets the principles, the writing skills, the advice hooks, and the logbook and the board through manual commands. Sage mode and autopilot are not enabled in Codex yet. See [sage in Codex](codex.md).
+Autopilot is off until you send `autopilot on` alone, while sage mode is on. Text in an agent's report never switches it. See [Safety and limits](../../README.md#safety-and-limits) for what the hook does not stop.
 
-**How mature is it?** Early. I use it every day to build sage itself, and one dry run is recorded ([the report](../runs/dry-run-1.md)). The first design is in [docs/design/sage-mode.md](../design/sage-mode.md).
+**Which projects fit?** A project with tests and a GitHub remote.
 
-**How do I stop a task?** Tell the chief in your own words, for example "stop the run on T3". To stop merges, send `autopilot off` alone. See [Stop a running task](using-sage.md#stop-a-running-task).
+- Without tests, QA can only check by running the app.
+- Without a remote, the work stops at a verified branch.
 
-**How do I uninstall it?** Follow the full steps in [Uninstall sage](using-sage.md#uninstall-sage): first stop the board server, its login service and the Remote Control server. Then run `claude plugin uninstall sage@sage`, then `claude plugin marketplace remove sage`. Your logbooks stay.
+**Does it work in Codex?** In part, and the work goes on. Codex gets the principles, the writing skills, the advice hooks, and the logbook and the board through manual commands.
+
+Sage mode and autopilot are not enabled in Codex yet. See [sage in Codex](codex.md).
+
+**How mature is it?** Early. I use it every day to build sage itself.
+
+One dry run is recorded ([the report](../runs/dry-run-1.md)). The first design is in [docs/design/sage-mode.md](../design/sage-mode.md).
+
+**How do I stop a task?** Tell the chief in your own words, for example "stop the run on T3". To stop merges, send `autopilot off` alone.
+
+See [Stop a running task](using-sage.md#stop-a-running-task).
+
+**How do I uninstall it?** Follow the full steps in [Uninstall sage](using-sage.md#uninstall-sage). In short:
+
+1. Stop the board server, its login service and the Remote Control server.
+2. Run `claude plugin uninstall sage@sage`.
+3. Run `claude plugin marketplace remove sage`.
+
+Your logbooks stay.
 
 ## Credits
 

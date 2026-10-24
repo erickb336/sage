@@ -12,7 +12,7 @@ import { withoutPrinciplesTable } from "./principles-table.mjs";
 import { PRINCIPLES_PAGE } from "./dictionary.mjs";
 import { files as graphics } from "./graphics.mjs";
 import { packageBoundaryProblems } from "./package-boundaries.mjs";
-import { docFiles, linkProblems, readmeProblems } from "./readme-checks.mjs";
+import { docFiles, linkProblems, paragraphProblems, readmeProblems } from "./readme-checks.mjs";
 import { SHOTS, SHOTS_RECORD, sampleHash } from "./board-shots.mjs";
 
 const problems = [];
@@ -140,8 +140,10 @@ for (const name of new Set([...drawn.keys()].map((f) => f.replace(/-(light|dark)
   if (!pages.some(shown)) problems.push(`docs/assets/${name}-light.svg: no page shows it; show it in the README or a docs page as <a href="<path>/${name}-light.svg">, then <picture> with its dark <source> and an <img> with alt text, each on its own line`);
 }
 
-// The README is a short front page, and every relative link of the README and the docs resolves (T381).
+// The README is a short front page, every relative link of the README and the docs resolves, and no paragraph of the
+// README or the guide has more than 3 sentences (T381).
 problems.push(...readmeProblems(readme), ...linkProblems(ROOT));
+for (const f of docFiles(ROOT).filter((f) => f === "README.md" || f.startsWith("docs/guide/"))) problems.push(...paragraphProblems(f, readFileSync(join(ROOT, f), "utf8")));
 // The board screenshots come from scripts/board-shots.mjs with its sample logbook: both files exist, and the record
 // names the sample that they show. It compares no pixels, so a renderer change does not fail the check by itself.
 for (const f of [...Object.values(SHOTS), SHOTS_RECORD]) if (!existsSync(join(ROOT, f))) problems.push(`${f}: missing; run node scripts/board-shots.mjs (see CONTRIBUTING.md)`);

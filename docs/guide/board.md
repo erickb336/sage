@@ -1,6 +1,8 @@
 # The board
 
-The board is a view of every project's logbook: what needs you, the agents that run now, each active task, and what merged. This page is the user guide to the board. The [README](../../README.md#the-board) has a screenshot, and [Every phrase](using-sage.md#every-phrase) lists the board phrases with all the others. The [board service guide](../../packages/sage-board/README.md) gives the server's setup by hand, the login service and private phone access.
+The board is a view of every project's logbook: what needs you, the agents that run now, each active task, and what merged. This page is the user guide to the board.
+
+The [README](../../README.md#the-board) has a screenshot, and [Every phrase](using-sage.md#every-phrase) lists the board phrases with all the others. The [board service guide](../../packages/sage-board/README.md) gives the server's setup by hand, the login service and private phone access.
 
 The board only reads. To change a task, a priority or a kind, ask the chief.
 
@@ -16,25 +18,67 @@ The board shows recorded tasks across explicit Claude and Codex logbook sources.
 | `show board T197`, `sage board T197`, or `board T197` | Full task detail for the current project. An unknown task gives nearby IDs and opens no other task. |
 | `show status` or `sage status` | Task states, recorded agents, what needs you, and the budget evidence that the logbook has. |
 
-Claude recognizes these phrases only at the start of your own message, outside quoted text. Leading bold and a trailing question mark work. Text after a question mark on the same line does not trigger the phrase. Codex uses its manual Sage skill commands until native owner phrase delivery is verified.
+Claude recognizes these phrases only at the start of your own message, outside quoted text:
+
+- Leading bold and a trailing question mark work.
+- Text after a question mark on the same line does not trigger the phrase.
+
+Codex uses its manual Sage skill commands until native owner phrase delivery is verified.
 
 The six columns are Backlog, Design, Building, In review, Ready to merge, and Done. Done includes merged and concluded tasks from the last seven days, when their completion date is recorded. Abandoned tasks remain available by exact lookup.
 
-Each card shows its task, project, the provider whose logbook holds it (Claude or Codex), PR, priority, kind, size, risk, and recorded agent roles and providers. Under the title, the step line shows only the steps of the task's route, each with a mark and a word, then a "Now" or "Needs you" line and a "Next" line. A backlog card has no "Now" and "Next" lines; it shows its "Needs you" line when it needs you. A long project name ends in an ellipsis, and its tooltip gives the full name. A project shows by its display name (set by the sage), else by its GitHub repository (the `upstream` remote, then `origin`), else by its folder. The Claude and Codex logbooks with the same key and the same checkout are one project. In each column, the tasks that need you come first, then P0 to P3, then the tasks with no priority. An archived project's tasks leave the columns: the Archived group under the board lists the project, with its task count and what needs you there, and the picker shows its tasks when you choose it. Review evidence applies only to the recorded PR head. Missing facts stay unknown. Inferred work from a Codex PR stays separate from recorded running agents.
+Each card shows its task, project, the provider whose logbook holds it (Claude or Codex), PR, priority, kind, size, risk, and recorded agent roles and providers. Under the title, the step line shows only the steps of the task's route, each with a mark and a word, then a "Now" or "Needs you" line and a "Next" line.
 
-The browser board has a project picker (the button with the current project; "/" opens it), a chip for each project that needs you, and a filter bar: Who, Priority, Kind and Program. Under a filter, the Needs you chip and each project's chip count only the tasks that the filter keeps. These need the page script. A live update changes only the parts of the page that changed, and keeps your scroll, focus, open folds and the open picker. At widths from 701 to 1180 px, the six columns show as two rows of three, so no column is cut off; above 1180 px the six columns fit also with a classic scroll bar. At phone width each chip, filter and button is at least 44 px high. On a task page, a dotted stand-in value shows its reason when you tap it or move the focus to it. The browser board is dark until you choose the light theme with the switch at the top; it works with scripts off too, and with scripts the board keeps your choice in this browser.
+- A backlog card has no "Now" and "Next" lines; it shows its "Needs you" line when it needs you.
+- A long project name ends in an ellipsis, and its tooltip gives the full name.
+- A project shows by its display name (set by the sage), else by its GitHub repository (the `upstream` remote, then `origin`), else by its folder.
+- The Claude and Codex logbooks with the same key and the same checkout are one project.
+- In each column, the tasks that need you come first, then P0 to P3, then the tasks with no priority.
+- An archived project's tasks leave the columns: the Archived group under the board lists the project, with its task count and what needs you there, and the picker shows its tasks when you choose it.
+- Review evidence applies only to the recorded PR head. Missing facts stay unknown.
+- Inferred work from a Codex PR stays separate from recorded running agents.
+
+The browser board has a project picker (the button with the current project; "/" opens it), a chip for each project that needs you, and a filter bar: Who, Priority, Kind and Program. These need the page script.
+
+- Under a filter, the Needs you chip and each project's chip count only the tasks that the filter keeps.
+- A live update changes only the parts of the page that changed, and keeps your scroll, focus, open folds and the open picker.
+- At widths from 701 to 1180 px, the six columns show as two rows of three, so no column is cut off; above 1180 px the six columns fit also with a classic scroll bar.
+- At phone width each chip, filter and button is at least 44 px high.
+- On a task page, a dotted stand-in value shows its reason when you tap it or move the focus to it.
+- The browser board is dark until you choose the light theme with the switch at the top; it works with scripts off too, and with scripts the board keeps your choice in this browser.
 
 ## Needs you and task pages
 
-Needs you lists open questions with their options and recommendation, designs that wait for your answer, failed checks or QA, and PRs that need your review. A held task is on it only with an open question. Gate IDs include the source and project. The chief must resolve that exact logbook before recording an answer. Needs you also has items that no card holds: a stuck program (its pilot was abandoned or is not in the logbook, also before you approve the breakdown), a breakdown gate that the logbook lost, a program that tasks name but the logbook does not have, a programs table that the board cannot read, a logbook that it cannot read, and a provider's logbook folder that it cannot read ("The Codex logbooks cannot be read"). Each item says why and what to do, and counts in "needs you". In the chat, the count of "needs you" equals the numbered items. In the chat, a program's breakdown gate is under its own heading, "Program approval", and every other item is under "Other". On the board page, the items with no card are in the box "Needs you, not on a card" above the columns.
+Needs you lists open questions with their options and recommendation, designs that wait for your answer, failed checks or QA, and PRs that need your review. A held task is on it only with an open question.
 
-A task page shows the step line, one row for each step with its detail and each review role's state, the brief, runs, verdict evidence, findings, artifacts, and latest decisions. A task of a program also shows its program, with a link and the progress, each task that it waits for with its state (met, not met or never met), and the tasks that wait for it. The offline HTML file contains the selected tasks and their full details. Text from agents is escaped in both views.
+Gate IDs include the source and project. The chief must resolve that exact logbook before recording an answer.
+
+Needs you also has items that no card holds:
+
+- a stuck program (its pilot was abandoned or is not in the logbook, also before you approve the breakdown);
+- a breakdown gate that the logbook lost;
+- a program that tasks name but the logbook does not have;
+- a programs table that the board cannot read;
+- a logbook that it cannot read;
+- a provider's logbook folder that it cannot read ("The Codex logbooks cannot be read").
+
+Each item says why and what to do, and counts in "needs you".
+
+- In the chat, the count of "needs you" equals the numbered items.
+- In the chat, a program's breakdown gate is under its own heading, "Program approval", and every other item is under "Other".
+- On the board page, the items with no card are in the box "Needs you, not on a card" above the columns.
+
+A task page shows the step line, one row for each step with its detail and each review role's state, the brief, runs, verdict evidence, findings, artifacts, and latest decisions. A task of a program also shows its program, with a link and the progress, each task that it waits for with its state (met, not met or never met), and the tasks that wait for it.
+
+The offline HTML file contains the selected tasks and their full details. Text from agents is escaped in both views.
 
 ## The Agents page
 
 The board server has a page **Agents** (`/agents`). The header of the pages has three tabs: "Task board | Programs | Agents (n)", where n is the count of agents that run now. The page has the same sign-in as the task board, and it updates live in the same way.
 
-The page shows every agent that runs now, in all projects, for Claude and Codex. It has one box for each project, with the project's Claude agent cap. A lead's helpers sit under it, indented. The projects and the rows that need a look come first. Each row gives the provider, role, run, task (with a link to its task page), model, time running, last activity and a state.
+The page shows every agent that runs now, in all projects, for Claude and Codex. It has one box for each project, with the project's Claude agent cap. A lead's helpers sit under it, indented.
+
+The projects and the rows that need a look come first. Each row gives the provider, role, run, task (with a link to its task page), model, time running, last activity and a state.
 
 | State | Shown when |
 | --- | --- |
@@ -45,7 +89,9 @@ The page shows every agent that runs now, in all projects, for Claude and Codex.
 | ■ helper stopped, run still open | The hook saw the helper stop, but the logbook still says that the run runs. The sage must end the run. |
 | ○ running | A Codex run: the logbook says that it runs. Codex sends no activity notes yet, so the row has no last activity, no helpers and no cap. |
 
-The page reads files only: the logbooks, the hook's agent slots and helper notes (by name and time, not their content) and the caps in `config.json`. It runs no command and reads no process list. To join a slot to its run, the hook marks each agent slot with the run id from the first line of the agent's brief ("Run R12 · task T3"). An agent whose brief has no such line shows with "No run recorded". For QA, `node scripts/board-sample.mjs <empty folder>` also writes sample agent slots.
+The page reads files only: the logbooks, the hook's agent slots and helper notes (by name and time, not their content) and the caps in `config.json`. It runs no command and reads no process list.
+
+To join a slot to its run, the hook marks each agent slot with the run id from the first line of the agent's brief ("Run R12 · task T3"). An agent whose brief has no such line shows with "No run recorded". For QA, `node scripts/board-sample.mjs <empty folder>` also writes sample agent slots.
 
 
 ## Programs on the board
@@ -67,8 +113,16 @@ The offline HTML file holds the programs list and each program's page too, as pa
 
 The read-only board does not initialize logbooks, acquire their write locks, update board history, fetch GitHub, or decide whether a PR may merge. Existing state commands still record changes and enforce the merge rules.
 
-In Claude, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots), and the chief shows its address, or why it is not running, next to the chat board. On the Mac the board needs no sign-in. On the phone, through a private HTTPS tunnel, you sign in as `sage` with your own password. Set it once in Terminal on the Mac with the `board --set-password` command that the line gives; until then, access from outside the Mac is off. The command needs a terminal, and the sage hook refuses the ordinary command shapes by which an agent sets the password or reads the board config. It does not stop a script that builds them while it runs; full protection needs the sandbox. After you change the config or the password, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
+In Claude, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots), and the chief shows its address, or why it is not running, next to the chat board. On the Mac the board needs no sign-in.
 
-The [board service guide](../../packages/sage-board/README.md) gives local startup, stable installation, offline export, and private phone access through a private HTTPS tunnel, such as Tailscale Serve. The server runs independently of a chat. It listens on loopback and asks for a sign-in for every request that is not from the Mac itself. A task page or a program page that is too large to show (over 8 MB) shows its parent page (the board, or the programs list) with a note, and the rest of the board stays live.
+On the phone, through a private HTTPS tunnel, you sign in as `sage` with your own password. Set it once in Terminal on the Mac with the `board --set-password` command that the line gives; until then, access from outside the Mac is off.
+
+The command needs a terminal, and the sage hook refuses the ordinary command shapes by which an agent sets the password or reads the board config. It does not stop a script that builds them while it runs; full protection needs the sandbox.
+
+After you change the config or the password, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
+
+The [board service guide](../../packages/sage-board/README.md) gives local startup, stable installation, offline export, and private phone access through a private HTTPS tunnel, such as Tailscale Serve. The server runs independently of a chat.
+
+It listens on loopback and asks for a sign-in for every request that is not from the Mac itself. A task page or a program page that is too large to show (over 8 MB) shows its parent page (the board, or the programs list) with a note, and the rest of the board stays live.
 
 `board --install --login-file` refuses when no upgrade-stable `node` command is on PATH, for example with asdf, Volta, fnm or a keg-only Homebrew Node. To fix it, put a `node` link to the Node that you run the install with in a folder that you own and that is on PATH (for example `~/.local/bin/node`), then run the install again.

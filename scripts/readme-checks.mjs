@@ -102,3 +102,32 @@ export function linkProblems(root, files = docFiles(root)) {
   }
   return problems;
 }
+
+/** The most sentences in one paragraph of the README and the guide, so that a reader can take in each paragraph at once. */
+export const MAX_SENTENCES = 3;
+/** A line that is not prose: a heading, a list item, a table row, a quote, a tag, a rule or an image. */
+const NOT_PROSE = /^\s*(#|[-*+] |\d+[.)] |\||>|<|---|\*\*\*|!\[)/;
+
+/** The sentences of a text: each end mark (. ! ?) before a space or the end, outside code spans and link URLs. */
+export const sentences = (text) => (text.replace(/(`+)[^`]*?\1/g, "x").replace(/\]\([^)]*\)/g, "]").match(/[.!?]+["')*_\]]*(?=\s|$)/g) ?? []).length;
+
+/** Each paragraph of a Markdown file with more than MAX_SENTENCES sentences. A paragraph is a run of prose lines that
+ * starts at the margin; code blocks, lists and their indented lines, tables, quotes, headings and tags are not. */
+export function paragraphProblems(file, text) {
+  const problems = [], lines = text.split("\n");
+  let start = -1, fence = null;
+  const end = (i) => {
+    const n = start < 0 ? 0 : sentences(lines.slice(start, i).join(" "));
+    if (n > MAX_SENTENCES) problems.push(`${file}:${start + 1}: a paragraph of ${n} sentences; keep it at ${MAX_SENTENCES} or fewer. Split it, or make it a list or a table`);
+    start = -1;
+  };
+  lines.forEach((line, i) => {
+    const mark = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) { if (mark?.startsWith(fence)) fence = null; return; }
+    if (mark) { end(i); fence = mark; return; }
+    if (!line.trim() || NOT_PROSE.test(line) || (start < 0 && /^\s/.test(line))) { end(i); return; }
+    if (start < 0) start = i;
+  });
+  end(lines.length);
+  return problems;
+}
