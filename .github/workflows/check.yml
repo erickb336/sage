@@ -16,3 +16,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
+      # The browser tests use the Chromium headless shell of the pinned playwright devDependency.
+      # npm ci downloads no browser; this step does. Playwright advises against a browser cache.
+      - run: npx playwright install --with-deps --only-shell chromium
+      - run: npm run test:browser

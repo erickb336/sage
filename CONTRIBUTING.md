@@ -61,6 +61,15 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
    npm test
    ```
 
+7. Run the browser tests of the board. They are not in `npm test`, so that it stays fast. They use the Chromium headless shell of the pinned `playwright` devDependency. `npm ci` downloads no browser, so install it once:
+
+   ```sh
+   npx playwright install --only-shell chromium
+   npm run test:browser
+   ```
+
+   To run one file: `node --test scripts/board-picker.test.mjs`. CI installs the same browser and runs `npm run test:browser` after `npm test`.
+
 ## The README and the docs
 
 - The README is a short front page. `npm run check` holds it to 150 lines, at most 5 What's new items, a first screen that answers what sage is, and relative links that resolve. A longer text goes into a page under `docs/`, listed in the [docs index](docs/README.md).
@@ -70,10 +79,10 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
 
 ## The board screenshots
 
-The board screenshots of the README and of [Learn sage in 5 minutes](docs/guide/learn-sage.md) come from `scripts/board-shots.mjs`. It renders the built board with fixed sample logbooks (made-up data, from `scripts/fixtures/board-programs.mjs` and `scripts/fixtures/board-walkthrough.mjs`) in Playwright's Chromium. Each shot is at phone width and 2x, and carries a SAMPLE DATA label. Playwright is not a dependency of sage, so give it through `NODE_PATH`. Set `NODE_PATH` to the `node_modules` folder itself, the folder that contains `playwright`:
+The board screenshots of the README and of [Learn sage in 5 minutes](docs/guide/learn-sage.md) come from `scripts/board-shots.mjs`. It renders the built board with fixed sample logbooks (made-up data, from `scripts/fixtures/board-programs.mjs` and `scripts/fixtures/board-walkthrough.mjs`) in Playwright's Chromium. Each shot is at phone width and 2x, and carries a SAMPLE DATA label. It uses the same browser as the browser tests (step 7 above):
 
 ```sh
-NODE_PATH=<path>/node_modules node scripts/board-shots.mjs
+node scripts/board-shots.mjs
 ```
 
 `npm run check` fails when a PNG is missing, or when the sample data changed after the last screenshots. It does not compare pixels.
