@@ -199,19 +199,22 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 
 ## Uninstall sage
 
-1. If you use the board server, stop it, in a terminal. First find the installed version: this command prints it on a line such as "Version: 375784346ccb".
+1. If you sent the board phrase (`show board`) on the Mac, or started the board server, a server may still run after the chat. Stop it first, in a terminal. To find the installed version, use the "Version:" line under `sage@sage` in the output of this command:
 
    ```sh
    claude plugin list
    ```
 
-   Replace `<version>` with that value. It is the name of the folder of that version in `~/.claude/plugins/cache/sage/sage/`:
+   Replace `<version>` in the first line with that value, then run the two commands:
 
    ```sh
-   node ~/.claude/plugins/cache/sage/sage/<version>/board/cli.mjs board --stop
+   cd ~/.claude/plugins/cache/sage/sage/<version>
+   node board/cli.mjs board --stop
    ```
 
-   A sage from before 2026-10-11 has no `board/cli.mjs`, so the command fails with "Cannot find module". Then stop its board server in another way:
+   If you already uninstalled sage, `claude plugin list` shows no version: use a folder in that cache directory that has `board/cli.mjs`.
+
+   When the command fails with "Cannot find module", your sage is older than the board command. Then stop its server in another way:
 
    - If you started it with `--serve`, press Ctrl+C in that terminal.
    - If its login service runs it, step 2 stops it.

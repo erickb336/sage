@@ -1,6 +1,6 @@
 # Changelog
 
-This is the full list of user-facing changes to sage, newest first. The README's [What's new](README.md#whats-new) shows the last five.
+This is the full list of user-facing changes to sage, newest first. The README's [What's new](README.md#whats-new) shows five chosen changes.
 Each date is the day of the first commit that made the change. Older changes are in the [git log](https://github.com/erickb336/sage/commits/main). In these entries, "the sage" is the chief, the main session in sage mode.
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve. See [To update sage](docs/guide/using-sage.md#to-update-sage).
@@ -78,7 +78,7 @@ Each date is the day of the first commit that made the change. Older changes are
 
 - **The board phrase starts the board server on the Mac.** `show board` runs `board --ensure` first: it sets the server up from the standard Claude and Codex roots when it has no config, starts it in the background when nothing answers on its port, and gives its address next to the chat board. On the Mac the board page needs no sign-in; through Tailscale it still does, with a password that you set with `board --set-password` (the file keeps only its hash). A busy port, an older or another board on the port, or a failed start gives one line that says why. `board --stop` stops this config's board server, so a changed config or password takes effect at the next `show board`; the line says when a restart is needed. A missing Claude or Codex logbook shows as "not set up yet", not as a failed update.
 
-- **Only your messages switch sage mode or autopilot.** An agent's report, a task notification, a hand-back or another session's message no longer switches autopilot off, also with a line that starts with "autopilot off" or "sage mode off". Your own text before or after the frames, and a message that you send while Claude works after the last frame, still switch it off. Text between two frames counts as agent text. When the hook cannot read a prompt's frames, for example a close of the wrong kind, nothing in it switches, and when it has an off, the chief tells you to send the off again as a message alone. The miss note no longer has the reason "an off line in an agent's text".
+- **Only your messages switch sage mode or autopilot.** *(Replaced later: see "A switch needs the exact phrase" above. Text in the shape of a queued message can still turn autopilot off, never on.)* An agent's report, a task notification, a hand-back or another session's message no longer switches autopilot off, also with a line that starts with "autopilot off" or "sage mode off". Your own text before or after the frames, and a message that you send while Claude works after the last frame, still switch it off. Text between two frames counts as agent text. When the hook cannot read a prompt's frames, for example a close of the wrong kind, nothing in it switches, and when it has an off, the chief tells you to send the off again as a message alone. The miss note no longer has the reason "an off line in an agent's text".
 
 ## 2026-10-10
 
