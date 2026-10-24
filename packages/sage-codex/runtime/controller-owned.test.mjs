@@ -5,6 +5,8 @@ import {EventEmitter} from 'node:events';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {PassThrough} from 'node:stream';
+import {runClient} from './controller-client.mjs';
 import {createControllerProcess} from './controller-process.mjs';
 import {resolveControllerBinary} from './controller-binding.mjs';
 
@@ -265,8 +267,71 @@ test('fake: a throw from onEvent fences the process and the turn is uncertain', 
   await f.owner.stop();
 });
 
+// The terminal client against the same fake. commands.mjs needs the bundled core, so the test loads the built copy.
+const {parseCommand} = await import(new URL('../../../plugins/sage-codex/skills/sage/commands.mjs', import.meta.url));
+const CLIENT_DIR = realpathSync(mkdtempSync(join(tmpdir(), 'sage-client-')));
+test.after(() => rmSync(CLIENT_DIR, {recursive: true, force: true}));
+writeFileSync(join(CLIENT_DIR, 'codex'), 'synthetic controller bytes'); chmodSync(join(CLIENT_DIR, 'codex'), 0o755);
+writeFileSync(join(CLIENT_DIR, 'chief.md'), INSTRUCTIONS);
+async function client(lines, fakeOptions = {}, {onInterrupt} = {}) {
+  const f = fakeChild(fakeOptions);
+  let text = '';
+  const output = {write(chunk) { text += chunk; return true; }};
+  const input = new PassThrough();
+  const code = runClient({argv: ['--project', PROJECT, '--task', 'T400', '--run', 'R1461', '--instructions', join(CLIENT_DIR, 'chief.md')],
+    env: {SAGE_CODEX_CONTROLLER_BIN: join(CLIENT_DIR, 'codex'), PATH: '/fixture/bin', CODEX_HOME: '/fixture/home'}, input, output, classify: parseCommand,
+    onInterrupt, spawn: f.spawn, schedule: f.schedule});
+  for (const line of lines) { await reactions(); input.write(`${line}\n`); }
+  input.end();
+  return {f, code: await code, lines: () => text.trimEnd().split('\n')};
+}
+
+test('client: each typed line is one turn, phrases are labelled, and the end of input stops the controller', async () => {
+  const run = await client(['sage mode', '', 'sage mode please', 'Say one synthetic sentence.']);
+  assert.equal(run.code, 0);
+  const lines = run.lines();
+  assert.match(lines[0], /^\[bound T400 R1461, root 01a16fbf-ff14-78a0-97a1-ce4a2d419f01, binding [0-9a-f]{64}\]$/);
+  assert.deepEqual(lines.slice(1), [
+    '[owner phrase: sage mode]', `chief> ${SYNTHETIC_REPLY}`, '[turn completed]',
+    '[no switch; the exact phrases are: sage mode, sage mode off]',`chief> ${SYNTHETIC_REPLY}`, '[turn completed]',
+    `chief> ${SYNTHETIC_REPLY}`, '[turn completed]',
+    '[controller stopped: Stop requested]']);
+  assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/start').map(message => message.params.input[0].text),
+    ['sage mode', 'sage mode please', 'Say one synthetic sentence.']);
+  assert.equal(run.f.launch.options.env.CODEX_HOME, '/fixture/home');
+  assert.equal(run.f.launch.args.includes('--owned-controller'), true);
+});
+
+test('client: a policy refusal ends with code 1 and sends no turn', async () => {
+  const run = await client(['Say one synthetic sentence.'], {edit: stream => { stream.find(entry => entry.after === 'thread/start' && entry.reply).reply.thread.cliVersion = '0.161.0'; return stream; }});
+  assert.equal(run.code, 1);
+  assert.deepEqual(run.lines(), ['[refused version: The controller is not version 0.160.0]', '[controller stopped: Stop requested]']);
+  assert.equal(run.f.methods().includes('turn/start'), false);
+});
+
+test('client: an interrupt request interrupts the active turn; the next line still runs', async () => {
+  let interrupt, turns = 0, held;
+  const acknowledged = new Promise(resolve => { held = resolve; });
+  const run = client(['Wait for an interrupt.', 'Say one synthetic sentence.'], {
+    onRequest(message, {emit}) {
+      if (message.method === 'turn/start' && ++turns === 1) {
+        setImmediate(() => { emit([{id: message.id, result: {turn: {id: 'held-turn', status: 'inProgress', items: []}}}]); held(); });
+        return false;
+      }
+      if (message.method === 'turn/interrupt') setImmediate(() => emit([{id: message.id, result: {}},
+        {method: 'turn/completed', params: {threadId: THREAD, turn: {id: 'held-turn', items: [], status: 'interrupted', error: null}}}]));
+    },
+  }, {onInterrupt: handler => { interrupt = handler; }});
+  // The first turn is active once the fake acknowledged it; no clock is involved.
+  await acknowledged;
+  interrupt();
+  const {code, lines} = await run;
+  assert.equal(code, 0);
+  assert.deepEqual(lines().slice(1), ['[turn interrupted]', `chief> ${SYNTHETIC_REPLY}`, '[turn completed]', '[controller stopped: Stop requested]']);
+});
+
 // Part 2: one gated test against the real fork binary. It runs only when SAGE_CODEX_CONTROLLER_BIN is set.
-const REAL = process.env.SAGE_CODEX_CONTROLLER_BIN ? false : 'SAGE_CODEX_CONTROLLER_BIN is not set; the real controller test is skipped';
+const REAL =process.env.SAGE_CODEX_CONTROLLER_BIN ? false : 'SAGE_CODEX_CONTROLLER_BIN is not set; the real controller test is skipped';
 
 function sse(events) {
   return events.map(event => `event: ${event.type}\n` + (Object.keys(event).length === 1 ? '\n' : `data: ${JSON.stringify(event)}\n\n`)).join('');
@@ -318,11 +383,11 @@ enabled = false
   writeFileSync(join(home, 'auth.json'), JSON.stringify({auth_mode: 'apikey', OPENAI_API_KEY: 'synthetic-api-key'}));
   const binary = resolveControllerBinary(process.env);
   const events = [];
+  const env = {PATH: `${bin}:/usr/bin:/bin`, HOME: userHome, TMPDIR: root, CODEX_HOME: home, CODEX_AUTHAPI_BASE_URL: url,
+    CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG: '1', CODEX_APP_SERVER_MANAGED_CONFIG_PATH: join(home, 'managed_config.toml'),
+    NO_PROXY: '*', no_proxy: '*', RUST_LOG: 'warn', DO_NOT_TRACK: '1'};
   const owner = createControllerProcess({
-    executable: binary.path, executableSha256: binary.sha256, cwd: project,
-    env: {PATH: `${bin}:/usr/bin:/bin`, HOME: userHome, TMPDIR: root, CODEX_HOME: home, CODEX_AUTHAPI_BASE_URL: url,
-      CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG: '1', CODEX_APP_SERVER_MANAGED_CONFIG_PATH: join(home, 'managed_config.toml'),
-      NO_PROXY: '*', no_proxy: '*', RUST_LOG: 'warn', DO_NOT_TRACK: '1'},
+    executable: binary.path, executableSha256: binary.sha256, cwd: project, env,
     startupTimeoutMs: 60000, inspectionTimeoutMs: 30000, stopGraceMs: 5000, turnTimeoutMs: 60000, interruptGraceMs: 10000,
     onEvent: event => events.push(event),
   });
@@ -332,7 +397,7 @@ enabled = false
     server.closeAllConnections?.();
     rmSync(root, {recursive: true, force: true});
   }
-  return {root, home, project, binary, owner, requests, events, held, close};
+  return {root, home, project, binary, env, owner, requests, events, held, close};
 }
 function filesUnder(dir) {
   if (!existsSync(dir)) return [];
@@ -396,5 +461,24 @@ test('real owned controller: interrupt of an active root turn gives interrupted'
     assert.equal(await turn, interrupted);
     const stopped = await f.owner.stop();
     assert.equal(stopped.state, 'stopped'); assert.equal(stopped.exitCode, 0);
+  } finally { await f.owner.stop(); await f.close(); }
+});
+
+test('real owned controller: the terminal client runs two typed lines as two turns', {skip: REAL, timeout: 180000}, async () => {
+  const f = await realFixture();
+  try {
+    writeFileSync(join(f.root, 'chief.md'), 'Synthetic owned controller test. Reply in one sentence.');
+    let text = '';
+    const input = new PassThrough();
+    input.end('sage mode\nSay one synthetic sentence.\n');
+    const code = await runClient({argv: ['--project', f.project, '--task', 'T400', '--run', 'R1461', '--instructions', join(f.root, 'chief.md')],
+      env: {...f.env, SAGE_CODEX_CONTROLLER_BIN: f.binary.path}, input, output: {write(chunk) { text += chunk; return true; }}, classify: parseCommand});
+    saveEvidence('real-client', {code, output: text});
+    const lines = text.trimEnd().split('\n');
+    assert.match(lines[0], /^\[bound T400 R1461, root [0-9a-f-]+, binding [0-9a-f]{64}\]$/);
+    assert.deepEqual(lines.slice(1), ['[owner phrase: sage mode]', `chief> ${SYNTHETIC_REPLY}`, '[turn completed]',
+      `chief> ${SYNTHETIC_REPLY}`, '[turn completed]', '[controller stopped: Stop requested]']);
+    assert.equal(code, 0);
+    assert.equal(f.requests.filter(request => request.url === '/v1/responses').length, 2);
   } finally { await f.owner.stop(); await f.close(); }
 });

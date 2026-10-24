@@ -1,6 +1,6 @@
 # Owned controller wrapper
 
-The wrapper runs the native owned controller of the Codex fork for one Sage task. It launches the controller, checks the effective policy before any model turn, binds one task to one root thread, and keeps every notification and an honest result for each turn.
+The wrapper runs the native owned controller of the Codex fork for one Sage task. It launches the controller, checks the effective policy before any model turn, binds one task to one root thread, and keeps every notification and an honest result for each turn. The terminal client puts the owner in front of it: each typed line is one turn.
 
 ## What it does
 
@@ -9,6 +9,21 @@ The wrapper runs the native owned controller of the Codex fork for one Sage task
 - **The owner's selection.** The wrapper never sends a model, provider, approval policy, sandbox, permission profile, environment list or tool list. The thread keeps the default environment, so the normal Codex tools run under the owner's own sandbox and approval setting. The owner's hooks stay on.
 - **Events.** Every notification and every refused server request is kept in arrival order, with a sequence number, as frozen data. Past `maxEvents` or `maxEventBytes`, the process fences: a lost event never passes silently. A throw from `onEvent` fences too. No stderr text is kept.
 - **Turn result.** `turnOutcome` decides from `turn/completed` of the bound thread and turn only: `completed`, `interrupted` or `failed`. A terminal that comes before the `turn/start` reply waits for it. Two terminals in one read give `uncertain`. EOF, a crash, an invalid frame, a fence or the event limit before a terminal give `uncertain`, never `completed`. At the turn deadline, and on `stop()` during a turn, the wrapper sends `turn/interrupt` first; with no terminal within `interruptGraceMs` the result is `uncertain`. An uncertain turn fences the process.
+
+## The terminal client
+
+Run it from the built plugin, because `commands.mjs` needs the bundled core:
+
+```sh
+SAGE_CODEX_CONTROLLER_BIN=/absolute/path/to/fork/codex \
+  node plugins/sage-codex/runtime/controller-client.mjs --project <folder> --task T400 --run R1 --instructions <file>
+```
+
+- It binds the task and prints the root thread and the binding hash, or the refusal code.
+- Each non-empty line is one turn, one at a time, sent unchanged. `commands.mjs` classifies the line: the client shows an owner phrase or a near match, and the chief applies it.
+- It prints the agent messages of the root thread, each refused server request, and the result of each turn.
+- Ctrl-C interrupts the active turn. The end of the input (Ctrl-D) stops the controller. An uncertain turn ends the session.
+- The controller gets the client's environment, so it uses the owner's `CODEX_HOME`, config, hooks and login.
 
 ## What it refuses
 
