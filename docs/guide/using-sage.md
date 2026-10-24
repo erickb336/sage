@@ -123,7 +123,7 @@ The lead does these things:
 
 The lead and each helper take a slot of the project's agent cap (`max_agents`, 4 by default). One lead with its 3 helpers fills the default cap, so the chief starts a second lead only when the cap has room for it and its helpers.
 
-A tiny task has no review and no QA, so its lead runs only the implementer. The task has no cycle: it is clean when its checks pass. A risk flag adds the security review, and then the task needs its clean cycles like any other task.
+A tiny task has no review and no QA in its route, so its lead runs only the implementer. A task with no review or QA in its route has no cycle: it needs only checks-pass. A risk flag or an added review puts a review in the route, and then the task needs its clean cycles like any other task.
 
 | A finding of a helper | What the lead does |
 | --- | --- |
