@@ -1000,3 +1000,23 @@ test("T390: the board calls the main session the chief, never the sage, on every
   assert.ok(pages.PG9.includes("<b>Now:</b> the chief revises the breakdown."));
   assert.ok(pages.chat.includes("- PG9 Changes · the chief revises the breakdown \\(gate G9\\)\n"));
 });
+
+test("T385: the task and program pages read right: no gate null, the odd waits sentence, and a page note in its own banner with no empty field", () => {
+  const tables = programsTables();
+  tables.tasks.push({ ...tables.tasks[0], id: "T96", state: "building", program: "PG20" });
+  const model = programsModel(tables);
+  // R1391-1: a task whose program row is missing names no gate.
+  const page = renderBoardHtml(model, { snapshot: false, taskKey: KEY("T96") });
+  assert.ok(page.includes("</span>The breakdown of PG20: the program is not in the logbook · "), page);
+  assert.ok(!/gate (null|undefined)/.test(page));
+  // R1391-2: odd text in the waits cell is its own clause, and a loop of waits says so.
+  const pg8 = renderProgramsHtml(model, { programKey: KEY("PG8") });
+  assert.ok(pg8.includes("<span>T83 cannot start: its waits cell has text that is not a task id. Ask the chief to set its waits again, or to drop T83.</span>"), pg8);
+  assert.ok(pg8.includes("<span>T81 cannot start: it waits for T82, in a loop of waits that never ends. Ask the chief to remove the wait, or to drop T81.</span>"), pg8);
+  // R1391-3: the server's note for a page that is too large is its own banner, not a line of Incomplete sources.
+  const noted = renderBoardHtml({ ...model, pageNote: "Sample page note." }, { snapshot: false });
+  assert.ok(noted.includes("<div>Sample page note.</div></div>") && !noted.includes("Incomplete sources"), noted);
+  // A source's own problem has no project, so its line has no empty field.
+  const source = renderBoardHtml({ ...model, diagnostics: [{ source: "codex", message: "Sample problem." }] }, { snapshot: false });
+  assert.ok(source.includes('<ul class="diag"><li>codex · Sample problem.</li></ul>'), source);
+});

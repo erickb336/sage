@@ -2890,10 +2890,14 @@ test("T383 items 3, 4 and 5: the task line and status read the waits as the boar
   byHand(s.dir, "gates", 0, "G1", (cells) => { cells[2] = question; return cells; });
   byHand(s.dir, "tasks", 0, "T1", (cells) => { cells[5] = "abandoned"; return cells; });
   assert.equal(programsLine(s), "program PG1 · 0 of 3 merged · T1 abandoned · pilot T1 abandoned: choose a new pilot, or drop the program · name: Codex support");
+  // F-T385-1: the task line and the status waits line agree: a task of the stuck program waits for its pilot, never met, not for the breakdown.
+  const PILOT = "T1 (abandoned, the pilot of PG1, never met)";
+  assert.equal(s.ok("task", "T2"), `T2 framed · small · round 0 · route build,code-review,qa · program PG1 · waits ${PILOT} · unmet T1`);
+  assert.equal(s.ok("status").split("\n").find((l) => l.startsWith("waits ")), `waits   2 waiting · T2 for ${PILOT} · T3 for ${PILOT}`);
   // Item 5: a loop of waits from a hand edit: each wait of the loop is never met.
   byHand(s.dir, "tasks", 0, "T2", (cells) => { cells[14] = "T3"; return cells; });
   byHand(s.dir, "tasks", 0, "T3", (cells) => { cells[14] = "T2"; return cells; });
-  assert.match(s.ok("status"), /\n {0}waits {3}2 waiting · T2 for T3 \(framed, in a loop of waits, never met\), the breakdown of PG1 \(open, gate G1\) · T3 for T2 \(framed, in a loop of waits, never met\), /);
+  assert.match(s.ok("status"), /\n {0}waits {3}2 waiting · T2 for T3 \(framed, in a loop of waits, never met\), T1 \(abandoned, the pilot of PG1, never met\) · T3 for T2 \(framed, in a loop of waits, never met\), T1 /);
 });
 
 test("T337: a logbook made before programs has no programs.tsv: it passes the integrity check and the merge check, and only program propose writes the file", async () => {

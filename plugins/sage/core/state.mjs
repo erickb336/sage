@@ -24,7 +24,7 @@ import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
-import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, namedText, programState, progressOf, progressText, shownGraph, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
+import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, namedText, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {}, usageInterfaces = [] }) {
@@ -1360,9 +1360,11 @@ const shownOf = (dir, tasks) => {
   const gates = read(dir, "gates");
   return shownGraph(waitGraph(tasks, read(dir, "programs"), gates, read(dir, "decisions")), gates);
 };
+/** A task's unmet waits as the printers show them (shownWaits), so the status waits line and the task line say what the board says. */
+const shownOpen = (task, graph) => shownWaits(task, graph).filter(({ state }) => !MET.includes(state));
 /** A task's waits for a printed line: each with its task's state, then the unmet ones. */
 const waitsText = (task, graph) => {
-  const all = waitsWithState(task, graph), open = unmetWaits(task, graph);
+  const all = shownWaits(task, graph), open = shownOpen(task, graph);
   if (!all.length) return "";
   return ` · waits ${waitList(all)} · ${open.length ? `unmet ${open.map(({ id, odd, program }) => (odd ? "the odd text" : program ? `the breakdown of ${program.id}` : id)).join(", ")}` : "all met"}`;
 };
@@ -1917,7 +1919,7 @@ function status(dir, save) {
     `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens · ${usageSummary(runs)}`,
   ];
   // The open tasks that wait, each with its unmet waits: a line only when one waits. Then the programs: a line only when there is one.
-  const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, unmetWaits(t, graph)]).filter(([, open]) => open.length);
+  const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, shownOpen(t, graph)]).filter(([, open]) => open.length);
   if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
   lines.push(...programsLine(graph));
   // The runs by task, once, so the usage lines are linear in the runs.

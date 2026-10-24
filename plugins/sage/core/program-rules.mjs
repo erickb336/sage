@@ -91,6 +91,16 @@ export const unmetWaits = (task, graph, passes = () => false) => waitsWithState(
 export function dead(state) {
   return state === "abandoned" || state === undefined;
 }
+/**
+ * A task's waits as every printer shows them (the boards, the status line and the task line; never a write rule or the
+ * merge check): a breakdown whose pilot is abandoned or lost makes its program stuck, so the task waits for that pilot
+ * instead, as in an active program, and never meets it (F-T385-1). graph: a shownGraph.
+ */
+export const shownWaits = (task, graph) => waitsWithState(task, graph).flatMap((wait) => {
+  const pilot = wait.program?.pilot, state = graph.byId.get(pilot)?.state;
+  if (!["proposed", "changing"].includes(wait.program?.state) || !dead(state)) return [wait];
+  return pilot === task.id || waitsOf(task).ids.includes(pilot) ? [] : [{ id: pilot, state, pilot: wait.program.id }];
+});
 
 /**
  * The program whose breakdown gate this gate is, from data, never from its text alone (the owner's Q1, T233): a programs

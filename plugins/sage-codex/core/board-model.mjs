@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
-import { ENDED, MET, breakdownGate, dead, gateLines, namedText, progressOf, progressText, shownGraph, waitGraph, waitsOf, waitsWithState } from "./program-rules.mjs";
+import { ENDED, MET, breakdownGate, dead, gateLines, namedText, progressOf, progressText, shownGraph, shownWaits, waitGraph, waitsOf } from "./program-rules.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -256,13 +256,9 @@ const LOST_FIX = id => `ask the chief to repair the logbook, or to propose ${id}
  * Each wait of a task, with its state: a task (met when merged or concluded; never met when abandoned or lost), the pilot
  * of its program, the breakdown that the owner has not approved (never met when dropped or lost), or a waits cell with
  * text that is not a task id (never met, and its text is never shown). A breakdown whose pilot is abandoned or lost
- * makes its program stuck (programsOf), so a task waits for that pilot instead, as in an active program: it cannot start.
+ * makes its program stuck (programsOf), so a task waits for that pilot instead (shownWaits): it cannot start.
  */
-const waitsFor = (task, graph) => waitsWithState(task, graph).flatMap(wait => {
-  const pilot = wait.program?.pilot;
-  if (!["proposed", "changing"].includes(wait.program?.state) || !dead(graph.byId.get(pilot)?.state)) return [wait];
-  return pilot === task.id || waitsOf(task).ids.includes(pilot) ? [] : [{ id: pilot, state: graph.byId.get(pilot)?.state, pilot: wait.program.id }];
-}).map(wait =>
+const waitsFor = (task, graph) => shownWaits(task, graph).map(wait =>
   wait.odd ? { odd: true, met: false, never: true }
   : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state, gateFound: !!wait.program.gateFound, ...(wait.program.named !== undefined && { named: wait.program.named }) }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
   // A wait of a loop of waits (a hand edit) is never met, as no task of the loop can start first.
@@ -647,7 +643,7 @@ function programsOf(source, project, group, graph, cards) {
 const inNeeds = card => !!card?.visible && !!card.column;
 /**
  * The programs that live tasks name but the logbook does not have (a lost programs row, or a program cell that is not a
- * program id, "?"): one item each, as the tasks cannot start and no program line shows it.
+ * program id, "?"): one item each, as the tasks cannot go on and no program line shows it.
  */
 function missingPrograms(source, project, group, graph) {
   const items = [];
@@ -656,7 +652,8 @@ function missingPrograms(source, project, group, graph) {
     if (graph.programs.has(id) || !live.length) continue;
     const one = live.length === 1, names = id === "?" ? `The program cell of ${and(live)} ${one ? "is" : "are"} not a program id` : `${and(live)} ${one ? "names" : "name"} ${id}`;
     items.push({ kind: "missing", title: id === "?" ? "A program cell is not a program id" : `The program ${id} is not in the logbook`,
-      text: `${names}, so ${one ? "it cannot" : "they cannot"} start. Ask the chief to repair the logbook, or to take ${one ? "the task" : "each task"} out of the program.`,
+      // "Cannot go on": also right for a task that is building already (R1391-4).
+      text: `${names}, so ${one ? "it cannot" : "they cannot"} go on. Ask the chief to repair the logbook, or to take ${one ? "the task" : "each task"} out of the program.`,
       key: `${project.key}/${id}`, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived });
   }
   return items;

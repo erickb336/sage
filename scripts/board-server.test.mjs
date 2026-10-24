@@ -508,6 +508,7 @@ test("T383 item 16: a task page that is too large shows the board with a note, b
   const page = await until(f, `/task/${key}`, "too large to show");
   assert.equal(page.status, 200);
   assert.ok(page.body.includes("so the board shows this page instead") && page.body.includes("Sample first task") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the board, with the reason");
+  assert.ok(!page.body.includes("Incomplete sources"), "R1391-3: the note is its own banner, not an incomplete source");
   const board = await read(f, "/");
   assert.ok(board.body.includes("Sample first task") && !board.body.includes("too large to show") && !board.body.includes("The board snapshot is unavailable."), "the board is live");
   // The first start: the rule needs no older copy.

@@ -9,7 +9,7 @@ const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
 const digest = text => createHash("sha256").update(text).digest();
 const unavailable = [{ source: "board", message: "The board snapshot is unavailable." }];
-const TOO_LARGE = { source: "board", message: "The page that you opened is too large to show (over 8 MB), so the board shows this page instead." };
+const TOO_LARGE = "The page that you opened is too large to show (over 8 MB), so the board shows this page instead.";
 const own = (object, name) => Object.hasOwn(object, name);
 
 function authority(value) {
@@ -164,9 +164,10 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   function pageFor(view, paths = false) {
     const html = render(model, view, paths);
     if (fits(html)) return { html, stale: model.stale, diagnostics: model.diagnostics };
-    const parent = { ...model, diagnostics: [...model.diagnostics, TOO_LARGE] }, other = render(parent, { programs: !!view.program }, paths);
+    // The note is about the page, not a source, so it is its own banner, not a line of Incomplete sources (R1391-3).
+    const other = render({ ...model, pageNote: TOO_LARGE }, { programs: !!view.program }, paths);
     if (!fits(other)) throw new RangeError("board rendering exceeds the size limit");
-    return { html: other, stale: model.stale, diagnostics: parent.diagnostics };
+    return { html: other, stale: model.stale, diagnostics: model.diagnostics };
   }
 
   function removeClient(client) {
