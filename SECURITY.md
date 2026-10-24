@@ -24,5 +24,6 @@ These are known, and they are not new reports:
 - An agent that holds your GitHub token can remove branch protection or merge a pull request. A separate GitHub identity for agents is planned and not built yet.
 - A tiny task without a risk flag merges after its checks pass, with no review and no QA. The chief sets the size of each task.
 - A raw TCP forward to the board server, such as an SSH tunnel, bypasses its sign-in. It is not supported.
+- On the Mac, the board needs no password. So any account or program on the Mac can read the board on 127.0.0.1: the tasks, gates, briefs and findings of every logbook. A request counts as from the Mac when it comes from a loopback address, with a loopback Host and no `Forwarded` or `X-Forwarded-*` header.
 
 The full list is in [Rules held in code](docs/design/rules-in-code.md#the-limits-of-the-hook).
