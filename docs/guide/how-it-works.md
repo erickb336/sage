@@ -11,7 +11,7 @@ This page shows the parts of sage and how a request becomes a verified pull requ
 
 There are two loops:
 
-- **The inner loop** turns a request into verified work. The chief briefs the team. The team designs, builds, reviews and tests. Findings go back to the build. A clean result becomes a pull request.
+- **The inner loop** turns a request into verified work: the chief briefs the team, and the team designs, builds, reviews and tests. Findings go back to the build. A clean result becomes a pull request.
 - **The outer loop** [seals the lesson](concepts.md): it gives a mistake that comes back twice a lasting fix, a test or a check in code first. Each sealed lesson makes [the dojo](concepts.md) stronger.
 
 <a href="../assets/tip-seal-light.svg">
@@ -25,18 +25,20 @@ The state lives in the logbook: plain files in `~/.claude/sage/<project>-<hash>/
 
 ## The team
 
-| Agent | What it does | Changes files? |
-| --- | --- | --- |
-| **Chief of staff** | Frames the work, picks routes, writes briefs, records results, asks you the questions | No |
-| **Lead** | Runs one task's pull request from the build to its clean cycles, with its own implementer, reviewers and QA | No |
-| **Designer** | A clickable prototype with sample data, and every state of each screen | Yes, in its own worktree |
-| **PE** (principal engineer) | Checks a plan or a design before the build: feasibility, data, risks, cost | No |
-| **Implementer** | Builds one task, runs the checks, opens the pull request, repairs findings | Yes, in its own worktree |
-| **Code reviewer** | Correctness, data safety, regressions, test evidence | No |
-| **Security reviewer** | Input at the boundaries, injection, secrets, access | No |
-| **UX reviewer** | The flow, the states, the copy and accessibility | No |
-| **QA** | Runs the checks and the real app, and tries to break it | No |
-| **Arena judge** | Scores an arena's candidates and grafts the best parts into one | Yes, the final version |
+| Agent | What it does |
+| --- | --- |
+| **Chief of staff** | Frames the work, picks routes, writes briefs, records results, asks you the questions |
+| **Lead** | Runs one task's pull request from the build to its clean cycles, with its own implementer, reviewers and QA |
+| **Designer** | A clickable prototype with sample data, and every state of each screen |
+| **PE** (principal engineer) | Checks a plan or a design before the build: feasibility, data, risks, cost |
+| **Implementer** | Builds one task, runs the checks, opens the pull request, repairs findings |
+| **Code reviewer** | Correctness, data safety, regressions, test evidence |
+| **Security reviewer** | Input at the boundaries, injection, secrets, access |
+| **UX reviewer** | The flow, the states, the copy and accessibility |
+| **QA** | Runs the checks and the real app, and tries to break it |
+| **Arena judge** | Scores an arena's candidates and grafts the best parts into one |
+
+Three agents change files: the designer and the implementer, each in its own git worktree, and the arena judge, which writes the final version. The others change no files.
 
 Only one agent writes on a branch at a time. Reviewers start fresh, so they don't share the builder's blind spots. How the lead and the models work: see [Using sage](using-sage.md#the-lead-and-the-models).
 

@@ -199,19 +199,19 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 
 ## Uninstall sage
 
-1. If you use the board server, stop it, in a terminal. Each folder in `~/.claude/plugins/cache/sage/sage/` is one installed version, with a hash as its name, and there can be several. Use the newest one: this command lists it first.
+1. If you use the board server, stop it, in a terminal. First find the installed version: this command prints it on a line such as "Version: 375784346ccb".
 
    ```sh
-   ls -t ~/.claude/plugins/cache/sage/sage/
+   claude plugin list
    ```
 
-   Replace `<version>` with that folder name:
+   Replace `<version>` with that value. It is the name of the folder of that version in `~/.claude/plugins/cache/sage/sage/`:
 
    ```sh
    node ~/.claude/plugins/cache/sage/sage/<version>/board/cli.mjs board --stop
    ```
 
-   A sage from before 2026-10-11 does not know `--stop`: the command says "unknown or repeated board option". Then stop its board server in another way:
+   A sage from before 2026-10-11 has no `board/cli.mjs`, so the command fails with "Cannot find module". Then stop its board server in another way:
 
    - If you started it with `--serve`, press Ctrl+C in that terminal.
    - If its login service runs it, step 2 stops it.
@@ -271,7 +271,7 @@ The uninstall does not remove your logbooks, your pages or the board's config. T
 | The chief says that your message was near a phrase | The hook found a phrase with other words, a question mark or a quote mark. Send the exact phrase alone. |
 | A phrase did nothing while Claude worked | A message sent while Claude works can switch only autopilot off. Send the phrase again when Claude is idle. |
 | A new version of sage has no effect | Start a new session (see [To update sage](#to-update-sage)). |
-| A push or a merge is refused | This is the hook. An agent pushes only `git push origin <branch>` on its own branch, and never merges. The refusal names the form that passes. Ask the chief what it needs. |
+| A push or a merge is refused | The hook refuses it: an agent pushes only `git push origin <branch>` on its own branch, and never merges. The refusal names the form that passes. Ask the chief what it needs. |
 | No pull request opens | Check that `gh` is installed and logged in (`gh auth status`), and that the project has a GitHub remote. Without a remote, the work stops at a verified branch. |
 | A task waits and nothing moves | Send `show board`. An open question under "Needs you" holds the task until you answer. A task of a program waits for your approval of the breakdown, then for its pilot. |
 | A pull request does not merge | A merge needs its clean cycles on the exact head commit. A new commit starts again from cycle 1. |

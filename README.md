@@ -76,7 +76,7 @@ Send `show board` to see what needs you, the agents at work, and each task in it
   <img alt="The top of the board page at phone width, with SAMPLE DATA: the project picker, the filter bar, a Needs you box, and the first card of the Backlog column, which asks you to approve a program." src="docs/assets/board-light.png" width="400">
 </picture>
 
-*Sample data: every task and program in the screenshot is made up. More in the [board guide](docs/guide/board.md).*
+*Sample data: every task and program in the screenshot is made up. The screenshot shows only the top of the page: the project picker, the filters, the Needs you box and the first card of the first column. The [board guide](docs/guide/board.md) describes the full board.*
 
 ## What to say
 

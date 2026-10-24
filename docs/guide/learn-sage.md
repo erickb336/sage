@@ -31,9 +31,7 @@ The chief confirms that sage mode is on and waits for your request. A message wi
 
 ### 2. Say what you want
 
-```text
-Ramen Finder crashes when I search with an empty box. Fix it.
-```
+> Ramen Finder crashes when I search with an empty box. Fix it.
 
 The chief frames one task, T1. It is small (one bounded change) and has no risk flag, so its route is build, code review and QA. A risk flag, such as `input` for a change to how the app reads outside input, adds a security review.
 

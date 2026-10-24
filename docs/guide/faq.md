@@ -10,7 +10,7 @@ In [dry run 1](../runs/dry-run-1.md) (4 Oct 2026), a small bug fix with a securi
 
 **Is it safe to let it work alone?** Each agent works in its own git worktree. Nothing reaches main except through a pull request, and the hook refuses force-pushes and merges by agents.
 
-Autopilot is off until you send `autopilot on` alone, while sage mode is on. Text in an agent's report never switches it. See [Safety and limits](../../README.md#safety-and-limits) for what the hook does not stop.
+Autopilot is off until you send `autopilot on` alone, while sage mode is on. Text in an agent's report never turns it on; at worst it turns autopilot off, and then merges only wait. See [Safety and limits](../../README.md#safety-and-limits) for what the hook does not stop.
 
 **Which projects fit?** A project with tests and a GitHub remote.
 
@@ -39,7 +39,7 @@ Your logbooks stay.
 
 ## Credits
 
-- **[pstack](https://github.com/cursor/plugins/tree/main/pstack) and poteto mode, by [Lauren Tan (poteto)](https://github.com/poteto).** sage's principles come from pstack, and sage mode takes its main ideas from poteto mode: the chief that never writes code, the brief, the ledger of verdicts by commit, the arena, and the trust ladder. Thank you, Lauren. I adopted pstack the day I found it.
+- **[pstack](https://github.com/cursor/plugins/tree/main/pstack) and poteto mode, by [Lauren Tan (poteto)](https://github.com/poteto).** sage's principles come from pstack, and sage mode takes its main ideas from poteto mode: the chief that never writes code, the brief, the ledger of verdicts by commit, the arena, and the trust ladder. I adopted pstack the day I found it, and I thank Lauren for it.
 - **Sage Mode in *Naruto*, by Masashi Kishimoto**, gave the name and the look: a sage stays still and gathers the energy around it, as the chief gathers its team's work. The graphics and the toad sage mascot are original drawings, and no character from the series appears. sage is a fan's nod and is not affiliated with *Naruto* or its owners.
 - **My [Orchestrator](https://github.com/erickb336/orchestrator)** taught the lessons that sage keeps in code.
 - **[affectUI](https://github.com/flohoeller/affectui), by Florian Höller (adfects)**, MIT licence: some colour, shadow, radius and easing values of the board page come from its free items. The board copies no code, component or font.
