@@ -5,7 +5,7 @@
 // eye, natural energy) with original shapes only: no characters, logos, clothing patterns or village symbols.
 // Each text is 7 px or more on a phone, where a graphic is 324 px wide: `npm run check` checks it. So the smallest
 // text is SMALL (24) in a graphic 1100 wide, and 28 in the hero, which is 1280 wide.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -720,7 +720,8 @@ const GRAPHICS = {
  *  no file depends on another, or on the order in which they are drawn. */
 export const files = () => Object.entries(GRAPHICS).flatMap(([name, draw]) => Object.entries(THEMES).map(([theme, t]) => [`${name}-${theme}.svg`, draw(t, `${name}-${theme[0]}`)]));
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Real paths, so that a run through a link (/tmp on macOS) draws too.
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   mkdirSync(OUT, { recursive: true });
   const all = files();
   for (const [file, svg] of all) writeFileSync(join(OUT, file), svg);
