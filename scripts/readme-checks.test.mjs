@@ -47,6 +47,11 @@ test("GitHub's anchors: lower case, no punctuation, a hyphen for each space", ()
   assert.equal(slug("The `sage` skill"), "the-sage-skill");
   // GitHub keeps an underscore (R1393-1).
   assert.equal(slug("The max_agents cap"), "the-max_agents-cap");
+  // GitHub makes the anchor from the heading's text, so the "_" and "__" of emphasis go; code keeps them (R1398-1).
+  assert.equal(slug("The _max_ cap"), "the-max-cap");
+  assert.equal(slug("__Bold__ start and _end_"), "bold-start-and-end");
+  assert.equal(slug("The _max_agents_ cap"), "the-max_agents-cap");
+  assert.equal(slug("The `__init__` file"), "the-__init__-file");
 });
 
 test("a repeated heading gets -1, -2, and a heading that already has that slug gets its own suffix, as on GitHub", () => {

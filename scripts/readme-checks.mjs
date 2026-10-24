@@ -35,8 +35,13 @@ export function readmeProblems(text) {
   return problems;
 }
 
-/** A heading's anchor, as GitHub makes it: lower case, punctuation removed (an underscore stays), each space a hyphen. */
-export const slug = (heading) => heading.trim().toLowerCase().replace(/<[^>]*>/g, "").replace(/[`*]/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
+/** An "_" or "__" that opens or closes emphasis: at the start or the end of a word, not inside it (max_agents). */
+const EMPHASIS = /(^|[^\p{L}\p{N}_])_{1,2}(?=[^\s_])|(?<=[^\s_])_{1,2}(?=$|[^\p{L}\p{N}_])/gu;
+/** A part of a heading: a code span keeps its text as it is; other text loses its emphasis marks. */
+const plain = (part, i) => (i % 2 ? part.slice(1, -1) : part.replace(/\*/g, "").replace(EMPHASIS, "$1"));
+/** A heading's anchor, as GitHub makes it from the heading's text: lower case, no emphasis marks, punctuation removed (an
+ * underscore in a word or in code stays), each space a hyphen. */
+export const slug = (heading) => heading.trim().toLowerCase().replace(/<[^>]*>/g, "").split(/(`[^`]*`)/).map(plain).join("").replace(/`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
 
 /** The anchors of a Markdown file: each heading's slug, and each id or name in a tag. As GitHub does (github-slugger),
  * a slug that is taken gets the next free -1, -2, … of its base, so "A", "A", "A-1" give a, a-1, a-1-1. */

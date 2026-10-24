@@ -73,7 +73,7 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/board-dark.png">
-  <img alt="The board page with SAMPLE DATA: a project picker, a Needs you box, a filter bar, and six columns from Backlog to Done, with a card for each made-up task." src="docs/assets/board-light.png" width="100%">
+  <img alt="The top of the board page at phone width, with SAMPLE DATA: the project picker, the filter bar, a Needs you box, and the first card of the Backlog column, which asks you to approve a program." src="docs/assets/board-light.png" width="400">
 </picture>
 
 *Sample data: every task and program in the screenshot is made up. More in the [board guide](docs/guide/board.md).*

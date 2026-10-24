@@ -33,13 +33,64 @@ The board and status phrases work at the start of your message. [Ask for the boa
 </picture>
 </a>
 
-A switch needs the exact phrase as the whole message. The hook removes the spaces and line breaks at the ends, ignores the letter case, and allows one full stop at the end. Nothing else counts: no other words, no question mark, no quote mark or bullet, no look-alike letter and no hidden character. So "sage mode. Fix the crash" switches nothing: send "sage mode" first, then the request. A message that is near a phrase switches nothing, and the hook gives the chief a note with the exact phrase to ask you for. Near means that the message names sage mode or autopilot with an on or off word (such as on, off, stop or pause), or starts with one of them. A mention in a sentence without such a word gets no note, so you can talk about the modes freely. Autopilot turns on only while sage mode is on, and "sage mode off" also turns autopilot off.
+"sage help" also tells you the rules below.
 
-Only your own text counts. Claude Code does not tell the hook who wrote a prompt, so the hook reads the frames that Claude Code puts around text that you did not type: an agent's report, a task notification, a message from another session and a system reminder. Text inside them never switches a mode, also when it is exactly a phrase. When Claude Code joins your message to one of them, your text before the first frame and after the last frame is your message. Text between two frames counts as agent text, because an agent can close its frames early and open new ones. A message that you send while Claude works counts as a message of its own when it is a whole system reminder after the last other frame. It can switch only autopilot off, because an agent can write the same shape and the hook cannot tell the two apart: "autopilot off" there works as it does alone, and "sage mode off" there turns autopilot off but keeps sage mode on, because sage mode off drops the hook's guards. Send "sage mode off" again when Claude is idle. An on phrase there switches nothing; send it again when Claude is idle. A message near a phrase gets one of two notes: a firm one when it starts like a phrase, and a softer one when it only mentions sage mode or autopilot in a sentence. The chief tells you only when your message was not a question. A phrase that changes nothing, such as "sage mode off" when sage mode is already off, gives no note. "sage help" also tells you these rules. A queued message before another frame switches nothing. When the hook cannot read the frames, for example a frame that does not close, nothing in that prompt switches. When that prompt, or a queued message before another frame, has a phrase, the chief asks you to send it again as a message alone.
+### The exact phrase
+
+A switch needs the exact phrase as the whole message. The hook reads your message in this way:
+
+- It removes the spaces and line breaks at the ends.
+- It ignores the letter case.
+- It allows one full stop at the end.
+- Nothing else counts: no other words, no question mark, no quote mark or bullet, no look-alike letter and no hidden character.
+
+So "sage mode. Fix the crash" switches nothing. Send "sage mode" first, then the request.
+
+Autopilot turns on only while sage mode is on. "sage mode off" also turns autopilot off.
+
+### A message near a phrase
+
+A message near a phrase switches nothing. Instead, the hook gives the chief a note with the exact phrase to ask you for. The chief tells you only when your message was not a question.
+
+| Your message | The note to the chief |
+| --- | --- |
+| It starts with sage mode or autopilot, for example "sage mode. Fix the crash". | A firm note. |
+| It names sage mode or autopilot with an on or off word (such as on, off, stop or pause) in a sentence. | A softer note. |
+| It names sage mode or autopilot without such a word. | No note, so you can talk about the modes freely. |
+| It is a phrase that changes nothing, for example "sage mode off" when sage mode is already off. | No note. |
+
+### Only your own text counts
+
+Claude Code does not tell the hook who wrote a prompt. So the hook reads the frames that Claude Code puts around text that you did not type:
+
+- an agent's report;
+- a task notification;
+- a message from another session;
+- a system reminder.
+
+Text inside a frame never turns a mode on, also when it is exactly a phrase. Only a queued message can turn autopilot off (see the next section). When Claude Code joins your message to frames, the hook reads the prompt in this way:
+
+- Your text before the first frame and after the last frame is your message.
+- Text between two frames counts as agent text, because an agent can close its frames early and open new ones.
+- When the hook cannot read the frames, for example a frame that does not close, nothing in the prompt switches.
+
+### A message that you send while Claude works
+
+A message that you send while Claude works waits in a queue. It counts as a message of its own only when it is a whole system reminder after the last other frame. An agent can write the same shape, and the hook cannot tell the two apart, so such a message can only turn autopilot off:
+
+| The queued message | What happens |
+| --- | --- |
+| "autopilot off" | Autopilot goes off, as when you send it alone. |
+| "sage mode off" | Autopilot goes off, but sage mode stays on, because sage mode off drops the hook's guards. Send it again when Claude is idle. |
+| An on phrase | Nothing switches. Send it again when Claude is idle. |
+
+A queued message before another frame switches nothing. When such a message, or a prompt with frames that the hook cannot read, has a phrase, the chief asks you to send the phrase again as a message alone.
 
 ## When the chief asks you
 
-The chief interrupts you at most once per task. It puts all the product questions of the task in that one batch, and each part comes with a recommendation and a default. A product question is one whose answer you would notice: what you see, which data is kept, who can do what. Four exceptions can interrupt you again:
+The chief interrupts you at most once per task. It puts all the product questions of the task in that one batch, and each part comes with a recommendation and a default. A product question is one whose answer you would notice: what you see, which data is kept, who can do what.
+
+Four exceptions can interrupt you again:
 
 - An irreversible action always gets its own yes.
 - A new fact that changes an earlier answer can bring the question back.
@@ -56,15 +107,54 @@ You answer in your own words, or pick an option. When you do not answer, the wor
 
 ## The lead and the models
 
-Each task with a build gets one lead. The chief records a lead run and starts the lead in the background with the name `lead-T<n>`. The lead runs the build, the cycles and the repair rounds with at most 3 helpers at once, leaves the task at verifying, and gives the chief one report. The lead and each helper take a slot of the project's agent cap (`max_agents`, 4 by default), so with the default cap one lead runs at a time. The lead records each finding of its helpers. A medium or high one goes to a repair round. A low one is dismissed with a reason, joins a round, or goes to the chief to move to a follow-up task. A tiny task has no review or QA, so its lead runs only the implementer. When the lead cannot clear a finding itself (a low one with no round, a new one from a round's re-check, or a fix that the re-check does not confirm), it ends blocked, and so it does in any state that its file does not name. The chief then reads the logbook and decides. Its only state moves there are repairing to reviewing (a fix that the re-check did not confirm gets the next round, or a replan) and reviewing to verifying (the checks passed). It may move a low or new finding to a follow-up task, and it starts a fresh lead, which goes on from the logbook. The chief keeps what only it does: your questions, the checks verdict after `gh pr checks`, the move to verified, the follow-up tasks, and the merge. So the chat shows a few lines for each pull request, not every report. An investigation has no pull request, so the chief runs it without a lead.
+Each task with a build gets one lead. The chief records a lead run and starts the lead in the background with the name `lead-T<n>`. An investigation has no pull request, so the chief runs it without a lead.
 
-sage uses balanced model defaults. Sonnet handles UX review, tiny implementation and code review, and QA for tiny and small tasks. Opus handles the other configurable roles and sizes. An optional `model.<role>.risk` setting overrides the size choice when the task has a risk flag.
+The lead does these things:
+
+- It runs the build, the cycles and the repair rounds, with at most 3 helpers at once.
+- It records each finding of its helpers.
+- It leaves the task at verifying and gives the chief one report. So the chat shows a few lines for each pull request, not every report.
+
+The lead and each helper take a slot of the project's agent cap (`max_agents`, 4 by default). So with the default cap, one lead runs at a time.
+
+A tiny task has no review and no QA, so its lead runs only the implementer. The task has no cycle: it is clean when its checks pass. A risk flag adds the security review, and then the task needs its clean cycles like any other task.
+
+| A finding of a helper | What the lead does |
+| --- | --- |
+| Medium or high | It sends the finding to a repair round. |
+| Low | It dismisses the finding with a reason, adds it to a round, or gives it to the chief to move to a follow-up task. |
+
+The lead ends blocked when it cannot clear a finding itself:
+
+- a low finding with no round;
+- a new finding from a round's re-check;
+- a fix that the re-check does not confirm.
+
+It also ends blocked in any state that its file does not name. The chief then reads the logbook and decides. It makes only these two state moves there:
+
+- repairing to reviewing: a fix that the re-check did not confirm gets the next round, or a replan;
+- reviewing to verifying: the checks passed.
+
+The chief may also move a low or new finding to a follow-up task. Then it starts a fresh lead, which goes on from the logbook.
+
+The chief keeps what only it does: your questions, the checks verdict after `gh pr checks`, the move to verified, the follow-up tasks, and the merge.
+
+sage uses balanced model defaults:
+
+- Sonnet does the UX review, the implementation of a tiny task, and the QA of a small task.
+- Opus does the other configurable roles and sizes.
+
+When the chief adds a code review or QA to a tiny task, Sonnet does it too. An optional `model.<role>.risk` setting overrides the size choice when the task has a risk flag.
 
 ## Waits and programs
 
 > **Warning:** before you use waits or programs, update sage (see [To update sage](#to-update-sage)) and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
-**A task can wait for other tasks.** Ask the chief, for example "T8 waits for T7". The task builds and merges only after each task that it waits for is merged or concluded. Its design and PE check can run meanwhile. A wait on an abandoned task is never met, so the chief asks you to remove or change it.
+**A task can wait for other tasks.** Ask the chief, for example "T8 waits for T7".
+
+The task builds and merges only after each task that it waits for is merged or concluded. Its design and PE check can run meanwhile.
+
+A wait on an abandoned task is never met, so the chief asks you to remove or change it.
 
 ### Programs
 
@@ -94,7 +184,9 @@ Run this command in a terminal:
 claude plugin update sage@sage
 ```
 
-The update applies to every running session at its next event: each hook event runs the newest installed sage. This holds for sessions that started on this version of sage or a later one. A new hook event or matcher needs a restart, and so do the instructions that a session already read (its skills and agent texts). When you are not sure, start a new session.
+The update applies to every running session at its next event: each hook event runs the newest installed sage. This holds for sessions that started on this version of sage or a later one.
+
+A new hook event or matcher needs a restart, and so do the instructions that a session already read (its skills and agent texts). When you are not sure, start a new session.
 
 ## Stop a running task
 
@@ -107,11 +199,22 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 
 ## Uninstall sage
 
-1. If you use the board server, stop it, in a terminal. Replace `<version>` with a folder name in `~/.claude/plugins/cache/sage/sage/`:
+1. If you use the board server, stop it, in a terminal. Each folder in `~/.claude/plugins/cache/sage/sage/` is one installed version, with a hash as its name, and there can be several. Use the newest one: this command lists it first.
+
+   ```sh
+   ls -t ~/.claude/plugins/cache/sage/sage/
+   ```
+
+   Replace `<version>` with that folder name:
 
    ```sh
    node ~/.claude/plugins/cache/sage/sage/<version>/board/cli.mjs board --stop
    ```
+
+   A sage from before 2026-10-11 does not know `--stop`: the command says "unknown or repeated board option". Then stop its board server in another way:
+
+   - If you started it with `--serve`, press Ctrl+C in that terminal.
+   - If its login service runs it, step 2 stops it.
 
 2. If you installed the board's login service, stop it and remove its login file. The login file starts the board at each login until you remove it:
 

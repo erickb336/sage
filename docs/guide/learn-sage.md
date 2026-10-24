@@ -63,7 +63,9 @@ You can leave. The logbook keeps the state, so a later session continues the wor
 
 The implementer opens pull request #41. Fresh agents review it: a code reviewer, and QA, which runs the app and tries to break it. A medium or high finding goes back to an implementer for a repair.
 
-One full set of fresh reviews and QA on one commit is a cycle, and a new commit starts again from cycle 1. T1 needs 1 clean cycle, so its step line shows "Review 1 of 1". A tiny or small task needs 1 clean cycle; a large task, or a task with a risk flag, needs 2 before autopilot merges it.
+One full set of fresh reviews and QA on one commit is a cycle, and a new commit starts again from cycle 1. T1 needs 1 clean cycle, so its step line shows "Review 1 of 1".
+
+A small task needs 1 clean cycle; a large task, or a task with a risk flag, needs 2 before autopilot merges it. A tiny task has no review and no QA, so it has no cycle: it is clean when its checks pass.
 
 ### 6. The result comes to you
 

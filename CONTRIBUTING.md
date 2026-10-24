@@ -70,10 +70,10 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
 
 ## The board screenshots
 
-The board screenshots of the README and of [Learn sage in 5 minutes](docs/guide/learn-sage.md) come from `scripts/board-shots.mjs`. It renders the built board with fixed sample logbooks (made-up data, from `scripts/fixtures/board-programs.mjs` and `scripts/fixtures/board-walkthrough.mjs`) in Playwright's Chromium. Each shot carries a SAMPLE DATA label. Playwright is not a dependency of sage, so give it through `NODE_PATH`:
+The board screenshots of the README and of [Learn sage in 5 minutes](docs/guide/learn-sage.md) come from `scripts/board-shots.mjs`. It renders the built board with fixed sample logbooks (made-up data, from `scripts/fixtures/board-programs.mjs` and `scripts/fixtures/board-walkthrough.mjs`) in Playwright's Chromium. Each shot is at phone width and 2x, and carries a SAMPLE DATA label. Playwright is not a dependency of sage, so give it through `NODE_PATH`. Set `NODE_PATH` to the `node_modules` folder itself, the folder that contains `playwright`:
 
 ```sh
-NODE_PATH=<folder with playwright in node_modules> node scripts/board-shots.mjs
+NODE_PATH=<path>/node_modules node scripts/board-shots.mjs
 ```
 
 `npm run check` fails when a PNG is missing, or when the sample data changed after the last screenshots. It does not compare pixels.

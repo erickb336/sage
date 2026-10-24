@@ -16,7 +16,7 @@ The questions that people ask about sage, then the work that sage comes from. "I
 
 **How do I stop a task?** Tell the chief in your own words, for example "stop the run on T3". To stop merges, send `autopilot off` alone. See [Stop a running task](using-sage.md#stop-a-running-task).
 
-**How do I uninstall it?** Run `claude plugin uninstall sage@sage`, then `claude plugin marketplace remove sage`. Your logbooks stay: see [Uninstall sage](using-sage.md#uninstall-sage).
+**How do I uninstall it?** Follow the full steps in [Uninstall sage](using-sage.md#uninstall-sage): first stop the board server, its login service and the Remote Control server. Then run `claude plugin uninstall sage@sage`, then `claude plugin marketplace remove sage`. Your logbooks stay.
 
 ## Credits
 

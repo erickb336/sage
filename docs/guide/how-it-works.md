@@ -56,11 +56,15 @@ Each task gets the least route for its size. The chief can add steps, never remo
 <a href="../assets/lifecycle-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/lifecycle-dark.svg">
-  <img alt="A task's states: framed, briefed, building, reviewing, verifying, verified, merged. A product question moves a building task to held until your answer. Findings to fix, or a QA fail, move it from verifying to repairing, and the next round goes back to reviewing, at most 3 rounds. Verified needs 1 clean cycle; autopilot merges after 1 for a tiny or small task, 2 for a large or risky one." src="../assets/lifecycle-light.svg" width="100%">
+  <img alt="A task's states: framed, briefed, building, reviewing, verifying, verified, merged. A product question moves a building task to held until your answer. Findings to fix, or a QA fail, move it from verifying to repairing, and the next round goes back to reviewing, at most 3 rounds. Verified needs 1 clean cycle; autopilot merges after 1 for a small task, 2 for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass." src="../assets/lifecycle-light.svg" width="100%">
 </picture>
 </a>
 
-A **cycle** is one full set of fresh reviews and QA on one commit. A task is **verified** after 1 clean cycle. With autopilot on, it **merges** after its clean cycles on the same commit: 1 for a tiny or small task, 2 for a large task or any task with a risk flag. A new commit starts again from cycle 1.
+A **cycle** is one full set of fresh reviews and QA on one commit. A new commit starts again from cycle 1.
+
+A task is **verified** after 1 clean cycle. With autopilot on, it **merges** after its clean cycles on the same commit: 1 for a small task, 2 for a large task or any task with a risk flag.
+
+A tiny task's route is only the build: it has no review and no QA, so it has no cycle. It is clean when its checks pass on its commit. A risk flag adds the security review, and then a tiny task needs 2 clean cycles too.
 
 ## The arena
 
