@@ -20,7 +20,8 @@ The chat view shows the tasks in the logbook of the tool that you use (Claude or
 
 Claude recognizes these phrases only at the start of your own message, outside quoted text:
 
-- Leading bold and a trailing question mark work.
+- Bold around the phrase works, for example `**show board**`.
+- A question mark works right after the phrase, also inside the bold (`**show board?**`). After the closing stars (`**show board**?`), it does not work.
 - Text after a question mark on the same line does not trigger the phrase.
 
 In Codex, these phrases do not work by themselves yet. Use the board commands of the `sage` skill instead, as [sage in Codex](codex.md) tells.

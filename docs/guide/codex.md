@@ -15,7 +15,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The stop check | Yes | No, until native captures prove it |
 | sage mode: the chief, the team, agent caps, report checks, the push and merge rules | Yes | Not enabled. Parts are built and tested, but they are not switched on in the installed plugin |
 | Autopilot | Yes | No |
-| The switch phrases (`sage mode`, `show board`) | Yes | No: use the manual skill commands |
+| The phrases (`sage mode`, `autopilot on`, `show board`) | Yes | No: use the manual skill commands |
 
 The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. The chat board in Codex shows only the Codex logbook. The browser board shows both by default, and each card says which provider's logbook holds it.
 

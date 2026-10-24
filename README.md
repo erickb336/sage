@@ -15,7 +15,7 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 <a href="docs/assets/hero-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
-  <img alt="sage: your chief of staff for Claude Code. Send “sage mode” as a message of its own. A hooded toad sage, the chief of staff, meditates in a misty mountain world. Around it, its team on a loop: designer, PE (principal engineer), implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA." src="docs/assets/hero-light.svg" width="100%">
+  <img alt="sage: your chief of staff for Claude Code. To start, send the words sage mode as a message of its own, with no quote marks. A hooded toad sage, the chief of staff, meditates in a misty mountain world. Around it, its team on a loop: designer, PE (principal engineer), implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA." src="docs/assets/hero-light.svg" width="100%">
 </picture>
 </a>
 

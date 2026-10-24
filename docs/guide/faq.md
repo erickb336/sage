@@ -32,7 +32,7 @@ See [Stop a running task](using-sage.md#stop-a-running-task).
 **How do I uninstall it?** Follow the full steps in [Uninstall sage](using-sage.md#uninstall-sage). In short:
 
 1. Stop the board server, its login service and the Remote Control server.
-2. Remove `~/.local/share/sage-board`, if it exists.
+2. Remove `~/.local/share/sage-board`, if it exists. This also deletes the board's offline pages: copy each page that you want to keep first.
 3. Remove the `"agent": "sage:chief-of-staff"` line from each `.claude/settings.json` that has it.
 4. Run `claude plugin uninstall sage@sage`.
 5. Run `claude plugin marketplace remove sage`.
