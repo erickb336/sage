@@ -303,7 +303,8 @@ h1{font-size:15px;margin:0;font-weight:600;letter-spacing:-.01em}.spacer{flex:1}
 .chip.need[aria-pressed="true"]{background:var(--need);border-color:var(--need);color:var(--panel)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .flip:focus-visible+.theme{outline:2px solid var(--accent);outline-offset:2px}
-.chip.unflip{display:none}:root:has(.flip:checked) .chip.unflip{display:inline-flex}:root:has(.flip:checked) :is(.flip,.theme):has(~.unflip){display:none}
+.chip.unflip{display:none}:root:has(.flip:checked) .flip:not(:checked)~.chip.unflip,.chip.unflip:focus-visible{display:inline-flex}
+:root:has(.flip:checked) .flip:not(:checked):has(~.unflip),:root:has(.flip:checked) .flip:not(:checked)+.theme:has(~.unflip),.theme:has(~.unflip:focus-visible){display:none}
 .count{font-weight:700}.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;background:var(--accent)}.dot.none{background:var(--faint)}
 .dot.p0{background:var(--p0)}.dot.p1{background:var(--p1)}.dot.p2{background:var(--p2)}.dot.p3{background:var(--p3)}.dot.p4{background:var(--p4)}.dot.p5{background:var(--p5)}.dot.p6{background:var(--p6)}.dot.p7{background:var(--p7)}
 .badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--need-soft);color:var(--need);font-size:11px;font-weight:700}
@@ -750,8 +751,10 @@ function filterBar(ctx, model) {
 const livePill = text => `<span class="livepill" id="live-state"><span class="ld" aria-hidden="true"></span><span class="lt">${esc(text)}</span></span><span class="vh" id="live-alert" role="status"></span>`;
 /**
  * The theme switch. The offline snapshot gives each of its pages its own (T378): a page hides the board's header. Any
- * checked switch flips the theme. Without scripts, a flipped snapshot shows a reset button in each switch's place: it
- * clears every switch of the form "themes", so each page's switch flips the theme back (R1384-2).
+ * checked switch flips the theme. Without scripts, a flipped snapshot shows a reset button in each other switch's place:
+ * it clears every switch of the form "themes", so each page's switch flips the theme back (R1384-2). The checked switch
+ * stays, so a second press flips back, and no control hides while it has focus: a reset that a key pressed stays until
+ * focus moves (R1481-1).
  */
 const THEME_WORDS = '<span class="to-light">Light theme</span><span class="to-dark">Dark theme</span>';
 const themeSwitch = (id = "flip", snapshot = false) => `<input type="checkbox" id="${id}" class="vh flip"${snapshot ? ' form="themes"' : ""}><label class="chip theme" for="${id}">${THEME_WORDS}</label>${snapshot ? `<button type="reset" form="themes" class="chip theme unflip">${THEME_WORDS}</button>` : ""}`;
@@ -909,11 +912,12 @@ function decisionText(ctx, project, text) {
 }
 /**
  * The answer of a breakdown gate's decision row ("<question> → <answer>"): the text after the gate's own question, so
- * the owner's own words keep each " → " in them (F-T384-1). Without the gate's row, the text after the last arrow; null
- * when the text has no arrow.
+ * the owner's own words keep each " → " in them (F-T384-1). Without the gate's row, the text after the first arrow on
+ * the last line: a breakdown question has more than one line and an answer has none, so a waits-for arrow in the
+ * question and an arrow in the answer both stay (R1481-2). null when that line has no arrow.
  */
 function answerOf(ctx, project, text) {
-  const question = ctx.programs.get(`${project}/${proposalOf({ question: text })}`)?.questions.find(asked => text.startsWith(`${asked} → `)), arrow = text.lastIndexOf(" → ");
+  const question = ctx.programs.get(`${project}/${proposalOf({ question: text })}`)?.questions.find(asked => text.startsWith(`${asked} → `)), arrow = text.indexOf(" → ", text.lastIndexOf(LINE) + 1);
   return question !== undefined ? text.slice(question.length + 3) : arrow >= 0 ? text.slice(arrow + 3) : null;
 }
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

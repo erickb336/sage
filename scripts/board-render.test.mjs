@@ -935,6 +935,14 @@ test("F-T384-1: an answer in the owner's own words shows in full, also when it h
   assert.deepEqual(decisionsOf(renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") })), ["12 Oct G1 answered: other: move T3 → after T2, then approve (2026-10-12 09:00 UTC)", "10 Oct PG1 proposed: Codex support, pilot T1, gate G1 (2026-10-10 09:00 UTC)"]);
 });
 
+test("R1481-2: without the gate's row, an own-words answer still shows in full: the arrow after the question's last line starts it", () => {
+  const tables = programsTables(), question = ["Approve program PG1? No task builds before you approve.", "Name: Codex support", "Goal: T2 → T3 in order", "Pilot, runs first:", "T1 sample one"].join("\u2028");
+  tables.gates.splice(tables.gates.findIndex(gate => gate.id === "G1"), 1);
+  tables.decisions.push({ at: "2026-10-10T09:00:00Z", task: "T1", decision: "PG1 proposed with gate G1, pilot T1, tasks none, name: Codex support", why: "program propose" },
+    { at: "2026-10-12T09:00:00Z", task: "T1", decision: `${question} → other: move T3 → after T2, then approve`, why: "the user's own words" });
+  assert.equal(decisionsOf(renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") }))[0], "12 Oct G1 answered: other: move T3 → after T2, then approve (2026-10-12 09:00 UTC)");
+});
+
 test("R1384-1: a member's move between two other programs is not a decision of this program: it never says the task left", () => {
   const tables = programsTables();
   tables.decisions.push({ at: "2026-10-11T09:00:00Z", task: "T3", decision: "program PG3 → PG4", why: "sample: between two others" },
