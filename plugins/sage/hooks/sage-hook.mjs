@@ -35,7 +35,7 @@
 // a push, every file change and command of an agent, and a chief's shell write that names a logbook file.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -239,8 +239,12 @@ function switchModes({ owner, text, queued = [], all, stray = "" }, state) {
     // A switch that changes nothing gives no note (F-T240-9).
     if (change.sage === false) {
       if (state.sage) notes.push("sage: sage mode is off. This is a normal session for the rest of it, also when it started as the chief: you may change files yourself again.");
-      Object.assign(state, { sage: false, given: false, autopilot: false });
-    } else if (change.sage) state.sage = true;
+      // off: "owner" marks the owner's own off phrase: any other off value is no choice of the owner (F-R1516-2).
+      Object.assign(state, { sage: false, off: "owner", given: false, autopilot: false });
+    } else if (change.sage) {
+      state.sage = true;
+      delete state.off;
+    }
     if (change.autopilot === false) {
       if (state.autopilot) notes.push("sage: autopilot is off. Work stops at verified, and the user merges.");
       state.autopilot = false;
@@ -312,8 +316,9 @@ export function handle(input, state, slots) {
     return deny(event, "the command modules could not load, so the hook refuses this command. Restore the complete plugin and try again.");
   }
   const main = !agentEvent(input);
-  // The agent type turns sage mode on only before the session has a mode, so the owner's off phrase holds (T398).
-  if (main && CHIEF.test(input.agent_type ?? "") && state.sage === undefined) state.sage = true;
+  // The agent type turns sage mode on unless the owner's off phrase turned it off, so that phrase holds (T398) and an off
+  // value that another writer left is no off (F-R1516-2).
+  if (main && CHIEF.test(input.agent_type ?? "") && !(state.sage === false && state.off === "owner")) state.sage = true;
 
   if (event === "UserPromptSubmit") {
     const prompt = promptOf(input);
@@ -433,12 +438,15 @@ export function handle(input, state, slots) {
     if (typeof why === "string") return deny(event, `${why} Report to the sage.`);
     helperKey = why?.helper;
   }
-  if (event !== "PreToolUse" || (!state.sage && !nestedSpawn)) return undefined;
-
-  if (FILE_TOOLS.test(tool)) {
+  // The chief changes no file while sage mode is on, and a chief agent changes none in any mode (F-R1515-1).
+  const chiefAgent = !main && CHIEF.test(input.agent_type ?? "");
+  if (event === "PreToolUse" && FILE_TOOLS.test(tool) && (state.sage || chiefAgent)) {
     if (filePolicy.error) return deny(event, "the file policy cannot load, so this file change is refused. Reinstall or update the sage plugin.");
-    if (filePolicy.chiefEditDenied({ sage: Boolean(state.sage), chief: main }) && !chiefMemoryWrite(input)) return deny(event, 'sage mode is on, so you do not change files yourself. Give this change to a sage:implementer. The user ends sage mode with the message "sage mode off", alone.');
+    if (filePolicy.chiefEditDenied({ sage: Boolean(state.sage) || chiefAgent, chief: main || chiefAgent }) && !chiefMemoryWrite(input)) {
+      return deny(event, chiefAgent ? "you are a chief agent, so you do not change files yourself, in any mode. Give this change to a sage:implementer." : 'sage mode is on, so you do not change files yourself. Give this change to a sage:implementer. The user ends sage mode with the message "sage mode off", alone.');
+    }
   }
+  if (event !== "PreToolUse" || (!state.sage && !nestedSpawn)) return undefined;
   let leadMark;
   if (main && AGENT_TOOLS.test(tool) && spawned === "sage:lead") {
     if (!/^lead-T\d+$/.test(spawnName)) return deny(event, "the sage starts a lead only with the name lead-T<n> of its task (the Agent tool's name, or its description when it has no name).");
@@ -2485,12 +2493,20 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     input = JSON.parse(readFileSync(0, "utf8"));
     const session = safe(input.session_id ?? "unknown");
     const file = join(stateDir(), `${session}.json`);
-    let state;
-    try {
-      state = JSON.parse(readFileSync(file, "utf8"));
-    } catch {
-      state = {};
+    // Only a regular file holds state. A FIFO could block the read until the hook's timeout, so the file opens without a
+    // wait, and any other kind of file, or a path the hook cannot open, throws: the catch below fails closed (F-R1517-1).
+    let state = {}, fd;
+    try { fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    if (fd !== undefined) {
+      try {
+        if (!fstatSync(fd).isFile()) throw Error(`the hook state ${file} is not a regular file`);
+        const text = readFileSync(fd, "utf8");
+        try { state = JSON.parse(text); } catch {}
+      } finally {
+        closeSync(fd);
+      }
     }
+    if (!state || typeof state !== "object" || Array.isArray(state)) state = {}; // null, 5, "x" or true is no state
     const before = JSON.stringify(state);
     const output = handle(input, state, slotsFor(join(stateDir(), "slots"), session, Date.now(), input.session_id ?? null));
     if (JSON.stringify(state) !== before) {
@@ -2505,13 +2521,14 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     try { commands = commandFields(input?.tool_input ?? {}); } catch {} // unreadable input must still produce a refusal
     const tools = (re) => re.test(input?.tool_name ?? "");
     const agentWrite = agentEvent(input) && (tools(FILE_TOOLS) || tools(SHELL_TOOLS)); // fail closed: an agent does nothing unchecked
+    const chiefFile = !agentEvent(input) && CHIEF.test(input?.agent_type ?? "") && tools(FILE_TOOLS); // nor does the chief change a file (F-R1517-1)
     let chiefWrite;
     try {
       chiefWrite = tools(SHELL_TOOLS) && shellWrite(input.tool_input ?? {}, true, input.cwd ?? process.cwd());
     } catch {
       chiefWrite = tools(SHELL_TOOLS);
     }
-    if (input?.hook_event_name === "PreToolUse" && ((!commands && tools(SHELL_TOOLS)) || commands?.some(command => mentionsMerge(command) || pushText(command) || (input.tool_name === "PowerShell" && powerShellProblem(command))) || agentWrite || chiefWrite || tools(AGENT_TOOLS) || (agentEvent(input) && tools(/^SendMessage$/)))) {
+    if (input?.hook_event_name === "PreToolUse" && ((!commands && tools(SHELL_TOOLS)) || commands?.some(command => mentionsMerge(command) || pushText(command) || (input.tool_name === "PowerShell" && powerShellProblem(command))) || agentWrite || chiefFile || chiefWrite || tools(AGENT_TOOLS) || (agentEvent(input) && tools(/^SendMessage$/)))) {
       process.stdout.write(JSON.stringify(deny("PreToolUse", `the hook could not check this command (${e?.message ?? e}), so it refuses it. Tell the user.`)));
     } else if (input && ["SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure", "Stop"].includes(input.hook_event_name)) {
       process.stderr.write(`sage: agent slots could not be updated (${e?.message ?? e}); reserved capacity stays charged.\n`);
