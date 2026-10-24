@@ -23,7 +23,7 @@ grep -v -E '^[[:space:]]*(</?(a|picture|p)( [^>]*)?>|<source [^>]*>)?[[:space:]]
 
 **The order of sections**
 
-A project is large when it has more than one kind of user, more than one way in, or a README over 150 lines. Otherwise it is small. The sections of the table come in its order. A section counts by what it holds, whatever its heading: for example, sage's "Learn sage in 5 minutes" is its Usage section. A section of the project's own can go between them.
+A project is large when it has more than one kind of user, more than one way in, or a README over 150 lines. Otherwise it is small. The sections of the table come in its order. A section counts by what it holds, whatever its heading: for example, sage's "Learn sage in 5 minutes" is its Usage section. A section of the project's own can go between them. For Why, How it works, Concepts, FAQ and Under the hood, a link to a page that holds the section counts as the section, so that the README stays short.
 
 | Section | What it holds | Small | Large |
 | --- | --- | --- | --- |

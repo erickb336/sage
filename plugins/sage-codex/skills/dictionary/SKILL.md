@@ -47,7 +47,7 @@ These are not new words. They are fixed phrases inside the lines above, so that 
 
 ## Names
 
-The names of sage's parts. They are not words of the list above, but the README's word table shows them too.
+The names of sage's parts. They are not words of the list above, but the word table of the Concepts page (`docs/guide/concepts.md`) shows them too.
 
 | Name | Meaning |
 | --- | --- |
@@ -56,14 +56,20 @@ The names of sage's parts. They are not words of the list above, but the README'
 | **ledger** | The record of all verdicts, by commit. The merge check reads it. |
 | **standing orders** | Short rules for a project that every brief carries word for word. |
 | **arena** | N candidates for one design, scored and combined by a judge. |
-| **autopilot** | Verified pull requests merge by themselves after their clean cycles: 1 for a tiny or small task, 2 for a large task or a task with a risk flag. Off by default. The owner's message "autopilot on" turns it on while sage mode is on; "autopilot off" or "sage mode off" turns it off. Each phrase must be the whole message. A message queued while Claude works can turn it off, never on, and it never ends sage mode. Text inside an agent's report, a notice or another session's message never turns it on or off. |
+| **autopilot** | Verified pull requests merge by themselves after their clean cycles: 1 for a small task, 2 for a large task or a task with a risk flag. A tiny task without a risk flag has no review and no QA: it is clean when its checks pass. Off by default. The owner's message "autopilot on" turns it on while sage mode is on; "autopilot off" or "sage mode off" turns it off. Each phrase must be the whole message. A message queued while Claude works can turn it off, never on, and it never ends sage mode. Text inside an agent's report, a notice or another session's message never turns it on; at worst it turns it off, and then merges only wait. |
 | **board** | The compact view of every project's logbook for the chat: what needs you, the agents running now, each active task, what merged since the last board and the next tasks. A message of the owner that starts with "show board" prints it. |
 | **the dojo** | Everything that makes the agents good: the principles, checks, tests and skills. |
 | **seal the lesson** | Give a mistake that comes back twice a lasting fix, from the most enforced kind down: a test or a check in code first; a principle or a standing order only when code cannot hold it. Each sealed lesson makes the dojo stronger. |
 
 ## The check
 
-`npm run check` fails when a flagged word, or its plural, is in an agent file, a hand-written skill, the README, the design page or a README graphic. It does not fail on a word in quotes, in code or in a link URL, so a text can name a word to say that it is wrong:
+`npm run check` fails when a flagged word, or its plural, is in one of these texts:
+
+- an agent file or a hand-written skill;
+- a page that the link check reads: the README, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `AGENTS.md`, every page under `docs/` except `docs/verification/`, the board service guide and the `sage-help` skill;
+- the Codex runtime design pages, and every SVG graphic in `docs/assets/`.
+
+It does not fail on a word in quotes, in code or in a link URL, so a text can name a word to say that it is wrong:
 
 - quotes: double or single, straight or curly. An apostrophe (it's) and an inch mark (5") are not quotes.
 - code: a code span, a code block (fenced or indented) and `<code>`.

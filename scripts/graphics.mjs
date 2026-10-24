@@ -495,7 +495,7 @@ function hero(t, id) {
     // The words.
     `<text x="64" y="176" font-family="${SANS}" font-size="152" font-weight="900" letter-spacing="-6" fill="url(#${id}-word)" filter="url(#${id}-wordglow)">sage</text>`,
     text(452, 90, ["Your chief of staff", "for Claude Code."], { size: 46, weight: 800, fill: EMBER.ink, lh: 1.12, ls: -0.5 }),
-    `<text x="454" y="190" font-family="${SANS}" font-size="28" fill="${EMBER.muted}"><tspan>Send </tspan><tspan font-weight="800" fill="${EMBER.hot}">“sage mode”</tspan><tspan> as a message.</tspan></text>`,
+    `<text x="454" y="190" font-family="${SANS}" font-size="28" fill="${EMBER.muted}"><tspan>Send </tspan><tspan font-weight="800" fill="${EMBER.hot}">“sage mode”</tspan><tspan> as a message of its own.</tspan></text>`,
     ...meds.map(plaqueOf),
     `<rect x="${cx - 128}" y="990" width="256" height="48" rx="8" fill="url(#${id}-chief)" filter="url(#${id}-glow)"/>`,
     text(cx, 1023, "Chief of staff", { size: 28, weight: 800, fill: "#160902", anchor: "middle" }),
@@ -503,7 +503,7 @@ function hero(t, id) {
     text(245, 1099, "Claude Code plugin · MIT", { size: 28, weight: 700, fill: EMBER.hot, anchor: "middle" }),
     text(W - 40, 1099, "Built on pstack and poteto mode, by Lauren Tan", { size: 28, fill: EMBER.muted, anchor: "end" }),
   ].join("\n");
-  return worldSvg(W, H, id, worldDefs(id), body, "sage: your chief of staff for Claude Code. Send sage mode as a message. A hooded toad sage, the chief of staff, meditates on a rock in a misty mountain world, with glowing gold toad eyes. Around it, its team on a loop: designer, PE, implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA. Claude Code plugin, MIT. Built on pstack and poteto mode, by Lauren Tan.", { border: t.dark ? "#3A2414" : undefined });
+  return worldSvg(W, H, id, worldDefs(id), body, "sage: your chief of staff for Claude Code. Send sage mode as a message of its own. A hooded toad sage, the chief of staff, meditates on a rock in a misty mountain world, with glowing gold toad eyes. Around it, its team on a loop: designer, PE, implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA. Claude Code plugin, MIT. Built on pstack and poteto mode, by Lauren Tan.", { border: t.dark ? "#3A2414" : undefined });
 }
 
 /** How it works: you, the chief of staff (the toad sage), the team's flow to a pull request, the logbook, and the outer
@@ -565,63 +565,6 @@ function loop(t, id) {
 
 /** A world panel in the reader's theme, with the world's defs and arrowheads. */
 const panel = (t, id, W, H, body, label) => worldSvg(W, H, id, [worldDefs(id), markers(id, t)].join("\n"), body, label, { rx: 24, bg: t.bg, border: t.border });
-
-/** Learn sage in 5 minutes: one session in a chat card, and five numbered notes. Sample data. */
-function walkthrough(t, id) {
-  const W = 1100, px = 36, py = 36, pw = 500, nx = 600, size = SMALL, lh = 1.4, LH = size * lh;
-  let by = py + 84;
-  const b = [
-    ["you", 1, ["sage mode"]],
-    ["you", 0, ["Ramen Finder: add a", "favourites list, and fix this", "week's crash."]],
-    ["chief", 2, ["T1 favourites: large · data", "T2 crash: small · input", "T2 starts now."]],
-    ["chief", 3, ["One question for T1: sync favourites", "across devices? Recommended and", "default if no answer: not now."]],
-    ["you", 0, ["not now"]],
-    ["chief", 4, ["T2: build → code review →", "security review → QA.", "Repair round 1: an empty search", "still crashed. Fixed in 4787c81."]],
-    ["chief", 5, ["T2 verified. QA ran the app: PASS.", "Not checked: the tablet layout.", "→ PR #41 is ready for you."]],
-  ].map(([side, n, lines]) => {
-    const w = Math.max(...lines.map((l) => tw(l, size, side === "you"))) + 36, h = f1(22 + lines.length * LH);
-    const bubble = { side, n, lines, x: side === "you" ? px + pw - 22 - w : px + 22, y: f1(by), w, h, mid: f1(by + h / 2) };
-    by += h + 18;
-    return bubble;
-  });
-  const ph = f1(by - py + 6), H = Math.round(py + ph + 36);
-  const notes = [
-    [1, "Switch it on", ["Send “sage mode” as a message", "of its own, then say what you want."]],
-    [2, "The chief frames each task", ["A size, risk flags and a route.", "A flag such as input adds the", "security review to a code change."]],
-    [3, "One batch of questions, at most", ["One interruption per task. Each", "product question has a", "recommendation and a default."]],
-    [4, "The team works", ["Fresh agents build, review and test.", "Findings go back for a repair."]],
-    [5, "You get results, not code", ["Evidence, what was not checked,", "and a pull request to merge."]],
-  ];
-  let end = 150;
-  const placed = notes.map(([n, title, lines]) => {
-    const target = b.find((x) => x.n === n), y = f1(Math.max(target.mid - 14, end + 30));
-    end = y + 40 + (lines.length - 1) * LH;
-    return { n, title, lines, y, target };
-  });
-  const body = [
-    backdrop(t, id, W, H, { moon: [nx + 44, 84, 130], seeds: [14, 63, 9], far: [H - 140, 60, 200, 70, 140], near: [H, 90, 240, 80, 170], pagodas: [[1040, H - 20, 0.8, 1.6]], mist: [140, 280, H - 170], mistK: 0.6 }),
-    // The chat card.
-    `<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="24" fill="${t.edge}" opacity="${t.glowOp}" filter="url(#${id}-glow)"/>`,
-    rect(px, py, pw, ph, { rx: 24, fill: t.tile, stroke: t.edge, sw: 1.5 }),
-    `<circle cx="${px + 30}" cy="${py + 34}" r="7" fill="${EMBER.orange}" filter="url(#${id}-glow)"/>`,
-    text(px + 48, py + 42, "sage mode · ~/workspace", { size, fill: t.muted, mono: true }),
-    path(`M${px} ${py + 62} L ${px + pw} ${py + 62}`, { stroke: t.line, sw: 1 }),
-    ...b.map(({ side, lines, x, y, w, h }) => (side === "you" ? `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="16" fill="url(#${id}-chief)"/>` : rect(x, y, w, h, { rx: 16, fill: t.chip, stroke: t.line, sw: 1 })) +
-      text(x + 18, f1(y + 33), lines, { size, lh, fill: side === "you" ? "#160902" : t.ink, weight: side === "you" ? 600 : 400 })),
-    // The notes: the toad sage's emblem on top, then five numbered steps, each tied to its message.
-    emblem(nx + 44, 84, 44, id),
-    text(nx + 104, 78, "One session, step by step", { size: 24, weight: 800, fill: t.ink }),
-    text(nx + 104, 110, "an illustration with sample data", { size, fill: t.muted }),
-    ...placed.map(({ n, title, lines, y, target }) => [
-      path(`M${nx - 2} ${y - 8} C ${nx - 30} ${y - 8}, ${target.x + target.w + 36} ${target.mid}, ${target.x + target.w + 8} ${target.mid}`, { stroke: t.edge, sw: 1.6, dash: "3 5", opacity: 0.8 }),
-      circle(nx + 18, y - 8, 18, { fill: "#0A0604", stroke: EMBER.gold, sw: 2 }),
-      text(nx + 18, f1(y - 0.5), String(n), { size, weight: 800, fill: EMBER.gold, anchor: "middle" }),
-      text(nx + 48, y, title, { size: 24, weight: 800, fill: t.ink }),
-      text(nx + 48, y + 32, lines, { size, fill: t.muted, lh }),
-    ].join("")),
-  ].join("\n");
-  return panel(t, id, W, H, body, "Learn sage in 5 minutes: an illustrative sage mode session about a made-up app, Ramen Finder, with numbered notes. You: sage mode. Then you: Ramen Finder: add a favourites list, and fix this week's crash. The chief frames T1, favourites, large, with the data flag, and T2, the crash, small, with the input flag, and starts T2. It asks one question for T1: sync favourites across devices? Recommended, and the default if you don't answer: not now. You answer: not now. T2 goes through build, code review, security review and QA; repair round 1 fixes an empty search that still crashed. T2 is verified: QA ran the app and passed. Not checked: the tablet layout. Pull request 41 is ready for you. The notes: 1, switch it on: start a message with sage mode. 2, the chief frames each task. 3, one batch of product questions at most, in one interruption per task. 4, the team works. 5, you get results, not code.");
-}
 
 /** Routes: the least route for each size of task. */
 function routes(t, id) {
@@ -694,10 +637,10 @@ function lifecycle(t, id) {
     text(f1(rep.x + rep.w / 2), by + ph + 34, "next round, at most 3", { size, fill: t.muted, anchor: "middle" }),
     // The rules of the states.
     rect(36, fy, W - 72, fh, { rx: 8, fill: t.tile, stroke: t.edge, sw: 1.5 }),
-    text(64, fy + 40, ["Verified needs 1 clean cycle. Autopilot merges after the task's clean cycles:", "1 for a tiny or small task, 2 for a large task or a task with a risk flag."], { size, weight: 700, fill: t.ink, lh: 1.4 }),
-    text(64, f1(fy + 40 + 2 * size * 1.4), ["The state tool checks each move. A new commit voids the verdicts,", "so the task is reviewed again."], { size, fill: t.muted, lh: 1.4 }),
+    text(64, fy + 40, ["Verified needs 1 clean cycle. Autopilot merges after the task's clean cycles:", "1 for a small task, 2 for a large task or a task with a risk flag."], { size, weight: 700, fill: t.ink, lh: 1.4 }),
+    text(64, f1(fy + 40 + 2 * size * 1.4), ["A tiny task has no review and no QA: it is clean when its checks pass.", "The state tool checks each move. A new commit voids the verdicts."], { size, fill: t.muted, lh: 1.4 }),
   ].join("\n");
-  return panel(t, id, W, H, body, "A task's life: framed, briefed, building, reviewing, verifying, verified, merged. A product question holds the task until your answer. Findings or a QA failure send it to repairing, then to review again, at most 3 rounds. Verified needs one clean cycle; autopilot merges after one for a tiny or small task, two for a large or risky one.");
+  return panel(t, id, W, H, body, "A task's life: framed, briefed, building, reviewing, verifying, verified, merged. A product question holds the task until your answer. Findings or a QA failure send it to repairing, then to review again, at most 3 rounds. Verified needs one clean cycle; autopilot merges after one for a small task, two for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass.");
 }
 
 /** The arena: one brief, N candidates on a mix of Claude models, a judge, one final version. */
@@ -767,7 +710,7 @@ const tip = (lines, label) => (t, id) => {
 };
 
 const GRAPHICS = {
-  hero, loop, walkthrough, routes, lifecycle, arena, pstack,
+  hero, loop, routes, lifecycle, arena, pstack,
   "tip-start": tip(["Send “sage mode” alone to switch it on,", "and “sage mode off” alone to switch it off.", "With any other words, it does nothing."], "The toad sage's tip: send sage mode alone to switch it on, and sage mode off alone to switch it off. With any other words, it does nothing."),
   "tip-try": tip(["Try it on one small, real bug, from your phone.", "Then look at the result, not the code."], "The toad sage's tip: try it on one small, real bug from your phone, then look at the result, not the code."),
   "tip-seal": tip(["Seal the lesson: give a mistake that comes back twice", "a lasting fix. A test or a check in code first; a principle", "or a standing order only when code cannot hold it.", "That's how the dojo gets stronger."], "The toad sage's tip: seal the lesson. Give a mistake that comes back twice a lasting fix: a test or a check in code first; a principle or a standing order only when code cannot hold it. That is how the dojo gets stronger."),

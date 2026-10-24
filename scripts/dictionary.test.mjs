@@ -174,25 +174,25 @@ test("npm run check passes when the word is quoted, in a code span, in a code bl
   assert.equal(c.run("check").status, 1);
 });
 
-test("npm run build makes the dictionary skill and the README's word table from writing/dictionary.md", () => {
+test("npm run build makes the dictionary skill and the concepts page's word table from writing/dictionary.md", () => {
   const c = copy();
   const source = c.read("writing/dictionary.md");
   c.write("writing/dictionary.md", source.replace("kept on the owner's Mac. |", "kept on the owner's computer. |").replace("**Flagged:** store,", "**Flagged:** store, ledger book (say logbook),"));
   assert.equal(c.run("check").status, 1, "the generated files are out of date before the build");
   assert.equal(c.run("build").status, 0);
   assert.match(c.read("plugins/sage/skills/dictionary/SKILL.md"), /\| \*\*logbook\*\* \| .*kept on the owner's computer\. \| store, database \|/);
-  assert.match(c.read("README.md"), /\n\| \*\*Logbook\*\* \| .*kept on the owner's computer\. \|\n/);
+  assert.match(c.read("docs/guide/concepts.md"), /\n\| \*\*Logbook\*\* \| .*kept on the owner's computer\. \|\n/);
   assert.equal(c.run("check").status, 0, c.run("check").stderr);
   c.agent("Write it in the ledger book.");
   assert.match(c.run("check").stderr, /qa\.md:\d+: "ledger book" is a flagged word; say logbook/);
 });
 
-test("npm run check fails when the README's word table is edited by hand", () => {
+test("npm run check fails when the concepts page's word table is edited by hand", () => {
   const c = copy();
-  c.write("README.md", c.read("README.md").replace("| **Logbook** |", "| **Store** |"));
+  c.write("docs/guide/concepts.md", c.read("docs/guide/concepts.md").replace("| **Logbook** |", "| **Store** |"));
   const r = c.run("check");
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /✗ README\.md: out of date; run npm run build/);
+  assert.match(r.stderr, /✗ docs\/guide\/concepts\.md: out of date; run npm run build/);
 });
 
 // Round 1: the findings of the first review cycle on pull request #7, each as the reviewers showed it.
@@ -263,23 +263,25 @@ test("a flagged word in a graphic says that its fix goes in scripts/graphics.mjs
   assert.match(r.stderr, /✗ docs\/assets\/loop-light\.svg:58: "Store" is a flagged word; say logbook \(writing\/dictionary\.md\); fix it in scripts\/graphics\.mjs/);
 });
 
-test("a title on the design page and a Mermaid label there fail the check", () => {
+test("a title on the design page and a Mermaid label there fail the check; the same word in a code block passes", () => {
   const c = copy();
-  const page = c.read("docs/design/sage-mode.html");
-  c.write("docs/design/sage-mode.html", page.replace('S[("Logbook', 'S[("Store').replace("<main>", '<main><p title="the store">x</p>'));
+  const page = c.read("docs/design/sage-mode.md");
+  c.write("docs/design/sage-mode.md", page.replace('S[("Logbook', 'S[("Store').replace("## 1. Where it fits", '<p title="the store">x</p>\n\n## 1. Where it fits').replace("```text\nGOAL", "```text\nstore\nGOAL"));
   const r = c.run("check");
-  const lineOf = (text) => page.slice(0, page.indexOf(text)).split("\n").length;
-  assert.match(r.stderr, new RegExp(`✗ docs/design/sage-mode\\.html:${lineOf('S[("Logbook')}: "Store" is a flagged word`));
-  assert.match(r.stderr, new RegExp(`✗ docs/design/sage-mode\\.html:${lineOf("<main>")}: "store" is a flagged word`));
+  const after = c.read("docs/design/sage-mode.md");
+  const lineOf = (text) => after.slice(0, after.indexOf(text)).split("\n").length;
+  assert.match(r.stderr, new RegExp(`✗ docs/design/sage-mode\\.md:${lineOf('S[("Store')}: "Store" is a flagged word`));
+  assert.match(r.stderr, new RegExp(`✗ docs/design/sage-mode\\.md:${lineOf('<p title="the store">')}: "store" is a flagged word`));
+  assert.doesNotMatch(r.stderr, new RegExp(`sage-mode\\.md:${lineOf("store\nGOAL")}:`), "a word in a text code block passes");
 });
 
-test("a README without its end marker gives one line from build and from check, not a stack trace", () => {
+test("a concepts page without its end marker gives one line from build and from check, not a stack trace", () => {
   const c = copy();
-  c.write("README.md", c.read("README.md").replace("<!-- The end of the word table. -->", ""));
+  c.write("docs/guide/concepts.md", c.read("docs/guide/concepts.md").replace("<!-- The end of the word table. -->", ""));
   for (const script of ["build", "check"]) {
     const r = c.run(script);
     assert.equal(r.status, 1, script);
-    assert.match(r.stderr, /^✗ README\.md: the word table needs the lines <!-- The word table comes from writing\/dictionary\.md: edit it there, then run npm run build\. --> and <!-- The end of the word table\. -->$/m, script);
+    assert.match(r.stderr, /^✗ docs\/guide\/concepts\.md: the word table needs the lines <!-- The word table comes from writing\/dictionary\.md: edit it there, then run npm run build\. --> and <!-- The end of the word table\. -->$/m, script);
     assert.doesNotMatch(r.stderr, /^\s+at /m, script);
   }
 });

@@ -2,7 +2,7 @@
 // source) and pstack's other principles in upstream/pstack/ (their description). scripts/build.mjs writes it, so a
 // pstack sync followed by the build gives each new pstack principle its row, and `npm run check` fails on a README
 // that differs.
-import { withBlock } from "./dictionary.mjs";
+import { PRINCIPLES_PAGE, withBlock } from "./dictionary.mjs";
 
 export const PRINCIPLES_START = "<!-- The principles table comes from principles/ and upstream/pstack/: edit them there, then run npm run build. -->";
 export const PRINCIPLES_END = "<!-- The end of the principles table. -->";
@@ -32,7 +32,11 @@ export function principlesTable(rows) {
     "| --- | --- | --- |",
     ...rows.map((r) => `| ${r.id} | ${cell(r.applyWhen)} | ${r.text} |`),
     "",
-    `Every principle except sage's own is pstack's, by Lauren Tan (MIT). "${AS_IS}" is pstack's text as it is, from \`upstream/pstack/\`. "${ADAPTED}" means that sage changed the wording: it is shorter, and it follows sage's writing standard. Its \`upstream:\` fingerprint records which pstack text it was checked against. "${OWN}" has no pstack source.`,
+    "Every principle except sage's own is pstack's, by Lauren Tan (MIT). The Text column has three values:",
+    "",
+    `- "${AS_IS}" is pstack's text as it is, from \`upstream/pstack/\`.`,
+    `- "${ADAPTED}" means that sage changed the wording: it is shorter, and it follows sage's writing standard. Its \`upstream:\` fingerprint records which pstack text it was checked against.`,
+    `- "${OWN}" has no pstack source.`,
     "",
     "</details>",
   ].join("\n");
@@ -46,4 +50,4 @@ export function withoutPrinciplesTable(readme) {
 }
 
 /** The README with its principles table replaced by a new one. */
-export const withPrinciplesTable = (readme, list) => withBlock(readme, PRINCIPLES_START, PRINCIPLES_END, list, "the principles table");
+export const withPrinciplesTable = (page, list) => withBlock(page, PRINCIPLES_START, PRINCIPLES_END, list, "the principles table", PRINCIPLES_PAGE);
