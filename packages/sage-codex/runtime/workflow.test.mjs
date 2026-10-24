@@ -138,3 +138,12 @@ test('reconciliation records the external outcome but refuses a later native or 
   assert.equal(result.publication.outcome,'merged');assert.equal(result.localState,'unresolved');
   assert.match(result.localError,/Native or ambiguous/);assert.equal(tool.read(f.dir,'tasks')[0].state,'verified');assert.equal(f.puts(),1);
 });
+
+test('an unanswered task gate refuses before submission and its answer permits publication',t=>{
+  const f=fixture(t);f.enable();
+  f.core('gate','add','T1','--question','May this task publish?','--options','Approve|Hold','--recommend','Hold');
+  assert.throws(()=>f.invoke('publish',{task:'T1',sha:f.head}),/T1 has unanswered gate G1/);
+  assert.equal(f.puts(),0);assert.equal(f.invoke('status').publications.T1,undefined);
+  f.core('gate','answer','G1','--option','1');
+  assert.equal(f.invoke('publish',{task:'T1',sha:f.head}).publication.outcome,'merged');assert.equal(f.puts(),1);
+});

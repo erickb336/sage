@@ -133,6 +133,9 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
     if (!session.sage || !session.autopilot || session.capability?.publisher !== currentPublisher()) fail("Publication needs active verified autopilot");
     const record = session.tasks[input.task];
     const runs = manual(record, input.task);
+    const prTasks = new Set(tool.read(dir, "tasks").filter(task => task.id === row.id || task.pr === row.pr).map(task => task.id));
+    const gate = tool.read(dir, "gates").find(gate => prTasks.has(gate.task) && !gate.answer);
+    if (gate) fail(`Task ${gate.task} has unanswered gate ${gate.id}`);
     if (!["verified", "pr-ready"].includes(row.state) || row.branch !== record.branch || row.pr !== record.pr
       || runs.some(run => run.status === "running" && run.role !== "lead")) fail("Task is not ready or specialist ownership is active");
     if (git(["branch", "--show-current"]) !== record.branch || git(["rev-parse", "HEAD"]) !== input.sha) fail("Local branch or head changed");
