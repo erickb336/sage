@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./build.mjs";
-import { linkProblems, readmeProblems, slug } from "./readme-checks.mjs";
+import { anchors, linkProblems, readmeProblems, slug } from "./readme-checks.mjs";
 
 const NEWS = (n) => ["## What's new", "", ...Array.from({ length: n }, (_, i) => `- **Change ${i + 1}.** One line.`), "", "All changes are in [CHANGELOG.md](CHANGELOG.md).", ""];
 const README = (lines = {}) => [
@@ -45,6 +45,20 @@ test("GitHub's anchors: lower case, no punctuation, a hyphen for each space", ()
   assert.equal(slug("1. Where it fits"), "1-where-it-fits");
   assert.equal(slug("Git: pushes, merges and branches"), "git-pushes-merges-and-branches");
   assert.equal(slug("The `sage` skill"), "the-sage-skill");
+  // GitHub keeps an underscore (R1393-1).
+  assert.equal(slug("The max_agents cap"), "the-max_agents-cap");
+});
+
+test("a repeated heading gets -1, -2, and a heading that already has that slug gets its own suffix, as on GitHub", () => {
+  // GitHub: A → a, A → a-1, A-1 → a-1-1 (a-1 is taken), A → a-2.
+  assert.deepEqual([...anchors("# A\n\n## A\n\n## A-1\n\n## A\n")], ["a", "a-1", "a-1-1", "a-2"]);
+});
+
+test("a link with a bad % escape is a problem, not a crash", (t) => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-links-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "README.md"), "[ok](README.md) [bad](docs/100%.md) [bad](a%zz.md)\n");
+  assert.deepEqual(linkProblems(dir, ["README.md"]), ["README.md:1: docs/100%.md has a bad % escape", "README.md:1: a%zz.md has a bad % escape"]);
 });
 
 test("a relative link, or a link to the main branch on GitHub, to a missing file or a missing anchor is a problem; another web link, code and a present anchor are not", (t) => {

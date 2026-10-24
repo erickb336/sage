@@ -35,18 +35,21 @@ export function readmeProblems(text) {
   return problems;
 }
 
-/** A heading's anchor, as GitHub makes it: lower case, punctuation removed, each space a hyphen. */
-export const slug = (heading) => heading.trim().toLowerCase().replace(/<[^>]*>/g, "").replace(/[`*_]/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[^\p{L}\p{N}\s-]/gu, "").replace(/\s/g, "-");
+/** A heading's anchor, as GitHub makes it: lower case, punctuation removed (an underscore stays), each space a hyphen. */
+export const slug = (heading) => heading.trim().toLowerCase().replace(/<[^>]*>/g, "").replace(/[`*]/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
 
-/** The anchors of a Markdown file: each heading's slug (a repeat gets -1, -2, …), and each id or name in a tag. */
+/** The anchors of a Markdown file: each heading's slug, and each id or name in a tag. As GitHub does (github-slugger),
+ * a slug that is taken gets the next free -1, -2, … of its base, so "A", "A", "A-1" give a, a-1, a-1-1. */
 export function anchors(text) {
-  const seen = new Map(), out = new Set();
+  const count = new Map(), out = new Set();
   for (const line of withoutCode(text).split("\n")) {
     const h = /^#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
     if (h) {
-      const base = slug(h[1]), n = seen.get(base) ?? 0;
-      seen.set(base, n + 1);
-      out.add(n ? `${base}-${n}` : base);
+      const base = slug(h[1]);
+      let anchor = base;
+      while (count.has(anchor)) { count.set(base, count.get(base) + 1); anchor = `${base}-${count.get(base)}`; }
+      count.set(anchor, 0);
+      out.add(anchor);
     }
     for (const m of line.matchAll(/<a\s[^>]*?(?:id|name)="([^"]+)"/g)) out.add(m[1]);
   }
@@ -84,7 +87,9 @@ export function linkProblems(root, files = docFiles(root)) {
       const target = onMain ? link.target.replace(GITHUB, "/") : link.target;
       if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) continue; // a web link, mailto: and the like
       const [path, anchor] = target.split("#");
-      const to = path ? join(root, path.startsWith("/") ? "" : dirname(file), decodeURIComponent(path)) : join(root, file);
+      let decoded;
+      try { decoded = decodeURIComponent(path); } catch { problems.push(`${file}:${line}: ${link.target} has a bad % escape`); continue; }
+      const to = path ? join(root, path.startsWith("/") ? "" : dirname(file), decoded) : join(root, file);
       if (!relative(root, to) || relative(root, to).startsWith("..")) { problems.push(`${file}:${line}: ${target} leaves the repository`); continue; }
       if (!existsSync(to)) { problems.push(`${file}:${line}: ${link.target} does not exist`); continue; }
       if (anchor && to.endsWith(".md") && statSync(to).isFile() && !anchorsOf(to).has(anchor)) problems.push(`${file}:${line}: ${link.target} names #${anchor}, which ${relative(root, to)} does not have`);

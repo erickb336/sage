@@ -1,6 +1,10 @@
 # Learn sage in 5 minutes
 
-This page follows one small task from your first message to a merged pull request. It is a worked example: the project, Ramen Finder, and every task in it are **SAMPLE DATA**. The board screenshots come from the real board code, with a made-up logbook (`scripts/fixtures/board-walkthrough.mjs`). The chief's own words vary from session to session, so this page describes them; the quoted board text is what the board prints for this sample.
+This page follows one small task from your first message to a merged pull request. It is a worked example: the project, Ramen Finder, and every task in it are **SAMPLE DATA**.
+
+The board screenshots come from the real board code, with a made-up logbook (`scripts/fixtures/board-walkthrough.mjs`). The chief's own words vary from session to session, so this page describes them. The quoted board text is what the board prints for this sample.
+
+Before you start, install sage with the README's [Quick start](../../README.md#quick-start).
 
 ## The loop
 
@@ -31,13 +35,13 @@ The chief confirms that sage mode is on and waits for your request. A message wi
 Ramen Finder crashes when I search with an empty box. Fix it.
 ```
 
-The chief frames one task, T1. It is small (one bounded change) and has the risk flag `input` (outside input), so its route is build, code review, security review and QA.
+The chief frames one task, T1. It is small (one bounded change) and has no risk flag, so its route is build, code review and QA. A risk flag, such as `input` for a change to how the app reads outside input, adds a security review.
 
 ### 3. Answer the one product question
 
-What the app shows for an empty search is a product choice, so the chief asks you once, on a choice card, with its recommendation first. The board shows the same question under "Needs you":
+What the app shows for an empty search is a product choice, so the chief asks you once. It asks on a choice card: a question in the chat with options to pick, its recommendation first. The chief also records the question as gate G1, a question that waits for your answer, so the board shows it under "Needs you":
 
-![The board with SAMPLE DATA: T1 in Backlog, with a Needs you box that asks what an empty search shows, and the recommendation: a hint to type a name.](../assets/learn-asks.png)
+<img alt="The board with SAMPLE DATA: T1 in Backlog, with the step line Plan, Build, Review 1 of 1 and Merge, and a Needs you box that asks what an empty search shows, with the recommendation: a hint to type a name." src="../assets/learn-asks.png" width="400">
 
 `show board` prints the question in the chat too:
 
@@ -49,21 +53,23 @@ You pick option 1. Engineering choices, such as the name of the helper function,
 
 ### 4. The agents build
 
-The chief starts one lead for the task's pull request. The lead starts an implementer in its own git worktree. The board shows both at work:
+The chief starts one lead for the task's pull request: an agent that runs the build, the reviews and the repairs, and reports to the chief once. The lead starts an implementer, which works in its own git worktree. The board shows both at work:
 
-![The board with SAMPLE DATA: T1 in Building, with the step line Plan done and Build running, and the lead and the implementer at work.](../assets/learn-building.png)
+<img alt="The board with SAMPLE DATA: T1 in Building, with the step line Plan done and Build running, and the lead and the implementer at work." src="../assets/learn-building.png" width="400">
 
-You can leave. The logbook keeps the state, so a later session, also from your phone, continues the work.
+You can leave. The logbook keeps the state, so a later session continues the work. You can also follow and steer it from your phone with [Remote Control](remote-control.md).
 
 ### 5. Reviews and QA check it
 
-The implementer opens pull request #41. Fresh agents review it: a code reviewer, a security reviewer (for the `input` flag) and QA, which runs the app and tries to break it. A medium or high finding goes back to an implementer for a repair. Each review starts again on a new commit.
+The implementer opens pull request #41. Fresh agents review it: a code reviewer, and QA, which runs the app and tries to break it. A medium or high finding goes back to an implementer for a repair.
+
+One full set of fresh reviews and QA on one commit is a cycle, and a new commit starts again from cycle 1. T1 needs 1 clean cycle, so its step line shows "Review 1 of 1". A tiny or small task needs 1 clean cycle; a large task, or a task with a risk flag, needs 2 before autopilot merges it.
 
 ### 6. The result comes to you
 
-When the reviews are clean on the final commit, the chief reports to you: the result, the evidence (the commands that ran, and screenshots), what was not checked, and the pull request. The board says what it needs from you:
+The reviews are clean on the final commit, so the chief reports to you. You get the result, the evidence (the commands that ran, and screenshots), what was not checked, and the pull request. The board says what it needs from you:
 
-![The board with SAMPLE DATA: T1 in Ready to merge, every step done, and Needs you: review and merge PR 41.](../assets/learn-ready.png)
+<img alt="The board with SAMPLE DATA: T1 in Ready to merge, with Plan, Build and Review 1 of 1 done, and Needs you: review and merge PR 41." src="../assets/learn-ready.png" width="400">
 
 > The board cannot tell if autopilot is on, so review and merge PR 41.
 
@@ -71,11 +77,11 @@ You look at the result, not the code. Autopilot is off by default, so you merge.
 
 ### 7. Merged
 
-You merge PR #41 on GitHub. When the logbook records the merge, the board moves T1 to Done:
+You merge PR #41 on GitHub. The chief then records the merge in the logbook, and the board moves T1 to Done:
 
-![The board with SAMPLE DATA: T1 in Done, last 7 days, with PR 41.](../assets/learn-merged.png)
+<img alt="The board with SAMPLE DATA: T1 in Done, last 7 days, with PR 41." src="../assets/learn-merged.png" width="400">
 
-To let verified pull requests merge by themselves, send `autopilot on` alone while sage mode is on. A task with a risk flag, like T1, then needs 2 clean review cycles on the same commit before it merges.
+To let verified pull requests merge by themselves, send `autopilot on` alone while sage mode is on. The chief then merges each task after its clean cycles, and tells you in one line.
 
 ## Try it yourself
 

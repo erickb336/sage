@@ -1,12 +1,12 @@
 # Using sage
 
-This page is the user guide to sage mode in Claude Code. It gives the rules behind the README's [quick start](../../README.md#quick-start) and [What to say](../../README.md#what-to-say): the switch phrases, when the chief asks you, how to update, stop and uninstall sage, and what to do when something goes wrong.
+This page is the user guide to sage mode in Claude Code. It gives the rules behind the README's [quick start](../../README.md#quick-start) and [What to say](../../README.md#what-to-say): every phrase, when the chief asks you, how to update, stop and uninstall sage, and what to do when something goes wrong.
 
 In sage's words, the **chief** is the main session in sage mode: your chief of staff. The [Concepts](concepts.md) page gives every word.
 
-## The switch phrases
+## Every phrase
 
-Sage mode and autopilot switch only on an exact phrase, sent as a message of its own:
+Send each phrase as a message of its own. Sage mode and autopilot switch only on the exact phrase as the whole message (the rules are below):
 
 | Send this, alone | What happens |
 | --- | --- |
@@ -15,6 +15,16 @@ Sage mode and autopilot switch only on an exact phrase, sent as a message of its
 | `autopilot on` | While sage mode is on: verified pull requests merge by themselves after their clean cycles. |
 | `autopilot off` | Verified pull requests wait for you again. |
 | `sage help` | A list of every phrase, and whether sage mode and autopilot are on now. It switches nothing. |
+
+The board and status phrases work at the start of your message. [Ask for the board](board.md#ask-for-the-board) gives their rules:
+
+| Send this | What you see |
+| --- | --- |
+| `show board` or `sage board` | The board of this project in the chat, and the address of the board page. |
+| `show board for all` or `sage board for all projects` | The board of every project. |
+| `show board for <project>` or `sage board for <project>` | The board of one project. |
+| `show board <task id>`, `sage board <task id>` or `board <task id>` | One task in full, for example `show board T1`. |
+| `show status` or `sage status` | The task states, the agents and what needs you. |
 
 <a href="../assets/tip-start-light.svg">
 <picture>
@@ -97,31 +107,58 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 
 ## Uninstall sage
 
-1. If you set up the board server or the Remote Control server, stop them first:
-   - The board: run the `board --stop` command that the board line in the chat gives you. For the login service, see [Optional login startup](../../packages/sage-board/README.md#optional-login-startup).
-   - Remote Control: send `/sage:remote-control server off`, then `/sage:remote-control off`.
-2. Remove the plugin, in a terminal:
+1. If you use the board server, stop it, in a terminal. Replace `<version>` with a folder name in `~/.claude/plugins/cache/sage/sage/`:
+
+   ```sh
+   node ~/.claude/plugins/cache/sage/sage/<version>/board/cli.mjs board --stop
+   ```
+
+2. If you installed the board's login service, stop it and remove its login file. The login file starts the board at each login until you remove it:
+
+   ```sh
+   launchctl bootout "gui/$(id -u)/dev.sage.board"
+   ```
+
+   ```sh
+   rm ~/Library/LaunchAgents/dev.sage.board.plist
+   ```
+
+3. If you set up the board by hand, remove its installed copy (`service/`) and its pages folder (`pages/`). The board has no command that removes them.
+
+   > **Warning:** this command also deletes the board's offline pages. Copy each page that you want to keep first.
+
+   ```sh
+   rm -r ~/.local/share/sage-board
+   ```
+
+4. If you set up the Remote Control server, send `/sage:remote-control server off`, then `/sage:remote-control off`.
+5. If a folder starts every session in sage mode, remove the `"agent": "sage:chief-of-staff"` line from its `.claude/settings.json` (see [Start every session in sage mode](#start-every-session-in-sage-mode)).
+6. Remove the plugin, in a terminal:
 
    ```sh
    claude plugin uninstall sage@sage
    ```
 
-3. Remove the marketplace:
+7. Remove the marketplace:
 
    ```sh
    claude plugin marketplace remove sage
    ```
 
-4. Start a new session. A session that was open still has sage's instructions.
+8. Start a new session. A session that was open still has sage's instructions.
 
-The uninstall does not remove your logbooks or your pages. They are plain files in the folders below. Delete them yourself when you no longer want the record.
+Claude Code keeps the plugin files in `~/.claude/plugins/cache/sage/` after the uninstall. It removes each version 14 days later, but only while another plugin is still installed ([plugin loading](https://code.claude.com/docs/en/plugins/loading)). To remove them at once, delete that folder.
+
+The uninstall does not remove your logbooks, your pages or the board's config. They are plain files in the folders below. Delete them yourself when you no longer want the record.
 
 ## Where sage keeps things
 
 - **The logbook** of each project: `~/.claude/sage/<project>-<hash>/`. It holds the tasks, the agent runs, the findings, the verdicts, your answers and the decision trail. So you can leave and come back from another device, and a new session continues the work.
 - **The hook's state**: `~/.claude/sage/.hooks/`. It keeps the mode, autopilot and the agent slots.
 - **The pages** of each task: `~/sage-worktrees/<project>-<hash>/pages/<task>/`, outside the logbook. Agents save their research pages and designs there. The chief makes the folder and prints its path.
-- **The board's config**: `~/.config/sage-board/`, when you use the board server.
+- **The board's config**: `~/.config/sage-board/`, when you use the board server. It holds `board.json` (with your board password's hash), `board.log` and `board.pid`.
+- **The board's login service**, when you install it ([Optional login startup](../../packages/sage-board/README.md#optional-login-startup)): the login file `~/Library/LaunchAgents/dev.sage.board.plist`, and the installed copy of the board in `~/.local/share/sage-board/service/`.
+- **The board's pages folder**: `~/.local/share/sage-board/pages/`, when the board's setup names it. The board saves its offline HTML pages there.
 
 ## Troubleshooting
 

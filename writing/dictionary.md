@@ -42,7 +42,7 @@ These are not new words. They are fixed phrases inside the lines above, so that 
 
 ## Names
 
-The names of sage's parts. They are not words of the list above, but the README's word table shows them too.
+The names of sage's parts. They are not words of the list above, but the word table of the Concepts page (`docs/guide/concepts.md`) shows them too.
 
 | Name | Meaning |
 | --- | --- |
@@ -58,7 +58,13 @@ The names of sage's parts. They are not words of the list above, but the README'
 
 ## The check
 
-`npm run check` fails when a flagged word, or its plural, is in an agent file, a hand-written skill, the README, the design page or a README graphic. It does not fail on a word in quotes, in code or in a link URL, so a text can name a word to say that it is wrong:
+`npm run check` fails when a flagged word, or its plural, is in one of these texts:
+
+- an agent file or a hand-written skill;
+- a page that the link check reads: the README, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `AGENTS.md`, every page under `docs/` except `docs/verification/`, the board service guide and the `sage-help` skill;
+- the Codex runtime design pages, and every SVG graphic in `docs/assets/`.
+
+It does not fail on a word in quotes, in code or in a link URL, so a text can name a word to say that it is wrong:
 
 - quotes: double or single, straight or curly. An apostrophe (it's) and an inch mark (5") are not quotes.
 - code: a code span, a code block (fenced or indented) and `<code>`.

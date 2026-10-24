@@ -1,5 +1,5 @@
 {
-  "sample": "8187f99cd80c0ac212a5db631a390756dac99218274329881fdd6b10dfb8fe73",
+  "sample": "ca4cb68329bed864cc685984b2eaf942288b24ff985edc042244611b88342685",
   "sources": [
     "scripts/fixtures/board-programs.mjs",
     "scripts/fixtures/board-walkthrough.mjs"

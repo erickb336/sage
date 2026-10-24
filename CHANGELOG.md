@@ -5,6 +5,10 @@ Each date is the day of the first commit that made the change. Older changes are
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve. See [To update sage](docs/guide/using-sage.md#to-update-sage).
 
+## 2026-10-24
+
+- **The README guide accepts a linked page.** In the `readme-guide` skill, a link to a page that holds the section now counts as the section for Why, How it works, Concepts, FAQ and Under the hood, so that a README stays short.
+
 ## 2026-10-22
 
 - **The board names more logbook problems.** A program whose pilot is abandoned or not in the logbook is stuck, also before you approve its breakdown: it is an item of Needs you, and each task of it cannot start. A task that names a program that the logbook does not have is an item too ("The program PG4 is not in the logbook"), and so is a provider's logbook folder that the board cannot read ("The Codex logbooks cannot be read"). A task in a loop of waits, from a hand edit, shows "in a loop" and "it cannot start", with a repair line. When a gate on the pilot has the breakdown options but its question names no program or another one, every line says so. When every table of a logbook fails for one reason, one item gives it, for example "Its folder has no read permission". The chat board's count of "needs you" equals its numbered items, and `show status` says "N need you". A task page or a program page that is too large to show (over 8 MB) shows its parent page, the board or the programs list, with a note; the rest of the board stays live.

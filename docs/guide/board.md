@@ -1,6 +1,6 @@
 # The board
 
-The board is a view of every project's logbook: what needs you, the agents that run now, each active task, and what merged. This page is the user guide to the board. The [README](../../README.md#the-board) has a screenshot and the three phrases that you use most. The [board service guide](../../packages/sage-board/README.md) gives the server's setup by hand, the login service and private phone access.
+The board is a view of every project's logbook: what needs you, the agents that run now, each active task, and what merged. This page is the user guide to the board. The [README](../../README.md#the-board) has a screenshot, and [Every phrase](using-sage.md#every-phrase) lists the board phrases with all the others. The [board service guide](../../packages/sage-board/README.md) gives the server's setup by hand, the login service and private phone access.
 
 The board only reads. To change a task, a priority or a kind, ask the chief.
 

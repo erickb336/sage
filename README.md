@@ -1,19 +1,23 @@
-<a href="docs/assets/hero-light.svg">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
-  <img alt="sage: your chief of staff for Claude Code. Send “sage mode” as a message. A hooded toad sage, the chief of staff, meditates in a misty mountain world. Around it, its team on a loop: designer, PE, implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA." src="docs/assets/hero-light.svg" width="100%">
-</picture>
-</a>
+# sage
 
-**sage is a plugin for Claude Code (Codex support in progress) that turns a session into your chief of staff.**
-You say what you want; a team of agents designs, builds, reviews and tests it, and you get a pull request with evidence.
+**sage is a Claude Code plugin for developers who want a team of agents to build, review and prove their work, while they review results instead of code.**
+You say what you want in a session; the agents design, build, review and test it, and you get a pull request with evidence.
 
 <p align="center">
   <a href="https://github.com/erickb336/sage/actions/workflows/check.yml"><img alt="checks" src="https://github.com/erickb336/sage/actions/workflows/check.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage"></a>
 </p>
 
-**Status:** early. Claude Code: supported. Codex: in progress. See [Status](#status), the [Quick start](#quick-start), and one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
+**Status:** early. Claude Code is supported, and Codex support is in progress ([Status](#status)).
+
+Start with the [Quick start](#quick-start). Then follow one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
+
+<a href="docs/assets/hero-light.svg">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
+  <img alt="sage: your chief of staff for Claude Code. Send “sage mode” as a message of its own. A hooded toad sage, the chief of staff, meditates in a misty mountain world. Around it, its team on a loop: designer, PE (principal engineer), implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA." src="docs/assets/hero-light.svg" width="100%">
+</picture>
+</a>
 
 ## Status
 
@@ -21,7 +25,7 @@ You say what you want; a team of agents designs, builds, reviews and tests it, a
 | --- | --- |
 | Maturity | Early: used daily by its author to build sage itself; one recorded dry run. |
 | Claude Code | Supported: sage mode, the team of agents, the rules in code, autopilot and the board. |
-| Codex | In progress. Works: principles, writing skills, advice hooks, and the logbook and board by manual commands. Not yet: sage mode and autopilot. See [sage in Codex](docs/guide/codex.md). |
+| Codex | In progress. The principles, the writing skills, the advice hooks, and the logbook and board by manual commands work; sage mode and autopilot do not work yet ([sage in Codex](docs/guide/codex.md)). |
 | Systems | macOS: tested. Linux: not yet tested. Windows: not supported. |
 
 ## Requirements
@@ -32,11 +36,11 @@ You say what you want; a team of agents designs, builds, reviews and tests it, a
 | Node.js 20 or later, and git | Yes | Yes |
 | `gh`, logged in (`gh auth login`) | Yes: for pull requests and the merge check | No |
 | A GitHub remote for your project | Recommended: without one, work stops at a verified branch | No |
-| macOS | For the board server and Remote Control | For the board server |
+| macOS | For the board server and [Remote Control](docs/guide/remote-control.md) (sessions from your phone) | For the board server |
 
 ## Quick start
 
-For Claude Code. For Codex, see [sage in Codex](docs/guide/codex.md).
+For Claude Code. For Codex, see [sage in Codex](docs/guide/codex.md). Claude Code must be installed and signed in ([install Claude Code](https://code.claude.com/docs/en/setup)).
 
 1. Install sage, in a terminal:
 
@@ -49,7 +53,7 @@ For Claude Code. For Codex, see [sage in Codex](docs/guide/codex.md).
    ```
 
    You see `Successfully installed plugin: sage@sage (scope: user)`.
-2. Start a new session in a project folder: run `claude`. A session that was already open does not get sage.
+2. Start a new session in a project folder: run `claude`. The first time, Claude Code asks you to trust the folder. A session that was already open does not get sage.
 3. Send the on phrase as a message of its own, with no other words:
 
    ```text
@@ -81,13 +85,13 @@ Send each phrase alone, as the whole message.
 | Say | What happens |
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff. Send your request next. |
-| `status` | Where each task is: running, waiting for you, verified. |
+| `show status` | Where each task is: running, waiting for you, verified. |
 | `show board` | The board in the chat, and the address of the board page. |
 | `autopilot on` / `autopilot off` | Verified pull requests merge by themselves, or wait for you again. Off by default. |
 | `sage mode off` | A normal session again. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-All phrases and the exact rules: [Using sage](docs/guide/using-sage.md#the-switch-phrases).
+Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase).
 
 ## Safety and limits
 
@@ -95,7 +99,7 @@ All phrases and the exact rules: [Using sage](docs/guide/using-sage.md#the-switc
 | --- | --- |
 | An agent that pushes to main, force-pushes or merges. | An agent that hides a command from the hook on purpose. A sandbox is planned. |
 | A merge without its clean review cycles on that exact commit. | Anyone with your GitHub token who removes branch protection. |
-| A mode switch by an agent's text: only your own message switches. | The cost of many agents: each one is a run on your plan or API credits. |
+| A mode turned on by an agent's text: only your own message turns a mode on. | The cost of many agents: each one is a run on your plan or API credits. |
 
 Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). Report a vulnerability: [SECURITY.md](SECURITY.md).
 

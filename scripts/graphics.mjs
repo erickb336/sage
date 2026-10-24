@@ -495,7 +495,7 @@ function hero(t, id) {
     // The words.
     `<text x="64" y="176" font-family="${SANS}" font-size="152" font-weight="900" letter-spacing="-6" fill="url(#${id}-word)" filter="url(#${id}-wordglow)">sage</text>`,
     text(452, 90, ["Your chief of staff", "for Claude Code."], { size: 46, weight: 800, fill: EMBER.ink, lh: 1.12, ls: -0.5 }),
-    `<text x="454" y="190" font-family="${SANS}" font-size="28" fill="${EMBER.muted}"><tspan>Send </tspan><tspan font-weight="800" fill="${EMBER.hot}">“sage mode”</tspan><tspan> as a message.</tspan></text>`,
+    `<text x="454" y="190" font-family="${SANS}" font-size="28" fill="${EMBER.muted}"><tspan>Send </tspan><tspan font-weight="800" fill="${EMBER.hot}">“sage mode”</tspan><tspan> as a message of its own.</tspan></text>`,
     ...meds.map(plaqueOf),
     `<rect x="${cx - 128}" y="990" width="256" height="48" rx="8" fill="url(#${id}-chief)" filter="url(#${id}-glow)"/>`,
     text(cx, 1023, "Chief of staff", { size: 28, weight: 800, fill: "#160902", anchor: "middle" }),
@@ -503,7 +503,7 @@ function hero(t, id) {
     text(245, 1099, "Claude Code plugin · MIT", { size: 28, weight: 700, fill: EMBER.hot, anchor: "middle" }),
     text(W - 40, 1099, "Built on pstack and poteto mode, by Lauren Tan", { size: 28, fill: EMBER.muted, anchor: "end" }),
   ].join("\n");
-  return worldSvg(W, H, id, worldDefs(id), body, "sage: your chief of staff for Claude Code. Send sage mode as a message. A hooded toad sage, the chief of staff, meditates on a rock in a misty mountain world, with glowing gold toad eyes. Around it, its team on a loop: designer, PE, implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA. Claude Code plugin, MIT. Built on pstack and poteto mode, by Lauren Tan.", { border: t.dark ? "#3A2414" : undefined });
+  return worldSvg(W, H, id, worldDefs(id), body, "sage: your chief of staff for Claude Code. Send sage mode as a message of its own. A hooded toad sage, the chief of staff, meditates on a rock in a misty mountain world, with glowing gold toad eyes. Around it, its team on a loop: designer, PE, implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA. Claude Code plugin, MIT. Built on pstack and poteto mode, by Lauren Tan.", { border: t.dark ? "#3A2414" : undefined });
 }
 
 /** How it works: you, the chief of staff (the toad sage), the team's flow to a pull request, the logbook, and the outer
