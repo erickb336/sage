@@ -362,14 +362,15 @@ test("T305: the step line and the Now and Next lines follow the fixed rule of ea
   assert.deepEqual(line(building), ["Plan: done", "Build: run", "Review 1 of 1: wait", "Merge: wait"]);
   assert.equal(building.loop.steps[1].detail, "The implementer (run R7) is at work. It started 40 min ago.");
   assert.deepEqual([building.loop.now.text, building.loop.next], ["The implementer is at work on the build.", "Review cycle 1 of 1, when the PR opens."]);
-  const verified = oneTask(task("T1", "verified", { pr: "41" }), { ledger: [{ task: "T1", pr: "41", sha: head, kind: "checks-pass", cycle: "1", at: now }, { task: "T1", pr: "41", sha: head, kind: "review-clean", cycle: "1", at: now }, { task: "T1", pr: "41", sha: head, kind: "qa-pass", cycle: "1", at: now }] }, [observation("mode", { autopilot: false })]);
+  const clean = { ledger: ["checks-pass", "review-clean", "qa-pass"].map(kind => ({ task: "T1", pr: "41", sha: head, kind, cycle: "1", at: now })) };
+  const verified = oneTask(task("T1", "verified", { pr: "41" }), clean, [observation("mode", { autopilot: false })]);
   assert.deepEqual(line(verified), ["Plan: done", "Build: done", "Review 1 of 1: done", "Merge: need"]);
   assert.deepEqual([verified.loop.now, verified.loop.next], [{ needs: true, text: "Autopilot is off, so review and merge PR 41." }, "Done after the merge."]);
   const unknown = oneTask(task("T1", "verified", { pr: "41" }));
   assert.equal(unknown.loop.now.text, "The board cannot tell if autopilot is on, so review and merge PR 41.", "R1075-4: plain words, not 'Autopilot state is unknown'");
   const auto = oneTask(task("T1", "verified", { pr: "41" }), {}, [observation("mode", { autopilot: true })]);
   assert.deepEqual([line(auto).at(-1), auto.loop.now.text, auto.reasons], ["Merge: idle", "Verified. Autopilot merges PR 41.", []]);
-  const merged = oneTask(task("T1", "merged", { pr: "41" }));
+  const merged = oneTask(task("T1", "merged", { pr: "41" }), clean);
   assert.deepEqual([line(merged), merged.loop.now.text, merged.loop.next], [["Plan: done", "Build: done", "Review 1 of 1: done", "Merge: done"], "Merged.", null]);
 });
 
@@ -391,6 +392,16 @@ test("R1076-1: a reviewing task whose cycles are all clean says the reviews are 
   const card = oneTask(task("T1", "reviewing", { pr: "12", risk: "auth", route: "build,code-review,security-review,qa" }), { ledger: [{ task: "T1", pr: "12", sha: head, kind: "checks-pass", cycle: "1", at: now }, ...ledger] }, [observation("pr", { number: 12, head, state: "open" })]);
   assert.deepEqual(line(card), ["Plan: done", "Build: done", "Review 1 of 2: done", "Review 2 of 2: done", "Merge: idle"]);
   assert.deepEqual([card.loop.now.text, card.loop.next], ["The reviews are done, with 2 clean cycles on aaaaaaa.", "The chief checks the verdicts, then the merge."]);
+});
+
+test("T387: a task past its reviews shows only the cycles with a recorded clean verdict set, never the size's full count", () => {
+  const cycle = n => ["checks-pass", "review-clean", "security-clean", "qa-pass"].map(kind => ({ task: "T1", pr: "12", sha: head, kind, cycle: String(n), at: now }));
+  const card = (state, ledger) => oneTask(task("T1", state, { pr: "12", risk: "auth", route: "build,code-review,security-review,qa" }), { ledger }, [observation("pr", { number: 12, head, state: state === "merged" ? "merged" : "open" })]);
+  assert.deepEqual(line(card("verified", cycle(1))), ["Plan: done", "Build: done", "Review 1 of 2: done", "Merge: need"], "1 of 2 cycles ran: the line shows 1");
+  assert.deepEqual(line(card("verified", [...cycle(1), ...cycle(2)])), ["Plan: done", "Build: done", "Review 1 of 2: done", "Review 2 of 2: done", "Merge: need"], "both cycles ran: the line shows 2");
+  assert.deepEqual(line(card("merged", cycle(1))), ["Plan: done", "Build: done", "Review 1 of 2: done", "Merge: done"], "an old task merged with fewer cycles than its size needs");
+  assert.deepEqual(line(card("merged", [])), ["Plan: done", "Build: done", "Merge: done"], "no recorded cycle: no review step claims one");
+  assert.deepEqual(line(card("reviewing", cycle(1))), ["Plan: done", "Build: done", "Review 1 of 2: done", "Review 2 of 2: idle", "Merge: wait"], "a task in review still shows every cycle of its size");
 });
 
 test("R1073-1, R1073-2, R1076-5: Next after a gate names the step that waits for it; held and replan wait for the chief unless a gate is open", () => {
@@ -439,14 +450,15 @@ test("T305: a repair is its own step, round n of m, then Review again; the round
 
 test("T305, R1071-2, R1076-3: an investigation shows Plan, Investigate, Evidence review and Conclude, and never a PR, a commit or a build", () => {
   const route = "investigate,evidence-review";
-  const verifying = oneTask(task("T1", "verifying", { size: "investigate", route }));
+  const evidence = { ledger: [{ task: "T1", pr: "", sha: "", kind: "evidence-clean", cycle: "1", at: now }] };
+  const verifying = oneTask(task("T1", "verifying", { size: "investigate", route }), evidence);
   assert.deepEqual(line(verifying), ["Plan: done", "Investigate: done", "Evidence review: done", "Conclude: idle"]);
   assert.deepEqual(verifying.loop.steps[2].parts, [["evidence review", "done"]], "a done step's parts are done, not 'not known yet'");
   assert.deepEqual([verifying.loop.now.text, verifying.loop.next], ["The chief checks the evidence review before the conclusion.", "The conclusion. The report comes to you."], "no doubled colon");
   const reviewing = oneTask(task("T1", "reviewing", { size: "investigate", route }), { runs: [{ id: "R19", task: "T1", role: "evidence-review", status: "running", started: now }] });
   assert.deepEqual([line(reviewing)[2], reviewing.loop.steps[2].detail, reviewing.loop.next], ["Evidence review: run", "The evidence review checks the report. The evidence reviewer (run R19) is at work. It started 0 min ago.", "The conclusion. The report comes to you."]);
   assert.deepEqual(line(oneTask(task("T1", "building", { size: "investigate", route }))), ["Plan: done", "Investigate: idle", "Evidence review: wait", "Conclude: wait"]);
-  assert.deepEqual(line(oneTask(task("T1", "concluded", { size: "investigate", route }))), ["Plan: done", "Investigate: done", "Evidence review: done", "Conclude: done"]);
+  assert.deepEqual(line(oneTask(task("T1", "concluded", { size: "investigate", route }), evidence)), ["Plan: done", "Investigate: done", "Evidence review: done", "Conclude: done"]);
 });
 
 test("T305: a run's time is minutes or hours up to 24 h; after 24 h with no logbook change, the run may have stopped", async () => {

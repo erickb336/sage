@@ -173,6 +173,55 @@ test("T378-18: the offline snapshot's task, programs and program pages each flip
   }
 });
 
+test("R1384-2: with scripts off, the offline snapshot's switches flip the theme together: a second page's switch flips it back", async t => {
+  const ctx = await browser.newContext({ javaScriptEnabled: false, colorScheme: "light", reducedMotion: "reduce" });
+  t.after(() => ctx.close());
+  await ctx.route("**/*", route => route.abort());
+  await ctx.route("http://board.test/snapshot", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: PAGES["/snapshot"]() }));
+  const page = await ctx.newPage(), switchOf = id => page.locator(`${id} .theme:visible`);
+  await page.goto("http://board.test/snapshot#programs");
+  await expectTheme(page, "dark", "programs");
+  await switchOf("#programs").click();
+  await expectTheme(page, "light", "flipped on the programs page");
+  for (const [id, now, words] of [[`#program-${key("PG1")}`, "dark", "Light theme"], [`#task-${key("T13")}`, "light", "Dark theme"], ["header", "dark", "Light theme"]]) {
+    await page.evaluate(hash => { location.hash = hash; }, id === "header" ? "" : id);
+    await switchOf(id).click();
+    await expectTheme(page, now, id);
+    assert.equal(await switchOf(id).innerText(), words, `${id}: the switch names the other theme`);
+  }
+});
+
+test("R1481-1: with scripts off, the snapshot's theme switch and its reset work by keyboard and keep focus on a shown control", async t => {
+  const ctx = await browser.newContext({ javaScriptEnabled: false, colorScheme: "light", reducedMotion: "reduce" });
+  t.after(() => ctx.close());
+  await ctx.route("**/*", route => route.abort());
+  await ctx.route("http://board.test/snapshot", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: PAGES["/snapshot"]() }));
+  const page = await ctx.newPage(), pg1 = `#program-${key("PG1")}`;
+  // The focused control, and whether the owner sees it: the checkbox itself is visually hidden, so its label shows it.
+  const focused = () => page.evaluate(() => { const at = document.activeElement, shown = at.matches(".flip") ? at.labels[0] : at; return [at.id || at.className, shown.checkVisibility()]; });
+  await page.goto("http://board.test/snapshot#programs");
+  await page.focus("#flip-programs");
+  for (const now of ["light", "dark", "light"]) {
+    await page.keyboard.press("Space");
+    await expectTheme(page, now, `programs page: Space flips to ${now}`);
+    assert.deepEqual(await focused(), ["flip-programs", true], `programs page, ${now}: focus stays on the switch`);
+  }
+  // Another page's switch is the reset now: Tab reaches it after the way back, and Space flips the theme back.
+  await page.evaluate(hash => { location.hash = hash; }, pg1);
+  await page.focus(`${pg1} a.back`);
+  for (let tabs = 0; tabs < 4 && !(await focused())[0].includes("unflip"); tabs++) await page.keyboard.press("Tab");
+  assert.deepEqual(await focused(), ["chip theme unflip", true], "the reset is the next stop");
+  await page.keyboard.press("Space");
+  await expectTheme(page, "dark", "the reset flips it back");
+  assert.deepEqual(await focused(), ["chip theme unflip", true], "focus stays on the reset");
+  assert.equal(await page.locator(`${pg1} .theme:visible`).count(), 1, "one switch shows");
+  // One step back is this page's own switch, which flips the theme again.
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Space");
+  await expectTheme(page, "light", "this page's switch flips it");
+  assert.deepEqual(await focused(), [`flip-program-${key("PG1")}`, true], "focus stays on this page's switch");
+});
+
 test("T378-19: the program approval band spans its section edge to edge", async t => {
   const page = await open(t, `/program/${key("PG3")}`);
   const [band, section] = await page.locator("section.approval").evaluate(element => [element.querySelector(".band").getBoundingClientRect(), element.getBoundingClientRect()].map(box => [Math.round(box.left), Math.round(box.right)]));
