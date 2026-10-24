@@ -88,7 +88,7 @@ Send each phrase alone, as the whole message.
 | `show status` | Where each task is: running, waiting for you, verified. |
 | `show board` | The board in the chat, and the address of the board page. |
 | `autopilot on` / `autopilot off` | Verified pull requests merge by themselves, or wait for you again. Off by default. |
-| `sage mode off` | A normal session again, except in a folder that [starts every session in sage mode](docs/guide/using-sage.md#start-every-session-in-sage-mode). Autopilot goes off too. |
+| `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
 Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase).
@@ -107,11 +107,11 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
+- **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
 - **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.
 - **Programs:** you approve the breakdown of a multi-task goal before any task of it builds.
 - **A task can wait for other tasks**, and the board has an Agents page and a project picker.
-- **A switch needs the exact phrase**, and `sage help` lists every phrase.
 
 All changes: [CHANGELOG.md](CHANGELOG.md).
 

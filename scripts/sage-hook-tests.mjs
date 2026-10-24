@@ -171,6 +171,21 @@ test("a session that starts as the chief-of-staff agent is in sage mode without 
   assert.match(denied(s.send(edit({ agent_type: "sage:chief-of-staff" }))), /you do not change files yourself/);
 });
 
+test("T398: in a session that starts as the chief, the off phrase holds until the on phrase", () => {
+  const s = session();
+  const chief = { agent_type: "sage:chief-of-staff" };
+  assert.match(context(s.send({ ...prompt("what is open?"), ...chief })), /# Chief of staff/, "sage mode is on at the first event");
+  assert.match(denied(s.send(edit(chief))), /you do not change files yourself/);
+  assert.match(context(s.send({ ...prompt("sage mode off"), ...chief })), /sage mode is off/);
+  assert.equal(s.send(edit(chief)), undefined, "the chief edits after the off phrase");
+  assert.equal(s.send({ ...prompt("fix the typo"), ...chief }), undefined, "no chief text at the next prompt");
+  s.send({ hook_event_name: "PostCompact", ...chief });
+  assert.equal(s.send({ ...prompt("and the next one"), ...chief }), undefined, "nor after a compaction");
+  assert.equal(s.send(edit(chief)), undefined, "sage mode stays off");
+  assert.match(context(s.send({ ...prompt("sage mode"), ...chief })), /# Chief of staff/, "the on phrase turns it on again");
+  assert.match(denied(s.send(edit(chief))), /you do not change files yourself/);
+});
+
 test("T347: in sage mode the chief writes only Markdown files of its own memory folder", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-memory-")));
   const config = join(root, "config"), memory = join(config, "projects", "-x-workspace-app", "memory"), outside = join(root, "outside");

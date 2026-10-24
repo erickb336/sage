@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // The sage hook. Claude Code sends one JSON event on stdin; the hook answers with one JSON object on stdout, or nothing.
 //   - "sage mode" makes the session the user's chief of staff (agents/chief-of-staff.md) until "sage mode off". A
-//     session that starts as the sage:chief-of-staff agent is in sage mode from its first event. Only a message of the
+//     session that starts as the sage:chief-of-staff agent is in sage mode from its first event, and "sage mode off"
+//     holds there too (T398). Only a message of the
 //     user that is exactly one phrase (mode-policy.mjs) switches sage mode or autopilot: never an agent's report, a task
 //     notification, a hand-back or another session's message (promptOf, T215, T240). A message the owner sends while
 //     Claude works counts as a message of its own. When the hook cannot read the frames of a prompt, nothing in it
@@ -237,7 +238,7 @@ function switchModes({ owner, text, queued = [], all, stray = "" }, state) {
     help ||= Boolean(change.help);
     // A switch that changes nothing gives no note (F-T240-9).
     if (change.sage === false) {
-      if (state.sage) notes.push("sage: sage mode is off. You may change files yourself again.");
+      if (state.sage) notes.push("sage: sage mode is off. This is a normal session for the rest of it, also when it started as the chief: you may change files yourself again.");
       Object.assign(state, { sage: false, given: false, autopilot: false });
     } else if (change.sage) state.sage = true;
     if (change.autopilot === false) {
@@ -311,7 +312,8 @@ export function handle(input, state, slots) {
     return deny(event, "the command modules could not load, so the hook refuses this command. Restore the complete plugin and try again.");
   }
   const main = !agentEvent(input);
-  if (main && CHIEF.test(input.agent_type ?? "")) state.sage = true;
+  // The agent type turns sage mode on only before the session has a mode, so the owner's off phrase holds (T398).
+  if (main && CHIEF.test(input.agent_type ?? "") && state.sage === undefined) state.sage = true;
 
   if (event === "UserPromptSubmit") {
     const prompt = promptOf(input);

@@ -7,6 +7,8 @@ Each date is the day of the first commit that made the change. Older changes are
 
 ## 2026-10-24
 
+- **The off phrase holds in every session.** In a folder whose `.claude/settings.json` starts every session as the chief, `sage mode off` now gives a normal session for the rest of the session, as in any other session. Before, sage mode came back on at the next event. `sage mode` turns it on again.
+
 - **The README guide accepts a linked page.** In the `readme-guide` skill, a link to a page that holds the section now counts as the section for Why, How it works, Concepts, FAQ and Under the hood, so that a README stays short.
 
 ## 2026-10-22
