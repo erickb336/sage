@@ -68,7 +68,7 @@ test("T368: the Program filter keeps its program's cards and its Needs you item,
   await page.selectOption("#f-program", key("PG2"));
   assert.deepEqual((await shownIds(page)).sort(), ["T22", "T23"]);
   assert.equal(await page.locator("#needstrip-n").textContent(), "1");
-  assert.equal(await page.locator("#needstrip li:not([hidden]) .what").textContent(), "PG2 Lead build: the pilot T21 was abandoned. Choose a new pilot, or drop the program. · sage (sample) · Claude logbook");
+  assert.equal(await page.locator("#needstrip li:not([hidden]) .what").textContent(), "Program PG2, Lead build: the pilot T21 was abandoned. Choose a new pilot, or drop the program. · sage (sample) · Claude logbook");
   assert.equal(await page.locator("#s-needs").textContent(), "1", "the summary counts the item that shows");
   await page.selectOption("#f-program", "none");
   assert.deepEqual((await shownIds(page)).sort(), ["T70"]);
