@@ -44,7 +44,13 @@ Until you set a password, every request that is not from the Mac itself gets sta
 
 The default port is 43123. Setup accepts `--port` from 1024 to 65535. A busy port causes an error; the service does not choose another port.
 
-Setup never changes a config that exists: it stops with an error that names the file. To change the port of an existing config, edit `"port"` in the file, then restart the board with `board --stop` and `board --ensure`. To set the board up again from the start, remove the file first; this also removes the board password.
+Setup never changes a config that exists: it stops with an error that names the file. To change the port of an existing config, do these steps in this order:
+
+1. Stop the board with `board --stop --config <file>`. Do this first: `--stop` looks for the board on the port that the file names.
+2. Edit `"port"` in the file.
+3. Ask for the board again, or run `board --ensure --config <file>`.
+
+If you edit the port first, `--stop` finds no board on the new port, and the old server runs on. To set the board up again from the start, remove the file first; this also removes the board password.
 
 The stable installation copies only board and core sources. It does not depend on a provider plugin cache. Stop the foreground service with Ctrl+C.
 

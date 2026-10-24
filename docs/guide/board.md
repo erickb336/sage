@@ -120,9 +120,15 @@ On the phone, through a private HTTPS tunnel, you sign in as `sage` with your ow
 
 The command needs a terminal, and the sage hook refuses the ordinary command shapes by which an agent sets the password or reads the board config. It does not stop a script that builds them while it runs; full protection needs the sandbox.
 
-After you change the config or the password, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
+After you change the password or another setting of the config, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
 
-Setup never changes a board config that exists. To move the board to another port, edit `"port"` in `~/.config/sage-board/board.json` (1024 to 65535), then restart it in the same way.
+Setup never changes a board config that exists. To move the board to another port (1024 to 65535), do these steps in this order:
+
+1. Run `board --stop --config <file>`, with the path of your board config (by default `~/.config/sage-board/board.json`). Do this first: `--stop` looks for the board on the port that the file names.
+2. Edit `"port"` in that file.
+3. Ask for the board again.
+
+If you edit the port first, `--stop` finds no board on the new port, and the old server runs on.
 
 The [board service guide](../../packages/sage-board/README.md) gives local startup, stable installation, offline export, and private phone access through a private HTTPS tunnel, such as Tailscale Serve. The server runs independently of a chat.
 

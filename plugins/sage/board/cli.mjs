@@ -75,7 +75,7 @@ export function createBoardConfig(path, { sources, port = 43123, allowedHosts = 
   return config;
 }
 /** Setup never changes a config that exists: the line names the file and the way to change it. */
-const existingConfig = path => `the board config ${path} exists, and setup does not change it. To change its "port" or another setting, edit that file, then run ${boardCommand("--stop", path, {}, true)} and ask for the board again. To set the board up again, remove the file first.`;
+const existingConfig = path => `the board config ${path} exists, and setup does not change it. To change its "port" or another setting, first run ${boardCommand("--stop", path, {}, true)} while the file still names the port of the running board, then edit that file, then ask for the board again. To set the board up again, remove the file first.`;
 /**
  * The standard logbook roots of the current user, as each provider's state tool computes them: SAGE_HOME, when it is
  * set, is the one root of every provider. A missing root stays listed: the server attaches when it appears. The board

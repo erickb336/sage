@@ -32,7 +32,7 @@ test("T395: setup on an existing config names the file and says how to change it
   const { config } = fixture(t), before = readFileSync(config, "utf8");
   const cli = fileURLToPath(new URL("../packages/sage-board/cli.mjs", import.meta.url));
   await assert.rejects(runBoardCli(["board", "--setup", "--config", config, "--port", "43200"], { output: () => {} }), {
-    message: `the board config ${config} exists, and setup does not change it. To change its "port" or another setting, edit that file, then run node ${cli} board --stop --config ${config} and ask for the board again. To set the board up again, remove the file first.`,
+    message: `the board config ${config} exists, and setup does not change it. To change its "port" or another setting, first run node ${cli} board --stop --config ${config} while the file still names the port of the running board, then edit that file, then ask for the board again. To set the board up again, remove the file first.`,
   });
   assert.equal(readFileSync(config, "utf8"), before);
 });
