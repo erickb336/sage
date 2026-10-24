@@ -183,11 +183,11 @@ function meta(task) {
 const WORD_OF = { backlog: "not started", design: "in design", building: "building", review: "in review", ready: "ready to merge" };
 /** A task's state as its row on the program page says it: the end state, else the word of its column. */
 const taskWord = task => ["merged", "concluded", "abandoned"].includes(task.state) ? task.state : WORD_OF[task.column] ?? task.state;
-const BREAKDOWN_STATE = { proposed: "waits for your approval", changing: "you asked for changes: the sage revises it", dropped: "you dropped it" };
+const BREAKDOWN_STATE = { proposed: "waits for your approval", changing: "you asked for changes: the chief revises it", dropped: "you dropped it" };
 const breakdownWhy = ({ id, state, gate, gateFound, named }) => BREAKDOWN_STATE[state] ?? (named !== undefined ? `its gate ${gate} ${namedText(named, id)}` : gateFound ? `its gate ${gate} is not a breakdown gate` : `its gate ${gate} is not in the logbook`);
 /** One wait of a task, with its state (T233): met, not met, or never met. */
 function waitItem(ctx, task, wait) {
-  if (wait.odd) return `<li class="v-stale"><span class="g" aria-hidden="true">⊘</span>Text in the waits cell that is not a task id · <span class="stw-cant">never met</span>: the sage sets the waits again.</li>`;
+  if (wait.odd) return `<li class="v-stale"><span class="g" aria-hidden="true">⊘</span>Text in the waits cell that is not a task id · <span class="stw-cant">never met</span>: the chief sets the waits again.</li>`;
   if (wait.breakdown) {
     const { id, gate } = wait.breakdown, why = breakdownWhy(wait.breakdown);
     return `<li class="${wait.never ? "v-stale" : "v-wait"}"><span class="g" aria-hidden="true">${wait.never ? "⊘" : "⧗"}</span>The breakdown of ${esc(id)}${gate ? ` (gate ${esc(gate)})` : ""}: ${esc(why)} · <span class="${wait.never ? "stw-cant" : "faint"}">${wait.never ? "never met" : "not met"}</span></li>`;
@@ -210,7 +210,7 @@ function programSections(ctx, task) {
 function nowWaits(task) {
   if (!task.waitLine || task.loop.now.needs) return nowNext(task);
   const open = task.waits.filter(wait => !wait.met);
-  const next = task.waitLine.never ? "Nothing until the wait changes. Ask the sage to remove the wait, or to drop this task."
+  const next = task.waitLine.never ? "Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task."
     : `Starts when ${open.map(wait => wait.breakdown ? "you approve the breakdown" : `${wait.id} merges`).join(" and ")}.${task.column === "design" ? " Its design and PE may run before." : ""}`;
   return `${waitHtml(task, true)}<div class="nextline"><b>Next:</b> ${esc(next)}</div>`;
 }
@@ -230,7 +230,7 @@ function page(ctx, task, { routed = false } = {}) {
   const decisions = task.decisions.length ? `<ol class="log">${[...task.decisions].reverse().map(row => `<li><span class="faint">${esc(day(row.at))}</span> ${esc(row.decision)}${row.why ? ` · ${esc(row.why)}` : ""}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`;
   const content = `<div class="ptop"><span class="id">${esc(task.id)}</span> · ${project(ctx, task)}${pr} · ${tags(task)} · <span class="faint">${esc(title(task.sourceLabel))} logbook</span></div>`
     + `<${routed ? "h1" : "h2"} class="ptitle">${esc(task.title)}</${routed ? "h1" : "h2"}>`
-    + `<div class="detail"><section class="wide"><h3>Where in the loop</h3>${stepLine(task)}${nowWaits(task)}${stepRows(task)}${agents(ctx, task, " nowagents")}${meta(task)}<p class="faint">To change the priority or the kind, ask the sage in the chat. The board is read-only.</p></section>`
+    + `<div class="detail"><section class="wide"><h3>Where in the loop</h3>${stepLine(task)}${nowWaits(task)}${stepRows(task)}${agents(ctx, task, " nowagents")}${meta(task)}<p class="faint">To change the priority or the kind, ask the chief in the chat. The board is read-only.</p></section>`
     + `<div class="colL"><section><h3>Brief</h3>${brief}</section><section><h3>Agent runs <span class="n">${task.runs.length}</span></h3>${runsTable(task)}</section><section><h3>Findings <span class="n">${task.findings.filter(row => row.status === "open").length} open</span></h3>${findings(task)}</section></div>`
     + `<div class="colR">${programSections(ctx, task)}<section><h3>Evidence <span class="n">${task.ledger.length}</span></h3>${evidence(task)}</section><section><h3>Latest decisions</h3>${decisions}</section><section><h3>Artifacts</h3>${artifacts(task)}</section></div></div>${legend(null)}`;
   return routed ? content : `<section class="page" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="#">← Board</a>${programLink(ctx, task)}<span class="spacer"></span>${themeSwitch(`flip-${anchor(task)}`)}</div>${content}</section>`;
@@ -727,9 +727,9 @@ function programFilter(ctx, model) {
 function needStrip(ctx, model) {
   const items = model.programNeeds ?? [];
   if (!items.length) return "";
-  // A stuck program says its name and why in one line, "PG2 Lead build: the pilot T21 was abandoned. …" (T374).
+  // A stuck program says its id, its name and why in one line, "Program PG2, Lead build: the pilot T21 was abandoned. …" (T374, T390).
   const stuck = need => need.kind === "stuck" && ctx.programs.get(need.key);
-  const what = need => stuck(need) ? `${stuck(need).id} ${stuck(need).name}: ${need.text.charAt(0).toLowerCase()}${need.text.slice(1)}` : need.title;
+  const what = need => stuck(need) ? `Program ${stuck(need).id}, ${stuck(need).name}: ${need.text.charAt(0).toLowerCase()}${need.text.slice(1)}` : need.title;
   const item = need => `<li data-need data-project="${esc(need.group)}" data-program="${need.program ? b64(need.key) : ""}"><span class="ic" aria-hidden="true">${need.program ? "◫" : "!"}</span><span class="what">${esc(what(need))} <span class="faint">· ${esc(need.projectName)} · ${esc(title(need.sourceLabel))} logbook</span></span>`
     + `<span class="act">${stuck(need) ? "Answer in the chat." : esc(need.text)}${need.program && ctx.programs.has(need.key) ? ` <a href="${esc(programHref(ctx, need.key))}">Open the program</a>` : ""}</span></li>`;
   return `<section class="needstrip" id="needstrip" aria-labelledby="needstrip-h"><h2 id="needstrip-h">${ICON}Needs you, not on a card <span class="n" id="needstrip-n">${items.length}</span></h2><ul>${items.map(item).join("")}</ul></section>`;
@@ -815,16 +815,16 @@ export function renderAgentsHtml(model, { live = false, paths = false } = {}) {
   const caps = agents.problems.length ? `<div class="caps">Caps: not known while the hook notes cannot be read.</div>`
     : agents.caps.map(entry => `<div class="caps" aria-label="Agent caps, ${esc(entry.label)} agents"><span>Caps (${esc(entry.label)} agents):</span>${entry.projects.map(project => capText(project.name, project.used, project.cap)).join("")}${capText("total", entry.total.used, entry.total.cap, false)}</div>`).join("");
   const problems = agents.problems.length ? `<div class="banner warn">${ICON}<div><b>The hook notes cannot be read</b> (${agents.problems.map(p => `${esc(p.source)}: ${esc(p.message)}`).join("; ")}). The page shows runs from the logbooks only, with no last activity and no helpers. Caps are not known.</div></div>` : "";
-  const unmatched = agents.unmatched.length ? `<div class="banner warn">${ICON}<div><b>${agents.unmatched.length} run${agents.unmatched.length === 1 ? " has" : "s have"} no hook record.</b> The logbook says ${agents.unmatched.map(item => `${esc(item.run)} (${esc(item.project)})`).join(", ")} ${agents.unmatched.length === 1 ? "runs" : "run"}, but no agent slot holds ${agents.unmatched.length === 1 ? "it" : "them"}. Each row stays, marked "may be stuck", until the sage ends the run.</div></div>` : "";
+  const unmatched = agents.unmatched.length ? `<div class="banner warn">${ICON}<div><b>${agents.unmatched.length} run${agents.unmatched.length === 1 ? " has" : "s have"} no hook record.</b> The logbook says ${agents.unmatched.map(item => `${esc(item.run)} (${esc(item.project)})`).join(", ")} ${agents.unmatched.length === 1 ? "runs" : "run"}, but no agent slot holds ${agents.unmatched.length === 1 ? "it" : "them"}. Each row stays, marked "may be stuck", until the chief ends the run.</div></div>` : "";
   const box = project => `<section class="group" aria-labelledby="g-${b64(project.key)}"><div class="ghead"><h2 id="g-${b64(project.key)}">${esc(project.name)}</h2>${paths && project.pathSub ? `<span class="faint">${esc(project.pathSub)}</span>` : project.pathSub ? `<span class="faint">${esc(project.sub)}</span>` : ""}<span class="n">${project.count} running</span>${project.cap ? `<span class="gcap">${capText(`${project.cap.label} cap`, project.cap.used, project.cap.cap)}</span>` : ""}</div><ul class="alist">${project.agents.map(agent => agentItem(agent, live)).join("")}</ul></section>`;
   const rules = agents.rules, list = agents.count ? `<div class="wrap">${agents.projects.map(box).join("")}</div>`
-    : `<div class="emptyboard"><b>No agent runs now.</b> When the sage starts an agent in any project, it shows here within a few seconds. The ${live ? '<a href="/">Task board</a>' : "Task board"} shows what comes next.</div>`;
+    : `<div class="emptyboard"><b>No agent runs now.</b> When the chief starts an agent in any project, it shows here within a few seconds. The ${live ? '<a href="/">Task board</a>' : "Task board"} shows what comes next.</div>`;
   const how = `<section class="rules" aria-label="How the page decides each state"><h2>How each state is decided</h2><ul>`
     + `<li><b>${AGENT_STATE.work[0]} working</b>: the hook saw the agent in the last ${rules.quiet} min.</li>`
     + `<li><b>${AGENT_STATE.wait[0]} waiting for its helpers</b>: a lead with at least one helper that still runs. A quiet lead is normal then.</li>`
     + `<li><b>${AGENT_STATE.stuck[0]} may be stuck</b>: no activity for ${rules.quiet} min or more, and no running helper; or the logbook says the run runs, and no agent slot holds it (the hook frees a slot after 60 min with no activity).</li>`
     + `<li><b>${AGENT_STATE.long[0]} running long</b>: the time running is more than ${rules.factor} times the median of the same role's ended runs in this project (it needs ${rules.basis} ended runs).</li>`
-    + `<li><b>${AGENT_STATE.stop[0]} helper stopped, run still open</b>: the hook saw the helper stop, but the logbook still says the run runs. The sage must end the run.</li>`
+    + `<li><b>${AGENT_STATE.stop[0]} helper stopped, run still open</b>: the hook saw the helper stop, but the logbook still says the run runs. The chief must end the run.</li>`
     + `<li><b>${AGENT_STATE.unk[0]} running</b>: the logbook says the run runs, and no activity is recorded (Codex sends no activity notes yet).</li></ul></section>`;
   const body = `<div class="boardview"><header><h1>Sage board</h1>${live ? pagesNav("agents", model) : ""}${pill}<span class="spacer"></span>${theme}</header>`
     + `<div id="board-content" data-at="${esc(at)}">${totals}${caps}${banners(model)}${problems}${unmatched}<main class="agentsview">${list}</main>${how}</div></div>`;
@@ -835,7 +835,7 @@ export function renderAgentsHtml(model, { live = false, paths = false } = {}) {
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const MET_WORDS = ["merged", "concluded"], ENDED_STATES = [...MET_WORDS, "abandoned"], NEEDS_PROGRAM = ["proposed", "stuck", "lost"];
 const roles = task => task ? [...new Set(task.agents.filter(agent => !agent.stale).map(agent => agent.role))] : [];
-const lostText = program => `${program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}` : program.gateFound ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`}. Ask the sage to repair the logbook, or to propose ${program.id} again.`;
+const lostText = program => `${program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}` : program.gateFound ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`}. Ask the chief to repair the logbook, or to propose ${program.id} again.`;
 /** What moves next in an active program (Q4): the first task with no unmet wait, then the count of the tasks that wait and those that cannot start. */
 function nextOf(ctx, program) {
   const task = program.next && ctx.tasks.get(program.next.key), at = roles(task);
@@ -843,14 +843,14 @@ function nextOf(ctx, program) {
     + (program.waiting ? ` <span class="faint">${program.waiting} more ${program.waiting === 1 ? "waits" : "wait"}.</span>` : "")
     + (program.cannotStart.length ? ` <span class="stw-cant">${esc(program.cannotStart.join(", "))} cannot start.</span>` : "") };
 }
-const droppedNext = program => program.open ? `${plural(program.open, "task")} still in it: ask the sage to take each task out of the program.` : "No task is in it.";
+const droppedNext = program => program.open ? `${plural(program.open, "task")} still in it: ask the chief to take each task out of the program.` : "No task is in it.";
 /** The line under a program in the list, by its state: what you do, what the sage does, or what moves next. A changing program is a line here, not an item of Needs you (QB). */
 function programNext(ctx, program) {
   const fixed = {
     proposed: `The breakdown waits for you. Open it to see the ${plural(program.progress.total, "task")}, then answer in the chat.`,
     stuck: program.need?.text ?? `The pilot ${program.pilot} cannot run. Choose a new pilot, or drop the program.`,
     lost: lostText(program),
-    changing: `You asked for changes (gate ${program.gate}). The sage revises the breakdown and proposes it again.`,
+    changing: `You asked for changes (gate ${program.gate}). The chief revises the breakdown and proposes it again.`,
     done: "Nothing: every task that is not abandoned is merged or concluded.",
     dropped: droppedNext(program),
   }[program.state];
@@ -870,7 +870,7 @@ function programsList(ctx, model, routed) {
   const head = `<${h} class="ptitle">Programs</${h}>`;
   const broken = (model.programNeeds ?? []).filter(need => need.kind === "programs").map(need => `<div class="banner warn">${ICON}<div><b>The programs of ${esc(need.projectName)} cannot be read.</b> ${esc(need.text)} The <a href="${ctx.snapshot ? "#" : "/"}">task board</a> still shows every task, without its program.</div></div>`).join("");
   if (!programs.length && model.programs?.length) return head + broken + `<div class="emptyboard"><b>Every program is in an archived project.</b> The list shows the programs of the projects that are not archived. A task of an archived project still links to its program's page.</div>`;
-  if (!programs.length) return head + broken + (broken ? "" : `<div class="emptyboard"><b>No programs yet.</b> A program starts when you ask for work that needs two or more tasks, where one task waits for another. The sage then proposes a breakdown, and it shows in Needs you for your approval.</div>`);
+  if (!programs.length) return head + broken + (broken ? "" : `<div class="emptyboard"><b>No programs yet.</b> A program starts when you ask for work that needs two or more tasks, where one task waits for another. The chief then proposes a breakdown, and it shows in Needs you for your approval.</div>`);
   const group = ([name, states]) => {
     const list = programs.filter(program => states.includes(program.state));
     return list.length ? `<h2 class="grp">${name} <span class="n">${list.length}</span></h2><ul class="plist" data-plist>${list.map(program => programRow(ctx, program, where)).join("")}</ul>` : "";
@@ -950,7 +950,7 @@ function programPage(ctx, program, routed) {
       + `${breakdownBody(reason)}</section>`;
   } else {
     const pilotLine = `<p><b>Pilot:</b> ${pilot ? `<a href="${esc(taskHref(ctx, pilot))}">${esc(pilot.id)}</a> ${esc(pilot.title)} · <span class="${MET_WORDS.includes(pilot.state) ? "stw-done" : pilot.state === "abandoned" ? "stw-cant" : "stw-run"}">${esc(taskWord(pilot))}</span>${roles(pilot).length ? ` · the ${esc(roles(pilot).join(" and the "))} at work` : ""}` : `${esc(program.pilot)} · <span class="stw-cant">not in the logbook</span>`}</p>`;
-    const rule = { dropped: `You dropped the breakdown (gate ${program.gate}).`, changing: `You asked for changes (gate ${program.gate}). The sage revises the breakdown and proposes it again.`, lost: "" }[program.state]
+    const rule = { dropped: `You dropped the breakdown (gate ${program.gate}).`, changing: `You asked for changes (gate ${program.gate}). The chief revises the breakdown and proposes it again.`, lost: "" }[program.state]
       ?? `Approved total: ${plural(total, "task")} (gate ${program.gate}). Done when every task that is not abandoned is merged or concluded${abandoned.length ? `: ${total - abandoned.length} of the ${total}` : ""}.`;
     lead = `<section class="wide"><h3>Goal and progress</h3>${program.goal ? `<p>${esc(program.goal)}</p>` : ""}${total ? `${pbar(program)}<div class="pkey" aria-hidden="true"><span><i class="m"></i>merged</span><span><i class="a"></i>abandoned</span><span><i class="o"></i>open</span></div>` : ""}${pilotLine}${rule ? `<p class="faint">${esc(rule)}</p>` : ""}</section>`;
     // "T13 can start when T12 merges.": each task that waits for the task that moves next, with each of its unmet waits.
@@ -959,11 +959,11 @@ function programPage(ctx, program, routed) {
     const moving = own.filter(task => task !== next.first && !ENDED_STATES.includes(task.state) && !task.waitLine);
     // "T11 cannot start: it waits for T10, which was abandoned." Each wait that is never met, in the prototype's words.
     const never = wait => wait.odd ? "its waits cell has text that is not a task id" : wait.breakdown ? `the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : `${wait.id}, which ${wait.state ? `was ${wait.word}` : "is not in the logbook"}`;
-    const cannot = own.filter(task => task.waitLine?.never && !ENDED_STATES.includes(task.state)).map(task => `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${esc(task.id)} cannot start: it waits for ${esc(task.waits.filter(wait => wait.never).map(never).join(" and "))}. Ask the sage to remove the wait, or to drop ${esc(task.id)}.</span></div>`).join("");
+    const cannot = own.filter(task => task.waitLine?.never && !ENDED_STATES.includes(task.state)).map(task => `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${esc(task.id)} cannot start: it waits for ${esc(task.waits.filter(wait => wait.never).map(never).join(" and "))}. Ask the chief to remove the wait, or to drop ${esc(task.id)}.</span></div>`).join("");
     const body = {
       stuck: () => `<div class="nowline need">${ICON}<span><b>Needs you:</b> ${esc(program.need?.text ?? "")}</span></div><div class="answer"><b>Answer in the chat:</b> a new pilot (a task of the program), or drop the program.</div>`,
       lost: () => `<div class="nowline need">${ICON}<span><b>Needs you:</b> ${esc(lostText(program))}</span></div>`,
-      changing: () => `<div class="nowline"><span><b>Now:</b> the sage revises the breakdown. No task builds before you approve the new one.</span></div>`,
+      changing: () => `<div class="nowline"><span><b>Now:</b> the chief revises the breakdown. No task builds before you approve the new one.</span></div>`,
       done: () => `<div class="nowline"><span>Nothing: every task that is not abandoned is merged or concluded.</span></div>`,
       dropped: () => program.open ? `<div class="nowline"><span>${esc(droppedNext(program))}</span></div>` : "",
       active: () => `<div class="nowline"><span><b>Now:</b> ${next.html}</span></div>${then.length ? `<div class="nextline"><b>Then:</b> ${esc(then.join(" "))}</div>` : ""}${cannot}${moving.length ? `<div class="nextline">Also moving: ${esc(moving.map(task => `${task.id} (${taskWord(task)})`).join(", "))}.</div>` : ""}`,
@@ -1041,9 +1041,9 @@ const programLine = program => {
   const next = program.next ? `${md(program.next.id)} \\(${program.next.pilot ? "pilot, " : ""}${md(program.next.word)}\\)` : "no task can move now";
   return `${head} · ${{
     proposed: () => `the breakdown waits for you \\(gate ${md(program.gate)}\\) · pilot ${md(program.pilot)}`,
-    changing: () => `the sage revises the breakdown \\(gate ${md(program.gate)}\\)`,
+    changing: () => `the chief revises the breakdown \\(gate ${md(program.gate)}\\)`,
     lost: () => `${program.named !== undefined ? `its gate ${md(program.gate)} ${md(namedText(program.named, program.id))}` : program.gateFound ? `its gate ${md(program.gate)} is not a breakdown gate on its pilot ${md(program.pilot)}` : `its breakdown gate ${md(program.gate)} is not in the logbook`} \\(see Needs you\\)`,
-    dropped: () => `dropped · ${tasks(program.open)} still in it: ask the sage to take each task out of the program`,
+    dropped: () => `dropped · ${tasks(program.open)} still in it: ask the chief to take each task out of the program`,
     stuck: () => `stuck: ${pilot} \\(see Needs you\\)`,
   }[program.state]?.() ?? `${md(program.progressText)} · next: ${next}${program.waiting ? ` · ${program.waiting} ${program.waiting === 1 ? "waits" : "wait"}` : ""}${program.cannotStart.length ? ` · ${program.cannotStart.map(md).join(", ")} cannot start` : ""}`}`;
 };

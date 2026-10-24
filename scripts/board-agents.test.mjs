@@ -41,7 +41,7 @@ test("T308: a slot joins its run by the run mark; a slot with no run and a run w
     [null, "designer", null, "work"],
     ["R2", "qa", null, "work"],
   ]);
-  assert.equal(list.find(agent => agent.runId === "R2" && agent.task).why, "no agent slot holds this run: the hook frees a slot after 60 min with no activity. Ask the sage to check the run.");
+  assert.equal(list.find(agent => agent.runId === "R2" && agent.task).why, "no agent slot holds this run: the hook frees a slot after 60 min with no activity. Ask the chief to check the run.");
   assert.deepEqual(model.unmatched, [{ run: "R2", project: "sample" }]);
   assert.equal(model.count, 4);
   assert.deepEqual(model.projects.map(project => project.name), ["sample", "other"], "the project with a problem first");

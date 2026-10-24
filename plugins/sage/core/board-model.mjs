@@ -84,7 +84,7 @@ export function runClock(started, now, lastActivity) {
   if (minutes < 60) return { text: `${minutes} min`, stale: false };
   if (minutes < 24 * 60) return { text: `${Math.floor(minutes / 60)} h ${minutes % 60} min`, stale: false };
   const last = Math.max(start, time(lastActivity) ?? start);
-  return now - last >= STALE_MS ? { text: `no news since ${dayMonth(last)}. The run may have stopped, so ask the sage to check it`, stale: true, since: dayMonth(last) } : { text: `since ${dayMonth(start)}`, stale: false };
+  return now - last >= STALE_MS ? { text: `no news since ${dayMonth(last)}. The run may have stopped, so ask the chief to check it`, stale: true, since: dayMonth(last) } : { text: `since ${dayMonth(start)}`, stale: false };
 }
 
 /**
@@ -130,7 +130,7 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, gates,
   const NAME = { plan: task.state === "designing" ? "the design" : "the plan", build: build ? "the build" : "the investigation", review: reviewName(at + 1), repair: `repair round ${round} of ${rounds}`, merge: build ? "the merge" : "the conclusion" };
   const actor = list => and([...new Set(list.map(run => `the ${AGENT_WORD[run.role] ?? run.role}`))]);
   const ago = run => { const clock = run.clock.text; return /^\d/.test(clock) ? `${clock} ago` : clock.startsWith("since ") ? `on ${clock.slice(6)}` : "at a time that is not recorded"; };
-  const runText = run => run.clock.stale ? `No news from the ${AGENT_WORD[run.role] ?? run.role} (run ${run.id}) since ${run.clock.since}. The run may have stopped, so ask the sage to check it.`
+  const runText = run => run.clock.stale ? `No news from the ${AGENT_WORD[run.role] ?? run.role} (run ${run.id}) since ${run.clock.since}. The run may have stopped, so ask the chief to check it.`
     : `The ${AGENT_WORD[run.role] ?? run.role} (${run.evidence?.data.provider ? `${run.evidence.data.provider}, ` : ""}run ${run.id}) is at work. It started ${ago(run)}.`;
   const heldAt = gate ? `Held at gate ${gate.id} (the question above).` : null;
   // The current step's status: it needs you, it failed, an agent runs it, its run may have stopped, or nobody runs it now.
@@ -205,7 +205,7 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, gates,
     : failed.length ? `${cap(and(failed))} failed${sha ? ` on ${sha}` : ""}.`
     : who === "chief" ? CHIEF[state]()
     : live.length ? `${cap(actor(live))} ${new Set(live.map(run => run.role)).size > 1 ? "are" : "is"} at work on ${name}.${noHead}`
-    : stale.length ? `No news from ${actor(stale)} since ${stale[0].clock.since}. The run may have stopped, so ask the sage to check it.`
+    : stale.length ? `No news from ${actor(stale)} since ${stale[0].clock.since}. The run may have stopped, so ask the chief to check it.`
     : `${IDLE[state] ?? `No agent works on ${name} now.`}${noHead}`;
 
   // Next: after an answer, the current step goes on; else the fixed rule of the state.
@@ -251,7 +251,7 @@ const graphOf = project => shownGraph(waitGraph((project.tables.tasks ?? []).fil
 const lostWhy = program => !program.gateFound ? `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`
   : program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}`
   : `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}`;
-const LOST_FIX = id => `ask the sage to repair the logbook, or to propose ${id} again.`;
+const LOST_FIX = id => `ask the chief to repair the logbook, or to propose ${id} again.`;
 /**
  * Each wait of a task, with its state: a task (met when merged or concluded; never met when abandoned or lost), the pilot
  * of its program, the breakdown that the owner has not approved (never met when dropped or lost), or a waits cell with
@@ -283,8 +283,8 @@ function waitLine(task, waits, column) {
   if (open.some(wait => wait.breakdown)) open = open.filter(wait => wait.breakdown);
   if (!open.length) return null;
   // Odd text in the waits cell is never shown: a sentence says that the cell needs new waits, and the task cannot start.
-  const never = open.some(wait => wait.never), named = open.filter(wait => !wait.odd), odd = named.length < open.length ? " Its waits cell has text that is not a task id: the sage sets its waits again." : "";
-  const loop = open.some(wait => wait.loop) ? " Its waits make a loop, which never ends: the sage sets its waits again." : "";
+  const never = open.some(wait => wait.never), named = open.filter(wait => !wait.odd), odd = named.length < open.length ? " Its waits cell has text that is not a task id: the chief sets its waits again." : "";
+  const loop = open.some(wait => wait.loop) ? " Its waits make a loop, which never ends: the chief sets its waits again." : "";
   if (!named.length) return { never, text: `It cannot start.${odd}` };
   return { never, text: `Waits for ${and(named.map(waitName))}${never ? ": it cannot start." : "."}${odd}${loop}${!never && column === "design" ? " Design and PE may run." : ""}` };
 }
@@ -555,7 +555,7 @@ function agentsOf(sources, groups, groupOf, cards, at) {
     } else if (agent.how === "logbook") [agent.state, agent.why] = ["unk", `${title(agent.provider)} sends no activity notes yet`];
     else if (agent.how === "unknown") [agent.state, agent.why] = ["unk", "no hook notes: activity not known"];
     else if (agent.how === "stopped") [agent.state, agent.why] = ["stop", `stopped${agent.stoppedAt ? ` at ${new Date(agent.stoppedAt).toISOString().slice(11, 16)} UTC` : ""}; the logbook still says running`];
-    else [agent.state, agent.why] = ["stuck", "no agent slot holds this run: the hook frees a slot after 60 min with no activity. Ask the sage to check the run."];
+    else [agent.state, agent.why] = ["stuck", "no agent slot holds this run: the hook frees a slot after 60 min with no activity. Ask the chief to check the run."];
     // Running long is apart from stuck: a busy agent can take much longer than usual.
     const basis = agent.run && ["work", "unk"].includes(agent.state) ? usualOf(agent.group, agent.run.role) : null;
     if (basis !== null && agent.running !== null) {
@@ -656,7 +656,7 @@ function missingPrograms(source, project, group, graph) {
     if (graph.programs.has(id) || !live.length) continue;
     const one = live.length === 1, names = id === "?" ? `The program cell of ${and(live)} ${one ? "is" : "are"} not a program id` : `${and(live)} ${one ? "names" : "name"} ${id}`;
     items.push({ kind: "missing", title: id === "?" ? "A program cell is not a program id" : `The program ${id} is not in the logbook`,
-      text: `${names}, so ${one ? "it cannot" : "they cannot"} start. Ask the sage to repair the logbook, or to take ${one ? "the task" : "each task"} out of the program.`,
+      text: `${names}, so ${one ? "it cannot" : "they cannot"} start. Ask the chief to repair the logbook, or to take ${one ? "the task" : "each task"} out of the program.`,
       key: `${project.key}/${id}`, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived });
   }
   return items;
@@ -695,8 +695,8 @@ function logbookNeeds(source, project, group) {
   const codes = new Set(why.map(message => TABLE_FILE.exec(message)?.[2]));
   const folder = why.length === TABLE_NAMES.length && codes.size === 1 && /^E[A-Z]+$/.test([...codes][0]) ? `Its folder ${PLAIN[[...codes][0]] ?? "cannot be read"}` : null;
   return [
-    ...(programs && !noTasks ? [item("programs", "The programs table cannot be read", `${reasonOf(programs)}. The board shows the tasks without their programs. Ask the sage to repair the logbook.`)] : []),
-    ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the sage to repair the logbook.`)] : []),
+    ...(programs && !noTasks ? [item("programs", "The programs table cannot be read", `${reasonOf(programs)}. The board shows the tasks without their programs. Ask the chief to repair the logbook.`)] : []),
+    ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`)] : []),
   ];
 }
 /** A logbook whose programs table cannot be read shows its tasks with no program (R1307-1): no tag, and no program wait. */
