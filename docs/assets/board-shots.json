@@ -1,0 +1,7 @@
+{
+  "sample": "ca4cb68329bed864cc685984b2eaf942288b24ff985edc042244611b88342685",
+  "sources": [
+    "scripts/fixtures/board-programs.mjs",
+    "scripts/fixtures/board-walkthrough.mjs"
+  ]
+}

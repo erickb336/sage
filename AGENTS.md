@@ -25,4 +25,4 @@
 - **The README's graphics** in `docs/assets/` are drawn by `scripts/graphics.mjs`, in light and dark. Change the script, then run `npm run graphics`; never edit an SVG by hand. `npm run check` checks that they match.
 - **`instructions/core.md`** stays under 8 KiB, because it loads into every session (through `~/.claude/CLAUDE.md`), so each byte costs context there.
 - **Write** at 80% of Simplified Technical English (`writing/ste-80.md`).
-- **Words:** use sage's approved words from `writing/dictionary.md`. It builds the `dictionary` skill and the README's word table; `npm run check` fails on a flagged word.
+- **Words:** use sage's approved words from `writing/dictionary.md`. It builds the `dictionary` skill and the word table of `docs/guide/concepts.md`; `npm run check` fails on a flagged word.

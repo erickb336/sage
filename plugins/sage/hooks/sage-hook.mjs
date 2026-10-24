@@ -6,7 +6,7 @@
 //     notification, a hand-back or another session's message (promptOf, T215, T240). A message the owner sends while
 //     Claude works counts as a message of its own. When the hook cannot read the frames of a prompt, nothing in it
 //     switches a mode, and the chief gets a note when the prompt has a phrase.
-//   - In sage mode it holds the rules that prompts alone did not hold in Orchestrator (docs/design/sage-mode.html,
+//   - In sage mode it holds the rules that prompts alone did not hold in Orchestrator (docs/design/sage-mode.md,
 //     "Rules"): the chief never edits files, every brief has all its fields, at most cap.<project> (default
 //     max_agents) sage agents run at once for a project and cap_total across all projects, nobody force-pushes or pushes to main, and a merge needs autopilot on, the checked head SHA and the clean
 //     cycles that the ledger records for it (the merge check), and an agent never merges. The merge rule and the push rule are allow-lists: a

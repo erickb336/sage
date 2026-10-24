@@ -55,7 +55,7 @@ const LEADS = 3;
 const RUN_ROLES = [...ROLES, "investigate", "evidence-review"];
 /** The roles of the runs whose reports give a review or QA verdict: none may still run when a task merges (F-T289-18). */
 const CHECKERS = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa", "evidence-review"];
-/** A task's states and the moves between them (docs/design/sage-mode.html, "A task's life"). Any state may go to abandoned. */
+/** A task's states and the moves between them (docs/design/sage-mode.md, "A task's life"). Any state may go to abandoned. */
 const NEXT = {
   framed: ["designing", "briefed"],
   designing: ["awaiting-you"],

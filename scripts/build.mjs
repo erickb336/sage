@@ -5,15 +5,15 @@ import { rewriteCoreImports } from "./package-imports.mjs";
 //   → plugins/sage/skills/<name>/SKILL.md   (one skill per principle, plus the writing standard and the README guide)
 // A principle in principles/ overrides pstack's principle of the same id. pstack's other principles go in as they are.
 //   → instructions/core.md                        (the always-on file: preferences + writing standard)
-//   writing/dictionary.md → plugins/sage/skills/dictionary/SKILL.md, and the word table in README.md (scripts/dictionary.mjs)
-//   principles/*.md and upstream/pstack → the principles table in README.md (scripts/principles-table.mjs)
+//   writing/dictionary.md → plugins/sage/skills/dictionary/SKILL.md, and the word table in docs/guide/concepts.md (scripts/dictionary.mjs)
+//   principles/*.md and upstream/pstack → the principles table in docs/guide/principles.md (scripts/principles-table.mjs)
 // Run `npm run build` after editing a source; `npm run check` fails when a generated file is out of date.
 import { mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, renameSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
 import { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "../packages/sage-core/index.mjs";
-import { checkWords, withWordTable, wordTable } from "./dictionary.mjs";
+import { PRINCIPLES_PAGE, WORDS_PAGE, checkWords, withWordTable, wordTable } from "./dictionary.mjs";
 import { principleRows, principlesTable, withPrinciplesTable } from "./principles-table.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -89,7 +89,8 @@ export function outputs() {
   checkWords(d.body); // a dictionary that the check cannot use stops the build
   out.set("plugins/sage/skills/dictionary/SKILL.md", skill("dictionary", `${d.meta.name}: sage's approved words, one meaning each, and the words not to say. Apply to ${d.meta.applyWhen}`, d.meta.source, `# ${d.meta.name}\n\n${d.body}`));
   const rows = principleRows(ownMeta, upstream.map((u) => ({ id: u.name.slice("principle-".length), description: u.description })));
-  out.set("README.md", withPrinciplesTable(withWordTable(readFileSync(join(ROOT, "README.md"), "utf8"), wordTable(d.body)), principlesTable(rows)));
+  out.set(WORDS_PAGE, withWordTable(readFileSync(join(ROOT, WORDS_PAGE), "utf8"), wordTable(d.body)));
+  out.set(PRINCIPLES_PAGE, withPrinciplesTable(readFileSync(join(ROOT, PRINCIPLES_PAGE), "utf8"), principlesTable(rows)));
   const p = parseSource(readFileSync(join(ROOT, "preferences/working-preferences.md"), "utf8"), "preferences/working-preferences.md");
   out.set("instructions/core.md", `${GENERATED}\n\n# ${p.meta.name}\n\n${p.body}\n\n# ${w.meta.name}\n\n${w.body}\n`);
   return packageOutputs(out);

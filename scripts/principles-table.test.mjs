@@ -1,4 +1,4 @@
-// The README's principles table (scripts/principles-table.mjs): its rows and attribution words, then `npm run build`
+// The principles page's table (scripts/principles-table.mjs): its rows and attribution words, then `npm run build`
 // and `npm run check` as people run them, in a copy of this repository.
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
@@ -37,14 +37,14 @@ function copy(t) {
   return { run, read, write };
 }
 
-test("npm run check fails when a principle's applyWhen changes and the README table does not; the build fixes it", (t) => {
+test("npm run check fails when a principle's applyWhen changes and the principles page does not; the build fixes it", (t) => {
   const c = copy(t);
   c.write("principles/fix-root-causes.md", c.read("principles/fix-root-causes.md").replace("applyWhen: debugging a failure or repairing a finding.", "applyWhen: a test fails for a reason nobody knows."));
   const r = c.run("check");
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /✗ README\.md: out of date; run npm run build/);
+  assert.match(r.stderr, /✗ docs\/guide\/principles\.md: out of date; run npm run build/);
   assert.equal(c.run("build").status, 0);
-  assert.match(c.read("README.md"), /\n\| fix-root-causes \| a test fails for a reason nobody knows \| pstack, adapted \|\n/);
+  assert.match(c.read("docs/guide/principles.md"), /\n\| fix-root-causes \| a test fails for a reason nobody knows \| pstack, adapted \|\n/);
   const after = c.run("check");
   assert.equal(after.status, 0, after.stderr);
 });
@@ -53,10 +53,10 @@ test("a sync: a new pstack principle gets its row from the build, and a changed 
   const c = copy(t);
   c.write("upstream/pstack/skills/principle-name-the-thing/SKILL.md", '---\nname: principle-name-the-thing\ndescription: "Apply when a value has no name. Give it one."\n---\n\n# Name the thing\n\nGive each value a name.\n');
   c.write("upstream/pstack/skills/principle-fix-root-causes/SKILL.md", `${c.read("upstream/pstack/skills/principle-fix-root-causes/SKILL.md")}\nA new pstack line.\n`);
-  assert.doesNotMatch(c.read("README.md"), /name-the-thing/);
+  assert.doesNotMatch(c.read("docs/guide/principles.md"), /name-the-thing/);
   assert.equal(c.run("check").status, 1);
   assert.equal(c.run("build").status, 0);
-  const readme = c.read("README.md");
+  const readme = c.read("docs/guide/principles.md");
   assert.match(readme, /\n\| name-the-thing \| a value has no name \| pstack \|\n/);
   assert.match(readme, /There are 26 principles: 25 are pstack's, by Lauren Tan \(MIT\), and 1 is sage's own\./);
   assert.match(readme, /<summary><strong>All 26 principles<\/strong><\/summary>/);
@@ -65,10 +65,10 @@ test("a sync: a new pstack principle gets its row from the build, and a changed 
   assert.match(after.stderr, /! principles\/fix-root-causes\.md: pstack changed skills\/principle-fix-root-causes\/SKILL\.md since this override's review/);
 });
 
-test("npm run check fails when the README's principles table is edited by hand", (t) => {
+test("npm run check fails when the principles page's table is edited by hand", (t) => {
   const c = copy(t);
-  c.write("README.md", c.read("README.md").replace("| fix-root-causes | debugging a failure or repairing a finding | pstack, adapted |", "| fix-root-causes | debugging a failure or repairing a finding | mine |"));
+  c.write("docs/guide/principles.md", c.read("docs/guide/principles.md").replace("| fix-root-causes | debugging a failure or repairing a finding | pstack, adapted |", "| fix-root-causes | debugging a failure or repairing a finding | mine |"));
   const r = c.run("check");
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /✗ README\.md: out of date; run npm run build/);
+  assert.match(r.stderr, /✗ docs\/guide\/principles\.md: out of date; run npm run build/);
 });

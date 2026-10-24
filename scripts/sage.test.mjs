@@ -2837,17 +2837,21 @@ test("R1128-3: a hand-edited waits cell is read with the ids parser: its other t
   assert.match(s.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts/);
 });
 
-test("R1130-1, R1140-2, R1140-3, R1157-2, R1157-3: the README gives the update command and the restart first in both waits places, and teaches a pair on one PR that you merge", () => {
-  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+test("R1130-1, R1140-2, R1140-3, R1157-2, R1157-3, T381: the rules page and the changelog give the update command and the restart first, and teach a pair on one PR that you merge; the README warns before waits", () => {
+  const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
   const warn = "Before you use waits, run `claude plugin update sage@sage` (see To update sage), then restart every session that was already open: an older session still merges a waiting task.";
   const pair = "To merge two tasks on one pull request, build both under the first task. The waiting task takes the same `pr=` and records its own verdicts with `--pr`, and gets its wait after its build. It moves to merged after the first one. Autopilot does not merge such a pull request, because its head branch is not a branch of each task: you merge it.";
-  const rows = readme.split("\n").filter((l) => l.includes(warn));
-  assert.equal(rows.length, 2, "once in the usage guide's table and once in what's new");
-  assert.ok(rows[0].startsWith(`| ${warn} A task can wait`), "the warning starts the table's cell");
-  assert.ok(rows[1].startsWith(`- **A task can wait for other tasks.** ${warn} `), "the warning starts the what's-new text");
-  for (const row of rows) assert.ok(row.includes(pair), "each place teaches the pair");
+  const rule = read("docs/design/rules-in-code.md").split("\n").filter((l) => l.includes(warn));
+  const change = read("CHANGELOG.md").split("\n").filter((l) => l.includes(warn));
+  assert.equal(rule.length, 1, "once in the rules page's table");
+  assert.equal(change.length, 1, "once in the changelog");
+  assert.ok(rule[0].startsWith(`| ${warn} A task can wait`), "the warning starts the table's cell");
+  assert.ok(change[0].startsWith(`- **A task can wait for other tasks.** ${warn} `), "the warning starts the changelog's text");
+  for (const row of [...rule, ...change]) assert.ok(row.includes(pair), "each place teaches the pair");
+  const readme = read("README.md");
   assert.ok(!readme.includes("no build of its own"), "no option to record states that did not happen");
-  assert.ok(readme.includes("**To update sage**"), "the section that the line names");
+  assert.ok(read("docs/guide/using-sage.md").includes("\n## To update sage\n"), "the section that the line names");
+  assert.match(readme, /> \*\*Warning:\*\* before you use waits or programs, update sage and restart every session that was already open\./, "the upgrade warning stays on the front page");
 });
 
 test("T336: an older logbook gets the waits column at its next write with no value lost, so an older sage then refuses to write it", () => {

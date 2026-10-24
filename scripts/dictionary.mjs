@@ -1,4 +1,4 @@
-// sage's words have one source: writing/dictionary.md. From its body come the README's word table (scripts/build.mjs)
+// sage's words have one source: writing/dictionary.md. From its body come the word table of the concepts page (scripts/build.mjs)
 // and the flagged words that `npm run check` fails on (scripts/check.mjs).
 
 const section = (body, heading) => body.split(/^## /m).find((s) => s.startsWith(`${heading}\n`)) ?? "";
@@ -6,7 +6,7 @@ const section = (body, heading) => body.split(/^## /m).find((s) => s.startsWith(
 const rows = (body, heading) => section(body, heading).split("\n").filter((l) => l.startsWith("| **"))
   .map((l) => l.slice(1, -1).split(" | ").map((c) => c.trim())).map(([w, ...rest]) => [w.replace(/\*\*/g, ""), ...rest]);
 
-/** The README's word table: each word, then each name, with its meaning. */
+/** The word table of the concepts page: each word, then each name, with its meaning. */
 export function wordTable(body) {
   const line = ([w, meaning]) => `| **${w[0].toUpperCase()}${w.slice(1)}** | ${meaning} |`;
   return ["| Word | Meaning |", "| --- | --- |", ...rows(body, "Words").map(line), ...rows(body, "Names").map(line)].join("\n");
@@ -14,14 +14,17 @@ export function wordTable(body) {
 
 export const TABLE_START = "<!-- The word table comes from writing/dictionary.md: edit it there, then run npm run build. -->";
 export const TABLE_END = "<!-- The end of the word table. -->";
-/** The README with the generated text between two marker lines replaced; `what` names the text in the error. */
-export function withBlock(readme, start, end, text, what) {
+/** The page that holds the word table, and the page that holds the principles table (scripts/principles-table.mjs). */
+export const WORDS_PAGE = "docs/guide/concepts.md";
+export const PRINCIPLES_PAGE = "docs/guide/principles.md";
+/** A page with the generated text between two marker lines replaced; `what` and `file` name the text and the page in the error. */
+export function withBlock(readme, start, end, text, what, file) {
   const i = readme.indexOf(start), j = readme.indexOf(end);
-  if (i < 0 || j < i) throw new Error(`README.md: ${what} needs the lines ${start} and ${end}`);
+  if (i < 0 || j < i) throw new Error(`${file}: ${what} needs the lines ${start} and ${end}`);
   return `${readme.slice(0, i + start.length)}\n\n${text}\n\n${readme.slice(j)}`;
 }
-/** The README with its word table replaced by a new one. */
-export const withWordTable = (readme, table) => withBlock(readme, TABLE_START, TABLE_END, table, "the word table");
+/** The concepts page with its word table replaced by a new one. */
+export const withWordTable = (page, table) => withBlock(page, TABLE_START, TABLE_END, table, "the word table", WORDS_PAGE);
 
 /** A flagged word as a pattern: its characters as they are, and a hyphen, a space or a line break between its parts, or none. */
 const pattern = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/[- ]/g, "(?:-|\\s+)?");
@@ -84,6 +87,8 @@ function indentedCode(text) {
 function prose(text, html) {
   const t = text.replace(/^---\n[\s\S]*?\n---(?:\n|$)/, (front) => front.replace(/^(description:)(.*)$/m, (all, key, value) => `${key} ${yamlText(value)}`));
   return (html ? t : indentedCode(t))
+    // A Mermaid diagram in Markdown is text that a person reads, as in a page: its fences go, and its labels' quotes are syntax.
+    .replace(/^([ \t]*)(`{3,}|~{3,})mermaid[ \t]*\n([\s\S]*?)^[ \t]*\2[ \t]*$/gm, (m, indent, fence, body) => `${blank(`${indent}${fence}mermaid`)}\n${body.replace(/"/g, " ")}${blank(fence)}`)
     .replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1/gm, blank) // fenced code blocks
     .replace(/(?<=(?:^|[^\\])(?:\\\\)*)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, blank) // code spans, with one backtick or more, not escaped (\`)
     .replace(/<pre class="mermaid">[\s\S]*?<\/pre>/g, (m) => m.replace(/"/g, " ")) // a Mermaid label's quotes are syntax
