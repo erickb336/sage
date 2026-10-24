@@ -2438,7 +2438,9 @@ test("shared chief instructions preserve the packaged agent and every brief fiel
   assert.equal(agent.split("\n---\n")[1].trim(), text);
   const fields = /```\n(GOAL[\s\S]*?)```/.exec(text)[1].trim().split("\n").map(line => line.split(/\s{2,}/)[0]);
   assert.deepEqual(fields, api.BRIEF_FIELDS);
-  assert.match(agent, /disallowedTools: Edit, Write, MultiEdit, NotebookEdit/);
+  // The chief has every tool, so the off phrase gives a full normal session; the sage hook refuses its edits (T398).
+  assert.doesNotMatch(agent.split("\n---\n")[0], /^(?:tools|disallowedTools):/m);
+  assert.match(agent.split("\n---\n")[0], /^skills:\n {2}- sage:sage$/m);
   assert.match(text, /The hook refuses a brief without them/);
   assert.match(text, /model sonnet/);
 });

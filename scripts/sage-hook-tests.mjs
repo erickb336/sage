@@ -156,7 +156,7 @@ test("sage mode makes the session the chief of staff, and only subagents may cha
   assert.match(on, /# Chief of staff \(sage mode\)/);
   assert.match(on, /The state tool: node \S+\/skills\/sage\/sage\.mjs <command> --project <path>\. Each shell call starts fresh, so write this full command every time/);
   assert.match(on, /Load these skills now: sage:sage, sage:principle-never-block-on-the-human/);
-  assert.doesNotMatch(on, /^disallowedTools:/m, "the agent's frontmatter is left out");
+  assert.doesNotMatch(on, /^(?:name: chief-of-staff|skills:)$/m, "the agent's frontmatter is left out");
   assert.match(denied(s.send(edit())), /Give this change to a sage:implementer/);
   assert.equal(s.send(edit({ agent_id: "a1", agent_type: "sage:implementer" })), undefined, "an implementer may edit");
   assert.equal(s.send(prompt("also add CSV export")), undefined, "the instructions come once");
@@ -174,16 +174,19 @@ test("a session that starts as the chief-of-staff agent is in sage mode without 
 test("T398: in a session that starts as the chief, the off phrase holds until the on phrase", () => {
   const s = session();
   const chief = { agent_type: "sage:chief-of-staff" };
+  // The chief agent has no tool limit, so the hook alone keeps every file tool from the chief while sage mode is on.
+  const fileTools = [edit(chief), tool("Write", { file_path: "/x/a.js", content: "x" }, chief),
+    tool("MultiEdit", { file_path: "/x/a.js", edits: [] }, chief), tool("NotebookEdit", { notebook_path: "/x/a.ipynb", new_source: "x" }, chief)];
   assert.match(context(s.send({ ...prompt("what is open?"), ...chief })), /# Chief of staff/, "sage mode is on at the first event");
-  assert.match(denied(s.send(edit(chief))), /you do not change files yourself/);
+  for (const call of fileTools) assert.match(denied(s.send(call)) ?? "", /you do not change files yourself/, `${call.tool_name} is refused while on`);
   assert.match(context(s.send({ ...prompt("sage mode off"), ...chief })), /sage mode is off/);
-  assert.equal(s.send(edit(chief)), undefined, "the chief edits after the off phrase");
+  for (const call of fileTools) assert.equal(s.send(call), undefined, `the chief may use ${call.tool_name} after the off phrase`);
   assert.equal(s.send({ ...prompt("fix the typo"), ...chief }), undefined, "no chief text at the next prompt");
   s.send({ hook_event_name: "PostCompact", ...chief });
   assert.equal(s.send({ ...prompt("and the next one"), ...chief }), undefined, "nor after a compaction");
   assert.equal(s.send(edit(chief)), undefined, "sage mode stays off");
   assert.match(context(s.send({ ...prompt("sage mode"), ...chief })), /# Chief of staff/, "the on phrase turns it on again");
-  assert.match(denied(s.send(edit(chief))), /you do not change files yourself/);
+  for (const call of fileTools) assert.match(denied(s.send(call)) ?? "", /you do not change files yourself/, `${call.tool_name} is refused again`);
 });
 
 test("T347: in sage mode the chief writes only Markdown files of its own memory folder", () => {

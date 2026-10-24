@@ -182,7 +182,7 @@ To make every session in a folder start in sage mode, put this in the folder's `
 { "agent": "sage:chief-of-staff" }
 ```
 
-In such a session, `sage mode off` gives a normal session for the rest of the session, as in any other session. To start sessions in that folder without sage mode, remove the line.
+In such a session, `sage mode off` gives a normal session for the rest of the session, as in any other session: the file tools work again. A new session, or `/clear`, in that folder starts in sage mode again. To start sessions in that folder without sage mode, remove the line.
 
 ## To update sage
 

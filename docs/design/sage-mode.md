@@ -67,7 +67,7 @@ The chief of staff never edits files. It writes briefs, records verdicts and ask
 
 | Idea | From | In sage mode |
 | --- | --- | --- |
-| A chief that owns the program, never the code | pstack orchestrate, Cursor projects | The chief of staff has no edit tools. In phrase mode, the hook blocks its edits. |
+| A chief that owns the program, never the code | pstack orchestrate, Cursor projects | While sage mode is on, the hook refuses the chief's file edits. After the off phrase, the session edits files as a normal session. |
 | "The brief is the product." A missing field stops the spawn | pstack orchestrate | A brief template with required fields. The hook refuses an agent spawn when a field is missing. |
 | Verdicts recorded by head SHA. A new commit voids them | pstack ledger, Orchestrator "merge the exact checked commit" | A ledger in the logbook. A merge is blocked unless the current SHA has the verdicts its route needs. |
 | A mode switched on by name, with playbooks copied into the to-do list | poteto mode | "sage mode" as the whole message. Each route's blocks go into the task list. |
