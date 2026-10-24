@@ -8,7 +8,7 @@ This page gives sage's own words, one meaning each. In the table, "the owner" is
 | --- | --- |
 | **Request** | What the owner asks for in the chat, in the owner's words, before sage frames it. |
 | **Program** | A request that sage runs as two or more tasks for one goal, where at least one task waits for another. It has a goal, a done condition (a count of merged tasks), a breakdown that the owner approves, and one pilot task. |
-| **Task** | One unit of work in one project, with one route and at most one pull request. It may wait for other tasks of its logbook ("waits for": it builds and merges only after they are merged or concluded). It is in at most one program. |
+| **Task** | One unit of work in one project, with one route and at most one pull request. It may wait for other tasks of its logbook ("waits for": it builds and merges only after they are merged or concluded). It is in at most one program. It ends in one of three states: merged (its pull request is in main), concluded (a route with no build step, such as investigate, ended with a clean evidence review) or abandoned (its work stopped for good, from any state). |
 | **Step** | One block of a task's route, done by one agent role: design, arena, pe, build, code-review, security-review, ux-review, qa, investigate, evidence-review. |
 | **Route** | The ordered steps of one task, set by its size and risk flags. |
 | **Run** | One agent's work on one step of a task, from brief to report; it has an id such as R12. Also the PE check of a breakdown. |
