@@ -346,7 +346,7 @@ test("T305, T349: the theme is dark until you choose light, a choice applies in 
   const { THEME_HEAD } = await import("../packages/sage-core/board-render.mjs");
   const html = renderBoardHtml(providers());
   assert.ok(html.indexOf(`<script>${THEME_HEAD}</script>`) < html.indexOf("<style>"), "the saved theme applies before the first paint");
-  assert.ok(html.includes('<input type="checkbox" id="flip" class="vh flip"><label class="chip theme" for="flip"><span class="to-light">Light theme</span><span class="to-dark">Dark theme</span></label>'));
+  assert.ok(html.includes('<input type="checkbox" id="flip" class="vh flip" form="themes"><label class="chip theme" for="flip"><span class="to-light">Light theme</span><span class="to-dark">Dark theme</span></label><button type="reset" form="themes" class="chip theme unflip">'), "R1384-2: a snapshot's switch can clear every switch");
   assert.ok(html.includes(":root[data-theme=light]:not(:has(.flip:checked)),:root:not([data-theme=light]):has(.flip:checked){--bg:#f0f0f1;"), "light shows for a light choice, or for a flipped dark or no choice");
   assert.ok(html.includes(":root[data-theme=light]:not(:has(.flip:checked)) .to-light,:root:not([data-theme=light]):has(.flip:checked) .to-light{display:none}"));
   assert.ok(!html.includes("prefers-color-scheme"), "the system theme does not choose the theme");
@@ -737,7 +737,7 @@ test("T368: the task page shows its program with the progress, each wait with it
 test("T368 C9: the offline snapshot holds the programs list and each program's page as anchors, and links to them", () => {
   const html = renderBoardHtml(programsModel());
   assert.ok(html.includes('<nav class="boardtabs" id="board-pages" aria-label="Board pages"><a href="#" aria-current="page">Task board</a><a href="#programs">Programs</a></nav>'));
-  assert.ok(html.includes('<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span><input type="checkbox" id="flip-programs" class="vh flip"><label class="chip theme" for="flip-programs">'));
+  assert.ok(html.includes('<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span><input type="checkbox" id="flip-programs" class="vh flip" form="themes"><label class="chip theme" for="flip-programs">'));
   assert.ok(html.includes(`<a class="prog" href="#program-${B64(KEY("PG1"))}">`) && html.includes(`<section class="page" id="program-${B64(KEY("PG1"))}" aria-label="PG1">`));
   assert.ok(html.includes(`<a class="back" href="#programs">← Programs</a><a class="back" href="#p=sage-ff5ee2&amp;pg=${B64(KEY("PG1"))}">Its tasks on the board</a>`));
   assert.ok(html.includes(`<a class="t" href="#task-${B64(KEY("T13"))}">Sample T13</a>`));
@@ -921,6 +921,27 @@ test("R1378-2, R1378-3: a decision with no valid time, also a day that its month
   assert.deepEqual(items, ['<span class="faint" title="2026-10-10 09:00 UTC">10 Oct</span> T3 merged: sample three', "T1 (pilot) merged: sample one", "T2 merged: sample two"]);
 });
 
+test("R1380-2: a decision in month 13 shows no date and goes last", () => {
+  const tables = programsTables();
+  tables.decisions.push({ at: "2026-13-01T09:00:00Z", task: "T3", decision: "state merged", why: "sample thirteen" }, { at: "2026-10-10T09:00:00Z", task: "T2", decision: "state merged", why: "sample ten" });
+  const pg1 = renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") }), items = [...pg1.matchAll(/<li>(.*?)<\/li>/g)].map(m => m[1]).filter(item => item.includes("sample"));
+  assert.deepEqual(items, ['<span class="faint" title="2026-10-10 09:00 UTC">10 Oct</span> T2 merged: sample ten', "T3 merged: sample thirteen"]);
+});
+
+test("F-T384-1: an answer in the owner's own words shows in full, also when it has an arrow in it", () => {
+  const tables = programsTables(), question = tables.gates.find(gate => gate.id === "G1").question;
+  tables.decisions.push({ at: "2026-10-10T09:00:00Z", task: "T1", decision: "PG1 proposed with gate G1, pilot T1, tasks none, name: Codex support", why: "program propose" },
+    { at: "2026-10-12T09:00:00Z", task: "T1", decision: `${question} → other: move T3 → after T2, then approve`, why: "the user's own words" });
+  assert.deepEqual(decisionsOf(renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") })), ["12 Oct G1 answered: other: move T3 → after T2, then approve (2026-10-12 09:00 UTC)", "10 Oct PG1 proposed: Codex support, pilot T1, gate G1 (2026-10-10 09:00 UTC)"]);
+});
+
+test("R1384-1: a member's move between two other programs is not a decision of this program: it never says the task left", () => {
+  const tables = programsTables();
+  tables.decisions.push({ at: "2026-10-11T09:00:00Z", task: "T3", decision: "program PG3 → PG4", why: "sample: between two others" },
+    { at: "2026-10-12T09:00:00Z", task: "T3", decision: "program PG4 → PG1", why: "sample: in" }, { at: "2026-10-13T09:00:00Z", task: "T2", decision: "program PG1 → PG4", why: "sample: out" });
+  assert.deepEqual(decisionsOf(renderProgramsHtml(programsModel(tables), { programKey: KEY("PG1") })), ["13 Oct T2 left PG1: sample: out (2026-10-13 09:00 UTC)", "12 Oct T3 joined PG1: sample: in (2026-10-12 09:00 UTC)"]);
+});
+
 test("R1371-4: a decision whose time is not a date shows no date and no title", () => {
   const tables = programsTables();
   tables.decisions.push({ at: "garbage", task: "T1", decision: "state merged", why: "sample" });
@@ -957,7 +978,7 @@ test("T378-18: the offline snapshot's task, programs and program pages each have
   const html = renderBoardHtml(programsModel());
   for (const id of [`task-${B64(KEY("T13"))}`, "programs", `program-${B64(KEY("PG1"))}`]) {
     const at = html.indexOf(`<section class="page" id="${id}"`), bar = html.slice(at, html.indexOf("</div>", html.indexOf('class="pagebar"', at)));
-    assert.ok(bar.includes(`<span class="spacer"></span><input type="checkbox" id="flip-${id}" class="vh flip"><label class="chip theme" for="flip-${id}">`), bar);
+    assert.ok(bar.includes(`<span class="spacer"></span><input type="checkbox" id="flip-${id}" class="vh flip" form="themes"><label class="chip theme" for="flip-${id}">`), bar);
     assert.ok(bar.indexOf('class="back"') < bar.indexOf("flip-"), "the way back comes first");
   }
   assert.ok(!renderBoardHtml(programsModel(), { snapshot: false, taskKey: KEY("T13") }).includes("flip-task-"), "a served page has the one switch of its bar");
