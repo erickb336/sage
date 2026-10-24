@@ -337,6 +337,21 @@ test("board event streams keep the last valid content while an incomplete write 
   const repaired = await stream.next(p => !p.stale && p.html.includes("Sample repaired title")); assert.deepEqual(repaired.diagnostics, []);
 });
 
+test("R1506-F1: a table written in place after an earlier rename onto it still updates the board, on Linux too", async t => {
+  // Node's recursive fs.watch on Linux (24.21) watched each file's inode. After the rename, the path's watch stayed on the
+  // old inode and its folder's event named a known file, so the in-place writes below sent nothing (CI run 40140060375).
+  const f = await fixture(t), stream = events(f); t.after(() => stream.close());
+  assert.equal((await stream.next()).stale, false);
+  const target = join(f.project, "tasks.tsv"), temporary = join(f.project, "tasks.pending");
+  writeFileSync(temporary, tasks(row("Sample renamed title"))); renameSync(temporary, target);
+  await stream.next(p => !p.stale && p.html.includes("Sample renamed title"));
+  writeFileSync(target, "Sample invalid table header\nSample incomplete write\n");
+  const stale = await stream.next(p => p.stale);
+  assert.match(stale.html, /Sample renamed title/); assert.doesNotMatch(stale.html, /Sample incomplete write/);
+  writeFileSync(target, tasks(row("Sample written in place")));
+  await stream.next(p => !p.stale && p.html.includes("Sample written in place"));
+});
+
 test("T314 R1042-2: a bad name or archived value in a logbook's config.json is a warning: the board stays live and shows the warning", async t => {
   const f = await fixture(t), stream = events(f); t.after(() => stream.close());
   const initial = await stream.next(); assert.equal(initial.stale, false);
