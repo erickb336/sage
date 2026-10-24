@@ -491,6 +491,7 @@ test("R1334-3, T383 items 15 and 16: a program page that is too large shows the 
   const page = await until(f, path, "too large to show");
   assert.equal(page.status, 200);
   assert.ok(page.body.includes("so the board shows this page instead") && page.body.includes("Sample changed goal.") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the programs list of the new snapshot, with the reason");
+  assert.ok(!page.body.includes("new EventSource("), "R1509-2: the page with the note opens no stream, so no update of the programs list removes the note");
   const sent = await stream.next(p => p.html.includes("too large to show"));
   assert.ok(sent.html.includes("Sample changed goal.") && !sent.html.includes("&lt;&lt;&lt;&lt;") && sent.stale === false, "the stream stays open and sends the same page");
   // The refresh checks only the shared pages, so they show the new logbook, live (T383): no page is stale.
@@ -509,6 +510,7 @@ test("T383 item 16: a task page that is too large shows the board with a note, b
   assert.equal(page.status, 200);
   assert.ok(page.body.includes("so the board shows this page instead") && page.body.includes("Sample first task") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the board, with the reason");
   assert.ok(!page.body.includes("Incomplete sources"), "R1391-3: the note is its own banner, not an incomplete source");
+  assert.ok(page.body.includes("This page does not update: reload the address to try again.") && !page.body.includes("new EventSource("), "R1509-2: the page with the note opens no stream, so no update of the board removes the note");
   const board = await read(f, "/");
   assert.ok(board.body.includes("Sample first task") && !board.body.includes("too large to show") && !board.body.includes("The board snapshot is unavailable."), "the board is live");
   // The first start: the rule needs no older copy.

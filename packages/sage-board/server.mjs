@@ -9,7 +9,7 @@ const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
 const digest = text => createHash("sha256").update(text).digest();
 const unavailable = [{ source: "board", message: "The board snapshot is unavailable." }];
-const TOO_LARGE = "The page that you opened is too large to show (over 8 MB), so the board shows this page instead.";
+const TOO_LARGE = "The page that you opened is too large to show (over 8 MB), so the board shows this page instead. This page does not update: reload the address to try again.";
 const own = (object, name) => Object.hasOwn(object, name);
 
 function authority(value) {
@@ -152,20 +152,21 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   }
 
   // The checkout paths go only to the Mac's own page (R1069-2).
-  const render = (state, view, paths) => view.agents ? renderAgentsHtml(state, { live: true, paths }) : view.programs || view.program ? renderProgramsHtml(state, { programKey: view.program ?? null, live: true, paths })
-    : renderBoardHtml(state, { taskKey: view.task, snapshot: false, live: true, paths });
+  const render = (state, view, paths, live = true) => view.agents ? renderAgentsHtml(state, { live, paths }) : view.programs || view.program ? renderProgramsHtml(state, { programKey: view.program ?? null, live, paths })
+    : renderBoardHtml(state, { taskKey: view.task, snapshot: false, live, paths });
   const fits = html => Buffer.byteLength(html) <= MAX_HTML;
   /**
    * A page with its stale mark and its diagnostics. The refresh checks the shared pages (the board, the Agents page and
    * the programs list), so a good snapshot has them. One rule for a single page (a task page or a program page) that is
    * too large (T383): its address shows its parent page (the board, or the programs list) from the same snapshot, with a
    * note. It needs no older copy, so it holds also at the first start, and one large page never stops the rest of the board.
+   * That page has no stream, so no update of its parent page replaces the note (R1509-2): a reload tries the address again.
    */
   function pageFor(view, paths = false) {
     const html = render(model, view, paths);
     if (fits(html)) return { html, stale: model.stale, diagnostics: model.diagnostics };
     // The note is about the page, not a source, so it is its own banner, not a line of Incomplete sources (R1391-3).
-    const other = render({ ...model, pageNote: TOO_LARGE }, { programs: !!view.program }, paths);
+    const other = render({ ...model, pageNote: TOO_LARGE }, { programs: !!view.program }, paths, false);
     if (!fits(other)) throw new RangeError("board rendering exceeds the size limit");
     return { html: other, stale: model.stale, diagnostics: model.diagnostics };
   }
