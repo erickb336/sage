@@ -8,6 +8,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMain } from "./is-main.mjs";
 
 const OUT = join(dirname(fileURLToPath(import.meta.url)), "../docs/assets");
 
@@ -720,7 +721,7 @@ const GRAPHICS = {
  *  no file depends on another, or on the order in which they are drawn. */
 export const files = () => Object.entries(GRAPHICS).flatMap(([name, draw]) => Object.entries(THEMES).map(([theme, t]) => [`${name}-${theme}.svg`, draw(t, `${name}-${theme[0]}`)]));
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   mkdirSync(OUT, { recursive: true });
   const all = files();
   for (const [file, svg] of all) writeFileSync(join(OUT, file), svg);
