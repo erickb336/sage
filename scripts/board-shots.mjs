@@ -9,7 +9,7 @@
 // dependency of sage: give it through NODE_PATH.
 // Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" node scripts/board-shots.mjs
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,4 +69,5 @@ async function main() {
   console.log(`✓ ${Object.values(SHOTS).join(", ")} and ${SHOTS_RECORD}`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await main();
+// Real paths, so that a run through a link (/tmp on macOS) takes the shots too.
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) await main();
