@@ -934,10 +934,10 @@ test("a merge needs autopilot on, the checked head SHA, and its clean cycles in 
   s.send(prompt("autopilot on"));
   s.send(prompt("sage mode"));
   assert.match(merge(), /autopilot is off, so the user merges/, "autopilot on before sage mode does not count");
-  assert.match(context(s.send(prompt("autopilot on"))), /autopilot is on\. A pull request merges on its head SHA after 1 clean cycle for a tiny or small task, 2 for a large task and 2 for a task with a risk flag; a large task with a risk flag needs the larger count\./);
+  assert.match(context(s.send(prompt("autopilot on"))), /autopilot is on\. A pull request merges on its head SHA after 1 clean cycle for a small task, 2 for a large task and 2 for a task with a risk flag; a large task with a risk flag needs the larger count\. A task with no review or QA in its route needs only checks-pass; a tiny task with an added review needs 1\./);
   s.send(prompt("autopilot off"));
   s.sage("config", "cycles.small=2", "cycles.large=3");
-  assert.match(context(s.send(prompt("autopilot on"))), /after 2 clean cycles for a tiny or small task, 3 for a large task and 2 for a task with a risk flag/, "the note reads the counts from the config");
+  assert.match(context(s.send(prompt("autopilot on"))), /after 2 clean cycles for a small task, 3 for a large task and 2 for a task with a risk flag;.* a tiny task with an added review needs 2\./, "the note reads the counts from the config");
   s.sage("config", "cycles.small=1", "cycles.large=2");
   s.send(prompt("autopilot off"));
   assert.match(context(s.send(prompt("autopilot on"))), /after 1 clean cycle for/);
@@ -992,7 +992,7 @@ test("F-T47-1: the autopilot note gives the clean cycles that the merge check as
   s.send(prompt("sage mode"));
   s.sage("init");
   s.sage("config", "cycles.small=3", "cycles.risk=4");
-  assert.match(context(s.send(prompt("autopilot on"))), /after 3 clean cycles for a tiny or small task, 3 for a large task and 4 for a task with a risk flag;/);
+  assert.match(context(s.send(prompt("autopilot on"))), /after 3 clean cycles for a small task, 3 for a large task and 4 for a task with a risk flag;/);
   const asks = {};
   for (const [n, args] of [["1", ["--size", "small"]], ["2", ["--size", "large"]], ["3", ["--size", "small", "--risk", "auth"]]]) {
     s.sage("task", "add", "--title", "t", ...args);

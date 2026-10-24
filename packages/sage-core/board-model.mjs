@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
-import { LINE, PRIORITIES, TASK_KINDS, agentCaps } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
 import { ENDED, MET, breakdownGate, dead, gateLines, namedText, progressOf, progressText, shownGraph, waitGraph, waitsOf, waitsWithState } from "./program-rules.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
@@ -171,6 +171,8 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, gates,
     steps.push({ key: "repair", label: `Repair, round ${round} of ${rounds}`, status, detail: heldAt ?? agentDetail("No agent works on the repair now.") },
       { key: "again", label: "Review again", status: "wait", detail: build ? `A new commit starts again from cycle 1 of ${required}.` : "The evidence review starts again.", parts: cycles[0] ? waiting(cycles[0]) : [] });
   } else for (const [i, cycle] of cycles.entries()) {
+    // Past the reviews, only a cycle with a recorded clean verdict set ran: the line never claims a cycle that did not (T387).
+    if (place("review") === "before" && !clean(cycle)) continue;
     const where = place("review"), pos = where === "at" ? i < at ? "before" : i > at ? "after" : "at" : where;
     const first = build ? task.pr ? "Starts when the build is done." : "Starts when the PR opens." : "Starts when the report is written.";
     const runningRun = cycle.steps.map(item => runs.find(run => run.id === item.run)).find(Boolean);
@@ -622,6 +624,9 @@ function programOrder(program, own) {
  */
 function programsOf(source, project, group, graph, cards) {
   const gates = new Map((project.tables.gates ?? []).map(gate => [gate.id, gate]));
+  // The questions of each program's breakdown gates, by program id, read once: the page cuts them off the answer rows (F-T384-1).
+  const questions = new Map();
+  for (const gate of gates.values()) { const id = proposalOf(gate); if (id) questions.set(id, [...questions.get(id) ?? [], gate.question]); }
   return [...graph.programs.values()].map(program => {
     const own = graph.byProgram.get(program.id) ?? [], progress = progressOf(own), pilotState = graph.byId.get(program.pilot)?.state;
     const state = program.state === "active" ? progress.done ? "done" : dead(pilotState) ? "stuck" : "active"
@@ -634,7 +639,7 @@ function programsOf(source, project, group, graph, cards) {
       // A lost program whose gate is open on a card in Needs you says so on that gate (card), so the problem counts once.
       : state === "lost" && !(gates.get(program.gate) && !gates.get(program.gate).answer && inNeeds(card({ id: gates.get(program.gate).task }))) ? { kind: "lost", title: lostWhy(program), text: title(LOST_FIX(program.id)) }
       : null;
-    return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate, gateFound: program.gateFound, ...(program.named !== undefined && { named: program.named }), open: open.length,
+    return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate, gateFound: program.gateFound, questions: questions.get(program.id) ?? [], ...(program.named !== undefined && { named: program.named }), open: open.length,
       source: source.id, sourceLabel: source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
       state, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
       next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === program.pilot } : null,

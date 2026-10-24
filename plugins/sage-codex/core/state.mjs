@@ -1879,7 +1879,7 @@ function programsLine({ byId, programs, byProgram }) {
     const open = own.filter((t) => !ENDED.includes(t.state)).length;
     const pilot = byId.get(p.pilot)?.state;
     // The board's words for each state (F-T233-11), and why a lost program is lost (F-T233-2).
-    const why = { proposed: ` · breakdown waits for you (${p.gate})`, changing: ` · you asked for changes (${p.gate}): the sage revises the breakdown`, lost: p.named !== undefined ? ` · its gate ${p.gate} ${namedText(p.named, p.id)}` : p.gateFound ? ` · its gate ${p.gate} is not a breakdown gate on its pilot ${p.pilot}` : ` · its breakdown gate ${p.gate} is not in the logbook` }[p.state] ?? "";
+    const why = { proposed: ` · breakdown waits for you (${p.gate})`, changing: ` · you asked for changes (${p.gate}): the chief revises the breakdown`, lost: p.named !== undefined ? ` · its gate ${p.gate} ${namedText(p.named, p.id)}` : p.gateFound ? ` · its gate ${p.gate} is not a breakdown gate on its pilot ${p.pilot}` : ` · its breakdown gate ${p.gate} is not in the logbook` }[p.state] ?? "";
     const line = p.state === "dropped" ? `dropped${open ? `: ${open} ${open === 1 ? "task" : "tasks"} still in it, take each out with program=none` : ""}`
       : p.state === "active" && progress.done ? `done, ${text}`
       : ["active", "proposed", "changing"].includes(p.state) && dead(pilot) ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the program`

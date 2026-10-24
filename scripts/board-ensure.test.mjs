@@ -144,7 +144,7 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
     // The config exists, so a setup setting is refused rather than ignored.
     const settings = await board(CLI, ["--ensure", "--port", String(port)], env);
     assert.equal(settings.status, 1);
-    assert.match(settings.stderr, /the board config exists/);
+    assert.equal(settings.stderr, `sage board: the board config ${config} exists, and setup does not change it. To change its "port" or another setting, first run node ${CLI} board --stop --config ${config} while the file still names the port of the running board, then edit that file, then ask for the board again. To set the board up again, remove the file first.\n`);
   } finally { await stop(dir, port); }
 });
 
@@ -201,6 +201,24 @@ test("T216: board --stop stops this config's board, and ensure says when the con
     const again = await board(CLI, ["--ensure"], env);
     assert.match(again.stdout, /^Sage board started: /);
   } finally { await stop(dir, port); }
+});
+
+test("T395: the documented port change (stop, edit the port, ask again) leaves one board, on the new port (R1478-1)", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const [oldPort, newPort] = [await freePort(), await freePort()];
+  try {
+    assert.equal((await board(CLI, ["--ensure", "--port", String(oldPort)], env)).status, 0);
+    // The order of the existing-config line: stop first, while the file still names the port that the board holds.
+    const stopped = await board(CLI, ["--stop", "--config", config], env);
+    assert.equal(stopped.stdout, `Board server stopped: 127.0.0.1:${oldPort} is free. Ask for the board again to start it.\n`, stopped.stderr);
+    writeFileSync(config, JSON.stringify({ ...JSON.parse(readFileSync(config, "utf8")), port: newPort }));
+    const again = await board(CLI, ["--ensure"], env);
+    assert.equal(again.stdout.startsWith(`Sage board started: http://127.0.0.1:${newPort}/`), true, again.stderr);
+    assert.equal((await get(oldPort)).error, "ECONNREFUSED", "the old board does not run on beside the new one");
+    // board.pid names the one server that answers, so a later --stop finds it.
+    const pid = readFileSync(join(dirname(config), "board.pid"), "utf8").trim();
+    assert.match((await get(newPort)).board, new RegExp(`^id=${configId(config)}; pid=${pid}; started=\\d+$`));
+  } finally { await stop(dir, oldPort); }
 });
 
 const listen = async (server) => { await new Promise((accept) => server.listen(0, "127.0.0.1", accept)); return server.address().port; };
