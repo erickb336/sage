@@ -259,7 +259,7 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 
 Claude Code keeps the plugin files in `~/.claude/plugins/cache/sage/` after the uninstall. It removes each version 14 days later, but only while another plugin is still installed ([plugin loading](https://code.claude.com/docs/en/plugins/loading)). To remove them at once, delete that folder, but only after step 1: the stop command is in it.
 
-The uninstall does not remove your logbooks, your pages or the board's config. They are plain files in the folders below. Delete them yourself when you no longer want the record.
+The uninstall keeps your logbooks, the task pages in each project's pages folder and the board's config; only step 3 deletes the board's offline pages. They are plain files in the folders below. Delete them yourself when you no longer want the record.
 
 ## Where sage keeps things
 

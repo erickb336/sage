@@ -32,7 +32,7 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 
 | You need | Claude Code | Codex |
 | --- | --- | --- |
-| The agent tool | Claude Code, with a Claude plan or API credits | Codex CLI (checked with 0.159.2 and 0.160.0) |
+| The agent tool | Claude Code, with a Claude plan or API credits | Codex CLI 0.159.2 or 0.160.0 |
 | Node.js 20 or later, and git | Yes | Yes |
 | `gh`, logged in (`gh auth login`) | Yes: for pull requests and the merge check | No |
 | A GitHub remote for your project | Recommended: without one, work stops at a verified branch | No |
