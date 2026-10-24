@@ -9,35 +9,35 @@ There are 25 principles: 24 are pstack's, by Lauren Tan (MIT), and 1 is sage's o
 <details>
 <summary><strong>All 25 principles</strong></summary>
 
-| Principle | Apply when | Text |
-| --- | --- | --- |
-| attack-the-premise | two or more fixes that share one premise have failed the same check or review | pstack, adapted |
-| boundary-discipline | reviewing or writing validation, error handling or framework adapters | pstack, adapted |
-| build-the-lever | any non-trivial work, not just bulk work: edits, migrations, analyses, checks | pstack |
-| contextualize-and-write-for-the-reader | writing anything someone else will read later: a design, a handoff, findings, a report, a verification, a brief, a reply | sage's own |
-| encode-lessons-in-structure | writing the same instruction a second time, or noticing a correction that keeps recurring | pstack, adapted |
-| exhaust-the-design-space | a new interaction or an architectural choice has no precedent in the code | pstack, adapted |
-| experience-first | a product, UX or scope trade-off comes up | pstack, adapted |
-| explain-the-number | before you trust, report, or act on a number you measured: a speedup, a regression, a throughput, a latency, or an eval result | pstack |
-| fix-root-causes | debugging a failure or repairing a finding | pstack, adapted |
-| foundational-thinking | before writing logic, when choosing core types and data structures or ordering scaffold against features | pstack, adapted |
-| guard-the-context-window | context is filling up: large outputs, long files, repeated reads, fan-out planning | pstack |
-| laziness-protocol | refactoring, judging a diff's size, or tempted to add an abstraction, a layer or a threaded signal | pstack, adapted |
-| make-operations-idempotent | designing commands, lifecycle steps, or processing loops that run amid crashes, restarts, and retries | pstack |
-| migrate-callers-then-delete-legacy-apis | a change introduces a new internal API while callers of the old one still exist | pstack, adapted |
-| minimize-reader-load | reviewing or shaping code that is hard to follow | pstack, adapted |
-| model-the-domain | writing stateful logic, or when code branches a lot or repeats a shape assumption across files | pstack |
-| never-block-on-the-human | tempted to ask "should I do X?" about reversible work | pstack, adapted |
-| outcome-oriented-execution | during planned rewrites and migrations with explicit phase boundaries | pstack |
-| prove-it-works | before declaring a task done, or when judging a claim that something works | pstack, adapted |
-| redesign-from-first-principles | integrating a new requirement into an existing design | pstack |
-| separate-before-serializing-shared-state | concurrent actors might write to the same file, branch, key, or state object | pstack |
-| sequence-verifiable-units | multi-step work (a sweep, a migration, a run of similar edits) or the order of commits in a change | pstack, adapted |
-| subtract-before-you-add | ordering an addition, a refactor or a rewrite | pstack, adapted |
-| test-behavior-not-implementation | writing, changing or keeping a test | pstack, adapted |
-| type-system-discipline | designing types, reviewing a function signature, or writing code in any statically-typed language | pstack |
+| Principle | Apply when |
+| --- | --- |
+| attack-the-premise<br>pstack, adapted | two or more fixes that share one premise have failed the same check or review |
+| boundary-discipline<br>pstack, adapted | reviewing or writing validation, error handling or framework adapters |
+| build-the-lever<br>pstack | any non-trivial work, not just bulk work: edits, migrations, analyses, checks |
+| contextualize-and-write-for-the-reader<br>sage's own | writing anything someone else will read later: a design, a handoff, findings, a report, a verification, a brief, a reply |
+| encode-lessons-in-structure<br>pstack, adapted | writing the same instruction a second time, or noticing a correction that keeps recurring |
+| exhaust-the-design-space<br>pstack, adapted | a new interaction or an architectural choice has no precedent in the code |
+| experience-first<br>pstack, adapted | a product, UX or scope trade-off comes up |
+| explain-the-number<br>pstack | before you trust, report, or act on a number you measured: a speedup, a regression, a throughput, a latency, or an eval result |
+| fix-root-causes<br>pstack, adapted | debugging a failure or repairing a finding |
+| foundational-thinking<br>pstack, adapted | before writing logic, when choosing core types and data structures or ordering scaffold against features |
+| guard-the-context-window<br>pstack | context is filling up: large outputs, long files, repeated reads, fan-out planning |
+| laziness-protocol<br>pstack, adapted | refactoring, judging a diff's size, or tempted to add an abstraction, a layer or a threaded signal |
+| make-operations-idempotent<br>pstack | designing commands, lifecycle steps, or processing loops that run amid crashes, restarts, and retries |
+| migrate-callers-then-delete-legacy-apis<br>pstack, adapted | a change introduces a new internal API while callers of the old one still exist |
+| minimize-reader-load<br>pstack, adapted | reviewing or shaping code that is hard to follow |
+| model-the-domain<br>pstack | writing stateful logic, or when code branches a lot or repeats a shape assumption across files |
+| never-block-on-the-human<br>pstack, adapted | tempted to ask "should I do X?" about reversible work |
+| outcome-oriented-execution<br>pstack | during planned rewrites and migrations with explicit phase boundaries |
+| prove-it-works<br>pstack, adapted | before declaring a task done, or when judging a claim that something works |
+| redesign-from-first-principles<br>pstack | integrating a new requirement into an existing design |
+| separate-before-serializing-shared-state<br>pstack | concurrent actors might write to the same file, branch, key, or state object |
+| sequence-verifiable-units<br>pstack, adapted | multi-step work (a sweep, a migration, a run of similar edits) or the order of commits in a change |
+| subtract-before-you-add<br>pstack, adapted | ordering an addition, a refactor or a rewrite |
+| test-behavior-not-implementation<br>pstack, adapted | writing, changing or keeping a test |
+| type-system-discipline<br>pstack | designing types, reviewing a function signature, or writing code in any statically-typed language |
 
-Every principle except sage's own is pstack's, by Lauren Tan (MIT). The Text column has three values:
+Every principle except sage's own is pstack's, by Lauren Tan (MIT). Under each name, one of three notes says where its text comes from:
 
 - "pstack" is pstack's text as it is, from `upstream/pstack/`.
 - "pstack, adapted" means that sage changed the wording: it is shorter, and it follows sage's writing standard. Its `upstream:` fingerprint records which pstack text it was checked against.
