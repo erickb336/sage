@@ -1419,9 +1419,8 @@ function agentCheck(input, file, slots) {
     if (input.agent_type === "sage:lead") return twice ? `--${twice} is given twice (T275).` : leadProblem(input, cmd, pos, opt, slots);
     return `"${[cmd, ...pos.slice(0, 1)].join(" ")}" writes the logbook, or is not a read command of the state tool.`;
   }
-  const text = commandFields(ti);
-  if (!text.some(t => writes(t, cwd))) return undefined;
-  const word = nearLogbook(text.join("\n"), roots, cwd) ?? text.map((t) => linksNear(t, roots[1], cwd)).find(Boolean);
+  if (!texts.some(t => writes(t, cwd))) return undefined;
+  const word = nearLogbook(texts.join("\n"), roots, cwd) ?? texts.map((t) => linksNear(t, roots[1], cwd)).find(Boolean);
   const hint = word && /\$\?/.test(word) ? " The hook does not expand $?, so its ? is a pattern character: to show an exit code, write || echo FAIL or ; echo done after the command instead." : "";
   return word && `an agent never writes, moves or removes a logbook file from the shell, and never writes near one with a pattern, a variable or a link to it. ${quoted(word)} makes this command near the logbook: change or remove it.${hint}`;
 }
