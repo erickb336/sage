@@ -15,15 +15,38 @@ const digest = createHash('sha256').update('synthetic controller bytes').digest(
 
 test('resolveControllerBinary refuses each bad path with its fixed code', () => {
   mkdirSync(join(dir, 'folder'));
-  symlinkSync(binary, join(dir, 'link'));
   writeFileSync(join(dir, 'plain'), 'x'); chmodSync(join(dir, 'plain'), 0o644);
   for (const [env, code] of [
     [{}, 'binary-unset'], [{SAGE_CODEX_CONTROLLER_BIN: ''}, 'binary-unset'], [{SAGE_CODEX_CONTROLLER_BIN: 'bin/codex'}, 'binary-relative'],
-    [{SAGE_CODEX_CONTROLLER_BIN: join(dir, 'folder')}, 'binary-not-file'], [{SAGE_CODEX_CONTROLLER_BIN: join(dir, 'link')}, 'binary-not-file'],
-    [{SAGE_CODEX_CONTROLLER_BIN: join(dir, 'missing')}, 'binary-not-file'], [{SAGE_CODEX_CONTROLLER_BIN: join(dir, 'plain')}, 'binary-not-executable'],
-    [{SAGE_CODEX_CONTROLLER_BIN: binary, SAGE_CODEX_CONTROLLER_SHA256: 'c'.repeat(64)}, 'binary'],
-    [{SAGE_CODEX_CONTROLLER_BIN: binary, SAGE_CODEX_CONTROLLER_SHA256: digest.toUpperCase()}, 'binary'],
+    [{SAGE_CODEX_CONTROLLER_BIN: join(dir, 'folder')}, 'binary-not-file'],
+    [{SAGE_CODEX_CONTROLLER_BIN: join(dir, 'missing')}, 'binary-missing'], [{SAGE_CODEX_CONTROLLER_BIN: join(dir, 'plain')}, 'binary-not-executable'],
+    [{SAGE_CODEX_CONTROLLER_BIN: binary, SAGE_CODEX_CONTROLLER_SHA256: 'c'.repeat(64)}, 'binary-hash'],
+    [{SAGE_CODEX_CONTROLLER_BIN: binary, SAGE_CODEX_CONTROLLER_SHA256: digest.toUpperCase()}, 'binary-hash'],
   ]) assert.throws(() => resolveControllerBinary(env), error => error.code === code, `${JSON.stringify(env)} gives ${code}`);
+});
+
+test('resolveControllerBinary: each refusal says what it found and what to do (R1504-2, R1505-4)', () => {
+  const message = env => { try { resolveControllerBinary(env); return 'pass'; } catch (error) { return error.message; } };
+  assert.equal(message({}), 'SAGE_CODEX_CONTROLLER_BIN is not set. Set SAGE_CODEX_CONTROLLER_BIN to the absolute path of the built fork binary (codex-rs/target/debug/codex in the fork checkout).');
+  assert.equal(message({SAGE_CODEX_CONTROLLER_BIN: join(dir, 'missing')}), `No file is at ${join(dir, 'missing')}. Build the fork binary, or correct SAGE_CODEX_CONTROLLER_BIN.`);
+  assert.equal(message({SAGE_CODEX_CONTROLLER_BIN: binary, SAGE_CODEX_CONTROLLER_SHA256: 'c'.repeat(64)}),
+    `The binary ${binary} has sha256 ${digest}, but SAGE_CODEX_CONTROLLER_SHA256 is ${'c'.repeat(64)}. Check that this is the binary that you built, then set SAGE_CODEX_CONTROLLER_SHA256 to its hash.`);
+});
+
+test('resolveControllerBinary follows a link to the real path, and refuses a file or a folder on it that others can write (R1503-5)', () => {
+  symlinkSync(binary, join(dir, 'link'));
+  assert.deepEqual(resolveControllerBinary({SAGE_CODEX_CONTROLLER_BIN: join(dir, 'link')}), {path: binary, sha256: digest, expectedSha256: null});
+  const open = join(dir, 'open'), sticky = join(dir, 'sticky'), shared = join(dir, 'shared');
+  for (const folder of [open, sticky]) { mkdirSync(folder); writeFileSync(join(folder, 'codex'), 'synthetic controller bytes'); chmodSync(join(folder, 'codex'), 0o755); }
+  writeFileSync(shared, 'synthetic controller bytes'); chmodSync(shared, 0o757);
+  chmodSync(open, 0o777); chmodSync(sticky, 0o1777);
+  // The old check looked at the last path part only: a link in a safe folder to a binary in an open folder passed.
+  symlinkSync(join(open, 'codex'), join(dir, 'link-to-open'));
+  const code = path => { try { resolveControllerBinary({SAGE_CODEX_CONTROLLER_BIN: path}); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
+  assert.equal(code(join(dir, 'link-to-open')), `binary-writable: The folder ${open} is writable by other users, so another user can replace the binary. Run chmod o-w on it, or move the binary.`);
+  assert.equal(code(shared), `binary-writable: ${shared} is writable by other users, so another user can change it. Run chmod o-w on it, then start again.`);
+  assert.equal(code(join(sticky, 'codex')), 'pass', 'a sticky folder such as /tmp is safe');
+  chmodSync(open, 0o755);
 });
 
 test('resolveControllerBinary returns the path and the file hash, and reads only its two variables', () => {
@@ -112,8 +135,36 @@ test('bindPolicy: one case for each refusal row', () => {
   assert.equal(refusalCode(value => { value.config.config.features.multi_agent_v2 = {enabled: true, subagent_usage_hint_text: 'keep'}; }), 'pass');
   assert.equal(refusalCode(value => { value.config.config.features.multi_agent_v2 = {enabled: false}; }), 'policy-value');
   assert.equal(refusalCode(value => { value.binary.expectedSha256 = digest; }), 'pass');
-  const value = observed(); delete value.config.config.approval_policy; delete value.config.origins.approval_policy; value.thread.approvalPolicy = 'never';
-  assert.deepEqual(bindPolicy(value).selection.approvalPolicy, {value: 'never', origin: 'default'});
+  const value = observed(); delete value.config.config.model; delete value.config.origins.model; value.thread.model = 'gpt-default';
+  assert.deepEqual(bindPolicy(value).selection.model, {value: 'gpt-default', origin: 'default'});
+});
+
+test('bindPolicy takes the sandbox and the approval policy only from a layer that an agent cannot write, and never as a default (R1503-4)', () => {
+  const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
+  const refusal = edit => { const value = observed(); edit(value); try { bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
+  assert.equal(refusal(value => { value.config.origins.sandbox_mode = project; }),
+    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes sandbox_mode only from your user config, a managed config or the launch flags. Move sandbox_mode to your user config, then start the client again.');
+  assert.match(refusal(value => { value.config.origins.approval_policy = project; }), /^selection-origin: The setting approval_policy comes from the project config/);
+  assert.match(refusal(value => { value.config.origins.approval_policy = {name: {type: 'packagedDefaults', file: '/opt/codex/defaults.toml'}}; }), /^selection-origin: .*packagedDefaults config layer \(\/opt\/codex\/defaults.toml\)/);
+  for (const key of ['approval_policy', 'sandbox_mode']) {
+    assert.equal(refusal(value => { delete value.config.config[key]; delete value.config.origins[key]; }),
+      `selection-missing: Your Codex config does not set ${key}, so the controller would use its default. Set ${key} in your user config (config.toml in your CODEX_HOME), then start the client again.`);
+  }
+  // The owner's layers pass: user (above), a managed file, and the launch flags.
+  assert.equal(refusal(value => { value.config.origins.sandbox_mode = {name: {type: 'system', file: '/etc/codex/managed_config.toml'}}; }), 'pass');
+  assert.equal(refusal(value => { value.config.origins.approval_policy = sessionFlags; }), 'pass');
+  // The model may come from the project layer: the decision covers the sandbox and the approval policy only.
+  assert.equal(refusal(value => { value.config.origins.model = project; }), 'pass');
+});
+
+test('bindPolicy: a version or a policy refusal names what it found and what to change (R1504-3)', () => {
+  const message = edit => { const value = observed(); edit(value); try { bindPolicy(value); return 'pass'; } catch (error) { return error.message; } };
+  assert.equal(message(value => { value.thread.thread.cliVersion = '0.161.0'; }),
+    'The controller is version 0.161.0, but this client needs 0.160.0. Set SAGE_CODEX_CONTROLLER_BIN to the fork binary of version 0.160.0, then start the client again.');
+  assert.equal(message(value => { value.config.origins['features.multi_agent_v2.enabled'] = user; }),
+    'The setting features.multi_agent_v2 comes from your user config (/home/config.toml), not from the launch flags of the client. Remove features.multi_agent_v2 from there, then start the client again.');
+  assert.equal(message(value => { value.config.config.features.goals = true; }),
+    'The setting features.goals is true, but the client needs false. Use the fork binary of version 0.160.0, then start the client again.');
 });
 
 const root = 'root-1', bound = 'turn-1';
@@ -149,6 +200,13 @@ test('turnOutcome: one case for each row of the terminal table', () => {
   assert.deepEqual([turnOutcome(timed, {type: 'lost', reason: 'No terminal event within the interrupt grace'})].map(s => [s.result, s.timedOut]), [['uncertain', true]]);
   assert.equal(run(reply, {type: 'event', event: done('completed')}, {type: 'lost', reason: 'Owned process closed'}).result, 'completed', 'a loss after the terminal changes nothing');
   assert.equal(run(reply, {type: 'event', event: done('inProgress')}).result, 'uncertain');
+});
+
+test('turnOutcome: a status that names an Object prototype member gives uncertain, never a non-string result (R1503-1)', () => {
+  for (const status of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    const state = run(reply, {type: 'event', event: done(status)});
+    assert.deepEqual([state.result, state.error], ['uncertain', {reason: `Unknown turn status ${status}`}], status);
+  }
 });
 
 test('turnOutcome: the last agent message falls back to item/completed of the bound turn only', () => {

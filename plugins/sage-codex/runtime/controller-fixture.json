@@ -1,5 +1,5 @@
 {
- "label": "Synthetic fixture. Derived from pages/T391/stage3/turn-transcript.jsonl (U3) and the config/read format of the real fork binary (R1461). {{project}} replaces the temp paths.",
+ "label": "Synthetic fixture. Derived from pages/T391/stage3/turn-transcript.jsonl (U3) and the config/read format of the real fork binary (R1461). {{project}} replaces the temp paths. R1514 added approval_policy and sandbox_mode from the user layer, because the client refuses them unset.",
  "stream": [
   {
    "after": "initialize",
@@ -29,6 +29,8 @@
     "config": {
      "model": "synthetic",
      "model_provider": "synthetic",
+     "approval_policy": "on-request",
+     "sandbox_mode": "read-only",
      "web_search": "disabled",
      "agents": {
       "enabled": true
@@ -100,6 +102,22 @@
       "version": "sha256:fixture-user"
      },
      "model_provider": {
+      "name": {
+       "type": "user",
+       "file": "{{project}}/config.toml",
+       "profile": null
+      },
+      "version": "sha256:fixture-user"
+     },
+     "approval_policy": {
+      "name": {
+       "type": "user",
+       "file": "{{project}}/config.toml",
+       "profile": null
+      },
+      "version": "sha256:fixture-user"
+     },
+     "sandbox_mode": {
       "name": {
        "type": "user",
        "file": "{{project}}/config.toml",

@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
-import {closeSync, constants, fstatSync, lstatSync, openSync, readSync} from 'node:fs';
-import {isAbsolute, resolve} from 'node:path';
+import {closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync} from 'node:fs';
+import {dirname, isAbsolute, resolve} from 'node:path';
 import {INSTRUCTION_BYTES, OWNED_CONTROLLER_CONFIG, validText} from './controller-transport.mjs';
 
 // The native version that the owned controller was proved against (T391).
@@ -20,28 +20,43 @@ function deepFreeze(value) {
   return value;
 }
 
-/** The only reader of the controller path: SAGE_CODEX_CONTROLLER_BIN. No default, no PATH lookup, no other variable. */
+const OTHERS_WRITE = 0o002, STICKY = 0o1000;
+const BINARY_FIX = 'Set SAGE_CODEX_CONTROLLER_BIN to the absolute path of the built fork binary (codex-rs/target/debug/codex in the fork checkout).';
+
+/**
+ * The only reader of the controller path: SAGE_CODEX_CONTROLLER_BIN. No default, no PATH lookup, no other variable.
+ * It resolves the real path, refuses a file or a folder on that path that another user can change, and hashes the file.
+ */
 export function resolveControllerBinary(env) {
-  const path = env.SAGE_CODEX_CONTROLLER_BIN;
+  const given = env.SAGE_CODEX_CONTROLLER_BIN;
   const expected = env.SAGE_CODEX_CONTROLLER_SHA256;
-  if (typeof path !== 'string' || path === '') throw refuse('binary-unset', 'SAGE_CODEX_CONTROLLER_BIN is not set');
-  if (!isAbsolute(path)) throw refuse('binary-relative', 'SAGE_CODEX_CONTROLLER_BIN must be an absolute path');
-  let stat;
-  try { stat = lstatSync(path); } catch { stat = undefined; }
-  if (!stat?.isFile()) throw refuse('binary-not-file', 'SAGE_CODEX_CONTROLLER_BIN must name a regular file, not a link or a folder');
-  if ((stat.mode & 0o111) === 0) throw refuse('binary-not-executable', 'SAGE_CODEX_CONTROLLER_BIN must be executable');
-  if (expected !== undefined && !HASH.test(expected)) throw refuse('binary', 'SAGE_CODEX_CONTROLLER_SHA256 must be 64 lowercase hex characters');
+  if (typeof given !== 'string' || given === '') throw refuse('binary-unset', `SAGE_CODEX_CONTROLLER_BIN is not set. ${BINARY_FIX}`);
+  if (!isAbsolute(given)) throw refuse('binary-relative', `SAGE_CODEX_CONTROLLER_BIN is ${JSON.stringify(given)}, a relative path. ${BINARY_FIX}`);
+  if (expected !== undefined && !HASH.test(expected)) throw refuse('binary-hash', `SAGE_CODEX_CONTROLLER_SHA256 is ${JSON.stringify(expected)}, not 64 lowercase hex characters. Set it to the sha256 of the binary, or unset it.`);
+  let path;
+  try { path = realpathSync(given); } catch { throw refuse('binary-missing', `No file is at ${given}. Build the fork binary, or correct SAGE_CODEX_CONTROLLER_BIN.`); }
+  // The real path has no link in it, so the folders below are the ones that the launch goes through.
+  const stat = lstatSync(path);
+  if (!stat.isFile()) throw refuse('binary-not-file', `${path} is not a regular file. ${BINARY_FIX}`);
+  if ((stat.mode & 0o111) === 0) throw refuse('binary-not-executable', `${path} is not executable. Use the built binary, or run chmod u+x on it.`);
+  if (stat.mode & OTHERS_WRITE) throw refuse('binary-writable', `${path} is writable by other users, so another user can change it. Run chmod o-w on it, then start again.`);
+  for (let folder = dirname(path); ; folder = dirname(folder)) {
+    const mode = statSync(folder).mode;
+    // A sticky folder (such as /tmp) is safe: other users cannot rename or remove an entry that they do not own.
+    if ((mode & OTHERS_WRITE) && !(mode & STICKY)) throw refuse('binary-writable', `The folder ${folder} is writable by other users, so another user can replace the binary. Run chmod o-w on it, or move the binary.`);
+    if (folder === dirname(folder)) break;
+  }
   // Hash the same file that lstat saw: O_NOFOLLOW refuses a link swapped in after lstat.
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   const hash = createHash('sha256');
   try {
     const opened = fstatSync(fd);
-    if (opened.ino !== stat.ino || opened.dev !== stat.dev) throw refuse('binary-not-file', 'SAGE_CODEX_CONTROLLER_BIN changed while it was read');
+    if (opened.ino !== stat.ino || opened.dev !== stat.dev) throw refuse('binary-changed', `${path} changed while the client read it. Start again.`);
     const buffer = Buffer.alloc(1024 * 1024);
     for (let read; (read = readSync(fd, buffer, 0, buffer.length, null)) > 0;) hash.update(buffer.subarray(0, read));
   } finally { closeSync(fd); }
   const digest = hash.digest('hex');
-  if (expected !== undefined && expected !== digest) throw refuse('binary', 'Controller binary hash does not match SAGE_CODEX_CONTROLLER_SHA256');
+  if (expected !== undefined && expected !== digest) throw refuse('binary-hash', `The binary ${path} has sha256 ${digest}, but SAGE_CODEX_CONTROLLER_SHA256 is ${expected}. Check that this is the binary that you built, then set SAGE_CODEX_CONTROLLER_SHA256 to its hash.`);
   return Object.freeze({path, sha256: digest, expectedSha256: expected ?? null});
 }
 
@@ -55,16 +70,29 @@ export function bindTask(input, cwd) {
   const {project, task, run, instructions} = input;
   if (typeof project !== 'string' || !isAbsolute(project) || resolve(project) !== project) throw refuse('task', 'Project must be a canonical absolute path');
   if (project !== cwd) throw refuse('task', 'Project must be the process cwd');
-  if (typeof task !== 'string' || !TASK.test(task)) throw refuse('task', 'Task must be T and digits, with no leading zero');
-  if (typeof run !== 'string' || !RUN.test(run)) throw refuse('task', 'Run must be R and digits, with no leading zero');
-  if (!validText(instructions, INSTRUCTION_BYTES)) throw refuse('task', 'Instructions must be non-empty text of at most 256 KiB, with no NUL');
+  if (typeof task !== 'string' || !TASK.test(task)) throw refuse('task', `The task ${JSON.stringify(task)} is not a task id. Give T and digits with no leading zero, for example --task T400.`);
+  if (typeof run !== 'string' || !RUN.test(run)) throw refuse('task', `The run ${JSON.stringify(run)} is not a run id. Give R and digits with no leading zero, for example --run R1.`);
+  if (!validText(instructions, INSTRUCTION_BYTES)) throw refuse('task', 'The instructions file must have text of 1 byte to 256 KiB, with no NUL. Correct the file that --instructions names.');
   return Object.freeze({project, task, run, instructionsSha256: sha256(instructions)});
 }
 
 /** Validates one turn text. It returns the hash that the turn result keeps. */
 export function bindTurnText(text) {
-  if (!validText(text, TURN_TEXT_BYTES)) throw refuse('turn-text', 'Turn text must be non-empty text of at most 64 KiB, with no NUL');
+  if (!validText(text, TURN_TEXT_BYTES)) {
+    const found = typeof text !== 'string' ? 'is not text' : text.includes('\0') ? 'has a NUL character' : `has ${Buffer.byteLength(text)} bytes`;
+    throw refuse('turn-text', `The line ${found}; a line must be text of 1 to ${TURN_TEXT_BYTES} bytes, with no NUL.`);
+  }
   return sha256(text);
+}
+
+// The layers that the agents of a session cannot write. The project layer (.codex/ in the project) is not one of them.
+const OWNER_LAYERS = new Set(['user', 'sessionFlags', 'mdm', 'system', 'enterpriseManaged', 'legacyManagedConfigTomlFromFile', 'legacyManagedConfigTomlFromMdm']);
+function layer(origin) {
+  const name = origin?.name ?? {};
+  if (name.type === 'user') return `your user config (${name.file}${name.profile ? `, profile ${name.profile}` : ''})`;
+  if (name.type === 'project') return `the project config in ${name.dotCodexFolder}`;
+  if (name.type === 'sessionFlags') return 'the launch flags';
+  return `the ${String(name.type ?? 'unknown')} config layer${name.file ? ` (${name.file})` : ''}`;
 }
 
 function effective(config, key) {
@@ -77,41 +105,48 @@ function effective(config, key) {
 }
 const camel = value => value.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 // config/read gives sandbox_mode in kebab case; the thread/start reply gives a tagged object in camel case.
+// The sandbox and the approval policy are the owner's: each must be set, in a layer that an agent cannot write.
 const SELECTION = [
-  ['model', 'model', value => value],
-  ['modelProvider', 'model_provider', value => value],
-  ['approvalPolicy', 'approval_policy', value => value],
-  ['sandbox', 'sandbox_mode', (value, reply) => (typeof value === 'string' ? {...reply, type: camel(value)} : value)],
+  ['model', 'model', value => value, false],
+  ['modelProvider', 'model_provider', value => value, false],
+  ['approvalPolicy', 'approval_policy', value => value, true],
+  ['sandbox', 'sandbox_mode', (value, reply) => (typeof value === 'string' ? {...reply, type: camel(value)} : value), true],
 ];
+const RESTART = 'then start the client again';
 
 /** Pure. Returns the frozen policy record with its binding hash, or throws a refusal with a fixed code. */
 export function bindPolicy({binary, args, initialize, config: read, thread: reply, task}) {
   const config = read?.config, origins = read?.origins;
-  if (!config || typeof config !== 'object' || !origins || typeof origins !== 'object') throw refuse('policy-missing', 'config/read gave no config or origins');
+  const fork = `Use the fork binary of version ${CONTROLLER_VERSION}, ${RESTART}`;
+  if (!config || typeof config !== 'object' || !origins || typeof origins !== 'object') throw refuse('policy-missing', `The controller gave no config layers. ${fork}.`);
   for (const [key, required] of Object.entries(OWNED_CONTROLLER_CONFIG)) {
     // A structured feature (such as features.multi_agent_v2) can be a table: its switch and origin are at `.enabled`.
     const switchKey = Object.hasOwn(origins, `${key}.enabled`) ? `${key}.enabled` : key;
     const value = effective(config, switchKey) ?? effective(config, key);
-    if (value === undefined || !Object.hasOwn(origins, switchKey)) throw refuse('policy-missing', `Owned key ${key} is missing from config/read`);
-    if (origins[switchKey]?.name?.type !== 'sessionFlags') throw refuse('policy-origin', `Owned key ${key} comes from another layer`);
-    if (value !== required) throw refuse('policy-value', `Owned key ${key} has another value`);
+    if (value === undefined || !Object.hasOwn(origins, switchKey)) throw refuse('policy-missing', `The controller did not report the setting ${key}. ${fork}.`);
+    if (origins[switchKey]?.name?.type !== 'sessionFlags') throw refuse('policy-origin', `The setting ${key} comes from ${layer(origins[switchKey])}, not from the launch flags of the client. Remove ${key} from there, ${RESTART}.`);
+    if (value !== required) throw refuse('policy-value', `The setting ${key} is ${JSON.stringify(value)}, but the client needs ${JSON.stringify(required)}. ${fork}.`);
   }
   const thread = reply?.thread;
-  if (thread?.cliVersion !== CONTROLLER_VERSION) throw refuse('version', `The controller is not version ${CONTROLLER_VERSION}`);
-  if (thread.ephemeral !== true) throw refuse('not-ephemeral', 'The root thread is not ephemeral');
-  if (thread.parentThreadId !== null) throw refuse('not-root', 'The thread is not a root');
-  if (thread.cwd !== task.project) throw refuse('cwd', 'The thread cwd is not the bound project');
-  if (typeof thread.id !== 'string' || thread.id === '') throw refuse('not-root', 'The thread has no id');
+  if (thread?.cliVersion !== CONTROLLER_VERSION) throw refuse('version', `The controller is version ${String(thread?.cliVersion ?? 'unknown')}, but this client needs ${CONTROLLER_VERSION}. Set SAGE_CODEX_CONTROLLER_BIN to the fork binary of version ${CONTROLLER_VERSION}, ${RESTART}.`);
+  const mismatch = `The controller does not behave as the fork of version ${CONTROLLER_VERSION}: ${fork}.`;
+  if (thread.ephemeral !== true) throw refuse('not-ephemeral', `The chief's thread is not ephemeral. ${mismatch}`);
+  if (thread.parentThreadId !== null) throw refuse('not-root', `The chief's thread is not a root thread. ${mismatch}`);
+  if (thread.cwd !== task.project) throw refuse('cwd', `The chief's thread runs in ${String(thread.cwd)}, not in the project ${task.project}. ${mismatch}`);
+  if (typeof thread.id !== 'string' || thread.id === '') throw refuse('not-root', `The chief's thread has no id. ${mismatch}`);
   const selection = {};
-  for (const [name, key, expect] of SELECTION) {
+  for (const [name, key, expect, owned] of SELECTION) {
     const observed = reply[name];
     const configured = effective(config, key);
+    const origin = origins[key];
+    if (owned && configured === undefined) throw refuse('selection-missing', `Your Codex config does not set ${key}, so the controller would use its default. Set ${key} in your user config (config.toml in your CODEX_HOME), ${RESTART}.`);
     if (configured === undefined) { selection[name] = {value: observed ?? null, origin: 'default'}; continue; }
-    if (canonical(expect(configured, observed)) !== canonical(observed)) throw refuse('selection-changed', `The thread ${name} is not the configured ${key}`);
-    selection[name] = {value: observed, origin: origins[key]?.name?.type ?? 'unknown'};
+    if (owned && !OWNER_LAYERS.has(origin?.name?.type)) throw refuse('selection-origin', `The setting ${key} comes from ${layer(origin)}. An agent can change project files, so the client takes ${key} only from your user config, a managed config or the launch flags. Move ${key} to your user config, ${RESTART}.`);
+    if (canonical(expect(configured, observed)) !== canonical(observed)) throw refuse('selection-changed', `The chief's thread has ${name} ${JSON.stringify(observed)}, but your config sets ${key} to ${JSON.stringify(configured)}. ${mismatch}`);
+    selection[name] = {value: observed, origin: origin?.name?.type ?? 'unknown'};
   }
-  if (!HASH.test(binary?.sha256 ?? '')) throw refuse('binary', 'The binary hash is missing');
-  if (binary.expectedSha256 && binary.expectedSha256 !== binary.sha256) throw refuse('binary', 'Controller binary hash does not match SAGE_CODEX_CONTROLLER_SHA256');
+  if (!HASH.test(binary?.sha256 ?? '')) throw refuse('binary', 'The binary hash is missing.');
+  if (binary.expectedSha256 && binary.expectedSha256 !== binary.sha256) throw refuse('binary', 'The binary hash does not match SAGE_CODEX_CONTROLLER_SHA256.');
   const record = {
     binary: {path: binary.path, sha256: binary.sha256}, args: [...args], cliVersion: thread.cliVersion,
     userAgent: initialize?.userAgent ?? null, selection, multiAgentMode: reply.multiAgentMode ?? null,
@@ -124,7 +159,8 @@ function agentText(items) {
   const messages = Array.isArray(items) ? items.filter(item => item?.type === 'agentMessage' && typeof item.text === 'string') : [];
   return messages.length ? messages.at(-1).text : null;
 }
-const TERMINAL = {completed: 'completed', interrupted: 'interrupted', failed: 'failed'};
+// A Map, not an object literal: a status such as "constructor" or "__proto__" must not find a prototype member.
+const TERMINAL = new Map([['completed', 'completed'], ['interrupted', 'interrupted'], ['failed', 'failed']]);
 
 /**
  * Pure reducer for the terminal result of one bound turn. The state starts as {threadId}. Messages:
@@ -155,7 +191,7 @@ export function turnOutcome(state, message) {
   if (method !== 'turn/completed' || params.turn?.id !== next.turnId) return Object.freeze(next);
   next.terminals += 1;
   if (next.terminals > 1) return decide('uncertain', {reason: 'Conflicting terminal events for the bound turn'});
-  const result = TERMINAL[params.turn.status] ?? 'uncertain';
+  const result = TERMINAL.get(params.turn.status) ?? 'uncertain';
   next.lastAgentMessage = agentText(params.turn.items) ?? next.itemAgentMessage;
   return decide(result, result === 'failed' ? (params.turn.error ?? null) : result === 'uncertain' ? {reason: `Unknown turn status ${String(params.turn.status)}`} : null);
 }
