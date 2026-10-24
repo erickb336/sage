@@ -2,7 +2,7 @@
 // The look is the T218 design (approved 2026-10-11) with the T305 picker, filter bar and step line (approved 2026-10-18).
 // The page needs no script for its cards, task pages, backlog fold and theme; the picker and the filters need the script.
 import { LINE, PRIORITIES, TASK_KINDS, proposalOf } from "./logbook-fields.mjs";
-import { namedText, PROGRAM_ID } from "./program-rules.mjs";
+import { lostWhy, namedText, PROGRAM_ID } from "./program-rules.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
 // Every control (C0, C1 with U+0085) and line or paragraph separator is a space, and every format character (\p{Cf}:
@@ -184,7 +184,8 @@ const WORD_OF = { backlog: "not started", design: "in design", building: "buildi
 /** A task's state as its row on the program page says it: the end state, else the word of its column. */
 const taskWord = task => ["merged", "concluded", "abandoned"].includes(task.state) ? task.state : WORD_OF[task.column] ?? task.state;
 const BREAKDOWN_STATE = { proposed: "waits for your approval", changing: "you asked for changes: the chief revises it", dropped: "you dropped it" };
-const breakdownWhy = ({ id, state, gate, gateFound, named }) => BREAKDOWN_STATE[state] ?? (named !== undefined ? `its gate ${gate} ${namedText(named, id)}` : gateFound ? `its gate ${gate} is not a breakdown gate` : gate ? `its gate ${gate} is not in the logbook` : "the program is not in the logbook");
+// missing: the stand-in for a program row that the logbook does not have; an empty gate cell is another reason (R1508-1).
+const breakdownWhy = ({ id, state, gate, gateFound, named, missing }) => BREAKDOWN_STATE[state] ?? (missing ? "the program is not in the logbook" : !gate ? "the program names no breakdown gate" : named !== undefined ? `its gate ${gate} ${namedText(named, id)}` : gateFound ? `its gate ${gate} is not a breakdown gate` : `its gate ${gate} is not in the logbook`);
 /** One wait of a task, with its state (T233): met, not met, or never met. */
 function waitItem(ctx, task, wait) {
   if (wait.odd) return `<li class="v-stale"><span class="g" aria-hidden="true">⊘</span>Text in the waits cell that is not a task id · <span class="stw-cant">never met</span>: the chief sets the waits again.</li>`;
@@ -847,7 +848,7 @@ export function renderAgentsHtml(model, { live = false, paths = false } = {}) {
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const MET_WORDS = ["merged", "concluded"], ENDED_STATES = [...MET_WORDS, "abandoned"], NEEDS_PROGRAM = ["proposed", "stuck", "lost"];
 const roles = task => task ? [...new Set(task.agents.filter(agent => !agent.stale).map(agent => agent.role))] : [];
-const lostText = program => `${program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}` : program.gateFound ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`}. Ask the chief to repair the logbook, or to propose ${program.id} again.`;
+const lostText = program => `${lostWhy(program)}. Ask the chief to repair the logbook, or to propose ${program.id} again.`;
 /** What moves next in an active program (Q4): the first task with no unmet wait, then the count of the tasks that wait and those that cannot start. */
 function nextOf(ctx, program) {
   const task = program.next && ctx.tasks.get(program.next.key), at = roles(task);

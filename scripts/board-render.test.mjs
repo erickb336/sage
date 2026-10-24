@@ -1049,3 +1049,32 @@ test("T385: the task and program pages read right: no gate null, the odd waits s
   const source = renderBoardHtml({ ...model, diagnostics: [{ source: "codex", message: "Sample problem." }] }, { snapshot: false });
   assert.ok(source.includes('<ul class="diag"><li>codex · Sample problem.</li></ul>'), source);
 });
+
+test("R1508-1: a program row with an empty gate cell names no breakdown gate; only a missing row is not in the logbook", () => {
+  const tables = programsTables();
+  tables.tasks.push({ ...tables.tasks[0], id: "T62", state: "framed", program: "PG41" }, { ...tables.tasks[0], id: "T63", state: "framed", program: "PG41" });
+  tables.programs.push({ ...tables.programs[0], id: "PG41", name: "No gate", pilot: "T62", gate: "" });
+  const model = programsModel(tables);
+  assert.equal(model.tasks.find(task => task.id === "T63").waitLine.text, "Waits for the PG41 breakdown, whose program names no breakdown gate: it cannot start.");
+  const page = renderBoardHtml(model, { snapshot: false, taskKey: KEY("T63") });
+  assert.ok(page.includes("</span>The breakdown of PG41: the program names no breakdown gate · "), page);
+  const pg41 = renderProgramsHtml(model, { programKey: KEY("PG41") });
+  assert.ok(pg41.includes("<b>Needs you:</b> PG41 names no breakdown gate. Ask the chief to repair the logbook, or to propose PG41 again.</span>"), pg41);
+  assert.ok(!/gate {2}of/.test(pg41 + renderProgramsHtml(model)), "no double space where the gate is empty");
+});
+
+test("R1509-1: in a proposed program, a loop of waits shows first on the card and the Now and Next lines, as on the program page", () => {
+  // PG40 is proposed (its gate G40 is open). The pilot T60 waits for T61, and T61 waits for T60: a hand edit's loop.
+  const tables = programsTables();
+  tables.tasks.push({ ...tables.tasks[0], id: "T60", state: "framed", program: "PG40", waits: "T61" }, { ...tables.tasks[0], id: "T61", state: "framed", program: "PG40", waits: "T60" });
+  tables.programs.push({ ...tables.programs[0], id: "PG40", name: "Loop in a proposal", pilot: "T60", gate: "G40" });
+  tables.gates.push({ ...tables.gates[0], id: "G40", task: "T60", question: tables.gates[0].question.replace(/PG1/g, "PG40").replace(/T1\b/g, "T60"), answer: "" });
+  const model = programsModel(tables), card = id => model.tasks.find(task => task.id === id);
+  const line = "Waits for T60 (not started, in a loop) and your approval of the PG40 breakdown (gate G40): it cannot start. Its waits make a loop, which never ends: the chief sets its waits again.";
+  assert.deepEqual([card("T61").waitLine, card("T60").waitLine.never], [{ never: true, text: line }, true]);
+  const page = renderBoardHtml(model, { snapshot: false, taskKey: KEY("T61") });
+  assert.ok(page.includes(`<span><b>Now:</b> ${line}</span>`), page);
+  assert.ok(page.includes("<b>Next:</b> Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task.</div>"), page);
+  const row = rowOf(renderProgramsHtml(model, { programKey: KEY("PG40") }), "T61");
+  assert.ok(row.includes('<span class="sw stw-cant">⊘ cannot start</span><span class="sub">⊘ waits for T60 (not started, in a loop): it cannot start</span>'), row);
+});

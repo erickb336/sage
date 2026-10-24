@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
-import { ENDED, MET, breakdownGate, dead, gateLines, namedText, progressOf, progressText, shownGraph, shownWaits, waitGraph, waitsOf } from "./program-rules.mjs";
+import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, namedText, progressOf, progressText, shownGraph, shownWaits, waitGraph, waitsOf } from "./program-rules.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -246,13 +246,6 @@ const WAIT_WORD = { backlog: "not started", design: "in design", building: "buil
 const stateWord = state => state === undefined ? "not in the logbook" : ["merged", "concluded", "abandoned"].includes(state) ? state : WAIT_WORD[COLUMNS.find(([, , states]) => states.includes(state))?.[0]] ?? state;
 /** The graph of one logbook's waits and programs: its tasks by id and each program with its state, as every printer shows it (shownGraph). */
 const graphOf = project => shownGraph(waitGraph((project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)), project.tables.programs ?? [], project.tables.gates ?? [], project.tables.decisions ?? []), project.tables.gates ?? []);
-/**
- * Why a lost program is lost, in the words of each line that names it: its gate row is gone; the gate is on its pilot with
- * the breakdown options, but its question names no program or another (named, shownGraph); or the row is not its breakdown gate.
- */
-const lostWhy = program => !program.gateFound ? `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`
-  : program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}`
-  : `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}`;
 const LOST_FIX = id => `ask the chief to repair the logbook, or to propose ${id} again.`;
 /**
  * Each wait of a task, with its state: a task (met when merged or concluded; never met when abandoned or lost), the pilot
@@ -262,7 +255,7 @@ const LOST_FIX = id => `ask the chief to repair the logbook, or to propose ${id}
  */
 const waitsFor = (task, graph) => shownWaits(task, graph).map(wait =>
   wait.odd ? { odd: true, met: false, never: true }
-  : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state, gateFound: !!wait.program.gateFound, ...(wait.program.named !== undefined && { named: wait.program.named }) }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
+  : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state, gateFound: !!wait.program.gateFound, ...(wait.program.missing && { missing: true }), ...(wait.program.named !== undefined && { named: wait.program.named }) }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
   // A wait of a loop of waits (a hand edit) is never met, as no task of the loop can start first.
   : { id: wait.id, state: wait.state ?? null, word: `${stateWord(wait.state)}${wait.loop ? ", in a loop" : ""}`, pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) || !!wait.loop, ...(wait.loop && { loop: true }) });
 const BREAKDOWN_WAIT = {
@@ -270,15 +263,16 @@ const BREAKDOWN_WAIT = {
   changing: (id, gate) => `the new breakdown of ${id}: you asked for changes (gate ${gate})`,
   dropped: (id, gate) => `the ${id} breakdown, which you dropped (gate ${gate})`,
 };
-const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.named !== undefined ? `whose gate ${wait.breakdown.gate} ${namedText(wait.breakdown.named, wait.breakdown.id)}` : wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : wait.breakdown.gate ? `whose gate ${wait.breakdown.gate} is not in the logbook` : "which is not in the logbook"}`
+const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.missing ? "which is not in the logbook" : !wait.breakdown.gate ? "whose program names no breakdown gate" : wait.breakdown.named !== undefined ? `whose gate ${wait.breakdown.gate} ${namedText(wait.breakdown.named, wait.breakdown.id)}` : wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : `whose gate ${wait.breakdown.gate} is not in the logbook`}`
   : `${wait.id} (${wait.pilot ? "pilot, " : ""}${wait.word})`;
 /**
- * The card's wait line, or null when nothing waits: each unmet wait (only the breakdown, when it waits for one), and
- * whether the task cannot start, as a wait of it is never met. A task in design may run its design and PE meanwhile.
+ * The card's wait line, or null when nothing waits: each wait that is never met, first, so a task that cannot start
+ * says so, as the program page and status do (R1509-1); then each other unmet wait, only the breakdown when it waits for one.
+ * A task in design may run its design and PE meanwhile. The task page's Now and Next lines read this line.
  */
 function waitLine(task, waits, column) {
-  let open = ENDED.includes(task.state) ? [] : waits.filter(wait => !wait.met);
-  if (open.some(wait => wait.breakdown)) open = open.filter(wait => wait.breakdown);
+  const unmet = ENDED.includes(task.state) ? [] : waits.filter(wait => !wait.met), breakdown = unmet.some(wait => wait.breakdown);
+  const open = [...unmet.filter(wait => wait.never), ...unmet.filter(wait => !wait.never && (!breakdown || wait.breakdown))];
   if (!open.length) return null;
   // Odd text in the waits cell is never shown: a sentence says that the cell needs new waits, and the task cannot start.
   const never = open.some(wait => wait.never), named = open.filter(wait => !wait.odd), odd = named.length < open.length ? " Its waits cell has text that is not a task id: the chief sets its waits again." : "";
