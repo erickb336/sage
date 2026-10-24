@@ -32,19 +32,44 @@ test("a sixth What's new item, a missing changelog link and a first screen witho
   assert.deepEqual(readmeProblems(late), ["README.md: the first screen (the first 10 lines with text) needs a link to #status", "README.md: the first screen (the first 10 lines with text) needs a link to #quick-start"]);
 });
 
-test("a paragraph of 4 sentences is a problem at its first line; 3 sentences, code, lists, tables and quotes are not", () => {
+test("a paragraph of 4 sentences is a problem at its first line; 3 sentences, code, short items and cells, and quotes are not", () => {
   const page = [
     "# Page", "",
     "One. Two? Three!", "",
     "First `a. b. c.` and [a link](x.md#a.b) and v1.2 and README.md.", "Second line. Third. Fourth \"quoted.\"", "",
     "```", "One. Two. Three. Four.", "```", "",
-    "- One. Two. Three. Four.", "  Five. Six.", "",
-    "| A | B |", "| --- | --- |", "| One. Two. | Three. Four. |", "",
+    "- One. Two.", "  Three.", "",
+    "| A | B |", "| --- | --- |", "| One. Two. | Three. Four. Five. |", "",
     "> One. Two. Three. Four.", "",
     "    One. Two. Three. Four.", "",
   ].join("\n");
   assert.deepEqual(paragraphProblems("docs/guide/x.md", page), ["docs/guide/x.md:5: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
   assert.deepEqual(paragraphProblems("README.md", "One. Two. Three.\nFour.\n\nFive.\n"), ["README.md:1: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
+});
+
+test("a list item or a table cell of 4 sentences is a problem at its line (R1406-5)", () => {
+  const page = [
+    "- One. Two.", "  Three. Four.", "- Five.", "1. One. Two. Three. Four.", "",
+    "| A | B |", "| --- | --- |", "| One. Two. Three. Four. | Five. |", "| `a|b` One. | Two \\| Three. Four. Five. Six. |", "",
+  ].join("\n");
+  assert.deepEqual(paragraphProblems("x.md", page), [
+    "x.md:1: a list item of 4 sentences; keep it at 3 or fewer. Shorten it, or split it",
+    "x.md:4: a list item of 4 sentences; keep it at 3 or fewer. Shorten it, or split it",
+    "x.md:8: a table cell of 4 sentences; keep it at 3 or fewer. Shorten it, or split it",
+    "x.md:9: a table cell of 4 sentences; keep it at 3 or fewer. Shorten it, or split it",
+  ]);
+});
+
+test("the paragraph rule counts sentences as a reader does, and paragraphs as GitHub does (R1404-2)", () => {
+  // "e.g.", "i.e." and "etc." before a word in lower case end no sentence; "etc." before a capital does.
+  assert.deepEqual(paragraphProblems("x.md", "One, e.g. two. Three, i.e. four. Five, etc. and six, etc.\n"), []);
+  assert.deepEqual(paragraphProblems("x.md", "One, etc. Two. Three. Four.\n"), ["x.md:1: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
+  // A multi-line HTML comment, and the text of a setext heading, are not prose.
+  assert.deepEqual(paragraphProblems("x.md", "<!--\nOne. Two. Three. Four.\n-->\n\nTitle one. Two. Three. Four.\n===\n\nTitle. Two. Three. Four.\n---\n"), []);
+  // A line that starts with an inline tag is prose; a block tag starts an HTML block, which runs to a blank line.
+  assert.deepEqual(paragraphProblems("x.md", "<kbd>Ctrl</kbd> one. Two. Three. Four.\n\n<div>\nOne. Two. Three. Four.\n</div>\n"), ["x.md:1: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
+  // A wrapped line that starts with a year and a dot continues the paragraph: only "1." starts a list there.
+  assert.deepEqual(paragraphProblems("x.md", "It started in\n2026. Two. Three. Four.\n"), ["x.md:1: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
 });
 
 test("the line budget counts every line of the raw file, blank ones too", () => {
@@ -67,6 +92,15 @@ test("GitHub's anchors: lower case, no punctuation, a hyphen for each space", ()
   assert.equal(slug("__Bold__ start and _end_"), "bold-start-and-end");
   assert.equal(slug("The _max_agents_ cap"), "the-max_agents-cap");
   assert.equal(slug("The `__init__` file"), "the-__init__-file");
+  // An "_" without its pair is text, and GitHub keeps it (R1404-1).
+  assert.equal(slug("The _private field"), "the-_private-field");
+  assert.equal(slug("The foo_ variable"), "the-foo_-variable");
+  assert.equal(slug("File_.md"), "file_md");
+  assert.equal(slug("_a_ and _b"), "a-and-_b");
+});
+
+test("a heading's anchor keeps the text of its code spans (R1420-1)", () => {
+  assert.deepEqual([...anchors("# The `sage` skill\n\n## The `max_agents` cap\n\n## The _private field\n\n```\n# Not a heading\n```\n")], ["the-sage-skill", "the-max_agents-cap", "the-_private-field"]);
 });
 
 test("a repeated heading gets -1, -2, and a heading that already has that slug gets its own suffix, as on GitHub", () => {
@@ -106,6 +140,27 @@ test("a relative link, or a link to the main branch on GitHub, to a missing file
     "README.md:6: ../outside.md leaves the repository",
     "README.md:7: https://github.com/erickb336/sage/blob/main/docs/guide.md#gone names #gone, which docs/guide.md does not have",
     "README.md:7: https://github.com/erickb336/sage/blob/main/gone.md does not exist",
+  ]);
+});
+
+test("a link to the repository root, a query and a link to a folder on GitHub pass as on GitHub; reference links are checked (R1430-2, R1430-3)", (t) => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-links-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, "docs"));
+  writeFileSync(join(dir, "docs/guide.md"), "# Guide\n\n[root](../) [root](..) [plain](guide.md?plain=1) [line](guide.md?plain=1#L3) [query](guide.md?x=1#guide)\n");
+  writeFileSync(join(dir, "README.md"), [
+    "[tree](https://github.com/erickb336/sage/tree/main/docs) [tree root](https://github.com/erickb336/sage/tree/main) [tree, no folder](https://github.com/erickb336/sage/tree/main/gone)",
+    "[ok][g] [no file][x] [no anchor][y] [^1]",
+    "",
+    "[g]: docs/guide.md#guide",
+    "[x]: <docs/missing.md>",
+    "  [y]: docs/guide.md#nothing \"A title\"",
+    "[^1]: A footnote, not a link.",
+  ].join("\n"));
+  assert.deepEqual(linkProblems(dir, ["README.md", "docs/guide.md"]), [
+    "README.md:1: https://github.com/erickb336/sage/tree/main/gone does not exist",
+    "README.md:5: docs/missing.md does not exist",
+    "README.md:6: docs/guide.md#nothing names #nothing, which docs/guide.md does not have",
   ]);
 });
 
