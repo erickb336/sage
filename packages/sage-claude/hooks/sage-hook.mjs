@@ -251,7 +251,7 @@ function switchModes({ owner, text, queued = [], all, stray = "" }, state) {
       const broken = Object.keys(c).find((k) => c[k] === "invalid");
       const [small, large, risky] = [{}, { size: "large" }, { risk: "auth" }].map((task) => stateTool.cyclesFor(task, c));
       if (broken) notes.push(`sage: autopilot is on. ${broken} in config.json is not a number: no merge until it is fixed (sage config ${broken}=<n>).`);
-      else notes.push(`sage: autopilot is on. A pull request merges on its head SHA after ${small} clean cycle${small === 1 ? "" : "s"} for a tiny or small task, ${large} for a large task and ${risky} for a task with a risk flag; a large task with a risk flag needs the larger count. Merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.`);
+      else notes.push(`sage: autopilot is on. A pull request merges on its head SHA after ${small} clean cycle${small === 1 ? "" : "s"} for a small task, ${large} for a large task and ${risky} for a task with a risk flag; a large task with a risk flag needs the larger count. A task with no review or QA in its route needs only checks-pass; a tiny task with an added review needs ${small}. Merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.`);
     }
   }
   // A near miss is never silent: a session's hook stayed off for two days when nothing said that a message missed (T194).
