@@ -65,7 +65,7 @@ To update, run `claude plugin update sage@sage` and start a new session. To stop
 
 ## The board
 
-Send `show board` to see what needs you, the agents at work, and each task in its column. On the Mac, it also opens a board page.
+Send `show board` to see what needs you, the agents at work, and each task in its column. On the Mac, it also starts the board page and gives its address.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/board-dark.png">
@@ -103,6 +103,7 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
+- **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.
 - **Programs:** you approve the breakdown of a multi-task goal before any task of it builds.
 - **A task can wait for other tasks**, and the board has an Agents page and a project picker.

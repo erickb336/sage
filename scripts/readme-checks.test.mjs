@@ -81,7 +81,10 @@ test("npm run check fails on a README with 6 What's new items, a missing screens
   cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   const readme = readFileSync(join(dir, "README.md"), "utf8");
-  writeFileSync(join(dir, "README.md"), readme.replace("\n\nAll changes: [CHANGELOG.md]", "\n- **A sixth change.** One line.\n- **A fifth.** One line.\n\nAll changes: [CHANGELOG.md]"));
+  // Fill the real What's new list up to 6 items, so that the test holds for any count from 1 to 5.
+  const news = readme.split("## What's new")[1].split("\n## ")[0].split("\n").filter((l) => l.startsWith("- ")).length;
+  const extra = Array.from({ length: 6 - news }, (_, i) => `\n- **Extra change ${i + 1}.** One line.`).join("");
+  writeFileSync(join(dir, "README.md"), readme.replace("\n\nAll changes: [CHANGELOG.md]", `${extra}\n\nAll changes: [CHANGELOG.md]`));
   rmSync(join(dir, "docs/assets/board-dark.png"));
   writeFileSync(join(dir, "docs/assets/board-shots.json"), JSON.stringify({ sample: "0".repeat(64) }));
   const r = spawnSync("node", [join(dir, "scripts/check.mjs")], { encoding: "utf8" });
