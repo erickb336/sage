@@ -1,8 +1,7 @@
 // Standalone browser check of the T308 Agents page: 375 and 1440 px, light and dark, the keyboard (the page tabs and the
-// task links) and a live refresh that keeps the scroll and the focus. SAMPLE DATA from board-sample.mjs. Like
-// board-picker.test.mjs, it needs Playwright through NODE_PATH and is not in the default test command. It runs
-// Playwright's bundled Chromium (PLAYWRIGHT_BROWSERS_PATH), or the headless shell at BOARD_BROWSER_PATH; never an
-// installed Chrome. Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$SCRATCH/browsers" node --test scripts/board-agents-browser.test.mjs
+// task links) and a live refresh that keeps the scroll and the focus. SAMPLE DATA from board-sample.mjs. It runs in
+// `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
+// BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
