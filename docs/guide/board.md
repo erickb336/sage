@@ -122,6 +122,8 @@ The command needs a terminal, and the sage hook refuses the ordinary command sha
 
 After you change the config or the password, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
 
+Setup never changes a board config that exists. To move the board to another port, edit `"port"` in `~/.config/sage-board/board.json` (1024 to 65535), then restart it in the same way.
+
 The [board service guide](../../packages/sage-board/README.md) gives local startup, stable installation, offline export, and private phone access through a private HTTPS tunnel, such as Tailscale Serve. The server runs independently of a chat.
 
 It listens on loopback and asks for a sign-in for every request that is not from the Mac itself. A task page or a program page that is too large to show (over 8 MB) shows its parent page (the board, or the programs list) with a note, and the rest of the board stays live.
