@@ -171,6 +171,8 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, gates,
     steps.push({ key: "repair", label: `Repair, round ${round} of ${rounds}`, status, detail: heldAt ?? agentDetail("No agent works on the repair now.") },
       { key: "again", label: "Review again", status: "wait", detail: build ? `A new commit starts again from cycle 1 of ${required}.` : "The evidence review starts again.", parts: cycles[0] ? waiting(cycles[0]) : [] });
   } else for (const [i, cycle] of cycles.entries()) {
+    // Past the reviews, only a cycle with a recorded clean verdict set ran: the line never claims a cycle that did not (T387).
+    if (place("review") === "before" && !clean(cycle)) continue;
     const where = place("review"), pos = where === "at" ? i < at ? "before" : i > at ? "after" : "at" : where;
     const first = build ? task.pr ? "Starts when the build is done." : "Starts when the PR opens." : "Starts when the report is written.";
     const runningRun = cycle.steps.map(item => runs.find(run => run.id === item.run)).find(Boolean);
