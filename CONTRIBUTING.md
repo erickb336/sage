@@ -78,6 +78,8 @@ NODE_PATH=<path>/node_modules node scripts/board-shots.mjs
 
 `npm run check` fails when a PNG is missing, or when the sample data changed after the last screenshots. It does not compare pixels.
 
+For board QA, `node scripts/board-sample.mjs <empty folder>` writes sample logbooks (made-up data), with sample agent slots for the Agents page. It prints the board sources as JSON.
+
 ## Following pstack
 
 pstack changes often. sage follows it so that its users do not have to.

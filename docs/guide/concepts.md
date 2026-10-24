@@ -1,6 +1,6 @@
 # Concepts
 
-This page gives sage's own words, one meaning each. The table comes from [writing/dictionary.md](../../writing/dictionary.md).
+This page gives sage's own words, one meaning each. In the table, "the owner" is you. The table comes from [writing/dictionary.md](../../writing/dictionary.md).
 
 <!-- The word table comes from writing/dictionary.md: edit it there, then run npm run build. -->
 
@@ -36,4 +36,4 @@ This page gives sage's own words, one meaning each. The table comes from [writin
 
 <!-- The end of the word table. -->
 
-In the table, "the owner" is you. sage uses each word in one meaning only. The [dictionary](../../writing/dictionary.md) also gives the words not to say; `npm run check` fails on the worst of them.
+sage uses each word in one meaning only. The [dictionary](../../writing/dictionary.md) also gives the words not to say; `npm run check` fails on the worst of them.

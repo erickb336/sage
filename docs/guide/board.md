@@ -31,7 +31,7 @@ Each card shows its task, project, the provider whose logbook holds it (Claude o
 
 - A backlog card has no "Now" and "Next" lines; it shows its "Needs you" line when it needs you.
 - A long project name ends in an ellipsis, and its tooltip gives the full name.
-- A project shows by its display name (set by the sage), else by its GitHub repository (the `upstream` remote, then `origin`), else by its folder.
+- A project shows by its display name (set by the chief), else by its GitHub repository (the `upstream` remote, then `origin`), else by its folder.
 - The Claude and Codex logbooks with the same key and the same checkout are one project.
 - In each column, the tasks that need you come first, then P0 to P3, then the tasks with no priority.
 - An archived project's tasks leave the columns: the Archived group under the board lists the project, with its task count and what needs you there, and the picker shows its tasks when you choose it.
@@ -86,12 +86,12 @@ The projects and the rows that need a look come first. Each row gives the provid
 | ◷ waiting for its helpers | A lead has at least one helper that still runs. |
 | ! may be stuck | No hook activity for 30 min or more, and no running helper. Or the logbook says that the run runs, and no agent slot holds it (the hook frees a slot after 60 min with no activity). |
 | ▲ running long | The time running is more than 2 times the median of the same role's ended runs in this project. It needs 5 ended runs. |
-| ■ helper stopped, run still open | The hook saw the helper stop, but the logbook still says that the run runs. The sage must end the run. |
+| ■ helper stopped, run still open | The hook saw the helper stop, but the logbook still says that the run runs. The chief must end the run. |
 | ○ running | A Codex run: the logbook says that it runs. Codex sends no activity notes yet, so the row has no last activity, no helpers and no cap. |
 
 The page reads files only: the logbooks, the hook's agent slots and helper notes (by name and time, not their content) and the caps in `config.json`. It runs no command and reads no process list.
 
-To join a slot to its run, the hook marks each agent slot with the run id from the first line of the agent's brief ("Run R12 · task T3"). An agent whose brief has no such line shows with "No run recorded". For QA, `node scripts/board-sample.mjs <empty folder>` also writes sample agent slots.
+To join a slot to its run, the hook marks each agent slot with the run id from the first line of the agent's brief ("Run R12 · task T3"). An agent whose brief has no such line shows with "No run recorded".
 
 
 ## Programs on the board
@@ -101,11 +101,11 @@ A program is a request that sage runs as two or more tasks for one goal, with on
 | Where | What you see |
 | --- | --- |
 | A card | The program's name (◫), "pilot" on the pilot, and a wait line in place of the Now line: what the task waits for (⧗), or ⊘ when a wait is never met, so the task cannot start. A wait in a loop of waits (a hand edit) says "in a loop" and is never met. |
-| The pilot's card, while the breakdown waits for you | A "Program approval" band on top and a frame, then the breakdown gate's question as the sage stored it, line by line, and how to answer: approve, change (say what to change) or drop the program. Only the gate that the program's row names, on its pilot, with the options approve, change and drop, gets the band: a gate that only copies its words is a plain gate. |
+| The pilot's card, while the breakdown waits for you | A "Program approval" band on top and a frame, then the breakdown gate's question as the chief stored it, line by line, and how to answer: approve, change (say what to change) or drop the program. Only the gate that the program's row names, on its pilot, with the options approve, change and drop, gets the band: a gate that only copies its words is a plain gate. |
 | The Program filter | The cards of one program, or of no program. A program with no card on the board (its tasks ended more than 7 days ago) says why, with a link to its page. The board keeps the choice in the address (`#pg=`). |
-| The Programs tab (`/programs`) | Each program in a group (Needs you, Active, Done; Dropped is folded) with its state, goal, progress bar and progress, for example "3 of 7 merged · T10 abandoned", and what moves next: only a task that waits for nothing, then how many tasks wait and which cannot start. A program whose breakdown you asked to change is a line here: the sage revises it. |
+| The Programs tab (`/programs`) | Each program in a group (Needs you, Active, Done; Dropped is folded) with its state, goal, progress bar and progress, for example "3 of 7 merged · T10 abandoned", and what moves next: only a task that waits for nothing, then how many tasks wait and which cannot start. A program whose breakdown you asked to change is a line here: the chief revises it. |
 | A program's page (`/program/<key>`) | Its goal and progress, the pilot, what moves next, its tasks in order (the pilot first, then each task after the tasks that it waits for), and its latest decisions, as short lines with short dates (for example "17 Oct T2 merged: PR 66"). While the breakdown waits for you, the page shows the breakdown gate in the frame. An unknown program gives the page "Program not found", with status 404. |
-| The chat | A Programs section with one line for each program that is not done. Done programs, and dropped programs with no task left in them, are counts, with ": open the board's Programs tab". A dropped program with tasks still in it keeps its line, which asks the sage to take each task out. |
+| The chat | A Programs section with one line for each program that is not done. Done programs, and dropped programs with no task left in them, are counts, with ": open the board's Programs tab". A dropped program with tasks still in it keeps its line, which asks the chief to take each task out. |
 
 The offline HTML file holds the programs list and each program's page too, as parts of the one file. Each of its pages has its own theme switch.
 

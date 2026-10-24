@@ -26,6 +26,12 @@ The board and status phrases work at the start of your message. [Ask for the boa
 | `show board <task id>`, `sage board <task id>` or `board <task id>` | One task in full, for example `show board T1`. |
 | `show status` or `sage status` | The task states, the agents and what needs you. |
 
+These words work inside a request. They switch nothing:
+
+| Put this in your request | What happens |
+| --- | --- |
+| `arena` or `arena <n>`, for example `arena 4` | The chief runs an [arena](how-it-works.md#the-arena) for the design: 3 candidates by default, or the number that you give, and a judge that combines them. |
+
 <a href="../assets/tip-start-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/tip-start-dark.svg">
@@ -115,7 +121,7 @@ The lead does these things:
 - It records each finding of its helpers.
 - It leaves the task at verifying and gives the chief one report. So the chat shows a few lines for each pull request, not every report.
 
-The lead and each helper take a slot of the project's agent cap (`max_agents`, 4 by default). So with the default cap, one lead runs at a time.
+The lead and each helper take a slot of the project's agent cap (`max_agents`, 4 by default). One lead with its 3 helpers fills the default cap, so the chief starts a second lead only when the cap has room for it and its helpers.
 
 A tiny task has no review and no QA, so its lead runs only the implementer. The task has no cycle: it is clean when its checks pass. A risk flag adds the security review, and then the task needs its clean cycles like any other task.
 
@@ -199,25 +205,21 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 
 ## Uninstall sage
 
-1. If you sent the board phrase (`show board`) on the Mac, or started the board server, a server may still run after the chat. Stop it first, in a terminal. To find the installed version, use the "Version:" line under `sage@sage` in the output of this command:
+1. If you sent the board phrase (`show board`) on the Mac, or started the board server, a server may still run after the chat. Stop it first, in a terminal, before you delete the plugin cache. To find the installed version, use the "Version:" line under `sage@sage` in the output of this command:
 
    ```sh
    claude plugin list
    ```
 
-   Replace `<version>` in the first line with that value, then run the two commands:
+   Replace `<version>` with that value, then run the command:
 
    ```sh
-   cd ~/.claude/plugins/cache/sage/sage/<version>
-   node board/cli.mjs board --stop
+   v=<version> && node ~/.claude/plugins/cache/sage/sage/$v/board/cli.mjs board --stop
    ```
 
-   If you already uninstalled sage, `claude plugin list` shows no version: use a folder in that cache directory that has `board/cli.mjs`.
+   When the command fails with "Cannot find module", the version is wrong. List the folders with `ls ~/.claude/plugins/cache/sage/sage/`, and use the one that matches the "Version:" line. If you already uninstalled sage, `claude plugin list` shows no version: use a folder from that list.
 
-   When the command fails with "Cannot find module", your sage is older than the board command. Then stop its server in another way:
-
-   - If you started it with `--serve`, press Ctrl+C in that terminal.
-   - If its login service runs it, step 2 stops it.
+   If you already deleted the plugin cache, reinstall sage, do this step, then uninstall again. Ctrl+C and `launchctl` do not stop a server that the board phrase started, because it runs detached. Only a server that you installed as a login service also needs step 2.
 
 2. If you installed the board's login service, stop it and remove its login file. The login file starts the board at each login until you remove it:
 
@@ -229,7 +231,7 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
    rm ~/Library/LaunchAgents/dev.sage.board.plist
    ```
 
-3. If you set up the board by hand, remove its installed copy (`service/`) and its pages folder (`pages/`). The board has no command that removes them.
+3. If the folder `~/.local/share/sage-board` exists, remove its installed copy (`service/`) and its pages folder (`pages/`). The board has no command that removes them.
 
    > **Warning:** this command also deletes the board's offline pages. Copy each page that you want to keep first.
 
@@ -253,13 +255,13 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 
 8. Start a new session. A session that was open still has sage's instructions.
 
-Claude Code keeps the plugin files in `~/.claude/plugins/cache/sage/` after the uninstall. It removes each version 14 days later, but only while another plugin is still installed ([plugin loading](https://code.claude.com/docs/en/plugins/loading)). To remove them at once, delete that folder.
+Claude Code keeps the plugin files in `~/.claude/plugins/cache/sage/` after the uninstall. It removes each version 14 days later, but only while another plugin is still installed ([plugin loading](https://code.claude.com/docs/en/plugins/loading)). To remove them at once, delete that folder, but only after step 1: the stop command is in it.
 
 The uninstall does not remove your logbooks, your pages or the board's config. They are plain files in the folders below. Delete them yourself when you no longer want the record.
 
 ## Where sage keeps things
 
-- **The logbook** of each project: `~/.claude/sage/<project>-<hash>/`. It holds the tasks, the agent runs, the findings, the verdicts, your answers and the decision trail. So you can leave and come back from another device, and a new session continues the work.
+- **The logbook** of each project: `~/.claude/sage/<project>-<hash>/`. It holds the tasks, the agent runs, the findings, the verdicts, your answers and the decision trail. So you can leave and come back: a new session on the same Mac continues the work, and Remote Control lets you follow it from a phone.
 - **The hook's state**: `~/.claude/sage/.hooks/`. It keeps the mode, autopilot and the agent slots.
 - **The pages** of each task: `~/sage-worktrees/<project>-<hash>/pages/<task>/`, outside the logbook. Agents save their research pages and designs there. The chief makes the folder and prints its path.
 - **The board's config**: `~/.config/sage-board/`, when you use the board server. It holds `board.json` (with your board password's hash), `board.log` and `board.pid`.

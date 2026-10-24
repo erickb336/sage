@@ -21,7 +21,7 @@ There are two loops:
 </picture>
 </a>
 
-The state lives in the logbook: plain files in `~/.claude/sage/<project>-<hash>/`. It holds the tasks, the agent runs, the findings, the verdicts, your answers and the decision trail. So you can leave, and a new session on another device continues the work.
+The state lives in the logbook: plain files in `~/.claude/sage/<project>-<hash>/`. It holds the tasks, the agent runs, the findings, the verdicts, your answers and the decision trail. So you can leave, and a new session on the same Mac continues the work; from a phone, follow it with Remote Control.
 
 ## The team
 

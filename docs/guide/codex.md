@@ -17,7 +17,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | Autopilot | Yes | No |
 | The switch phrases (`sage mode`, `show board`) | Yes | No: use the manual skill commands |
 
-The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. The board reads both, and each card says which provider's logbook holds it.
+The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. The chat board in Codex shows only the Codex logbook. The browser board shows both by default, and each card says which provider's logbook holds it.
 
 ## What you need
 

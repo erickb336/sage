@@ -22,6 +22,7 @@ These are known, and they are not new reports:
 
 - The hook stops mistakes and the usual habits of an agent, not an agent that acts on purpose. A script that builds a command while it runs can pass the hook. The sandbox for agents is planned and not built yet.
 - An agent that holds your GitHub token can remove branch protection or merge a pull request. A separate GitHub identity for agents is planned and not built yet.
+- A tiny task without a risk flag merges after its checks pass, with no review and no QA. The chief sets the size of each task.
 - A raw TCP forward to the board server, such as an SSH tunnel, bypasses its sign-in. It is not supported.
 
 The full list is in [Rules held in code](docs/design/rules-in-code.md#the-limits-of-the-hook).
