@@ -2152,6 +2152,30 @@ test("T386: an agent's harmless command passes with an apostrophe in its descrip
   }
 });
 
+// T386 round 1 (R1497): the chief's logbook write rule reads the command too, not its description.
+test("T386: the chief's harmless command passes with a logbook name or an apostrophe in its description; a write in the command stays refused", () => {
+  for (const on of [false, true]) {
+    const s = session();
+    if (on) s.send(prompt("sage mode"));
+    const send = (command, description) => denied(s.send(tool("Bash", { command, description }, { cwd: FEATURE })));
+    const harmless = [
+      ["git status", "Read the chief's ledger.tsv"],
+      ["ls", "List the agent's runs.tsv rows"],
+      ["cp a.tsv b.tsv", "Copy it, not $SAGE_HOME/p/ledger.tsv"],
+      ["cp a.tsv b.tsv", `Copy it, not ${join(s.vars.SAGE_HOME, "p", "ledger.tsv")}`],
+    ];
+    assert.deepEqual(harmless.filter(([command, description]) => send(command, description) !== undefined), [], `sage mode ${on}: refused`);
+    for (const command of ["echo x >> $SAGE_HOME/p/ledger.tsv", `echo x >> ${join(s.vars.SAGE_HOME, "p", "ledger.tsv")}`]) {
+      for (const description of ["Show the status", "Read the chief's ledger.tsv"]) {
+        assert.match(send(command, description) ?? "", /the chief never writes, moves or removes a logbook file/, `sage mode ${on}: ${command} / ${description}`);
+      }
+    }
+    if (!on) continue; // the chief's merge and push rules are sage mode rules
+    assert.match(send("git status", "gh pr merge 41") ?? "", /--match-head-commit/, "a merge named only in the description");
+    assert.match(send("git status", "git push origin main") ?? "", /only through a pull request/, "a push to main named only in the description");
+  }
+});
+
 test("C3: a SAGE_HOME or CLAUDE_CONFIG_DIR set to a scratch folder passes, for an agent and the chief; one that names the real sage root is refused (T83)", () => {
   const s = session();
   const scratch = mkdtempSync(join(tmpdir(), "sage-scratch-"));

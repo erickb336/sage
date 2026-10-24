@@ -939,7 +939,7 @@ function chiefMemoryWrite(input) {
 }
 /** The word with which a command tool's input writes a logbook file, or undefined. sage: in sage mode a logbook file's name counts too. */
 function shellWrite(ti, sage, cwd) {
-  const text = commandFields(ti);
+  const text = runFields(ti);
   const all = text.join("\n");
   const words = partsOf(all);
   if (!text.some(t => writes(t, cwd)) || stateToolOnly(typeof ti.command === "string" ? ti.command : "")) return undefined;
@@ -1398,7 +1398,7 @@ function agentCheck(input, file, slots) {
   if (ti.dangerouslyDisableSandbox) return "an agent never runs a command outside the sandbox (dangerouslyDisableSandbox).";
   const command = typeof ti.command === "string" ? ti.command : "";
   const cwd = input.cwd ?? process.cwd();
-  const texts = commandFields({ ...ti, description: undefined }); // a description runs nothing
+  const texts = runFields(ti);
   const named = texts.map((t) => runsNamed(t, cwd)).find(Boolean);
   if (named) {
     if (texts.some((t) => /sage-pr\.mjs/i.test(unquote(t)))) return "only the chief runs the PR script (sage-pr.mjs).";
@@ -1642,7 +1642,7 @@ function boardProblem(input) {
     return reach.config || reach.above ? BOARD_CONFIG : undefined;
   }
   if (!SHELL_TOOLS.test(tool)) return undefined;
-  for (const text of commandFields({ ...ti, description: undefined, ...(terminal ? { cwd: undefined } : {}) })) {
+  for (const text of runFields(terminal ? { ...ti, cwd: undefined } : ti)) {
     let read;
     try { read = boardCommands(text, cwd, uncertain); } catch {
       // The hook cannot read the line: it refuses one that names the board or a config (fail closed).
@@ -1720,6 +1720,9 @@ const expansionProblem = (command, cwd, options) => sharedCommands.expansionProb
 function commandFields(ti) {
   return fields(Array.isArray(ti.command) ? { ...ti, command: ti.command.join(" ") } : ti);
 }
+
+/** The fields that a command tool runs: every field but the description, because a description runs nothing (T386). */
+const runFields = (ti) => commandFields({ ...ti, description: undefined });
 
 /** PowerShell expansions cannot be judged by the shared shell reader. Refuse protected words conservatively. */
 function powerShellProblem(command) {
