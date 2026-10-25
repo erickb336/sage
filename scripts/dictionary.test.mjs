@@ -63,7 +63,13 @@ function copy() {
   };
   const file = join(dir, "plugins/sage/agents/qa.md");
   const original = readFileSync(file, "utf8");
-  return { dir, run, write, read: (rel) => readFileSync(join(dir, rel), "utf8"), agent: (line) => write("plugins/sage/agents/qa.md", `${original}\n${line}\n`) };
+  // The check refuses a test file that no test command names (R1534-3), so a test that adds scripts/sample.test.mjs names it.
+  const listSample = () => {
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    pkg.scripts.test += " scripts/sample.test.mjs";
+    writeFileSync(join(dir, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
+  };
+  return { dir, run, write, listSample, read: (rel) => readFileSync(join(dir, rel), "utf8"), agent: (line) => write("plugins/sage/agents/qa.md", `${original}\n${line}\n`) };
 }
 
 test("npm run check fails on a flagged word in an agent file, a skill or the README, and names the file and line", () => {
@@ -79,8 +85,21 @@ test("npm run check fails on a flagged word in an agent file, a skill or the REA
   }
 });
 
+test("R1534-3: npm run check refuses a test file in scripts/ that no test command names, and passes when test:browser names it", () => {
+  const c = copy();
+  c.write("scripts/sample-browser.test.mjs", "import assert from \"node:assert/strict\";\nassert.ok(true);\n");
+  const r = c.run("check");
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /✗ scripts\/sample-browser\.test\.mjs: no test command runs it; add it to "test" or "test:browser" in package\.json/);
+  const pkg = JSON.parse(c.read("package.json"));
+  pkg.scripts["test:browser"] += " scripts/sample-browser.test.mjs";
+  c.write("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+  assert.equal(c.run("check").status, 0);
+});
+
 test("npm run check refuses a wall-clock time under a fixed number of ms in a test, and names the file, line and fix (T53)", () => {
   const c = copy();
+  c.listSample();
   const sample = (body) => c.write("scripts/sample.test.mjs", `import assert from "node:assert/strict";\n${body}\n`);
   const refused = (line) => new RegExp(`✗ scripts/sample\\.test\\.mjs:${line}: a test holds a wall-clock or CPU time under a fixed number, so a busy machine can break it\\. Instead, assert CPU time \\(process\\.cpuUsage\\)`);
   const forms = [
@@ -130,6 +149,7 @@ test("F-T289-61: the timing check reads each file that a test file imports, such
 
 test("T188: check rejects fixed CPU-time bounds and permits ratios or a reason", () => {
   const c = copy();
+  c.listSample();
   const forms = [
     "assert.ok(process.cpuUsage().user < 200_000);",
     "const elapsed = Date.now();\nassert.ok(elapsed < 50 && count === 1);",
