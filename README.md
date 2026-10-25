@@ -124,7 +124,7 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
-- **sage on Codex:** sage installs from its marketplace, in the CLI and the desktop app, and each session starts with a sage status ([Quick start in Codex](#quick-start-in-codex)). `sage mode` gives a Codex session the chief's role, also after a compaction; `sage mode off` and `sage help` work as in Claude Code; `autopilot on` and `autopilot off` record autopilot, but in Codex it merges nothing yet: you merge. The plugin gives the state tool as MCP tools ([the logbook tools](docs/guide/codex.md#the-logbook-tools)).
+- **sage on Codex:** sage installs from its marketplace, in the CLI and the desktop app, and each session starts with a sage status ([Quick start in Codex](#quick-start-in-codex)). `sage mode` gives a Codex session the chief's role, also after a compaction; `sage mode off` and `sage help` work as in Claude Code; `autopilot on` and `autopilot off` record autopilot, but in Codex it merges nothing yet: you merge. The logbook tools come as MCP tools, and the chief starts each role agent with its role text ([sage in Codex](docs/guide/codex.md)).
 - **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
 - **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.

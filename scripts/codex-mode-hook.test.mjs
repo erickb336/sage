@@ -75,7 +75,7 @@ test("T453: the on phrase gives the chief role once; the off phrase ends it; a c
   const on = contextOf(await s.prompt("sage mode"));
   assert.match(on, ROLE);
   assert.match(on, /\n# Chief of staff \(sage mode\)\n/);
-  assert.match(on, /Use the installed Sage skill’s absolute state-tool path/, "the Codex bindings of the chief instructions");
+  assert.match(on, /Each `sage` command below is a tool of the plugin's `sage` MCP server/, "the Codex bindings of the chief instructions");
   assert.equal(await s.prompt("what is open?"), undefined, "the role is not repeated on each prompt");
   assert.equal(await s.start("startup"), undefined);
   assert.equal(await s.start("resume"), undefined, "a resumed thread keeps the role in its history");

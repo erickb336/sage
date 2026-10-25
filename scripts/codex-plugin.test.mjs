@@ -85,25 +85,25 @@ function installed(t, { trust = [], cliVersion } = {}) {
 }
 
 const output = (text) => ({ systemMessage: text, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } });
-const ALL = ["session_start:0:0", "session_start:1:0", "user_prompt_submit:0:0", "user_prompt_submit:1:0", "pre_tool_use:0:0"];
+const ALL = ["session_start:0:0", "session_start:1:0", "user_prompt_submit:0:0", "user_prompt_submit:1:0", "pre_tool_use:0:0", "subagent_stop:0:0"];
 
 test("the SessionStart hook gives the status of a trusted install on a tested Codex", (t) => {
   const { run } = installed(t, { trust: ALL, cliVersion: "0.164.0-alpha.11.1" });
   assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(
-    "sage 0.1.0 is installed. Codex 0.164.0-alpha.11.1.\nsage hooks: all 5 trusted.\nTo start sage mode, send this message alone: sage mode"));
+    "sage 0.1.0 is installed. Codex 0.164.0-alpha.11.1.\nsage hooks: all 6 trusted.\nTo start sage mode, send this message alone: sage mode"));
 });
 
 test("the SessionStart hook names hooks without trust and warns outside the tested Codex range", (t) => {
   const { run } = installed(t, { trust: ["session_start:0:0"], cliVersion: "0.165.0" });
   assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(
-    "sage 0.1.0 is installed. Codex 0.165.0.\nsage hooks: 1 of 5 trusted. Type /hooks in the Codex CLI to review the others.\n" +
+    "sage 0.1.0 is installed. Codex 0.165.0.\nsage hooks: 1 of 6 trusted. Type /hooks in the Codex CLI to review the others.\n" +
     "To start sage mode, send this message alone: sage mode\nWarning: sage is tested with Codex 0.160 to 0.164, not 0.165.0. Some sage hooks may not work."));
 });
 
 test("the SessionStart hook says when it cannot read the Codex version, and ignores other events", (t) => {
   const { run } = installed(t, { trust: ALL });
   assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(
-    "sage 0.1.0 is installed. Codex version unknown.\nsage hooks: all 5 trusted.\nTo start sage mode, send this message alone: sage mode\n" +
+    "sage 0.1.0 is installed. Codex version unknown.\nsage hooks: all 6 trusted.\nTo start sage mode, send this message alone: sage mode\n" +
     "Warning: sage is tested with Codex 0.160 to 0.164. Some sage hooks may not work."));
   assert.equal(run({ hook_event_name: "UserPromptSubmit", prompt: "hello" }), "");
 });

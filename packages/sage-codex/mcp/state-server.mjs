@@ -19,7 +19,7 @@ const sha = z.string().describe("the full 40-character SHA of the head commit");
  * Each tool: its description, its input fields, and the command words with the positional fields (pos). Every other
  * field is an option of the command, given as --field=value so that a value that starts with -- stays a value.
  */
-const TOOLS = {
+export const TOOLS = {
   init: { read: false, describe: "Make the project's logbook and its standing orders, or check an existing one. Run it once for a new project.", argv: () => ["init"] },
   status: { read: true, describe: "Print the status lines of the project's logbook: tasks, runs, gates and programs.", argv: () => ["status"] },
   task_add: {

@@ -16,7 +16,9 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the `sage` skill's commands read it and show the board |
 | The stop check | Yes | No, until native captures prove it |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
-| sage mode: the team, agent caps, report checks, the push and merge rules in code | Yes | Not enabled. Parts are built and tested, but they are not switched on in the installed plugin |
+| Role agents (lead, implementer, reviewers, QA) | Yes | Yes: the chief puts the role text at the top of each spawn message, and starts every role agent itself (no lead yet: the chief does the lead's work). See [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md) |
+| The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
+| sage mode: agent caps, the push and merge rules in code | Yes | Not enabled. Parts are built and tested, but they are not switched on in the installed plugin |
 | Autopilot | Yes | The phrases record it, but it merges nothing yet: you merge |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | No: use the manual skill commands |
