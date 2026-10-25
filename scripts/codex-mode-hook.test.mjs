@@ -208,7 +208,7 @@ test("T453: the README and the Codex guide say what the hook really does in Code
   const guide = readFileSync(new URL("../docs/guide/codex.md", import.meta.url), "utf8");
   const found = (text, pattern) => pattern.test(text.replace(/\s+/g, " "));
   assert.deepEqual({
-    "README: autopilot merges verified work in Codex": found(readme, /With `autopilot on`, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt\./) && !found(readme, /merges nothing yet/),
+    "guide: autopilot merges verified work in Codex": found(guide, /With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt\./) && !found(guide + readme, /merges nothing yet/),
     "README: no claim that every phrase works as in Claude Code": !found(readme, /`autopilot off` and `sage help` work as in Claude Code/),
     "guide: the warning line, and that codex exec does not show it": found(guide, /gives Codex a warning line; the terminal UI and the app show it; `codex exec` does not\./),
     "guide: no claim that the hook shows one line": !found(guide, /and shows one line/),
@@ -218,7 +218,7 @@ test("T453: the README and the Codex guide say what the hook really does in Code
     "guide: the desktop app, not yet checked": found(guide, /desktop app.*This desktop path is not checked yet\./i),
     "guide: step 3 starts Codex with no flags and trusts the hooks": found(guide, /3\. Run `codex` in a project folder\. At the "Hooks need review" screen .*choose \*\*Trust all and continue\*\*/),
     "guide: a fork starts with sage mode off": found(guide, /A forked thread starts with sage mode and autopilot off/),
-  }, Object.fromEntries(["README: autopilot merges verified work in Codex", "README: no claim that every phrase works as in Claude Code", "guide: the warning line, and that codex exec does not show it", "guide: no claim that the hook shows one line", "guide: a damaged mode file", "guide: send a phrase when Codex is idle", "guide: no exact phrase for a question", "guide: the desktop app, not yet checked", "guide: step 3 starts Codex with no flags and trusts the hooks", "guide: a fork starts with sage mode off"].map((k) => [k, true])));
+  }, Object.fromEntries(["guide: autopilot merges verified work in Codex", "README: no claim that every phrase works as in Claude Code", "guide: the warning line, and that codex exec does not show it", "guide: no claim that the hook shows one line", "guide: a damaged mode file", "guide: send a phrase when Codex is idle", "guide: no exact phrase for a question", "guide: the desktop app, not yet checked", "guide: step 3 starts Codex with no flags and trusts the hooks", "guide: a fork starts with sage mode off"].map((k) => [k, true])));
 });
 
 test("T453: the chief role fits the hooks.json context limit, counted at 3 bytes for each token (English text has about 4)", async () => {

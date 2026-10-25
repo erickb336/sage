@@ -1,6 +1,6 @@
 # sage in Codex
 
-This page tells you how to install sage in Codex, what it does there today, and what does not work yet. sage installs as a Codex plugin from its own marketplace, with your normal Codex: the terminal CLI or the Codex desktop app in the ChatGPT app. In Codex, sage mode gives the session the chief's role, but the rules that Claude Code's hook holds in code do not apply yet.
+This page tells you how to install sage in Codex, what it does there today, and what does not work yet. sage installs as a Codex plugin from its own marketplace, with your normal Codex: the terminal CLI or the Codex desktop app in the ChatGPT app. In Codex, sage mode gives the session the chief's role, its role agents and the logbook tools; hooks hold the merge and edit rules, and autopilot merges verified work.
 
 The design of the two provider plugins is in [Separate provider packages](../design/provider-packages.md).
 
@@ -18,9 +18,9 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
 | Role agents (lead, implementer, reviewers, QA) | Yes | Yes: the chief puts the role text at the top of each spawn message, and starts every role agent itself (no lead yet: the chief does the lead's work). See [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md) |
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
-| sage mode: agent caps, the push and merge rules in code | Yes | Not enabled. Parts are built and tested, but they are not switched on in the installed plugin |
-| Autopilot | Yes | The phrases record it, but it merges nothing yet: you merge |
-| The merge rule, the chief's no-edit rule and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)). The merge rule and the no-edit rule act only when the mode hook records sage mode, which is not in the plugin yet |
+| sage mode: agent caps and the push rules in code | Yes | No |
+| Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt |
+| The merge rule, the no-edit rules and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)) |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | No: use the manual skill commands |
 
@@ -49,14 +49,14 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 
    You see ``Added plugin `sage` from marketplace `sage`.`` Then `codex plugin list` shows `sage@sage  installed, enabled`.
 
-3. Run `codex` in a project folder. At the "Hooks need review" screen ("5 hooks are new or changed"), choose **Trust all and continue**. Codex runs the sage hooks only after this step.
+3. Run `codex` in a project folder. At the "Hooks need review" screen ("8 hooks are new or changed"), choose **Trust all and continue**. Codex runs the sage hooks only after this step.
 
    > **Note:** `codex exec` skips hooks without your trust, and it gives no warning.
 
 4. Send a message. Above the reply, you see one status, for example:
 
    ```text
-   ↳ Hook · sage 0.1.0 is installed. Codex 0.160.0. sage hooks: all 5 trusted. To start sage mode, send this message alone: sage mode
+   ↳ Hook · sage 0.1.0 is installed. Codex 0.160.0. sage hooks: all 8 trusted. To start sage mode, send this message alone: sage mode
    ```
 
    The status says when some sage hooks do not have your trust yet, and it warns when your Codex version is outside the tested range. Codex starts a session at your first message, so the status comes then.
@@ -78,14 +78,14 @@ Send each phrase alone, as the whole message, in any letter case.
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff: the hook adds the chief's role to that turn. Send your request next. |
 | `sage mode off` | A normal session again. Autopilot goes off too. The hook adds the role no more, also after a compaction. |
-| `autopilot on` / `autopilot off` | The hook records autopilot, while sage mode is on. It merges nothing yet: work stops at verified, and you merge. |
+| `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
 - Send a phrase when Codex is idle.
 - Only your own typed message switches a mode: Codex gives the hook no agent text. A Codex review or approval check sends its own prompt, and that prompt switches nothing.
 - A message near a phrase switches nothing. The chief asks you for the exact phrase, unless your message was a question.
 - For a normal switch, the chief confirms the switch in one line of its reply.
-- For a limit or a fault, the hook gives Codex a warning line; the terminal UI and the app show it; `codex exec` does not. The limit: `autopilot on` merges nothing yet. The faults: an event that the hook cannot read (it switches nothing and turns autopilot off), and a mode folder that it cannot use (the line names the folder).
+- For a limit or a fault, the hook gives Codex a warning line; the terminal UI and the app show it; `codex exec` does not. The faults: an event that the hook cannot read (it switches nothing and turns autopilot off), and a mode folder that it cannot use (the line names the folder).
 - A damaged mode file turns sage mode and autopilot off. The hook replaces the file with a clean one and gives one warning line. Send `sage mode` to turn sage mode on again.
 - A forked thread starts with sage mode and autopilot off, because Codex does not tell the hook which thread it came from. If the fork shows the chief's role, the chief tells you this in one line. Send `sage mode` in the fork to turn it on there.
 - With `SAGE_HOOKS=off`, a phrase switches nothing, and the hook gives one warning line that says so.
@@ -114,36 +114,22 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 
 ## The rules in Codex
 
-The hook `hooks/gate-hook.mjs` holds three rules. Codex runs it before each shell command and each `apply_patch` edit (`PreToolUse`), and before it shows an approval prompt for a shell command (`PermissionRequest`).
+The hook `hooks/gate-hook.mjs` holds these rules. Codex runs it before each shell command and each `apply_patch` edit (`PreToolUse`), and before it shows an approval prompt for a shell command (`PermissionRequest`).
 
 | Rule | When | What you see |
 | --- | --- | --- |
 | A merge runs only with autopilot on and a passing merge check for that head commit, in the one form `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, from the main thread | sage mode | Codex blocks any other merge, and the chief gets one line with the reason. A verified merge runs with no approval prompt: the hook allows its network approval itself |
 | The chief changes no files | sage mode, the main thread | Codex blocks the chief's `apply_patch` edit. The chief briefs an implementer, and agents edit as before |
+| A reviewer, QA or the PE changes no files | sage mode, a role agent whose task name names that role | Codex blocks its `apply_patch` edit, with one line: the agent reports a finding instead |
 | No one changes files under a `.codex` folder | Every mode, every thread | Codex blocks the `apply_patch` edit, or the shell write that names the folder. Codex reads project settings from that folder, so you make such changes yourself |
+| No shell command names the Codex sage folder, and none resumes or forks a Codex session | Every mode, every thread | Codex blocks the command, with one line. The sage folder holds the logbook and the mode files; the logbook tools change them |
 
 For every other approval, the hook does not decide, so Codex shows its own prompt. When the hook cannot read a tool call, it blocks the call and says so in one line. When it cannot read an approval request, Codex shows its own prompt.
 
-The hook reads sage mode and autopilot from the mode file of the session (in `SAGE_HOME`, or `CODEX_HOME/sage`, under `.hooks/codex/`). The merge check needs `gh`, logged in, and the logbook's verdicts for the head commit, as in Claude Code.
+The hook reads sage mode from the mode file of the session (in `SAGE_HOME`, or `CODEX_HOME/sage`, under `.hooks/codex/`), with the same reader as the mode hook: a damaged file is off. Autopilot counts only when the mode file and your own typed messages in Codex's record of the thread both turn it on, so an agent that writes a mode file unlocks no merge. The merge check needs `gh`, logged in, and the logbook's verdicts for the head commit, as in Claude Code.
 
-Limits: the hook reads a shell command's text, so a write that hides the folder name (for example in a variable) is not blocked; Codex's own sandbox keeps `.codex` read-only in the workspace-write mode. A shell write by the chief is not blocked either: the rule covers `apply_patch`.
-
-## The rules in Codex
-
-The hook `hooks/gate-hook.mjs` holds three rules. Codex runs it before each shell command and each `apply_patch` edit (`PreToolUse`), and before it shows an approval prompt for a shell command (`PermissionRequest`).
-
-| Rule | When | What you see |
-| --- | --- | --- |
-| A merge runs only with autopilot on and a passing merge check for that head commit, in the one form `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, from the main thread | sage mode | Codex blocks any other merge, and the chief gets one line with the reason. A verified merge runs with no approval prompt: the hook allows its network approval itself |
-| The chief changes no files | sage mode, the main thread | Codex blocks the chief's `apply_patch` edit. The chief briefs an implementer, and agents edit as before |
-| No one changes files under a `.codex` folder | Every mode, every thread | Codex blocks the `apply_patch` edit, or the shell write that names the folder. Codex reads project settings from that folder, so you make such changes yourself |
-
-For every other approval, the hook does not decide, so Codex shows its own prompt. When the hook cannot read a tool call, it blocks the call and says so in one line. When it cannot read an approval request, Codex shows its own prompt.
-
-The hook reads sage mode and autopilot from the mode file of the session (in `SAGE_HOME`, or `CODEX_HOME/sage`, under `.hooks/codex/`). The merge check needs `gh`, logged in, and the logbook's verdicts for the head commit, as in Claude Code.
-
-Limits: the hook reads a shell command's text, so a write that hides the folder name (for example in a variable) is not blocked; Codex's own sandbox keeps `.codex` read-only in the workspace-write mode. A shell write by the chief is not blocked either: the rule covers `apply_patch`.
+Limits: the hook reads a shell command's text, so a command that hides a folder name (for example in a variable) is not blocked; Codex's own sandbox keeps `.codex` and the Codex home read-only in the workspace-write mode. A shell write by the chief or a reviewer is not blocked either: the edit rules cover `apply_patch`.
 
 ## What comes next
 
-Full sage mode in Codex comes as more parts of the same plugin: a hook for the mode phrases and the chief's role, a local MCP server for the logbook, and hooks for the report fields and the merge rules. Codex draws its own approval prompts in both front ends, so sage adds none. The runtime notes of the parked Codex fork, for example the [Claude parity audit](../../packages/sage-codex/runtime/claude-parity-audit.md), stay as evidence.
+The lead role, agent caps, the push rules and the board phrases come later in the same plugin. Codex draws its own approval prompts in both front ends, so sage adds none. The runtime notes of the parked Codex fork, for example the [Claude parity audit](../../packages/sage-codex/runtime/claude-parity-audit.md), stay as evidence.

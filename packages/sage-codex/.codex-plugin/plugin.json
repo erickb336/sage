@@ -1,7 +1,7 @@
 {
   "name": "sage",
   "version": "0.1.0",
-  "description": "sage for Codex, in the desktop app and the CLI: principles, writing skills, the logbook, and a status at the start of each session. sage mode and autopilot are in progress.",
+  "description": "sage for Codex, in the desktop app and the CLI: sage mode with the chief and its role agents, the logbook tools, the merge and edit rules, autopilot, principles and writing skills.",
   "author": {
     "name": "Erick Benitez-Ramos"
   },
