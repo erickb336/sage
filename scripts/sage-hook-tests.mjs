@@ -5112,7 +5112,9 @@ test("T434: the main session starts a lead with the desktop app's Agent input: n
   const call = { subagent_type: "sage:lead", description: "lead-T7 Codex doc and copy fixes", prompt: BRIEF };
   assert.equal(s.send(tool("Agent", call, { tool_use_id: "desk", cwd: LEAD_DIR })), undefined);
   s.send(resultOf("desk", "lead-desk"));
-  assert.match(denied(s.send(desktopLead("desk-2", "lead-T7 again"))) ?? "", /a lead named lead-T7 already holds a slot/, "the description's lead-T7 is one lead per task");
+  const twice = denied(s.send(desktopLead("desk-2", "lead-T7 again"))) ?? "";
+  assert.match(twice, /a lead named lead-T7 already holds a slot/, "the description's lead-T7 is one lead per task");
+  assert.match(twice, /stop it with TaskStop \(by its agent id, from its start's result: it started with no name field, so a stop by its name is refused\)/, "a nameless lead stops only by its agent id");
   assert.match(denied(s.send(desktopLead("old-form", "Lead T8 Codex doc and copy fixes"))) ?? "",
     /start the description with lead-T<n> and a space, for example "lead-T12 fix the form"/, "the refusal says how to name the lead");
   // Claude Code knows a lead with no name field only by its agent id: a stop by name would fail and still free the slot.
