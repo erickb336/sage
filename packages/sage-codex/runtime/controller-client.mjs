@@ -239,7 +239,9 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   const timer = schedule ?? defaultSchedule;
   let cancelWait = () => {}, waited = false;
   const awaitModel = () => { cancelWait(); cancelWait = waited ? () => {} : timer(() => { waited = true; say(WAITING); }, WAIT_MS); };
-  let args, binary, project, instructions, agents;
+  let args, binary, project, instructions;
+  // The chief instructions with the project AGENTS.md, and the notice for a file that the client left out.
+  let agents;
   try {
     args = parseArgs(argv);
     binary = resolveControllerBinary(env);
