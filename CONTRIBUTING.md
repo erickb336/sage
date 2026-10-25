@@ -74,6 +74,16 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
 
 - The README is a short front page. `npm run check` holds it to 150 lines, a first screen that answers what sage is and its status, a link to the changelog, and relative links that resolve. A longer text goes into a page under `docs/`, listed in the [docs index](docs/README.md).
 - Each change for users goes into [CHANGELOG.md](CHANGELOG.md), newest first. The README has no list of changes: it links to the changelog.
+- Do not edit `CHANGELOG.md`: the build makes it from the folder `changes/`, so that two pull requests do not edit the same entries. Each pull request adds one file, `changes/<task>.md` (for example `changes/T492.md`), then runs `npm run build`. The file has the date of the first commit of the change, then one list item, with links written as from `CHANGELOG.md`:
+
+  ```markdown
+  ---
+  date: 2026-10-25
+  ---
+  - **A short title.** What changed for users, and what they do now.
+  ```
+
+  The build puts the dates newest first. In one date, it puts the files by name, highest task first, then the older entries of `changes/earlier.md`. `npm run check` fails when `CHANGELOG.md` is not what the build makes. When `CHANGELOG.md` conflicts in a merge, take either side, then run `npm run build`.
 - The word table of [Concepts](docs/guide/concepts.md) and the table of [Principles](docs/guide/principles.md) come from the build: edit `writing/dictionary.md` or the principles, then run `npm run build`.
 - Write at about 80% of Simplified Technical English ([writing/ste-80.md](writing/ste-80.md)), with sage's words from [writing/dictionary.md](writing/dictionary.md). `npm run check` fails on a flagged word.
 

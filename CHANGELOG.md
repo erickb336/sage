@@ -1,3 +1,5 @@
+<!-- Built by scripts/build.mjs from changes/: write your entry in changes/<task>.md, then run npm run build. -->
+
 # Changelog
 
 This is the full list of user-facing changes to sage, newest first. The README has no list of changes: it links here.
@@ -7,6 +9,7 @@ Each date is the day of the first commit that made the change. Older changes are
 
 ## 2026-10-25
 
+- **One change log file for each pull request.** A pull request now writes its change log entry in its own file, `changes/<task>.md` (for example `changes/T492.md`), with the date and the list item. `npm run build` puts the entries into this changelog, newest date first, and `npm run check` fails when this changelog is not what the build makes. So the entries of two pull requests no longer conflict as text: a conflict in `CHANGELOG.md` is now only in a built file, and `npm run build` ends it. See [CONTRIBUTING.md](CONTRIBUTING.md#the-readme-and-the-docs).
 - **Leads start again in the desktop app.** The sage hook refused every lead start in the Claude desktop app, because its Agent tool has no `name` and no `run_in_background` field. Now the hook reads a lead's name `lead-T<n>` from the first word of the description when no name is sent, and refuses only `run_in_background` false. A lead names each helper by its run id `R<n>` in the same way. The chief starts a lead with a description such as `lead-T12 fix the form`, and stops or messages a lead with no name by its agent id: the hook refuses a stop by `lead-T<n>` for such a lead.
 - **Waits in the chat's task lookup and on the programs list.** When you ask about a task that waits, the chat now gives the task page's Now and Next lines: for example "Waits for T10 (abandoned): it cannot start", and "Next: Nothing until the wait changes". Before, it said "In the backlog" and "Next: The build". On the programs list and in the chat's programs lines, a program whose breakdown waits for you, or that the chief revises, now names each task that cannot start.
 - **A replay of past reviews.** `node scripts/review-replay.mjs <logbook folder> [--out <file>]` reads a logbook and reports, for the 10 merged PRs with the most review data, which review roles ran, their tokens by repair round, their findings by severity, class and round, which findings came after round 0 or moved to a later task, and which roles found nothing; then the findings per million tokens for each role and class, and the gaps in the data. A finding that moved to a follow-up task counts once, on the task where a review found it. It only reads the logbook, and it refuses to write its report there, also through a link or another letter case of the path. It changes no route: it measures, so that you can decide which reviews to keep for a project.
