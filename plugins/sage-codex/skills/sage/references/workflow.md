@@ -6,13 +6,12 @@ The parent is the chief and the sole logbook writer. The chief frames work, asks
 2. Frame a task through the CLI. Follow its route and risks. Resolve product decisions before dependent implementation.
 3. Confirm the host supports the required hierarchy and roles. Use its actual agent tools and capacity, not tool names from another provider.
 4. Keep one active build team per project. Give each writer exclusive paths or a separate worktree. Known checks do not provide atomic exclusion across sessions.
-5. Record the lead run and send the complete brief. Only the chief starts a lead. The lead coordinates but does not edit project files, merge or question the owner directly.
-6. The chief starts every role agent, as [start a role agent](roles.md) says: the lead asks the chief for its implementers, code reviewers, security reviewers, UX reviewers and QA. Role agents do not start agents. Keep at most three agents for one lead's task, within the lower host, project and owner limit.
-7. The chief records each specialist run before its work starts. The lead requests the ID from the chief and reports evidence back. The lead and specialists never write logbook tables or invoke state mutations.
-8. The implementer makes the scoped change and runs appropriate checks. An independent reviewer examines the change; the implementer cannot certify its own review.
-9. Record findings before verdicts. Repair on the same task branch. Use the CLI's repair/held/replan rules, not a new task to hide unresolved findings.
-10. Run every required clean cycle on the final commit. A new commit restarts cycles. Use configured counts: default one for tiny/small, two for large or risk-flagged tasks, or more when required.
-11. QA checks acceptance against the final head. Show the user the artifact, evidence, limitations and any needed decision. Stop at verified unless separately authorized publication is available.
+5. The team is flat for now: the chief does the lead's work and starts every role agent (implementers, code reviewers, security reviewers, UX reviewers and QA), as [start a role agent](roles.md) says. Leads come later. Role agents do not start agents. Keep at most three agents for one task, within the lower host, project and owner limit.
+6. The chief records each run before its work starts and sends the complete brief. Role agents never write logbook tables or invoke state mutations.
+7. The implementer makes the scoped change and runs appropriate checks. An independent reviewer examines the change; the implementer cannot certify its own review.
+8. Record findings before verdicts. Repair on the same task branch. Use the CLI's repair/held/replan rules, not a new task to hide unresolved findings.
+9. Run every required clean cycle on the final commit. A new commit restarts cycles. Use configured counts: default one for tiny/small, two for large or risk-flagged tasks, or more when required.
+10. QA checks acceptance against the final head. Show the user the artifact, evidence, limitations and any needed decision. Stop at verified unless separately authorized publication is available.
 
 Tiny work still needs an independent code review under this workflow; add that block with a reason if the framed route lacks it. Run security review for applicable risks and UX review when the experience changes. Large design/PE and investigation work stay with the parent until their specific dispatch path is verified. Do not silently skip required review or rename a missing role. Stop the dependent phase and explain the gap.
 

@@ -2456,11 +2456,11 @@ test("shared chief Codex instructions keep unsupported routes and automatic merg
   assert.match(prepared, /prepared native adapter renders these shared rules on verified owner\s+activation and restores them after supported native compaction/);
   assert.match(prepared, /installed manual preview does not load this automatic chief role/);
   assert.match(prepared, /Full automatic Sage remains disabled/);
-  assert.match(text, /the chief starts a lead, and the lead starts its permitted team/);
-  assert.match(text, /a tiny task goes through a lead to an implementer/);
-  assert.match(text, /Wait for a successful preparation receipt before the native spawn call/);
-  assert.match(text, /same unique name/);
-  assert.match(text, /does not create an assignment, start an agent, or grant a slot/);
+  assert.match(text, /you start every agent yourself, and you do the lead's work/);
+  assert.match(text, /a tiny task goes to an implementer/);
+  assert.match(text, /call `spawn_agent` in the `collaboration` namespace/);
+  assert.match(text, /`fork_turns: "none"`/);
+  assert.doesNotMatch(text, /sage_prepare_task|admission|preparation/i);
   assert.match(text, /PE, designer, and arena-judge routes are not yet integrated and verified/);
   assert.match(text, /Autopilot remains off/);
   assert.match(text, /Never merge, push to the main branch, or force-push/);

@@ -2,7 +2,7 @@
 
 The chief starts each role agent (lead, implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa) as a Codex child agent. Codex plugins cannot ship agent roles, so the role text goes at the top of the spawn message. The plugin writes no role files into your Codex home.
 
-**The shape is flat for now.** The chief starts every role agent, also the reviewers and QA of a lead's task. A lead asks the chief to start them; it does not start agents itself.
+**The shape is flat for now.** The chief starts every role agent and does the lead's work (the briefs, the review cycles and the repair rounds). Leads come later. Role agents do not start agents. Record each run with the `run_add` tool of the sage MCP server before the spawn.
 
 ## Steps
 

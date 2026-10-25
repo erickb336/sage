@@ -2,7 +2,7 @@
 // The input shape is a SubagentStop input that stock Codex 0.160.0 sent in run R1648 (paths replaced).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -58,6 +58,26 @@ test("an input that the gate cannot read stops nothing and gives one plain line"
   for (const input of ["not json", "null", { ...stop({}), hook_event_name: "Stop" }, stop({ stop_hook_active: "no" }),
     stop({ last_assistant_message: 7 }), stop({ agent_transcript_path: null }), stop({ agent_transcript_path: join(dir, "missing.jsonl") }),
     stop({ agent_transcript_path: notMeta })]) assert.deepEqual(gate(input), UNREAD, JSON.stringify(input));
+});
+
+// The tools that the chief and role texts may name. STOCK: the tool lists of stock Codex 0.160.0 in run R1648
+// (gpt-6.1-sol: functions, clock and collaboration namespaces; fake-model: the multi_agent_v1 list), with the
+// spawn_agent parameters. MCP: the tools of the plugin's sage MCP server (T454, PR 327).
+const STOCK = ["exec", "wait", "request_user_input", "request_user_input_async", "sleep", "followup_task", "interrupt_agent",
+  "list_agents", "send_message", "spawn_agent", "wait_agent", "task_name", "fork_turns", "reasoning_effort", "exec_command",
+  "write_stdin", "view_image", "close_agent", "resume_agent", "send_input", "fork_context", "get_goal", "create_goal", "update_goal", "web_search"];
+const MCP = ["init", "status", "task_add", "task_set", "run_add", "run_done", "finding_add", "finding_triage", "finding_close",
+  "finding_move", "verdict", "round", "merge_check", "log", "standing", "standing_add", "pages", "gate_add", "gate_answer"];
+/** Each tool-like name (snake case in a code span) that a binding text names, except an example sage task name. */
+const named = (text) => [...text.matchAll(/`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`/g)].map((m) => m[1]).filter((name) => !/^sage_[a-z_]+_t\d+$/.test(name));
+
+test("every tool that a Codex chief or role binding names is a stock Codex tool or a sage MCP tool", () => {
+  const texts = [JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8")),
+    ...Object.values(JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/role-bindings.json"), "utf8")))]
+    .flatMap((bindings) => Object.values(bindings)).join("\n");
+  assert.deepEqual(named(texts).filter((name) => !STOCK.includes(name) && !MCP.includes(name)), []);
+  assert.doesNotMatch(texts, /admission|preparation|approved worktree tool/i);
+  assert.deepEqual(named("use `sage_prepare_task`, then `spawn_agent` as `sage_qa_t3`"), ["sage_prepare_task", "spawn_agent"], "the reader finds a fork-only tool");
 });
 
 test("role.mjs prints the role text and the sage report, and refuses an unknown role", () => {
