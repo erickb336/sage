@@ -245,6 +245,56 @@ test("T398 F-R1516-2: an off value that the owner's off phrase did not set does 
   }
 });
 
+// R1532: the state that the owner's off phrase saves. A hook that read it from the places below would let the chief edit.
+const OFF_STATE = JSON.stringify({ sage: false, off: "owner", given: false, autopilot: false });
+const CHIEF_AGENT = { agent_type: "sage:chief-of-staff" };
+const offState = (place) => {
+  const s = session();
+  mkdirSync(join(s.dir, "state"));
+  const off = join(s.dir, "off.json");
+  writeFileSync(off, OFF_STATE);
+  place(join(s.dir, "state", "s1.json"), off);
+  return s;
+};
+const refusedChief = (s, why) => {
+  for (const call of fileToolsOf(CHIEF_AGENT)) assert.match(denied(s.sendRaw(call)) ?? "", /could not check/, `${why}: ${call.tool_name}`);
+};
+
+test("T398 R1532-2: the hook does not follow a symbolic link at the state path", () => {
+  assert.equal(denied(offState((state, off) => copyFileSync(off, state)).sendRaw(edit(CHIEF_AGENT))), undefined, "the off state as a plain file holds");
+  refusedChief(offState((state, off) => symlinkSync(off, state)), "a symbolic link at the state path");
+});
+
+test("T398 R1532-2: the hook refuses a state file with two hard links", () => {
+  refusedChief(offState((state, off) => linkSync(off, state)), "a state with two hard links");
+});
+
+test("T398 R1532-3: the hook refuses a state over 1 MB, and does not crash", () => {
+  refusedChief(offState((state) => writeFileSync(state, OFF_STATE.replace("}", `,"pad":"${"x".repeat(2 << 20)}"}`))), "a state of 2 MB");
+});
+
+test("T398 R1532-2: the hook never writes through a link at its temporary name, and replaces a stale one of its own", () => {
+  const chief = CHIEF_AGENT;
+  // The hook saves its state through a file named after its pid, here 4242 by a preload, so that the test can plant the link.
+  const preload = join(mkdtempSync(join(tmpdir(), "sage-pid-")), "pid.mjs");
+  writeFileSync(preload, 'Object.defineProperty(process, "pid", { value: 4242 });\n');
+  const s = session({ NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` });
+  mkdirSync(join(s.dir, "state"));
+  const target = join(s.dir, "target.txt");
+  writeFileSync(target, "kept");
+  symlinkSync(target, join(s.dir, "state", "s1.json.4242"));
+  s.sendRaw({ ...prompt("what is open?"), ...chief }); // sage mode starts, so the hook saves its state
+  assert.equal(readFileSync(target, "utf8"), "kept", "the link's target is not written");
+  assert.equal(existsSync(join(s.dir, "state", "s1.json")), false, "no state is saved through the link");
+  // A stale temporary file of the hook's own is replaced, and the state is saved.
+  const stale = session({ NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` });
+  mkdirSync(join(stale.dir, "state"));
+  writeFileSync(join(stale.dir, "state", "s1.json.4242"), "stale");
+  stale.sendRaw({ ...prompt("what is open?"), ...chief });
+  assert.equal(JSON.parse(readFileSync(join(stale.dir, "state", "s1.json"), "utf8")).sage, true, "the state is saved");
+  assert.equal(existsSync(join(stale.dir, "state", "s1.json.4242")), false, "no temporary file stays");
+});
+
 test("T347: in sage mode the chief writes only Markdown files of its own memory folder", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-memory-")));
   const config = join(root, "config"), memory = join(config, "projects", "-x-workspace-app", "memory"), outside = join(root, "outside");

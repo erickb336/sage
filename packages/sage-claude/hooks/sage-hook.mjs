@@ -2495,13 +2495,16 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     input = JSON.parse(readFileSync(0, "utf8"));
     const session = safe(input.session_id ?? "unknown");
     const file = join(stateDir(), `${session}.json`);
-    // Only a regular file holds state. A FIFO could block the read until the hook's timeout, so the file opens without a
-    // wait, and any other kind of file, or a path the hook cannot open, throws: the catch below fails closed (F-R1517-1).
+    // Only a regular file with one link and at most 1 MB holds state. A FIFO could block the read until the hook's timeout,
+    // so the file opens without a wait; a symbolic link does not open; a hard link or a huge file (which crashes the read)
+    // throws. So does a path the hook cannot open: the catch below fails closed (F-R1517-1, R1532-2, R1532-3).
     let state = {}, fd;
-    try { fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    try { fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0)); } catch (error) { if (error.code !== "ENOENT") throw error; }
     if (fd !== undefined) {
       try {
-        if (!fstatSync(fd).isFile()) throw Error(`the hook state ${file} is not a regular file`);
+        const stat = fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1) throw Error(`the hook state ${file} is not a regular file with one link`);
+        if (stat.size > 1 << 20) throw Error(`the hook state ${file} is over 1 MB`);
         const text = readFileSync(fd, "utf8");
         try { state = JSON.parse(text); } catch {}
       } finally {
@@ -2513,8 +2516,17 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     const output = handle(input, state, slotsFor(join(stateDir(), "slots"), session, Date.now(), input.session_id ?? null));
     if (JSON.stringify(state) !== before) {
       mkdirSync(stateDir(), { recursive: true });
-      writeFileSync(`${file}.${process.pid}`, JSON.stringify(state));
-      renameSync(`${file}.${process.pid}`, file);
+      // The temporary file is new ("wx"), so a link planted at its name is never written through. A stale one of the hook's
+      // own (a regular file of this user with one link) is removed; anything else at the name throws (R1532-2).
+      const tmp = `${file}.${process.pid}`, save = () => writeFileSync(tmp, JSON.stringify(state), { flag: "wx" });
+      try { save(); } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        const old = lstatSync(tmp);
+        if (!old.isFile() || old.nlink !== 1 || (process.getuid && old.uid !== process.getuid())) throw Error(`${tmp} is not the hook's own temporary file`);
+        rmSync(tmp);
+        save();
+      }
+      renameSync(tmp, file);
     }
     if (output) process.stdout.write(JSON.stringify(output));
   } catch (e) {

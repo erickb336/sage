@@ -301,7 +301,7 @@ About 2,000 tokens or fewer, with long material in files. The hook reads a revie
 
 | Rule | Enforced by | Why |
 | --- | --- | --- |
-| The chief never edits files | **Code:** the hook alone, while sage mode is on. It refuses a chief subagent's edits in every mode, and refuses the chief's edits when it cannot read or save its state | It keeps the big picture. Tested in the prototype. |
+| The chief never edits files | **Code:** the hook alone, while sage mode is on. It refuses a chief subagent's edits in every mode, and, in a session that started as the chief, refuses the chief's edits when it cannot read or save its state. A session that the on phrase made the chief is not covered yet (T414) | It keeps the big picture. Tested in the prototype. |
 | A brief has every field | **Code:** hook on the agent spawn | A vague brief fails quietly (pstack) |
 | One writer per worktree or branch | **Code:** the state tool refuses a second open writer on a branch | Parallel writers conflict (Cognition) |
 | At most N agents at once (default 4: one lead and its 3 children) | **Code:** the hook counts running agents | Cost and focus. Orchestrator used 3 |
