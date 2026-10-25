@@ -2,7 +2,7 @@ import {spawn as nativeSpawn} from 'node:child_process';
 import {realpathSync} from 'node:fs';
 import {isAbsolute} from 'node:path';
 import {createControllerTransport, OWNED_CONTROLLER_CONFIG} from './controller-transport.mjs';
-import {bindPolicy, bindTask, bindTurnText, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, checkProjectFiles, turnOutcome} from './controller-binding.mjs';
 
 // Limits bound one wire frame and retained stderr bytes, not total process output.
 const DEFAULT_FRAME_BYTES = 1024 * 1024;
@@ -13,7 +13,7 @@ function positive(value, name) {
 }
 // The streamed pieces of one item, such as item/agentMessage/delta and item/commandExecution/outputDelta.
 const DELTA = /^item\/.+(\/d|D)elta$/;
-const defaultSchedule = (callback, delay) => { const timer = setTimeout(callback, delay); return () => clearTimeout(timer); };
+export const defaultSchedule = (callback, delay) => { const timer = setTimeout(callback, delay); return () => clearTimeout(timer); };
 export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owned-controller', '--strict-config',
   ...Object.entries(OWNED_CONTROLLER_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])]);
 
@@ -25,14 +25,14 @@ export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owne
 export function createControllerProcess(options, {spawn = nativeSpawn, schedule = defaultSchedule} = {}) {
   if (!options || Object.getPrototypeOf(options) !== Object.prototype) throw new TypeError('Trusted launch options required');
   const allowed = ['executable', 'executableSha256', 'cwd', 'env', 'startupTimeoutMs', 'inspectionTimeoutMs', 'stopGraceMs', 'maxFrameBytes', 'maxDiagnosticBytes',
-    'turnTimeoutMs', 'interruptGraceMs', 'maxEvents', 'maxEventBytes', 'onEvent'];
+    'turnTimeoutMs', 'interruptGraceMs', 'maxEvents', 'maxDeltaEvents', 'maxEventBytes', 'onEvent'];
   for (const key of Reflect.ownKeys(options)) {
     const descriptor = Object.getOwnPropertyDescriptor(options, key);
     if (!allowed.includes(key) || !('value' in descriptor)) throw new TypeError('Unsupported launch option');
   }
   const {executable, executableSha256, cwd, env, startupTimeoutMs = 10000, inspectionTimeoutMs = 10000, stopGraceMs = 1000,
     maxFrameBytes = DEFAULT_FRAME_BYTES, maxDiagnosticBytes = DEFAULT_DIAGNOSTIC_BYTES,
-    turnTimeoutMs = 2 * 60 * 60 * 1000, interruptGraceMs = 10000, maxEvents = 20000, maxEventBytes = 64 * 1024 * 1024, onEvent} = options;
+    turnTimeoutMs = 2 * 60 * 60 * 1000, interruptGraceMs = 10000, maxEvents = 20000, maxDeltaEvents = 1000000, maxEventBytes = 64 * 1024 * 1024, onEvent} = options;
   if (typeof executable !== 'string' || !isAbsolute(executable) || typeof cwd !== 'string' || !isAbsolute(cwd)) throw new TypeError('Trusted absolute executable and canonical cwd required');
   if (typeof executableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(executableSha256)) throw new TypeError('Executable sha256 required');
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Invalid event callback');
@@ -45,14 +45,14 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
   }
   Object.freeze(environment);
   for (const [name, value] of Object.entries({startupTimeoutMs, inspectionTimeoutMs, stopGraceMs, maxFrameBytes, maxDiagnosticBytes,
-    turnTimeoutMs, interruptGraceMs, maxEvents, maxEventBytes})) positive(value, name);
+    turnTimeoutMs, interruptGraceMs, maxEvents, maxDeltaEvents, maxEventBytes})) positive(value, name);
   if (typeof spawn !== 'function' || typeof schedule !== 'function') throw new TypeError('Invalid process dependencies');
   let child, connection, attempted = false, fenced = false, fenceReason = null, childClosed = false, exitCode = null, exitSignal = null;
   let phase = 'idle', stopPromise, inspectionPromise, diagnosticBytes = 0, diagnosticsTruncated = false;
   let initialized = null, threadRequested = false, binding = null, turn = null;
   const streamClosures = new Set(), observations = new Set(), signals = [], events = [], settledTurns = new Set();
   // The event limits count from the start of the current turn, so a long session never reaches them.
-  let windowEvents = 0, windowBytes = 0, sequence = 0;
+  let windowEvents = 0, windowDeltas = 0, windowBytes = 0, sequence = 0;
   let resolveFenced;
   const fencedPromise = new Promise(resolve => { resolveFenced = resolve; });
   let buffered = Buffer.alloc(0);
@@ -115,10 +115,10 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     const notification = received.kind === 'observation';
     const message = notification ? received.notification : received.request;
     // A streamed turn sends one delta for each small piece of text, so a long valid turn sends many deltas:
-    // maxEventBytes bounds them, maxEvents does not count them.
+    // maxEventBytes and the larger maxDeltaEvents bound them, maxEvents does not count them.
     const counted = !(notification && DELTA.test(message.method));
-    if ((counted && windowEvents >= maxEvents) || windowBytes + bytes > maxEventBytes) { fence('Event limit exceeded'); return; }
-    if (counted) windowEvents += 1;
+    if ((counted ? windowEvents >= maxEvents : windowDeltas >= maxDeltaEvents) || windowBytes + bytes > maxEventBytes) { fence('Event limit exceeded'); return; }
+    if (counted) windowEvents += 1; else windowDeltas += 1;
     windowBytes += bytes;
     const event = Object.freeze({seq: ++sequence, kind: notification ? 'notification' : 'server-request-refused', method: message.method, message});
     events.push(event);
@@ -204,7 +204,10 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
       .finally(() => { inspectionPromise = undefined; });
     return inspectionPromise;
   }
-  /** Binds one task to one root thread. No turn can start unless the effective policy passed. */
+  /**
+   * Binds one task to one root thread. Every check of the project files and of config/read runs before thread/start,
+   * because thread/start starts the MCP servers. No turn can start unless the effective policy passed.
+   */
   async function openThread(input) {
     if (threadRequested) throw new Error('This process already bound its one task and root thread');
     if (phase !== 'ready' || fenced || stopPromise) throw new Error('Process not ready for a thread');
@@ -212,7 +215,9 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     try {
       const task = bindTask(input, cwd);
       if (realpathSync(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
+      checkProjectFiles(task.project, environment);
       const config = await inspect();
+      checkConfig(config);
       const thread = await bounded(connection.startThread({cwd, ephemeral: true, developerInstructions: input.instructions}), inspectionTimeoutMs, 'Thread start observation expired');
       binding = bindPolicy({binary: {path: executable, sha256: executableSha256}, args: OWNED_LAUNCH_ARGS, initialize: initialized, config, thread, task});
       return Object.freeze({state: 'bound', policy: binding});
@@ -241,7 +246,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     let inputSha256;
     try { inputSha256 = bindTurnText(text); } catch (error) { return Promise.reject(error); }
     const current = {state: Object.freeze({threadId: binding.threadId}), inputSha256, cancels: [], interruptRequested: false};
-    windowEvents = 0; windowBytes = 0;
+    windowEvents = 0; windowDeltas = 0; windowBytes = 0;
     // With an onEvent handler the caller keeps what it needs, so events() keeps the current turn only.
     if (onEvent) events.length = 0;
     const promise = new Promise(resolve => { current.resolve = resolve; });

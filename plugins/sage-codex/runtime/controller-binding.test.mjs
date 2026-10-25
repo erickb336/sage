@@ -166,7 +166,7 @@ test('bindPolicy takes the sandbox and the approval policy only from a layer tha
   const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
   const refusal = edit => { const value = observed(); edit(value); try { bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
   assert.equal(refusal(value => { value.config.origins.sandbox_mode = project; }),
-    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox and approval settings only from your user config, a managed config or the launch flags. Move sandbox_mode to your user config, then start the client again.');
+    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move sandbox_mode to your user config, then start the client again.');
   assert.match(refusal(value => { value.config.origins.approval_policy = project; }), /^selection-origin: The setting approval_policy comes from the project config/);
   assert.match(refusal(value => { value.config.origins.approval_policy = {name: {type: 'packagedDefaults', file: '/opt/codex/defaults.toml'}}; }), /^selection-origin: .*packagedDefaults config layer \(\/opt\/codex\/defaults.toml\)/);
   for (const key of ['approval_policy', 'sandbox_mode']) {
@@ -195,7 +195,7 @@ test('bindPolicy: a model and a provider that no layer sets are the default, as 
 test('bindPolicy refuses each key that changes the sandbox or the approval route from a project layer (R1524-1, R1524-2)', () => {
   const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
   const refusal = (key, origin = project) => { const value = observed(); value.config.origins[key] = origin; try { bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
-  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox and approval settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, then start the client again.`;
+  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, then start the client again.`;
   // The keys as the real config/read names them: a list item has its index.
   for (const [key, name] of [['sandbox_workspace_write.network_access', 'sandbox_workspace_write.network_access'],
     ['sandbox_workspace_write.writable_roots.0', 'sandbox_workspace_write.writable_roots'], ['sandbox_workspace_write.exclude_slash_tmp', 'sandbox_workspace_write.exclude_slash_tmp'],

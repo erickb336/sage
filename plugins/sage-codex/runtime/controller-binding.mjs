@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
-import {closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync} from 'node:fs';
-import {dirname, isAbsolute, resolve} from 'node:path';
+import {closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync} from 'node:fs';
+import {basename, dirname, isAbsolute, join, relative, resolve} from 'node:path';
 import {INSTRUCTION_BYTES, OWNED_CONTROLLER_CONFIG, validText} from './controller-transport.mjs';
 
 // The native version that the owned controller was proved against (T391).
@@ -123,49 +123,69 @@ const SELECTION = [
   ['sandbox', 'sandbox_mode', (value, reply) => (typeof value === 'string' ? {...reply, type: camel(value)} : value), true],
 ];
 const RESTART = 'then start the client again';
-// Each key that changes the sandbox or where an approval goes. Each must come from a layer that an agent cannot write.
-const OWNER_ONLY = ['sandbox_mode', 'sandbox_workspace_write', 'permissions', 'default_permissions', 'approval_policy', 'approvals_reviewer', 'auto_review'];
+// Each key that changes the sandbox or where an approval goes, or that starts a program (an MCP server, or a hook at
+// an event). Each must come from a layer that an agent cannot write.
+const OWNER_ONLY = ['sandbox_mode', 'sandbox_workspace_write', 'permissions', 'default_permissions', 'approval_policy', 'approvals_reviewer', 'auto_review',
+  'mcp_servers', 'hooks', 'features.request_permissions_tool', 'features.exec_permission_approvals', 'features.write_stdin_approval'];
+// An MCP server or a hook event is one entry of its table, so the message names the entry, not one of its fields.
+const ENTRIES = new Set(['mcp_servers', 'hooks']);
 function requireOwner(key, origin) {
   if (OWNER_LAYERS.has(origin?.name?.type)) return;
   // config/read names a list item by its index (sandbox_workspace_write.writable_roots.0); the owner edits the list.
-  const name = key.replace(/(\.[0-9]+)+$/, '');
-  throw refuse('selection-origin', `The setting ${name} comes from ${layer(origin)}. An agent can change project files, so the client takes the sandbox and approval settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, ${RESTART}.`);
+  const [table, entry] = key.split('.');
+  const name = ENTRIES.has(table) && entry ? `${table}.${entry}` : key.replace(/(\.[0-9]+)+$/, '');
+  throw refuse('selection-origin', `The setting ${name} comes from ${layer(origin)}. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, ${RESTART}.`);
+}
+const FORK = `Use the fork binary of version ${CONTROLLER_VERSION}, ${RESTART}`;
+// config/read gives a key that no layer sets as null with no origin: the controller uses its default.
+function configured(config, origins, key) {
+  const value = effective(config, key);
+  return value === null && !origins[key] ? undefined : value;
 }
 
-/** Pure. Returns the frozen policy record with its binding hash, or throws a refusal with a fixed code. */
-export function bindPolicy({binary, args, initialize, config: read, thread: reply, task}) {
+/**
+ * Pure. Checks the config/read reply before thread/start, because thread/start already starts the MCP servers: each
+ * owned launch key has its value from the launch flags, and each owner-only key comes from an owner layer. Returns
+ * the config and its origins, or throws a refusal with a fixed code.
+ */
+export function checkConfig(read) {
   const config = read?.config, origins = read?.origins;
-  const fork = `Use the fork binary of version ${CONTROLLER_VERSION}, ${RESTART}`;
-  if (!config || typeof config !== 'object' || !origins || typeof origins !== 'object') throw refuse('policy-missing', `The controller gave no config layers. ${fork}.`);
+  if (!config || typeof config !== 'object' || !origins || typeof origins !== 'object') throw refuse('policy-missing', `The controller gave no config layers. ${FORK}.`);
   for (const [key, required] of Object.entries(OWNED_CONTROLLER_CONFIG)) {
     // A structured feature (such as features.multi_agent_v2) can be a table: its switch and origin are at `.enabled`.
     const switchKey = Object.hasOwn(origins, `${key}.enabled`) ? `${key}.enabled` : key;
     const value = effective(config, switchKey) ?? effective(config, key);
-    if (value === undefined || !Object.hasOwn(origins, switchKey)) throw refuse('policy-missing', `The controller did not report the setting ${key}. ${fork}.`);
+    if (value === undefined || !Object.hasOwn(origins, switchKey)) throw refuse('policy-missing', `The controller did not report the setting ${key}. ${FORK}.`);
     if (origins[switchKey]?.name?.type !== 'sessionFlags') throw refuse('policy-origin', `The setting ${key} comes from ${layer(origins[switchKey])}, not from the launch flags of the client. Remove ${key} from there, ${RESTART}.`);
-    if (value !== required) throw refuse('policy-value', `The setting ${key} is ${JSON.stringify(value)}, but the client needs ${JSON.stringify(required)}. ${fork}.`);
+    if (value !== required) throw refuse('policy-value', `The setting ${key} is ${JSON.stringify(value)}, but the client needs ${JSON.stringify(required)}. ${FORK}.`);
   }
+  for (const [key, origin] of Object.entries(origins))
+    if (OWNER_ONLY.some(guarded => key === guarded || key.startsWith(`${guarded}.`))) requireOwner(key, origin);
+  for (const [, key, , owned] of SELECTION) {
+    if (!owned) continue;
+    if (configured(config, origins, key) === undefined) throw refuse('selection-missing', `Your Codex config does not set ${key}. Set it in your user config, ${RESTART}.`);
+    requireOwner(key, origins[key]);
+  }
+  return {config, origins};
+}
+
+/** Pure. Returns the frozen policy record with its binding hash, or throws a refusal with a fixed code. */
+export function bindPolicy({binary, args, initialize, config: read, thread: reply, task}) {
+  const {config, origins} = checkConfig(read);
   const thread = reply?.thread;
   if (thread?.cliVersion !== CONTROLLER_VERSION) throw refuse('version', `The controller is version ${String(thread?.cliVersion ?? 'unknown')}, but this client needs ${CONTROLLER_VERSION}. Set SAGE_CODEX_CONTROLLER_BIN to the fork binary of version ${CONTROLLER_VERSION}, ${RESTART}.`);
-  const mismatch = `The controller does not behave as the fork of version ${CONTROLLER_VERSION}: ${fork}.`;
+  const mismatch = `The controller does not behave as the fork of version ${CONTROLLER_VERSION}: ${FORK}.`;
   if (thread.ephemeral !== true) throw refuse('not-ephemeral', `The chief's thread is not ephemeral. ${mismatch}`);
   if (thread.parentThreadId !== null) throw refuse('not-root', `The chief's thread is not a root thread. ${mismatch}`);
   if (thread.cwd !== task.project) throw refuse('cwd', `The chief's thread runs in ${String(thread.cwd)}, not in the project ${task.project}. ${mismatch}`);
   if (typeof thread.id !== 'string' || thread.id === '') throw refuse('not-root', `The chief's thread has no id. ${mismatch}`);
-  for (const [key, origin] of Object.entries(origins))
-    if (OWNER_ONLY.some(guarded => key === guarded || key.startsWith(`${guarded}.`))) requireOwner(key, origin);
   const selection = {};
-  for (const [name, key, expect, owned] of SELECTION) {
+  for (const [name, key, expect] of SELECTION) {
     const observed = reply[name];
-    const origin = origins[key];
-    // config/read gives a key that no layer sets as null with no origin: the controller uses its default.
-    const value = effective(config, key);
-    const configured = value === null && !origin ? undefined : value;
-    if (owned && configured === undefined) throw refuse('selection-missing', `Your Codex config does not set ${key}. Set it in your user config, ${RESTART}.`);
-    if (configured === undefined) { selection[name] = {value: observed ?? null, origin: 'default'}; continue; }
-    if (owned) requireOwner(key, origin);
-    if (canonical(expect(configured, observed)) !== canonical(observed)) throw refuse('selection-changed', `The chief's thread has ${name} ${JSON.stringify(observed)}, but your config sets ${key} to ${JSON.stringify(configured)}. ${mismatch}`);
-    selection[name] = {value: observed, origin: origin?.name?.type ?? 'unknown'};
+    const value = configured(config, origins, key);
+    if (value === undefined) { selection[name] = {value: observed ?? null, origin: 'default'}; continue; }
+    if (canonical(expect(value, observed)) !== canonical(observed)) throw refuse('selection-changed', `The chief's thread has ${name} ${JSON.stringify(observed)}, but your config sets ${key} to ${JSON.stringify(value)}. ${mismatch}`);
+    selection[name] = {value: observed, origin: origins[key]?.name?.type ?? 'unknown'};
   }
   if (!HASH.test(binary?.sha256 ?? '')) throw refuse('binary', 'The binary hash is missing.');
   if (binary.expectedSha256 && binary.expectedSha256 !== binary.sha256) throw refuse('binary', 'The binary hash does not match SAGE_CODEX_CONTROLLER_SHA256.');
@@ -175,6 +195,41 @@ export function bindPolicy({binary, args, initialize, config: read, thread: repl
     threadId: thread.id, project: task.project, task: task.task, run: task.run, instructionsSha256: task.instructionsSha256,
   };
   return deepFreeze({...record, bindingHash: sha256(canonical(record))});
+}
+
+const realOrNull = path => { try { return realpathSync(path); } catch { return null; } };
+function upward(folder) { const folders = [folder]; while (folder !== dirname(folder)) folders.push(folder = dirname(folder)); return folders; }
+// A linked Git worktree takes its hooks from the matching folder of its main checkout. That checkout is the folder
+// above the common git folder that holds worktrees/<name>, which the .git file of the worktree names.
+function mainCheckoutFolders(project) {
+  const folders = upward(project);
+  const checkout = folders.find(folder => existsSync(join(folder, '.git')));
+  let gitDir;
+  try { gitDir = realpathSync(resolve(checkout, /^gitdir: (.+)$/m.exec(readFileSync(join(checkout, '.git'), 'utf8'))[1].trim())); } catch { return []; }
+  if (basename(dirname(gitDir)) !== 'worktrees') return [];
+  const main = dirname(dirname(dirname(gitDir)));
+  return folders.slice(0, folders.indexOf(checkout) + 1).map(folder => join(main, relative(checkout, folder)));
+}
+
+/**
+ * Refuses the project files that Codex loads with no config key, so config/read never shows them: a rules file
+ * (.codex/rules/*.rules) can let a command run with no approval or outside the sandbox, and a hooks file
+ * (.codex/hooks.json) runs commands at hook events. Codex loads them from the .codex folder of each folder from the
+ * project root down to the cwd, and the hooks of a linked worktree from its main checkout; the check covers each
+ * folder up to the filesystem root. The .codex folder that is CODEX_HOME holds the owner's own rules and hooks.
+ */
+export function checkProjectFiles(project, env) {
+  const home = realOrNull(env.CODEX_HOME || (env.HOME ? join(env.HOME, '.codex') : ''));
+  const why = 'An agent can change project files, so the client refuses the rules and hooks files of the project and of each folder above it.';
+  for (const folder of new Set([...upward(project), ...mainCheckoutFolders(project)])) {
+    const dotCodex = join(folder, '.codex');
+    if (home && realOrNull(dotCodex) === home) continue;
+    let rules = [];
+    try { rules = readdirSync(join(dotCodex, 'rules')).filter(name => name.endsWith('.rules')).sort(); }
+    catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw refuse('project-files', `The client cannot read ${join(dotCodex, 'rules')} (${error.code}), so it cannot check it for rules files. Make the folder readable, or remove it, ${RESTART}.`); }
+    if (rules.length) throw refuse('project-rules', `The rules file ${join(dotCodex, 'rules', rules[0])} is in a project folder. A rule can let a command run with no approval or outside the sandbox. ${why} Move the rules to ${home ? join(home, 'rules') : 'the rules folder of your Codex home'}, or remove the file, ${RESTART}.`);
+    if (existsSync(join(dotCodex, 'hooks.json'))) throw refuse('project-hooks', `The hooks file ${join(dotCodex, 'hooks.json')} is in a project folder. A hook runs a command at its event. ${why} Move the hooks to your user Codex config, or remove the file, ${RESTART}.`);
+  }
 }
 
 function agentText(items) {

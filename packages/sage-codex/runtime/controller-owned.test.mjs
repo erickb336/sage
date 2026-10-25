@@ -103,10 +103,23 @@ test('fake 1: the full order binds the policy, runs one turn to completed and ke
   assert.equal(stop.state, 'stopped'); assert.equal(f.timersClear(), true);
 });
 
-for (const [name, edit, code] of [
-  ['fake 2: a user origin for features.multi_agent_v2', stream => { stream.find(entry => entry.after === 'config/read').reply.origins['features.multi_agent_v2.enabled'].name = {type: 'user', file: '/x', profile: null}; return stream; }, 'policy-origin'],
-  ['fake 3: cliVersion 0.161.0', stream => { stream.find(entry => entry.after === 'thread/start' && entry.reply).reply.thread.cliVersion = '0.161.0'; return stream; }, 'version'],
-  ['fake 4: a reply model that differs from the effective model', stream => { stream.find(entry => entry.after === 'thread/start' && entry.reply).reply.model = 'other-model'; return stream; }, 'selection-changed'],
+const PROJECT_LAYER = {name: {type: 'project', dotCodexFolder: `${PROJECT}/.codex`}, version: 'sha256:project'};
+const fromProject = (...keys) => stream => {
+  const {origins} = stream.find(entry => entry.after === 'config/read').reply;
+  for (const key of keys) origins[key] = PROJECT_LAYER;
+  return stream;
+};
+const SENT = ['initialize', 'initialized', 'config/read'];
+// A config/read refusal comes before thread/start, because thread/start starts the MCP servers (R1543-2).
+for (const [name, edit, code, sent] of [
+  ['fake 2: a user origin for features.multi_agent_v2', stream => { stream.find(entry => entry.after === 'config/read').reply.origins['features.multi_agent_v2.enabled'].name = {type: 'user', file: '/x', profile: null}; return stream; }, 'policy-origin', SENT],
+  ['fake 3: cliVersion 0.161.0', stream => { stream.find(entry => entry.after === 'thread/start' && entry.reply).reply.thread.cliVersion = '0.161.0'; return stream; }, 'version', [...SENT, 'thread/start']],
+  ['fake 4: a reply model that differs from the effective model', stream => { stream.find(entry => entry.after === 'thread/start' && entry.reply).reply.model = 'other-model'; return stream; }, 'selection-changed', [...SENT, 'thread/start']],
+  ['fake 20: a project sandbox key (R1543-2)', fromProject('sandbox_workspace_write.network_access'), 'selection-origin', SENT],
+  ['fake 21: a project MCP server (R1543-1, R1544-2, R1546-1)', fromProject('mcp_servers.probe.command', 'mcp_servers.probe.args.0'), 'selection-origin', SENT],
+  ['fake 22: a project hook (R1544-2)', fromProject('hooks.SessionStart.0.hooks.0.command'), 'selection-origin', SENT],
+  ...['request_permissions_tool', 'exec_permission_approvals', 'write_stdin_approval'].map(feature =>
+    [`fake 23: the project approval feature ${feature}`, fromProject(`features.${feature}`), 'selection-origin', SENT]),
 ]) test(`${name} refuses and sends no turn/start`, async () => {
   const f = fake({edit});
   const opened = await bound(f);
@@ -114,7 +127,77 @@ for (const [name, edit, code] of [
   assert.equal(opened.status.state, 'stopped');
   await assert.rejects(f.owner.runTurn('Say one synthetic sentence.'), /No bound root thread/);
   assert.equal(f.methods().includes('turn/start'), false);
-  assert.deepEqual(f.methods(), ['initialize', 'initialized', 'config/read', 'thread/start']);
+  assert.deepEqual(f.methods(), sent);
+});
+
+test('fake 24: an MCP server or a hook from the project names its entry and says where to move it (R1543-1, R1544-2)', async () => {
+  const message = async edit => (await bound(fake({edit}))).error.message;
+  const refused = name => `The setting ${name} comes from the project config in ${PROJECT}/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, then start the client again.`;
+  assert.equal(await message(fromProject('mcp_servers.probe.command')), refused('mcp_servers.probe'));
+  assert.equal(await message(fromProject('hooks.SessionStart.0.hooks.0.command')), refused('hooks.SessionStart'));
+  assert.equal(await message(fromProject('features.write_stdin_approval')), refused('features.write_stdin_approval'));
+  // The same entries from the user layer pass.
+  const user = {name: {type: 'user', file: '/fixture/home/config.toml', profile: null}, version: 'sha256:user'};
+  const fromUser = stream => { const {origins} = stream.find(entry => entry.after === 'config/read').reply; origins['mcp_servers.probe.command'] = user; origins['hooks.Stop.0.hooks.0.command'] = user; return stream; };
+  assert.equal((await bound(fake({edit: fromUser}))).state, 'bound');
+});
+
+// The project files that Codex loads with no config key (R1544-1): a rules file in the .codex folder of the project or
+// of a folder above it, and a hooks file. The .codex folder that is CODEX_HOME is the owner's.
+test('fake 25: a rules or hooks file in the project or a folder above it refuses before config/read; CODEX_HOME rules pass (R1544-1)', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-owned-files-')));
+  try {
+    const project = join(root, 'work', 'project');
+    mkdirSync(project, {recursive: true});
+    const put = (path, text = '') => { mkdirSync(join(root, path, '..'), {recursive: true}); writeFileSync(join(root, path), text); };
+    const open = async (env = {}) => {
+      const f = fakeChild({edit: stream => JSON.parse(JSON.stringify(stream).replaceAll(PROJECT, project))});
+      const owner = createControllerProcess({executable: '/fixture/codex', executableSha256: HASH, cwd: project, env: {PATH: '/fixture/bin', ...env},
+        startupTimeoutMs: DELAY.startup, inspectionTimeoutMs: DELAY.inspection, stopGraceMs: DELAY.stop}, {spawn: f.spawn, schedule: f.schedule});
+      await owner.start();
+      const opened = await owner.openThread({project, task: 'T400', run: 'R1461', instructions: INSTRUCTIONS});
+      await owner.stop();
+      return [opened.state, opened.code ?? null, opened.error?.message.replaceAll(root, '<root>') ?? null, f.methods()];
+    };
+    const why = 'An agent can change project files, so the client refuses the rules and hooks files of the project and of each folder above it.';
+    // The owner's own rules: CODEX_HOME is the .codex folder above the project, as ~/.codex is above ~/workspace/x.
+    put('.codex/rules/user.rules', 'prefix_rule(pattern = ["true"], decision = "allow")\n');
+    assert.deepEqual((await open({CODEX_HOME: join(root, '.codex')}))[0], 'bound');
+    assert.deepEqual((await open({HOME: root}))[0], 'bound', 'HOME/.codex is CODEX_HOME when CODEX_HOME is not set');
+    // With another CODEX_HOME, the same folder is a folder above the project.
+    assert.deepEqual(await open({CODEX_HOME: join(root, 'codex-home')}), ['refused', 'project-rules',
+      `The rules file <root>/.codex/rules/user.rules is in a project folder. A rule can let a command run with no approval or outside the sandbox. ${why} Move the rules to the rules folder of your Codex home, or remove the file, then start the client again.`, ['initialize', 'initialized']]);
+    put('work/.codex/rules/parent.rules', 'prefix_rule(pattern = ["sh"], decision = "allow")\n');
+    put('work/project/.codex/rules/default.rules', 'prefix_rule(pattern = ["sh"], decision = "allow")\n');
+    const refused = path => ['refused', 'project-rules', `The rules file <root>/${path} is in a project folder. A rule can let a command run with no approval or outside the sandbox. ${why} Move the rules to <root>/.codex/rules, or remove the file, then start the client again.`, ['initialize', 'initialized']];
+    assert.deepEqual(await open({CODEX_HOME: join(root, '.codex')}), refused('work/project/.codex/rules/default.rules'));
+    rmSync(join(project, '.codex'), {recursive: true});
+    assert.deepEqual(await open({CODEX_HOME: join(root, '.codex')}), refused('work/.codex/rules/parent.rules'));
+    // A file that does not end in .rules is not a rules file, as Codex reads them.
+    rmSync(join(root, 'work', '.codex', 'rules', 'parent.rules')); put('work/.codex/rules/notes.txt');
+    assert.deepEqual((await open({CODEX_HOME: join(root, '.codex')}))[0], 'bound');
+    put('work/project/.codex/hooks.json', '{"hooks": {}}');
+    assert.deepEqual(await open({CODEX_HOME: join(root, '.codex')}), ['refused', 'project-hooks',
+      `The hooks file <root>/work/project/.codex/hooks.json is in a project folder. A hook runs a command at its event. ${why} Move the hooks to your user Codex config, or remove the file, then start the client again.`, ['initialize', 'initialized']]);
+  } finally { rmSync(root, {recursive: true, force: true}); }
+});
+
+// A linked worktree takes its hooks from the matching folder of its main checkout.
+test('fake 26: a hooks file in the main checkout of a linked worktree refuses (R1544-2)', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-owned-worktree-')));
+  try {
+    const main = join(root, 'main'), project = join(root, 'linked', 'app');
+    mkdirSync(join(main, '.git', 'worktrees', 'linked'), {recursive: true}); mkdirSync(join(main, 'app', '.codex'), {recursive: true}); mkdirSync(project, {recursive: true});
+    writeFileSync(join(root, 'linked', '.git'), `gitdir: ${join(main, '.git', 'worktrees', 'linked')}\n`);
+    writeFileSync(join(main, 'app', '.codex', 'hooks.json'), '{"hooks": {}}');
+    const f = fakeChild({edit: stream => JSON.parse(JSON.stringify(stream).replaceAll(PROJECT, project))});
+    const owner = createControllerProcess({executable: '/fixture/codex', executableSha256: HASH, cwd: project, env: {PATH: '/fixture/bin', CODEX_HOME: join(root, 'home')}}, {spawn: f.spawn, schedule: f.schedule});
+    await owner.start();
+    const opened = await owner.openThread({project, task: 'T400', run: 'R1461', instructions: INSTRUCTIONS});
+    await owner.stop();
+    assert.deepEqual([opened.code, f.methods()], ['project-hooks', ['initialize', 'initialized']]);
+    assert.match(opened.error.message, /^The hooks file .*\/main\/app\/\.codex\/hooks\.json is in a project folder\./);
+  } finally { rmSync(root, {recursive: true, force: true}); }
 });
 
 test('fake 5: a turn/completed before the turn/start reply is held and decides after the reply', async () => {
@@ -235,6 +318,20 @@ test('fake 18: deltas do not count toward maxEvents, so a long streamed turn com
   const fenced = await bytes.owner.runTurn('Say a long synthetic text.');
   assert.deepEqual([fenced.state, fenced.error], ['uncertain', {reason: 'Event limit exceeded'}]);
   await bytes.owner.stop();
+});
+
+test('fake 27: maxDeltaEvents bounds the count of kept deltas in each turn, as maxEventBytes bounds their bytes (R1544-4)', async () => {
+  const f = fake({edit: withDeltas(500), maxDeltaEvents: 500});
+  assert.equal((await bound(f)).state, 'bound');
+  // The count starts again with each turn.
+  for (const turn of [1, 2]) assert.equal((await f.owner.runTurn(`Turn ${turn}.`)).state, 'completed', `turn ${turn}`);
+  await f.owner.stop();
+  const over = fake({edit: withDeltas(500), maxDeltaEvents: 499});
+  assert.equal((await bound(over)).state, 'bound');
+  const fenced = await over.owner.runTurn('Say a long synthetic text.');
+  assert.deepEqual([fenced.state, fenced.error], ['uncertain', {reason: 'Event limit exceeded'}]);
+  assert.equal(over.owner.events().filter(event => event.method === 'item/agentMessage/delta').length, 499);
+  await over.owner.stop();
 });
 
 test('fake 19: with an onEvent handler, events() keeps the current turn only; the sequence numbers go on (R1523-2)', async () => {
@@ -374,14 +471,15 @@ const NEXT = 'Type the next line, or press Ctrl-D to stop the controller.';
 function clientRun({fakeOptions = {}, env = {}, argv = CLIENT_ARGS} = {}) {
   const f = fakeChild(fakeOptions);
   let text = '', handler, ended = false;
-  const output = {write(chunk) { text += chunk; return true; }};
+  // writableLength is the output that waits for the terminal, as a stream gives it; a test can raise it.
+  const output = {writableLength: 0, write(chunk) { text += chunk; return true; }};
   const input = new PassThrough();
   // An undefined value removes that variable.
   const merged = Object.fromEntries(Object.entries({...CLIENT_ENV, ...env}).filter(([, value]) => value !== undefined));
   const code = runClient({argv, env: merged, input, output, classify: parseCommand,
     onSignal: handle => { handler = handle; }, spawn: f.spawn, schedule: f.schedule});
   code.then(() => { ended = true; });
-  return {f, input, code, signal: name => handler(name), text: () => text, lines: () => text.trimEnd().split('\n'), ended: () => ended};
+  return {f, input, output, code, signal: name => handler(name), text: () => text, lines: () => text.trimEnd().split('\n'), ended: () => ended};
 }
 /** Waits, with no clock, until the check passes; a bounded number of event-loop turns, then the test fails. */
 async function until(check, what) {
@@ -606,7 +704,7 @@ test('client: SIGTERM during a turn says that the controller stops now; SIGHUP s
   assert.deepEqual(idle.f.sent.filter(message => message.ended).length, 1, 'the controller stdin ended');
 });
 
-test('client: a user config without model and model_provider starts; the Ready line shows the thread values (R1526-2)', async () => {
+test('client: a user config without model and model_provider starts; the Ready line shows the thread model as the Codex default (R1526-2, R1545-1)', async () => {
   const run = await client(['Say one synthetic sentence.'], {edit: stream => {
     const read = stream.find(entry => entry.after === 'config/read' && entry.reply).reply;
     read.config.model = null; read.config.model_provider = null;
@@ -614,7 +712,91 @@ test('client: a user config without model and model_provider starts; the Ready l
     return stream;
   }});
   assert.equal(run.code, 0);
-  assert.deepEqual(run.lines(), [...HEADER, ...READY, WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
+  assert.deepEqual(run.lines(), [...HEADER,
+    '[Ready: task T400, run R1461. The chief uses your Codex config: model "synthetic" (the Codex default), approval "on-request", sandbox "read-only".]', READY[1],
+    WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
+});
+
+test('client: a refused line keeps its fix when another typed line waits (R1546-2)', async () => {
+  const run = await client(['x'.repeat(64 * 1024 + 1), 'Say one synthetic sentence.']);
+  assert.equal(run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [
+    '[The client did not send the line: The line has 65537 bytes; a line must be text of 1 to 65536 bytes, with no NUL. Shorten or correct the line, then type it again.]',
+    WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
+});
+
+test('client: a controller warning of several lines shows several prefixed lines, with no U+FFFD for the newlines (R1546-3)', async () => {
+  const summary = 'Project-local config is disabled in these folders:\n    1. /p/.codex\n       Trust the project to load it.\n';
+  const run = await client([], {edit: stream => {
+    stream.splice(stream.findIndex(entry => entry.after === 'thread/start'), 0, {after: 'thread/start', notification: {method: 'configWarning', params: {summary, path: '/p/.codex/config.toml'}}},
+      {after: 'thread/start', notification: {method: 'warning', params: {message: 'first\r\nsecond'}}});
+    return stream;
+  }});
+  assert.equal(run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length, HEADER.length + 5), [
+    '[Warning about your Codex config: Project-local config is disabled in these folders:]',
+    '[Warning about your Codex config:     1. /p/.codex]',
+    '[Warning about your Codex config:        Trust the project to load it. (/p/.codex/config.toml)]',
+    '[Warning from the controller: first]', '[Warning from the controller: second]']);
+  assert.equal(run.text().includes('�'), false, run.text());
+});
+
+test('client: a crash during a turn and at the start give plain words, one wording for each event (R1545-2)', async () => {
+  const hold = holdFirstTurn();
+  const run = clientRun({fakeOptions: hold.options});
+  run.input.write('Wait for an interrupt.\n');
+  await until(() => hold.held, 'the held turn');
+  run.f.close(1);
+  await until(run.ended, 'the client exit');
+  run.input.end();
+  assert.equal(await run.code, 1);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [
+    '[The result of the turn is unknown: the controller process ended by itself. No later line can run. Check the project for changes from this turn. Start the client again.]',
+    '[The session ended early: the controller process ended by itself. Start the client again.]']);
+  // The controller ends before it answers initialize.
+  const early = clientRun({fakeOptions: {onRequest: (message, {close}) => (message.method === 'initialize' ? (queueMicrotask(() => close(1)), false) : undefined)}});
+  early.input.end();
+  assert.equal(await early.code, 1);
+  assert.deepEqual(early.lines(), [...HEADER, '[The controller did not start: the controller process ended by itself. Check that SAGE_CODEX_CONTROLLER_BIN is the fork binary and that your Codex config file loads. Start the client again.]']);
+});
+
+test('client: a turn with no controller event for 15 s shows the wait note once; the note goes with the turn (R1545-3)', async () => {
+  const hold = holdFirstTurn();
+  const run = clientRun({fakeOptions: hold.options});
+  run.input.write('Wait for an interrupt.\n');
+  await until(() => hold.held, 'the held turn');
+  run.f.fire(15000);
+  assert.equal(run.lines().at(-1), '[Waiting for the model. Press Ctrl-C to stop the turn.]');
+  // Once for each turn: no second wait timer runs in this turn.
+  assert.throws(() => run.f.fire(15000), /a live timer of 15000/);
+  run.signal('SIGINT');
+  await until(() => run.lines().at(-1) === `[You stopped the turn. ${NEXT}]`, 'the stopped turn');
+  run.input.end('Say one synthetic sentence.\n');
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.lines().filter(line => line.startsWith('[Waiting')).length, 1);
+  assert.throws(() => run.f.fire(15000), /a live timer of 15000/, 'the wait ends with its turn');
+});
+
+test('client: a terminal that takes no output stops the turn once with a message, and drops output past 8 MiB (R1544-4)', async () => {
+  const hold = holdFirstTurn({answerInterrupt: false});
+  const run = clientRun({fakeOptions: hold.options});
+  run.input.write('Wait for an interrupt.\n');
+  await until(() => hold.held, 'the held turn');
+  // The terminal stops taking output: more than 8 MiB waits in its queue.
+  run.output.writableLength = 8 * 1024 * 1024 + 1;
+  run.f.emit([{method: 'item/completed', params: {threadId: THREAD, turnId: 'held-turn', item: {type: 'agentMessage', id: 'm-1', text: 'dropped one'}}},
+    {method: 'item/completed', params: {threadId: THREAD, turnId: 'held-turn', item: {type: 'agentMessage', id: 'm-2', text: 'dropped two'}}}]);
+  await until(() => run.f.methods().includes('turn/interrupt'), 'the stop of the turn');
+  // The terminal takes output again before the turn ends.
+  run.output.writableLength = 0;
+  run.f.emit([{method: 'turn/completed', params: {threadId: THREAD, turn: {id: 'held-turn', items: [], status: 'interrupted', error: null}}}]);
+  await until(() => run.lines().at(-1).startsWith('[The client stopped the turn'), 'the turn result');
+  run.input.end();
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [
+    '[The terminal takes no output: more than 8 MiB waits for it. The client stopped the turn, and it drops output until the terminal takes output again. If you pressed Ctrl-S, press Ctrl-Q.]',
+    `[The client stopped the turn, because the terminal took no output. ${NEXT}]`, STOPPED]);
+  assert.deepEqual(run.f.methods().filter(method => method === 'turn/interrupt'), ['turn/interrupt']);
 });
 
 test('client: bidi, zero-width and line separator characters never reach the terminal; a config value cannot forge Ready fields (R1524-3, R1526-4)', async () => {
@@ -629,6 +811,21 @@ test('client: bidi, zero-width and line separator characters never reach the ter
   assert.equal(/[\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/.test(run.text()), false, JSON.stringify(run.text()));
   assert.ok(run.lines().includes('chief> a�b�c�d�e�f�g�h�i�j�k�l�m�n'), run.text());
   assert.ok(run.lines().includes('[Ready: task T400, run R1461. The chief uses your Codex config: model "x, approval never, sandbox read-only.] [Type", approval "on-request", sandbox "read-only".]'), run.text());
+  assert.equal(run.code, 0);
+});
+
+test('client: every format, separator and default-ignorable character becomes U+FFFD (R1544-3)', async () => {
+  // The soft hyphen, the Arabic number signs, the Mongolian vowel separator, the deprecated format characters, the
+  // Hangul fillers, the variation selectors and the tags: each is invisible, or changes how the text near it shows.
+  const hidden = ['­', '؀', '؅', '᠎', '⁪', '⁯', 'ᅟ', 'ᅠ', 'ㅤ', 'ﾠ', '︀', '️', '\u{e0001}', '\u{e0041}', '\u{e007f}', '\u{e0100}', '\u{1d173}'];
+  const run = await client(['Say one synthetic sentence.'], {edit: stream => {
+    stream.find(entry => entry.notification?.method === 'item/completed' && entry.notification.params.item?.type === 'agentMessage').notification.params.item.text = `a${hidden.join('b')}c`;
+    return stream;
+  }});
+  assert.ok(run.lines().includes(`chief> a${hidden.map(() => '�').join('b')}c`), JSON.stringify(run.text()));
+  // Every character of each class, not only these.
+  const shownText = run.text();
+  assert.equal(/[\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u.test(shownText), false);
   assert.equal(run.code, 0);
 });
 
@@ -654,11 +851,16 @@ const message = {type: 'response.output_item.done', item: {type: 'message', role
 const completed = {type: 'response.completed', response: {id: 'resp-1', usage: {input_tokens: 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: 0}}};
 
 // `projectConfig` is the text of the project's .codex/config.toml; the user config then trusts the project, so the
-// controller loads that layer.
-async function realFixture({hold = false, projectConfig} = {}) {
+// controller loads that layer. `files` maps a path under the fixture root to its text. CODEX_HOME is the .codex folder
+// above the project, as ~/.codex is above ~/workspace/<project>, and it holds a rules file of the owner.
+async function realFixture({hold = false, projectConfig, files = {}} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-owned-')));
-  const home = join(root, 'codex-home'), project = join(root, 'project'), bin = join(root, 'bin'), userHome = join(root, 'home');
-  for (const dir of [home, project, bin, userHome]) mkdirSync(dir);
+  const home = join(root, '.codex'), project = join(root, 'work', 'project'), bin = join(root, 'bin'), userHome = join(root, 'home');
+  for (const dir of [join(home, 'rules'), project, bin, userHome]) mkdirSync(dir, {recursive: true});
+  writeFileSync(join(home, 'rules', 'owner.rules'), 'prefix_rule(pattern = ["sage-fixture-never-run"], decision = "forbidden")\n');
+  // A command in a project file touches this marker if it runs.
+  const marker = join(root, 'marker'), marked = text => text.replaceAll('{{marker}}', marker);
+  for (const [path, text] of Object.entries(files)) { mkdirSync(join(root, path, '..'), {recursive: true}); writeFileSync(join(root, path), marked(text)); }
   // The controller may look for process tools: only refusing fakes are on PATH.
   for (const name of ['ps', 'pgrep', 'kill', 'launchctl']) { writeFileSync(join(bin, name), '#!/bin/sh\nexit 1\n'); chmodSync(join(bin, name), 0o755); }
   const requests = [], held = [];
@@ -695,27 +897,34 @@ enabled = false
 [feedback]
 enabled = false
 ${projectConfig === undefined ? '' : `[projects."${project}"]\ntrust_level = "trusted"\n`}`);
-  if (projectConfig !== undefined) { mkdirSync(join(project, '.codex')); writeFileSync(join(project, '.codex', 'config.toml'), projectConfig); }
+  if (projectConfig !== undefined) { mkdirSync(join(project, '.codex'), {recursive: true}); writeFileSync(join(project, '.codex', 'config.toml'), marked(projectConfig)); }
   writeFileSync(join(home, 'auth.json'), JSON.stringify({auth_mode: 'apikey', OPENAI_API_KEY: 'synthetic-api-key'}));
   const binary = resolveControllerBinary(process.env);
   const events = [];
   const env = {PATH: `${bin}:/usr/bin:/bin`, HOME: userHome, TMPDIR: root, CODEX_HOME: home, CODEX_AUTHAPI_BASE_URL: url,
     CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG: '1', CODEX_APP_SERVER_MANAGED_CONFIG_PATH: join(home, 'managed_config.toml'),
     NO_PROXY: '*', no_proxy: '*', RUST_LOG: 'warn', DO_NOT_TRACK: '1'};
-  // The test keeps the handle of the real controller process, to see its exit by that handle.
-  const children = [];
+  // The test keeps the handle of the real controller process, to see its exit by that handle, and the method of each
+  // request that the wrapper sends to it.
+  const children = [], sent = [];
   const owner = createControllerProcess({
     executable: binary.path, executableSha256: binary.sha256, cwd: project, env,
     startupTimeoutMs: 60000, inspectionTimeoutMs: 30000, stopGraceMs: 5000, turnTimeoutMs: 60000, interruptGraceMs: 10000,
     onEvent: event => events.push(event),
-  }, {spawn: (...launch) => { const child = spawn(...launch); children.push(child); return child; }});
+  }, {spawn: (...launch) => {
+    const child = spawn(...launch);
+    children.push(child);
+    const write = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (chunk, ...rest) => { const {method} = JSON.parse(chunk); if (method) sent.push(method); return write(chunk, ...rest); };
+    return child;
+  }});
   async function close() {
     for (const response of held) response.end();
     await new Promise(resolve => server.close(resolve));
     server.closeAllConnections?.();
     rmSync(root, {recursive: true, force: true});
   }
-  return {root, home, project, binary, env, owner, requests, events, held, children, close};
+  return {root, home, project, marker, binary, env, owner, requests, events, held, children, sent, close};
 }
 function filesUnder(dir) {
   if (!existsSync(dir)) return [];
@@ -800,8 +1009,46 @@ test('real owned controller: a project config that widens the sandbox or moves a
     } finally { await f.owner.stop(); await f.close(); }
   }
   saveEvidence('real-project-layer', found);
-  const refused = key => ['refused', 'selection-origin', `The setting ${key} comes from the project config in <project>/.codex. An agent can change project files, so the client takes the sandbox and approval settings only from your user config, a managed config or the launch flags. Move ${key} to your user config, then start the client again.`, 'stopped', 0];
+  const refused = key => ['refused', 'selection-origin', `The setting ${key} comes from the project config in <project>/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${key} to your user config, then start the client again.`, 'stopped', 0];
   assert.deepEqual(found, {widen: refused('sandbox_workspace_write.network_access'), reviewer: refused('approvals_reviewer')});
+});
+
+// Each project way to start a program or to change approvals refuses before thread/start: thread/start starts the MCP
+// servers, and the rules and hooks files have no config key (R1543-1, R1543-2, R1544-1, R1544-2, R1546-1).
+test('real owned controller: a project MCP server, hook, approval feature, rules file, parent rules file or hooks file refuses before thread/start', {skip: REAL, timeout: 300000}, async () => {
+  const allow = 'prefix_rule(pattern = ["sh"], decision = "allow")\n';
+  const variants = {
+    mcp: {projectConfig: '[mcp_servers.probe]\ncommand = "/usr/bin/touch"\nargs = ["{{marker}}"]\n'},
+    hook: {projectConfig: '[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = "command"\ncommand = "/usr/bin/touch {{marker}}"\n'},
+    feature: {projectConfig: '[features]\nrequest_permissions_tool = true\n'},
+    rules: {projectConfig: '', files: {'work/project/.codex/rules/default.rules': allow}},
+    parentRules: {files: {'work/.codex/rules/parent.rules': allow}},
+    hooksFile: {projectConfig: '', files: {'work/project/.codex/hooks.json': JSON.stringify({hooks: {SessionStart: [{hooks: [{type: 'command', command: '/usr/bin/touch {{marker}}'}]}]}})}},
+  };
+  const found = {};
+  for (const [name, options] of Object.entries(variants)) {
+    const f = await realFixture(options);
+    try {
+      await f.owner.start();
+      const opened = await f.owner.openThread({project: f.project, task: 'T400', run: 'R1461', instructions: 'Synthetic owned controller test.'});
+      found[name] = {state: opened.state, code: opened.code ?? null, message: opened.error?.message.replaceAll(f.root, '<root>') ?? null, status: opened.status?.state ?? null,
+        sent: [...f.sent], marker: existsSync(f.marker), posts: f.requests.filter(request => request.url === '/v1/responses').length};
+    } finally { await f.owner.stop(); await f.close(); }
+  }
+  saveEvidence('real-project-programs', found);
+  const config = ['initialize', 'initialized', 'config/read'], files = ['initialize', 'initialized'];
+  const origin = name => `The setting ${name} comes from the project config in <root>/work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, then start the client again.`;
+  const why = 'An agent can change project files, so the client refuses the rules and hooks files of the project and of each folder above it.';
+  const rules = path => `The rules file <root>/${path} is in a project folder. A rule can let a command run with no approval or outside the sandbox. ${why} Move the rules to <root>/.codex/rules, or remove the file, then start the client again.`;
+  const refused = (code, message, sent) => ({state: 'refused', code, message, status: 'stopped', sent, marker: false, posts: 0});
+  assert.deepEqual(found, {
+    mcp: refused('selection-origin', origin('mcp_servers.probe'), config),
+    hook: refused('selection-origin', origin('hooks.SessionStart'), config),
+    feature: refused('selection-origin', origin('features.request_permissions_tool'), config),
+    rules: refused('project-rules', rules('work/project/.codex/rules/default.rules'), files),
+    parentRules: refused('project-rules', rules('work/.codex/rules/parent.rules'), files),
+    hooksFile: refused('project-hooks', `The hooks file <root>/work/project/.codex/hooks.json is in a project folder. A hook runs a command at its event. ${why} Move the hooks to your user Codex config, or remove the file, then start the client again.`, files),
+  });
 });
 
 // A killed client closes the pipe to the controller's stdin, and nothing else ends the controller then, because it
@@ -865,7 +1112,16 @@ const reader = createInterface({input: process.stdin});
 reader.on('line', line => {
   const message = JSON.parse(line);
   if (!message.method) return;
-  if (message.method === 'turn/start' && ++turns > 1) {
+  if (message.method === 'turn/start') mark('turn-' + ++turns);
+  if (message.method === 'turn/start' && turns === 1 && process.env.FAKE_BIG) {
+    // One agent message larger than the buffer of a terminal, then the end of the turn.
+    const id = 'big-turn';
+    send([{id: message.id, result: {turn: {id, status: 'inProgress', items: []}}},
+      {method: 'item/completed', params: {threadId: thread, turnId: id, item: {type: 'agentMessage', id: 'big', text: 'x'.repeat(Number(process.env.FAKE_BIG))}}},
+      {method: 'turn/completed', params: {threadId: thread, turn: {id, items: [], status: 'completed', error: null}}}]);
+    return;
+  }
+  if (message.method === 'turn/start' && turns > 1) {
     // Each later turn gets its own turn id, as the real controller gives.
     const turn = stream.find(entry => entry.after === 'turn/start' && entry.reply).reply.turn.id;
     send(JSON.parse(JSON.stringify(stream.filter(entry => entry.after === 'turn/start')).replaceAll(turn, turn + '-' + turns))
@@ -886,7 +1142,7 @@ reader.on('line', line => {
 });
 reader.on('close', () => process.exit(0));
 `;
-async function signalFixture({pty} = {}) {
+async function signalFixture({pty, mark = 'turn-started', pump = true, env = {}} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-signal-')));
   const project = join(root, 'project'), marks = join(root, 'marks');
   mkdirSync(project); mkdirSync(marks);
@@ -895,11 +1151,12 @@ async function signalFixture({pty} = {}) {
   const clientPath = fileURLToPath(new URL('../../../plugins/sage-codex/runtime/controller-client.mjs', import.meta.url));
   const command = [process.execPath, clientPath, '--project', project, '--task', 'T400', '--run', 'R1461', '--instructions', join(root, 'chief.md')];
   // detached: the client leads its own process group, as a job in a terminal does. With `pty`, the Python helper
-  // runs the client on a pseudo terminal, types the `pty` line when it is not empty, and closes the terminal.
-  const [file, ...args] = pty === undefined ? command : ['python3', '-I', '-c', PTY, pty, join(marks, 'turn-started'), ...command];
+  // runs the client on a pseudo terminal, types the `pty` text when it is not empty, waits for the `mark` (reading the
+  // terminal only with `pump`), and closes the terminal.
+  const [file, ...args] = pty === undefined ? command : ['python3', '-I', '-c', PTY, pty, join(marks, mark), pump ? '1' : '0', ...command];
   const client = spawn(file, args, {
     detached: true, stdio: ['pipe', 'pipe', 'pipe'],
-    env: {PATH: process.env.PATH, SAGE_CODEX_CONTROLLER_BIN: join(root, 'codex'), FAKE_FIXTURE: fileURLToPath(new URL('./controller-fixture.json', import.meta.url)), FAKE_PROJECT: project, FAKE_MARKS: marks},
+    env: {PATH: process.env.PATH, SAGE_CODEX_CONTROLLER_BIN: join(root, 'codex'), FAKE_FIXTURE: fileURLToPath(new URL('./controller-fixture.json', import.meta.url)), FAKE_PROJECT: project, FAKE_MARKS: marks, ...env},
   });
   let out = '', code;
   client.stdout.on('data', chunk => { out += chunk; });
@@ -957,7 +1214,7 @@ test('signal: two Ctrl-C stop the controller, and the client exits with code 0 w
 // of short steps for the client, and stops only its own child, by its pid from fork, if the client stays up.
 const PTY = `
 import json, os, pty, select, signal, sys, time
-line, mark, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+line, mark, pumping, args = sys.argv[1], sys.argv[2], sys.argv[3] == '1', sys.argv[4:]
 pid, fd = pty.fork()
 if pid == 0:
     os.execv(args[0], args)
@@ -978,7 +1235,11 @@ if ready and line:
     for _ in range(1500):
         if os.path.exists(mark):
             break
-        pump()
+        if pumping:
+            pump()
+        else:
+            time.sleep(0.02)
+marked = os.path.exists(mark)
 os.close(fd)
 code = None
 for _ in range(1500):
@@ -991,10 +1252,10 @@ killed = code is None
 if killed:
     os.kill(pid, signal.SIGKILL)
     code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
-print(json.dumps({'ready': ready, 'code': code, 'killed': killed}))
+print(json.dumps({'ready': ready, 'marked': marked, 'code': code, 'killed': killed}))
 `;
-async function closedTerminal(line) {
-  const s = await signalFixture({pty: line});
+async function closedTerminal(line, options) {
+  const s = await signalFixture({pty: line, ...options});
   try {
     const code = await s.exited;
     return {...JSON.parse(s.out()), helperCode: code, controllerExit: s.marked('exited') ? readFileSync(join(s.marks, 'exited'), 'utf8') : null};
@@ -1003,9 +1264,16 @@ async function closedTerminal(line) {
 const PYTHON = spawnSync('python3', ['-I', '-c', 'import pty'], {stdio: 'ignore'}).status === 0 ? false : 'python3 with the pty module is not on PATH';
 
 test('pty: closing the terminal at Ready stops the client with code 1 and ends the controller (R1525-1)', {skip: PYTHON, timeout: 120000}, async () => {
-  assert.deepEqual(await closedTerminal(''), {ready: true, code: 1, killed: false, helperCode: 0, controllerExit: '0'});
+  assert.deepEqual(await closedTerminal(''), {ready: true, marked: false, code: 1, killed: false, helperCode: 0, controllerExit: '0'});
 });
 
 test('pty: closing the terminal during a turn stops the client with code 1 and ends the controller (R1525-1, R1526-3)', {skip: PYTHON, timeout: 120000}, async () => {
-  assert.deepEqual(await closedTerminal('Wait for an interrupt.'), {ready: true, code: 1, killed: false, helperCode: 0, controllerExit: '0'});
+  assert.deepEqual(await closedTerminal('Wait for an interrupt.'), {ready: true, marked: true, code: 1, killed: false, helperCode: 0, controllerExit: '0'});
+});
+
+// The terminal takes no output while the chief writes more than its buffer. A blocking write would stop the client
+// there, so it would never read the second line: the client writes to its terminal without blocking (R1543-3).
+test('pty: a terminal that takes no output does not stop the client; it runs the next line, and a close then stops it (R1543-3)', {skip: PYTHON, timeout: 120000}, async () => {
+  assert.deepEqual(await closedTerminal('Write a long text.\nSay one synthetic sentence.', {mark: 'turn-2', pump: false, env: {FAKE_BIG: String(512 * 1024)}}),
+    {ready: true, marked: true, code: 1, killed: false, helperCode: 0, controllerExit: '0'});
 });
