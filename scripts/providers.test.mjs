@@ -3092,7 +3092,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   writeFileSync(preload, `import {ChildProcess} from 'node:child_process';\nimport {appendFileSync} from 'node:fs';\nChildProcess.prototype.kill = function(signal) { appendFileSync(${JSON.stringify(signalLog)}, String(signal)+'\\n'); this.stdin?.end(); return true; };\n`);
   const plugin = {
     skills: readdirSync(join(ROOT, 'plugins/sage-codex/skills')).map(name => ({name: `sage:${name}`})),
-    hooks: ['preToolUse', 'userPromptSubmit'].map(eventName => ({eventName})),
+    hooks: ['preToolUse', 'sessionStart', 'sessionStart', 'userPromptSubmit', 'userPromptSubmit'].map(eventName => ({eventName})),
     summary: {source: {path: join(ROOT, 'plugins/sage-codex')}},
   };
   if (scenario === 'bad-manifest') plugin.hooks = [];
@@ -3109,7 +3109,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   assert.equal(readFileSync(closed, 'utf8'), 'stdin closed', 'the child acknowledged transport closure');
   if (scenario === 'success') {
     assert.equal(result.code, 0, stderr);
-    assert.match(stdout, /discovered \d+ skills and 2 hooks/);
+    assert.match(stdout, /discovered \d+ skills and 5 hooks/);
   } else {
     assert.equal(result.code, 1, stdout + stderr);
     assert.doesNotMatch(stdout, /discovered \d+ skills/);

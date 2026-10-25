@@ -25,7 +25,7 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 | --- | --- |
 | Maturity | Early: used daily by its author to build sage itself; one recorded dry run. |
 | Claude Code | Supported: sage mode, the team of agents, the rules in code, autopilot and the board. |
-| Codex | In progress. sage installs as a Codex plugin in the CLI and the desktop app; the principles, the writing skills, the advice hooks, a start status, and the logbook and board by manual commands work. The mode phrases work: sage mode gives the session the chief's role, but the rules in code and the merges of autopilot do not work yet ([sage in Codex](docs/guide/codex.md)). |
+| Codex | In progress. sage installs as a Codex plugin in the CLI and the desktop app; the principles, the writing skills, the advice hooks, a start status, the logbook tools (MCP) and the board work. The mode phrases work: sage mode gives the session the chief's role, but the rules in code and the merges of autopilot do not work yet ([sage in Codex](docs/guide/codex.md)). |
 | Systems | macOS: tested. Linux: not yet tested. Windows: not supported. |
 
 ## Requirements
@@ -124,7 +124,7 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
-- **sage on Codex:** sage installs from its marketplace, in the CLI and the desktop app, and each session starts with a sage status ([Quick start in Codex](#quick-start-in-codex)). `sage mode` gives a Codex session the chief's role, also after a compaction; `sage mode off` and `sage help` work as in Claude Code; `autopilot on` and `autopilot off` record autopilot, but in Codex it merges nothing yet: you merge.
+- **sage on Codex:** sage installs from its marketplace, in the CLI and the desktop app, and each session starts with a sage status ([Quick start in Codex](#quick-start-in-codex)). `sage mode` gives a Codex session the chief's role, also after a compaction; `sage mode off` and `sage help` work as in Claude Code; `autopilot on` and `autopilot off` record autopilot, but in Codex it merges nothing yet: you merge. The plugin gives the state tool as MCP tools ([the logbook tools](docs/guide/codex.md#the-logbook-tools)).
 - **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
 - **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.

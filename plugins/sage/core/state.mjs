@@ -2816,15 +2816,24 @@ const shown = (text) => text.split("\n").map(visible).join("\n");
 /** The standing orders as a person wrote them, for briefs to copy word for word: tabs stay, a CRLF or CR line end prints as a plain one, and no hidden character stays. */
 const orders = (text) => text.replace(/\r\n?/g, "\n").replace(HIDDEN, "");
 
-function runCli(argv = process.argv.slice(2)) {
+/** One command as the CLI runs it: the text that it prints, or its refusal (code 1) or error (code 2) after "sage: ". */
+function command(argv, env = process.env) {
   try {
-    console.log((argv[0] === "standing" ? orders : shown)(sage(argv)));
+    return { code: 0, text: (argv[0] === "standing" ? orders : shown)(sage(argv, env)) };
   } catch (err) {
-    console.error(`sage: ${shown(err instanceof Refusal ? err.message : err.stack)}`);
-    process.exit(err instanceof Refusal ? 1 : 2);
+    return { code: err instanceof Refusal ? 1 : 2, text: `sage: ${shown(err instanceof Refusal ? err.message : err.stack)}` };
   }
 }
 
+function runCli(argv = process.argv.slice(2)) {
+  const { code, text } = command(argv);
+  if (code) {
+    console.error(text);
+    process.exit(code);
+  }
+  console.log(text);
+}
+
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

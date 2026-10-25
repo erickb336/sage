@@ -13,7 +13,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | Principles and the writing skills | Yes | Yes: the same skills, including the `sage` skill for manual logbook commands |
 | A principle at the moment it applies | Yes | Yes, for a design request, a test or document patch, a README and a commit |
 | Advice after a failed check | Yes | No: Codex's shell hook output does not give a reliable exit status |
-| The logbook and the board | Yes | Yes, through the manual commands of the `sage` skill |
+| The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the `sage` skill's commands read it and show the board |
 | The stop check | Yes | No, until native captures prove it |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
 | sage mode: the team, agent caps, report checks, the push and merge rules in code | Yes | Not enabled. Parts are built and tested, but they are not switched on in the installed plugin |
@@ -89,6 +89,25 @@ Send each phrase alone, as the whole message, in any letter case.
 - The hook keeps the mode of each session in `~/.codex/sage/.hooks/codex/` (or under `SAGE_HOME`).
 
 The hooks run only after you trust them (step 3). In `codex exec`, Codex skips hooks that you have not trusted, with no warning.
+
+## The logbook tools
+
+The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI. Its tools write the logbook: one tool for each command of the state tool that the chief and the leads use.
+
+| Tool | Command of the state tool |
+| --- | --- |
+| `init`, `status` | `init`, `status` |
+| `task_add`, `task_set` | `task add`, `task <T> set` |
+| `run_add`, `run_done` | `run add`, `run done` |
+| `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` |
+| `verdict`, `round`, `merge_check`, `log` | `verdict`, `round`, `merge-check`, `log` |
+| `standing`, `standing_add`, `pages` | `standing`, `standing add`, `pages` |
+| `gate_add`, `gate_answer` | `gate add`, `gate answer` |
+
+- Each tool takes `project`, the absolute path of the project's checkout, and the command's options by their names.
+- The tools run the same checks as the commands. A refusal comes back as a tool error with the reason of the command.
+- Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it. Under full access, an agent's shell can still change the logbook.
+- The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.
 
 ## What comes next
 
