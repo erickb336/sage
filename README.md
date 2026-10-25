@@ -25,7 +25,7 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 | --- | --- |
 | Maturity | Early: used daily by its author to build sage itself; one recorded dry run. |
 | Claude Code | Supported: sage mode, the team of agents, the rules in code, autopilot and the board. |
-| Codex | In progress. The principles, the writing skills, the advice hooks, and the logbook and board by manual commands work; sage mode and autopilot do not work yet ([sage in Codex](docs/guide/codex.md)). |
+| Codex | In progress. The principles, the writing skills, the advice hooks, the logbook tools (MCP) and the board work; sage mode and autopilot do not work yet ([sage in Codex](docs/guide/codex.md)). |
 | Systems | macOS: tested. Linux: not yet tested. Windows: not supported. |
 
 ## Requirements
@@ -107,11 +107,11 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
+- **Codex: the logbook tools.** The Codex plugin gives the state tool as MCP tools, in the desktop app and the CLI; agent shells cannot write the logbook ([sage in Codex](docs/guide/codex.md#the-logbook-tools)).
 - **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
 - **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.
 - **Programs:** you approve the breakdown of a multi-task goal before any task of it builds.
-- **A task can wait for other tasks**, and the board has an Agents page and a project picker.
 
 All changes: [CHANGELOG.md](CHANGELOG.md).
 

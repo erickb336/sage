@@ -6,7 +6,7 @@ license: MIT
 
 # Sage for Codex
 
-This skill guides the chief, a lead and specialist agents through an explicit workflow. The parent alone writes the logbook through the bundled CLI. Native Codex tools perform agent work when available. The bundled workflow helper stores session mode and guards explicit publication. These instructions do not enforce native admission or global ownership.
+This skill guides the chief, a lead and specialist agents through an explicit workflow. The parent alone writes the logbook, through the plugin's `sage` MCP tools; the bundled CLI reads it. Native Codex tools perform agent work when available. The bundled workflow helper stores session mode and guards explicit publication. These instructions do not enforce native admission or global ownership.
 
 ## Entry and owner commands
 

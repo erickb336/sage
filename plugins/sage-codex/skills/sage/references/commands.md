@@ -12,6 +12,23 @@ JSON
 
 Use a structured stdin API or safely written input file for arbitrary owner text. Do not construct shell code from it. The output is `phrase` with an exact phrase, a core `board`/`task`/`status` intent, `near` with suggested phrases, or `none`. Invalid input exits nonzero. The helper executes no intent and writes no state. The caller must establish that the text is the owner's direct message.
 
+## Logbook writes: the sage MCP tools
+
+Write the logbook only through the plugin's `sage` MCP tools. Codex starts that server outside the shell sandbox; under `workspace-write`, a write command of the CLI fails in a shell, because the logbook is not a writable folder there. The CLI still reads the logbook (`status`, `task T7`, `board`, `merge-check`).
+
+| Tool | Command | Fields besides `project` |
+| --- | --- | --- |
+| `init`, `status` | `init`, `status` | none |
+| `task_add` | `task add` | `title`, `size`, and `risk`, `add`, `why`, `priority`, `kind`, `waits`, `program` |
+| `task_set` | `task <T> set` | `task`, `fields` (for example `{"state": "briefed", "branch": "codex/t7-example"}`) |
+| `run_add`, `run_done` | `run add <T>`, `run done <R>` | `task` or `run`, and the command's options |
+| `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` | `task`, `key`, `decision` (triage), and the options |
+| `verdict`, `round`, `merge_check`, `log` | `verdict <T>`, `round <T>`, `merge-check`, `log <T> <decision>` | the command's options |
+| `standing`, `standing_add`, `pages` | `standing`, `standing add <order>`, `pages <T> [record <file>]` | `order`, `task`, `record` |
+| `gate_add`, `gate_answer` | `gate add <T>`, `gate answer <G>` | the command's options (`option`, `other-hex`) |
+
+Each tool takes `project`, the verified absolute checkout. An option field has the option's name without `--`, for example `usage-interface`. A tool result is the command's text; a refusal is a tool error that starts with `sage:` and gives the command's reason. The CLI examples below give the syntax and the rules of each command.
+
 The examples below use `SAGE_CLI` for the resolved absolute `sage.mjs` path and `PROJECT` for the verified absolute checkout. Set both from inspected paths, not untrusted text. Replace example IDs with IDs returned by the tool; never assume the next ID.
 
 ```sh

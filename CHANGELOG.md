@@ -5,6 +5,10 @@ Each date is the day of the first commit that made the change. Older changes are
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve. See [To update sage](docs/guide/using-sage.md#to-update-sage).
 
+## 2026-10-25
+
+- **Codex: the logbook tools.** The Codex plugin starts a local MCP server, `sage`, in the desktop app and the CLI. Its tools (`init`, `status`, `task_add`, `task_set`, `run_add`, `run_done`, the finding tools, `verdict`, `round`, `merge_check`, `log`, `standing`, `pages` and the gate tools) run the state tool's commands with the same checks, and a refusal is a tool error with the command's reason. Codex starts the server outside the shell sandbox, so under `workspace-write` only the server writes the logbook. See [sage in Codex](docs/guide/codex.md#the-logbook-tools).
+
 ## 2026-10-24
 
 - **The off phrase holds in every session.** In a folder whose `.claude/settings.json` starts every session as the chief, `sage mode off` now gives a normal session for the rest of the session, as in any other session. Before, sage mode came back on at the next event, and the session had no file tools. Now the chief agent has every tool, and the sage hook alone refuses the chief's file edits while sage mode is on. `sage mode` turns it on again. A new session, or `/clear`, in that folder starts in sage mode again.

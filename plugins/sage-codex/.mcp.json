@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "sage": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./mcp/state-server.mjs"],
+      "cwd": ".",
+      "env_vars": ["CODEX_HOME", "SAGE_HOME"],
+      "default_tools_approval_mode": "approve"
+    }
+  }
+}
