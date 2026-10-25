@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {bindPolicy, bindTask, bindTurnText, checkConfig, checkProjectFiles, resolveControllerBinary, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, projectTrustFlags, resolveControllerBinary, trustFlags, turnOutcome, unflaggedTrustKeys} from './controller-binding.mjs';
 import {OWNED_LAUNCH_ARGS} from './controller-process.mjs';
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sage-binding-')));
@@ -169,7 +169,7 @@ test('bindPolicy takes the sandbox and the approval policy only from a layer tha
   // The process checks the config with the owner's Codex folder before thread/start; bindPolicy checks it again.
   const refusal = edit => { const value = observed(); edit(value); try { checkConfig(value.config, '/home/.codex'); bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
   assert.equal(refusal(value => { value.config.origins.sandbox_mode = project; }),
-    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting sandbox_mode. If you trust it, move it to your Codex config (/home/.codex/config.toml). If not, remove it. Then start the client again.');
+    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. The client takes each setting only from your Codex config, a managed config or the launch flags, because an agent can change the other layers. Check the setting sandbox_mode. If you trust it, move it to your Codex config (/home/.codex/config.toml). If not, remove it. Then start the client again.');
   assert.match(refusal(value => { value.config.origins.approval_policy = project; }), /^selection-origin: The setting approval_policy comes from the project config/);
   assert.match(refusal(value => { value.config.origins.approval_policy = {name: {type: 'packagedDefaults', file: '/opt/codex/defaults.toml'}}; }), /^selection-origin: .*packagedDefaults config layer \(\/opt\/codex\/defaults.toml\)/);
   const example = {approval_policy: 'approval_policy = "on-request"', sandbox_mode: 'sandbox_mode = "read-only"'};
@@ -186,8 +186,8 @@ test('bindPolicy takes the sandbox and the approval policy only from a layer tha
   // The owner's layers pass: user (above), a managed file, and the launch flags.
   assert.equal(refusal(value => { value.config.origins.sandbox_mode = {name: {type: 'system', file: '/etc/codex/managed_config.toml'}}; }), 'pass');
   assert.equal(refusal(value => { value.config.origins.approval_policy = sessionFlags; }), 'pass');
-  // The model may come from the project layer: the decision covers the sandbox and the approval policy only.
-  assert.equal(refusal(value => { value.config.origins.model = project; }), 'pass');
+  // No setting comes from the project, the model neither (T435).
+  assert.match(refusal(value => { value.config.origins.model = project; }), /^selection-origin: The setting model comes from the project config/);
 });
 
 test('bindPolicy: a model and a provider that no layer sets are the default, as config/read gives them: null with no origin (R1526-2)', () => {
@@ -199,90 +199,98 @@ test('bindPolicy: a model and a provider that no layer sets are the default, as 
   assert.deepEqual([selection.model, selection.modelProvider], [{value: 'gpt-default', origin: 'default'}, {value: 'openai', origin: 'default'}]);
 });
 
-test('bindPolicy refuses each key that changes the sandbox or the approval route from a project layer (R1524-1, R1524-2)', () => {
+// Each setting comes from a layer that an agent cannot write: no key of a project layer is allowed (T435), also the
+// model and text settings that an earlier allow-list took (R1524-1, R1524-2, R1563-1, R1564-1, R1564-2).
+test('bindPolicy refuses each setting from a project layer with its name, and takes it from the user layer', () => {
   const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
   const refusal = (key, origin = project) => { const value = observed(); value.config.origins[key] = origin; try { bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
-  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (config.toml in your Codex folder). If not, remove it. Then start the client again.`;
-  // The keys as the real config/read names them: a list item has its index.
+  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. The client takes each setting only from your Codex config, a managed config or the launch flags, because an agent can change the other layers. Check the setting ${name}. If you trust it, move it to your Codex config (config.toml in your Codex folder). If not, remove it. Then start the client again.`;
+  // The keys as the real config/read names them: a list item has its index, and the message names the list.
   for (const [key, name] of [['sandbox_workspace_write.network_access', 'sandbox_workspace_write.network_access'],
-    ['sandbox_workspace_write.writable_roots.0', 'sandbox_workspace_write.writable_roots'], ['sandbox_workspace_write.exclude_slash_tmp', 'sandbox_workspace_write.exclude_slash_tmp'],
-    ['approvals_reviewer', 'approvals_reviewer'], ['auto_review.policy', 'auto_review.policy'], ['default_permissions', 'default_permissions'],
-    ['permissions.workspace.filesystem.write.0', 'permissions.workspace.filesystem.write']]) {
+    ['sandbox_workspace_write.writable_roots.0', 'sandbox_workspace_write.writable_roots'], ['approvals_reviewer', 'approvals_reviewer'],
+    ['permissions.workspace.filesystem.write.0', 'permissions.workspace.filesystem.write'], ['mcp_servers.probe.command', 'mcp_servers.probe.command'],
+    ['hooks.Stop.0.hooks.0.command', 'hooks.Stop.0.hooks.0.command'], ['features.request_permissions_tool', 'features.request_permissions_tool'],
+    ['model', 'model'], ['model_reasoning_effort', 'model_reasoning_effort'], ['model_verbosity', 'model_verbosity'], ['tui.notifications.0', 'tui.notifications'], ['future_key', 'future_key']]) {
     assert.equal(refusal(key), refused(name), key);
     assert.equal(refusal(key, user), 'pass', `${key} from the user layer`);
   }
 });
 
-// The project may set only the settings of the model's text; each other key refuses, also a key that the client does
-// not know (R1563-1, R1564-1, R1564-2).
-test('bindPolicy takes from the project only the keys of its allow-list; each other key refuses with its name (R1563-1, R1564-1, R1564-2)', () => {
-  const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
-  const refusal = (key, origin = project) => { const value = observed(); value.config.origins[key] = origin; try { checkConfig(value.config, '/home/.codex'); bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
-  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (/home/.codex/config.toml). If not, remove it. Then start the client again.`;
-  for (const key of ['model', 'model_reasoning_effort', 'model_reasoning_summary', 'model_verbosity', 'personality', 'developer_instructions',
-    'file_opener', 'history.persistence', 'history.max_bytes', 'tui.animations', 'tui.notifications.0'])
-    assert.equal(refusal(key), 'pass', key);
-  for (const [key, name] of [
-    ['shell_environment_policy.set.ZDOTDIR', 'shell_environment_policy.set.ZDOTDIR'], ['shell_environment_policy.set.PATH', 'shell_environment_policy.set.PATH'],
-    ['shell_environment_policy.inherit', 'shell_environment_policy.inherit'], ['allow_login_shell', 'allow_login_shell'], ['zsh_path', 'zsh_path'],
-    ['agents.reviewer.config_file', 'agents.reviewer.config_file'], ['agents.max_depth', 'agents.max_depth'],
-    ['mcp_servers.probe.command', 'mcp_servers.probe'], ['hooks.Stop.0.hooks.0.command', 'hooks.Stop'], ['features.shell_tool', 'features.shell_tool'],
-    ['tools.web_search', 'tools.web_search'], ['experimental_use_unified_exec_tool', 'experimental_use_unified_exec_tool'], ['notify.0', 'notify'],
-    ['model_provider', 'model_provider'], ['model_providers.local.base_url', 'model_providers.local.base_url'], ['model_instructions_file', 'model_instructions_file'],
-    ['profile', 'profile'], ['openai_base_url', 'openai_base_url'], ['js_repl_node_path', 'js_repl_node_path'], ['history.file', 'history.file'],
-    // A name that only starts like an allowed one, and a key that the client does not know.
-    ['model_x', 'model_x'], ['tuix', 'tuix'], ['sandbox_mode_note', 'sandbox_mode_note'], ['future_key', 'future_key']]) {
-    assert.equal(refusal(key), refused(name), key);
-    assert.equal(refusal(key, user), 'pass', `${key} from the user layer`);
-  }
-});
-
-// A list replaces the owner's list, and config/read then still names the owner's items as the origins, so only the
-// project layer's own tree shows it (R1575-1). The real config/read reply for this project config, from the probe:
-// project layer config {shell_environment_policy: {include_only: [], exclude: []}}, origins include_only.0 = user.
-test('checkConfig refuses each key path of a project layer that is not on the allow-list: empty lists and tables too (R1575-1)', () => {
-  const projectName = {type: 'project', dotCodexFolder: '/work/project/.codex'};
-  const refusal = config => {
-    const value = observed();
-    value.config.layers.splice(1, 0, {name: projectName, version: 'sha256:p', config});
-    try { checkConfig(value.config, '/home/.codex'); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; }
-  };
-  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (/home/.codex/config.toml). If not, remove it. Then start the client again.`;
-  assert.equal(refusal({shell_environment_policy: {include_only: []}}), refused('shell_environment_policy.include_only'));
-  assert.equal(refusal({shell_environment_policy: {exclude: []}}), refused('shell_environment_policy.exclude'));
-  assert.equal(refusal({shell_environment_policy: {include_only: [], exclude: []}}), refused('shell_environment_policy.include_only'));
-  assert.equal(refusal({shell_environment_policy: {}}), refused('shell_environment_policy'));
-  assert.equal(refusal({sandbox_workspace_write: {writable_roots: []}}), refused('sandbox_workspace_write.writable_roots'));
-  assert.equal(refusal({mcp_servers: {probe: {}}}), refused('mcp_servers.probe'));
-  assert.equal(refusal({notify: []}), refused('notify'));
-  assert.equal(refusal({model: 'gpt-y', history: {file: '/tmp/h'}}), refused('history.file'));
-  // The keys of the allow-list pass, with an empty table on the way to one, and a list under tui.
-  assert.equal(refusal({model: 'gpt-y', model_reasoning_effort: 'low', history: {persistence: 'none'}, tui: {notifications: []}}), 'pass');
-  assert.equal(refusal({tui: {}, history: {}}), 'pass');
-  assert.equal(refusal({}), 'pass');
-  // A layer of another type that is not the owner's is checked the same way; the owner's own layers set anything.
-  const other = observed(); other.config.layers.push({name: {type: 'packagedDefaults', file: '/opt/codex/defaults.toml'}, version: 'sha256:d', config: {shell_environment_policy: {exclude: []}}});
-  assert.throws(() => checkConfig(other.config), error => error.code === 'selection-origin' && /packagedDefaults config layer/.test(error.message));
-  const owner = observed(); owner.config.layers[1].config.shell_environment_policy = {include_only: [], exclude: []};
-  assert.doesNotThrow(() => checkConfig(owner.config));
+// The launch flag marks the project untrusted, so Codex disables each project layer at each config load (T435). A
+// disabled layer loads nothing, whatever its tree holds; only an enabled one refuses.
+test('checkConfig: disabled project layers pass and give their folders; an enabled project layer refuses project-trusted', () => {
+  const untrusted = '/work/project is marked as untrusted in the effective configuration. To load project-local config, hooks, and exec policies, update its trust setting.';
+  const layer = (folder, disabledReason, config) => ({name: {type: 'project', dotCodexFolder: folder}, version: 'sha256:p', config, ...(disabledReason ? {disabledReason} : {})});
+  const check = edit => { const value = observed(); edit(value.config.layers); try { return checkConfig(value.config, '/home/.codex').projectFolders; } catch (error) { return `${error.code}: ${error.message}`; } };
+  assert.deepEqual(check(() => {}), []);
+  assert.deepEqual(check(layers => layers.push(layer('/work/.codex', untrusted, {mcp_servers: {x: {command: '/bin/x'}}}),
+    layer('/work/project/.codex', untrusted, {features: {request_permissions_tool: true}, shell_environment_policy: {include_only: []}, model_verbosity: 'low'}))),
+  ['/work/.codex', '/work/project/.codex']);
+  // The refusal names a managed config first: no owner trust entry made the controller load a project layer in a
+  // probe (R1602-2, R1612-1).
+  const trusted = 'project-trusted: The controller loads the project config in /work/project/.codex, although the client marks the project as untrusted. An agent can change that config. A managed config (/etc/codex/managed_config.toml, or one from your organization) can mark the project as trusted. Remove that trust entry (if the file belongs to your organization, ask its administrator), then start the client again.';
+  // A layer with only a model text setting refuses too: the client takes nothing from an enabled project layer.
+  assert.equal(check(layers => layers.push(layer('/work/project/.codex', null, {model_verbosity: 'low'}))), trusted);
+  assert.equal(check(layers => layers.push(layer('/work/.codex', untrusted, {}), layer('/work/project/.codex', '', {}))), trusted);
   // A reply with no layers cannot be checked.
   const none = observed(); delete none.config.layers;
   assert.throws(() => checkConfig(none.config), error => error.code === 'policy-missing');
+  // The binding record keeps the folders, so its hash covers them.
+  const value = observed(); value.config.layers.push(layer('/work/project/.codex', untrusted, {}));
+  const policy = bindPolicy(value);
+  assert.deepEqual(policy.projectFolders, ['/work/project/.codex']);
+  assert.notEqual(policy.bindingHash, bindPolicy(observed()).bindingHash);
 });
 
-test('checkProjectFiles: a link loop in .codex/agents refuses with a fixed code and the fix; a dead link passes (R1575-3)', () => {
-  const project = join(dir, 'loop-project'), agents = join(project, '.codex', 'agents');
-  mkdirSync(agents, {recursive: true});
-  symlinkSync(join(agents, 'dead-target'), join(agents, 'dead'));
-  const result = () => { try { checkProjectFiles(project, {CODEX_HOME: join(dir, 'no-home')}); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
-  assert.equal(result(), 'pass', 'a dead link is no role file');
-  symlinkSync(join(agents, 'self'), join(agents, 'self'));
-  assert.equal(result(), `project-files: The client cannot read ${join(agents, 'self')} (a loop of links), so it cannot check it for agent role files. Make the folder readable, or remove it, then start the client again.`);
-  rmSync(join(agents, 'self'));
-  // The agents folder itself is a loop of two links.
-  rmSync(agents, {recursive: true});
-  symlinkSync(join(project, '.codex', 'other'), agents); symlinkSync(agents, join(project, '.codex', 'other'));
-  assert.equal(result(), `project-files: The client cannot read ${agents} (a loop of links), so it cannot check it for agent role files. Make the folder readable, or remove it, then start the client again.`);
+// Each folder from the project up to / is one key of one inline table. A dotted key (-c projects.<path>.trust_level)
+// splits a path at each dot, and the controller then stops at startup (R1591 dottedDotPath).
+test('projectTrustFlags marks the project and each folder above it, up to /, as untrusted; a dot, a quote or a backslash stays in one key', () => {
+  assert.deepEqual(projectTrustFlags('/a/my.project'),
+    ['-c', 'projects={ "/a/my.project"={ trust_level="untrusted" }, "/a"={ trust_level="untrusted" }, "/"={ trust_level="untrusted" } }']);
+  assert.deepEqual(projectTrustFlags('/'), ['-c', 'projects={ "/"={ trust_level="untrusted" } }']);
+  // Each key is a TOML basic string: JSON's escapes, and DEL, which TOML does not take raw, as \u007f.
+  const odd = '/w/a "b\\c/d\u0001e\u007ff';
+  const [flag, value] = projectTrustFlags(odd);
+  assert.equal(flag, '-c');
+  assert.equal(value, 'projects={ "/w/a \\"b\\\\c/d\\u0001e\\u007ff"={ trust_level="untrusted" }, "/w/a \\"b\\\\c"={ trust_level="untrusted" }, "/w"={ trust_level="untrusted" }, "/"={ trust_level="untrusted" } }');
+  const keys = [...value.matchAll(/("(?:[^"\\]|\\.)*")=\{ trust_level="untrusted" \}/g)].map(match => JSON.parse(match[1]));
+  assert.deepEqual(keys, [odd, '/w/a "b\\c', '/w', '/']);
+  for (const bad of ['relative/path', '/a/\ud800b', 5, undefined]) assert.throws(() => projectTrustFlags(bad), error => error.code === 'project-path', String(bad));
+  // The refusal says what is wrong with the path and what to do (R1602-5).
+  assert.throws(() => projectTrustFlags('/a/\ud800b'), {message: 'The project path "/a/\\ud800b" is not valid Unicode, so the client cannot write it in a Codex setting. Rename the folder to a valid name, or use another project folder, then start the client again.'});
+});
+
+// Codex looks up the canonical spelling of the cwd (realpath(3)); the spelling that the owner typed gets its keys too,
+// each folder up to /, and a folder that both spellings share is one key (R1600-1, R1601-1).
+test('projectTrustFlags gives each spelling of the project its keys, the canonical one first, with no key twice', () => {
+  assert.deepEqual(projectTrustFlags('/Work/MyProj', '/Work/myproj'),
+    ['-c', 'projects={ "/Work/MyProj"={ trust_level="untrusted" }, "/Work"={ trust_level="untrusted" }, "/"={ trust_level="untrusted" }, "/Work/myproj"={ trust_level="untrusted" } }']);
+  // An NFD folder name that the owner typed in NFC.
+  const [, value] = projectTrustFlags('/w/café', '/W/café');
+  const keys = [...value.matchAll(/("(?:[^"\\]|\\.)*")=\{ trust_level="untrusted" \}/g)].map(match => JSON.parse(match[1]));
+  assert.deepEqual(keys, ['/w/café', '/w', '/', '/W/café', '/W']);
+  assert.deepEqual(projectTrustFlags('/a', '/a'), projectTrustFlags('/a'));
+});
+
+// R1620-1, R1620-2, R1622-1: each key of the owner's projects tables (the user config, its profile and the managed
+// configs) that the flag does not name, as it is: an agent can move the project into any folder that the owner trusts.
+// A key in a project layer is not the owner's. The flag then names each owner key after the project keys.
+test('unflaggedTrustKeys gives each owner trust key that the flag does not name; trustFlags names them as untrusted', () => {
+  const trusted = {trust_level: 'trusted'};
+  const layer = (name, keys) => ({name, version: 'v', config: {projects: Object.fromEntries(keys.map(key => [key, trusted]))}});
+  const user = layer({type: 'user', file: '/h/config.toml', profile: null}, ['/work/MyProj', '/elsewhere/trusted', '/work/MYPROJ', '~/notes']);
+  const profile = layer({type: 'user', file: '/h/config.toml', profile: 'team'}, ['/team', '/elsewhere/trusted']);
+  const managed = layer({type: 'mdm', domain: 'd', key: 'k'}, ['/org']);
+  const project = layer({type: 'project', dotCodexFolder: '/work/MyProj/.codex'}, ['/agent/folder']);
+  const read = {config: {}, origins: {}, layers: [user, profile, managed, project]};
+  const keys = unflaggedTrustKeys(read, ['/work/MyProj', '/work/myproj']);
+  assert.deepEqual(keys, ['/elsewhere/trusted', '/work/MYPROJ', '~/notes', '/team', '/org']);
+  // With those keys in the flag, the same reply gives none; a reply with no layers has none.
+  assert.deepEqual(unflaggedTrustKeys(read, ['/work/MyProj', '/work/myproj'], keys), []);
+  assert.deepEqual(unflaggedTrustKeys({}, ['/work/MyProj']), []);
+  assert.deepEqual(trustFlags(['/w/p'], ['/elsewhere', '/w', '~/notes']),
+    ['-c', 'projects={ "/w/p"={ trust_level="untrusted" }, "/w"={ trust_level="untrusted" }, "/"={ trust_level="untrusted" }, "/elsewhere"={ trust_level="untrusted" }, "~/notes"={ trust_level="untrusted" } }']);
+  assert.deepEqual(trustFlags(['/w/p']), projectTrustFlags('/w/p'));
 });
 
 test('bindPolicy: a version or a policy refusal names what it found and what to change (R1504-3)', () => {

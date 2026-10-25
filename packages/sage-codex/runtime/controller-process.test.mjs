@@ -1,9 +1,17 @@
 import test, {beforeEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
+import {mkdtempSync, realpathSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {dirname, join} from 'node:path';
 const api = await import('./controller-process.mjs').catch(error => { if (error.code === 'ERR_MODULE_NOT_FOUND') return {}; throw error; });
 beforeEach(() => assert.equal(typeof api.createControllerProcess, 'function'));
 const HASH = 'a'.repeat(64);
+// The process runs the controller in the canonical spelling of its cwd (realpath(3)), so the cwd is a real folder.
+const PROJECT = realpathSync.native(mkdtempSync(join(tmpdir(), 'sage-process-')));
+test.after(() => rmSync(PROJECT, {recursive: true, force: true}));
+const ABOVE = [PROJECT];
+for (let folder = PROJECT; folder !== dirname(folder);) ABOVE.push(folder = dirname(folder));
 function fixture({auto = true, blocked = false} = {}) {
   const child = new EventEmitter();
   child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.stdin = new EventEmitter();
@@ -18,7 +26,7 @@ function fixture({auto = true, blocked = false} = {}) {
     if (auto && message.method === 'config/read') queueMicrotask(() => child.stdout.emit('data', Buffer.from(JSON.stringify({id: message.id, result: {config: {model: 'selected'}}}) + '\n')));
   };
   const env = {PATH: '/fixture/bin', CODEX_HOME: '/fixture/home'};
-  const owner = api.createControllerProcess({executable: '/fixture/codex', executableSha256: HASH, cwd: '/fixture/project', env, maxFrameBytes: 256, maxDiagnosticBytes: 8}, {
+  const owner = api.createControllerProcess({executable: '/fixture/codex', executableSha256: HASH, cwd: PROJECT, env, maxFrameBytes: 256, maxDiagnosticBytes: 8}, {
     spawn(executable, args, options) { spawnCount++; launch = {executable, args, options}; return child; },
     schedule(callback) { const timer = {callback, cancelled: false}; timers.push(timer); return () => { timer.cancelled = true; }; },
   });
@@ -34,14 +42,16 @@ test('owned startup launches only the owned entry and inspects the fixed cwd', a
   const f = fixture(); await f.owner.start();
   assert.deepEqual(await f.owner.inspect(), {config: {model: 'selected'}});
   assert.equal(f.launch.executable, '/fixture/codex');
-  assert.equal(f.launch.options.shell, false); assert.equal(f.launch.options.cwd, '/fixture/project');
+  assert.equal(f.launch.options.shell, false); assert.equal(f.launch.options.cwd, PROJECT);
   // Its own process group, so that a terminal Ctrl-C reaches the client only (R1504-1, R1502-1).
   assert.equal(f.launch.options.detached, true);
   assert.equal(f.launch.options.env.CODEX_HOME, '/fixture/home');
   assert.deepEqual(f.launch.args, ['app-server', '--stdio', '--owned-controller', '--strict-config',
     '-c', 'agents.enabled=true', '-c', 'features.multi_agent=false', '-c', 'features.multi_agent_v2=true', '-c', 'features.goals=false',
-    '-c', 'web_search="disabled"', '-c', 'features.plugins=false', '-c', 'features.apps=false', '-c', 'features.remote_plugin=false']);
-  assert.deepEqual(f.sent.at(-1).params, {cwd: '/fixture/project', includeLayers: true});
+    '-c', 'web_search="disabled"', '-c', 'features.plugins=false', '-c', 'features.apps=false', '-c', 'features.remote_plugin=false',
+    // The cwd and each folder above it are untrusted, so the controller loads no project layer at any load (T435).
+    '-c', `projects={ ${ABOVE.map(folder => `${JSON.stringify(folder)}={ trust_level="untrusted" }`).join(', ')} }`]);
+  assert.deepEqual(f.sent.at(-1).params, {cwd: PROJECT, includeLayers: true});
   assert.deepEqual(Object.keys(f.owner).sort(), ['answer', 'events', 'fenced', 'inspect', 'interrupt', 'openThread', 'refuse', 'runTurn', 'start', 'status', 'stop']);
   await assert.rejects(f.owner.runTurn('no thread yet'), /No bound root thread/);
   assert.throws(() => f.owner.start(), /already/);
@@ -127,18 +137,18 @@ test('stop settles pending inspection before child closure and disposes observat
 });
 
 test('trusted launch rejects arbitrary arguments and getters before spawning', () => {
-  const valid = {executable: '/fixture/codex', executableSha256: HASH, cwd: '/fixture/project', env: {PATH: '/fixture/bin'}};
+  const valid = {executable: '/fixture/codex', executableSha256: HASH, cwd: PROJECT, env: {PATH: '/fixture/bin'}};
   assert.equal(typeof api.createControllerProcess(valid).start, 'function');
   for (const extra of [{args: ['--other']}, {selectedConfig: {}}, {shell: true}, {executableSha256: 'abc'}, {executableSha256: undefined},
     {onEvent: 'log'}, {maxEvents: 0}, {maxEventBytes: -1}, {turnTimeoutMs: 1.5}, {interruptGraceMs: 0}]) assert.throws(() => api.createControllerProcess({...valid, ...extra}));
   let reads = 0;
-  const getter = Object.defineProperty({...valid}, 'cwd', {get() { reads++; return '/fixture/project'; }});
+  const getter = Object.defineProperty({...valid}, 'cwd', {get() { reads++; return PROJECT; }});
   assert.throws(() => api.createControllerProcess(getter)); assert.equal(reads, 0);
 });
 
 test('synchronous spawn failure retains owner and never retries', async () => {
   let calls = 0;
-  const owner = api.createControllerProcess({executable: '/fixture/codex', executableSha256: HASH, cwd: '/fixture/project', env: {}}, {spawn() { calls++; throw Error('launch refused'); }});
+  const owner = api.createControllerProcess({executable: '/fixture/codex', executableSha256: HASH, cwd: PROJECT, env: {}}, {spawn() { calls++; throw Error('launch refused'); }});
   await assert.rejects(owner.start(), /launch refused/);
   assert.throws(() => owner.start(), /already/);
   assert.equal((await owner.stop()).state, 'stopped'); assert.equal(calls, 1);
