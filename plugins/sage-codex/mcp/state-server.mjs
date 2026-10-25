@@ -142,7 +142,7 @@ export function createStateServer({ env = process.env } = {}) {
     let missing;
     try { missing = recordBrief(folder, task, brief, env); } catch (error) { return { isError: true, content: [{ type: "text", text: `sage: ${error.message}` }] }; }
     const text = missing.length
-      ? `sage: the brief of ${task} has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line. Add them, then run brief again.`
+      ? `sage: the brief of ${task} has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with a colon, two spaces or a tab after its name (GOAL: …, GOAL   …), or its name alone on the line. Add them, then run brief again.`
       : `brief ${task} checked: all ${BRIEF_FIELDS.length} fields. Spawn the agent with this task name and this brief.`;
     return { ...(missing.length ? { isError: true } : {}), content: [{ type: "text", text }] };
   });

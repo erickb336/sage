@@ -2884,7 +2884,7 @@ test("R1130-1, R1140-2, R1140-3, R1157-2, R1157-3, T381: the rules page and the 
   const readme = read("README.md");
   assert.ok(!readme.includes("no build of its own"), "no option to record states that did not happen");
   assert.ok(read("docs/guide/using-sage.md").includes("\n## To update sage\n"), "the section that the line names");
-  assert.match(readme, /> \*\*Warning:\*\* before you use waits or programs, update sage and restart every session that was already open\./, "the upgrade warning stays on the front page");
+  assert.match(readme, /> \*\*Warning:\*\* before you use programs \(tasks of one goal\) or tasks that wait for other tasks, update sage and restart every session that was already open\./, "the upgrade warning stays on the front page");
 });
 
 test("T336: an older logbook gets the waits column at its next write with no value lost, so an older sage then refuses to write it", () => {

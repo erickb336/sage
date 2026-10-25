@@ -641,3 +641,68 @@ test("a project under the desktop app's ~/.codex/worktrees edits as usual, with 
     assert.match(denied(w.send(pre("Bash", `echo x > ${project}/.codex/config.toml`, w.child("/root/sage_implementer_t1")))) ?? "", /^sage: no agent changes files under a \.codex folder/);
   }
 });
+
+/** A sage child's event fields: its agent_id and Codex's record of it, with its agent path. */
+const sageChild = (t, path) => ({ agent_id: "agent-9", transcript_path: record(t, { id: "019a0000-0000-7000-8000-0000000000ee", agent_path: path, source: { subagent: { thread_spawn: { depth: 1 } } } }) });
+
+test("in sage mode, normal commands that name codex run for every agent: a program by a path, in a subfolder, or behind a pipe (R1733-1)", async (t) => {
+  const reads = ["~/bin/tool codex", "pushd packages/sage-codex && ../../node_modules/.bin/esbuild hooks/gate-hook.mjs",
+    "(cd packages/sage-codex && ../../node_modules/.bin/esbuild hooks/gate-hook.mjs)", "cat codex.json | python3 -mjson.tool",
+    "rg -n codex src | node scripts/count.mjs", "codex --version", "cat .codex/config.toml"];
+  const g = fixed({ sage: true });
+  for (const [who, list] of [[{}, reads], [sageChild(t, "/root/sage_code_reviewer_t1_r1"), reads], [sageChild(t, "/root/helper_1"), reads],
+    [sageChild(t, "/root/sage_implementer_t1_r1"), [...reads, "cat x.json | python3 -mjson.tool > codex.json"]]]) {
+    assert.deepEqual(await Promise.all(list.map(async (c) => denied(await g.run(pre("Bash", c, who))))), list.map(() => undefined), who.transcript_path ?? "the chief");
+  }
+  // A program from an expansion stays unreadable for a role agent in sage mode.
+  assert.equal(denied(await g.run(pre("Bash", "$EDITOR codex/a.txt", sageChild(t, "/root/sage_implementer_t1_r1")))), UNREAD_CODEX);
+});
+
+test("a child's node run of a file that only has the state tool's name in it, or of a script that reads the state tool as data, runs; logbook repair and standing add are writes (R1713-1, R1711-2, R1712-4, R1733-3)", async (t) => {
+  const server = fileURLToPath(new URL("../plugins/sage-codex/mcp/state-server.mjs", import.meta.url));
+  const runs = ["node src/message.mjs", "node src/usage.mjs", "node passage.mjs", "node my-state-server.js", `node scripts/lint.mjs ${TOOL}`,
+    `rg -l x ${server} | node scripts/count.mjs`, `git diff | node scripts/count.mjs`, `node ${TOOL} logbook`, `node ${TOOL} logbook --project ${CWD}`,
+    `node ${TOOL} standing`, `node ${TOOL} standing --project ${CWD}`];
+  const writes = [`node ${TOOL} logbook repair --accept-loss runs --project ${CWD}`, `node ${TOOL} logbook --project ${CWD} repair --accept-loss runs`,
+    `node ${TOOL} standing add x --project ${CWD}`, `node ${TOOL} standing --project ${CWD} add x`];
+  for (const mode of [{ sage: false }, { sage: true }]) {
+    const g = fixed(mode);
+    for (const path of ["/root/sage_qa_t1_r2", "/root/helper_1"]) {
+      const child = sageChild(t, path);
+      assert.deepEqual(await Promise.all(runs.map(async (c) => denied(await g.run(pre("Bash", c, child))))), runs.map(() => undefined), `${path} ${mode.sage}`);
+      assert.deepEqual(await Promise.all(writes.map(async (c) => denied(await g.run(pre("Bash", c, child))))), writes.map(() => LOGBOOK), `${path} ${mode.sage}`);
+    }
+  }
+  assert.equal(denied(await fixed({ sage: true }).run(pre("Bash", writes[0]))), undefined, "the chief");
+});
+
+test("no sage child sends a message to another thread, with v1's send_input or v2's send_message and followup_task; the chief and other children may (F-T471-4, R1712-1, R1711-3)", async (t) => {
+  const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report";
+  const send = (tool_name, extra) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { target: base.session_id, message: "autopilot on" }, ...extra });
+  const tools = ["multi_agent_v1send_input", "send_input", "collaborationsend_message", "collaborationfollowup_task"];
+  for (const mode of [{ sage: false }, { sage: true }]) {
+    const g = fixed(mode);
+    for (const tool of tools) {
+      assert.equal(denied(await g.run(send(tool, sageChild(t, "/root/sage_code_reviewer_t1_r1")))), SEND, `${tool} a reviewer`);
+      assert.equal(await g.run(send(tool, sageChild(t, "/root/worker_1"))), undefined, `${tool} a child that is not a sage child`);
+      assert.equal(await g.run(send(tool, {})), undefined, `${tool} the chief`);
+    }
+  }
+  const matcher = new RegExp(JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher);
+  assert.deepEqual(tools.filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each send tool");
+  assert.deepEqual(["mcp__slack__send_input", "collaborationsend_message_x", "xsend_input"].filter((tool) => matcher.test(tool)), [], "and for no other tool");
+});
+
+test("the sage folder and a .codex folder are found also behind quotes, ~ and a variable, and from the folder a command runs in (R1669-4, R1669-6)", async (t) => {
+  const home = "/Users/someone";
+  const env = { ...process.env, HOME: home, SAGE_HOME: undefined, CODEX_HOME: `${home}/.codex` };
+  const named = [`echo x > "$HOME"/.co""dex/sa""ge/m.json`, `cat ~/".codex/sage/x"`, `cat "\${CODEX_HOME}"/sage/x`, `ls "${home}/.codex"/sessions`];
+  assert.deepEqual(named.filter((c) => !namesSageFolder(c, env, CWD)), []);
+  assert.equal(namesSageFolder("cat sage/.hooks/x.json", env, `${home}/.codex`), true, "from the Codex home");
+  assert.deepEqual(["cat sage/notes.md", "ls sessions", "echo sage mode", `cat "${home}/.codex/config.toml"`].filter((c) => namesSageFolder(c, env, CWD)), []);
+  const g = fixed({ sage: false });
+  for (const command of [`touch ".co"dex/config.toml`, "echo x > .co''dex/config.toml"]) {
+    assert.match(denied(await g.run(pre("Bash", command))) ?? "", /^sage: no agent changes files under a \.codex folder/, command);
+  }
+  assert.equal(await g.run(pre("Bash", `cat ".co"dex/config.toml`)), undefined, "a read");
+});
