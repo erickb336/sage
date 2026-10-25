@@ -113,7 +113,7 @@ You answer in your own words, or pick an option. When you do not answer, the wor
 
 ## The lead and the models
 
-Each task with a build gets one lead. The chief records a lead run and starts the lead in the background with the name `lead-T<n>`. An investigation has no pull request, so the chief runs it without a lead.
+Each task with a build gets one lead. The chief records a lead run and starts the lead in the background with the name `lead-T<n>` (in the desktop app, the first word of its description). An investigation has no pull request, so the chief runs it without a lead.
 
 The lead does these things:
 
