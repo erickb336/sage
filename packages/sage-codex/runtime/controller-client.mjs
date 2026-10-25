@@ -16,9 +16,10 @@ const HOW_TO = '[Type a line and press Enter: the chief gets it as one turn. Ctr
 const NEXT = 'Type the next line, or press Ctrl-D to stop the controller.';
 const RESTART = 'Start the client again.';
 
-// Controller text never reaches the terminal raw. Each C0 and C1 control character, the newline too, becomes U+FFFD,
-// so that the text cannot move the cursor, write the clipboard (OSC 52) or start a new line that looks like the client's.
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
+// Controller text never reaches the terminal raw. Each of these characters becomes U+FFFD: the C0 and C1 controls
+// (the newline too), the bidi controls, the zero-width characters and the line and paragraph separators. So the text
+// cannot move the cursor, write the clipboard (OSC 52), reorder what the owner sees or start a line like the client's.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g;
 export const oneLine = text => String(text).replace(CONTROL, '�');
 
 function parseArgs(argv) {
@@ -44,15 +45,20 @@ function instructionsText(path) {
   try { return readFileSync(path, 'utf8'); }
   catch (error) { throw new Error(error.code === 'ENOENT' ? `The instructions file ${path} does not exist. Give the chief instructions file with --instructions.` : `The client cannot read the instructions file ${path} (${error.code}). Give a file that you can read with --instructions.`); }
 }
-// The thread reply gives the sandbox as {type: 'readOnly'}; the owner's config says read-only.
-const shown = value => (typeof value === 'string' ? value : value?.type?.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`) ?? JSON.stringify(value));
+// The thread reply gives the sandbox as {type: 'readOnly'}; the owner's config says read-only. A config value is
+// quoted (JSON escapes a quote in it), so a model name such as `x, approval never` cannot look like a client field.
+const shown = value => (typeof value?.type === 'string' ? JSON.stringify(value.type.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`))
+  : JSON.stringify(value) ?? 'none');
 const why = error => error?.message ?? error?.reason ?? (error ? JSON.stringify(error) : 'the controller gave no reason');
 
-function turnLine(result) {
+// `then` gives what comes after the turn: the given next step, that the controller stops now, or nothing when a
+// typed line waits (that line says that it starts).
+function turnLine(result, then) {
   if (result.state === 'completed') return '[Turn completed.]';
-  if (result.state === 'interrupted') return result.timedOut ? `[The turn reached its time limit, so the client stopped it. ${NEXT}]` : `[You stopped the turn. ${NEXT}]`;
-  if (result.state === 'failed') return `[The turn failed: ${why(result.error)}. Type the line again to try again, or press Ctrl-D to stop the controller.]`;
-  if (result.state === 'refused') return `[The controller refused the turn: ${why(result.error)}. Change the line, then type it again.]`;
+  if (result.state === 'not-sent') return `[The client did not send the line: ${why(result.error)}${then('Shorten or correct the line, then type it again.')}]`;
+  if (result.state === 'interrupted') return result.timedOut ? `[The turn reached its time limit, so the client stopped it.${then(NEXT)}]` : `[You stopped the turn.${then(NEXT)}]`;
+  if (result.state === 'failed') return `[The turn failed: ${why(result.error)}.${then('Type the line again to try again, or press Ctrl-D to stop the controller.')}]`;
+  if (result.state === 'refused') return `[The controller refused the turn: ${why(result.error)}.${then('Change the line, then type it again.')}]`;
   return `[The result of the turn is unknown: ${why(result.error)}. No later line can run. Check the project for changes from this turn. ${RESTART}]`;
 }
 function requestLine(method, params = {}) {
@@ -64,12 +70,16 @@ function requestLine(method, params = {}) {
 /**
  * The owner's terminal client. Each typed line is one turn on the chief's thread, run one at a time; a line typed
  * during a turn waits. `classify` (commands.mjs) labels the mode phrases; the line itself goes to the chief unchanged.
- * `onSignal` gets the handler for SIGINT, SIGTERM and SIGHUP. Returns the exit code: 0 only after a stop that the
- * owner asked for (end of input or Ctrl-C), 1 after a refusal, a crash or an unknown turn result.
+ * `onSignal` gets the handler for SIGINT, SIGTERM and SIGHUP; SIGHUP means that the terminal is lost (the entry also
+ * gives it for an EIO or EPIPE on the terminal). Returns the exit code: 0 only after a stop that the owner asked for
+ * (end of input, Ctrl-C or SIGTERM), 1 after a refusal, a crash, an unknown turn result or a lost terminal.
  */
 export async function runClient({argv, env, input, output, classify, onSignal = () => {}, spawn, schedule}) {
-  const say = (...lines) => { for (const line of lines) output.write(`${oneLine(line)}\n`); };
-  const chief = text => { for (const line of String(text).split(/\r?\n/)) output.write(`chief> ${oneLine(line)}\n`); };
+  // After the terminal is lost, a write gives EIO or EPIPE, so the client writes nothing more.
+  let terminalLost = false;
+  const write = text => { if (!terminalLost) output.write(text); };
+  const say = (...lines) => { for (const line of lines) write(`${oneLine(line)}\n`); };
+  const chief = text => { for (const line of String(text).split(/\r?\n/)) write(`chief> ${oneLine(line)}\n`); };
   let args, binary, project, instructions;
   try {
     args = parseArgs(argv);
@@ -96,7 +106,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       else if (event.method === 'item/completed' && params.threadId === rootThread && params.item?.type === 'agentMessage') chief(params.item.text);
     }}, {spawn, schedule});
 
-  // The owner's stop: end of input, a second Ctrl-C, SIGTERM or SIGHUP. Each wakes the loop below.
+  // The stop: end of input, a second Ctrl-C, SIGTERM, or a lost terminal (SIGHUP). Each wakes the loop below.
   let ready = false, stopAsked = false, inputEnded = false, turnActive = false, hinted = false, wake = () => {};
   const queue = [];
   const requestStop = () => {
@@ -106,7 +116,10 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     owner.stop();
     wake();
   };
+  // After the turn: the controller stops now, a typed line waits, or the owner types the next line.
+  const then = fallback => (stopAsked || (inputEnded && !queue.length) ? ' The controller stops now.' : queue.length ? '' : ` ${fallback}`);
   onSignal(signal => {
+    if (signal === 'SIGHUP') { terminalLost = true; requestStop(); return; }
     if (signal !== 'SIGINT' || !ready || hinted) { requestStop(); return; }
     hinted = true;
     if (!turnActive) { say('[No turn is running. Press Ctrl-C again or Ctrl-D to stop the controller.]'); return; }
@@ -157,7 +170,9 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
         if (command.kind === 'near') say(`[No mode changed: this line is not a mode phrase, so the chief gets it as a normal line. To switch, type one of these alone: ${command.phrases.join(', ')}.]`);
         const result = await owner.runTurn(text).catch(error => ({state: 'not-sent', error}));
         turnActive = false;
-        say(result.state === 'not-sent' ? `[The client did not send the line: ${why(result.error)} Shorten or correct the line, then type it again.]` : turnLine(result));
+        say(turnLine(result, then));
+        // After a Ctrl-C the owner may not expect the line that waits, so the client says that it starts.
+        if (hinted && result.state === 'interrupted' && queue.length && !stopAsked) say('[The line that you typed during the turn starts now.]');
         continue;
       }
       if (inputEnded) break;
@@ -171,7 +186,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   // An open input keeps the process alive after a stop by Ctrl-C or a signal, so the client releases it.
   input.destroy?.();
   const status = await owner.stop();
-  const clean = (stopAsked || inputEnded) && status.state === 'stopped' && status.reason === 'Stop requested';
+  const clean = !terminalLost && (stopAsked || inputEnded) && status.state === 'stopped' && status.reason === 'Stop requested';
   if (status.state !== 'stopped') say('[The controller did not stop after SIGTERM and SIGKILL. Find its codex app-server process and stop it.]');
   else if (clean) say('[You stopped the controller. The session ended.]');
   else if (outcome !== 'refused') say(`[The session ended early: ${reasonText(status.reason)}. ${RESTART}]`);
@@ -185,8 +200,23 @@ try { if (process.argv[1]) entryPath = realpathSync(process.argv[1]); } catch { 
 if (entryPath === fileURLToPath(import.meta.url)) {
   // commands.mjs needs the bundled core, so the client runs from the built plugin.
   const {parseCommand} = await import('../skills/sage/commands.mjs');
-  let handle = () => {};
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => handle(signal));
+  // After the terminal closes (macOS), two terminal calls wait for ever, and then no signal handler runs: a blocking
+  // write, and the open that node does when it first uses process.stderr. So the client opens stderr now (it writes
+  // there only a crash message, so an error on stderr is no loss), and it writes to the terminal without blocking:
+  // such a write then fails at once with EIO.
+  process.stderr.on('error', () => {});
+  if (process.stdout.isTTY) process.stdout._handle.setBlocking(false);
+  // A lost terminal: SIGHUP, or an EIO or EPIPE on it. The client stops the controller, and its exit code is 1 also
+  // when the loss shows only in its last write.
+  let handle = () => {}, lost = false;
+  const loseTerminal = () => { lost = true; handle('SIGHUP'); };
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => handle(signal));
+  process.on('SIGHUP', loseTerminal);
+  for (const stream of [process.stdin, process.stdout]) stream.on('error', error => {
+    if (error.code !== 'EIO' && error.code !== 'EPIPE') throw error;
+    loseTerminal();
+  });
+  process.on('exit', () => { if (lost) process.exitCode = 1; });
   runClient({argv: process.argv.slice(2), env: process.env, input: process.stdin, output: process.stdout, classify: parseCommand,
     onSignal: handler => { handle = handler; }})
     .then(code => { process.exitCode = code; }, error => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });

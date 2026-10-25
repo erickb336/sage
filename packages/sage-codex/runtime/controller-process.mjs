@@ -11,6 +11,8 @@ function positive(value, name) {
   if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`Invalid ${name}`);
   return value;
 }
+// The streamed pieces of one item, such as item/agentMessage/delta and item/commandExecution/outputDelta.
+const DELTA = /^item\/.+(\/d|D)elta$/;
 const defaultSchedule = (callback, delay) => { const timer = setTimeout(callback, delay); return () => clearTimeout(timer); };
 export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owned-controller', '--strict-config',
   ...Object.entries(OWNED_CONTROLLER_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])]);
@@ -50,7 +52,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
   let initialized = null, threadRequested = false, binding = null, turn = null;
   const streamClosures = new Set(), observations = new Set(), signals = [], events = [], settledTurns = new Set();
   // The event limits count from the start of the current turn, so a long session never reaches them.
-  let windowEvents = 0, windowBytes = 0;
+  let windowEvents = 0, windowBytes = 0, sequence = 0;
   let resolveFenced;
   const fencedPromise = new Promise(resolve => { resolveFenced = resolve; });
   let buffered = Buffer.alloc(0);
@@ -106,15 +108,19 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     if (turnId) settledTurns.add(turnId);
     current.resolve(Object.freeze({state: result, task: binding.task, run: binding.run, threadId: binding.threadId, turnId,
       bindingHash: binding.bindingHash, inputSha256: current.inputSha256, lastAgentMessage, error, timedOut,
-      eventCount: events.length, status: status()}));
+      eventCount: sequence, status: status()}));
   }
   function observe(received, bytes) {
     if (received.kind === 'reply') return;
-    if (windowEvents >= maxEvents || windowBytes + bytes > maxEventBytes) { fence('Event limit exceeded'); return; }
-    windowEvents += 1; windowBytes += bytes;
     const notification = received.kind === 'observation';
     const message = notification ? received.notification : received.request;
-    const event = Object.freeze({seq: events.length + 1, kind: notification ? 'notification' : 'server-request-refused', method: message.method, message});
+    // A streamed turn sends one delta for each small piece of text, so a long valid turn sends many deltas:
+    // maxEventBytes bounds them, maxEvents does not count them.
+    const counted = !(notification && DELTA.test(message.method));
+    if ((counted && windowEvents >= maxEvents) || windowBytes + bytes > maxEventBytes) { fence('Event limit exceeded'); return; }
+    if (counted) windowEvents += 1;
+    windowBytes += bytes;
+    const event = Object.freeze({seq: ++sequence, kind: notification ? 'notification' : 'server-request-refused', method: message.method, message});
     events.push(event);
     if (onEvent) { try { onEvent(event); } catch { fence('Event callback failed'); return; } }
     // A terminal for a turn whose result was given already: the earlier result may be wrong, so no later turn runs.
@@ -236,6 +242,8 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     try { inputSha256 = bindTurnText(text); } catch (error) { return Promise.reject(error); }
     const current = {state: Object.freeze({threadId: binding.threadId}), inputSha256, cancels: [], interruptRequested: false};
     windowEvents = 0; windowBytes = 0;
+    // With an onEvent handler the caller keeps what it needs, so events() keeps the current turn only.
+    if (onEvent) events.length = 0;
     const promise = new Promise(resolve => { current.resolve = resolve; });
     current.promise = promise;
     turn = current;

@@ -4,7 +4,7 @@ import {chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync
 import {EventEmitter} from 'node:events';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
-import {spawn} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
@@ -92,10 +92,11 @@ test('fake 1: the full order binds the policy, runs one turn to completed and ke
   assert.deepEqual(f.methods(), ['initialize', 'initialized', 'config/read', 'thread/start', 'turn/start']);
   assert.deepEqual(f.sent.find(message => message.method === 'thread/start').params, {cwd: PROJECT, ephemeral: true, developerInstructions: INSTRUCTIONS});
   assert.deepEqual(f.sent.find(message => message.method === 'turn/start').params, {threadId: THREAD, input: [{type: 'text', text: 'Say one synthetic sentence.'}]});
+  // The handler gets every event in order; events() keeps the events of the current turn (R1523-2).
+  assert.deepEqual(f.events.map(event => event.method), fixtureMethods(f.stream));
+  assert.deepEqual(f.events.map(event => event.seq), f.events.map((_, index) => index + 1));
   const events = f.owner.events();
-  assert.deepEqual(events.map(event => event.method), fixtureMethods(f.stream));
-  assert.deepEqual(events.map(event => event.seq), events.map((_, index) => index + 1));
-  assert.deepEqual(f.events, [...events]);
+  assert.deepEqual(events, f.events.filter(event => event.seq > 1));
   assert.ok(Object.isFrozen(events) && Object.isFrozen(events[0]) && Object.isFrozen(events[0].message.params));
   assert.ok(Object.isFrozen(result));
   const stop = await f.owner.stop();
@@ -201,8 +202,8 @@ test('fake 11: the event limit fences the process and the turn is uncertain', as
   const result = await f.owner.runTurn('Say one synthetic sentence.');
   assert.equal(result.state, 'uncertain'); assert.equal(result.error.reason, 'Event limit exceeded');
   assert.equal(result.status.reason, 'Event limit exceeded');
-  // The limit counts from the turn start: the one event before the turn plus the three of the turn are kept.
-  assert.equal(f.owner.events().length, 1 + 3);
+  // The limit counts from the turn start, and events() keeps the current turn only: its three events.
+  assert.deepEqual(f.owner.events().map(event => event.seq), [2, 3, 4]);
   await f.owner.stop();
 });
 
@@ -213,6 +214,46 @@ test('fake 14: the event limit counts per turn, so a long session runs on (R1505
   for (const text of ['one', 'two', 'three']) assert.equal((await f.owner.runTurn(text)).state, 'completed', text);
   assert.equal(f.owner.status().reason, null);
   await f.owner.stop();
+});
+
+// One long valid turn: the model streams its reply as many deltas, more than maxEvents.
+const withDeltas = count => stream => {
+  const at = stream.findIndex(isRootTerminal);
+  const delta = {after: 'turn/start', notification: {method: 'item/agentMessage/delta', params: {threadId: THREAD, turnId: TURN, itemId: 'msg-1', delta: 'word '}}};
+  stream.splice(at, 0, ...Array.from({length: count}, () => delta));
+  return stream;
+};
+test('fake 18: deltas do not count toward maxEvents, so a long streamed turn completes; maxEventBytes still bounds them (R1526-1)', async () => {
+  const f = fake({edit: withDeltas(500), maxEvents: turnEvents(load())});
+  assert.equal((await bound(f)).state, 'bound');
+  const result = await f.owner.runTurn('Say a long synthetic text.');
+  assert.deepEqual([result.state, result.error], ['completed', null]);
+  assert.equal(f.owner.events().filter(event => event.method === 'item/agentMessage/delta').length, 500, 'each delta is kept');
+  await f.owner.stop();
+  const bytes = fake({edit: withDeltas(500), maxEventBytes: 64 * 1024});
+  assert.equal((await bound(bytes)).state, 'bound');
+  const fenced = await bytes.owner.runTurn('Say a long synthetic text.');
+  assert.deepEqual([fenced.state, fenced.error], ['uncertain', {reason: 'Event limit exceeded'}]);
+  await bytes.owner.stop();
+});
+
+test('fake 19: with an onEvent handler, events() keeps the current turn only; the sequence numbers go on (R1523-2)', async () => {
+  const f = fake();
+  assert.equal((await bound(f)).state, 'bound');
+  const perTurn = turnEvents(load());
+  await f.owner.runTurn('one');
+  const second = await f.owner.runTurn('two');
+  const kept = f.owner.events();
+  assert.equal(kept.length, perTurn, 'only the events of the second turn');
+  assert.deepEqual([kept[0].seq, kept.at(-1).seq, second.eventCount], [1 + perTurn + 1, 1 + 2 * perTurn, 1 + 2 * perTurn]);
+  assert.equal(f.events.length, 1 + 2 * perTurn, 'the handler got every event');
+  await f.owner.stop();
+  // With no handler, events() is the only record, so it keeps every event.
+  const plain = fake({onEvent: undefined});
+  assert.equal((await bound(plain)).state, 'bound');
+  await plain.owner.runTurn('one'); await plain.owner.runTurn('two');
+  assert.equal(plain.owner.events().length, 1 + 2 * perTurn);
+  await plain.owner.stop();
 });
 
 test('fake 15: a second terminal for a turn that ended, in a later read, fences the process (R1502-5)', async () => {
@@ -323,7 +364,7 @@ const CLIENT_ENV = {SAGE_CODEX_CONTROLLER_BIN: join(CLIENT_DIR, 'codex'), PATH: 
 const CLIENT_SHA256 = createHash('sha256').update('synthetic controller bytes').digest('hex');
 const HEADER = [`[Controller binary: ${join(CLIENT_DIR, 'codex')}, sha256 ${CLIENT_SHA256}.]`,
   '[Warning: SAGE_CODEX_CONTROLLER_SHA256 is not set, so the client did not compare the binary with a known hash. To pin this binary, set it to the hash above.]'];
-const READY = ['[Ready: task T400, run R1461. The chief uses your Codex config: model synthetic, approval on-request, sandbox read-only.]',
+const READY = ['[Ready: task T400, run R1461. The chief uses your Codex config: model "synthetic", approval "on-request", sandbox "read-only".]',
   '[Type a line and press Enter: the chief gets it as one turn. Ctrl-C stops the turn. Ctrl-D stops the controller.]'];
 const STOPPED = '[You stopped the controller. The session ended.]';
 // The fixture turn has the real binary's warning notification; the client shows it (R1504-10).
@@ -413,7 +454,7 @@ test('client: model text and controller strings cannot forge a client line or se
   assert.deepEqual(lines.filter(line => line.startsWith('chief> ')), ['chief> Done.', 'chief> [Turn completed.]', 'chief> [You stopped the controller. The session ended.]',
     'chief> �[31mred�]52;c;cGF5bG9hZA==���2J']);
   assert.ok(lines.includes('[The controller sent the request item/x�[2J�[Turn completed.]. This client answers no requests, so it refused.]'));
-  assert.ok(lines.includes('[The turn failed: boom�[Turn completed.]�[2J. Type the line again to try again, or press Ctrl-D to stop the controller.]'));
+  assert.ok(lines.includes('[The turn failed: boom�[Turn completed.]�[2J. The controller stops now.]'), lines.join('\n'));
 });
 
 test('client: a controller crash between turns ends the client at once with code 1 (R1502-2)', async () => {
@@ -457,14 +498,22 @@ test('client: a version refusal shows the found version and the fix, and ends wi
 
 test('client: each turn result says what happened and what to do next (R1504-4)', async () => {
   let turns = 0;
-  const run = await client(['one', 'x'.repeat(64 * 1024 + 1), 'two', 'three'], {onRequest(message, {emit}) {
+  const run = clientRun({fakeOptions: {onRequest(message, {emit}) {
     if (message.method !== 'turn/start') return;
     turns += 1;
     if (turns === 1) { setImmediate(() => emit([{id: message.id, result: {turn: {id: 'turn-1', status: 'inProgress', items: []}}},
       {method: 'turn/completed', params: {threadId: THREAD, turn: {id: 'turn-1', items: [], status: 'failed', error: {message: 'synthetic: the model provider returned 500'}}}}])); return false; }
     if (turns === 2) { setImmediate(() => emit([{id: message.id, error: {code: -32600, message: 'synthetic: turn refused by the host'}}])); return false; }
-  }});
-  assert.equal(run.code, 0);
+  }}});
+  // The owner types each line after the result of the one before, so each result gives the next step.
+  const results = () => run.lines().filter(line => /^\[The (turn failed|client did not send|controller refused)/.test(line)).length;
+  for (const [index, line] of ['one', 'x'.repeat(64 * 1024 + 1), 'two'].entries()) {
+    run.input.write(`${line}\n`);
+    await until(() => results() > index, `the result of ${line.slice(0, 5)}`);
+  }
+  // The last line comes with the end of the input: it runs, then the controller stops.
+  run.input.end('three\n');
+  assert.equal(await run.code, 0);
   assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [
     '[The turn failed: synthetic: the model provider returned 500. Type the line again to try again, or press Ctrl-D to stop the controller.]',
     '[The client did not send the line: The line has 65537 bytes; a line must be text of 1 to 65536 bytes, with no NUL. Shorten or correct the line, then type it again.]',
@@ -485,7 +534,9 @@ test('client: Ctrl-C shows a message at once and stops the turn; a line typed du
   run.input.end();
   assert.equal(await run.code, 0);
   assert.deepEqual(run.lines().slice(HEADER.length + READY.length), ['[The chief is on a turn. Your line runs after it.]',
-    '[Stopping the turn... Press Ctrl-C again to stop the controller.]', `[You stopped the turn. ${NEXT}]`, WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
+    // A waiting line runs after the Ctrl-C, and the client says so (R1525-3).
+    '[Stopping the turn... Press Ctrl-C again to stop the controller.]', '[You stopped the turn.]', '[The line that you typed during the turn starts now.]',
+    WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
   assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/interrupt').map(message => message.params), [{threadId: THREAD, turnId: 'held-turn'}]);
 });
 
@@ -498,7 +549,7 @@ test('client: a second Ctrl-C stops the controller, also before the chief is rea
   await until(run.ended, 'the client exit');
   assert.equal(await run.code, 0);
   assert.deepEqual(run.lines().slice(HEADER.length + READY.length), ['[Stopping the turn... Press Ctrl-C again to stop the controller.]', '[Stopping the controller...]',
-    `[You stopped the turn. ${NEXT}]`, STOPPED]);
+    '[You stopped the turn. The controller stops now.]', STOPPED]);
   // Before the chief is ready: the config/read reply never comes, and Ctrl-C stops the start.
   const early = clientRun({fakeOptions: {onRequest: message => (message.method === 'config/read' ? false : undefined)}});
   await until(() => early.f.methods().includes('config/read'), 'the config/read request');
@@ -521,7 +572,64 @@ test('client: the end of input during a turn says when the controller stops and 
   run.signal('SIGINT');
   await until(run.ended, 'the client exit');
   assert.equal(await run.code, 0);
-  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [ended, '[Stopping the turn... Press Ctrl-C again to stop the controller.]', `[You stopped the turn. ${NEXT}]`, STOPPED]);
+  // No line can be typed after the end of input: the text says that the controller stops (R1525-2).
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [ended, '[Stopping the turn... Press Ctrl-C again to stop the controller.]',
+    '[You stopped the turn. The controller stops now.]', STOPPED]);
+});
+
+test('client: SIGTERM during a turn says that the controller stops now; SIGHUP stops it with code 1 and writes nothing more (R1526-3, R1525-1)', async () => {
+  for (const signal of ['SIGTERM', 'SIGHUP']) {
+    const hold = holdFirstTurn();
+    const run = clientRun({fakeOptions: hold.options});
+    run.input.write('Wait for an interrupt.\n');
+    await until(() => hold.held, 'the held turn');
+    run.signal(signal);
+    await until(run.ended, 'the client exit');
+    run.input.end();
+    assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/interrupt' || message.ended).map(message => message.method ?? 'stdin ended'), ['turn/interrupt', 'stdin ended'], signal);
+    if (signal === 'SIGTERM') {
+      assert.equal(await run.code, 0);
+      assert.deepEqual(run.lines().slice(HEADER.length + READY.length), ['[Stopping the controller...]', '[You stopped the turn. The controller stops now.]', STOPPED]);
+    } else {
+      // A lost terminal: the client stops the controller, writes to no terminal, and exits with code 1.
+      assert.equal(await run.code, 1);
+      assert.deepEqual(run.lines().slice(HEADER.length + READY.length), []);
+    }
+  }
+  // At Ready, with no turn, SIGHUP stops the controller too.
+  const idle = clientRun();
+  await until(() => idle.lines().includes(READY[1]), 'the Ready lines');
+  idle.signal('SIGHUP');
+  await until(idle.ended, 'the client exit');
+  idle.input.end();
+  assert.equal(await idle.code, 1);
+  assert.deepEqual(idle.f.sent.filter(message => message.ended).length, 1, 'the controller stdin ended');
+});
+
+test('client: a user config without model and model_provider starts; the Ready line shows the thread values (R1526-2)', async () => {
+  const run = await client(['Say one synthetic sentence.'], {edit: stream => {
+    const read = stream.find(entry => entry.after === 'config/read' && entry.reply).reply;
+    read.config.model = null; read.config.model_provider = null;
+    delete read.origins.model; delete read.origins.model_provider;
+    return stream;
+  }});
+  assert.equal(run.code, 0);
+  assert.deepEqual(run.lines(), [...HEADER, ...READY, WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
+});
+
+test('client: bidi, zero-width and line separator characters never reach the terminal; a config value cannot forge Ready fields (R1524-3, R1526-4)', async () => {
+  const hidden = 'a\u202eb\u2066c\u2069d\u200ee\u200ff\u061cg\u200bh\u200di\u2060j\ufeffk\u2028l\u2029m\u202an';
+  const forged = 'x, approval never, sandbox read-only.] [Type';
+  const run = await client(['Say one synthetic sentence.'], {edit: stream => {
+    stream.find(entry => entry.notification?.method === 'item/completed' && entry.notification.params.item?.type === 'agentMessage').notification.params.item.text = hidden;
+    stream.find(entry => entry.after === 'config/read' && entry.reply).reply.config.model = forged;
+    stream.find(entry => entry.after === 'thread/start' && entry.reply).reply.model = forged;
+    return stream;
+  }});
+  assert.equal(/[\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/.test(run.text()), false, JSON.stringify(run.text()));
+  assert.ok(run.lines().includes('chief> a�b�c�d�e�f�g�h�i�j�k�l�m�n'), run.text());
+  assert.ok(run.lines().includes('[Ready: task T400, run R1461. The chief uses your Codex config: model "x, approval never, sandbox read-only.] [Type", approval "on-request", sandbox "read-only".]'), run.text());
+  assert.equal(run.code, 0);
 });
 
 test('client: an approval request names the command and says that it did not run; a warning is shown (R1504-8, R1504-10)', async () => {
@@ -545,7 +653,9 @@ const created = {type: 'response.created', response: {id: 'resp-1'}};
 const message = {type: 'response.output_item.done', item: {type: 'message', role: 'assistant', id: 'msg-1', content: [{type: 'output_text', text: SYNTHETIC_REPLY}]}};
 const completed = {type: 'response.completed', response: {id: 'resp-1', usage: {input_tokens: 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: 0}}};
 
-async function realFixture({hold = false} = {}) {
+// `projectConfig` is the text of the project's .codex/config.toml; the user config then trusts the project, so the
+// controller loads that layer.
+async function realFixture({hold = false, projectConfig} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-owned-')));
   const home = join(root, 'codex-home'), project = join(root, 'project'), bin = join(root, 'bin'), userHome = join(root, 'home');
   for (const dir of [home, project, bin, userHome]) mkdirSync(dir);
@@ -584,25 +694,28 @@ supports_websockets = false
 enabled = false
 [feedback]
 enabled = false
-`);
+${projectConfig === undefined ? '' : `[projects."${project}"]\ntrust_level = "trusted"\n`}`);
+  if (projectConfig !== undefined) { mkdirSync(join(project, '.codex')); writeFileSync(join(project, '.codex', 'config.toml'), projectConfig); }
   writeFileSync(join(home, 'auth.json'), JSON.stringify({auth_mode: 'apikey', OPENAI_API_KEY: 'synthetic-api-key'}));
   const binary = resolveControllerBinary(process.env);
   const events = [];
   const env = {PATH: `${bin}:/usr/bin:/bin`, HOME: userHome, TMPDIR: root, CODEX_HOME: home, CODEX_AUTHAPI_BASE_URL: url,
     CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG: '1', CODEX_APP_SERVER_MANAGED_CONFIG_PATH: join(home, 'managed_config.toml'),
     NO_PROXY: '*', no_proxy: '*', RUST_LOG: 'warn', DO_NOT_TRACK: '1'};
+  // The test keeps the handle of the real controller process, to see its exit by that handle.
+  const children = [];
   const owner = createControllerProcess({
     executable: binary.path, executableSha256: binary.sha256, cwd: project, env,
     startupTimeoutMs: 60000, inspectionTimeoutMs: 30000, stopGraceMs: 5000, turnTimeoutMs: 60000, interruptGraceMs: 10000,
     onEvent: event => events.push(event),
-  });
+  }, {spawn: (...launch) => { const child = spawn(...launch); children.push(child); return child; }});
   async function close() {
     for (const response of held) response.end();
     await new Promise(resolve => server.close(resolve));
     server.closeAllConnections?.();
     rmSync(root, {recursive: true, force: true});
   }
-  return {root, home, project, binary, env, owner, requests, events, held, close};
+  return {root, home, project, binary, env, owner, requests, events, held, children, close};
 }
 function filesUnder(dir) {
   if (!existsSync(dir)) return [];
@@ -674,6 +787,46 @@ test('real owned controller: interrupt of an active root turn gives interrupted'
   } finally { await f.owner.stop(); await f.close(); }
 });
 
+test('real owned controller: a project config that widens the sandbox or moves approvals is refused before any turn (R1524-1, R1524-2)', {skip: REAL, timeout: 180000}, async () => {
+  const found = {};
+  for (const [name, text] of [['widen', '[sandbox_workspace_write]\nnetwork_access = true\n'], ['reviewer', 'approvals_reviewer = "auto_review"\n']]) {
+    const f = await realFixture({projectConfig: text});
+    try {
+      await f.owner.start();
+      const opened = await f.owner.openThread({project: f.project, task: 'T400', run: 'R1461', instructions: 'Synthetic owned controller test.'});
+      // The message names the project folder, which differs in each run.
+      found[name] = [opened.state, opened.code, opened.error.message.replace(f.project, '<project>'), opened.status.state,
+        f.requests.filter(request => request.url === '/v1/responses').length];
+    } finally { await f.owner.stop(); await f.close(); }
+  }
+  saveEvidence('real-project-layer', found);
+  const refused = key => ['refused', 'selection-origin', `The setting ${key} comes from the project config in <project>/.codex. An agent can change project files, so the client takes the sandbox and approval settings only from your user config, a managed config or the launch flags. Move ${key} to your user config, then start the client again.`, 'stopped', 0];
+  assert.deepEqual(found, {widen: refused('sandbox_workspace_write.network_access'), reviewer: refused('approvals_reviewer')});
+});
+
+// A killed client closes the pipe to the controller's stdin, and nothing else ends the controller then, because it
+// runs in its own process group. So this case closes that stdin during a held turn and sees the exit by the handle.
+test('real owned controller: a closed stdin during a held turn ends the controller by itself (R1523-3)', {skip: REAL, timeout: 180000}, async () => {
+  const f = await realFixture({hold: true});
+  try {
+    await f.owner.start();
+    assert.equal((await f.owner.openThread({project: f.project, task: 'T400', run: 'R1461', instructions: 'Synthetic owned controller test.'})).state, 'bound');
+    const turn = f.owner.runTurn('Say one synthetic sentence.');
+    for (let i = 0; i < 1500 && !(f.held.length && f.events.some(event => event.method === 'turn/started')); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(f.held.length, 'the provider holds the turn');
+    const [child] = f.children;
+    child.stdin.end();
+    // A bounded count of short waits for the exit event of this handle; the finally block stops it if it stays.
+    for (let i = 0; i < 1500 && child.exitCode === null && child.signalCode === null; i++) await new Promise(resolve => setTimeout(resolve, 20));
+    const exit = {code: child.exitCode, signal: child.signalCode};
+    const result = await turn;
+    saveEvidence('real-stdin-closed', {exit, result, pid: child.pid, status: f.owner.status()});
+    assert.deepEqual(exit, {code: 0, signal: null});
+    assert.deepEqual(f.owner.status().signals, [], 'the controller ended with no signal from the wrapper');
+    assert.equal(result.state, 'uncertain');
+  } finally { await f.owner.stop(); await f.close(); }
+});
+
 test('real owned controller: the terminal client runs two typed lines as two turns', {skip: REAL, timeout: 180000}, async () => {
   const f = await realFixture();
   try {
@@ -686,7 +839,7 @@ test('real owned controller: the terminal client runs two typed lines as two tur
     saveEvidence('real-client', {code, output: text});
     const lines = text.trimEnd().split('\n').filter(line => !line.startsWith('[Warning from the controller: '));
     assert.deepEqual(lines, [`[Controller binary: ${f.binary.path}, sha256 ${f.binary.sha256}.]`, HEADER[1],
-      '[Ready: task T400, run R1461. The chief uses your Codex config: model synthetic, approval never, sandbox read-only.]', READY[1],
+      '[Ready: task T400, run R1461. The chief uses your Codex config: model "synthetic", approval "never", sandbox "read-only".]', READY[1],
       '[You typed the mode phrase "sage mode". The client sends it to the chief, which switches the mode and says so.]', `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]',
       `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
     assert.equal(code, 0);
@@ -733,15 +886,18 @@ reader.on('line', line => {
 });
 reader.on('close', () => process.exit(0));
 `;
-async function signalFixture() {
+async function signalFixture({pty} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-signal-')));
   const project = join(root, 'project'), marks = join(root, 'marks');
   mkdirSync(project); mkdirSync(marks);
   writeFileSync(join(root, 'codex'), FAKE_CONTROLLER); chmodSync(join(root, 'codex'), 0o755);
   writeFileSync(join(root, 'chief.md'), INSTRUCTIONS);
   const clientPath = fileURLToPath(new URL('../../../plugins/sage-codex/runtime/controller-client.mjs', import.meta.url));
-  // detached: the client leads its own process group, as a job in a terminal does.
-  const client = spawn(process.execPath, [clientPath, '--project', project, '--task', 'T400', '--run', 'R1461', '--instructions', join(root, 'chief.md')], {
+  const command = [process.execPath, clientPath, '--project', project, '--task', 'T400', '--run', 'R1461', '--instructions', join(root, 'chief.md')];
+  // detached: the client leads its own process group, as a job in a terminal does. With `pty`, the Python helper
+  // runs the client on a pseudo terminal, types the `pty` line when it is not empty, and closes the terminal.
+  const [file, ...args] = pty === undefined ? command : ['python3', '-I', '-c', PTY, pty, join(marks, 'turn-started'), ...command];
+  const client = spawn(file, args, {
     detached: true, stdio: ['pipe', 'pipe', 'pipe'],
     env: {PATH: process.env.PATH, SAGE_CODEX_CONTROLLER_BIN: join(root, 'codex'), FAKE_FIXTURE: fileURLToPath(new URL('./controller-fixture.json', import.meta.url)), FAKE_PROJECT: project, FAKE_MARKS: marks},
   });
@@ -796,15 +952,60 @@ test('signal: two Ctrl-C stop the controller, and the client exits with code 0 w
   } finally { await s.close(); }
 });
 
-test('signal: when the client dies, the controller in its own process group ends too', {timeout: 120000}, async () => {
-  const s = await signalFixture();
+// A real terminal: Python's pty.fork runs the client on a pseudo terminal, waits for the Ready lines (and for a mark
+// when it types a line), then closes the terminal, as the owner who closes the window does. It waits a bounded count
+// of short steps for the client, and stops only its own child, by its pid from fork, if the client stays up.
+const PTY = `
+import json, os, pty, select, signal, sys, time
+line, mark, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(args[0], args)
+out = bytearray()
+def pump():
+    if select.select([fd], [], [], 0.02)[0]:
+        try:
+            out.extend(os.read(fd, 4096))
+        except OSError:
+            pass
+for _ in range(1500):
+    if b'[Type a line' in out:
+        break
+    pump()
+ready = b'[Type a line' in out
+if ready and line:
+    os.write(fd, line.encode() + b'\\n')
+    for _ in range(1500):
+        if os.path.exists(mark):
+            break
+        pump()
+os.close(fd)
+code = None
+for _ in range(1500):
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done:
+        code = os.waitstatus_to_exitcode(status)
+        break
+    time.sleep(0.02)
+killed = code is None
+if killed:
+    os.kill(pid, signal.SIGKILL)
+    code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+print(json.dumps({'ready': ready, 'code': code, 'killed': killed}))
+`;
+async function closedTerminal(line) {
+  const s = await signalFixture({pty: line});
   try {
-    s.client.stdin.write('Wait for an interrupt.\n');
-    await s.waitFor(() => s.marked('turn-started'), 'the held turn');
-    s.client.kill('SIGKILL');
-    await s.exited;
-    // The closed stdin pipe ends the controller: no orphan stays.
-    await s.waitFor(() => s.marked('exited'), 'the controller exit');
-    assert.equal(readFileSync(join(s.marks, 'exited'), 'utf8'), '0');
+    const code = await s.exited;
+    return {...JSON.parse(s.out()), helperCode: code, controllerExit: s.marked('exited') ? readFileSync(join(s.marks, 'exited'), 'utf8') : null};
   } finally { await s.close(); }
+}
+const PYTHON = spawnSync('python3', ['-I', '-c', 'import pty'], {stdio: 'ignore'}).status === 0 ? false : 'python3 with the pty module is not on PATH';
+
+test('pty: closing the terminal at Ready stops the client with code 1 and ends the controller (R1525-1)', {skip: PYTHON, timeout: 120000}, async () => {
+  assert.deepEqual(await closedTerminal(''), {ready: true, code: 1, killed: false, helperCode: 0, controllerExit: '0'});
+});
+
+test('pty: closing the terminal during a turn stops the client with code 1 and ends the controller (R1525-1, R1526-3)', {skip: PYTHON, timeout: 120000}, async () => {
+  assert.deepEqual(await closedTerminal('Wait for an interrupt.'), {ready: true, code: 1, killed: false, helperCode: 0, controllerExit: '0'});
 });
