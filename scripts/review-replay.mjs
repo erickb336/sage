@@ -6,8 +6,8 @@
 //   node scripts/review-replay.mjs <logbook folder> [--out <file>]
 //
 // Without --out it prints the report. --out never names a file in the logbook folder.
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { FINDING_CLASSES } from "../packages/sage-core/logbook-fields.mjs";
 import { REVIEW_ROLES } from "../packages/sage-core/review.mjs";
 import { isMain } from "./is-main.mjs";
@@ -16,11 +16,15 @@ const PICK = 10;
 const SEVERITIES = ["high", "medium", "low"];
 const CLEAN = /-clean$|^qa-pass$/;
 
-/** The rows of one table of the logbook, as objects by its header. */
-function table(dir, name) {
+/** The rows of one table of the logbook, as objects by its header. It counts in `ragged` the rows whose cell count differs from the header. */
+function table(dir, name, ragged) {
   const [head = "", ...lines] = readFileSync(resolve(dir, `${name}.tsv`), "utf8").replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
   const cols = head.split("\t");
-  return lines.map((line) => { const v = line.split("\t"); return Object.fromEntries(cols.map((c, i) => [c, v[i] ?? ""])); });
+  return lines.map((line) => {
+    const v = line.split("\t");
+    if (v.length !== cols.length) ragged[name] = (ragged[name] ?? 0) + 1;
+    return Object.fromEntries(cols.map((c, i) => [c, v[i] ?? ""]));
+  });
 }
 
 const ran = (run) => run.status === "done";
@@ -35,29 +39,46 @@ const one = (s) => s.replace(/\s+/g, " ").replace(/\|/g, "\\|");
 
 /** The report, as Markdown, from the logbook folder `dir`. `at` is the date it prints. Read only. */
 export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
-  const tasks = table(dir, "tasks"), allRuns = table(dir, "runs"), allFindings = table(dir, "findings");
-  const ledger = table(dir, "ledger"), decisions = table(dir, "decisions");
+  const ragged = {}, read = (name) => table(dir, name, ragged);
+  const tasks = read("tasks"), allRuns = read("runs"), rows = read("findings"), ledger = read("ledger"), decisions = read("decisions");
   const runById = new Map(allRuns.map((r) => [r.id, r]));
   const runs = allRuns.filter((r) => REVIEW_ROLES.includes(r.role));
+  const keyRun = (key) => /^(?:F-)?(R\d+)-/.exec(key)?.[1];
+
+  // A finding that came back after a fix ("<key> opened again"), and one moved to a follow-up task ("<key> moved to T9
+  // as F-T9-1: …"). A move rewrites the row to the new task and key, round 0 and no run, and its old task keeps only
+  // the decision. So each moved row counts once, back on the task and key where a review found it, as kept, in the
+  // round of the run that its old key names, else in round 1: a move is for a finding of a repair round.
+  const again = new Set(), moved = new Map(), from = new Map();
+  for (const d of decisions) {
+    const m = /^(\S+) (?:opened again|moved to (T\d+) as (\S+):)/.exec(d.decision);
+    if (m?.[2]) {
+      (moved.get(d.task) ?? moved.set(d.task, []).get(d.task)).push({ key: m[1], to: m[2], as: m[3] });
+      from.set(`${m[2]}\t${m[3]}`, { task: d.task, key: m[1] });
+    } else if (m) again.add(`${d.task}\t${m[1]}`);
+  }
+  const originOf = (f) => {
+    let o = from.get(`${f.task}\t${f.key}`);
+    for (let n = 0, up; o && n < from.size && (up = from.get(`${o.task}\t${o.key}`)); n++) o = up; // moved again
+    return o;
+  };
+  const allFindings = rows.map((f) => {
+    const o = originOf(f);
+    if (!o) return f;
+    const run = runById.get(keyRun(o.key));
+    return { ...f, task: o.task, key: o.key, triage: "moved", round: run?.task === o.task ? run.round : "1", movedTo: `${f.task} ${f.key}` };
+  });
   const byTask = (rows) => rows.reduce((m, r) => (m.get(r.task)?.push(r) ?? m.set(r.task, [r]), m), new Map());
   const runsOf = byTask(runs), findingsOf = byTask(allFindings);
   const verdictOf = new Map(ledger.filter((l) => l.run && !l.kind.startsWith("checks-")).map((l) => [l.run, l.kind]));
+  const movedRow = new Map(allFindings.filter((f) => f.movedTo).map((f) => [`${f.task}\t${f.key}`, f]));
 
   // The run of a finding: its run cell, else the run that its key names (R12-3 or F-R12-3), when that run is of its task.
   const runOf = (f) => {
-    const id = f.run || /^(?:F-)?(R\d+)-/.exec(f.key)?.[1];
+    const id = f.run || keyRun(f.key);
     return id && runById.get(id)?.task === f.task ? { id, how: f.run ? "cell" : "key" } : undefined;
   };
   const classOf = (f) => f.class || "untagged";
-  // A finding that came back after a fix ("<key> opened again"), and one moved to a follow-up task ("<key> moved to T9
-  // as F-T9-1: …"): a moved finding's row now holds the new task and key, so its old task keeps only the decision.
-  const again = new Set(), moved = new Map();
-  const findingAt = new Map(allFindings.map((f) => [`${f.task}\t${f.key}`, f]));
-  for (const d of decisions) {
-    const m = /^(\S+) (?:opened again|moved to (T\d+) as (\S+):)/.exec(d.decision);
-    if (m?.[2]) (moved.get(d.task) ?? moved.set(d.task, []).get(d.task)).push({ key: m[1], to: m[2], as: m[3], now: findingAt.get(`${m[2]}\t${m[3]}`) });
-    else if (m) again.add(`${d.task}\t${m[1]}`);
-  }
   // A later task's finding whose summary names this task id: a rough sign that a problem shipped (a proxy, not a record).
   const namedBy = (id) => allFindings.filter((f) => f.task !== id && new RegExp(`\\b${id}\\b`).test(f.summary));
 
@@ -110,7 +131,7 @@ export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
     }
     if (!found.some(serious)) out.push("- none");
     const later = namedBy(t.id), gone = moved.get(t.id) ?? [];
-    out.push("", `Moved to a follow-up task: ${gone.length ? gone.map((m) => `${m.key} to ${m.to} as ${m.as}${m.now ? ` (${m.now.severity})` : ""}`).join(", ") : "none"}.`);
+    out.push("", `Moved to a follow-up task: ${gone.length ? gone.map((m) => { const f = movedRow.get(`${t.id}\t${m.key}`); return `${m.key} to ${m.to} as ${m.as}${f ? ` (${f.severity}, ${f.source})` : ""}`; }).join(", ") : "none"}.`);
     out.push(`Findings of other tasks whose summary names ${t.id}: ${later.length ? later.map((f) => `${f.task} ${f.key} (${f.severity})`).join(", ") : "none"}.`, "");
     for (const f of found) all.push([c, f]);
   }
@@ -157,6 +178,9 @@ export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
     `- Tokens: ${doneRuns.filter((r) => !tokensOf(r)).length} of ${doneRuns.length} done review runs in the logbook have no token count; the pick leaves out every PR with such a run, so the pick favours later PRs.`,
     `- A finding's round is the task's repair round when the finding was recorded. "After round 0" says that the round-0 reviews did not report it; the logbook cannot tell whether the problem was in the round-0 code or came with a repair.`,
     `- The logbook does not record a problem that shipped after a merge. A later finding that names the task is a proxy from the summary text, and a task id can also name a test case.`,
+    `- Moves: ${movedRow.size} findings in the logbook moved to a follow-up task. Each counts once, as kept, on the task and key where a review found it (from the move's decision), and not on the follow-up task. Its round is the round of the run that its old key names, else round 1, because a move is for a finding of a repair round.`,
+    `- Bounds: a finding that is added again with its key and an unchanged summary takes the new round and leaves no decision. So "after round 0" is an upper bound and "opened again after a fix" is a lower bound.`,
+    `- Rows: ${sum(Object.values(ragged), (n) => n)} of ${tasks.length + allRuns.length + rows.length + ledger.length + decisions.length} rows of the five tables it reads have a cell count that differs from their header${Object.keys(ragged).length ? ` (${Object.entries(ragged).map(([n, c]) => `${n} ${c}`).join(", ")})` : ""}; a missing cell reads as empty.`,
     `- This counts past runs only. It cannot tell what a different set of reviews would have found: that needs reviews re-run on the past commits (design v2, R1).`,
     "");
   return out.join("\n");
@@ -168,15 +192,32 @@ if (isMain(import.meta.url)) {
     console.error("usage: node scripts/review-replay.mjs <logbook folder> [--out <file>]");
     process.exit(2);
   }
-  const report = replay(dir);
-  if (!file) process.stdout.write(report);
-  else {
-    // The report never goes into the logbook folder: it is only read.
-    const book = realpathSync(dir), into = realpathSync(dirname(resolve(file)));
-    if (into === book || into.startsWith(book + sep)) {
-      console.error(`refused: --out ${file} is in the logbook folder, which this script only reads.`);
-      process.exit(2);
-    }
-    writeFileSync(file, report);
+  try {
+    const report = replay(dir);
+    if (file) writeOutside(dir, file, report);
+    else process.stdout.write(report);
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+    console.error(`review-replay: ${e.path} does not exist.`);
+    process.exit(2);
   }
+}
+
+/**
+ * Writes the report to `file`, never into the logbook folder `dir`: it is only read. The check compares device and
+ * inode, not path text, so a link, a hard link or another letter case of a logbook path is refused too.
+ */
+function writeOutside(dir, file, report) {
+  const refuse = (why) => { console.error(`refused: --out ${file} ${why}`); process.exit(2); };
+  const id = (s) => `${s.dev}:${s.ino}`, book = new Set();
+  const walk = (d) => {
+    book.add(id(statSync(d)));
+    for (const e of readdirSync(d, { withFileTypes: true })) e.isDirectory() ? walk(join(d, e.name)) : book.add(id(lstatSync(join(d, e.name))));
+  };
+  walk(dir);
+  const target = resolve(file), at = lstatSync(target, { throwIfNoEntry: false });
+  if (at?.isSymbolicLink()) refuse("is a link: give a plain file outside the logbook folder.");
+  if (book.has(id(statSync(dirname(target)))) || (at && book.has(id(at)))) refuse("is in the logbook folder, which this script only reads.");
+  const fd = openSync(target, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0), 0o644);
+  try { writeFileSync(fd, report); } finally { closeSync(fd); }
 }
