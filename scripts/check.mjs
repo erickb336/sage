@@ -220,6 +220,13 @@ for (const f of [...new Set([...testFiles, ...imported])].filter((f) => existsSy
   });
 }
 
+// Each test file in scripts/ runs in CI: npm test or npm run test:browser names it (R1534-3).
+{
+  const { scripts } = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const named = new Set(`${scripts.test} ${scripts["test:browser"]}`.split(/\s+/));
+  for (const f of readdirSync(join(ROOT, "scripts"))) if (f.endsWith(".test.mjs") && !named.has(`scripts/${f}`)) problems.push(`scripts/${f}: no test command runs it; add it to "test" or "test:browser" in package.json`);
+}
+
 // Provider build outputs must be exact, including the absence of obsolete or foreign files.
 for (const dir of ["plugins/sage", "plugins/sage-codex"]) {
   for (const file of filesUnder(join(ROOT, dir))) {

@@ -162,6 +162,14 @@ export const lostWhy = (program) => !program.gate ? `${program.id} names no brea
   : program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}`
   : `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}`;
 /**
+ * The same reason as a clause after the program's name, for a line that already names the program (the status and chat
+ * program lines, a wait for its breakdown): one rule for each of them (R1534-1). missing: a task's program that has no row.
+ */
+export const lostClause = (program) => program.missing ? "the program is not in the logbook" : !program.gate ? "the program names no breakdown gate"
+  : !program.gateFound ? `its breakdown gate ${program.gate} is not in the logbook`
+  : program.named !== undefined ? `its gate ${program.gate} ${namedText(program.named, program.id)}`
+  : `its gate ${program.gate} is not a breakdown gate on its pilot ${program.pilot}`;
+/**
  * The wait graph as every printer shows it (the boards, the status line and the task line; never a write rule or the
  * merge check): a program is proposed or changing only while its gate is its breakdown gate by the data rule
  * (breakdownGate); else it is lost, so no line says that a breakdown waits for the owner while Needs you shows the gate as

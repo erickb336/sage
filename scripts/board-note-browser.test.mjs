@@ -1,9 +1,8 @@
 // Standalone browser check of R1509-2: a task page over the page limit (8 MB) shows the board with a note, and the note
 // stays on screen with scripts on, also after the board's stream would send its first update. It starts the real board
-// server on a free loopback port (never 4173 or 43123) over a SAMPLE logbook in a temporary folder. Like
-// board-polish-browser.test.mjs, it needs Playwright through NODE_PATH and is not in the default test command. It runs
-// Playwright's bundled Chromium (PLAYWRIGHT_BROWSERS_PATH), or the headless shell at BOARD_BROWSER_PATH; never an installed Chrome.
-// Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$SCRATCH/browsers" node --test scripts/board-note-browser.test.mjs
+// server on a free loopback port (never 4173 or 43123) over a SAMPLE logbook in a temporary folder. It runs in
+// `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
+// BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";

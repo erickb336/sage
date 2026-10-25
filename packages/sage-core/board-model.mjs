@@ -255,7 +255,7 @@ const LOST_FIX = id => `ask the chief to repair the logbook, or to propose ${id}
  */
 const waitsFor = (task, graph) => shownWaits(task, graph).map(wait =>
   wait.odd ? { odd: true, met: false, never: true }
-  : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, state: wait.program.state, gateFound: !!wait.program.gateFound, ...(wait.program.missing && { missing: true }), ...(wait.program.named !== undefined && { named: wait.program.named }) }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
+  : wait.program ? { breakdown: { id: wait.program.id, gate: wait.program.gate ?? null, pilot: wait.program.pilot, state: wait.program.state, gateFound: !!wait.program.gateFound, ...(wait.program.missing && { missing: true }), ...(wait.program.named !== undefined && { named: wait.program.named }) }, met: false, never: ["dropped", "lost"].includes(wait.program.state) }
   // A wait of a loop of waits (a hand edit) is never met, as no task of the loop can start first.
   : { id: wait.id, state: wait.state ?? null, word: `${stateWord(wait.state)}${wait.loop ? ", in a loop" : ""}`, pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) || !!wait.loop, ...(wait.loop && { loop: true }) });
 const BREAKDOWN_WAIT = {

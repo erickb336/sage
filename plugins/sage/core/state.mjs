@@ -24,7 +24,7 @@ import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
-import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, namedText, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
+import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
 export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {}, usageInterfaces = [] }) {
@@ -1319,7 +1319,7 @@ const unanswered = (program) => ["proposed", "changing"].includes(program?.state
 const graphOf = (dir) => waitGraph(...["tasks", "programs", "gates", "decisions"].map((t) => read(dir, t)));
 const ODD = "the waits cell has text that is not a task id";
 /** A program's breakdown that is not approved, for a waits line. */
-const breakdownOf = ({ id, state, gate, gateFound, named }) => `the breakdown of ${id} (${{ proposed: `open, gate ${gate}`, changing: `changes asked, gate ${gate}`, dropped: `dropped, gate ${gate}` }[state] ?? (named !== undefined ? `its gate ${gate} ${namedText(named, id)}` : gateFound ? `its gate ${gate} is not a breakdown gate` : gate ? `its gate ${gate} is not in the logbook` : "not in the logbook")})`;
+const breakdownOf = (program) => `the breakdown of ${program.id} (${{ proposed: `open, gate ${program.gate}`, changing: `changes asked, gate ${program.gate}`, dropped: `dropped, gate ${program.gate}` }[program.state] ?? lostClause(program)})`;
 const waitList = (open) => open.map(({ id, state, odd, pilot, program, loop }) => (odd ? ODD : program ? breakdownOf(program) : `${id} (${state ?? "not in the logbook"}${pilot ? `, the pilot of ${pilot}` : ""}${loop ? ", in a loop of waits, never met" : dead(state) ? ", never met" : ""})`)).join(", ");
 /**
  * When a task with these unmet waits goes on: after its tasks are merged or concluded, and after the owner approves its
@@ -1343,7 +1343,7 @@ const waitFix = (task, open) => {
       proposed: ` No task of ${program.id} builds before the owner approves its breakdown: ask the owner to answer gate ${program.gate}.`,
       changing: ` The owner asked for changes to the breakdown of ${program.id}: propose it again (sage program propose ${program.id}, with --name, --goal or --pilot when they change), and the owner answers the new gate.`,
       dropped: ` The owner dropped ${program.id}, so its breakdown is never approved: ${out}`,
-    }[program.state] ?? ` ${program.id} or its breakdown gate is not in the logbook, so its breakdown is never approved: ${program.pilot === task.id ? `propose it again (sage program propose ${program.id}), or ask the owner.` : out}`,
+    }[program.state] ?? ` The breakdown of ${program.id} is never approved: ${program.pilot === task.id ? `propose it again (sage program propose ${program.id}), or ask the owner.` : out}`,
     open.some(({ odd }) => odd) ? ` A hand edit put that text there: set the waits again (${how}).` : "",
   ].join("");
 };
@@ -1881,7 +1881,7 @@ function programsLine({ byId, programs, byProgram }) {
     const open = own.filter((t) => !ENDED.includes(t.state)).length;
     const pilot = byId.get(p.pilot)?.state;
     // The board's words for each state (F-T233-11), and why a lost program is lost (F-T233-2).
-    const why = { proposed: ` · breakdown waits for you (${p.gate})`, changing: ` · you asked for changes (${p.gate}): the chief revises the breakdown`, lost: p.named !== undefined ? ` · its gate ${p.gate} ${namedText(p.named, p.id)}` : p.gateFound ? ` · its gate ${p.gate} is not a breakdown gate on its pilot ${p.pilot}` : ` · its breakdown gate ${p.gate} is not in the logbook` }[p.state] ?? "";
+    const why = { proposed: ` · breakdown waits for you (${p.gate})`, changing: ` · you asked for changes (${p.gate}): the chief revises the breakdown`, lost: ` · ${lostClause(p)}` }[p.state] ?? "";
     const line = p.state === "dropped" ? `dropped${open ? `: ${open} ${open === 1 ? "task" : "tasks"} still in it, take each out with program=none` : ""}`
       : p.state === "active" && progress.done ? `done, ${text}`
       : ["active", "proposed", "changing"].includes(p.state) && dead(pilot) ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the program`

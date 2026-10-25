@@ -845,7 +845,7 @@ test("T374-3: on a dropped or a lost program's page, a task that is not the pilo
   tables.tasks.push({ ...tables.tasks.find(task => task.id === "T60"), id: "T61", title: "Sample T61" }, { ...tables.tasks.find(task => task.id === "T75"), id: "T76", title: "Sample T76" });
   const model = programsModel(tables), pg6 = renderProgramsHtml(model, { programKey: KEY("PG6") }), pg7 = renderProgramsHtml(model, { programKey: KEY("PG7") });
   assert.equal(rowOf(pg6, "T61"), `<span class="id">T61</span><a class="t" href="/task/${B64(KEY("T61"))}">Sample T61</a><span class="sw stw-cant">⊘ cannot start</span><span class="sub">⊘ waits for the breakdown of PG6: you dropped it</span>`);
-  assert.ok(rowOf(pg7, "T76").includes('<span class="sub">⊘ waits for the breakdown of PG7: its gate G30 is not in the logbook</span>'), rowOf(pg7, "T76"));
+  assert.ok(rowOf(pg7, "T76").includes('<span class="sub">⊘ waits for the breakdown of PG7: its breakdown gate G30 is not in the logbook</span>'), rowOf(pg7, "T76"));
   assert.ok(!rowOf(pg6, "T61").includes("T60") && !rowOf(pg7, "T76").includes("T75"), "the pilot is not named");
 });
 
@@ -1061,20 +1061,32 @@ test("R1508-1: a program row with an empty gate cell names no breakdown gate; on
   const pg41 = renderProgramsHtml(model, { programKey: KEY("PG41") });
   assert.ok(pg41.includes("<b>Needs you:</b> PG41 names no breakdown gate. Ask the chief to repair the logbook, or to propose PG41 again.</span>"), pg41);
   assert.ok(!/gate {2}of/.test(pg41 + renderProgramsHtml(model)), "no double space where the gate is empty");
+  // R1534-1: the chat board's program line says the same, by the same rule (lostClause).
+  const text = renderBoardText(model);
+  assert.ok(text.includes("\n- PG41 No gate · the program names no breakdown gate \\(see Needs you\\)"), text);
+  assert.ok(!/gate {2}is/.test(text), "no double space where the gate is empty");
 });
 
-test("R1509-1: in a proposed program, a loop of waits shows first on the card and the Now and Next lines, as on the program page", () => {
-  // PG40 is proposed (its gate G40 is open). The pilot T60 waits for T61, and T61 waits for T60: a hand edit's loop.
+test("R1509-1, R1535-1: in a proposed program, a loop of waits shows first on the card and the Now and Next lines, as on the program page, for the pilot too", () => {
+  // PG40 is proposed (its gate G40 is open). The pilot T66 waits for T67, and T67 waits for T66: a hand edit's loop.
   const tables = programsTables();
-  tables.tasks.push({ ...tables.tasks[0], id: "T60", state: "framed", program: "PG40", waits: "T61" }, { ...tables.tasks[0], id: "T61", state: "framed", program: "PG40", waits: "T60" });
-  tables.programs.push({ ...tables.programs[0], id: "PG40", name: "Loop in a proposal", pilot: "T60", gate: "G40" });
-  tables.gates.push({ ...tables.gates[0], id: "G40", task: "T60", question: tables.gates[0].question.replace(/PG1/g, "PG40").replace(/T1\b/g, "T60"), answer: "" });
+  tables.tasks.push({ ...tables.tasks[0], id: "T66", title: "Sample pilot of a loop", state: "framed", program: "PG40", waits: "T67" }, { ...tables.tasks[0], id: "T67", state: "framed", program: "PG40", waits: "T66" });
+  tables.programs.push({ ...tables.programs[0], id: "PG40", name: "Loop in a proposal", pilot: "T66", gate: "G40" });
+  tables.gates.push({ ...tables.gates[0], id: "G40", task: "T66", question: tables.gates[0].question.replace(/PG1/g, "PG40").replace(/T1\b/g, "T66"), answer: "" });
   const model = programsModel(tables), card = id => model.tasks.find(task => task.id === id);
-  const line = "Waits for T60 (not started, in a loop) and your approval of the PG40 breakdown (gate G40): it cannot start. Its waits make a loop, which never ends: the chief sets its waits again.";
-  assert.deepEqual([card("T61").waitLine, card("T60").waitLine.never], [{ never: true, text: line }, true]);
-  const page = renderBoardHtml(model, { snapshot: false, taskKey: KEY("T61") });
-  assert.ok(page.includes(`<span><b>Now:</b> ${line}</span>`), page);
+  const line = id => `Waits for ${id} (not started, in a loop) and your approval of the PG40 breakdown (gate G40): it cannot start. Its waits make a loop, which never ends: the chief sets its waits again.`;
+  assert.deepEqual([card("T67").waitLine, card("T66").waitLine], [{ never: true, text: line("T66") }, { never: true, text: line("T67") }]);
+  const page = renderBoardHtml(model, { snapshot: false, taskKey: KEY("T67") });
+  assert.ok(page.includes(`<span><b>Now:</b> ${line("T66")}</span>`), page);
   assert.ok(page.includes("<b>Next:</b> Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task.</div>"), page);
-  const row = rowOf(renderProgramsHtml(model, { programKey: KEY("PG40") }), "T61");
-  assert.ok(row.includes('<span class="sw stw-cant">⊘ cannot start</span><span class="sub">⊘ waits for T60 (not started, in a loop): it cannot start</span>'), row);
+  const program = renderProgramsHtml(model, { programKey: KEY("PG40") });
+  for (const [id, other, sub] of [["T67", "T66", ""], ["T66", "T67", "pilot · "]]) assert.ok(rowOf(program, id).includes(`<span class="sw stw-cant">⊘ cannot start</span><span class="sub">${sub}⊘ waits for ${other} (not started, in a loop): it cannot start</span>`), rowOf(program, id));
+  // R1535-1: the pilot keeps the question of its breakdown, and by the same rule its wait line says that it cannot start.
+  const wait = `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${line("T67")}</span></div>`;
+  const pilot = renderBoardHtml(model, { snapshot: false, taskKey: KEY("T66") });
+  assert.ok(pilot.includes(`<b>Needs you:</b> Approve program PG40?`) && pilot.includes(`</div>${wait}<div class="nextline"><b>Next:</b> Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task.</div>`), pilot);
+  assert.ok(!pilot.includes("after your answer"), "no Next line says that the plan starts after the answer");
+  const board = renderBoardHtml(model, { snapshot: false }), at = board.indexOf(`id="card-${B64(KEY("T66"))}"`);
+  assert.ok(board.slice(at, board.indexOf("</a>", at)).includes(`<b>Needs you:</b> the breakdown of PG40.</span></div>${wait}`), board.slice(at, at + 3000));
+  assert.ok(renderBoardText(model).includes(`**T66 Sample pilot of a loop**`) && renderBoardText(model).includes(`⊘ ${line("T67").replace(/[().:]/g, c => `\\${c}`)}`), "the chat board says the same");
 });
