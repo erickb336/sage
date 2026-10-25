@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./build.mjs";
-import { assemble } from "./changelog.mjs";
+import { assemble, changelog } from "./changelog.mjs";
 
 const BUILT = "<!-- Built by scripts/build.mjs from changes/: write your entry in changes/<task>.md, then run npm run build. -->";
 const EARLIER = "# Changelog\n\nThe intro.\n\n## 2026-10-25\n\n- **Old.** Text.\n  - A sub item.\n\n## 2026-10-24\n\n- **Older.** Text.\n";
@@ -92,4 +92,80 @@ test("npm run check fails on a fragment that the build has not put in CHANGELOG.
   const built = check();
   assert.equal(built.status, 0, built.stderr);
   assert.match(readFileSync(join(dir, "CHANGELOG.md"), "utf8"), /\n## 2099-01-01\n\n- \*\*A later change\.\*\* Text\.\n\n## 2026-10-25\n/);
+});
+
+// R1771: nothing drops without a line that says so. A small checkout with changes/ and CHANGELOG.md.
+function checkout(t, changelogText) {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-changelog-root-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, "changes"));
+  writeFileSync(join(dir, "changes/earlier.md"), EARLIER);
+  writeFileSync(join(dir, "CHANGELOG.md"), changelogText);
+  return dir;
+}
+const HAND = "- **By hand.** An entry that a pull request wrote in CHANGELOG.md before T492.";
+const withHand = (item) => assemble(EARLIER, {}).replace("## 2026-10-25\n\n", `## 2026-10-25\n\n${item}\n`);
+
+test("a file in changes/ that is not a .md fragment stops the build with its name and the fix, and the renamed file is kept", (t) => {
+  const dir = checkout(t, assemble(EARLIER, {}));
+  for (const name of ["T500.MD", "T500.txt", "T500", "T500.md.bak"]) {
+    writeFileSync(join(dir, "changes", name), entry("2026-10-25", "- **Five hundred.** Text."));
+    assert.throws(() => changelog(dir), { message: `changes/${name}: the build reads only .md files, so it would drop this file; rename it to changes/<task>.md (for example changes/T500.md)` });
+    rmSync(join(dir, "changes", name));
+  }
+  writeFileSync(join(dir, "changes/T500.md"), entry("2026-10-25", "- **Five hundred.** Text."));
+  assert.equal((changelog(dir).match(/Five hundred/g) ?? []).length, 1);
+});
+
+test("a list line written by hand in CHANGELOG.md stops the build with the line and the fix, also in a merge conflict, and the fragment keeps it", (t) => {
+  const line = `CHANGELOG.md has a list line that no file of changes/ makes, so the build would drop it: "${HAND.slice(0, 70)}...". Move it into changes/<task>.md with its date (or into changes/earlier.md if it is an older entry), then run npm run build.`;
+  const dir = checkout(t, withHand(HAND));
+  assert.throws(() => changelog(dir), { message: line });
+  writeFileSync(join(dir, "CHANGELOG.md"), `<<<<<<< HEAD\n${assemble(EARLIER, {})}=======\n${withHand(HAND)}>>>>>>> origin/main\n`);
+  assert.throws(() => changelog(dir), { message: line });
+  // The fix that the message names: the entry goes into a fragment, and the build writes it once.
+  writeFileSync(join(dir, "changes/T501.md"), entry("2026-10-25", HAND));
+  const fixed = changelog(dir);
+  assert.equal(fixed.replace(/<!-- Lines of the last build.*\n$/, ""), assemble(EARLIER, { "T501.md": entry("2026-10-25", HAND) }));
+  assert.equal(fixed.split("\n").filter((l) => l === HAND).length, 1);
+});
+
+test("a fragment that you edit after a build is only out of date, but a built bullet that you edit in CHANGELOG.md stops the build", (t) => {
+  const dir = checkout(t, "");
+  writeFileSync(join(dir, "changes/T502.md"), entry("2026-10-25", "- **Old title.** Old text."));
+  writeFileSync(join(dir, "CHANGELOG.md"), changelog(dir));
+  writeFileSync(join(dir, "changes/T502.md"), entry("2026-10-25", "- **New title.** New text."));
+  const rebuilt = changelog(dir);
+  assert.match(rebuilt, /\n- \*\*New title\.\*\* New text\.\n/);
+  assert.doesNotMatch(rebuilt, /Old title/);
+  writeFileSync(join(dir, "CHANGELOG.md"), rebuilt.replace("New text.", "New text, edited by hand."));
+  assert.throws(() => changelog(dir), { message: /^CHANGELOG\.md has a list line that no file of changes\/ makes, so the build would drop it: "- \*\*New title\.\*\* New text, edited by hand\."\. Move it into changes\/<task>\.md/ });
+});
+
+test("npm run build writes nothing, and npm run check fails, on a hand-written entry or a wrong file name; after the fix both pass", (t) => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-changelog-hand-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
+  symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
+  const run = (script) => spawnSync("node", [join(dir, "scripts", script)], { encoding: "utf8" });
+  const file = join(dir, "CHANGELOG.md");
+  const before = readFileSync(file, "utf8");
+  const edited = before.replace("## 2026-10-25\n\n", `## 2026-10-25\n\n${HAND}\n`);
+  writeFileSync(file, edited);
+  const build = run("build.mjs"), check = run("check.mjs");
+  assert.equal(build.status, 1);
+  assert.match(build.stderr, /^✗ CHANGELOG\.md has a list line that no file of changes\/ makes, so the build would drop it: "- \*\*By hand\.\*\* An entry that a pull request wrote in CHANGELOG\.md befo\.\.\."\. Move it into changes\/<task>\.md with its date .*, then run npm run build\.$/m);
+  assert.equal(readFileSync(file, "utf8"), edited, "the build leaves CHANGELOG.md as it was");
+  assert.equal(check.status, 1);
+  assert.match(check.stderr, /^✗ CHANGELOG\.md has a list line that no file of changes\/ makes/m);
+  writeFileSync(join(dir, "changes/T99998.md"), entry("2026-10-25", HAND));
+  writeFileSync(join(dir, "changes/T99999.txt"), entry("2026-10-25", "- **Lost.** Text."));
+  const named = run("build.mjs");
+  assert.equal(named.status, 1);
+  assert.match(named.stderr, /^✗ changes\/T99999\.txt: the build reads only \.md files, so it would drop this file; rename it to changes\/<task>\.md/m);
+  rmSync(join(dir, "changes/T99999.txt"));
+  assert.equal(run("build.mjs").status, 0);
+  const built = readFileSync(file, "utf8");
+  assert.equal(built.split("\n").filter((l) => l === HAND).length, 1);
+  assert.equal(run("check.mjs").status, 0);
 });

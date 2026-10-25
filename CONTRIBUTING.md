@@ -83,7 +83,7 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
   - **A short title.** What changed for users, and what they do now.
   ```
 
-  The build puts the dates newest first. In one date, it puts the files by name, highest task first, then the older entries of `changes/earlier.md`. `npm run check` fails when `CHANGELOG.md` is not what the build makes. When `CHANGELOG.md` conflicts in a merge, take either side, then run `npm run build`.
+  The build puts the dates newest first. In one date, it puts the files by name, highest task first, then the older entries of `changes/earlier.md`. `npm run check` fails when `CHANGELOG.md` is not what the build makes. The build stops, and writes nothing, in two cases: a file of `changes/` that is not a `.md` file (rename it to `changes/<task>.md`), and a list line in `CHANGELOG.md` that no file of `changes/` makes, which is an entry written by hand (move it into `changes/<task>.md` with its date, then run `npm run build` again). When `CHANGELOG.md` conflicts in a merge, do not take a side first. Run `npm run build`: it names each hand-written entry of both sides. Move each into `changes/<task>.md`, then run `npm run build`, which writes `CHANGELOG.md` and ends the conflict.
 - The word table of [Concepts](docs/guide/concepts.md) and the table of [Principles](docs/guide/principles.md) come from the build: edit `writing/dictionary.md` or the principles, then run `npm run build`.
 - Write at about 80% of Simplified Technical English ([writing/ste-80.md](writing/ste-80.md)), with sage's words from [writing/dictionary.md](writing/dictionary.md). `npm run check` fails on a flagged word.
 
