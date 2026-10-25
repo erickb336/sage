@@ -20,8 +20,18 @@ function deepFreeze(value) {
   return value;
 }
 
-const OTHERS_WRITE = 0o002, STICKY = 0o1000;
+const SHARED_WRITE = 0o022, STICKY = 0o1000;
 const BINARY_FIX = 'Set SAGE_CODEX_CONTROLLER_BIN to the absolute path of the built fork binary (codex-rs/target/debug/codex in the fork checkout).';
+
+// Another user can change the binary when its group or other users can write it, or when it belongs to another user.
+// The same holds for each folder on its real path, except that a sticky folder (such as /tmp) refuses a rename or a
+// removal by a user who does not own the entry. Root may own each of them: root can change any file anyway.
+function changeableBy(stat, folder) {
+  const uid = process.getuid();
+  if (stat.uid !== uid && stat.uid !== 0) return `belongs to another user (uid ${stat.uid})`;
+  if ((stat.mode & SHARED_WRITE) && !(folder && (stat.mode & STICKY))) return 'is writable by its group or by other users';
+  return null;
+}
 
 /**
  * The only reader of the controller path: SAGE_CODEX_CONTROLLER_BIN. No default, no PATH lookup, no other variable.
@@ -39,11 +49,11 @@ export function resolveControllerBinary(env) {
   const stat = lstatSync(path);
   if (!stat.isFile()) throw refuse('binary-not-file', `${path} is not a regular file. ${BINARY_FIX}`);
   if ((stat.mode & 0o111) === 0) throw refuse('binary-not-executable', `${path} is not executable. Use the built binary, or run chmod u+x on it.`);
-  if (stat.mode & OTHERS_WRITE) throw refuse('binary-writable', `${path} is writable by other users, so another user can change it. Run chmod o-w on it, then start again.`);
+  const fileRisk = changeableBy(stat, false);
+  if (fileRisk) throw refuse('binary-writable', `${path} ${fileRisk}, so another user can change it. Use a binary that you own, with chmod go-w on it, then start again.`);
   for (let folder = dirname(path); ; folder = dirname(folder)) {
-    const mode = statSync(folder).mode;
-    // A sticky folder (such as /tmp) is safe: other users cannot rename or remove an entry that they do not own.
-    if ((mode & OTHERS_WRITE) && !(mode & STICKY)) throw refuse('binary-writable', `The folder ${folder} is writable by other users, so another user can replace the binary. Run chmod o-w on it, or move the binary.`);
+    const folderRisk = changeableBy(statSync(folder), true);
+    if (folderRisk) throw refuse('binary-writable', `The folder ${folder} ${folderRisk}, so another user can replace the binary. Move the binary to a folder that you own, with chmod go-w on each folder.`);
     if (folder === dirname(folder)) break;
   }
   // Hash the same file that lstat saw: O_NOFOLLOW refuses a link swapped in after lstat.
@@ -113,6 +123,14 @@ const SELECTION = [
   ['sandbox', 'sandbox_mode', (value, reply) => (typeof value === 'string' ? {...reply, type: camel(value)} : value), true],
 ];
 const RESTART = 'then start the client again';
+// Each key that changes the sandbox or where an approval goes. Each must come from a layer that an agent cannot write.
+const OWNER_ONLY = ['sandbox_mode', 'sandbox_workspace_write', 'permissions', 'default_permissions', 'approval_policy', 'approvals_reviewer', 'auto_review'];
+function requireOwner(key, origin) {
+  if (OWNER_LAYERS.has(origin?.name?.type)) return;
+  // config/read names a list item by its index (sandbox_workspace_write.writable_roots.0); the owner edits the list.
+  const name = key.replace(/(\.[0-9]+)+$/, '');
+  throw refuse('selection-origin', `The setting ${name} comes from ${layer(origin)}. An agent can change project files, so the client takes the sandbox and approval settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, ${RESTART}.`);
+}
 
 /** Pure. Returns the frozen policy record with its binding hash, or throws a refusal with a fixed code. */
 export function bindPolicy({binary, args, initialize, config: read, thread: reply, task}) {
@@ -134,14 +152,18 @@ export function bindPolicy({binary, args, initialize, config: read, thread: repl
   if (thread.parentThreadId !== null) throw refuse('not-root', `The chief's thread is not a root thread. ${mismatch}`);
   if (thread.cwd !== task.project) throw refuse('cwd', `The chief's thread runs in ${String(thread.cwd)}, not in the project ${task.project}. ${mismatch}`);
   if (typeof thread.id !== 'string' || thread.id === '') throw refuse('not-root', `The chief's thread has no id. ${mismatch}`);
+  for (const [key, origin] of Object.entries(origins))
+    if (OWNER_ONLY.some(guarded => key === guarded || key.startsWith(`${guarded}.`))) requireOwner(key, origin);
   const selection = {};
   for (const [name, key, expect, owned] of SELECTION) {
     const observed = reply[name];
-    const configured = effective(config, key);
     const origin = origins[key];
-    if (owned && configured === undefined) throw refuse('selection-missing', `Your Codex config does not set ${key}, so the controller would use its default. Set ${key} in your user config (config.toml in your CODEX_HOME), ${RESTART}.`);
+    // config/read gives a key that no layer sets as null with no origin: the controller uses its default.
+    const value = effective(config, key);
+    const configured = value === null && !origin ? undefined : value;
+    if (owned && configured === undefined) throw refuse('selection-missing', `Your Codex config does not set ${key}. Set it in your user config, ${RESTART}.`);
     if (configured === undefined) { selection[name] = {value: observed ?? null, origin: 'default'}; continue; }
-    if (owned && !OWNER_LAYERS.has(origin?.name?.type)) throw refuse('selection-origin', `The setting ${key} comes from ${layer(origin)}. An agent can change project files, so the client takes ${key} only from your user config, a managed config or the launch flags. Move ${key} to your user config, ${RESTART}.`);
+    if (owned) requireOwner(key, origin);
     if (canonical(expect(configured, observed)) !== canonical(observed)) throw refuse('selection-changed', `The chief's thread has ${name} ${JSON.stringify(observed)}, but your config sets ${key} to ${JSON.stringify(configured)}. ${mismatch}`);
     selection[name] = {value: observed, origin: origin?.name?.type ?? 'unknown'};
   }

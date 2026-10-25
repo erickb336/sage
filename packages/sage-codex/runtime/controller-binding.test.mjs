@@ -43,10 +43,33 @@ test('resolveControllerBinary follows a link to the real path, and refuses a fil
   // The old check looked at the last path part only: a link in a safe folder to a binary in an open folder passed.
   symlinkSync(join(open, 'codex'), join(dir, 'link-to-open'));
   const code = path => { try { resolveControllerBinary({SAGE_CODEX_CONTROLLER_BIN: path}); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
-  assert.equal(code(join(dir, 'link-to-open')), `binary-writable: The folder ${open} is writable by other users, so another user can replace the binary. Run chmod o-w on it, or move the binary.`);
-  assert.equal(code(shared), `binary-writable: ${shared} is writable by other users, so another user can change it. Run chmod o-w on it, then start again.`);
+  assert.equal(code(join(dir, 'link-to-open')), `binary-writable: The folder ${open} is writable by its group or by other users, so another user can replace the binary. Move the binary to a folder that you own, with chmod go-w on each folder.`);
+  assert.equal(code(shared), `binary-writable: ${shared} is writable by its group or by other users, so another user can change it. Use a binary that you own, with chmod go-w on it, then start again.`);
   assert.equal(code(join(sticky, 'codex')), 'pass', 'a sticky folder such as /tmp is safe');
   chmodSync(open, 0o755);
+});
+
+test('resolveControllerBinary refuses group write and another owner on the file and on each folder of its path (R1523-1, R1524-4)', () => {
+  const group = join(dir, 'group'), groupFile = join(dir, 'group-file');
+  mkdirSync(group); writeFileSync(join(group, 'codex'), 'synthetic controller bytes'); chmodSync(join(group, 'codex'), 0o755);
+  writeFileSync(groupFile, 'synthetic controller bytes');
+  const code = path => { try { resolveControllerBinary({SAGE_CODEX_CONTROLLER_BIN: path}); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
+  // The old check read only the others-write bit: a file or a folder with group write (staff on macOS) passed.
+  chmodSync(groupFile, 0o775); chmodSync(group, 0o775);
+  assert.equal(code(groupFile), `binary-writable: ${groupFile} is writable by its group or by other users, so another user can change it. Use a binary that you own, with chmod go-w on it, then start again.`);
+  assert.equal(code(join(group, 'codex')), `binary-writable: The folder ${group} is writable by its group or by other users, so another user can replace the binary. Move the binary to a folder that you own, with chmod go-w on each folder.`);
+  chmodSync(group, 0o755);
+  assert.equal(code(join(group, 'codex')), 'pass');
+  // Another owner: the test cannot chown, so the process plays a user who owns none of these files. The real
+  // uid of this test owns them, and it is not root.
+  const owner = process.getuid();
+  assert.notEqual(owner, 0, 'the test runs as a normal user');
+  const getuid = process.getuid;
+  process.getuid = () => owner + 1;
+  try {
+    assert.equal(code(binary), `binary-writable: ${binary} belongs to another user (uid ${owner}), so another user can change it. Use a binary that you own, with chmod go-w on it, then start again.`);
+  } finally { process.getuid = getuid; }
+  assert.equal(code(binary), 'pass');
 });
 
 test('resolveControllerBinary returns the path and the file hash, and reads only its two variables', () => {
@@ -143,18 +166,47 @@ test('bindPolicy takes the sandbox and the approval policy only from a layer tha
   const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
   const refusal = edit => { const value = observed(); edit(value); try { bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
   assert.equal(refusal(value => { value.config.origins.sandbox_mode = project; }),
-    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes sandbox_mode only from your user config, a managed config or the launch flags. Move sandbox_mode to your user config, then start the client again.');
+    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox and approval settings only from your user config, a managed config or the launch flags. Move sandbox_mode to your user config, then start the client again.');
   assert.match(refusal(value => { value.config.origins.approval_policy = project; }), /^selection-origin: The setting approval_policy comes from the project config/);
   assert.match(refusal(value => { value.config.origins.approval_policy = {name: {type: 'packagedDefaults', file: '/opt/codex/defaults.toml'}}; }), /^selection-origin: .*packagedDefaults config layer \(\/opt\/codex\/defaults.toml\)/);
   for (const key of ['approval_policy', 'sandbox_mode']) {
     assert.equal(refusal(value => { delete value.config.config[key]; delete value.config.origins[key]; }),
-      `selection-missing: Your Codex config does not set ${key}, so the controller would use its default. Set ${key} in your user config (config.toml in your CODEX_HOME), then start the client again.`);
+      `selection-missing: Your Codex config does not set ${key}. Set it in your user config, then start the client again.`);
+    // config/read gives a key that no layer sets as null, with no origin (R1526-2).
+    assert.equal(refusal(value => { value.config.config[key] = null; delete value.config.origins[key]; }),
+      `selection-missing: Your Codex config does not set ${key}. Set it in your user config, then start the client again.`);
   }
   // The owner's layers pass: user (above), a managed file, and the launch flags.
   assert.equal(refusal(value => { value.config.origins.sandbox_mode = {name: {type: 'system', file: '/etc/codex/managed_config.toml'}}; }), 'pass');
   assert.equal(refusal(value => { value.config.origins.approval_policy = sessionFlags; }), 'pass');
   // The model may come from the project layer: the decision covers the sandbox and the approval policy only.
   assert.equal(refusal(value => { value.config.origins.model = project; }), 'pass');
+});
+
+test('bindPolicy: a model and a provider that no layer sets are the default, as config/read gives them: null with no origin (R1526-2)', () => {
+  const value = observed();
+  value.config.config.model = null; value.config.config.model_provider = null;
+  delete value.config.origins.model; delete value.config.origins.model_provider;
+  value.thread.model = 'gpt-default'; value.thread.modelProvider = 'openai';
+  const {selection} = bindPolicy(value);
+  assert.deepEqual([selection.model, selection.modelProvider], [{value: 'gpt-default', origin: 'default'}, {value: 'openai', origin: 'default'}]);
+});
+
+test('bindPolicy refuses each key that changes the sandbox or the approval route from a project layer (R1524-1, R1524-2)', () => {
+  const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
+  const refusal = (key, origin = project) => { const value = observed(); value.config.origins[key] = origin; try { bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
+  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox and approval settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, then start the client again.`;
+  // The keys as the real config/read names them: a list item has its index.
+  for (const [key, name] of [['sandbox_workspace_write.network_access', 'sandbox_workspace_write.network_access'],
+    ['sandbox_workspace_write.writable_roots.0', 'sandbox_workspace_write.writable_roots'], ['sandbox_workspace_write.exclude_slash_tmp', 'sandbox_workspace_write.exclude_slash_tmp'],
+    ['approvals_reviewer', 'approvals_reviewer'], ['auto_review.policy', 'auto_review.policy'], ['default_permissions', 'default_permissions'],
+    ['permissions.workspace.filesystem.write.0', 'permissions.workspace.filesystem.write']]) {
+    assert.equal(refusal(key), refused(name), key);
+    assert.equal(refusal(key, user), 'pass', `${key} from the user layer`);
+  }
+  // A key that only shares the start of a name is not one of them.
+  assert.equal(refusal('sandbox_mode_note'), 'pass');
+  assert.equal(refusal('model_reasoning_effort'), 'pass');
 });
 
 test('bindPolicy: a version or a policy refusal names what it found and what to change (R1504-3)', () => {
