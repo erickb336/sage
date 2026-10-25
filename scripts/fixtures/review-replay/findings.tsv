@@ -1,0 +1,9 @@
+task	key	round	source	severity	summary	triage	reason	status	run	class
+T1	R2-1	0	code-reviewer	high	Lock file left after a crash	fix		closed		state-edge
+T1	R3-1	0	security-reviewer	medium	Path check follows a link	fix		closed	R3	security
+T1	R3-2	0	security-reviewer	low	Error text names the full path	dismiss	not a leak	dismissed		
+T1	R5-1	1	code-reviewer	medium	Retry loses the second row	fix		closed		
+T1	F-T1-9	1	qa	medium	Empty name saves a blank row	fix		closed		
+T1	R1-1	0	implementer	low	Old test is slow	fix		closed		
+T2	R7-1	0	code-reviewer	low	Help text has a typo	fix		closed		copy
+T5	F-T5-1	0	code-reviewer	low	README step of T1 says the old flag	fix		closed		
