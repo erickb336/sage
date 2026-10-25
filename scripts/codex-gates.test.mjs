@@ -1,7 +1,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -285,6 +285,27 @@ test("a forged mode file alone unlocks no merge: autopilot also needs the user's
   const other = { type: "event_msg", payload: { type: "item_completed", thread_id: "another-thread", item: { type: "UserMessage", content: [{ type: "text", text: "autopilot on" }] } } };
   writeFileSync(w.transcript, ["sage mode"].map((text) => JSON.stringify({ ...other, payload: { ...other.payload, thread_id: base.session_id, item: { ...other.payload.item, content: [{ type: "text", text }] } } })).concat(JSON.stringify(other)).join("\n"));
   assert.deepEqual(typedModes(w.transcript, base.session_id), { sage: true, autopilot: false }, "a message of another thread (a fork's copied history) does not count");
+});
+
+test("typed messages count in a transcript over Node's string limit, in lines across piece ends and in CRLF lines (F-T473-1)", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "sage-typed-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const typed = (text, thread = base.session_id) => JSON.stringify({ type: "event_msg", payload: { type: "item_completed", thread_id: thread, item: { type: "UserMessage", content: [{ type: "text", text }] } } });
+  const meta = JSON.stringify({ type: "session_meta", payload: { id: base.session_id } });
+  const file = (name, text) => { writeFileSync(join(dir, name), text); return join(dir, name); };
+  // 600 MiB: the first line, a sparse gap of zero bytes (no disk), then the typed messages after it.
+  const long = file("long.jsonl", `${meta}\n`);
+  truncateSync(long, 600 * 2 ** 20);
+  appendFileSync(long, `\n${typed("sage mode")}\n${typed("autopilot on")}\n`);
+  const started = performance.now();
+  assert.deepEqual(typedModes(long, base.session_id), { sage: true, autopilot: true }, "a 600 MiB session");
+  console.log(`typedModes, 600 MiB sparse transcript: ${Math.round(performance.now() - started)} ms`); // evidence only: no time limit (order 26)
+  appendFileSync(long, `${typed("autopilot off")}\n`);
+  assert.deepEqual(typedModes(long, base.session_id), { sage: true, autopilot: false }, "the off phrase after the gap counts too");
+  // A thread id of 3 MiB of 3-byte characters: each line crosses piece ends, and some ends cut a character in two.
+  const wide = `s-${"€".repeat(2 ** 20)}`;
+  assert.deepEqual(typedModes(file("wide.jsonl", `${meta}\n${typed("sage mode", wide)}\n${typed("autopilot on", wide)}`), wide), { sage: true, autopilot: true }, "lines across pieces");
+  assert.deepEqual(typedModes(file("crlf.jsonl", `${meta}\r\n${typed("sage mode")}\r\n${typed("autopilot on")}\r\n`), base.session_id), { sage: true, autopilot: true }, "CRLF lines");
 });
 
 test("no thread names the Codex sage folder in a shell command, or resumes or forks a Codex session (T460)", (t) => {
