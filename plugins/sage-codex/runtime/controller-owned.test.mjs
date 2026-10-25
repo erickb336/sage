@@ -1504,6 +1504,8 @@ test('client: SIGTERM refuses each request that waits, and a crash drops them, s
   assert.equal(await crashed.code, 1);
   assert.deepEqual(replies(crashed, ['s-1']), []);
   assert.equal(crashed.lines().includes('[You allowed it once.]'), false);
+  // After the fence no reply can go out, so the question never shows again.
+  assert.equal(crashed.lines().filter(line => line === ASK).length, 1);
 });
 
 // Part 2: one gated test against the real fork binary. It runs only when SAGE_CODEX_CONTROLLER_BIN is set.
