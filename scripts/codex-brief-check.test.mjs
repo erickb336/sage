@@ -108,7 +108,7 @@ test("after a spawn with no checked brief, the chief gets a warning that names t
 
 test("an input that the hook cannot read gives one plain line and no note", (t) => {
   const w = world(t);
-  const UNREAD = { systemMessage: "sage: the brief check could not read what Codex sent it, so this agent starts without its brief note. If this comes again, update the sage plugin or Codex." };
+  const UNREAD = { systemMessage: "sage: the brief check could not read what Codex sent it, so this agent starts without its brief note. If this comes again, update the sage plugin, and keep Codex in the tested range (0.160 to 0.164)." };
   for (const input of ["not json", "null", { hook_event_name: "Stop" }, { ...w.start("sage_qa_t1"), transcript_path: join(w.dir, "none.jsonl") }, { ...w.start("sage_qa_t1"), cwd: 7 }]) {
     assert.deepEqual(w.send(input), UNREAD, JSON.stringify(input));
   }

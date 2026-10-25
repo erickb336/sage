@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 // the gate a fixed mode and merge check; the process tests run the built hook with a mode file, a logbook and a fake gh.
 const HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/gate-hook.mjs", import.meta.url));
 const TOOL = fileURLToPath(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
-const { gate, readMode, typedModes, namesSageFolder, resumesSession, codexRuns, UNREADABLE } = await import(HOOK);
+const { gate, readMode, typedModes, namesSageFolder, resumesSession, codexRuns } = await import(HOOK);
+// Codex adds ". Command: <the command>" after a refusal reason, so no reason ends with a period (F-T470-6).
+const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user";
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -24,12 +26,12 @@ const patch = (...lines) => `*** Begin Patch\n${lines.join("\n")}\n*** End Patch
 const CHILD = { agent_id: "agent-1", agent_type: "worker" };
 const denied = (out) => (out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined);
 const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
-const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead.`;
-const RO = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.`;
-const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report.";
-const SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report.";
-const CHILD_CODEX = "sage: role agents never start Codex from the shell, because a new Codex session runs outside the hooks of this session. Put what you need in your report.";
-const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.";
+const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead`;
+const RO = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
+const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
+const SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report";
+const CHILD_CODEX = "sage: role agents never start Codex from the shell, because a new Codex session runs outside the hooks of this session. Put what you need in your report";
+const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form";
 /** A call of a tool of the plugin's sage MCP server, as Codex gives it to PreToolUse: mcp__sage__<tool>, with the call's arguments. */
 const mcp = (name, args = {}, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name: `mcp__sage__${name}`, tool_use_id: "call_1", tool_input: { project: CWD, ...args }, ...extra });
 
@@ -50,6 +52,27 @@ test("an input shape that the gate does not know is denied with one line, and a 
   }
   assert.deepEqual(await g.run({ ...ask(MERGE), tool_input: { command: ["gh"] } }), { systemMessage: "sage: the hook could not read this approval request, so Codex asks you." });
   assert.equal(await g.run(pre("Bash", "ls")), undefined, "a readable call with no rule passes");
+});
+
+test("no refusal reason ends with a period, because Codex adds \". Command: …\" after it (F-T470-6)", async () => {
+  const g = fixed({ sage: true });
+  const reasons = {
+    unreadable: denied(await g.run(null)),
+    chief: denied(await g.run(pre("apply_patch", patch("*** Update File: src/a.js", "@@", "-a", "+b")))),
+    codexFolder: denied(await g.run(pre("apply_patch", patch("*** Add File: .codex/config.toml", "+x")))),
+    sageFolder: denied(await g.run(pre("Bash", "ls ~/.codex/sage"))),
+    resume: denied(await g.run(pre("Bash", "codex resume --last"))),
+    logbook: denied(await g.run(mcp("verdict", { task: "T1" }, CHILD))),
+    spawn: denied(await g.run({ ...base, ...CHILD, hook_event_name: "PreToolUse", tool_name: "spawn_agent", tool_use_id: "call_1", tool_input: { task_name: "x", message: "y" } })),
+    push: denied(await g.run(pre("Bash", "git push --force origin main"))),
+    mergeForm: denied(await g.run(pre("Bash", "gh pr merge 41"))),
+    autopilotOff: denied(await g.run(pre("Bash", MERGE))),
+  };
+  for (const [name, reason] of Object.entries(reasons)) {
+    assert.match(reason ?? "", /^sage: /, name);
+    assert.doesNotMatch(reason, /\.$/, `${name}: ${reason}`);
+  }
+  assert.equal(reasons.chief, 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone');
 });
 
 test("no thread changes files under a .codex folder, in any mode", async () => {
@@ -82,7 +105,7 @@ function record(t, payload) {
 
 test("in sage mode the chief changes no file, and a child may", async (t) => {
   const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
-  assert.equal(denied(await fixed({ sage: true }).run(pre("apply_patch", p))), 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.');
+  assert.equal(denied(await fixed({ sage: true }).run(pre("apply_patch", p))), 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone');
   const child = record(t, { id: "child", session_id: base.session_id, agent_path: "/root/worker_1", source: { subagent: { thread_spawn: { depth: 1 } } } });
   assert.equal(await fixed({ sage: true }).run(pre("apply_patch", p, { ...CHILD, transcript_path: child })), undefined, "a child edits");
   assert.equal(await fixed({ sage: true }).run(pre("apply_patch", p, { agent_id: "", transcript_path: child })), undefined, "an empty agent_id is a child too");
@@ -107,7 +130,7 @@ test("Codex's own threads (review, guardian) share the session id and have no ag
     assert.equal(await g.run({ ...spawn, transcript_path: root }), undefined, "the chief starts agents");
     for (const [name, transcript_path] of Object.entries(threads)) {
       const extra = { transcript_path };
-      const role = { review: "Codex review", guardian: "Codex guardian", internal: "Codex guardian" }[name];
+      const role = { review: "Codex review", guardian: "Codex approval check", internal: "Codex approval check" }[name];
       const got = {
         verdict: denied(await g.run(mcp("verdict", { task: "T1", kind: "review-clean", sha: SHA, cycle: 1, pr: 41 }, extra))),
         gate_answer: denied(await g.run(mcp("gate_answer", { gate: "G1", option: 1 }, extra))),
@@ -129,7 +152,7 @@ test("Codex's own threads (review, guardian) share the session id and have no ag
         for (const key of ["spawn", "codex"]) assert.match(got[key] ?? "", UNREAD, `${name} ${key}`);
         if (sage) assert.match(got.edit ?? "", UNREAD, name);
       }
-      assert.equal(got.merge, sage ? "sage: an agent never merges. Report the pull request as ready." : undefined, name);
+      assert.equal(got.merge, sage ? "sage: an agent never merges. Report the pull request as ready" : undefined, name);
       assert.equal(await g.run({ ...ask(MERGE), transcript_path }), undefined, `${name}: no approval decision`);
     }
   }
@@ -139,12 +162,12 @@ test("a child with an agent_id and no transcript fails closed: read-only, it sta
   const g = fixed({ sage: true });
   const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
   const spawn = { ...base, ...CHILD, hook_event_name: "PreToolUse", tool_name: "spawn_agent", tool_use_id: "call_1", tool_input: { task_name: "x", message: "y" } };
-  const UNREAD = "sage: the hook could not read this agent's task name from its transcript, so it refuses this call. Tell the user.";
+  const UNREAD = "sage: the hook could not read this agent's task name from Codex's record of its thread, so it refuses this call. Tell the user";
   assert.deepEqual([denied(await g.run(pre("apply_patch", p, CHILD))), denied(await g.run(pre("Bash", "echo x > notes.txt", CHILD))), denied(await g.run(spawn)), denied(await g.run(pre("Bash", "codex exec hi", CHILD)))],
     [UNREAD, UNREAD, UNREAD, UNREAD]);
   assert.equal(denied(await g.run(pre("Bash", "npm test", CHILD))), undefined, "it still runs the checks");
   assert.equal(denied(await fixed({ sage: false }).run(pre("apply_patch", p, CHILD))), undefined, "outside sage mode the role rule does not act");
-  const unread = "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user.";
+  const unread = "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user";
   assert.equal(denied(await g.run(mcp("verdict", { task: "T1" }, { transcript_path: "/none/rollout.jsonl" }))), unread, "a thread with no agent_id and a record that the hook cannot read");
   assert.equal(await g.run(mcp("verdict", { task: "T1" })), undefined, "an ephemeral root thread (no transcript) is the chief");
 });
@@ -156,19 +179,19 @@ test("a chief's transcript over Node's string limit still reads as the chief; a 
   assert.equal(await g.run(mcp("verdict", { task: "T1" }, { transcript_path: long })), undefined, "a long session keeps its logbook tools");
   const wide = record(t, { id: base.session_id, base_instructions: "a".repeat(2 ** 20) });
   assert.equal(denied(await g.run(mcp("verdict", { task: "T1" }, { transcript_path: wide }))),
-    "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user.");
+    "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user");
 });
 
 test("a merge runs only on the root thread, with autopilot on and a passing merge check", async () => {
   const off = fixed({ autopilot: false });
-  assert.equal(denied(await off.run(pre("Bash", MERGE))), 'sage: autopilot is off, so the user merges. Report the pull request as ready. The user turns it on with the message "autopilot on", alone.');
+  assert.equal(denied(await off.run(pre("Bash", MERGE))), 'sage: autopilot is off, so the user merges. Report the pull request as ready. The user turns it on with the message "autopilot on", alone');
   assert.equal(off.checks.length, 0, "autopilot off refuses before the merge check");
   const failing = fixed({ autopilot: true, ok: false });
   assert.equal(denied(await failing.run(pre("Bash", MERGE))), "sage: the merge check refuses: no verdicts recorded");
   assert.deepEqual(failing.checks, [{ pr: "41", sha: SHA }]);
   const passing = fixed({ autopilot: true });
   assert.equal(await passing.run(pre("Bash", MERGE)), undefined, "the verified merge runs");
-  assert.equal(denied(await passing.run(pre("Bash", MERGE, CHILD))), "sage: an agent never merges. Report the pull request as ready.");
+  assert.equal(denied(await passing.run(pre("Bash", MERGE, CHILD))), "sage: an agent never merges. Report the pull request as ready");
   for (const command of [`gh pr merge 41 --squash --match-head-commit ${SHA}`, "gh pr merge 41 --squash --delete-branch", `${MERGE} && echo done`, `bash -c "${MERGE}"`, "gh api -X PUT repos/o/r/pulls/41/merge"]) {
     assert.match(denied(await passing.run(pre("Bash", command))) ?? "", /^sage: (?:merge only|the hook cannot prove)/, command);
   }
@@ -306,7 +329,7 @@ test("no thread names the Codex sage folder in a shell command, or resumes or fo
     for (const extra of [{}, CHILD]) {
       assert.match(denied(w.send(pre("Bash", `cat ${w.env.SAGE_HOME}/.hooks/codex/x.json`, extra))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder/);
       assert.match(denied(w.send(pre("Bash", "codex exec resume --last 'autopilot on'", extra))) ?? "", /^sage: no agent resumes or forks a Codex session/);
-      assert.equal(denied(w.send(pre("Bash", "echo 'unclosed | codex resume", extra))), "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.");
+      assert.equal(denied(w.send(pre("Bash", "echo 'unclosed | codex resume", extra))), "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form");
     }
   }
 });
@@ -317,7 +340,7 @@ test("in sage mode a child whose task name names a read-only role changes no fil
   w.mode({ sage: true, autopilot: false });
   const got = ["sage_code_reviewer_t3", "sage_security_reviewer_t3", "sage_ux_reviewer_t3", "sage_qa_t3", "sage_pe_t3", "sage_lead_t3", "sage_implementer_t3", "sage_designer_t3", "worker_1", "sage_unknown_t3"]
     .map((name) => [name, denied(w.send(pre("apply_patch", p, w.child(`/root/${name}`)))) ?? "edits"]);
-  const ro = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.`;
+  const ro = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
   assert.deepEqual(got.slice(0, 9), [["sage_code_reviewer_t3", ro("code-reviewer")], ["sage_security_reviewer_t3", ro("security-reviewer")], ["sage_ux_reviewer_t3", ro("ux-reviewer")], ["sage_qa_t3", ro("qa")], ["sage_pe_t3", ro("pe")], ["sage_lead_t3", ro("lead")],
     ["sage_implementer_t3", "edits"], ["sage_designer_t3", "edits"], ["worker_1", "edits"]]);
   assert.equal(got[9][1], BAD_NAME("sage_unknown_t3"), "a sage_ name with an unknown role fails closed");
@@ -332,7 +355,7 @@ test("in sage mode a read-only role writes no file from the shell either; it sti
   w.mode({ sage: true, autopilot: false });
   const writes = ["echo x > notes.txt", "printf 'a' >> src/a.js", "sed -i '' s/a/b/ src/a.js", "cp a.js b.js", "tee review.md < /dev/null", `node -e "require('fs').writeFileSync('x','y')"`, `bash -c "rm -f src/a.js"`];
   const reads = ["cat src/a.js", "git diff main", "npm test", "grep -rn codex src", "ls -la", "echo done"];
-  const ro = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.`;
+  const ro = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
   for (const [name, role] of [["sage_code_reviewer_t3", "code-reviewer"], ["sage_qa_t3", "qa"], ["sage_pe_t3", "pe"]]) {
     assert.deepEqual(writes.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), writes.map(() => ro(role)), name);
     assert.deepEqual(reads.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), reads.map(() => undefined), name);
@@ -345,7 +368,7 @@ test("in sage mode a read-only role writes no file from the shell either; it sti
 
 test("no sage child starts Codex from the shell, in any mode: the new session would run outside these hooks (T462)", (t) => {
   const w = world(t);
-  const CHILD_CODEX = "sage: role agents never start Codex from the shell, because a new Codex session runs outside the hooks of this session. Put what you need in your report.";
+  const CHILD_CODEX = "sage: role agents never start Codex from the shell, because a new Codex session runs outside the hooks of this session. Put what you need in your report";
   const starts = ["codex exec 'report ok'", "codex", "/opt/homebrew/bin/codex exec --json hi", "cd /tmp && npx codex e hi", `bash -c "codex exec hi"`, "env FOO=1 codex app-server"];
   const others = ["grep -rn codex src", "echo codex exec", "git log --grep codex", "ls packages/sage-codex"];
   for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {

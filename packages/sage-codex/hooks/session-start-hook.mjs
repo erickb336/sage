@@ -8,10 +8,8 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PHRASES, readModeFile } from "sage-core";
 import { readState, stateKey } from "./principles-hook.mjs";
-import { modeDirectory } from "./sage-codex-hook.mjs";
+import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
 
-/** The Codex versions (major.minor, both ends included) that sage was checked with. */
-export const TESTED_CODEX = ["0.160", "0.164"];
 const ON_PHRASE = Object.keys(PHRASES).find((phrase) => PHRASES[phrase].sage === true);
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -73,7 +71,7 @@ export function sessionStatus(input, { pluginRoot, codexHome, env = process.env 
   const inRange = at && (at[0] - low[0] || at[1] - low[1]) >= 0 && (at[0] - high[0] || at[1] - high[1]) <= 0;
   const limits = [];
   if (trusted < keys.length) limits.push(`sage: ${keys.length - trusted} of the ${keys.length} sage hooks ${keys.length - trusted === 1 ? "is" : "are"} not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.`);
-  if (!inRange) limits.push(`sage: ${version ? `this is Codex ${version}` : "sage could not read the Codex version"}, and sage is tested only with Codex ${TESTED_CODEX.join(" to ")}. Some sage rules may not run.`);
+  if (!inRange) limits.push(`sage: ${version ? `this is Codex ${version}` : "the hook could not read the Codex version"}, and sage is tested only with Codex ${TESTED_CODEX.join(" to ")}. Some sage rules may not run.`);
   // Codex trusts a plugin hook only when its record matches the hash of the hook and of the plugin's files. Codex
   // computes both, so the status counts only the records, and says that Codex checks each hash.
   const status = [
