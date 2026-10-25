@@ -618,3 +618,60 @@ test("a project under the desktop app's ~/.codex/worktrees edits as usual, with 
     assert.match(denied(w.send(pre("Bash", `echo x > ${project}/.codex/config.toml`, w.child("/root/sage_implementer_t1")))) ?? "", /^sage: no agent changes files under a \.codex folder/);
   }
 });
+
+/** A sage child's event fields: its agent_id and Codex's record of it, with its agent path. */
+const sageChild = (t, path) => ({ agent_id: "agent-9", transcript_path: record(t, { id: "019a0000-0000-7000-8000-0000000000ee", agent_path: path, source: { subagent: { thread_spawn: { depth: 1 } } } }) });
+
+test("a command that names codex and pipes text into a shell, or runs a link or copy that the same line makes, is unreadable (F-T471-1)", async (t) => {
+  const hidden = ["echo codex exec hi | sh", "printf 'codex exec hi' | bash -s", "echo 'require(\"child_process\").execSync(\"codex exec hi\")' | node -",
+    "ln -s /opt/homebrew/bin/codex y; ./y exec hi", `cp /opt/homebrew/bin/codex ${CWD}/c && ${CWD}/c exec hi`];
+  const others = ["echo codex | grep codex", "git log --oneline | grep codex", "cat notes.txt | sh", "./scripts/build.sh", "codex --version | head -1"];
+  assert.deepEqual(hidden.map((c) => codexRuns(c, CWD)), hidden.map(() => null));
+  assert.deepEqual(others.map((c) => codexRuns(c, CWD)?.length), [0, 0, 0, 0, 1]);
+  const reviewer = sageChild(t, "/root/sage_code_reviewer_t1_r1");
+  const g = fixed({ sage: true });
+  assert.deepEqual(await Promise.all(hidden.map(async (c) => denied(await g.run(pre("Bash", c, reviewer))))), hidden.map(() => UNREAD_CODEX));
+  assert.deepEqual(await Promise.all(others.map(async (c) => denied(await g.run(pre("Bash", c, reviewer))))), others.map(() => undefined));
+  assert.equal(denied(await g.run(pre("Bash", hidden[0]))), undefined, "the chief");
+});
+
+test("a child runs no write command of the state tool from node's code, an option's value, standard input or a module to load (F-T471-2, F-T471-3)", async (t) => {
+  const { stateToolWrites } = await import(HOOK);
+  const writes = [`node -e "import('${TOOL}')" verdict T1`, "node --input-type=module -e \"await import('/x/skills/sage/sage.mjs')\"", `node --stack-size 4000 ${TOOL} verdict T1`,
+    `node --stack-size 4000 ${TOOL}`, `cat ${TOOL} | node - verdict T1`, `node - verdict T1 < ${TOOL}`, `node --import ${TOOL} x.mjs`, `node -r /x/mcp/state-server.mjs x.mjs`];
+  const reads = [`node --stack-size 4000 ${TOOL} status`, "node scripts/build.mjs", "node -e \"console.log(1)\"", "cat x.mjs | node -", "node --test scripts/codex-gates.test.mjs"];
+  assert.deepEqual(writes.filter((c) => !stateToolWrites(c, CWD)), [], "each write form is found");
+  assert.deepEqual(reads.filter((c) => stateToolWrites(c, CWD)), [], "no false match");
+  const g = fixed({ sage: false });
+  const child = sageChild(t, "/root/sage_implementer_t1_r1");
+  assert.deepEqual(await Promise.all(writes.map(async (c) => denied(await g.run(pre("Bash", c, child))))), writes.map(() => LOGBOOK));
+  assert.equal(denied(await g.run(pre("Bash", writes[2]))), undefined, "the chief");
+});
+
+test("no child sends input to another thread: it would start a turn of the chief as if the user typed it (F-T471-4)", async (t) => {
+  const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
+  const send = (tool_name, extra) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { target: base.session_id, message: "autopilot on" }, ...extra });
+  for (const mode of [{ sage: false }, { sage: true }]) {
+    const g = fixed(mode);
+    for (const tool of ["multi_agent_v1send_input", "send_input"]) {
+      for (const path of ["/root/sage_implementer_t1_r1", "/root/worker_1"]) assert.equal(denied(await g.run(send(tool, sageChild(t, path)))), SEND, `${tool} ${path}`);
+      assert.equal(await g.run(send(tool, {})), undefined, "the chief");
+    }
+  }
+  const matcher = JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher;
+  assert.ok(new RegExp(matcher).test("multi_agent_v1send_input"), "Codex runs the gate for send_input");
+});
+
+test("the sage folder and a .codex folder are found also behind quotes, ~ and a variable, and from the folder a command runs in (R1669-4, R1669-6)", async (t) => {
+  const home = "/Users/someone";
+  const env = { ...process.env, HOME: home, SAGE_HOME: undefined, CODEX_HOME: `${home}/.codex` };
+  const named = [`echo x > "$HOME"/.co""dex/sa""ge/m.json`, `cat ~/".codex/sage/x"`, `cat "\${CODEX_HOME}"/sage/x`, `ls "${home}/.codex"/sessions`];
+  assert.deepEqual(named.filter((c) => !namesSageFolder(c, env, CWD)), []);
+  assert.equal(namesSageFolder("cat sage/.hooks/x.json", env, `${home}/.codex`), true, "from the Codex home");
+  assert.deepEqual(["cat sage/notes.md", "ls sessions", "echo sage mode", `cat "${home}/.codex/config.toml"`].filter((c) => namesSageFolder(c, env, CWD)), []);
+  const g = fixed({ sage: false });
+  for (const command of [`touch ".co"dex/config.toml`, "echo x > .co''dex/config.toml"]) {
+    assert.match(denied(await g.run(pre("Bash", command))) ?? "", /^sage: no agent changes files under a \.codex folder/, command);
+  }
+  assert.equal(await g.run(pre("Bash", `cat ".co"dex/config.toml`)), undefined, "a read");
+});

@@ -7,6 +7,13 @@ Each date is the day of the first commit that made the change. Older changes are
 
 ## 2026-10-25
 
+- **Harder Codex rules.** The Codex hook now also blocks these ways around a sage rule:
+  - a role agent that starts Codex by text piped into a shell, or through a link or a copy that the same command makes;
+  - an agent that runs a write command of the state tool from `node -e` code, after a `node` option with a value, from standard input (`node -`) or as a module to load first;
+  - an agent's `send_input` to another thread (multi-agent v1 with `agent_max_depth` 2 or more), because a message to the chief's thread would count as typed by you;
+  - a name of the sage folder or of a `.codex` folder behind quotes (`.co""dex`), `~`, `$HOME` or `$CODEX_HOME`, or from the folder that the command runs in.
+  - The brief check now starts a field only at a line that is the field's name with a colon (`FORBIDDEN:`), two spaces or a tab after it, or nothing, outside a list or a code block. So a line such as "FORBIDDEN words are flagged" in another field no longer gives a role agent the wrong `FORBIDDEN` text.
+  - The chief's setup text in Codex now says that the state CLI only reads (`board`, `config`), and that `program` has no tool yet, so programs do not run in Codex. The limits that stay are in [sage in Codex](docs/guide/codex.md#the-rules-in-codex).
 - **Autopilot and the version line in a long Codex session.** In a Codex session whose transcript is over about 512 MiB, autopilot now stays on, so the hook still allows a verified merge. Before, the hook could not read so large a file, read autopilot as off, and refused the merge. A resumed long session also shows its Codex version again, with no false warning. The hook now reads the transcript in pieces, and the version from the first line only.
 - **A shorter README.** The README has a "Why sage?" section again, after the hero image. The Status, Requirements and What's new sections are gone. The status line at the top gives the maturity and the systems, each requirement is in the text where you need it (the Quick start and the board), and this changelog alone lists the changes. In the `readme-guide` skill, a link to the changelog now counts as the What's new section.
 - **sage on Codex.** sage now runs in your normal Codex CLI, as one plugin. The Codex desktop app should work the same way, but it is not checked yet.

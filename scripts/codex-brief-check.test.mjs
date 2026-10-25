@@ -51,9 +51,18 @@ function world(t) {
 test("core reads a brief's fields at the start of a line, as the report check does, and names each missing or empty one", () => {
   assert.deepEqual(missingBriefFields(brief()), []);
   assert.deepEqual(missingBriefFields(brief(["VERIFY", "STANDING"])), ["VERIFY", "STANDING"]);
-  assert.deepEqual(missingBriefFields("**GOAL:** x\n- SCOPE y\nCONTEXT\n\nDECISIONS:\nACCEPTANCE z"), ["CONTEXT", "DECISIONS", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"], "CONTEXT and DECISIONS have no text");
+  assert.deepEqual(missingBriefFields("**GOAL:** x\n- SCOPE: y\nCONTEXT\n\nDECISIONS:\nACCEPTANCE  z\nVERIFY\tw"), ["SCOPE", "CONTEXT", "DECISIONS", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"], "a list item is no field; CONTEXT and DECISIONS have no text");
   assert.deepEqual(missingBriefFields("the goal is GOAL x\ngoal: y\nGOALS z"), FIELDS, "a field name inside a line, in lower case or as part of a word is no field");
   assert.equal(briefSections(brief()).FORBIDDEN, "never push to main.\nNever run real ps.");
+  assert.equal(briefSections(FIELDS.map((f) => `${f}\nthe ${f.toLowerCase()}`).join("\n\n")).FORBIDDEN, "the forbidden", "renderBrief's form: the name alone on its line");
+});
+
+test("a line of another field that starts with a field's word, a list item or a line in a code block starts no field (F-T471-9)", () => {
+  const context = "CONTEXT: the check flags words.\nFORBIDDEN words are flagged by the check.\n- FORBIDDEN: a list item\n   FORBIDDEN: an indented line\n```\nFORBIDDEN: in a code block\n```";
+  const text = brief().replace("CONTEXT: the context of T1.", context);
+  assert.deepEqual(missingBriefFields(text), []);
+  assert.equal(briefSections(text).FORBIDDEN, "never push to main.\nNever run real ps.");
+  assert.match(briefSections(text).CONTEXT, /FORBIDDEN words are flagged by the check\.\n- FORBIDDEN: a list item\n {3}FORBIDDEN: an indented line\n```\nFORBIDDEN: in a code block\n```$/);
 });
 
 test("the start note of a sage child: the standing orders, the FORBIDDEN field and the checked brief", (t) => {
