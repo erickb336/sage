@@ -14,6 +14,8 @@ function positive(value, name) {
 }
 // The streamed pieces of one item, such as item/agentMessage/delta and item/commandExecution/outputDelta.
 const DELTA = /^item\/.+(\/d|D)elta$/;
+// The MCP servers that the controller starts by itself, with no config key (the fixture and the real binary give it).
+const BUILT_IN_MCP = new Set(['codex_apps']);
 export const defaultSchedule = (callback, delay) => { const timer = setTimeout(callback, delay); return () => clearTimeout(timer); };
 export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owned-controller', '--strict-config',
   ...Object.entries(OWNED_CONTROLLER_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])]);
@@ -50,7 +52,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
   if (typeof spawn !== 'function' || typeof schedule !== 'function') throw new TypeError('Invalid process dependencies');
   let child, connection, attempted = false, fenced = false, fenceReason = null, childClosed = false, exitCode = null, exitSignal = null;
   let phase = 'idle', stopPromise, inspectionPromise, diagnosticBytes = 0, diagnosticsTruncated = false;
-  let initialized = null, threadRequested = false, binding = null, turn = null;
+  let initialized = null, threadRequested = false, binding = null, turn = null, checkedMcp = null;
   const streamClosures = new Set(), observations = new Set(), signals = [], events = [], settledTurns = new Set();
   // The event limits count from the start of the current turn, so a long session never reaches them.
   let windowEvents = 0, windowDeltas = 0, windowBytes = 0, sequence = 0;
@@ -117,17 +119,25 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     if (received.kind === 'reply') return;
     const notification = received.kind === 'observation';
     const message = notification ? received.notification : received.request;
-    // A streamed turn sends one delta for each small piece of text, so a long valid turn sends many deltas:
-    // maxEventBytes and the larger maxDeltaEvents bound them, maxEvents does not count them.
-    const counted = !(notification && DELTA.test(message.method));
-    if ((counted ? windowEvents >= maxEvents : windowDeltas >= maxDeltaEvents) || windowBytes + bytes > maxEventBytes) { fence('Event limit exceeded'); return; }
-    if (counted) windowEvents += 1; else windowDeltas += 1;
-    windowBytes += bytes;
+    const params = message.params;
+    // A streamed piece (a delta), a new copy of the whole diff (turn/diff/updated, after each patch) and each event of
+    // another thread than the bound root (a child agent) can pass 64 MiB in one long valid turn (R1580-1). With an
+    // onEvent handler, events() does not keep them, so they cost no memory: only maxDeltaEvents counts them.
+    // maxEvents and maxEventBytes bound the events that events() keeps.
+    const passed = notification && (DELTA.test(message.method) || message.method === 'turn/diff/updated'
+      || (binding !== null && typeof params?.threadId === 'string' && params.threadId !== binding.threadId));
+    if (passed ? windowDeltas >= maxDeltaEvents : windowEvents >= maxEvents || windowBytes + bytes > maxEventBytes) { fence('Event limit exceeded'); return; }
+    if (passed) windowDeltas += 1; else { windowEvents += 1; windowBytes += bytes; }
     const event = Object.freeze({seq: ++sequence, kind: notification ? 'notification' : 'server-request-refused', method: message.method, message});
-    events.push(event);
+    if (!(passed && onEvent)) events.push(event);
+    // A second guard for a project config that changes after config/read (R1581-1): thread/start reads the config
+    // again, so an MCP server that the check did not see could start. The session then stops before any turn uses it.
+    if (message.method === 'mcpServer/startupStatus/updated' && checkedMcp && !checkedMcp.has(params?.name) && !BUILT_IN_MCP.has(params?.name)) {
+      fence('Unchecked MCP server');
+      return;
+    }
     if (onEvent) { try { onEvent(event); } catch { fence('Event callback failed'); return; } }
     // A terminal for a turn whose result was given already: the earlier result may be wrong, so no later turn runs.
-    const params = message.params;
     if (message.method === 'turn/completed' && binding && params?.threadId === binding.threadId && settledTurns.has(params.turn?.id)) {
       fence('A second terminal event came for a turn that had ended');
       return;
@@ -220,7 +230,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
       if (realpathSync(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
       checkProjectFiles(task.project, environment);
       const config = await inspect();
-      checkConfig(config, codexHome(environment));
+      checkedMcp = new Set(Object.keys(checkConfig(config, codexHome(environment)).config.mcp_servers ?? {}));
       const thread = await bounded(connection.startThread({cwd, ephemeral: true, developerInstructions: input.instructions}), inspectionTimeoutMs, 'Thread start observation expired');
       binding = bindPolicy({binary: {path: executable, sha256: executableSha256}, args: OWNED_LAUNCH_ARGS, initialize: initialized, config, thread, task});
       return Object.freeze({state: 'bound', policy: binding});

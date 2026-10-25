@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
 import {PassThrough} from 'node:stream';
-import {runClient} from './controller-client.mjs';
+import {PASTE_OFF, PASTE_ON, runClient} from './controller-client.mjs';
 import {createControllerProcess} from './controller-process.mjs';
 import {resolveControllerBinary} from './controller-binding.mjs';
 
@@ -255,7 +255,9 @@ test('fake 6: a child turn/completed and another turn are kept as events; only t
   assert.equal((await bound(f)).state, 'bound');
   const result = await f.owner.runTurn('Say one synthetic sentence.');
   assert.equal(result.state, 'completed'); assert.equal(result.eventCount, 17);
-  assert.deepEqual(f.owner.events().filter(event => event.method === 'turn/completed').map(event => event.message.params.threadId), ['child-thread', THREAD, THREAD]);
+  assert.deepEqual(f.events.filter(event => event.method === 'turn/completed').map(event => event.message.params.threadId), ['child-thread', THREAD, THREAD]);
+  // With a handler, events() keeps no event of another thread: the handler got it (R1580-1).
+  assert.deepEqual(f.owner.events().filter(event => event.method === 'turn/completed').map(event => event.message.params.threadId), [THREAD, THREAD]);
   await f.owner.stop();
 });
 
@@ -342,18 +344,74 @@ const withDeltas = count => stream => {
   stream.splice(at, 0, ...Array.from({length: count}, () => delta));
   return stream;
 };
-test('fake 18: deltas do not count toward maxEvents, so a long streamed turn completes; maxEventBytes still bounds them (R1526-1)', async () => {
+test('fake 18: deltas do not count toward maxEvents, so a long streamed turn completes; maxEventBytes still bounds the kept events (R1526-1)', async () => {
   const f = fake({edit: withDeltas(500), maxEvents: turnEvents(load())});
   assert.equal((await bound(f)).state, 'bound');
   const result = await f.owner.runTurn('Say a long synthetic text.');
   assert.deepEqual([result.state, result.error], ['completed', null]);
-  assert.equal(f.owner.events().filter(event => event.method === 'item/agentMessage/delta').length, 500, 'each delta is kept');
+  assert.equal(f.events.filter(event => event.method === 'item/agentMessage/delta').length, 500, 'the handler gets each delta');
   await f.owner.stop();
-  const bytes = fake({edit: withDeltas(500), maxEventBytes: 64 * 1024});
+  // An agent message of the root is kept, so it counts toward maxEventBytes.
+  const big = stream => { stream.splice(stream.findIndex(isRootTerminal), 0, {after: 'turn/start', notification: {method: 'item/completed',
+    params: {threadId: THREAD, turnId: TURN, item: {type: 'agentMessage', id: 'big', text: 'x'.repeat(100 * 1024)}}}}); return stream; };
+  const bytes = fake({edit: big, maxEventBytes: 64 * 1024});
   assert.equal((await bound(bytes)).state, 'bound');
   const fenced = await bytes.owner.runTurn('Say a long synthetic text.');
   assert.deepEqual([fenced.state, fenced.error], ['uncertain', {reason: 'Event limit exceeded'}]);
   await bytes.owner.stop();
+});
+
+// A long turn with many patches and much command output: each turn/diff/updated sends the whole diff again. With the
+// default limits, 70 MiB of diffs, output deltas and child events in one turn complete, and events() keeps none of
+// them, so the memory stays bounded (R1580-1).
+test('fake 30: 70 MiB of diffs, output deltas and child events in one turn complete with the default limits (R1580-1)', async () => {
+  const piece = 'd'.repeat(1024 * 1024);
+  const streamed = stream => {
+    const at = stream.findIndex(isRootTerminal);
+    const events = Array.from({length: 70}, (_, index) => ({after: 'turn/start', notification: [
+      {method: 'turn/diff/updated', params: {threadId: THREAD, turnId: TURN, diff: piece}},
+      {method: 'item/commandExecution/outputDelta', params: {threadId: THREAD, turnId: TURN, itemId: 'cmd-1', delta: piece}},
+      {method: 'item/completed', params: {threadId: 'child-thread', turnId: 'child-turn', item: {type: 'agentMessage', id: `c-${index}`, text: piece}}},
+    ][index % 3]}));
+    stream.splice(at, 0, ...events);
+    return stream;
+  };
+  let bytes = 0;
+  const f = fake({edit: streamed, onEvent: event => { bytes += JSON.stringify(event.message).length; }});
+  assert.equal((await bound(f)).state, 'bound');
+  const result = await f.owner.runTurn('Make many patches.');
+  assert.deepEqual([result.state, result.error], ['completed', null]);
+  assert.ok(bytes > 70 * 1024 * 1024, `the handler got ${bytes} bytes`);
+  assert.deepEqual(f.owner.events().filter(event => ['turn/diff/updated', 'item/commandExecution/outputDelta'].includes(event.method) || event.message.params?.threadId === 'child-thread'), []);
+  assert.equal(f.owner.status().reason, null);
+  await f.owner.stop();
+});
+
+// A project config written after config/read and before thread/start can add an MCP server that the check did not
+// see: thread/start reads the config again and starts it. The startup event of that server fences the session
+// (R1581-1). The owner's servers and the built-in codex_apps pass.
+test('fake 31: an MCP startup event for a server that the checked config does not have fences the session (R1581-1)', async () => {
+  const startup = (name, after = 'thread/start') => ({after, notification: {method: 'mcpServer/startupStatus/updated', params: {threadId: THREAD, name, status: 'starting', error: null, failureReason: null}}});
+  const owner = stream => {
+    const read = stream.find(entry => entry.after === 'config/read' && entry.reply).reply;
+    read.config.mcp_servers = {docs: {command: '/owner/docs'}}; read.origins['mcp_servers.docs.command'] = read.origins.model;
+    return stream;
+  };
+  const passes = fake({edit: stream => { owner(stream).splice(stream.findIndex(entry => entry.after === 'thread/start'), 0, startup('docs'), startup('codex_apps')); return stream; }});
+  assert.equal((await bound(passes)).state, 'bound');
+  assert.equal((await passes.owner.runTurn('Say one synthetic sentence.')).state, 'completed');
+  await passes.owner.stop();
+  const added = fake({edit: stream => { owner(stream).splice(stream.findIndex(isRootTerminal), 0, startup('probe', 'turn/start')); return stream; }});
+  assert.equal((await bound(added)).state, 'bound');
+  const result = await added.owner.runTurn('Say one synthetic sentence.');
+  assert.deepEqual([result.state, result.error], ['uncertain', {reason: 'Unchecked MCP server'}]);
+  assert.equal(added.owner.status().reason, 'Unchecked MCP server');
+  await added.owner.stop();
+  // At thread/start, before its reply: the start of the chief does not bind, and the process stops.
+  const early = fake({edit: stream => { stream.splice(stream.findIndex(entry => entry.after === 'thread/start'), 0, startup('probe')); return stream; }});
+  await early.owner.start();
+  const opened = await early.owner.openThread({project: PROJECT, task: 'T400', run: 'R1461', instructions: INSTRUCTIONS});
+  assert.deepEqual([opened.state, opened.status.state, early.owner.status().reason], ['uncertain', 'stopped', 'Unchecked MCP server']);
 });
 
 test('fake 27: maxDeltaEvents bounds the count of kept deltas in each turn, as maxEventBytes bounds their bytes (R1544-4)', async () => {
@@ -366,7 +424,7 @@ test('fake 27: maxDeltaEvents bounds the count of kept deltas in each turn, as m
   assert.equal((await bound(over)).state, 'bound');
   const fenced = await over.owner.runTurn('Say a long synthetic text.');
   assert.deepEqual([fenced.state, fenced.error], ['uncertain', {reason: 'Event limit exceeded'}]);
-  assert.equal(over.owner.events().filter(event => event.method === 'item/agentMessage/delta').length, 499);
+  assert.equal(over.events.filter(event => event.method === 'item/agentMessage/delta').length, 499);
   await over.owner.stop();
 });
 
@@ -498,7 +556,9 @@ const CLIENT_SHA256 = createHash('sha256').update('synthetic controller bytes').
 const HEADER = [`[Controller binary: ${join(CLIENT_DIR, 'codex')}, sha256 ${CLIENT_SHA256}.]`,
   '[Warning: SAGE_CODEX_CONTROLLER_SHA256 is not set, so the client did not compare the binary with a known hash. To pin this binary, set it to the hash above.]'];
 const READY = ['[Ready: task T400, run R1461. The chief uses your Codex config: model "synthetic", approval "on-request", sandbox "read-only".]',
-  '[Type a line and press Enter: the chief gets it as one turn. Ctrl-C stops the turn. Ctrl-D stops the controller.]'];
+  '[Type a line and press Enter: the chief gets it as one turn. Ctrl-C clears the line, drops the lines that wait and stops the turn. Ctrl-D stops the controller.]'];
+// On a terminal, the last Ready line says that a paste of several lines is one line.
+const READY_TTY = '[Type a line and press Enter: the chief gets it as one turn. A paste of several lines is one line. Ctrl-C clears the line, drops the lines that wait and stops the turn. Ctrl-D stops the controller.]';
 const STOPPED = '[You stopped the controller. The session ended.]';
 // The fixture turn has the real binary's warning notification; the client shows it (R1504-10).
 const WARNING = '[Warning from the controller: Model metadata for `synthetic` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.]';
@@ -517,7 +577,9 @@ function clientRun({fakeOptions = {}, env = {}, argv = CLIENT_ARGS, tty = false}
   const code = runClient({argv, env: merged, input, output, classify: parseCommand,
     onSignal: handle => { handler = handle; }, spawn: f.spawn, schedule: f.schedule});
   code.then(() => { ended = true; });
-  return {f, input, output, code, signal: name => handler(name), text: () => text, lines: () => text.trimEnd().split('\n'), ended: () => ended};
+  // lines() leaves out the switches of bracketed paste mode; text() keeps them.
+  const lines = () => text.replaceAll(PASTE_ON, '').replaceAll(PASTE_OFF, '').trimEnd().split('\n');
+  return {f, input, output, code, signal: name => handler(name), text: () => text, lines, ended: () => ended};
 }
 /** Waits, with no clock, until the check passes; a bounded number of event-loop turns, then the test fails. */
 async function until(check, what) {
@@ -686,23 +748,97 @@ test('client: each turn result says what happened and what to do next (R1504-4)'
     WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
 });
 
-test('client: Ctrl-C shows a message at once and stops the turn; a line typed during the turn waits, then runs (R1504-6, R1504-1)', async () => {
-  const hold = holdFirstTurn();
+test('client: Ctrl-C shows a message at once, stops the turn and drops the lines that wait; a line typed after it runs (R1504-6, R1504-1, R1577-1)', async () => {
+  const hold = holdFirstTurn({answerInterrupt: false});
   const run = clientRun({fakeOptions: hold.options});
+  // A paste of four lines from a pipe during the turn: the four lines wait.
   run.input.write('Wait for an interrupt.\n');
   await until(() => hold.held, 'the held turn');
-  run.input.write('Say one synthetic sentence.\n');
-  await until(() => run.lines().at(-1) === '[The chief is on a turn. Your line runs after it.]', 'the queued line note');
+  run.input.write('l2\nl3\nl4\nl5\n');
+  await until(() => run.lines().filter(line => line === '[The chief is on a turn. Your line runs after it.]').length === 4, 'the queued line notes');
   run.signal('SIGINT');
-  assert.equal(run.lines().at(-1), '[Stopping the turn... Press Ctrl-C again to stop the controller.]', 'the message comes before the result');
-  await until(() => run.lines().includes('[Turn completed.]'), 'the queued line');
+  assert.equal(run.lines().at(-1), '[Stopping the turn... The 4 lines that waited do not run. Press Ctrl-C again to stop the controller.]', 'the message comes before the result');
+  run.input.write('Say one synthetic sentence.\nSay it again.\n');
+  await until(() => run.lines().filter(line => line === '[The chief is on a turn. Your line runs after it.]').length === 6, 'the lines after Ctrl-C');
+  run.f.emit([{method: 'turn/completed', params: {threadId: THREAD, turn: {id: 'held-turn', items: [], status: 'interrupted', error: null}}}]);
+  await until(() => run.lines().filter(line => line === '[Turn completed.]').length === 2, 'the two lines after Ctrl-C');
   run.input.end();
   assert.equal(await run.code, 0);
-  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), ['[The chief is on a turn. Your line runs after it.]',
-    // A waiting line runs after the Ctrl-C, and the client says so (R1525-3).
-    '[Stopping the turn... Press Ctrl-C again to stop the controller.]', '[You stopped the turn.]', '[The line that you typed during the turn starts now.]',
-    WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
+  const waits = '[The chief is on a turn. Your line runs after it.]';
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [waits, waits, waits, waits,
+    '[Stopping the turn... The 4 lines that waited do not run. Press Ctrl-C again to stop the controller.]', waits, waits,
+    // The lines that wait now came after the Ctrl-C, and the client says so, with the count (R1525-3, R1577-2).
+    '[You stopped the turn.]', '[The 2 lines that you typed after Ctrl-C start now, one at a time.]',
+    WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
+  assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/start').map(message => message.params.input[0].text),
+    ['Wait for an interrupt.', 'Say one synthetic sentence.', 'Say it again.']);
   assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/interrupt').map(message => message.params), [{threadId: THREAD, turnId: 'held-turn'}]);
+});
+
+// The terminal keys, as raw mode gives them: each write is one read of the terminal.
+test('client: on a terminal, a bracketed paste of five lines is one turn at Enter, with its line ends (R1577-1)', async () => {
+  const run = clientRun({tty: true});
+  await until(() => run.lines().at(-1) === READY_TTY, 'the Ready lines');
+  // The paste comes in three reads, and its end mark is split between two of them.
+  for (const chunk of ['\x1b[200~l1\rl2\r\nl3', '\nl4\rl5\x1b[20', '1~', '\r']) run.input.write(chunk);
+  await until(() => run.lines().includes('[Turn completed.]'), 'the turn');
+  run.input.write('\x04');
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/start').map(message => message.params.input[0].text), ['l1\nl2\nl3\nl4\nl5']);
+  // The client turns bracketed paste on before the Ready lines and off before the last line.
+  assert.equal(run.text().startsWith(`${HEADER.join('\n')}\n${PASTE_ON}[Ready:`), true, run.text().slice(0, 400));
+  assert.equal(run.text().endsWith(`${PASTE_OFF}${STOPPED}\n`), true);
+  assert.equal(run.input.isRaw, false, 'line mode is back at the end');
+});
+
+test('client: on a terminal, Ctrl-C clears the typed line, so the next Enter sends only the new line; a split key sequence adds no text (R1575-2, R1575-4)', async () => {
+  const run = clientRun({tty: true});
+  await until(() => run.lines().at(-1) === READY_TTY, 'the Ready lines');
+  run.input.write('drop the table');
+  run.input.write('\x03');
+  // The Up key in two reads, an Escape key alone, then Alt-x in one read: none adds text.
+  for (const chunk of ['say', '\x1b', '[A', ' hello\x1b', 'O', 'A', '\x1b', '!\x1bx', '\r']) run.input.write(chunk);
+  await until(() => run.lines().includes('[Turn completed.]'), 'the turn');
+  assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/start').map(message => message.params.input[0].text), ['say hello!']);
+  // A second Ctrl-C on an empty line stops the controller; the Ctrl-C that cleared a line did not.
+  run.input.write('\x03');
+  await until(() => run.lines().at(-1).startsWith('[No turn is running.'), 'the hint');
+  run.input.write('\x03');
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/start').map(message => message.params.input[0].text), ['say hello!']);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), ['drop the table', '[You cleared the line. Press Ctrl-C again or Ctrl-D to stop the controller.]',
+    'say hello!', WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', '[No turn is running. Press Ctrl-C again or Ctrl-D to stop the controller.]',
+    '[Stopping the controller...]', STOPPED]);
+});
+
+test('client: on a terminal, raw mode stays on after Ctrl-D during a turn, and Ctrl-C then still stops the turn (R1577-3)', async () => {
+  const hold = holdFirstTurn();
+  const run = clientRun({fakeOptions: hold.options, tty: true});
+  await until(() => run.lines().at(-1) === READY_TTY, 'the Ready lines');
+  run.input.write('Wait for an interrupt.\r');
+  await until(() => hold.held, 'the held turn');
+  run.input.write('\x04');
+  await until(() => run.lines().at(-1).startsWith('[Your input ended.'), 'the end note');
+  assert.equal(run.input.isRaw, true, 'the terminal stays raw');
+  // Text typed after the end of the input does nothing: no echo, no turn.
+  run.input.write('late text\r');
+  run.input.write('\x03');
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), ['Wait for an interrupt.',
+    '[Your input ended. The controller stops after the lines that you typed. Press Ctrl-C to stop the turn now.]',
+    '[Stopping the turn... Press Ctrl-C again to stop the controller.]', '[You stopped the turn. The controller stops now.]', STOPPED]);
+  assert.equal(run.f.sent.filter(message => message.method === 'turn/start').length, 1);
+  assert.equal(run.input.isRaw, false);
+});
+
+test('client: an agent message that ends with line ends shows no empty chief line (R1578-1)', async () => {
+  const run = await client(['Say one synthetic sentence.'], {edit: stream => {
+    const item = stream.find(entry => entry.notification?.method === 'item/completed' && entry.notification.params.item?.type === 'agentMessage');
+    item.notification.params.item.text = 'First line.\n\nLast line.\n';
+    return stream;
+  }});
+  assert.equal(run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [WARNING, 'chief> First line.', 'chief> ', 'chief> Last line.', '[Turn completed.]', STOPPED]);
 });
 
 test('client: a second Ctrl-C stops the controller, also before the chief is ready; the exit code is 0 (R1504-1)', async () => {
@@ -871,7 +1007,7 @@ test('client: a terminal that takes no output stops the turn once with a message
 test('client: in raw mode, the 8 MiB message does not name Ctrl-S or Ctrl-Q (T424 F1)', async () => {
   const hold = holdFirstTurn({answerInterrupt: false});
   const run = clientRun({fakeOptions: hold.options, tty: true});
-  await until(() => run.lines().at(-1) === READY[1], 'the Ready lines');
+  await until(() => run.lines().at(-1) === READY_TTY, 'the Ready lines');
   assert.equal(run.input.isRaw, true);
   run.input.write('Wait for an interrupt.\r');
   await until(() => hold.held, 'the held turn');
@@ -1149,6 +1285,8 @@ test('real owned controller: a project MCP server, hook, approval feature, rules
     // The R1563 probe: zsh read the .zshenv of a project ZDOTDIR outside the sandbox (R1563-1).
     zdotdir: {projectConfig: '[shell_environment_policy.set]\nZDOTDIR = "{{marker}}-zdot"\n', files: {'marker-zdot/.zshenv': '/usr/bin/touch {{marker}}\n'}},
     loginShell: {projectConfig: 'allow_login_shell = true\n'},
+    // An empty list replaces the owner's list, and config/read gives it no origin; the project layer shows it (R1575-1).
+    emptyLists: {projectConfig: '[shell_environment_policy]\ninclude_only = []\nexclude = []\n'},
     roleFile: {projectConfig: '', files: {'work/project/.codex/agents/reviewer.toml': 'name = "reviewer"\ndescription = "A synthetic role"\ndeveloper_instructions = "Synthetic."\n'}},
   };
   const found = {};
@@ -1176,6 +1314,7 @@ test('real owned controller: a project MCP server, hook, approval feature, rules
     hooksFile: refused('project-hooks', `The hooks file <root>/work/project/.codex/hooks.json is in the project. A hook runs a command at its event. ${why} Check the hooks. If you trust them, move them to your Codex config (<root>/.codex/hooks.json). If not, remove them. Then start the client again.`, files),
     zdotdir: refused('selection-origin', origin('shell_environment_policy.set.ZDOTDIR'), config),
     loginShell: refused('selection-origin', origin('allow_login_shell'), config),
+    emptyLists: refused('selection-origin', origin('shell_environment_policy.include_only'), config),
     roleFile: refused('project-agents', `The agent role file <root>/work/project/.codex/agents/reviewer.toml is in the project. A role sets the config of each agent that the chief starts with it: its instructions, model, sandbox and MCP servers. ${why} Check the role. If you trust it, move it to your Codex config (<root>/.codex/agents/). If not, remove it. Then start the client again.`, files),
   });
 });
@@ -1465,7 +1604,8 @@ if killed:
     os.kill(pid, 9)
     code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
 os.close(fd)
-print(json.dumps({'seen': seen, 'code': code, 'killed': killed, 'escape': b'\\x1b' in out}))
+plain = out.replace(b'\\x1b[?2004h', b'').replace(b'\\x1b[?2004l', b'')
+print(json.dumps({'seen': seen, 'code': code, 'killed': killed, 'escape': b'\\x1b' in plain, 'paste': [out.count(b'\\x1b[?2004h'), out.count(b'\\x1b[?2004l')]}))
 `;
 // A terminal in line mode keeps at most 1024 bytes of one line on macOS (MAX_CANON), so these lines never reached the
 // client before it read the terminal raw (R1554-1).
@@ -1480,10 +1620,26 @@ test('pty: a pasted line of 3000 bytes and one of 60000 bytes each run as one tu
   const s = await signalFixture({pty: JSON.stringify(steps), script: PASTE, mark: 'turn-1'});
   try {
     assert.equal(await s.exited, 0);
-    assert.deepEqual(JSON.parse(s.out()), {seen: [true, true, true, true, true, true], code: 0, killed: false, escape: false});
+    assert.deepEqual(JSON.parse(s.out()), {seen: [true, true, true, true, true, true], code: 0, killed: false, escape: false, paste: [1, 1]});
     assert.deepEqual(readdirSync(s.marks).filter(name => name.startsWith('turn-')).sort(), ['turn-1', 'turn-2', 'turn-started']);
     assert.equal(readFileSync(join(s.marks, 'turn-1'), 'utf8'), first);
     assert.equal(readFileSync(join(s.marks, 'turn-2'), 'utf8'), second);
     assert.equal(readFileSync(join(s.marks, 'exited'), 'utf8'), '0', 'the controller ended by its own exit');
+  } finally { await s.close(); }
+});
+
+// The owner pastes five lines into a real terminal that brackets the paste, then presses Enter: one turn with the
+// five lines (R1577-1). Then Ctrl-C clears a typed line (R1575-2), and an ESC in one read and "[A" in the next add
+// no text (R1575-4). The step with keys 'q7\x1b' waits for the echo of q7, so the ESC came in that read.
+test('pty: a bracketed paste of five lines is one turn; Ctrl-C clears a typed line; a split key sequence adds nothing', {skip: PYTHON, timeout: 120000}, async () => {
+  const steps = [['\x1b[200~l1\rl2\rl3\rl4\rl5\x1b[201~\r', ''], ['\x03', '[You stopped the turn.'], ['drop the table', 'drop the table'],
+    ['\x03', '[You cleared the line.'], ['q7\x1b', 'q7'], ['[Ak\r', '[Turn completed.]'], ['\x04', '[You stopped the controller. The session ended.]']];
+  const s = await signalFixture({pty: JSON.stringify(steps), script: PASTE, mark: 'turn-1'});
+  try {
+    assert.equal(await s.exited, 0);
+    assert.deepEqual(JSON.parse(s.out()), {seen: [true, true, true, true, true, true, true, true], code: 0, killed: false, escape: false, paste: [1, 1]});
+    assert.deepEqual(readdirSync(s.marks).filter(name => name.startsWith('turn-')).sort(), ['turn-1', 'turn-2', 'turn-started']);
+    assert.equal(readFileSync(join(s.marks, 'turn-1'), 'utf8'), 'l1\nl2\nl3\nl4\nl5');
+    assert.equal(readFileSync(join(s.marks, 'turn-2'), 'utf8'), 'q7k');
   } finally { await s.close(); }
 });

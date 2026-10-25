@@ -135,6 +135,16 @@ const EXAMPLE = {approval_policy: '"on-request"', sandbox_mode: '"read-only"'};
 const PROJECT_ALLOWED = ['model', 'model_reasoning_effort', 'model_reasoning_summary', 'model_verbosity', 'personality',
   'developer_instructions', 'file_opener', 'history.persistence', 'history.max_bytes', 'tui.'];
 const projectAllowed = key => PROJECT_ALLOWED.some(name => key === name || (name.endsWith('.') && key.startsWith(name)));
+// Each key path that one layer sets, from the layer's own config tree: a table with keys goes on to each key; an
+// empty table, a list (empty or not) and a value are one path each. A list replaces the list of a lower layer, so
+// an empty list from the project can clear an owner list, and then config/read names no origin for it (R1575-1).
+// An empty table merges nothing, so one on the way to an allowed key passes (a [tui] header with no keys).
+function checkLayer(value, path, origin, home) {
+  const table = value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (table && Object.keys(value).length) { for (const [key, item] of Object.entries(value)) checkLayer(item, `${path}.${key}`, origin, home); return; }
+  if (projectAllowed(path) || (table && PROJECT_ALLOWED.some(name => name.startsWith(`${path}.`)))) return;
+  requireOwner(path, origin, home);
+}
 // An MCP server or a hook event is one entry of its table, so the message names the entry, not one of its fields.
 const ENTRIES = new Set(['mcp_servers', 'hooks']);
 function requireOwner(key, origin, home) {
@@ -153,13 +163,13 @@ function configured(config, origins, key) {
 
 /**
  * Pure. Checks the config/read reply before thread/start, because thread/start already starts the MCP servers: each
- * owned launch key has its value from the launch flags, and each key that PROJECT_ALLOWED does not name comes from an
- * owner layer. Returns
- * the config and its origins, or throws a refusal with a fixed code.
+ * owned launch key has its value from the launch flags, and each layer that is not the owner's sets only the keys
+ * that PROJECT_ALLOWED names. The origins of the merged config are a second check. Returns the config and its
+ * origins, or throws a refusal with a fixed code.
  */
 export function checkConfig(read, home = '') {
-  const config = read?.config, origins = read?.origins;
-  if (!config || typeof config !== 'object' || !origins || typeof origins !== 'object') throw refuse('policy-missing', `The controller gave no config layers. ${FORK}.`);
+  const config = read?.config, origins = read?.origins, layers = read?.layers;
+  if (!config || typeof config !== 'object' || !origins || typeof origins !== 'object' || !Array.isArray(layers)) throw refuse('policy-missing', `The controller gave no config layers. ${FORK}.`);
   for (const [key, required] of Object.entries(OWNED_CONTROLLER_CONFIG)) {
     // A structured feature (such as features.multi_agent_v2) can be a table: its switch and origin are at `.enabled`.
     const switchKey = Object.hasOwn(origins, `${key}.enabled`) ? `${key}.enabled` : key;
@@ -168,6 +178,7 @@ export function checkConfig(read, home = '') {
     if (origins[switchKey]?.name?.type !== 'sessionFlags') throw refuse('policy-origin', `The setting ${key} comes from ${layer(origins[switchKey])}, not from the launch flags of the client. Remove ${key} from there, ${RESTART}.`);
     if (value !== required) throw refuse('policy-value', `The setting ${key} is ${JSON.stringify(value)}, but the client needs ${JSON.stringify(required)}. ${FORK}.`);
   }
+  for (const item of layers) if (!OWNER_LAYERS.has(item?.name?.type)) for (const [key, value] of Object.entries(item.config ?? {})) checkLayer(value, key, item, home);
   for (const [key, origin] of Object.entries(origins)) if (!projectAllowed(key)) requireOwner(key, origin, home);
   // Each missing key in one refusal, so that the owner fixes them all before one restart.
   const missing = SELECTION.filter(([, key, , owned]) => owned && configured(config, origins, key) === undefined).map(([, key]) => key);
@@ -244,21 +255,20 @@ export function checkProjectFiles(project, env) {
   }
 }
 // Codex reads each .toml file in the agents folder and in each folder below it as an agent role. A link to a folder
-// counts as a folder; `seen` stops a loop of links.
+// counts as a folder; `seen` stops a walk that comes back to a folder. A link that points to itself, or a loop of
+// links, cannot be read, so it refuses with the fix, as each other error does; a missing folder or a dead link passes.
 function roleFile(folder, seen = new Set()) {
-  const real = realOrNull(folder);
-  if (!real || seen.has(real)) return null;
+  const unreadable = error => refuse('project-files', `The client cannot read ${folder} (${error.code === 'ELOOP' ? 'a loop of links' : error.code}), so it cannot check it for agent role files. Make the folder readable, or remove it, ${RESTART}.`);
+  let real, entries;
+  try { real = realpathSync(folder); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw unreadable(error); }
+  if (seen.has(real)) return null;
   seen.add(real);
-  let entries;
   try { entries = readdirSync(folder, {withFileTypes: true}).sort((a, b) => (a.name < b.name ? -1 : 1)); }
-  catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
-    throw refuse('project-files', `The client cannot read ${folder} (${error.code}), so it cannot check it for agent role files. Make the folder readable, or remove it, ${RESTART}.`);
-  }
+  catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null; throw unreadable(error); }
   for (const entry of entries) {
     const path = join(folder, entry.name);
     if (entry.name.endsWith('.toml')) return path;
-    if (entry.isDirectory() || (entry.isSymbolicLink() && statSync(path, {throwIfNoEntry: false})?.isDirectory())) { const found = roleFile(path, seen); if (found) return found; }
+    if (entry.isDirectory() || entry.isSymbolicLink()) { const found = roleFile(path, seen); if (found) return found; }
   }
   return null;
 }

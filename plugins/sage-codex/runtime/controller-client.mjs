@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync} from 'node:fs';
+import {closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, writeSync} from 'node:fs';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
 import {bindTask, resolveControllerBinary} from './controller-binding.mjs';
@@ -12,7 +12,8 @@ const USAGE = [
   '  --instructions  the file with the chief instructions',
 ];
 const FLAGS = ['--project', '--task', '--run', '--instructions'];
-const HOW_TO = '[Type a line and press Enter: the chief gets it as one turn. Ctrl-C stops the turn. Ctrl-D stops the controller.]';
+// On a terminal, a paste of several lines is one line too: the owner presses Enter after it.
+const howTo = terminal => `[Type a line and press Enter: the chief gets it as one turn.${terminal ? ' A paste of several lines is one line.' : ''} Ctrl-C clears the line, drops the lines that wait and stops the turn. Ctrl-D stops the controller.]`;
 const NEXT = 'Type the next line, or press Ctrl-D to stop the controller.';
 const RESTART = 'Start the client again.';
 const WAITING = '[Waiting for the model. Press Ctrl-C to stop the turn.]';
@@ -49,34 +50,55 @@ const REASONS = new Map([
   ['Invalid or oversized protocol frame', 'the controller sent a message that the client cannot read'],
   ['No terminal event within the interrupt grace', 'the controller did not end the turn after the client stopped it'],
   ['The turn/start reply has no turn id', 'the controller gave the turn no id'],
+  ['Unchecked MCP server', 'the controller started an MCP server that is not in the config that the client checked (an agent may have added it to a .codex/config.toml file after the check); check the project config'],
 ]);
 // A terminal in line mode keeps at most MAX_CANON bytes of one line (1024 on macOS), so a longer typed or pasted
 // line never reaches the client. So on a terminal the client reads each key (raw mode) and keeps the line itself:
-// Enter sends the line, Backspace removes the last character, Ctrl-C is the same as SIGINT, and Ctrl-D on an empty
-// line ends the input. It echoes only printable text and tabs; a key sequence (such as an arrow) and each other
-// control character are ignored. Node's readline in terminal mode does this too, but it draws the line again at
-// each wrap of the terminal width, so a paste of 12000 bytes into 80 columns takes minutes.
-const KEY_SEQUENCE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O.|.)?/gsu;
+// Enter sends the line, Backspace removes the last character, Ctrl-C clears the line and is the same as SIGINT, and
+// Ctrl-D on an empty line ends the input. It echoes only printable text and tabs; a key sequence (such as an arrow)
+// and each other control character are ignored. Node's readline in terminal mode does this too, but it draws the
+// line again at each wrap of the terminal width, so a paste of 12000 bytes into 80 columns takes minutes.
+// Bracketed paste mode: the terminal puts PASTE_START and PASTE_END around a paste, and its line ends between them
+// stay in the line as \n, so a paste of several lines is one turn at Enter (R1577-1).
+export const PASTE_ON = '\x1b[?2004h', PASTE_OFF = '\x1b[?2004l';
+const PASTE_START = '\x1b[200~', PASTE_END = '\x1b[201~';
+// One key sequence (CSI, SS3, or Alt and a key), or one character.
+const TOKEN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O.|.)?|./gsu;
+// The start of a key sequence at the end of a read: its rest comes in the next read (R1575-4).
+const PARTIAL = /\x1b(?:\[[0-?]*[ -/]*|O)?$/u;
 function readTerminal(input, write, {line, interrupt, end}) {
-  let text = '', afterReturn = false;
+  let text = '', afterReturn = false, pasting = false, pending = '', ended = false;
   input.setRawMode(true);
   input.setEncoding('utf8');
-  const data = chunk => {
+  write(PASTE_ON);
+  input.on('data', chunk => {
+    // An Escape key alone at the end of a read, with no sequence after it, is the Escape key only.
+    let all = pending === '\x1b' && !/^[[O]/u.test(chunk) ? chunk : pending + chunk;
+    pending = PARTIAL.exec(all)?.[0] ?? '';
+    all = all.slice(0, all.length - pending.length);
     let echo = '';
     const show = () => { if (echo) write(echo); echo = ''; };
-    for (const char of chunk.replace(KEY_SEQUENCE, '')) {
+    for (const [key] of all.matchAll(TOKEN)) {
+      if (key.startsWith('\x1b')) { if (key === PASTE_START) pasting = true; else if (key === PASTE_END) pasting = false; continue; }
+      // Raw mode stays on until the client ends, so after the end of input Ctrl-C still stops the turn (R1577-3).
+      if (ended) { if (key === '\x03') interrupt(false); continue; }
       // A paste can give \r\n: one line end.
-      if (char === '\n' && afterReturn) { afterReturn = false; continue; }
-      afterReturn = char === '\r';
-      if (char === '\r' || char === '\n') { echo += '\n'; show(); const done = text; text = ''; line(done); }
-      else if (char === '\x03') { show(); interrupt(); }
-      else if (char === '\x04') { if (!text) { show(); input.off('data', data); input.setRawMode(false); end(); return; } }
-      else if (char === '\x7f' || char === '\b') { if (text) { text = text.replace(/.$/su, ''); echo += '\b \b'; } }
-      else if (char === '\t' || oneLine(char) === char) { text += char; echo += char; }
+      if (key === '\n' && afterReturn) { afterReturn = false; continue; }
+      afterReturn = key === '\r';
+      if (key === '\r' || key === '\n') {
+        echo += '\n';
+        if (pasting) { text += '\n'; continue; }
+        show(); const done = text; text = ''; line(done);
+      } else if (key === '\t' || oneLine(key) === key) { text += key; echo += key; }
+      // A control character in a paste is text of the paste, not a key: the client drops it.
+      else if (pasting) continue;
+      // Ctrl-C clears the line, so that the next Enter never sends the cleared text (R1575-2).
+      else if (key === '\x03') { const cleared = text !== ''; text = ''; if (cleared) echo += '\n'; show(); interrupt(cleared); }
+      else if (key === '\x04') { if (!text) { show(); ended = true; end(); } }
+      else if (key === '\x7f' || key === '\b') { if (text) { text = text.replace(/.$/su, ''); echo += '\b \b'; } }
     }
     show();
-  };
-  input.on('data', data);
+  });
 }
 // The process gives a lost request as "Connection closed; outcome uncertain: <reason>" or "<reason>; outcome uncertain".
 const plain = text => {
@@ -173,7 +195,8 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   };
   const say = (...lines) => { for (const line of lines) write(`${oneLine(line)}\n`); };
   const tell = line => write(`${oneLine(line)}\n`, true);
-  const chief = text => { for (const line of String(text).split(/\r?\n/)) write(`chief> ${oneLine(line)}\n`); };
+  // The line ends at the end of a message give no empty chief line (R1578-1).
+  const chief = text => { for (const line of String(text).replace(/(\r?\n)+$/, '').split(/\r?\n/)) write(`chief> ${oneLine(line)}\n`); };
   // A controller text of several lines gives several lines, each with the prefix, so no line of it looks like the client's.
   const framed = (prefix, text, suffix) => {
     const lines = String(text).split(/\r?\n/).filter(line => line.trim());
@@ -224,13 +247,17 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   };
   // After the turn: the controller stops now, the fix for the line, a typed line waits, or the owner types the next line.
   const then = (hint, fix = false) => (stopAsked || (inputEnded && !queue.length) ? ' The controller stops now.' : fix || !queue.length ? ` ${hint}` : '');
-  const onSignalOrKey = signal => {
+  // Ctrl-C clears the typed line (`cleared`) and drops the lines that wait; the first one also stops the turn. A
+  // Ctrl-C that clears a typed line never stops the controller: a later Ctrl-C on an empty line does that.
+  const onSignalOrKey = (signal, cleared = false) => {
     if (signal === 'SIGHUP') { terminalLost = true; requestStop(); return; }
-    if (signal !== 'SIGINT' || !ready || hinted) { requestStop(); return; }
+    if (signal !== 'SIGINT' || !ready || (hinted && !cleared)) { requestStop(); return; }
+    const waited = queue.splice(0).length;
+    const dropped = waited === 1 ? ' The line that waited does not run.' : waited ? ` The ${waited} lines that waited do not run.` : '';
+    const again = turnActive ? 'Press Ctrl-C again to stop the controller.' : 'Press Ctrl-C again or Ctrl-D to stop the controller.';
+    if (turnActive && !hinted) { hinted = true; say(`[Stopping the turn...${dropped} ${again}]`); owner.interrupt().catch(() => {}); return; }
     hinted = true;
-    if (!turnActive) { say('[No turn is running. Press Ctrl-C again or Ctrl-D to stop the controller.]'); return; }
-    say('[Stopping the turn... Press Ctrl-C again to stop the controller.]');
-    owner.interrupt().catch(() => {});
+    say(`[${cleared ? 'You cleared the line.' : 'No turn is running.'}${dropped} ${again}]`);
   };
   onSignal(onSignalOrKey);
 
@@ -260,10 +287,10 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       if (turnActive && !stopAsked) say('[Your input ended. The controller stops after the lines that you typed. Press Ctrl-C to stop the turn now.]');
       wake();
     };
-    if (input.isTTY) readTerminal(input, write, {line, end, interrupt: () => onSignalOrKey('SIGINT')});
+    if (input.isTTY) readTerminal(input, write, {line, end, interrupt: cleared => onSignalOrKey('SIGINT', cleared)});
     else createInterface({input, crlfDelay: Infinity, terminal: false}).on('line', line).on('close', end);
     // The terminal is raw before the Ready lines, so the terminal never echoes the start of a paste that comes at once.
-    say(`[Ready: task ${args.task}, run ${args.run}. The chief uses your Codex config: model ${shown(model.value)}${model.origin === 'default' ? ' (the Codex default)' : ''}, approval ${shown(approvalPolicy.value)}, sandbox ${shown(sandbox.value)}.]`, HOW_TO);
+    say(`[Ready: task ${args.task}, run ${args.run}. The chief uses your Codex config: model ${shown(model.value)}${model.origin === 'default' ? ' (the Codex default)' : ''}, approval ${shown(approvalPolicy.value)}, sandbox ${shown(sandbox.value)}.]`, howTo(input.isTTY));
     ready = true;
     owner.fenced().then(() => wake());
     for (;;) {
@@ -281,8 +308,8 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
         turnActive = false; cancelWait();
         const ended = turnLine(result, then, fullStop);
         tell(dropped && !fullStop ? ended.replace(/]$/, ' Some output of this turn did not show, because the terminal took no output.]') : ended);
-        // After a Ctrl-C the owner may not expect the line that waits, so the client says that it starts.
-        if (hinted && result.state === 'interrupted' && queue.length && !stopAsked) tell('[The line that you typed during the turn starts now.]');
+        // Ctrl-C dropped the lines that waited, so each line that waits now came after it; the client says that it starts.
+        if (hinted && result.state === 'interrupted' && queue.length && !stopAsked) tell(queue.length === 1 ? '[The line that you typed after Ctrl-C starts now.]' : `[The ${queue.length} lines that you typed after Ctrl-C start now, one at a time.]`);
         continue;
       }
       if (inputEnded) break;
@@ -294,8 +321,8 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   // stop() runs on every path, so the controller never outlives the client.
   const outcome = await session().catch(error => { say(`[The client failed: ${error.message}]`); return 'failed'; });
   // An open input keeps the process alive after a stop by Ctrl-C or a signal, so the client releases it, and gives
-  // the terminal back its line mode.
-  if (input.isRaw) input.setRawMode(false);
+  // the terminal back its line mode, with bracketed paste off.
+  if (input.isRaw) { write(PASTE_OFF, true); input.setRawMode(false); }
   input.destroy?.();
   const status = await owner.stop();
   const clean = !terminalLost && (stopAsked || inputEnded) && status.state === 'stopped' && status.reason === 'Stop requested';
@@ -326,7 +353,12 @@ if (entryPath === fileURLToPath(import.meta.url)) {
     if (error.code !== 'EIO' && error.code !== 'EPIPE') throw error;
     loseTerminal();
   });
-  process.on('exit', () => { if (lost) process.exitCode = 1; });
+  // A crash ends the process before the client gives the terminal back: node then resets raw mode, and this turns
+  // bracketed paste off, so that the shell after it does not get the paste marks.
+  process.on('exit', () => {
+    if (lost) process.exitCode = 1;
+    else if (process.stdin.isRaw) try { writeSync(process.stdout.fd, PASTE_OFF); } catch { /* The terminal is gone. */ }
+  });
   runClient({argv: process.argv.slice(2), env: process.env, input: process.stdin, output: process.stdout, classify: parseCommand,
     onSignal: handler => { handle = handler; }})
     .then(code => { process.exitCode = code; }, error => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
