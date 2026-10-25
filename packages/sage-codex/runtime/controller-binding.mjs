@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync} from 'node:fs';
+import {closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync} from 'node:fs';
 import {dirname, isAbsolute, join, resolve} from 'node:path';
 import {INSTRUCTION_BYTES, OWNED_CONTROLLER_CONFIG, validText} from './controller-transport.mjs';
 
@@ -144,11 +144,18 @@ function requireOwner(key, origin, home) {
  * because Codex gives each folder from the project root to the cwd its own trust decision, and a trusted folder above
  * the project would stay loaded. The inline table keeps each path one key: a dotted key splits a path at each dot.
  * A JSON string is a TOML basic string, except DEL, which TOML wants escaped.
+ * Each spelling of the project gets its keys: the canonical one first (the cwd, as realpath(3) gives it, which is the
+ * spelling that Codex looks up), then the spelling that the owner typed, when its letter case or Unicode form differs.
  */
-export function projectTrustFlags(project) {
-  if (typeof project !== 'string' || !isAbsolute(project) || !project.isWellFormed()) throw refuse('project-path', `The client cannot write the project path ${JSON.stringify(project)} as a Codex setting. Use a project folder with a valid name, ${RESTART}.`);
-  const folders = [project];
-  for (let folder = project; folder !== dirname(folder);) folders.push(folder = dirname(folder));
+export function projectTrustFlags(...spellings) {
+  const folders = [];
+  for (const project of spellings) {
+    if (typeof project !== 'string' || !isAbsolute(project) || !project.isWellFormed()) throw refuse('project-path', `The project path ${JSON.stringify(project)} is not valid Unicode, so the client cannot write it in a Codex setting. Rename the folder to a valid name, or use another project folder, ${RESTART}.`);
+    for (let folder = project; ; folder = dirname(folder)) {
+      if (!folders.includes(folder)) folders.push(folder);
+      if (folder === dirname(folder)) break;
+    }
+  }
   const keys = folders.map(folder => `${JSON.stringify(folder).replaceAll('\x7f', '\\u007f')}={ trust_level="untrusted" }`);
   return ['-c', `projects={ ${keys.join(', ')} }`];
 }
@@ -176,17 +183,104 @@ export function checkConfig(read, home = '') {
     if (origins[switchKey]?.name?.type !== 'sessionFlags') throw refuse('policy-origin', `The setting ${key} comes from ${layer(origins[switchKey])}, not from the launch flags of the client. Remove ${key} from there, ${RESTART}.`);
     if (value !== required) throw refuse('policy-value', `The setting ${key} is ${JSON.stringify(value)}, but the client needs ${JSON.stringify(required)}. ${FORK}.`);
   }
-  // The launch flag marks the project untrusted, so each project layer is disabled. Only a managed config, which is
-  // above the launch flags, can mark it trusted again.
+  // The launch flag marks the project untrusted, so each project layer is disabled. A trust entry under a spelling
+  // that the flag does not name, or a managed config (above the launch flags), can mark it trusted again.
   const projects = layers.filter(item => item?.name?.type === 'project');
   const enabled = projects.find(item => !item.disabledReason);
-  if (enabled) throw refuse('project-trusted', `The controller loads the project config in ${enabled.name.dotCodexFolder}, although the client marks the project as untrusted. A managed config (from your organization) may mark the project as trusted. An agent can change the project config, so the client does not start the chief. Remove the trust entry of the project from the managed config, or ask your administrator to remove it, ${RESTART}.`);
+  if (enabled) throw refuse('project-trusted', `The controller loads the project config in ${enabled.name.dotCodexFolder}, although the client marks the project as untrusted. An agent can change the project config, so the client does not start the chief. The likely causes, in order: a trust entry for the project in your Codex config (${homePath(home, 'config.toml')}) under another spelling of its path, such as other letter case; or a trust entry in a managed config (/etc/codex/managed_config.toml, or one from your organization). Remove that trust entry (for a managed config, ask your administrator), ${RESTART}.`);
   for (const [key, origin] of Object.entries(origins)) requireOwner(key, origin, home);
   // Each missing key in one refusal, so that the owner fixes them all before one restart.
   const missing = SELECTION.filter(([, key, , owned]) => owned && configured(config, origins, key) === undefined).map(([, key]) => key);
   if (missing.length) throw refuse('selection-missing', `Your Codex config does not set ${missing.join(' and ')}. Set ${missing.length > 1 ? 'them' : 'it'} in your Codex config (${homePath(home, 'config.toml')}), for example ${missing.map(key => `${key} = ${EXAMPLE[key]}`).join(' and ')}, ${RESTART}.`);
   for (const [, key, , owned] of SELECTION) if (owned) requireOwner(key, origins[key], home);
   return {config, origins, projectFolders: projects.map(item => item.name.dotCodexFolder)};
+}
+
+// The project files of plain Codex: in each folder from the project root (the nearest folder above the cwd with a
+// .git entry, or the cwd when none has one) down to the cwd, the first of these names that is there, then the owner's
+// project_doc_fallback_filenames. All files together have at most project_doc_max_bytes (the Codex default is 32 KiB).
+const DOC_NAMES = ['AGENTS.override.md', 'AGENTS.md'];
+export const PROJECT_DOC_BYTES = 32 * 1024;
+const KINDS = [['isDirectory', 'a folder'], ['isFIFO', 'a named pipe'], ['isSocket', 'a socket'], ['isCharacterDevice', 'a device'], ['isBlockDevice', 'a device']];
+// The classes of the client's terminal filter (controller-client.mjs), except the line end and the tab.
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu;
+// A file can hold the end mark of its section; the client writes its < as &lt;, so that the file cannot end it.
+const END_MARK = /<(?=\s*\/\s*INSTRUCTIONS\s*>)/giu;
+const section = (project, texts) => `\n\n# AGENTS.md instructions for ${project}\n\n<INSTRUCTIONS>\n${texts.join('\n\n')}\n</INSTRUCTIONS>\n`;
+const there = path => { try { return Boolean(lstatSync(path, {throwIfNoEntry: false})); } catch { return true; } };
+function docFolders(project) {
+  const chain = [project];
+  for (let folder = project; folder !== dirname(folder); folder = dirname(folder)) {
+    if (there(join(folder, '.git'))) return chain;
+    chain.unshift(dirname(folder));
+  }
+  return [project];
+}
+// Reads at most `limit` + 1 bytes of one file, with no wait: a named pipe or a device is refused by the type of the
+// open file. Returns {bytes}, or {why, fix} for a file that the chief does not get.
+function readDoc(path, limit) {
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return {why: `it is ${KINDS.find(([test]) => stat[test]())?.[1] ?? 'a special file'}, not a regular file`, fix: 'make it a regular file'};
+    const buffer = Buffer.alloc(limit + 1);
+    let size = 0;
+    for (let read; size < buffer.length && (read = readSync(fd, buffer, size, buffer.length - size, null)) > 0;) size += read;
+    return {bytes: buffer.subarray(0, size)};
+  } catch (error) {
+    // A dead link is no file, as in Codex.
+    if (error.code === 'ENOENT') return {bytes: Buffer.alloc(0)};
+    return {why: `the client cannot read it (${error.code})`, fix: 'make it readable'};
+  } finally { if (fd !== undefined) closeSync(fd); }
+}
+
+/**
+ * Codex does not load the project files (AGENTS.md) of an untrusted project, so the wrapper reads them once, after the
+ * check of config/read, and adds them to the chief instructions in the form that Codex gives them. The thread/start
+ * request has no field for the user-role project text that Codex sends, so they go in a marked developer section.
+ * Each file keeps its line ends and tabs; each other hidden character becomes U+FFFD. A file that breaks a rule is left
+ * out, with a notice. Returns {instructions, notices}.
+ */
+export function projectInstructions(project, read, instructions, home = '') {
+  const config = read?.config ?? {}, origins = read?.origins ?? {};
+  const max = configured(config, origins, 'project_doc_max_bytes');
+  const limit = Number.isSafeInteger(max) && max >= 0 ? max : PROJECT_DOC_BYTES;
+  const fallback = configured(config, origins, 'project_doc_fallback_filenames');
+  const names = [...DOC_NAMES, ...(Array.isArray(fallback) ? fallback.filter(name => typeof name === 'string' && name.trim()).map(name => name.trim()) : [])];
+  const texts = [], notices = [];
+  // A limit of 0 turns the project files off, as in Codex.
+  let left = limit;
+  for (const folder of limit ? docFolders(project) : []) {
+    const name = names.find(item => there(join(folder, item)));
+    if (!name) continue;
+    const path = join(folder, name);
+    const leave = (why, fix) => notices.push(`[The session starts without the project file ${path}: ${why}. To give it to the chief, ${fix}, then start the client again.]`);
+    const file = readDoc(path, Math.min(left, INSTRUCTION_BYTES));
+    if (file.why) { leave(file.why, file.fix); continue; }
+    const {bytes} = file;
+    if (bytes.length > left) { leave(`with it, the project files have more than ${limit} bytes (project_doc_max_bytes)`, `shorten it, or raise project_doc_max_bytes in your Codex config (${homePath(home, 'config.toml')})`); continue; }
+    if (bytes.includes(0)) { leave('it has a NUL character', 'remove the NUL character'); continue; }
+    const text = bytes.toString('utf8');
+    if (!text.trim()) continue;
+    const clean = text.replaceAll('\r\n', '\n').replace(/\n+$/, '').replace(HIDDEN, character => (character === '\n' || character === '\t' ? character : '�')).replace(END_MARK, '&lt;');
+    if (Buffer.byteLength(instructions + section(project, [...texts, clean])) > INSTRUCTION_BYTES) { leave('with it, the chief instructions have more than 256 KiB', 'shorten it or the chief instructions file'); continue; }
+    texts.push(clean);
+    left -= bytes.length;
+  }
+  return {instructions: texts.length ? instructions + section(project, texts) : instructions, notices};
+}
+
+/**
+ * The notice for the .codex folders of the disabled project layers, or none. The controller's own warning says to
+ * trust the project; under sage a trust entry changes nothing, so the client shows this notice instead. A folder that
+ * holds only skills (and dot files) loses nothing under sage, so it is not named (R1602-1).
+ */
+export function settingsNotice(folders) {
+  const named = folders.filter(folder => { try { return readdirSync(folder).some(name => name !== 'skills' && !name.startsWith('.')); } catch { return true; } });
+  if (!named.length) return [];
+  const list = named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named.at(-1)}` : named[0];
+  return [`[This project has Codex settings in ${list}. They do not load under sage: the project config, rules, hooks and agent roles. Skills still load.]`];
 }
 
 /** Pure. Returns the frozen policy record with its binding hash, or throws a refusal with a fixed code. */

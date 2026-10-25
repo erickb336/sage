@@ -226,7 +226,8 @@ test('checkConfig: disabled project layers pass and give their folders; an enabl
   assert.deepEqual(check(layers => layers.push(layer('/work/.codex', untrusted, {mcp_servers: {x: {command: '/bin/x'}}}),
     layer('/work/project/.codex', untrusted, {features: {request_permissions_tool: true}, shell_environment_policy: {include_only: []}, model_verbosity: 'low'}))),
   ['/work/.codex', '/work/project/.codex']);
-  const trusted = 'project-trusted: The controller loads the project config in /work/project/.codex, although the client marks the project as untrusted. A managed config (from your organization) may mark the project as trusted. An agent can change the project config, so the client does not start the chief. Remove the trust entry of the project from the managed config, or ask your administrator to remove it, then start the client again.';
+  // The refusal names the likely causes in order: an owner trust entry under another spelling, then a managed config (R1602-2).
+  const trusted = 'project-trusted: The controller loads the project config in /work/project/.codex, although the client marks the project as untrusted. An agent can change the project config, so the client does not start the chief. The likely causes, in order: a trust entry for the project in your Codex config (/home/.codex/config.toml) under another spelling of its path, such as other letter case; or a trust entry in a managed config (/etc/codex/managed_config.toml, or one from your organization). Remove that trust entry (for a managed config, ask your administrator), then start the client again.';
   // A layer with only a model text setting refuses too: the client takes nothing from an enabled project layer.
   assert.equal(check(layers => layers.push(layer('/work/project/.codex', null, {model_verbosity: 'low'}))), trusted);
   assert.equal(check(layers => layers.push(layer('/work/.codex', untrusted, {}), layer('/work/project/.codex', '', {}))), trusted);
@@ -254,6 +255,20 @@ test('projectTrustFlags marks the project and each folder above it, up to /, as 
   const keys = [...value.matchAll(/("(?:[^"\\]|\\.)*")=\{ trust_level="untrusted" \}/g)].map(match => JSON.parse(match[1]));
   assert.deepEqual(keys, [odd, '/w/a "b\\c', '/w', '/']);
   for (const bad of ['relative/path', '/a/\ud800b', 5, undefined]) assert.throws(() => projectTrustFlags(bad), error => error.code === 'project-path', String(bad));
+  // The refusal says what is wrong with the path and what to do (R1602-5).
+  assert.throws(() => projectTrustFlags('/a/\ud800b'), {message: 'The project path "/a/\\ud800b" is not valid Unicode, so the client cannot write it in a Codex setting. Rename the folder to a valid name, or use another project folder, then start the client again.'});
+});
+
+// Codex looks up the canonical spelling of the cwd (realpath(3)); the spelling that the owner typed gets its keys too,
+// each folder up to /, and a folder that both spellings share is one key (R1600-1, R1601-1).
+test('projectTrustFlags gives each spelling of the project its keys, the canonical one first, with no key twice', () => {
+  assert.deepEqual(projectTrustFlags('/Work/MyProj', '/Work/myproj'),
+    ['-c', 'projects={ "/Work/MyProj"={ trust_level="untrusted" }, "/Work"={ trust_level="untrusted" }, "/"={ trust_level="untrusted" }, "/Work/myproj"={ trust_level="untrusted" } }']);
+  // An NFD folder name that the owner typed in NFC.
+  const [, value] = projectTrustFlags('/w/café', '/W/café');
+  const keys = [...value.matchAll(/("(?:[^"\\]|\\.)*")=\{ trust_level="untrusted" \}/g)].map(match => JSON.parse(match[1]));
+  assert.deepEqual(keys, ['/w/café', '/w', '/', '/W/café', '/W']);
+  assert.deepEqual(projectTrustFlags('/a', '/a'), projectTrustFlags('/a'));
 });
 
 test('bindPolicy: a version or a policy refusal names what it found and what to change (R1504-3)', () => {

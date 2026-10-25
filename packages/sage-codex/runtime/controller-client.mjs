@@ -2,10 +2,8 @@
 import {closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, writeSync} from 'node:fs';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
-import {join} from 'node:path';
 import {bindTask, projectTrustFlags, resolveControllerBinary} from './controller-binding.mjs';
 import {createControllerProcess, defaultSchedule} from './controller-process.mjs';
-import {INSTRUCTION_BYTES} from './controller-transport.mjs';
 
 const USAGE = [
   'Usage: SAGE_CODEX_CONTROLLER_BIN=<fork codex binary> node controller-client.mjs --project <folder> --task <T…> --run <R…> --instructions <file>',
@@ -120,11 +118,13 @@ function parseArgs(argv) {
   if (missing.length) throw new Error(`The client needs ${missing.join(', ')}.`);
   return args;
 }
+// The canonical spelling of the project folder (realpath(3), the spelling that Codex looks up), and the spelling that
+// the owner typed with its links resolved, which keeps the typed letter case and Unicode form (R1600-1, R1601-1).
 function projectFolder(path) {
-  let real;
-  try { real = realpathSync(path); } catch { throw new Error(`The project folder ${path} does not exist. Give an existing folder with --project.`); }
+  let real, typed;
+  try { real = realpathSync.native(path); typed = realpathSync(path); } catch { throw new Error(`The project folder ${path} does not exist. Give an existing folder with --project.`); }
   if (!statSync(real).isDirectory()) throw new Error(`${path} is not a folder. Give the project folder with --project.`);
-  return real;
+  return {real, typed};
 }
 // A named pipe, a device or a folder is not an instructions file: a read of a pipe or a device can wait for ever. The
 // open does not wait (O_NONBLOCK), and the type check is on the open file, so a swap after the check changes nothing.
@@ -141,37 +141,9 @@ function instructionsText(path) {
     throw new Error(error.code === 'ENOENT' ? `The instructions file ${path} does not exist. Give the chief instructions file with --instructions.` : `The client cannot read the instructions file ${path} (${error.code}). Give a file that you can read with --instructions.`);
   } finally { if (fd !== undefined) closeSync(fd); }
 }
-// Codex does not load the AGENTS.md of an untrusted project, so the client reads the project AGENTS.md once, at the
-// start, and adds it to the chief instructions in the form that Codex gives it. A missing or empty file adds nothing.
-// A file that breaks a rule is left out, with a reason. The text keeps its line ends and tabs; each other character
-// of CONTROL becomes U+FFFD, so no hidden text reaches the chief. An agent can change the file, as with Codex itself.
-const AGENTS_BYTES = 32 * 1024;
-function projectAgents(project, instructions) {
-  const path = join(project, 'AGENTS.md');
-  const left = why => ({instructions, notice: `[The chief does not get the project file ${path}: ${why}.]`});
-  let fd, text;
-  try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
-    const stat = fstatSync(fd);
-    if (!stat.isFile()) return left(`it is ${KINDS.find(([test]) => stat[test]())?.[1] ?? 'a special file'}, not a regular file`);
-    if (stat.size > AGENTS_BYTES) return left('it has more than 32 KiB');
-    text = readFileSync(fd, 'utf8');
-  } catch (error) {
-    if (error.code === 'ENOENT') return {instructions};
-    return left(`the client cannot read it (${error.code})`);
-  } finally { if (fd !== undefined) closeSync(fd); }
-  if (Buffer.byteLength(text) > AGENTS_BYTES) return left('it has more than 32 KiB');
-  if (text.includes('\0')) return left('it has a NUL character');
-  if (!text.trim()) return {instructions};
-  const clean = text.replaceAll('\r\n', '\n').replace(/\n+$/, '').replace(CONTROL, character => (character === '\n' || character === '\t' ? character : '\uFFFD'));
-  const all = `${instructions}\n\n# AGENTS.md instructions for ${project}\n\n<INSTRUCTIONS>\n${clean}\n</INSTRUCTIONS>\n`;
-  if (Buffer.byteLength(all) > INSTRUCTION_BYTES) return left('with it, the chief instructions have more than 256 KiB');
-  return {instructions: all};
-}
 // The controller's own warning for the disabled project layers says to trust the project. Under sage a trust entry
-// changes nothing, so the client shows its own notice (projectNotice) instead.
+// changes nothing, so the client shows the notice of openThread (settingsNotice) instead.
 const UNTRUSTED_WARNING = 'Project-local config, hooks, and exec policies are disabled in the following folders';
-const projectNotice = folders => `[This project has Codex settings in ${folders.length > 1 ? `${folders.slice(0, -1).join(', ')} and ${folders.at(-1)}` : folders[0]}. They do not load under sage: the project config, rules, hooks and agent roles. Skills still load.]`;
 // The thread reply gives the sandbox as {type: 'readOnly'}; the owner's config says read-only. A config value is
 // quoted (JSON escapes a quote in it), so a model name such as `x, approval never` cannot look like a client field.
 const shown = value => (typeof value?.type === 'string' ? JSON.stringify(value.type.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`))
@@ -239,17 +211,14 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   const timer = schedule ?? defaultSchedule;
   let cancelWait = () => {}, waited = false;
   const awaitModel = () => { cancelWait(); cancelWait = waited ? () => {} : timer(() => { waited = true; say(WAITING); }, WAIT_MS); };
-  let args, binary, project, instructions;
-  // The chief instructions with the project AGENTS.md, and the notice for a file that the client left out.
-  let agents;
+  let args, binary, project, typed, instructions;
   try {
     args = parseArgs(argv);
     binary = resolveControllerBinary(env);
-    project = projectFolder(args.project);
-    projectTrustFlags(project);
+    ({real: project, typed} = projectFolder(args.project));
+    projectTrustFlags(project, typed);
     instructions = instructionsText(args.instructions);
     bindTask({project, task: args.task, run: args.run, instructions}, project);
-    agents = projectAgents(project, instructions);
   } catch (error) {
     say(`[The client did not start: ${error.message}]`);
     if (!args) say(...USAGE);
@@ -257,12 +226,11 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   }
   say(`[Controller binary: ${binary.path}, sha256 ${binary.sha256}.]`);
   if (!binary.expectedSha256) say('[Warning: SAGE_CODEX_CONTROLLER_SHA256 is not set, so the client did not compare the binary with a known hash. To pin this binary, set it to the hash above.]');
-  if (agents.notice) say(agents.notice);
 
   let rootThread = null;
   const warned = new Set();
   const warnOnce = (...parts) => { const key = parts.join('\0'); if (!warned.has(key)) { warned.add(key); framed(...parts); } };
-  owner = createControllerProcess({executable: binary.path, executableSha256: binary.sha256, cwd: project,
+  owner = createControllerProcess({executable: binary.path, executableSha256: binary.sha256, cwd: project, typedCwd: typed,
     env: Object.fromEntries(Object.entries(env).filter(([, value]) => typeof value === 'string')),
     onEvent(event) {
       if (turnActive) awaitModel();
@@ -303,7 +271,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       if (!stopAsked) say(`[The controller did not start: ${plain(owner.status().reason ?? error.message)}. Check that SAGE_CODEX_CONTROLLER_BIN is the fork binary and that your Codex config file loads. ${RESTART}]`);
       return 'refused';
     }
-    const opened = await owner.openThread({project, task: args.task, run: args.run, instructions: agents.instructions});
+    const opened = await owner.openThread({project, task: args.task, run: args.run, instructions});
     if (opened.state !== 'bound') {
       if (!stopAsked) say(opened.code === 'rpc' ? `[The controller refused to start the chief: ${why(opened.error)}. ${RESTART}]`
         : opened.state === 'uncertain' ? `[The start of the chief has an unknown result: ${why(opened.error)}. ${RESTART}]`
@@ -311,7 +279,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       return 'refused';
     }
     rootThread = opened.policy.threadId;
-    if (opened.policy.projectFolders.length) say(projectNotice(opened.policy.projectFolders));
+    say(...opened.notices);
     const {model, approvalPolicy, sandbox} = opened.policy.selection;
     const line = text => {
       if (!text.trim() || stopAsked) return;

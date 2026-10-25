@@ -2,7 +2,7 @@ import {spawn as nativeSpawn} from 'node:child_process';
 import {realpathSync} from 'node:fs';
 import {isAbsolute} from 'node:path';
 import {createControllerTransport, OWNED_CONTROLLER_CONFIG} from './controller-transport.mjs';
-import {bindPolicy, bindTask, bindTurnText, checkConfig, codexHome, projectTrustFlags, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, codexHome, projectInstructions, projectTrustFlags, settingsNotice, turnOutcome} from './controller-binding.mjs';
 
 // Limits bound one wire frame and retained stderr bytes, not total process output.
 // One frame can hold one whole agent message, so the frame bound is the event bound of a turn (maxEventBytes).
@@ -26,14 +26,14 @@ export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owne
 export function createControllerProcess(options, {spawn = nativeSpawn, schedule = defaultSchedule} = {}) {
   if (!options || Object.getPrototypeOf(options) !== Object.prototype) throw new TypeError('Trusted launch options required');
   const allowed = ['executable', 'executableSha256', 'cwd', 'env', 'startupTimeoutMs', 'inspectionTimeoutMs', 'stopGraceMs', 'maxFrameBytes', 'maxDiagnosticBytes',
-    'turnTimeoutMs', 'interruptGraceMs', 'maxEvents', 'maxDeltaEvents', 'maxEventBytes', 'onEvent'];
+    'turnTimeoutMs', 'interruptGraceMs', 'maxEvents', 'maxDeltaEvents', 'maxEventBytes', 'onEvent', 'typedCwd'];
   for (const key of Reflect.ownKeys(options)) {
     const descriptor = Object.getOwnPropertyDescriptor(options, key);
     if (!allowed.includes(key) || !('value' in descriptor)) throw new TypeError('Unsupported launch option');
   }
   const {executable, executableSha256, cwd, env, startupTimeoutMs = 10000, inspectionTimeoutMs = 10000, stopGraceMs = 1000,
     maxFrameBytes = DEFAULT_FRAME_BYTES, maxDiagnosticBytes = DEFAULT_DIAGNOSTIC_BYTES,
-    turnTimeoutMs = 2 * 60 * 60 * 1000, interruptGraceMs = 10000, maxEvents = 20000, maxDeltaEvents = 1000000, maxEventBytes = 64 * 1024 * 1024, onEvent} = options;
+    turnTimeoutMs = 2 * 60 * 60 * 1000, interruptGraceMs = 10000, maxEvents = 20000, maxDeltaEvents = 1000000, maxEventBytes = 64 * 1024 * 1024, onEvent, typedCwd = cwd} = options;
   if (typeof executable !== 'string' || !isAbsolute(executable) || typeof cwd !== 'string' || !isAbsolute(cwd)) throw new TypeError('Trusted absolute executable and canonical cwd required');
   if (typeof executableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(executableSha256)) throw new TypeError('Executable sha256 required');
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Invalid event callback');
@@ -49,7 +49,8 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     turnTimeoutMs, interruptGraceMs, maxEvents, maxDeltaEvents, maxEventBytes})) positive(value, name);
   if (typeof spawn !== 'function' || typeof schedule !== 'function') throw new TypeError('Invalid process dependencies');
   // The controller loads no project layer of the cwd (projectTrustFlags); the binding record keeps these arguments.
-  const launchArgs = Object.freeze([...OWNED_LAUNCH_ARGS, ...projectTrustFlags(cwd)]);
+  // `typedCwd` is the cwd as the owner typed it (links resolved), when its letter case or Unicode form differs.
+  const launchArgs = Object.freeze([...OWNED_LAUNCH_ARGS, ...projectTrustFlags(cwd, typedCwd)]);
   let child, connection, attempted = false, fenced = false, fenceReason = null, childClosed = false, exitCode = null, exitSignal = null;
   let phase = 'idle', stopPromise, inspectionPromise, diagnosticBytes = 0, diagnosticsTruncated = false;
   let initialized = null, threadRequested = false, binding = null, turn = null;
@@ -221,12 +222,17 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     threadRequested = true;
     try {
       const task = bindTask(input, cwd);
-      if (realpathSync(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
+      // The canonical spelling (realpath(3)): Codex looks up the trust of this spelling (R1600-1).
+      if (realpathSync.native(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
       const config = await inspect();
       checkConfig(config, codexHome(environment));
-      const thread = await bounded(connection.startThread({cwd, ephemeral: true, developerInstructions: input.instructions}), inspectionTimeoutMs, 'Thread start observation expired');
-      binding = bindPolicy({binary: {path: executable, sha256: executableSha256}, args: launchArgs, initialize: initialized, config, thread, task});
-      return Object.freeze({state: 'bound', policy: binding});
+      // The project files (AGENTS.md) after the check, with the owner's limits from config/read.
+      const docs = projectInstructions(cwd, config, input.instructions, codexHome(environment));
+      const sent = bindTask({...input, instructions: docs.instructions}, cwd);
+      const thread = await bounded(connection.startThread({cwd, ephemeral: true, developerInstructions: docs.instructions}), inspectionTimeoutMs, 'Thread start observation expired');
+      binding = bindPolicy({binary: {path: executable, sha256: executableSha256}, args: launchArgs, initialize: initialized, config, thread, task: sent});
+      // The start notices for the owner: the settings that do not load, then each project file that the chief does not get.
+      return Object.freeze({state: 'bound', policy: binding, notices: Object.freeze([...settingsNotice(binding.projectFolders), ...docs.notices])});
     } catch (error) {
       const state = error.code === 'uncertain' ? 'uncertain' : 'refused';
       const code = error.rpcError ? 'rpc' : (error.code ?? 'refused');
