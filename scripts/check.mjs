@@ -7,6 +7,8 @@ import { MOMENTS } from "../plugins/sage/hooks/principles-hook.mjs";
 import { BRIEF_FIELDS as CORE_BRIEF_FIELDS } from "../packages/sage-core/index.mjs";
 import { TASK_KINDS } from "../packages/sage-core/logbook-fields.mjs";
 import { BRIEF_FIELDS, FINDING_FORM, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
+import { handle as codexModeHook } from "../plugins/sage-codex/hooks/sage-codex-hook.mjs";
+import { chiefInstructionParts } from "../plugins/sage-codex/runtime/chief-output.mjs";
 import { fingerprint, overrides } from "./sync-pstack.mjs";
 import { withoutPrinciplesTable } from "./principles-table.mjs";
 import { PRINCIPLES_PAGE } from "./dictionary.mjs";
@@ -180,6 +182,18 @@ try {
 } catch (e) { problems.push(String(e.message)); } // a source that the build cannot read, such as a README without its markers
 const core = readFileSync(join(ROOT, "instructions/core.md"), "utf8");
 if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${Buffer.byteLength(core)} bytes; keep it under 8 KiB (it loads into every session, so each byte costs context there)`);
+
+// T494: the chief in Codex must get every rule. Codex counts hook context at 4 bytes a token
+// (codex-rs utils/string/src/truncate.rs) and cuts a text above the hook's limit (hooks/src/output_spill.rs).
+try {
+  const codexHooks = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/hooks/hooks.json"), "utf8")).hooks;
+  const tokens = Math.min(...["UserPromptSubmit", "SessionStart"].flatMap((e) => codexHooks[e].flatMap((g) => g.hooks))
+    .filter((h) => h.command.endsWith('/hooks/sage-codex-hook.mjs"')).map((h) => h.additionalContextLimit ?? 2500));
+  const limit = tokens * 4;
+  const role = Buffer.byteLength(codexModeHook({ hook_event_name: "UserPromptSubmit", session_id: "check", prompt: "sage mode" }, {}).hookSpecificOutput.additionalContext);
+  if (role > limit) problems.push(`Codex chief role: the sage hook gives ${role} bytes, ${role - limit} bytes over its limit of ${limit} bytes (0 bytes left; additionalContextLimit ${tokens} tokens at 4 bytes each, in packages/sage-codex/hooks/hooks.json), so Codex would cut the rules. Shorten the chief text (packages/sage-core/roles/chief-of-staff.md) or raise the limit`);
+  chiefInstructionParts();
+} catch (e) { problems.push(`Codex chief role: ${e.message} (packages/sage-core/roles/chief-of-staff.md)`); }
 
 // A test must not hold wall-clock or CPU time under a tight fixed bound: load and machine differences can fail a
 // correct test (T53, T188). A name takes the clock when it is set from a clock reading or from a
