@@ -21,7 +21,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
 | sage mode: agent caps in code | Yes | No |
-| Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt |
+| Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt. Codex still asks you 4 times in each task, before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)) |
 | The merge rule, the no-edit rules and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)) |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | No: use the manual skill commands |
@@ -94,7 +94,7 @@ Send each phrase alone, as the whole message, in any letter case.
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff: the hook adds the chief's role to that turn. Send your request next. |
 | `sage mode off` | A normal session again. Autopilot goes off too. The hook adds the role no more, also after a compaction. |
-| `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. |
+| `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. Each task still asks you 4 times before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)). |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
 - Send a phrase when Codex is idle. To stop merges at once, press Esc to stop Codex's turn, then send the off phrase for autopilot alone.
@@ -108,6 +108,43 @@ Send each phrase alone, as the whole message, in any letter case.
 - The hook keeps the mode of each session in `~/.codex/sage/.hooks/codex/` (or under `SAGE_HOME`).
 
 The hooks run only after you trust them (step 3). In `codex exec`, Codex skips hooks that you have not trusted, with no warning.
+
+### The approval prompts of each task
+
+With autopilot on, each task still asks you 4 times before its merge: Codex asks, not sage. In the default `workspace-write` sandbox, "`<writable_root>/.git` is protected as read-only", and network access is off ([Codex: Agent approvals & security](https://developers.openai.com/codex/agent-approvals-security.md)). So these commands must run outside the sandbox, and Codex asks you first.
+
+| Prompt | What it is for | Why Codex asks |
+| --- | --- | --- |
+| Create the task worktree (`git worktree add`) | The implementer's own folder and branch for the task | It writes to `.git` |
+| Commit on the task branch (`git commit`) | The change of the task | It writes to `.git` |
+| Send the task branch (`git push -u origin <branch>`) | The branch of the pull request on GitHub | It writes to `.git` and needs the network |
+| Open the pull request (`gh pr create`) | The pull request that the reviews and the merge check read | It needs the network |
+
+- The merge needs no prompt: with autopilot on, the sage hook allows the verified merge command itself.
+- The off phrase for autopilot, or for sage mode, brings back Codex's normal prompts, also for the merge.
+- The model writes the reason line of each prompt, so its words can be different. The table uses the words of a check with the Codex CLI 0.164.0 and a test model.
+
+In the CLI, Codex 0.164.0 gives these choices for such a prompt ([the choice text](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/tui/src/bottom_pane/approval_overlay.rs#L852-L938), [which choices it offers](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/protocol/src/approvals.rs#L377-L410)):
+
+| Choice | What it does |
+| --- | --- |
+| **Yes, proceed** | Runs this command one time. The next task asks again. |
+| **Yes, and don't ask again for commands that start with `<prefix>`** | Runs the command, and adds an allow rule for that prefix to `~/.codex/rules/default.rules` ([the file](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L877-L879), [the write](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L469-L490)). The rule holds for good, in every session: a matching command then runs outside the sandbox with no prompt. Codex shows this choice only when it has a prefix to offer. |
+| **No, and tell Codex what to do differently** | Does not run the command. Codex stops its turn and waits for your message. |
+
+Codex 0.164.0 offers no choice for "this session" only for these prompts. Codex's [Rules page](https://developers.openai.com/codex/rules.md) tells how to read or remove a rule.
+
+> **Warning:** a rule holds in every Codex session, also outside sage mode, where no sage rule checks a push. Do not allow a prefix that is wider than the command needs.
+
+To stop the prompts for later tasks, do this at the first prompt of each kind:
+
+1. Read the prefix in the backticks of the second choice.
+2. If the prefix names no branch, folder or title of this task (for example `git worktree add` or `gh pr create`), choose **Yes, and don't ask again for commands that start with `<prefix>`**.
+3. If the prefix names this task's branch or folder, choose **Yes, proceed**. Such a rule never matches the next task.
+
+The model proposes the prefix. In the check with a test model, every prefix was the whole command, with the task's branch and folder, so each later task would ask again. A real model can propose a shorter prefix, but sage did not check this.
+
+The desktop app gets the same choices from Codex, but its docs do not name their text, and sage was not run in the app yet.
 
 ## The logbook tools
 
