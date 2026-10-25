@@ -67,7 +67,7 @@ The chief of staff never edits files. It writes briefs, records verdicts and ask
 
 | Idea | From | In sage mode |
 | --- | --- | --- |
-| A chief that owns the program, never the code | pstack orchestrate, Cursor projects | The chief of staff has no edit tools. In phrase mode, the hook blocks its edits. |
+| A chief that owns the program, never the code | pstack orchestrate, Cursor projects | While sage mode is on, the hook refuses the chief's file edits. After the off phrase, the session edits files as a normal session. |
 | "The brief is the product." A missing field stops the spawn | pstack orchestrate | A brief template with required fields. The hook refuses an agent spawn when a field is missing. |
 | Verdicts recorded by head SHA. A new commit voids them | pstack ledger, Orchestrator "merge the exact checked commit" | A ledger in the logbook. A merge is blocked unless the current SHA has the verdicts its route needs. |
 | A mode switched on by name, with playbooks copied into the to-do list | poteto mode | "sage mode" as the whole message. Each route's blocks go into the task list. |
@@ -301,7 +301,7 @@ About 2,000 tokens or fewer, with long material in files. The hook reads a revie
 
 | Rule | Enforced by | Why |
 | --- | --- | --- |
-| The chief never edits files | **Code:** agent tools + hook | It keeps the big picture. Tested in the prototype. |
+| The chief never edits files | **Code:** the hook alone, while sage mode is on. It refuses a chief subagent's edits in every mode, and, in a session that started as the chief, refuses the chief's edits when it cannot read or save its state. A session that the on phrase made the chief is not covered yet (T414) | It keeps the big picture. Tested in the prototype. |
 | A brief has every field | **Code:** hook on the agent spawn | A vague brief fails quietly (pstack) |
 | One writer per worktree or branch | **Code:** the state tool refuses a second open writer on a branch | Parallel writers conflict (Cognition) |
 | At most N agents at once (default 4: one lead and its 3 children) | **Code:** the hook counts running agents | Cost and focus. Orchestrator used 3 |
