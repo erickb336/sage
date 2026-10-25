@@ -1,0 +1,11 @@
+id	task	role	round	candidate	branch	status	tokens	report	started	ended	model
+R1	T1	implementer	0			done	50000		2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	
+R2	T1	code-reviewer	0			done	100000		2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	
+R3	T1	security-reviewer	0			done	200000		2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	
+R4	T1	qa	0			done	100000		2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	
+R5	T1	code-reviewer	1			done	100000		2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	
+R6	T1	qa	1			done	50000		2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	
+R7	T2	code-reviewer	0			done	300000		2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	
+R8	T2	qa	0			done	100000		2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	
+R9	T2	ux-reviewer	0			failed			2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	
+R10	T3	code-reviewer	0			done			2026-10-01T10:00:00Z	2026-10-01T10:10:00Z	

@@ -1,0 +1,4 @@
+at	task	decision	why
+2026-10-01T11:00:00Z	T1	F-T1-9 opened again: Empty name saves a blank row	the summary before: Empty name saves a row
+2026-10-01T11:30:00Z	T1	R4-1 moved to T5 as F-T5-1: README step of T1 says the old flag	the follow-up task: Follow-up of T1
+2026-10-01T11:40:00Z	T1	F-T1-12 moved to T5 as F-T5-2: Log line shows the full token	the follow-up task: Follow-up of T1
