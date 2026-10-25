@@ -5,10 +5,12 @@
 //     form that names one), because Codex reads project settings from it.
 //   - The chief: in sage mode the root thread (no agent_id) changes no file with apply_patch. A child may.
 //   - A read-only role: in sage mode a child whose task name names a role that core keeps from editing (a reviewer, QA,
-//     the PE) changes no file with apply_patch. The task name is the last part of the agent path in the first line of
-//     the child's transcript, as the report gate reads it.
+//     the PE) changes no file, with apply_patch or with a shell write form (core's commandWrites). The task name is the
+//     last part of the agent path in the first line of the child's transcript, as the report gate reads it.
 //   - The sage folder: no thread, in any mode, runs a shell command that names the Codex sage folder (the logbook and the
 //     mode files) or that resumes or forks a Codex session, so an agent cannot forge a mode file or a typed message.
+//   - A new Codex: no sage child (a task name that starts with sage_), in any mode, runs codex from the shell, because
+//     a new Codex session (codex exec, codex) runs outside the hooks of this session.
 //   - A merge (sage mode): only the one merge form of core, only on the root thread, only with autopilot on and a passing
 //     merge check for that head SHA. Autopilot counts only when the mode file and the user's own typed messages in
 //     Codex's transcript of the thread both give it, so a forged mode file alone unlocks nothing. PreToolUse denies every
@@ -20,8 +22,9 @@ import { realpathSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites, createCommandPolicy, PR, pullRequestHead, readModeFile, roleEditDenied, switchModes } from "sage-core";
+import { chiefEditDenied, commandWrites, createCommandPolicy, PR, programsRun, pullRequestHead, readModeFile, roleEditDenied, switchModes } from "sage-core";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
+import { childTask } from "./report-gate.mjs";
 import { modeDirectory } from "./sage-codex-hook.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -36,7 +39,9 @@ const AUTOPILOT_OFF = 'sage: autopilot is off, so the user merges. Report the pu
 const SAGE_FOLDER = "sage: no agent runs a shell command that names the Codex sage folder, because the logbook and the mode files are there. Use the sage MCP tools for the logbook.";
 const RESUME = "sage: no agent resumes or forks a Codex session from the shell, because its prompts would count as the user's. Ask the user.";
 const READ_ONLY = (role) => `sage: a ${role} reviews and changes no files; report the finding instead.`;
-const UNREAD_ROLE = "sage: the hook could not read this agent's task name from its transcript, so it refuses the edit. Tell the user.";
+const UNREAD_ROLE = "sage: the hook could not read this agent's task name from its transcript, so it refuses the change. Tell the user.";
+const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.";
+const CHILD_CODEX ="sage: a sage agent never starts Codex from the shell, because a new Codex session runs outside the hooks of this session. Report what you need instead.";
 
 /** A path segment named .codex, in any letter case (the Mac file system ignores case). */
 const CODEX_SEGMENT = /(?:^|[\s/\\'"=:<>])\.codex(?=$|[\s/\\'"<>;|&)])/i;
@@ -75,10 +80,17 @@ export function readMode({ session, transcript }, env = process.env) {
 
 /** The role of a sage child from the task name in its transcript (sage_<role with _ for ->_t<n>), or null for another child. */
 export function childRole(transcript) {
-  const meta = JSON.parse(readFileSync(transcript, "utf8").split("\n", 1)[0]);
-  if (meta?.type !== "session_meta") throw Error("no session_meta");
-  const task = /^sage_([a-z_]+?)_t\d+$/.exec(String(meta.payload?.agent_path ?? "").split("/").at(-1));
+  const task = /^sage_([a-z_]+?)_t\d+$/.exec(childTask(transcript));
   return task ? task[1].replaceAll("_", "-") : null;
+}
+
+/** Why the gate refuses a child's change of files in sage mode, or undefined: a read-only role, or a task name that it cannot read. */
+function childChange(f, sage) {
+  if (!sage || f.transcript === null) return undefined;
+  try {
+    const role = childRole(f.transcript);
+    return role !== null && roleEditDenied({ sage, role }) ? READ_ONLY(role) : undefined; // core throws for a role that it does not know
+  } catch { return UNREAD_ROLE; }
 }
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -93,15 +105,18 @@ export function namesSageFolder(command, env = process.env) {
   return new RegExp([...paths, "\\$\\{?SAGE_HOME\\b", "\\$\\{?CODEX_HOME\\}?/sage(?![\\w.-])", "\\.hooks/codex"].join("|"), "i").test(command);
 }
 
-const WRAPPERS = new Set(["env", "exec", "command", "nohup", "sudo", "npx", "time"]);
-/** Whether a simple command of a shell command runs codex with resume or fork. */
-export function resumesSession(command) {
-  return command.split(/[;&|\n()`]+/).some((part) => {
-    const words = part.trim().split(/\s+/).map((word) => word.replace(/^['"]+|['"]+$/g, "").toLowerCase());
-    const at = words.findIndex((word) => !/^\w+=/.test(word) && !WRAPPERS.has(word));
-    return at >= 0 && /(?:^|\/)codex(?:\.exe)?$/.test(words[at]) && words.slice(at + 1).some((word) => word === "resume" || word === "fork");
-  });
+/**
+ * The arguments of each codex program that a shell command runs, read by core's command reader (also after wrappers and
+ * in the -c text of a shell), or null when the reader cannot read the command.
+ */
+export function codexRuns(command, cwd = "/") {
+  try {
+    return programsRun(command, cwd).filter((p) => /(?:^|\/)codex(?:\.exe)?$/i.test(p.word)).map((p) => p.args);
+  } catch { return null; }
 }
+const resumes = (args) => args.some((word) => /^(?:resume|fork)$/i.test(word));
+/** Whether a shell command runs codex with resume or fork. */
+export const resumesSession = (command, cwd) => (codexRuns(command, cwd) ?? []).some(resumes);
 
 /** The merge check for one merge form: the pull request's head branch from gh, then the state tool's ledger check. */
 export async function checkMerge({ pr, sha }, cwd, env = process.env) {
@@ -158,17 +173,23 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     if (paths.some((path) => CODEX_SEGMENT.test(resolve(f.cwd, path)))) return deny(CODEX_FOLDER);
     const { sage } = mode(f, env);
     if (!f.child) return chiefEditDenied({ sage, chief: true }) ? deny(CHIEF) : undefined;
-    if (!sage || f.transcript === null) return undefined;
-    let role, readOnly;
-    try {
-      role = childRole(f.transcript);
-      readOnly = role !== null && roleEditDenied({ sage, role }); // core throws for a role that it does not know
-    } catch { return deny(UNREAD_ROLE); }
-    return readOnly ? deny(READ_ONLY(role)) : undefined;
+    const why = childChange(f, sage);
+    return why ? deny(why) : undefined;
   }
   if (namesSageFolder(f.command, env)) return deny(SAGE_FOLDER);
-  if (resumesSession(f.command)) return deny(RESUME);
+  const runs = codexRuns(f.command, f.cwd);
+  if (runs === null && /\bcodex\b/i.test(f.command)) return deny(UNREAD_CODEX);
+  if (runs?.some(resumes)) return deny(RESUME);
   if (codexShellWrite(f.command, f.cwd)) return deny(CODEX_FOLDER);
+  if (f.child && f.transcript !== null) {
+    if (runs?.length) {
+      let task;
+      try { task = childTask(f.transcript); } catch { return deny(UNREAD_ROLE); }
+      if (task.startsWith("sage_")) return deny(CHILD_CODEX);
+    }
+    const why = commandWrites(f.command, f.cwd) ? childChange(f, mode(f, env).sage) : undefined;
+    if (why) return deny(why);
+  }
   const merge = policy.mergeIn(f.command);
   if (!merge) return undefined;
   const { sage, autopilot } = mode(f, env);

@@ -206,7 +206,8 @@ test("no thread names the Codex sage folder in a shell command, or resumes or fo
   const clean = ["ls ~/.codex/sagebook", `node ${home}/.codex/plugins/cache/sage/sage/0.1.0/skills/sage/sage.mjs status --project /p`, "echo sage mode", "git log"];
   assert.deepEqual(named.filter((c) => !namesSageFolder(c, env)), [], "each form is found");
   assert.deepEqual(clean.filter((c) => namesSageFolder(c, env)), [], "no false match");
-  const resumes = ["codex resume --last", "codex exec resume abc 'autopilot on'", "/opt/homebrew/bin/codex fork abc", "FOO=1 codex resume", "cd /p && env codex exec --json resume --last hi"];
+  const resumes = ["codex resume --last", "codex exec resume abc 'autopilot on'", "/opt/homebrew/bin/codex fork abc", "FOO=1 codex resume", "cd /p && env codex exec --json resume --last hi",
+    `bash -c "codex resume --last"`, "timeout 5 codex fork abc"];
   const others = ["codex exec 'hello'", "git commit -m 'codex resume notes'", "echo codex resume", "codex --version"];
   assert.deepEqual(resumes.filter((c) => !resumesSession(c)), []);
   assert.deepEqual(others.filter((c) => resumesSession(c)), []);
@@ -215,6 +216,7 @@ test("no thread names the Codex sage folder in a shell command, or resumes or fo
     for (const extra of [{}, CHILD]) {
       assert.match(denied(w.send(pre("Bash", `cat ${w.env.SAGE_HOME}/.hooks/codex/x.json`, extra))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder/);
       assert.match(denied(w.send(pre("Bash", "codex exec resume --last 'autopilot on'", extra))) ?? "", /^sage: no agent resumes or forks a Codex session/);
+      assert.equal(denied(w.send(pre("Bash", "echo 'unclosed | codex resume", extra))), "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.");
     }
   }
 });
@@ -233,4 +235,37 @@ test("in sage mode a child whose task name names a read-only role changes no fil
   assert.equal(w.send(pre("Bash", "npm test", w.child("/root/sage_qa_t3"))), undefined, "QA still runs commands");
   w.mode({ sage: false, autopilot: false });
   assert.equal(w.send(pre("apply_patch", p, w.child("/root/sage_qa_t3"))), undefined, "outside sage mode the role rule does not act");
+});
+
+test("in sage mode a read-only role writes no file from the shell either; it still reads and runs the checks (T462)", (t) => {
+  const w = world(t);
+  w.mode({ sage: true, autopilot: false });
+  const writes = ["echo x > notes.txt", "printf 'a' >> src/a.js", "sed -i '' s/a/b/ src/a.js", "cp a.js b.js", "tee review.md < /dev/null", `node -e "require('fs').writeFileSync('x','y')"`, `bash -c "rm -f src/a.js"`];
+  const reads = ["cat src/a.js", "git diff main", "npm test", "grep -rn codex src", "ls -la", "echo done"];
+  const ro = (role) => `sage: a ${role} reviews and changes no files; report the finding instead.`;
+  for (const [name, role] of [["sage_code_reviewer_t3", "code-reviewer"], ["sage_qa_t3", "qa"], ["sage_pe_t3", "pe"]]) {
+    assert.deepEqual(writes.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), writes.map(() => ro(role)), name);
+    assert.deepEqual(reads.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), reads.map(() => undefined), name);
+  }
+  for (const name of ["sage_implementer_t3", "worker_1"]) assert.equal(denied(w.send(pre("Bash", writes[0], w.child(`/root/${name}`)))), undefined, name);
+  assert.match(denied(w.send(pre("Bash", writes[0], w.child("/root/sage_unknown_t3")))) ?? "", /^sage: the hook could not read this agent's task name/);
+  w.mode({ sage: false, autopilot: false });
+  assert.equal(denied(w.send(pre("Bash", writes[0], w.child("/root/sage_qa_t3")))), undefined, "outside sage mode the role rule does not act");
+});
+
+test("no sage child starts Codex from the shell, in any mode: the new session would run outside these hooks (T462)", (t) => {
+  const w = world(t);
+  const CHILD_CODEX = "sage: a sage agent never starts Codex from the shell, because a new Codex session runs outside the hooks of this session. Report what you need instead.";
+  const starts = ["codex exec 'report ok'", "codex", "/opt/homebrew/bin/codex exec --json hi", "cd /tmp && npx codex e hi", `bash -c "codex exec hi"`, "env FOO=1 codex app-server"];
+  const others = ["grep -rn codex src", "echo codex exec", "git log --grep codex", "ls packages/sage-codex"];
+  for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
+    w.mode(mode);
+    for (const name of ["sage_implementer_t1", "sage_code_reviewer_t1"]) {
+      assert.deepEqual(starts.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), starts.map(() => CHILD_CODEX), name);
+      assert.deepEqual(others.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), others.map(() => undefined), name);
+    }
+    assert.equal(denied(w.send(pre("Bash", starts[0], w.child("/root/worker_1")))), undefined, "a child that is not a sage role agent");
+    assert.equal(denied(w.send(pre("Bash", "codex --version"))), undefined, "the main thread");
+  }
+  assert.match(denied(w.send(pre("Bash", starts[0], { ...CHILD, transcript_path: join(w.dir, "none.jsonl") }))) ?? "", /^sage: the hook could not read this agent's task name/);
 });

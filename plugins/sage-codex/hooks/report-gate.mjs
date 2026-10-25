@@ -10,12 +10,11 @@ import { REPORT_FIELDS, missingReportFields } from "../core/index.mjs";
 
 const UNREAD = "sage: the report check could not read this agent's stop, so it did not check its report.";
 
-/** The task name of a sage role agent, from the session_meta line that starts a Codex child transcript. */
-function sageTask(path) {
+/** The task name of a Codex child (the last part of its agent path), from the session_meta line that starts its transcript. */
+export function childTask(path) {
   const meta = JSON.parse(readFileSync(path, "utf8").split("\n", 1)[0]);
   if (meta?.type !== "session_meta") throw Error("no session_meta");
-  const task = String(meta.payload?.agent_path ?? "").split("/").at(-1);
-  return task.startsWith("sage_") ? task : undefined;
+  return String(meta.payload?.agent_path ?? "").split("/").at(-1);
 }
 
 export function reportGate(input) {
@@ -23,8 +22,8 @@ export function reportGate(input) {
   if (input?.hook_event_name !== "SubagentStop" || typeof input.stop_hook_active !== "boolean"
     || !(message === null || typeof message === "string") || typeof input.agent_transcript_path !== "string") return { systemMessage: UNREAD };
   let task;
-  try { task = sageTask(input.agent_transcript_path); } catch { return { systemMessage: UNREAD }; }
-  const missing = task ? missingReportFields(message ?? "") : [];
+  try { task = childTask(input.agent_transcript_path); } catch { return { systemMessage: UNREAD }; }
+  const missing = task.startsWith("sage_") ? missingReportFields(message ?? "") : [];
   if (!missing.length) return {};
   if (input.stop_hook_active) return { systemMessage: `sage: ${task} stopped, and its report still has no ${missing.join(", ")}. Read the report as it is.` };
   return { decision: "block", reason: `sage: your report has no ${missing.join(", ")}. End with the sage report: ${REPORT_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.` };
