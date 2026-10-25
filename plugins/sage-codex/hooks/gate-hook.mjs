@@ -16,8 +16,8 @@
 //   - The logbook: only the chief records it. A child, in any mode, calls only the sage MCP tools that read, and runs
 //     only the read commands of the plugin's state tool from the shell (never its MCP server).
 //   - No role agent starts agents: a child under a sage_ name, in any mode, gets no spawn_agent.
-//   - No child, in any mode, sends input to another thread (multi-agent v1's send_input, with agent_max_depth 2 or
-//     more): its message to the root thread would start a root turn as if the user typed it.
+//   - No sage child, in any mode, sends a message to another thread (multi-agent v1's send_input, v2's send_message
+//     and followup_task): its message to the root thread would start a root turn as if the user typed it.
 //   - The sage folder: no thread, in any mode, runs a shell command that names the Codex sage folder (the logbook and the
 //     mode files) or the Codex sessions folder, or that resumes or forks a Codex session, so an agent cannot forge a
 //     mode file or a typed message.
@@ -76,8 +76,12 @@ export const CHILD_READS = new Set(["status", "standing", "merge_check"]);
 const SAGE_TOOL = /^mcp__sage__(.+)$/;
 /** Codex's hook name of the spawn tool: spawn_agent (the default and the multi_agent_v1 forms), or with its namespace before it (collaborationspawn_agent). */
 const SPAWN = /spawn_agent$/;
-/** Codex's hook name of multi-agent v1's send_input, with its namespace before it or not. */
-const SEND_INPUT = /send_input$/;
+/**
+ * Codex's hook names of the tools that send a message to another thread: multi-agent v1's send_input (with its
+ * namespace or not), and v2's send_message and followup_task in the default collaboration namespace (Codex 0.164.0
+ * spec_plan.rs:1489-1508; the hook name is the namespace, then the name, registry.rs:943-951).
+ */
+const SEND_INPUT = /^(?:(?:multi_agent_v1)?send_input|collaboration(?:send_message|followup_task))$/;
 const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages" && input.record === undefined);
 
 /** A path segment named .codex, in any letter case (the Mac file system ignores case). */
@@ -256,15 +260,52 @@ function codexExecutables(env) {
 /** Whether a codex run starts no session: it only prints the version or the help. */
 const printsOnly = (args) => args.length > 0 && args.every((word) => /^(?:--version|-V|--help|-h)$/.test(word));
 
-/** A shell or an interpreter that runs the text piped into it as code (with no script and no -c text). */
-const STDIN_CODE = /^(?:sh|bash|zsh|dash|ksh|fish|node|nodejs|python\d*(?:\.\d+)?|perl|ruby|osascript)$/;
 /**
- * Whether the reader cannot see which program a run starts (F-T471-1): a word from an expansion ($X, $(…), a backtick),
- * a path to a program that is no file yet (a link or a copy that the same line makes: ./y), or a shell or interpreter
- * that runs the text piped into it (echo codex exec hi | sh).
+ * The shells and interpreters that run a script, or the text piped into them as code, with the option that gives them
+ * code as text instead (-c of a shell, -e of node, perl and ruby): with that option, the piped text is data.
  */
-const hidden = (p) => /[$`]/.test(p.word) || (!p.file && p.word.includes("/") && !CODEX_NAME.test(p.word))
-  || (p.piped && STDIN_CODE.test(programName(p.word)) && p.args.every((word) => word === "-" || /^-[^-c]*$/.test(word)));
+const SHELL = /^(?:sh|bash|zsh|dash|ksh|csh|tcsh|fish)$/;
+const CODE_OPTION = [[SHELL, /^-[A-Za-z]*c[A-Za-z]*$/], [/^(?:node|nodejs)$/, /^-[A-Za-z]*[ep][A-Za-z]*$|^--(?:eval|print)(?:=|$)/],
+  [/^python\d*(?:\.\d+)?$/, /^-[A-Za-z]*[cm][A-Za-z]*$/], [/^perl\d*(?:\.[\d.]+)?$/, /^-[A-Za-z]*[eE][A-Za-z]*$/], [/^ruby\d*(?:\.[\d.]+)?$/, /^-[A-Za-z]*e[A-Za-z]*$/], [/^osascript$/, /^-e$/]];
+/** A run of a shell or an interpreter (busybox sh counts as sh): its code option and its arguments, or undefined. */
+function interpreter(p) {
+  const [name, args] = programName(p.word) === "busybox" ? [p.args[0] ?? "", p.args.slice(1)] : [programName(p.word), p.args];
+  const code = CODE_OPTION.find(([program]) => program.test(name))?.[1];
+  return code && { code, args, shell: SHELL.test(name) };
+}
+/** The script word of a shell or an interpreter, or "-" when it runs its standard input, or null when it runs -c or -e text. */
+function scriptOf({ code, args, shell }) {
+  for (let i = 0; i < args.length; i++) {
+    const word = args[i];
+    if (word === "--") return shell && args.slice(0, i).some((a) => /^-[A-Za-z]*s[A-Za-z]*$/.test(a)) ? "-" : args[i + 1] ?? "-";
+    if (word === "-" || code.test(word)) return word === "-" ? "-" : null;
+    if (shell && /^-[A-Za-z]*s[A-Za-z]*$/.test(word)) return "-";
+    if (!word.startsWith("-")) return word;
+  }
+  return "-";
+}
+/** The base names of the files that a command makes: each target of a > or >> redirection, and the last word of each ln, cp, mv or install. */
+function filesMade(runs, command, cwd, env) {
+  const made = new Set();
+  for (const p of runs) if (/^(?:ln|cp|mv|install)$/.test(programName(p.word)) && p.args.length) made.add(basename(p.args.at(-1)));
+  try {
+    for (const r of programsRun(command, cwd, env.PATH ?? "", { redirectEvidence: true, redirectParts: true })) if (/>/.test(r.operator ?? "") && r.target) made.add(basename(r.target));
+  } catch { /* the runs were read, so the redirections are too */ }
+  return made;
+}
+/**
+ * Whether the reader cannot see which program a run starts (F-T471-1, R1711-1): a word from an expansion ($X, $(…), a
+ * backtick); a path to a program that is no file yet (./y); a program, or a script of a shell or an interpreter, that a
+ * link, a copy or a redirection of the same command makes (ln -s <codex> y; PATH=. y, or printf … > r.sh; sh r.sh); or
+ * a shell or an interpreter that runs the text piped into it as code (echo codex exec hi | bash --norc, | sh -s --,
+ * | node --input-type=commonjs).
+ */
+function hidden(p, made) {
+  if (/[$`]/.test(p.word) || (!p.file && p.word.includes("/") && !CODEX_NAME.test(p.word)) || made.has(basename(p.word))) return true;
+  const run = interpreter(p);
+  const script = run && scriptOf(run);
+  return Boolean(script && (script === "-" ? p.piped : made.has(basename(script))));
+}
 
 /**
  * The arguments of each codex program that a shell command runs (after the program, or after node's script), read by
@@ -275,7 +316,10 @@ const hidden = (p) => /[$`]/.test(p.word) || (!p.file && p.word.includes("/") &&
 export function codexRuns(command, cwd = "/", env = process.env) {
   let runs;
   try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return null; }
-  if (/codex/i.test(command) && runs.some(hidden)) return null;
+  if (/codex/i.test(command)) {
+    const made = filesMade(runs, command, cwd, env);
+    if (runs.some((p) => hidden(p, made))) return null;
+  }
   const executables = codexExecutables(env);
   const codex = (word, file) => CODEX_NAME.test(word) || (Boolean(file) && executables.has(real(file)));
   const found = [];
@@ -292,39 +336,33 @@ const resumes = (args) => args.some((word) => /^(?:resume|fork)$/i.test(word));
 /** Whether a shell command runs Codex's apply_patch program, which writes files as the apply_patch tool does. */
 const runsPatch = (command, cwd, env) => { try { return programsRun(command, cwd, env.PATH ?? "").some((p) => PATCH_NAME.test(programName(p.word))); } catch { return true; } };
 
-/** The read commands of the state tool, which a child may run from the shell (pages only without record). */
+/** The read commands of the state tool, which a child may run from the shell (pages only without record, logbook only without repair). */
 const STATE_READS = new Set(["status", "standing", "merge-check", "logbook"]);
+const readsOnly = (words) => (STATE_READS.has(words[0]) && !(words[0] === "logbook" && words.includes("repair"))) || (words[0] === "pages" && !words.includes("record"));
 const STATE_SCRIPT = /(?:^|\/)(?:skills\/sage\/sage\.mjs|mcp\/state-server\.mjs)$/;
 /**
  * Whether a shell command runs the plugin's MCP server or a state tool command that writes the logbook: the plugin's
  * own copies by their real files, or any skills/sage/sage.mjs and mcp/state-server.mjs by name, directly or as node's
- * script. Node's script is the first word that is one of them, so an option's value before it does not hide it. A node
- * run that names one of them in another form counts too (F-T471-2, F-T471-3): in code (-e, -p), as a module to load
- * first (--import, -r), in the text piped into node, and from an expansion or standard input (node -) in a command
- * that names one of them.
+ * script. A node script from an expansion in a command that names one of them counts too.
  */
 export function stateToolWrites(command, cwd = "/", env = process.env) {
-  const names = /sage\.mjs|state-server/;
   let runs;
-  try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return names.test(command); }
+  try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return /sage\.mjs|state-server/.test(command); }
   const own = new Set([real(TOOL), real(SERVER)].filter(Boolean));
-  const isState = (script) => { const file = real(script) ?? script; return own.has(file) || STATE_SCRIPT.test(file) || STATE_SCRIPT.test(script); };
   for (const p of runs) {
     let script = p.file ?? p.word, args = p.args;
     if (/^(?:node|nodejs)$/i.test(programName(p.word))) {
-      const at = p.args.findIndex((word) => isState(resolve(p.dir ?? cwd, word)));
-      if (at < 0) {
-        if ([...p.args, ...p.stdin].some((word) => names.test(word))) return true;
-        if (names.test(command) && p.args.some((word) => word === "-" || /[$`]/.test(word))) return true;
-        continue;
-      }
-      script = resolve(p.dir ?? cwd, p.args[at]), args = p.args.slice(at + 1);
+      const at = p.args.findIndex((word) => !word.startsWith("-"));
+      if (at < 0) continue;
+      script = p.args[at], args = p.args.slice(at + 1);
+      if (/[$`]/.test(script)) { if (/sage\.mjs|state-server/.test(command)) return true; continue; }
+      script = resolve(p.dir ?? cwd, script);
     }
     const file = real(script) ?? script;
-    if (!isState(script)) continue;
+    if (!own.has(file) && !STATE_SCRIPT.test(file) && !STATE_SCRIPT.test(script)) continue;
     if (/state-server\.mjs$/.test(file) || /state-server\.mjs$/.test(script)) return true;
     const words = args.filter((word) => !word.startsWith("-"));
-    if (!(STATE_READS.has(words[0]) || (words[0] === "pages" && !words.includes("record")))) return true;
+    if (!readsOnly(words)) return true;
   }
   return false;
 }
@@ -404,8 +442,12 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   }
   const sageTool = SAGE_TOOL.exec(f.tool);
   if (sageTool) return thread.child && !childMayCall(sageTool[1], f.input) ? refuse(thread, CHILD_LOGBOOK) : undefined;
-  // A child's send_input to the root thread would start a root turn whose prompt counts as the user's (F-T471-4).
-  if (SEND_INPUT.test(f.tool)) return thread.child ? refuse(thread, CHILD_SEND) : undefined;
+  // A sage child's message to another thread would start a turn there, as the user's on the root thread (F-T471-4),
+  // or wake an implementer for a read-only reviewer (R1712-1). The chief and a child that is not a sage child may send.
+  if (SEND_INPUT.test(f.tool)) {
+    const under = thread.child && underSage(thread);
+    return under === false ? undefined : refuse(thread, under ? CHILD_SEND : UNREAD_ROLE);
+  }
   if (SPAWN.test(f.tool)) {
     const under = thread.child && underSage(thread);
     return under === false ? undefined : refuse(thread, under ? CHILD_SPAWN : UNREAD_ROLE);

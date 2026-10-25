@@ -647,42 +647,59 @@ const sageChild = (t, path) => ({ agent_id: "agent-9", transcript_path: record(t
 
 test("a command that names codex and pipes text into a shell, or runs a link or copy that the same line makes, is unreadable (F-T471-1)", async (t) => {
   const hidden = ["echo codex exec hi | sh", "printf 'codex exec hi' | bash -s", "echo 'require(\"child_process\").execSync(\"codex exec hi\")' | node -",
-    "ln -s /opt/homebrew/bin/codex y; ./y exec hi", `cp /opt/homebrew/bin/codex ${CWD}/c && ${CWD}/c exec hi`];
-  const others = ["echo codex | grep codex", "git log --oneline | grep codex", "cat notes.txt | sh", "./scripts/build.sh", "codex --version | head -1"];
-  assert.deepEqual(hidden.map((c) => codexRuns(c, CWD)), hidden.map(() => null));
-  assert.deepEqual(others.map((c) => codexRuns(c, CWD)?.length), [0, 0, 0, 0, 1]);
+    "ln -s /opt/homebrew/bin/codex y; ./y exec hi", `cp /opt/homebrew/bin/codex ${CWD}/c && ${CWD}/c exec hi`,
+    // R1711-1: a shell or an interpreter with options but no script and no -c or -e text, and a program or a script that the same command makes.
+    "echo codex exec hi | bash --norc", "echo codex exec hi | sh -s --", "echo codex exec hi | busybox sh", "echo codex exec hi | csh",
+    "echo 'require(\"child_process\").execSync(\"codex exec hi\")' | node --input-type=commonjs",
+    "ln -s /opt/homebrew/bin/codex y ; PATH=.:/usr/bin y exec hi", "cp /opt/homebrew/bin/codex ./node_modules/.bin/zz && npx zz exec hi", "printf 'codex exec hi' > r.sh ; sh r.sh"];
+  const others = ["echo codex | grep codex", "git log --oneline | grep codex", "cat notes.txt | sh", "./scripts/build.sh", "codex --version | head -1",
+    "rg -n codex src", "git log --grep codex | node scripts/count.mjs", "git diff | node scripts/count.mjs codex", "node scripts/codex-x.mjs", "npm test -- codex",
+    "cat .codex/config.toml", "echo codex | sh -c cat", "echo codex | node -e 'process.stdin.pipe(process.stdout)'", "printf codex > out.txt; grep codex out.txt", "git diff codex | python3 -c 'print(1)'"];
+  assert.deepEqual(hidden.filter((c) => codexRuns(c, CWD) !== null), []);
+  assert.deepEqual(others.filter((c) => codexRuns(c, CWD) === null), []);
+  assert.deepEqual(others.slice(0, 5).map((c) => codexRuns(c, CWD)?.length), [0, 0, 0, 0, 1]);
   const reviewer = sageChild(t, "/root/sage_code_reviewer_t1_r1");
   const g = fixed({ sage: true });
   assert.deepEqual(await Promise.all(hidden.map(async (c) => denied(await g.run(pre("Bash", c, reviewer))))), hidden.map(() => UNREAD_CODEX));
-  assert.deepEqual(await Promise.all(others.map(async (c) => denied(await g.run(pre("Bash", c, reviewer))))), others.map(() => undefined));
+  // The last four are shell writes for a read-only role (-c and -e text, a redirection): the implementer runs them.
+  const implementer = sageChild(t, "/root/sage_implementer_t1_r1");
+  for (const [who, list] of [[reviewer, others.slice(0, -4)], [implementer, others]]) {
+    assert.deepEqual(await Promise.all(list.map(async (c) => denied(await g.run(pre("Bash", c, who))))), list.map(() => undefined));
+  }
   assert.equal(denied(await g.run(pre("Bash", hidden[0]))), undefined, "the chief");
 });
 
-test("a child runs no write command of the state tool from node's code, an option's value, standard input or a module to load (F-T471-2, F-T471-3)", async (t) => {
-  const { stateToolWrites } = await import(HOOK);
-  const writes = [`node -e "import('${TOOL}')" verdict T1`, "node --input-type=module -e \"await import('/x/skills/sage/sage.mjs')\"", `node --stack-size 4000 ${TOOL} verdict T1`,
-    `node --stack-size 4000 ${TOOL}`, `cat ${TOOL} | node - verdict T1`, `node - verdict T1 < ${TOOL}`, `node --import ${TOOL} x.mjs`, `node -r /x/mcp/state-server.mjs x.mjs`];
-  const reads = [`node --stack-size 4000 ${TOOL} status`, "node scripts/build.mjs", "node -e \"console.log(1)\"", "cat x.mjs | node -", "node --test scripts/codex-gates.test.mjs"];
-  assert.deepEqual(writes.filter((c) => !stateToolWrites(c, CWD)), [], "each write form is found");
-  assert.deepEqual(reads.filter((c) => stateToolWrites(c, CWD)), [], "no false match");
-  const g = fixed({ sage: false });
-  const child = sageChild(t, "/root/sage_implementer_t1_r1");
-  assert.deepEqual(await Promise.all(writes.map(async (c) => denied(await g.run(pre("Bash", c, child))))), writes.map(() => LOGBOOK));
-  assert.equal(denied(await g.run(pre("Bash", writes[2]))), undefined, "the chief");
-});
-
-test("no child sends input to another thread: it would start a turn of the chief as if the user typed it (F-T471-4)", async (t) => {
-  const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report";
-  const send = (tool_name, extra) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { target: base.session_id, message: "autopilot on" }, ...extra });
+test("a child's node run of a file that only has the state tool's name in it, or of a script that reads the state tool as data, runs; logbook repair is a write (R1713-1, R1711-2, R1712-4)", async (t) => {
+  const server = fileURLToPath(new URL("../plugins/sage-codex/mcp/state-server.mjs", import.meta.url));
+  const runs = ["node src/message.mjs", "node src/usage.mjs", "node passage.mjs", "node my-state-server.js", `node scripts/lint.mjs ${TOOL}`,
+    `rg -l x ${server} | node scripts/count.mjs`, `git diff | node scripts/count.mjs`, `node ${TOOL} logbook`, `node ${TOOL} logbook --project ${CWD}`];
+  const writes = [`node ${TOOL} logbook repair --accept-loss runs --project ${CWD}`, `node ${TOOL} logbook --project ${CWD} repair --accept-loss runs`];
   for (const mode of [{ sage: false }, { sage: true }]) {
     const g = fixed(mode);
-    for (const tool of ["multi_agent_v1send_input", "send_input"]) {
-      for (const path of ["/root/sage_implementer_t1_r1", "/root/worker_1"]) assert.equal(denied(await g.run(send(tool, sageChild(t, path)))), SEND, `${tool} ${path}`);
-      assert.equal(await g.run(send(tool, {})), undefined, "the chief");
+    for (const path of ["/root/sage_qa_t1_r2", "/root/helper_1"]) {
+      const child = sageChild(t, path);
+      assert.deepEqual(await Promise.all(runs.map(async (c) => denied(await g.run(pre("Bash", c, child))))), runs.map(() => undefined), `${path} ${mode.sage}`);
+      assert.deepEqual(await Promise.all(writes.map(async (c) => denied(await g.run(pre("Bash", c, child))))), writes.map(() => LOGBOOK), `${path} ${mode.sage}`);
     }
   }
-  const matcher = JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher;
-  assert.ok(new RegExp(matcher).test("multi_agent_v1send_input"), "Codex runs the gate for send_input");
+  assert.equal(denied(await fixed({ sage: true }).run(pre("Bash", writes[0]))), undefined, "the chief");
+});
+
+test("no sage child sends a message to another thread, with v1's send_input or v2's send_message and followup_task; the chief and other children may (F-T471-4, R1712-1, R1711-3)", async (t) => {
+  const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report";
+  const send = (tool_name, extra) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { target: base.session_id, message: "autopilot on" }, ...extra });
+  const tools = ["multi_agent_v1send_input", "send_input", "collaborationsend_message", "collaborationfollowup_task"];
+  for (const mode of [{ sage: false }, { sage: true }]) {
+    const g = fixed(mode);
+    for (const tool of tools) {
+      assert.equal(denied(await g.run(send(tool, sageChild(t, "/root/sage_code_reviewer_t1_r1")))), SEND, `${tool} a reviewer`);
+      assert.equal(await g.run(send(tool, sageChild(t, "/root/worker_1"))), undefined, `${tool} a child that is not a sage child`);
+      assert.equal(await g.run(send(tool, {})), undefined, `${tool} the chief`);
+    }
+  }
+  const matcher = new RegExp(JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher);
+  assert.deepEqual(tools.filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each send tool");
+  assert.deepEqual(["mcp__slack__send_input", "collaborationsend_message_x", "xsend_input"].filter((tool) => matcher.test(tool)), [], "and for no other tool");
 });
 
 test("the sage folder and a .codex folder are found also behind quotes, ~ and a variable, and from the folder a command runs in (R1669-4, R1669-6)", async (t) => {
