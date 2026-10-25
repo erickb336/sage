@@ -23,7 +23,7 @@ grep -v -E '^[[:space:]]*(</?(a|picture|p)( [^>]*)?>|<source [^>]*>)?[[:space:]]
 
 **The order of sections**
 
-A project is large when it has more than one kind of user, more than one way in, or a README over 150 lines. Otherwise it is small. The sections of the table come in its order. A section counts by what it holds, whatever its heading: for example, sage's "Learn sage in 5 minutes" is its Usage section. A section of the project's own can go between them. For Why, How it works, Concepts, FAQ and Under the hood, a link to a page that holds the section counts as the section, so that the README stays short.
+A project is large when it has more than one kind of user, more than one way in, or a README over 150 lines. Otherwise it is small. The sections of the table come in its order. A section counts by what it holds, whatever its heading: for example, sage's "Learn sage in 5 minutes" is its Usage section. A section of the project's own can go between them. For Why, How it works, What's new, Concepts, FAQ and Under the hood, a link to a page that holds the section counts as the section, so that the README stays short. For What's new, that page is the changelog.
 
 | Section | What it holds | Small | Large |
 | --- | --- | --- | --- |
@@ -112,6 +112,6 @@ A person can check each item in about a minute, except the items marked "tool" o
 - [ ] No graphic uses a logo or a character that the project does not own.
 - [ ] Each badge is true and checked by a machine: it links to a CI result or reads the repository.
 - [ ] Each claim such as "fast" has a measured comparison and its method.
-- [ ] If the project has a What's new section, it lists the latest changes, newest first.
+- [ ] If the project has a What's new section or a changelog, it lists the latest changes, newest first.
 - [ ] Tool: the project's word check passes. Without one, read the text against the writing-standard skill and the project's dictionary.
 - [ ] Tool: each link resolves. Use the project's link check, or a link checker such as `lychee README.md`.

@@ -8,7 +8,7 @@ You say what you want in a session; the agents design, build, review and test it
   <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage"></a>
 </p>
 
-**Status:** early. Claude Code is supported, and Codex support is in progress ([Status](#status)).
+**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex, sage mode and autopilot now work through the sage plugin, and the lead and the board phrases do not yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS; Linux is not yet tested; Windows is not supported.
 
 Start with the [Quick start](#quick-start). Then follow one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
 
@@ -19,28 +19,26 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 </picture>
 </a>
 
-## Status
+## Why "sage"?
 
-| Area | Status |
-| --- | --- |
-| Maturity | Early: used daily by its author to build sage itself; one recorded dry run. |
-| Claude Code | Supported: sage mode, the team of agents, the rules in code, autopilot and the board. |
-| Codex | In progress. sage installs as a Codex plugin in the CLI and the desktop app. sage mode, its role agents, the logbook tools, the merge and edit rules and autopilot work; the lead, the agent caps and the board phrases do not yet ([sage in Codex](docs/guide/codex.md)). |
-| Systems | macOS: tested. Linux: not yet tested. Windows: not supported. |
+In *Naruto*, a sage stays still to gather natural energy. In Sage Mode, the sage sees and senses more than in normal combat. sage mode works the same way:
 
-## Requirements
+- **The chief of staff stays still.** It changes no files. It frames the work, writes the briefs and keeps the logbook.
+- **It gathers natural energy.** Here, that energy is the team's work: agents work in parallel, each in its own git worktree.
+- **It sees the whole.** It groups the tasks of one goal into a program, makes a task wait for the tasks that it builds on, and gives a mistake that comes back a lasting fix.
 
-| You need | Claude Code | Codex |
-| --- | --- | --- |
-| The agent tool | Claude Code, with a Claude plan or API credits | Codex 0.160 to 0.164: the CLI, or the Codex desktop app in the ChatGPT app |
-| Node.js 20 or later, and git | Yes | Yes |
-| `gh`, logged in (`gh auth login`) | Yes: for pull requests and the merge check | For a merge by autopilot and its merge check |
-| A GitHub remote for your project | Recommended: without one, work stops at a verified branch | No |
-| macOS | For the board server and [Remote Control](docs/guide/remote-control.md) (sessions from your phone) | For the board server |
+The idea of a mode that you turn on by name comes from pstack's **poteto mode**.
+
+And the toad? In the story, toads teach Sage Mode. So sage's mascot is a toad sage: an original drawing of a hooded toad that meditates while its team works.
 
 ## Quick start
 
-For Claude Code. For Codex, see [Quick start in Codex](#quick-start-in-codex). Claude Code must be installed and signed in ([install Claude Code](https://code.claude.com/docs/en/setup)).
+For Claude Code. For Codex, see [In Codex](#in-codex) below. Before you start:
+
+- Install Claude Code and sign in, with a Claude plan or API credits ([install Claude Code](https://code.claude.com/docs/en/setup)).
+- Install Node.js 20 or later, and git.
+- Install `gh` and log in (`gh auth login`). sage uses it for pull requests and the merge check.
+- Give your project a GitHub remote, if you can: without one, work stops at a verified branch.
 
 1. Install sage, in a terminal:
 
@@ -67,27 +65,15 @@ For Claude Code. For Codex, see [Quick start in Codex](#quick-start-in-codex). C
 
 To update, run `claude plugin update sage@sage` and start a new session. To stop a task or uninstall sage, see [Using sage](docs/guide/using-sage.md).
 
-### Quick start in Codex
+> **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
-For the Codex CLI and the Codex desktop app, with your normal Codex ([sage in Codex](docs/guide/codex.md)).
+### In Codex
 
-1. Add the sage marketplace and install the plugin, in a terminal:
-
-   ```sh
-   codex plugin marketplace add https://github.com/erickb336/sage.git
-   ```
-
-   ```sh
-   codex plugin add sage@sage
-   ```
-
-2. Run `codex` in a project folder. At the "Hooks need review" screen, choose **Trust all and continue**. Do this again after each sage update.
-3. Send a message. You see `Hook · sage 0.1.0 is installed.`, the Codex version, the trust of the sage hooks and the on phrase.
-4. Send `sage mode` alone. The session becomes your chief of staff: send your request next.
+In Codex 0.160 to 0.164, the CLI or the desktop app: run `codex plugin marketplace add https://github.com/erickb336/sage.git`, then `codex plugin add sage@sage`. Start `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)).
 
 ## The board
 
-Send `show board` to see what needs you, the agents at work, and each task in its column. On the Mac, it also starts the board page and gives its address.
+Send `show board` to see what needs you, the agents at work, and each task in its column. On the Mac, it also starts the board page and gives its address. The board server, and [Remote Control](docs/guide/remote-control.md) (sessions from your phone), need macOS.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/board-dark.png">
@@ -122,23 +108,13 @@ Every phrase, also the board forms, and the exact rules: [Every phrase](docs/gui
 
 Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). Report a vulnerability: [SECURITY.md](SECURITY.md).
 
-## What's new
-
-> **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
-
-- **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
-- **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
-- **The board page has a new look:** dark by default, with AA contrast in both themes.
-- **Programs:** you approve the breakdown of a multi-task goal before any task of it builds.
-
-All changes: [CHANGELOG.md](CHANGELOG.md).
-
 ## Learn more
 
 - [Learn sage in 5 minutes](docs/guide/learn-sage.md): one small task, from your first message to a merged pull request.
 - [How sage works](docs/guide/how-it-works.md): the loops, the team, the routes and a task's life.
 - [Using sage](docs/guide/using-sage.md): phrases, questions, update, stop, uninstall and troubleshooting.
 - [Concepts](docs/guide/concepts.md), [principles](docs/guide/principles.md), and the [FAQ and credits](docs/guide/faq.md).
+- [What's new](CHANGELOG.md): every change for users, newest first, in the changelog.
 - [Contributing](CONTRIBUTING.md), and the [docs index](docs/README.md).
 
 ## Credits and licence

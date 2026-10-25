@@ -1,5 +1,6 @@
 // The README's limits and the docs' links, for `npm run check` (T381). The README is a short front page: a line
-// budget, at most 5 What's new items, and a first screen that says what sage is, its status and where to start.
+// budget, a link to the changelog (T465: the changelog alone lists the changes), and a first screen that says what sage
+// is, its status and where to start.
 // Every relative link in the README and the docs resolves to a file, and every #anchor to a heading or an id; so does
 // each link to this repository's main branch on GitHub. A local check, not a link checker such as lychee: it needs no
 // download and no network, and other web links stay unchecked.
@@ -9,28 +10,21 @@ import { dirname, join, relative } from "node:path";
 /** The README's budget: every line of the raw file counts, also a blank one. */
 export const MAX_LINES = 150;
 export const MAX_BYTES = 15_000;
-export const MAX_NEWS = 5;
 /** A link to a file or a folder on this repository's main branch, which the check reads as a path from the root. */
 const GITHUB = /^https:\/\/github\.com\/erickb336\/sage\/(?:blob|tree)\/main(?:\/|(?=[?#]|$))/;
 
 /** The first screen, as the README guide defines it: the first 10 lines that are not blank and not a lone tag. */
 export const firstScreen = (text) => text.split("\n").filter((l) => !/^\s*(<\/?(a|picture|p)( [^>]*)?>|<source [^>]*>)?\s*$/.test(l)).slice(0, 10);
 
-/** The problems of a README's text: its budget, its What's new list and its first screen. */
+/** The problems of a README's text: its budget, its link to the changelog and its first screen. */
 export function readmeProblems(text) {
   const problems = [];
   const lines = text.split("\n").length - (text.endsWith("\n") ? 1 : 0), bytes = Buffer.byteLength(text);
   if (lines > MAX_LINES) problems.push(`README.md: ${lines} lines; keep it at ${MAX_LINES} or fewer. Move reference material to a page under docs/`);
   if (bytes > MAX_BYTES) problems.push(`README.md: ${bytes} bytes; keep it at ${MAX_BYTES} or fewer. Move reference material to a page under docs/`);
-  const news = /^## What's new\n([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(text)?.[1];
-  if (news === undefined) problems.push("README.md: no \"## What's new\" section");
-  else {
-    const items = news.split("\n").filter((l) => /^[-*] /.test(l)).length;
-    if (items > MAX_NEWS) problems.push(`README.md: What's new has ${items} items; keep the last ${MAX_NEWS}, and move the others to CHANGELOG.md`);
-    if (!news.includes("](CHANGELOG.md)")) problems.push("README.md: What's new must link to CHANGELOG.md");
-  }
+  if (!text.includes("](CHANGELOG.md)")) problems.push("README.md: no link to CHANGELOG.md; the changelog holds the list of changes");
   const screen = firstScreen(text).join("\n");
-  for (const [need, what] of [[/^\*\*sage is an? [^*]+\.\*\*/m, 'one bold sentence that starts "**sage is a"'], [/\]\(#status\)/, "a link to #status"], [/\]\(#quick-start\)/, "a link to #quick-start"]])
+  for (const [need, what] of [[/^\*\*sage is an? [^*]+\.\*\*/m, 'one bold sentence that starts "**sage is a"'], [/^\*\*Status:\*\* /m, 'a status line that starts "**Status:**"'], [/\]\(#quick-start\)/, "a link to #quick-start"]])
     if (!need.test(screen)) problems.push(`README.md: the first screen (the first 10 lines with text) needs ${what}`);
   return problems;
 }
