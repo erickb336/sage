@@ -65,7 +65,7 @@ function privateDirectory(path) {
   if (!info.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o077)) throw new Error("unsafe advice directory");
 }
 
-function readState(file) {
+export function readState(file) {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const info = fstatSync(fd);

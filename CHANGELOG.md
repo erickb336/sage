@@ -5,6 +5,10 @@ Each date is the day of the first commit that made the change. Older changes are
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve. See [To update sage](docs/guide/using-sage.md#to-update-sage).
 
+## 2026-10-25
+
+- **The merge and edit rules in Codex.** The Codex plugin has a new hook for shell commands, `apply_patch` edits and approval requests. In sage mode, a merge runs only in the form `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, from the main thread, with autopilot on and a passing merge check for that commit; then Codex shows no approval prompt for it. Any other merge is blocked with one line that gives the reason. The chief's own `apply_patch` edits are blocked in sage mode, so it briefs an implementer. In every mode, no one edits files under a `.codex` folder. Every other approval request gets Codex's own prompt. See [The rules in Codex](docs/guide/codex.md#the-rules-in-codex).
+
 ## 2026-10-24
 
 - **The off phrase holds in every session.** In a folder whose `.claude/settings.json` starts every session as the chief, `sage mode off` now gives a normal session for the rest of the session, as in any other session. Before, sage mode came back on at the next event, and the session had no file tools. Now the chief agent has every tool, and the sage hook alone refuses the chief's file edits while sage mode is on. `sage mode` turns it on again. A new session, or `/clear`, in that folder starts in sage mode again.

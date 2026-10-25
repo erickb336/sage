@@ -34,7 +34,7 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 | --- | --- | --- |
 | The agent tool | Claude Code, with a Claude plan or API credits | Codex CLI 0.159.2 or 0.160.0 |
 | Node.js 20 or later, and git | Yes | Yes |
-| `gh`, logged in (`gh auth login`) | Yes: for pull requests and the merge check | No |
+| `gh`, logged in (`gh auth login`) | Yes: for pull requests and the merge check | For a merge by autopilot and its merge check |
 | A GitHub remote for your project | Recommended: without one, work stops at a verified branch | No |
 | macOS | For the board server and [Remote Control](docs/guide/remote-control.md) (sessions from your phone) | For the board server |
 
@@ -100,6 +100,7 @@ Every phrase, also the board forms, and the exact rules: [Every phrase](docs/gui
 | An agent that pushes to main, force-pushes or merges. | An agent that hides a command from the hook on purpose. A sandbox is planned. |
 | A merge without its clean review cycles on that exact commit. A task with no review or QA in its route needs only its checks to pass. | Anyone with your GitHub token who removes branch protection. |
 | A mode turned on by an agent's text: only your own message turns a mode on. | The cost of many agents: each one is a run on your plan or API credits. |
+| In Codex: an unverified merge, the chief's own edits in sage mode, and any edit under a `.codex` folder ([The rules in Codex](docs/guide/codex.md#the-rules-in-codex)). | In Codex: a shell write that hides a `.codex` folder name, for example in a variable. |
 
 Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). Report a vulnerability: [SECURITY.md](SECURITY.md).
 
@@ -107,11 +108,11 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
+- **The merge and edit rules in Codex:** a verified merge runs with no approval prompt when autopilot is on, and any other merge is blocked; the chief edits no files in sage mode; no one edits a `.codex` folder.
 - **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
 - **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.
 - **Programs:** you approve the breakdown of a multi-task goal before any task of it builds.
-- **A task can wait for other tasks**, and the board has an Agents page and a project picker.
 
 All changes: [CHANGELOG.md](CHANGELOG.md).
 
