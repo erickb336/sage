@@ -26,15 +26,19 @@ export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owne
 export function createControllerProcess(options, {spawn = nativeSpawn, schedule = defaultSchedule} = {}) {
   if (!options || Object.getPrototypeOf(options) !== Object.prototype) throw new TypeError('Trusted launch options required');
   const allowed = ['executable', 'executableSha256', 'cwd', 'env', 'startupTimeoutMs', 'inspectionTimeoutMs', 'stopGraceMs', 'maxFrameBytes', 'maxDiagnosticBytes',
-    'turnTimeoutMs', 'interruptGraceMs', 'maxEvents', 'maxDeltaEvents', 'maxEventBytes', 'onEvent', 'typedCwd'];
+    'turnTimeoutMs', 'interruptGraceMs', 'maxEvents', 'maxDeltaEvents', 'maxEventBytes', 'onEvent'];
   for (const key of Reflect.ownKeys(options)) {
     const descriptor = Object.getOwnPropertyDescriptor(options, key);
     if (!allowed.includes(key) || !('value' in descriptor)) throw new TypeError('Unsupported launch option');
   }
   const {executable, executableSha256, cwd, env, startupTimeoutMs = 10000, inspectionTimeoutMs = 10000, stopGraceMs = 1000,
     maxFrameBytes = DEFAULT_FRAME_BYTES, maxDiagnosticBytes = DEFAULT_DIAGNOSTIC_BYTES,
-    turnTimeoutMs = 2 * 60 * 60 * 1000, interruptGraceMs = 10000, maxEvents = 20000, maxDeltaEvents = 1000000, maxEventBytes = 64 * 1024 * 1024, onEvent, typedCwd = cwd} = options;
+    turnTimeoutMs = 2 * 60 * 60 * 1000, interruptGraceMs = 10000, maxEvents = 20000, maxDeltaEvents = 1000000, maxEventBytes = 64 * 1024 * 1024, onEvent} = options;
   if (typeof executable !== 'string' || !isAbsolute(executable) || typeof cwd !== 'string' || !isAbsolute(cwd)) throw new TypeError('Trusted absolute executable and canonical cwd required');
+  // Codex looks up the trust of the canonical spelling of its cwd (realpath(3)), with the letter case and the Unicode
+  // form of the disk. So the controller runs there, and the trust flag names that spelling first, then `cwd` as the
+  // owner typed it, when it differs (R1600-1, R1601-1).
+  const canonical = realpathSync.native(cwd);
   if (typeof executableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(executableSha256)) throw new TypeError('Executable sha256 required');
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Invalid event callback');
   if (!env || Object.getPrototypeOf(env) !== Object.prototype) throw new TypeError('Explicit trusted environment required');
@@ -49,8 +53,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     turnTimeoutMs, interruptGraceMs, maxEvents, maxDeltaEvents, maxEventBytes})) positive(value, name);
   if (typeof spawn !== 'function' || typeof schedule !== 'function') throw new TypeError('Invalid process dependencies');
   // The controller loads no project layer of the cwd (projectTrustFlags); the binding record keeps these arguments.
-  // `typedCwd` is the cwd as the owner typed it (links resolved), when its letter case or Unicode form differs.
-  const launchArgs = Object.freeze([...OWNED_LAUNCH_ARGS, ...projectTrustFlags(cwd, typedCwd)]);
+  const launchArgs = Object.freeze([...OWNED_LAUNCH_ARGS, ...projectTrustFlags(canonical, cwd)]);
   let child, connection, attempted = false, fenced = false, fenceReason = null, childClosed = false, exitCode = null, exitSignal = null;
   let phase = 'idle', stopPromise, inspectionPromise, diagnosticBytes = 0, diagnosticsTruncated = false;
   let initialized = null, threadRequested = false, binding = null, turn = null;
@@ -179,8 +182,8 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
       try {
         // Its own process group: a Ctrl-C in the owner's terminal reaches the client only, and the client decides.
         // The controller still ends with the client: its stdin closes then, and stop() ends it on every client path.
-        child = spawn(executable, [...launchArgs], {cwd, env: environment, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe']});
-        connection = createControllerTransport({generation: 'owned-process', send: write, inspectionCwd: cwd});
+        child = spawn(executable, [...launchArgs], {cwd: canonical, env: environment, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe']});
+        connection = createControllerTransport({generation: 'owned-process', send: write, inspectionCwd: canonical});
         child.on('error', () => fence('Owned process error'));
         child.on('close', (code, signal) => { childClosed = true; exitCode = code; exitSignal = signal; fence('Owned process closed'); notify(); });
         for (const [name, stream] of [['stdin', child.stdin], ['stdout', child.stdout], ['stderr', child.stderr]]) {
@@ -222,14 +225,14 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     threadRequested = true;
     try {
       const task = bindTask(input, cwd);
-      // The canonical spelling (realpath(3)): Codex looks up the trust of this spelling (R1600-1).
-      if (realpathSync.native(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
+      if (realpathSync(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
       const config = await inspect();
       checkConfig(config, codexHome(environment));
-      // The project files (AGENTS.md) after the check, with the owner's limits from config/read.
-      const docs = projectInstructions(cwd, config, input.instructions, codexHome(environment));
-      const sent = bindTask({...input, instructions: docs.instructions}, cwd);
-      const thread = await bounded(connection.startThread({cwd, ephemeral: true, developerInstructions: docs.instructions}), inspectionTimeoutMs, 'Thread start observation expired');
+      // The project files (AGENTS.md) after the check, with the owner's limits from config/read. The binding record
+      // keeps the canonical project and the hash of the instructions that the thread gets.
+      const docs = projectInstructions(canonical, config, input.instructions, codexHome(environment));
+      const sent = bindTask({...input, project: canonical, instructions: docs.instructions}, canonical);
+      const thread = await bounded(connection.startThread({cwd: canonical, ephemeral: true, developerInstructions: docs.instructions}), inspectionTimeoutMs, 'Thread start observation expired');
       binding = bindPolicy({binary: {path: executable, sha256: executableSha256}, args: launchArgs, initialize: initialized, config, thread, task: sent});
       // The start notices for the owner: the settings that do not load, then each project file that the chief does not get.
       return Object.freeze({state: 'bound', policy: binding, notices: Object.freeze([...settingsNotice(binding.projectFolders), ...docs.notices])});

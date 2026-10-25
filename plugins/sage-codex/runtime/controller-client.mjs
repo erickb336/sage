@@ -118,13 +118,13 @@ function parseArgs(argv) {
   if (missing.length) throw new Error(`The client needs ${missing.join(', ')}.`);
   return args;
 }
-// The canonical spelling of the project folder (realpath(3), the spelling that Codex looks up), and the spelling that
-// the owner typed with its links resolved, which keeps the typed letter case and Unicode form (R1600-1, R1601-1).
+// The project folder with its links resolved, in the spelling that the owner typed. The controller process runs in its
+// canonical spelling (realpath(3)), and the trust flag names both (R1600-1, R1601-1).
 function projectFolder(path) {
-  let real, typed;
-  try { real = realpathSync.native(path); typed = realpathSync(path); } catch { throw new Error(`The project folder ${path} does not exist. Give an existing folder with --project.`); }
+  let real;
+  try { real = realpathSync(path); } catch { throw new Error(`The project folder ${path} does not exist. Give an existing folder with --project.`); }
   if (!statSync(real).isDirectory()) throw new Error(`${path} is not a folder. Give the project folder with --project.`);
-  return {real, typed};
+  return real;
 }
 // A named pipe, a device or a folder is not an instructions file: a read of a pipe or a device can wait for ever. The
 // open does not wait (O_NONBLOCK), and the type check is on the open file, so a swap after the check changes nothing.
@@ -211,12 +211,12 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   const timer = schedule ?? defaultSchedule;
   let cancelWait = () => {}, waited = false;
   const awaitModel = () => { cancelWait(); cancelWait = waited ? () => {} : timer(() => { waited = true; say(WAITING); }, WAIT_MS); };
-  let args, binary, project, typed, instructions;
+  let args, binary, project, instructions;
   try {
     args = parseArgs(argv);
     binary = resolveControllerBinary(env);
-    ({real: project, typed} = projectFolder(args.project));
-    projectTrustFlags(project, typed);
+    project = projectFolder(args.project);
+    projectTrustFlags(project, realpathSync.native(project));
     instructions = instructionsText(args.instructions);
     bindTask({project, task: args.task, run: args.run, instructions}, project);
   } catch (error) {
@@ -230,7 +230,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   let rootThread = null;
   const warned = new Set();
   const warnOnce = (...parts) => { const key = parts.join('\0'); if (!warned.has(key)) { warned.add(key); framed(...parts); } };
-  owner = createControllerProcess({executable: binary.path, executableSha256: binary.sha256, cwd: project, typedCwd: typed,
+  owner = createControllerProcess({executable: binary.path, executableSha256: binary.sha256, cwd: project,
     env: Object.fromEntries(Object.entries(env).filter(([, value]) => typeof value === 'string')),
     onEvent(event) {
       if (turnActive) awaitModel();
