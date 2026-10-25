@@ -7,7 +7,8 @@ permissions:
   contents: read
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Pinned: Playwright 1.55.0 has no headless shell for ubuntu-latest (Ubuntu 26.04 since 2026-10-19).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -16,3 +17,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
+      # The browser tests use the Chromium headless shell of the pinned playwright devDependency.
+      # npm ci downloads no browser; this step does. Playwright advises against a browser cache.
+      - run: npx playwright install --with-deps --only-shell chromium
+      - run: npm run test:browser

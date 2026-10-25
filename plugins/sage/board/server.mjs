@@ -1,8 +1,8 @@
 // Provider-neutral, read-only board transport. The caller owns configuration and the owner's password record.
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
-import { lstatSync, watch } from "node:fs";
+import { lstatSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
-import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { readBoardSources, buildBoardModel, renderBoardHtml, renderAgentsHtml, renderProgramsHtml } from "../core/index.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
@@ -210,21 +210,28 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     refreshTimer.unref();
   }
 
+  // One plain watch (not recursive) on each real folder of a source, and on the nearest ancestor that exists. A folder's
+  // watch reports each change of a file in it, also of a file that a rename put there. Node's recursive watch on Linux
+  // did not (R1506-F1): up to 24.21 it watched each file's inode, so after a rename the path's watch stayed on the old
+  // file. The same rule runs on macOS. A new folder gets its watch at the next read.
   function watchPlans() {
     const plans = new Map();
-    const add = (path, recursive, child = null) => {
+    const add = (path, child = null) => {
       const info = lstatSync(path);
       if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("watch directory is unavailable");
-      const key = `${recursive ? "tree" : "parent"}:${path}`;
-      const plan = plans.get(key) ?? { key, path, recursive, identity: `${info.dev}:${info.ino}`, children: new Set() };
-      if (child) plan.children.add(child);
-      plans.set(key, plan);
+      const plan = plans.get(path) ?? { path, identity: `${info.dev}:${info.ino}`, children: new Set(), all: false };
+      if (child) plan.children.add(child); else plan.all = true;
+      plans.set(path, plan);
+    };
+    const tree = path => {
+      add(path);
+      for (const entry of readdirSync(path, { withFileTypes: true })) if (entry.isDirectory()) try { tree(join(path, entry.name)); } catch {}
     };
     for (const source of configured) {
-      try { add(source.path, true); } catch {}
+      try { tree(source.path); } catch {}
       let ancestor = dirname(source.path);
       for (;;) {
-        try { add(ancestor, false, source.path.slice(ancestor.length + (ancestor.endsWith(sep) ? 0 : 1)).split(sep)[0]); break; }
+        try { add(ancestor, source.path.slice(ancestor.length + (ancestor.endsWith(sep) ? 0 : 1)).split(sep)[0]); break; }
         catch { const parent = dirname(ancestor); if (parent === ancestor) break; ancestor = parent; }
       }
     }
@@ -241,9 +248,9 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       if (watchErrors.has(key)) continue;
       try {
         const item = { plan, watcher: null };
-        item.watcher = watch(plan.path, { recursive: plan.recursive }, (event, filename) => {
+        item.watcher = watch(plan.path, (event, filename) => {
           // A rename can name only the destination. Recheck the source even when that name differs.
-          if (event !== "rename" && !item.plan.recursive && filename && !item.plan.children.has(String(filename).split(sep)[0])) return;
+          if (event !== "rename" && !item.plan.all && filename && !item.plan.children.has(String(filename))) return;
           watchErrors.clear(); schedule();
         });
         item.watcher.on("error", () => {

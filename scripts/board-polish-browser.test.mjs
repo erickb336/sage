@@ -1,10 +1,8 @@
 // Standalone browser check of the T382 board polish batch (T374, T378): the address after needs=1, the Program filter
 // after a project change, a live refresh of the programs pages' Needs you count, the program id in a phone's page bar, a
 // long program name on a card, a theme change in another tab, the forced colours, the approval band and 320 px task
-// pages. SAMPLE DATA from scripts/fixtures/board-programs.mjs. Like board-programs-browser.test.mjs, it needs Playwright
-// through NODE_PATH and is not in the default test command. It runs Playwright's bundled Chromium
-// (PLAYWRIGHT_BROWSERS_PATH), or the headless shell at BOARD_BROWSER_PATH; never an installed Chrome.
-// Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$SCRATCH/browsers" node --test scripts/board-polish-browser.test.mjs
+// pages. SAMPLE DATA from scripts/fixtures/board-programs.mjs. It runs in `npm run test:browser`, not in `npm test`,
+// with Playwright's bundled Chromium, or the headless shell at BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
