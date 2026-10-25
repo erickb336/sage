@@ -1,0 +1,549 @@
+{
+ "label": "Synthetic fixture. Derived from pages/T391/stage3/turn-transcript.jsonl (U3) and the config/read format of the real fork binary (R1461). {{project}} replaces the temp paths. R1514 added approval_policy and sandbox_mode from the user layer, because the client refuses them unset.",
+ "stream": [
+  {
+   "after": "initialize",
+   "reply": {
+    "userAgent": "synthetic-owned-controller/0.160.0 (Mac OS 27.0.1; arm64) unknown (synthetic-owned-controller; 0)",
+    "codexHome": "{{project}}",
+    "platformFamily": "unix",
+    "platformOs": "macos"
+   }
+  },
+  {
+   "after": "thread/start",
+   "notification": {
+    "method": "remoteControl/status/changed",
+    "params": {
+     "status": "disabled",
+     "serverName": "fixture-host.example",
+     "installationId": "00000000-0000-4000-8000-000000000000",
+     "environmentId": null
+    },
+    "emittedAtMs": 1792876216074
+   }
+  },
+  {
+   "after": "config/read",
+   "reply": {
+    "config": {
+     "model": "synthetic",
+     "model_provider": "synthetic",
+     "approval_policy": "on-request",
+     "sandbox_mode": "read-only",
+     "web_search": "disabled",
+     "agents": {
+      "enabled": true
+     },
+     "features": {
+      "multi_agent": false,
+      "multi_agent_v2": true,
+      "goals": false,
+      "plugins": false,
+      "apps": false,
+      "remote_plugin": false
+     }
+    },
+    "origins": {
+     "agents.enabled": {
+      "name": {
+       "type": "sessionFlags"
+      },
+      "version": "sha256:fixture-session-flags"
+     },
+     "features.multi_agent": {
+      "name": {
+       "type": "sessionFlags"
+      },
+      "version": "sha256:fixture-session-flags"
+     },
+     "features.multi_agent_v2.enabled": {
+      "name": {
+       "type": "sessionFlags"
+      },
+      "version": "sha256:fixture-session-flags"
+     },
+     "features.goals": {
+      "name": {
+       "type": "sessionFlags"
+      },
+      "version": "sha256:fixture-session-flags"
+     },
+     "web_search": {
+      "name": {
+       "type": "sessionFlags"
+      },
+      "version": "sha256:fixture-session-flags"
+     },
+     "features.plugins": {
+      "name": {
+       "type": "sessionFlags"
+      },
+      "version": "sha256:fixture-session-flags"
+     },
+     "features.apps": {
+      "name": {
+       "type": "sessionFlags"
+      },
+      "version": "sha256:fixture-session-flags"
+     },
+     "features.remote_plugin": {
+      "name": {
+       "type": "sessionFlags"
+      },
+      "version": "sha256:fixture-session-flags"
+     },
+     "model": {
+      "name": {
+       "type": "user",
+       "file": "{{project}}/config.toml",
+       "profile": null
+      },
+      "version": "sha256:fixture-user"
+     },
+     "model_provider": {
+      "name": {
+       "type": "user",
+       "file": "{{project}}/config.toml",
+       "profile": null
+      },
+      "version": "sha256:fixture-user"
+     },
+     "approval_policy": {
+      "name": {
+       "type": "user",
+       "file": "{{project}}/config.toml",
+       "profile": null
+      },
+      "version": "sha256:fixture-user"
+     },
+     "sandbox_mode": {
+      "name": {
+       "type": "user",
+       "file": "{{project}}/config.toml",
+       "profile": null
+      },
+      "version": "sha256:fixture-user"
+     }
+    },
+    "layers": [
+     {
+      "name": {
+       "type": "sessionFlags"
+      },
+      "version": "sha256:fixture-session-flags",
+      "config": {
+       "agents": {
+        "enabled": true
+       },
+       "features": {
+        "multi_agent": false,
+        "multi_agent_v2": true,
+        "goals": false,
+        "plugins": false,
+        "apps": false,
+        "remote_plugin": false
+       },
+       "web_search": "disabled"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "after": "thread/start",
+   "reply": {
+    "thread": {
+     "id": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "environments": [
+      {
+       "environmentId": "local",
+       "cwd": "{{project}}",
+       "runtimeWorkspaceRoots": [
+        "{{project}}"
+       ]
+      }
+     ],
+     "extra": null,
+     "sessionId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "forkedFromId": null,
+     "parentThreadId": null,
+     "preview": "",
+     "ephemeral": true,
+     "section": null,
+     "sectionEnteredAt": null,
+     "projectId": null,
+     "historyMode": "paginated",
+     "modelProvider": "synthetic",
+     "model": "synthetic",
+     "reasoningEffort": null,
+     "createdAt": 1792876216,
+     "updatedAt": 1792876216,
+     "recencyAt": 1792876216,
+     "status": {
+      "type": "idle"
+     },
+     "path": null,
+     "cwd": "{{project}}",
+     "cliVersion": "0.160.0",
+     "originator": "synthetic-owned-controller",
+     "source": "vscode",
+     "canAcceptDirectInput": true,
+     "threadSource": null,
+     "agentNickname": null,
+     "agentRole": null,
+     "gitInfo": null,
+     "name": null,
+     "daybreakEnabled": null,
+     "turns": []
+    },
+    "model": "synthetic",
+    "modelProvider": "synthetic",
+    "serviceTier": null,
+    "disabledPluginIds": [],
+    "cwd": "{{project}}",
+    "runtimeWorkspaceRoots": [
+     "{{project}}"
+    ],
+    "instructionSources": [],
+    "approvalPolicy": "on-request",
+    "approvalsReviewer": "user",
+    "sandbox": {
+     "type": "readOnly",
+     "networkAccess": false
+    },
+    "activePermissionProfile": {
+     "id": ":read-only",
+     "extends": null
+    },
+    "reasoningEffort": null,
+    "multiAgentMode": "explicitRequestOnly"
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "thread/started",
+    "params": {
+     "thread": {
+      "id": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "{{project}}",
+        "runtimeWorkspaceRoots": [
+         "{{project}}"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": true,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "synthetic",
+      "model": "synthetic",
+      "reasoningEffort": null,
+      "createdAt": 1792876216,
+      "updatedAt": 1792876216,
+      "recencyAt": 1792876216,
+      "status": {
+       "type": "idle"
+      },
+      "path": null,
+      "cwd": "{{project}}",
+      "cliVersion": "0.160.0",
+      "originator": "synthetic-owned-controller",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     }
+    },
+    "emittedAtMs": 1792876216134
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "mcpServer/startupStatus/updated",
+    "params": {
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "name": "codex_apps",
+     "status": "starting",
+     "error": null,
+     "failureReason": null
+    },
+    "emittedAtMs": 1792876216135
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "mcpServer/startupStatus/updated",
+    "params": {
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "name": "codex_apps",
+     "status": "failed",
+     "error": "MCP client for `codex_apps` failed to start: MCP startup failed: handshaking with MCP server failed: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: unexpected server response: HTTP 404: {}, when send initialize request: Send message error Transport [codex_rmcp_client::event_notification_transport::EventNotificationTransport<rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<codex_rmcp_client::http_client_adapter::StreamableHttpClientAdapter>>>] error: unexpected server response: HTTP 404: {}, when send initialize request",
+     "failureReason": null
+    },
+    "emittedAtMs": 1792876216135
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "warning",
+    "params": {
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "message": "Model metadata for `synthetic` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+    },
+    "emittedAtMs": 1792876216141
+   }
+  },
+  {
+   "after": "turn/start",
+   "reply": {
+    "turn": {
+     "id": "01a16fbf-ff48-73a1-80f1-497c27421025",
+     "items": [],
+     "itemsView": "notLoaded",
+     "status": "inProgress",
+     "error": null,
+     "startedAt": null,
+     "completedAt": null,
+     "durationMs": null
+    }
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1792876216157
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "turn": {
+      "id": "01a16fbf-ff48-73a1-80f1-497c27421025",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1792876216,
+      "completedAt": null,
+      "durationMs": null
+     }
+    },
+    "emittedAtMs": 1792876216157
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a16fbf-ff7c-7e01-9fb5-761cce045ad1",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Say one synthetic sentence.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "turnId": "01a16fbf-ff48-73a1-80f1-497c27421025",
+     "startedAtMs": 1792876216190
+    },
+    "emittedAtMs": 1792876216190
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a16fbf-ff7c-7e01-9fb5-761cce045ad1",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Say one synthetic sentence.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "turnId": "01a16fbf-ff48-73a1-80f1-497c27421025",
+     "completedAtMs": 1792876216190
+    },
+    "emittedAtMs": 1792876216194
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg-1",
+      "text": "Synthetic reply from the local fixture provider.",
+      "phase": null,
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "turnId": "01a16fbf-ff48-73a1-80f1-497c27421025",
+     "startedAtMs": 1792876216200
+    },
+    "emittedAtMs": 1792876216201
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg-1",
+      "text": "Synthetic reply from the local fixture provider.",
+      "phase": null,
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "turnId": "01a16fbf-ff48-73a1-80f1-497c27421025",
+     "completedAtMs": 1792876216200
+    },
+    "emittedAtMs": 1792876216202
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "turnId": "01a16fbf-ff48-73a1-80f1-497c27421025",
+     "tokenUsage": {
+      "total": {
+       "totalTokens": 0,
+       "inputTokens": 0,
+       "cachedInputTokens": 0,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 0,
+       "reasoningOutputTokens": 0
+      },
+      "last": {
+       "totalTokens": 0,
+       "inputTokens": 0,
+       "cachedInputTokens": 0,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 0,
+       "reasoningOutputTokens": 0
+      },
+      "modelContextWindow": 258400
+     }
+    },
+    "emittedAtMs": 1792876216207
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "account/rateLimits/updated",
+    "params": {
+     "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": null,
+      "secondary": null,
+      "credits": null,
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": null,
+      "rateLimitReachedType": null
+     }
+    },
+    "emittedAtMs": 1792876216207
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "status": {
+      "type": "idle"
+     }
+    },
+    "emittedAtMs": 1792876216210
+   }
+  },
+  {
+   "after": "turn/start",
+   "notification": {
+    "method": "turn/completed",
+    "params": {
+     "threadId": "01a16fbf-ff14-78a0-97a1-ce4a2d419f01",
+     "turn": {
+      "id": "01a16fbf-ff48-73a1-80f1-497c27421025",
+      "items": [
+       {
+        "type": "agentMessage",
+        "id": "msg-1",
+        "text": "Synthetic reply from the local fixture provider.",
+        "phase": null,
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null
+       }
+      ],
+      "itemsView": "summary",
+      "status": "completed",
+      "error": null,
+      "startedAt": 1792876216,
+      "completedAt": 1792876216,
+      "durationMs": 67
+     }
+    },
+    "emittedAtMs": 1792876216210
+   }
+  }
+ ]
+}

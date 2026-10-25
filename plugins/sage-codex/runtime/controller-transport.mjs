@@ -1,10 +1,11 @@
 import {isAbsolute} from 'node:path';
 
-// These are launch requirements, not evidence that an external process applied them.
-export const REQUIRED_CONTROLLER_CONFIG = Object.freeze({
-  'agents.enabled': false,
+// The owned launch profile. These are launch requirements; bindPolicy checks that the process applied them.
+// The owner's hooks stay as configured (owner decision Q3, 2026-10-24).
+export const OWNED_CONTROLLER_CONFIG = Object.freeze({
+  'agents.enabled': true,
   'features.multi_agent': false,
-  'features.multi_agent_v2': false,
+  'features.multi_agent_v2': true,
   'features.goals': false,
   web_search: 'disabled',
   'features.plugins': false,
@@ -42,16 +43,14 @@ function object(value, allowed) {
 const nonempty = value => typeof value === 'string' && value.length > 0;
 const validId = value => typeof value === 'string' || Number.isSafeInteger(value);
 const owns = (value, key) => Object.hasOwn(value, key);
+export const INSTRUCTION_BYTES = 256 * 1024;
+export const validText = (value, limit) => nonempty(value) && !value.includes('\0') && Buffer.byteLength(value) <= limit;
 function uncertain(reason) { return Object.assign(new Error(`Connection closed; outcome uncertain: ${reason}`), {code: 'uncertain'}); }
 
-/** Owns one already-established connection. No spawning, effects or task acceptance. */
-export function createControllerTransport({generation, send, profile = {}, initialRequestId = 0, inspectionCwd}) {
+/** Owns one already-established connection. It never sends a model, provider, approval, sandbox or tool selection. */
+export function createControllerTransport({generation, send, initialRequestId = 0, inspectionCwd}) {
   if (!nonempty(generation) || typeof send !== 'function' || !validId(initialRequestId)) throw new TypeError('Invalid connection configuration');
   if (inspectionCwd !== undefined && (!nonempty(inspectionCwd) || !isAbsolute(inspectionCwd))) throw new TypeError('Invalid inspection cwd');
-  const selected = object(profile, ['model', 'approvalPolicy', 'sandbox']);
-  if (owns(selected, 'model') && !nonempty(selected.model)) throw new TypeError('Invalid model');
-  if (owns(selected, 'approvalPolicy') && !['untrusted', 'on-failure', 'on-request', 'never'].includes(selected.approvalPolicy)) throw new TypeError('Invalid approval policy');
-  if (owns(selected, 'sandbox') && !['read-only', 'workspace-write', 'danger-full-access'].includes(selected.sandbox)) throw new TypeError('Invalid sandbox');
   const pending = new Map();
   let resolveClosed;
   const connectionClosed = new Promise(resolve => { resolveClosed = resolve; });
@@ -105,16 +104,13 @@ export function createControllerTransport({generation, send, profile = {}, initi
   }
   function startThread(params = {}) {
     requireReady();
-    const input = object(params, ['cwd', 'ephemeral']);
+    const input = object(params, ['cwd', 'ephemeral', 'developerInstructions']);
     if (owns(input, 'cwd') && !nonempty(input.cwd)) throw new TypeError('Invalid cwd');
     if (owns(input, 'ephemeral') && typeof input.ephemeral !== 'boolean') throw new TypeError('Invalid ephemeral flag');
-    return request('thread/start', {...selected, ...input, environments: []});
-  }
-  function resumeThread(params) {
-    requireReady();
-    const input = object(params, ['threadId']);
-    if (!nonempty(input.threadId)) throw new TypeError('Invalid thread ID');
-    return request('thread/resume', {...selected, ...input});
+    if (owns(input, 'developerInstructions') && !validText(input.developerInstructions, INSTRUCTION_BYTES)) throw new TypeError('Invalid developer instructions');
+    // No environments key: an empty list disables the tools, so the thread keeps the default environment under the
+    // owner's own sandbox and approval setting (owner decision Q1, 2026-10-24).
+    return request('thread/start', input);
   }
   function startTurn(params) {
     requireReady();
@@ -124,7 +120,13 @@ export function createControllerTransport({generation, send, profile = {}, initi
       object(item, ['type', 'text']);
       if (item.type !== 'text' || typeof item.text !== 'string') throw new TypeError('Only text input is supported');
     }
-    return request('turn/start', {...input, environments: []});
+    return request('turn/start', input);
+  }
+  function interruptTurn(params) {
+    requireReady();
+    const input = object(params, ['threadId', 'turnId']);
+    if (!nonempty(input.threadId) || !nonempty(input.turnId)) throw new TypeError('Invalid interrupt target');
+    return request('turn/interrupt', input);
   }
   function receive(raw, sourceGeneration) {
     try {
@@ -139,7 +141,7 @@ export function createControllerTransport({generation, send, profile = {}, initi
           if (!validId(message.id)) throw new Error('Invalid server request ID');
           transmit({id: message.id, error: {code: -32601, message: 'Controller transport does not handle server requests'}});
           if (closed) throw new Error('Server refusal send failed');
-          return Object.freeze({kind: 'server-request-refused'});
+          return Object.freeze({kind: 'server-request-refused', method: message.method, request: message});
         }
         return Object.freeze({kind: 'observation', notification: message});
       }
@@ -160,5 +162,5 @@ export function createControllerTransport({generation, send, profile = {}, initi
       throw uncertain(error.message);
     }
   }
-  return Object.freeze({initialize, startThread, resumeThread, startTurn, readConfiguration, receive, disconnect});
+  return Object.freeze({initialize, startThread, startTurn, interruptTurn, readConfiguration, receive, disconnect});
 }
