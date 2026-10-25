@@ -97,8 +97,11 @@ test("T51: Bash builtin spellings do not hide external executable identity", asy
 
 test("T51: built hook normalizes agent stash, process, reader and writer executable names", async t => {
   const f = isolated(t, "claude"), logbook = join(f.dir, "logbook"); mkdirSync(logbook);
-  const previous = process.env.SAGE_HOME; process.env.SAGE_HOME = logbook;
-  t.after(() => { if (previous === undefined) delete process.env.SAGE_HOME; else process.env.SAGE_HOME = previous; });
+  // The hook resolves each name on PATH and allows a temporary fake by design. An empty PATH folder keeps the result the
+  // same with or without the caller's fake ps first on PATH: on a case-insensitive file system, "PS" finds that fake (T469).
+  const saved = { SAGE_HOME: process.env.SAGE_HOME, PATH: process.env.PATH }, bin = join(f.dir, "bin"); mkdirSync(bin);
+  Object.assign(process.env, { SAGE_HOME: logbook, PATH: bin });
+  t.after(() => { for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value; });
   const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
   const decide = command => hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
     agent_id: "fixture", agent_type: "sage:implementer", tool_input: { command } }, { sage: true }, { touch() {} });

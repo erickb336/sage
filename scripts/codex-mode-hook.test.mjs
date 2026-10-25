@@ -57,7 +57,7 @@ async function modes(s) {
   assert.ok(now, "the help phrase reports the modes");
   return `sage mode ${now[1]}, autopilot ${now[2]}`;
 }
-const ROLE = /^sage: sage mode is on\. You are the user's chief of staff until the user sends the message "sage mode off", alone\.\n\nThe state tool: node "[^"]+\/skills\/sage\/sage\.mjs" <command> --project <path>\./;
+const ROLE = /^sage: sage mode is on\. You are the user's chief of staff until the user sends the message "sage mode off", alone\.\n\nThe state tool, for reads only: node "[^"]+\/skills\/sage\/sage\.mjs" <command> --project <path>\. Write the logbook only with the sage MCP tools\.\n/;
 
 test("T453: the Claude hook's phrase table gives the same modes and near-miss notes in Codex", async () => {
   const got = await Promise.all(PHRASE_CASES.map(async ([why, before, message]) => {
@@ -133,7 +133,7 @@ test("T453: a subagent's prompt switches nothing and gets no role, also with the
   assert.equal(await modes(s), "sage mode on, autopilot off");
 });
 
-const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin or Codex." };
+const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (0.160 to 0.164)." };
 
 test("T453: an unknown input shape switches nothing, turns autopilot off, and shows one plain line", async () => {
   const s = session();
