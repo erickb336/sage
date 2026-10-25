@@ -20,6 +20,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
 | sage mode: agent caps, the push and merge rules in code | Yes | Not enabled. Parts are built and tested, but they are not switched on in the installed plugin |
 | Autopilot | Yes | The phrases record it, but it merges nothing yet: you merge |
+| The merge rule, the chief's no-edit rule and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)). The merge rule and the no-edit rule act only when the mode hook records sage mode, which is not in the plugin yet |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | No: use the manual skill commands |
 
@@ -110,6 +111,38 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - The tools run the same checks as the commands. A refusal comes back as a tool error with the reason of the command.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it. Under full access, an agent's shell can still change the logbook.
 - The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.
+
+## The rules in Codex
+
+The hook `hooks/gate-hook.mjs` holds three rules. Codex runs it before each shell command and each `apply_patch` edit (`PreToolUse`), and before it shows an approval prompt for a shell command (`PermissionRequest`).
+
+| Rule | When | What you see |
+| --- | --- | --- |
+| A merge runs only with autopilot on and a passing merge check for that head commit, in the one form `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, from the main thread | sage mode | Codex blocks any other merge, and the chief gets one line with the reason. A verified merge runs with no approval prompt: the hook allows its network approval itself |
+| The chief changes no files | sage mode, the main thread | Codex blocks the chief's `apply_patch` edit. The chief briefs an implementer, and agents edit as before |
+| No one changes files under a `.codex` folder | Every mode, every thread | Codex blocks the `apply_patch` edit, or the shell write that names the folder. Codex reads project settings from that folder, so you make such changes yourself |
+
+For every other approval, the hook does not decide, so Codex shows its own prompt. When the hook cannot read a tool call, it blocks the call and says so in one line. When it cannot read an approval request, Codex shows its own prompt.
+
+The hook reads sage mode and autopilot from the mode file of the session (in `SAGE_HOME`, or `CODEX_HOME/sage`, under `.hooks/codex/`). The merge check needs `gh`, logged in, and the logbook's verdicts for the head commit, as in Claude Code.
+
+Limits: the hook reads a shell command's text, so a write that hides the folder name (for example in a variable) is not blocked; Codex's own sandbox keeps `.codex` read-only in the workspace-write mode. A shell write by the chief is not blocked either: the rule covers `apply_patch`.
+
+## The rules in Codex
+
+The hook `hooks/gate-hook.mjs` holds three rules. Codex runs it before each shell command and each `apply_patch` edit (`PreToolUse`), and before it shows an approval prompt for a shell command (`PermissionRequest`).
+
+| Rule | When | What you see |
+| --- | --- | --- |
+| A merge runs only with autopilot on and a passing merge check for that head commit, in the one form `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, from the main thread | sage mode | Codex blocks any other merge, and the chief gets one line with the reason. A verified merge runs with no approval prompt: the hook allows its network approval itself |
+| The chief changes no files | sage mode, the main thread | Codex blocks the chief's `apply_patch` edit. The chief briefs an implementer, and agents edit as before |
+| No one changes files under a `.codex` folder | Every mode, every thread | Codex blocks the `apply_patch` edit, or the shell write that names the folder. Codex reads project settings from that folder, so you make such changes yourself |
+
+For every other approval, the hook does not decide, so Codex shows its own prompt. When the hook cannot read a tool call, it blocks the call and says so in one line. When it cannot read an approval request, Codex shows its own prompt.
+
+The hook reads sage mode and autopilot from the mode file of the session (in `SAGE_HOME`, or `CODEX_HOME/sage`, under `.hooks/codex/`). The merge check needs `gh`, logged in, and the logbook's verdicts for the head commit, as in Claude Code.
+
+Limits: the hook reads a shell command's text, so a write that hides the folder name (for example in a variable) is not blocked; Codex's own sandbox keeps `.codex` read-only in the workspace-write mode. A shell write by the chief is not blocked either: the rule covers `apply_patch`.
 
 ## What comes next
 

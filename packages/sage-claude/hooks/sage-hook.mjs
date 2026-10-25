@@ -1711,7 +1711,8 @@ function gitGate(event, command, state, cwd, main, tool) {
   // The pull request's head branch, from GitHub: each task of the pull request must own it (F-T273-8).
   let head;
   try {
-    head = prHead(merge.pr, cwd);
+    if (boardPolicy.error) throw boardPolicy.error;
+    head = boardPolicy.pullRequestHead(merge.pr, cwd);
   } catch (e) {
     return deny(event, `the hook could not read the head branch of PR ${merge.pr} from GitHub (${e?.message ?? e}), so it refuses the merge. Try again, or tell the user.`);
   }
@@ -1724,24 +1725,6 @@ function gitGate(event, command, state, cwd, main, tool) {
     verdict = { reason: `it could not run (${e?.message ?? e}), so it refuses every merge. Tell the user.` };
   }
   return verdict?.ok === true ? undefined : deny(event, `the merge check refuses: ${verdict?.reason}`);
-}
-
-/**
- * The head branch of pull request pr, as gh in the merge's folder reads it: the repository that gh pr merge acts on. Read
- * only, at most 5 seconds. It throws when gh fails or is slow, when it gives no branch, and for a pull request from a
- * fork, whose branch name says nothing about a task here (F-T273-8).
- */
-function prHead(pr, cwd) {
-  if (!/^\d+$/.test(String(pr ?? "")) || !BigInt(pr)) throw new Error("the merge names no pull request number");
-  pr = String(BigInt(pr)); // as gh reads it: 012 is PR 12
-  const env = { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" };
-  const r = spawnSync("gh", ["pr", "view", String(pr), "--json", "headRefName,isCrossRepository"], { cwd, encoding: "utf8", timeout: 5000, killSignal: "SIGKILL", maxBuffer: 2 ** 20, stdio: ["ignore", "pipe", "ignore"], env });
-  if (r.error) throw new Error(r.error.code === "ETIMEDOUT" ? "gh did not answer in 5 seconds" : r.error.message);
-  if (r.status !== 0) throw new Error(`gh pr view ${pr} failed`);
-  const view = JSON.parse(r.stdout);
-  if (view?.isCrossRepository !== false) throw new Error(`PR ${pr} is not a branch of this repository`);
-  if (typeof view.headRefName !== "string" || !view.headRefName) throw new Error("gh gave no head branch");
-  return view.headRefName;
 }
 
 /**

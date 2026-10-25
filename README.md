@@ -34,7 +34,7 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 | --- | --- | --- |
 | The agent tool | Claude Code, with a Claude plan or API credits | Codex 0.160 to 0.164: the CLI, or the Codex desktop app in the ChatGPT app |
 | Node.js 20 or later, and git | Yes | Yes |
-| `gh`, logged in (`gh auth login`) | Yes: for pull requests and the merge check | No |
+| `gh`, logged in (`gh auth login`) | Yes: for pull requests and the merge check | For a merge by autopilot and its merge check |
 | A GitHub remote for your project | Recommended: without one, work stops at a verified branch | No |
 | macOS | For the board server and [Remote Control](docs/guide/remote-control.md) (sessions from your phone) | For the board server |
 
@@ -69,7 +69,7 @@ To update, run `claude plugin update sage@sage` and start a new session. To stop
 
 ### Quick start in Codex
 
-For the Codex CLI and the Codex desktop app. sage mode does not work in Codex yet ([sage in Codex](docs/guide/codex.md)).
+For the Codex CLI and the Codex desktop app, with your normal Codex ([sage in Codex](docs/guide/codex.md)).
 
 1. Add the sage marketplace and install the plugin, in a terminal:
 
@@ -83,6 +83,7 @@ For the Codex CLI and the Codex desktop app. sage mode does not work in Codex ye
 
 2. Run `codex` in a project folder. At the "Hooks need review" screen, choose **Trust all and continue**. Do this again after each sage update.
 3. Send a message. You see `Hook · sage 0.1.0 is installed.`, the Codex version, the trust of the sage hooks and the on phrase.
+4. Send `sage mode` alone. The session becomes your chief of staff: send your request next.
 
 ## The board
 
@@ -108,7 +109,7 @@ Send each phrase alone, as the whole message.
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase). In Codex, the mode phrases and `sage help` work; the board phrases do not yet, and autopilot merges nothing yet ([sage in Codex](docs/guide/codex.md#turn-on-sage-mode)).
+Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase). In Codex, the mode phrases and `sage help` work, and the board phrases do not yet ([sage in Codex](docs/guide/codex.md#turn-on-sage-mode)).
 
 ## Safety and limits
 
@@ -117,6 +118,7 @@ Every phrase, also the board forms, and the exact rules: [Every phrase](docs/gui
 | An agent that pushes to main, force-pushes or merges. | An agent that hides a command from the hook on purpose. A sandbox is planned. |
 | A merge without its clean review cycles on that exact commit. A task with no review or QA in its route needs only its checks to pass. | Anyone with your GitHub token who removes branch protection. |
 | A mode turned on by an agent's text: only your own message turns a mode on. | The cost of many agents: each one is a run on your plan or API credits. |
+| In Codex: an unverified merge, the chief's own edits in sage mode, and any edit under a `.codex` folder ([The rules in Codex](docs/guide/codex.md#the-rules-in-codex)). | In Codex: a shell write that hides a `.codex` folder name, for example in a variable. |
 
 Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). Report a vulnerability: [SECURITY.md](SECURITY.md).
 
@@ -124,7 +126,7 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
-- **sage on Codex:** sage installs from its marketplace, in the CLI and the desktop app, and each session starts with a sage status ([Quick start in Codex](#quick-start-in-codex)). `sage mode` gives a Codex session the chief's role, also after a compaction; `sage mode off` and `sage help` work as in Claude Code; `autopilot on` and `autopilot off` record autopilot, but in Codex it merges nothing yet: you merge. The logbook tools come as MCP tools, and the chief starts each role agent with its role text ([sage in Codex](docs/guide/codex.md)).
+- **sage on Codex:** install the plugin in the Codex CLI or desktop app, trust its hooks once, and send `sage mode`: the session becomes your chief, with the logbook tools, role agents and the report check ([Quick start in Codex](#quick-start-in-codex)). In sage mode the chief edits no files, and an agent never merges. With `autopilot on`, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt.
 - **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
 - **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.
