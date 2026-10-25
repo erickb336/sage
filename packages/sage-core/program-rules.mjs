@@ -72,11 +72,11 @@ export const waitGraph = (tasks, programs, gates, decisions) => {
 /**
  * A task's waits, each with the state of its task (undefined for a task that the logbook lost), then its program's two
  * implicit waits: the pilot (pilot: the program's id) once the breakdown is approved, else the breakdown itself
- * (program), and odd text as one more.
+ * (program), and odd text as one more. A program that the logbook does not have is a stand-in with missing: true.
  */
 export const waitsWithState = (task, { byId, programs, loops }) => {
   const { ids, odd } = waitsOf(task);
-  const program = task?.program ? (programs.get(task.program) ?? { id: task.program, state: "lost" }) : undefined;
+  const program = task?.program ? (programs.get(task.program) ?? { id: task.program, state: "lost", missing: true }) : undefined;
   const pilot = program?.state === "active" && program.pilot !== task.id ? program.pilot : undefined;
   // An explicit wait on the pilot is a pilot wait too. loop: the wait is a link of a loop of waits (shownGraph only).
   const wait = (id) => ({ id, state: byId.get(id)?.state, ...(id === pilot && { pilot: program.id }), ...(loops?.has(task.id) && loops.get(task.id) === loops.get(id) && { loop: true }) });
@@ -91,6 +91,16 @@ export const unmetWaits = (task, graph, passes = () => false) => waitsWithState(
 export function dead(state) {
   return state === "abandoned" || state === undefined;
 }
+/**
+ * A task's waits as every printer shows them (the boards, the status line and the task line; never a write rule or the
+ * merge check): a breakdown whose pilot is abandoned or lost makes its program stuck, so the task waits for that pilot
+ * instead, as in an active program, and never meets it (F-T385-1). graph: a shownGraph.
+ */
+export const shownWaits = (task, graph) => waitsWithState(task, graph).flatMap((wait) => {
+  const pilot = wait.program?.pilot, state = graph.byId.get(pilot)?.state;
+  if (!["proposed", "changing"].includes(wait.program?.state) || !dead(state)) return [wait];
+  return pilot === task.id || waitsOf(task).ids.includes(pilot) ? [] : [{ id: pilot, state, pilot: wait.program.id }];
+});
 
 /**
  * The program whose breakdown gate this gate is, from data, never from its text alone (the owner's Q1, T233): a programs
@@ -142,6 +152,23 @@ function loopsOf(byId, programs) {
 }
 /** Why a lost program's gate on its pilot is not its breakdown gate, by its question (shownGraph's named): "names no program in its question". */
 export const namedText = (named, id) => named ? `names ${named} in its question, not ${id}` : "names no program in its question";
+/**
+ * Why a lost program is lost, as every line that names it says it: its gate cell is empty (R1508-1); its gate row is gone;
+ * the gate is on its pilot with the breakdown options, but its question names no program or another (named, shownGraph);
+ * or the row is not its breakdown gate.
+ */
+export const lostWhy = (program) => !program.gate ? `${program.id} names no breakdown gate`
+  : !program.gateFound ? `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`
+  : program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}`
+  : `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}`;
+/**
+ * The same reason as a clause after the program's name, for a line that already names the program (the status and chat
+ * program lines, a wait for its breakdown): one rule for each of them (R1534-1). missing: a task's program that has no row.
+ */
+export const lostClause = (program) => program.missing ? "the program is not in the logbook" : !program.gate ? "the program names no breakdown gate"
+  : !program.gateFound ? `its breakdown gate ${program.gate} is not in the logbook`
+  : program.named !== undefined ? `its gate ${program.gate} ${namedText(program.named, program.id)}`
+  : `its gate ${program.gate} is not a breakdown gate on its pilot ${program.pilot}`;
 /**
  * The wait graph as every printer shows it (the boards, the status line and the task line; never a write rule or the
  * merge check): a program is proposed or changing only while its gate is its breakdown gate by the data rule

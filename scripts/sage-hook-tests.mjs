@@ -133,6 +133,9 @@ const prompt = (text) => ({ hook_event_name: "UserPromptSubmit", prompt: text })
 const TEAM_ROLES = ["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
 const tool = (tool_name, tool_input, extra = {}) => ({ hook_event_name: "PreToolUse", tool_name, tool_input, ...extra });
 const edit = (extra) => tool("Edit", { file_path: "/x/a.js" }, extra);
+/** The four file tools, each as one event with the extra fields. */
+const fileToolsOf = (extra) => [edit(extra), tool("Write", { file_path: "/x/a.js", content: "x" }, extra),
+  tool("MultiEdit", { file_path: "/x/a.js", edits: [] }, extra), tool("NotebookEdit", { notebook_path: "/x/a.ipynb", new_source: "x" }, extra)];
 /** Two checkouts for the push rule: one on a feature branch, where the commands of a test run, and one on main. */
 const checkout = (branch) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-checkout-")));
@@ -156,7 +159,7 @@ test("sage mode makes the session the chief of staff, and only subagents may cha
   assert.match(on, /# Chief of staff \(sage mode\)/);
   assert.match(on, /The state tool: node \S+\/skills\/sage\/sage\.mjs <command> --project <path>\. Each shell call starts fresh, so write this full command every time/);
   assert.match(on, /Load these skills now: sage:sage, sage:principle-never-block-on-the-human/);
-  assert.doesNotMatch(on, /^disallowedTools:/m, "the agent's frontmatter is left out");
+  assert.doesNotMatch(on, /^(?:name: chief-of-staff|skills:)$/m, "the agent's frontmatter is left out");
   assert.match(denied(s.send(edit())), /Give this change to a sage:implementer/);
   assert.equal(s.send(edit({ agent_id: "a1", agent_type: "sage:implementer" })), undefined, "an implementer may edit");
   assert.equal(s.send(prompt("also add CSV export")), undefined, "the instructions come once");
@@ -169,6 +172,127 @@ test("sage mode makes the session the chief of staff, and only subagents may cha
 test("a session that starts as the chief-of-staff agent is in sage mode without the phrase", () => {
   const s = session();
   assert.match(denied(s.send(edit({ agent_type: "sage:chief-of-staff" }))), /you do not change files yourself/);
+});
+
+test("T398: in a session that starts as the chief, the off phrase holds until the on phrase", () => {
+  const s = session();
+  const chief = { agent_type: "sage:chief-of-staff" };
+  // The chief agent has no tool limit, so the hook alone keeps every file tool from the chief while sage mode is on.
+  const fileTools = fileToolsOf(chief);
+  assert.match(context(s.send({ ...prompt("what is open?"), ...chief })), /# Chief of staff/, "sage mode is on at the first event");
+  for (const call of fileTools) assert.match(denied(s.send(call)) ?? "", /you do not change files yourself/, `${call.tool_name} is refused while on`);
+  assert.match(context(s.send({ ...prompt("sage mode off"), ...chief })), /sage mode is off/);
+  for (const call of fileTools) assert.equal(s.send(call), undefined, `the chief may use ${call.tool_name} after the off phrase`);
+  assert.equal(s.send({ ...prompt("fix the typo"), ...chief }), undefined, "no chief text at the next prompt");
+  s.send({ hook_event_name: "PostCompact", ...chief });
+  assert.equal(s.send({ ...prompt("and the next one"), ...chief }), undefined, "nor after a compaction");
+  assert.equal(s.send(edit(chief)), undefined, "sage mode stays off");
+  assert.match(context(s.send({ ...prompt("sage mode"), ...chief })), /# Chief of staff/, "the on phrase turns it on again");
+  for (const call of fileTools) assert.match(denied(s.send(call)) ?? "", /you do not change files yourself/, `${call.tool_name} is refused again`);
+});
+
+test("T398 F-R1517-1: when the hook cannot read or save its state, it refuses the chief's file tools (fail closed)", () => {
+  const chief = { agent_type: "sage:chief-of-staff" };
+  const refusedAll = (s, why, ms) => {
+    for (const call of fileToolsOf(chief)) assert.match(denied(s.sendRaw(call, ms)) ?? "", /could not check|you do not change files yourself/, `${why}: ${call.tool_name}`);
+  };
+  // The state cannot be saved: its folder is under a regular file.
+  const file = join(mkdtempSync(join(tmpdir(), "sage-file-")), "not-a-folder");
+  writeFileSync(file, "");
+  refusedAll(session({ SAGE_HOOKS_STATE: join(file, "state") }), "the state folder is under a file");
+  // A state that is no object reads as no state: sage mode then starts for the chief by the normal rule.
+  for (const text of ["null", '"x"', "5", "true", "[]"]) {
+    const s = session();
+    mkdirSync(join(s.dir, "state"));
+    writeFileSync(join(s.dir, "state", "s1.json"), text);
+    refusedAll(s, `the state is ${text}`);
+  }
+  // A folder at the state path.
+  const folder = session();
+  mkdirSync(join(folder.dir, "state", "s1.json"), { recursive: true });
+  refusedAll(folder, "the state is a folder");
+  // A FIFO at the state path, only in this test's own temp folder: the hook does not wait for a writer.
+  const fifo = session();
+  mkdirSync(join(fifo.dir, "state"));
+  const made = spawnSync("mkfifo", [join(fifo.dir, "state", "s1.json")]);
+  assert.equal(made.status, 0, String(made.stderr));
+  refusedAll(fifo, "the state is a FIFO", 20_000);
+  // A plain session with a state it cannot save is not refused its file tools: only the chief's are.
+  assert.equal(denied(session({ SAGE_HOOKS_STATE: join(file, "state") }).sendRaw(edit())), undefined);
+});
+
+test("T398 F-R1515-1: a chief subagent never uses the file tools, in any mode; memory notes stay allowed", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "sage-memory-")));
+  mkdirSync(join(root, "config", "projects"), { recursive: true });
+  const s = session({ CLAUDE_CONFIG_DIR: join(root, "config") });
+  const chief = { agent_id: "c1", agent_type: "sage:chief-of-staff", cwd: root };
+  const note = tool("Write", { file_path: join(root, "config", "projects", "p", "memory", "a.md"), content: "x" }, chief);
+  for (const mode of ["before sage mode", "sage mode", "sage mode off"]) {
+    if (mode !== "before sage mode") s.send(prompt(mode));
+    for (const call of fileToolsOf(chief)) assert.match(denied(s.send(call)) ?? "", /you are a chief agent, so you do not change files yourself/, `${mode}: ${call.tool_name}`);
+    assert.equal(denied(s.send(note)), undefined, `${mode}: a memory note`);
+  }
+  assert.equal(denied(s.send(edit())), undefined, "the main session after the off phrase may edit");
+});
+
+test("T398 F-R1516-2: an off value that the owner's off phrase did not set does not turn sage mode off", () => {
+  const chief = { agent_type: "sage:chief-of-staff" };
+  for (const value of [false, null, 0, ""]) {
+    const s = session();
+    mkdirSync(join(s.dir, "state"));
+    writeFileSync(join(s.dir, "state", "s1.json"), JSON.stringify({ sage: value, given: true }));
+    for (const call of fileToolsOf(chief)) assert.match(denied(s.send(call)) ?? "", /you do not change files yourself/, `sage ${JSON.stringify(value)}: ${call.tool_name}`);
+  }
+});
+
+// R1532: the state that the owner's off phrase saves. A hook that read it from the places below would let the chief edit.
+const OFF_STATE = JSON.stringify({ sage: false, off: "owner", given: false, autopilot: false });
+const CHIEF_AGENT = { agent_type: "sage:chief-of-staff" };
+const offState = (place) => {
+  const s = session();
+  mkdirSync(join(s.dir, "state"));
+  const off = join(s.dir, "off.json");
+  writeFileSync(off, OFF_STATE);
+  place(join(s.dir, "state", "s1.json"), off);
+  return s;
+};
+const refusedChief = (s, why) => {
+  for (const call of fileToolsOf(CHIEF_AGENT)) assert.match(denied(s.sendRaw(call)) ?? "", /could not check/, `${why}: ${call.tool_name}`);
+};
+
+test("T398 R1532-2: the hook does not follow a symbolic link at the state path", () => {
+  assert.equal(denied(offState((state, off) => copyFileSync(off, state)).sendRaw(edit(CHIEF_AGENT))), undefined, "the off state as a plain file holds");
+  refusedChief(offState((state, off) => symlinkSync(off, state)), "a symbolic link at the state path");
+});
+
+test("T398 R1532-2: the hook refuses a state file with two hard links", () => {
+  refusedChief(offState((state, off) => linkSync(off, state)), "a state with two hard links");
+});
+
+test("T398 R1532-3: the hook refuses a state over 1 MB, and does not crash", () => {
+  refusedChief(offState((state) => writeFileSync(state, OFF_STATE.replace("}", `,"pad":"${"x".repeat(2 << 20)}"}`))), "a state of 2 MB");
+});
+
+test("T398 R1532-2: the hook never writes through a link at its temporary name, and replaces a stale one of its own", () => {
+  const chief = CHIEF_AGENT;
+  // The hook saves its state through a file named after its pid, here 4242 by a preload, so that the test can plant the link.
+  const preload = join(mkdtempSync(join(tmpdir(), "sage-pid-")), "pid.mjs");
+  writeFileSync(preload, 'Object.defineProperty(process, "pid", { value: 4242 });\n');
+  const s = session({ NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` });
+  mkdirSync(join(s.dir, "state"));
+  const target = join(s.dir, "target.txt");
+  writeFileSync(target, "kept");
+  symlinkSync(target, join(s.dir, "state", "s1.json.4242"));
+  s.sendRaw({ ...prompt("what is open?"), ...chief }); // sage mode starts, so the hook saves its state
+  assert.equal(readFileSync(target, "utf8"), "kept", "the link's target is not written");
+  assert.equal(existsSync(join(s.dir, "state", "s1.json")), false, "no state is saved through the link");
+  // A stale temporary file of the hook's own is replaced, and the state is saved.
+  const stale = session({ NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` });
+  mkdirSync(join(stale.dir, "state"));
+  writeFileSync(join(stale.dir, "state", "s1.json.4242"), "stale");
+  stale.sendRaw({ ...prompt("what is open?"), ...chief });
+  assert.equal(JSON.parse(readFileSync(join(stale.dir, "state", "s1.json"), "utf8")).sage, true, "the state is saved");
+  assert.equal(existsSync(join(stale.dir, "state", "s1.json.4242")), false, "no temporary file stays");
 });
 
 test("T347: in sage mode the chief writes only Markdown files of its own memory folder", () => {

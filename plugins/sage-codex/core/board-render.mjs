@@ -2,7 +2,7 @@
 // The look is the T218 design (approved 2026-10-11) with the T305 picker, filter bar and step line (approved 2026-10-18).
 // The page needs no script for its cards, task pages, backlog fold and theme; the picker and the filters need the script.
 import { LINE, PRIORITIES, TASK_KINDS, proposalOf } from "./logbook-fields.mjs";
-import { namedText, PROGRAM_ID } from "./program-rules.mjs";
+import { lostClause, lostWhy, PROGRAM_ID } from "./program-rules.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
 // Every control (C0, C1 with U+0085) and line or paragraph separator is a space, and every format character (\p{Cf}:
@@ -111,9 +111,10 @@ const stepRows = task => `<ol class="vlist">${task.loop.steps.map(step => `<li c
 function card(ctx, task, { archived = false, i = 0 } = {}) {
   const done = task.column === "done", approval = task.reasons.find(reason => reason.breakdown);
   // A wait line shows instead of the Now line; a task that needs you keeps its question, and its wait line under it.
-  // A pilot whose breakdown waits for you shows the breakdown only: its wait is the same question (Q1, QF).
+  // A pilot whose breakdown waits for you shows the breakdown, and no wait line when its only wait is that question (Q1,
+  // QF): a wait that is never met is first on the wait line (waitLine), so a line that is never met says more (R1535-1).
   const others = approval && task.reasons.filter(reason => reason !== approval);
-  const now = approval ? `<div class="nowline need">${ICON}<span><b>Needs you:</b> the breakdown of ${esc(approval.breakdown.id)}.${others.length ? ` ${others.map(reason => esc(`${String(reason.text).split(LINE).join(" ")}${reason.recommendation ? ` I recommend: ${reason.recommendation}` : ""}`)).join(" ")}` : ""}</span></div>${breakdownBody(approval)}`
+  const now = approval ? `<div class="nowline need">${ICON}<span><b>Needs you:</b> the breakdown of ${esc(approval.breakdown.id)}.${others.length ? ` ${others.map(reason => esc(`${String(reason.text).split(LINE).join(" ")}${reason.recommendation ? ` I recommend: ${reason.recommendation}` : ""}`)).join(" ")}` : ""}</span></div>${task.waitLine?.never ? waitHtml(task) : ""}${breakdownBody(approval)}`
     : task.waitLine && !task.loop.now.needs ? waitHtml(task) : (task.column !== "backlog" ? nowNext(task) : task.loop.now.needs ? nowNext(task, false) : "") + waitHtml(task);
   return `<a class="card${task.reasons.length ? " needs" : ""}${approval ? " approval" : ""}" id="card-${b64(task.key)}" href="${esc(taskHref(ctx, task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.filter(agent => !agent.stale).length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}" data-i="${i}" data-program="${task.program ? b64(task.program.key) : ""}"${archived ? " data-archived hidden" : ""}>`
     + (approval ? `<div class="band"><span aria-hidden="true">◫</span>Program approval<span class="bk">· ${esc(approval.breakdown.id)} ${esc(approval.breakdown.name)} · gate ${esc(approval.gateId)}</span></div>` : "")
@@ -184,7 +185,8 @@ const WORD_OF = { backlog: "not started", design: "in design", building: "buildi
 /** A task's state as its row on the program page says it: the end state, else the word of its column. */
 const taskWord = task => ["merged", "concluded", "abandoned"].includes(task.state) ? task.state : WORD_OF[task.column] ?? task.state;
 const BREAKDOWN_STATE = { proposed: "waits for your approval", changing: "you asked for changes: the chief revises it", dropped: "you dropped it" };
-const breakdownWhy = ({ id, state, gate, gateFound, named }) => BREAKDOWN_STATE[state] ?? (named !== undefined ? `its gate ${gate} ${namedText(named, id)}` : gateFound ? `its gate ${gate} is not a breakdown gate` : `its gate ${gate} is not in the logbook`);
+// missing: the stand-in for a program row that the logbook does not have; an empty gate cell is another reason (R1508-1).
+const breakdownWhy = breakdown => BREAKDOWN_STATE[breakdown.state] ?? lostClause(breakdown);
 /** One wait of a task, with its state (T233): met, not met, or never met. */
 function waitItem(ctx, task, wait) {
   if (wait.odd) return `<li class="v-stale"><span class="g" aria-hidden="true">⊘</span>Text in the waits cell that is not a task id · <span class="stw-cant">never met</span>: the chief sets the waits again.</li>`;
@@ -206,13 +208,18 @@ function programSections(ctx, task) {
   return `<section><h3>Program</h3>${box}</section><section><h3>Waits for <span class="n">${task.waits.length}</span></h3>${task.waits.length ? `<ul class="vlist">${task.waits.map(wait => waitItem(ctx, task, wait)).join("")}</ul>` : `<div class="empty">Waits for no task.</div>`}`
     + `${by.length ? `<h4>Waited for by</h4><p>${by.map(other => `<a href="${esc(taskHref(ctx, other))}">${esc(other.id)}</a>`).join(", ")}</p>` : ""}</section>`;
 }
-/** The Now and Next lines of a task page: a task that waits says what it waits for, and when it starts. */
+/**
+ * The Now and Next lines of a task page: a task that waits says what it waits for, and when it starts. A task that needs
+ * you keeps its question as its Now line; when a wait is never met, its wait line follows and the Next line says that
+ * nothing starts, also after your answer (R1535-1).
+ */
 function nowWaits(task) {
-  if (!task.waitLine || task.loop.now.needs) return nowNext(task);
+  const needs = task.loop.now.needs;
+  if (!task.waitLine || needs && !task.waitLine.never) return nowNext(task);
   const open = task.waits.filter(wait => !wait.met);
   const next = task.waitLine.never ? "Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task."
     : `Starts when ${open.map(wait => wait.breakdown ? "you approve the breakdown" : `${wait.id} merges`).join(" and ")}.${task.column === "design" ? " Its design and PE may run before." : ""}`;
-  return `${waitHtml(task, true)}<div class="nextline"><b>Next:</b> ${esc(next)}</div>`;
+  return `${needs ? nowNext(task, false) : ""}${waitHtml(task, !needs)}<div class="nextline"><b>Next:</b> ${esc(next)}</div>`;
 }
 // A long program name ends with an ellipsis, and its title has the full name, so the page bar keeps its width (R1334-1).
 const programLink = (ctx, task) => {
@@ -248,12 +255,15 @@ const legend = ctx => {
 function banners(model) {
   // A configured root that does not exist yet is a quiet note, not an incomplete source (F-T216-8).
   const notSetUp = model.notSetUp?.length ? `<div class="banner"><div>Not set up yet: ${model.notSetUp.map(esc).join(", ")}. The board adds a logbook when it appears.</div></div>` : "";
-  const list = items => `<ul class="diag">${items.map(d => `<li>${esc(d.source)} · ${esc(d.project ?? "")} · ${esc(d.message)}</li>`).join("")}</ul>`;
+  // A source's own problem has no project: its line has no empty field (R1391-3).
+  const list = items => `<ul class="diag">${items.map(d => `<li>${[d.source, d.project, d.message].filter(Boolean).map(esc).join(" · ")}</li>`).join("")}</ul>`;
+  // A page note is about the page, not a source: the server's note for a page that is too large to show (R1391-3).
+  const note = model.pageNote ? `<div class="banner warn">${ICON}<div>${esc(model.pageNote)}</div></div>` : "";
   // A warning is a logbook setting that the board ignores (a bad name or archived value): the numbers are still whole.
   const warned = model.warnings.length ? `<div class="banner warn">${ICON}<div><b>Settings ignored.</b> The board shows these projects without them.${list(model.warnings)}</div></div>` : "";
   // A note says how the board joined or kept apart the logbooks of one key (T305 notes, section 3).
   const noted = model.notes?.length ? `<div class="banner warn">${ICON}<div><b>Logbook notes.</b> How the board joined the logbooks of each repository.${list(model.notes)}</div></div>` : "";
-  return `${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
+  return `${note}${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
 }
 
 // Theme (bug bash R1023-4, T349): the page is dark until you choose light; a choice is kept in the browser and the head
@@ -844,7 +854,7 @@ export function renderAgentsHtml(model, { live = false, paths = false } = {}) {
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const MET_WORDS = ["merged", "concluded"], ENDED_STATES = [...MET_WORDS, "abandoned"], NEEDS_PROGRAM = ["proposed", "stuck", "lost"];
 const roles = task => task ? [...new Set(task.agents.filter(agent => !agent.stale).map(agent => agent.role))] : [];
-const lostText = program => `${program.named !== undefined ? `The gate ${program.gate} of ${program.id} ${namedText(program.named, program.id)}` : program.gateFound ? `The gate ${program.gate} of ${program.id} is not a breakdown gate on its pilot ${program.pilot}` : `The breakdown gate ${program.gate} of ${program.id} is not in the logbook`}. Ask the chief to repair the logbook, or to propose ${program.id} again.`;
+const lostText = program => `${lostWhy(program)}. Ask the chief to repair the logbook, or to propose ${program.id} again.`;
 /** What moves next in an active program (Q4): the first task with no unmet wait, then the count of the tasks that wait and those that cannot start. */
 function nextOf(ctx, program) {
   const task = program.next && ctx.tasks.get(program.next.key), at = roles(task);
@@ -976,9 +986,12 @@ function programPage(ctx, program, routed) {
     const next = nextOf(ctx, program), then = next.first ? (ctx.waitedBy.get(next.first.key) ?? []).filter(task => task.program?.key === program.key && !ENDED_STATES.includes(task.state) && !task.waitLine?.never)
       .map(task => { const ids = task.waits.filter(wait => !wait.met && wait.id).map(wait => wait.id); return `${task.id} can start when ${ids.join(" and ")} ${ids.length === 1 ? "merges" : "merge"}.`; }) : [];
     const moving = own.filter(task => task !== next.first && !ENDED_STATES.includes(task.state) && !task.waitLine);
-    // "T11 cannot start: it waits for T10, which was abandoned." Each wait that is never met, in the prototype's words.
-    const never = wait => wait.odd ? "its waits cell has text that is not a task id" : wait.breakdown ? `the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : `${wait.id}, which ${wait.state ? `was ${wait.word}` : "is not in the logbook"}`;
-    const cannot = own.filter(task => task.waitLine?.never && !ENDED_STATES.includes(task.state)).map(task => `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${esc(task.id)} cannot start: it waits for ${esc(task.waits.filter(wait => wait.never).map(never).join(" and "))}. Ask the chief to remove the wait, or to drop ${esc(task.id)}.</span></div>`).join("");
+    // "T11 cannot start: it waits for T10, which was abandoned." Each wait that is never met, in the prototype's words; odd
+    // text in the waits cell is its own clause, "its waits cell has text that is not a task id" (R1391-2).
+    const never = wait => wait.breakdown ? `the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : wait.loop ? `${wait.id}, in a loop of waits that never ends` : `${wait.id}, which ${wait.state ? `was ${wait.word}` : "is not in the logbook"}`;
+    const why = task => { const named = task.waits.filter(wait => wait.never && !wait.odd).map(never), odd = task.waits.some(wait => wait.odd);
+      return [named.length && `it waits for ${named.join(" and ")}`, odd && "its waits cell has text that is not a task id"].filter(Boolean).join(", and "); };
+    const cannot = own.filter(task => task.waitLine?.never && !ENDED_STATES.includes(task.state)).map(task => `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${esc(task.id)} cannot start: ${esc(why(task))}. Ask the chief to ${task.waits.some(wait => wait.odd) ? "set its waits again" : "remove the wait"}, or to drop ${esc(task.id)}.</span></div>`).join("");
     const body = {
       stuck: () => `<div class="nowline need">${ICON}<span><b>Needs you:</b> ${esc(program.need?.text ?? "")}</span></div><div class="answer"><b>Answer in the chat:</b> a new pilot (a task of the program), or drop the program.</div>`,
       lost: () => `<div class="nowline need">${ICON}<span><b>Needs you:</b> ${esc(lostText(program))}</span></div>`,
@@ -1061,7 +1074,7 @@ const programLine = program => {
   return `${head} · ${{
     proposed: () => `the breakdown waits for you \\(gate ${md(program.gate)}\\) · pilot ${md(program.pilot)}`,
     changing: () => `the chief revises the breakdown \\(gate ${md(program.gate)}\\)`,
-    lost: () => `${program.named !== undefined ? `its gate ${md(program.gate)} ${md(namedText(program.named, program.id))}` : program.gateFound ? `its gate ${md(program.gate)} is not a breakdown gate on its pilot ${md(program.pilot)}` : `its breakdown gate ${md(program.gate)} is not in the logbook`} \\(see Needs you\\)`,
+    lost: () => `${md(lostClause(program))} \\(see Needs you\\)`,
     dropped: () => `dropped · ${tasks(program.open)} still in it: ask the chief to take each task out of the program`,
     stuck: () => `stuck: ${pilot} \\(see Needs you\\)`,
   }[program.state]?.() ?? `${md(program.progressText)} · next: ${next}${program.waiting ? ` · ${program.waiting} ${program.waiting === 1 ? "waits" : "wait"}` : ""}${program.cannotStart.length ? ` · ${program.cannotStart.map(md).join(", ")} cannot start` : ""}`}`;

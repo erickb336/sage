@@ -2890,10 +2890,28 @@ test("T383 items 3, 4 and 5: the task line and status read the waits as the boar
   byHand(s.dir, "gates", 0, "G1", (cells) => { cells[2] = question; return cells; });
   byHand(s.dir, "tasks", 0, "T1", (cells) => { cells[5] = "abandoned"; return cells; });
   assert.equal(programsLine(s), "program PG1 · 0 of 3 merged · T1 abandoned · pilot T1 abandoned: choose a new pilot, or drop the program · name: Codex support");
+  // F-T385-1: the task line and the status waits line agree: a task of the stuck program waits for its pilot, never met, not for the breakdown.
+  const PILOT = "T1 (abandoned, the pilot of PG1, never met)";
+  assert.equal(s.ok("task", "T2"), `T2 framed · small · round 0 · route build,code-review,qa · program PG1 · waits ${PILOT} · unmet T1`);
+  assert.equal(s.ok("status").split("\n").find((l) => l.startsWith("waits ")), `waits   2 waiting · T2 for ${PILOT} · T3 for ${PILOT}`);
   // Item 5: a loop of waits from a hand edit: each wait of the loop is never met.
   byHand(s.dir, "tasks", 0, "T2", (cells) => { cells[14] = "T3"; return cells; });
   byHand(s.dir, "tasks", 0, "T3", (cells) => { cells[14] = "T2"; return cells; });
-  assert.match(s.ok("status"), /\n {0}waits {3}2 waiting · T2 for T3 \(framed, in a loop of waits, never met\), the breakdown of PG1 \(open, gate G1\) · T3 for T2 \(framed, in a loop of waits, never met\), /);
+  assert.match(s.ok("status"), /\n {0}waits {3}2 waiting · T2 for T3 \(framed, in a loop of waits, never met\), T1 \(abandoned, the pilot of PG1, never met\) · T3 for T2 \(framed, in a loop of waits, never met\), T1 /);
+});
+
+test("R1535-1: in a proposed program, the pilot in a loop of waits cannot start, as each other task of the loop: the task line, the status waits line and the programs line", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  // A hand edit makes a loop: the pilot T1 waits for T2, and T2 waits for T1. The gate G1 stays open.
+  byHand(s.dir, "tasks", 0, "T1", (cells) => { cells[14] = "T2"; return cells; });
+  byHand(s.dir, "tasks", 0, "T2", (cells) => { cells[14] = "T1"; return cells; });
+  const loop = (id) => `${id} (framed, in a loop of waits, never met)`;
+  assert.equal(s.ok("task", "T1"), `T1 framed · small · round 0 · route build,code-review,qa · program PG1 · waits ${loop("T2")}, ${OPEN} · unmet T2, the breakdown of PG1`);
+  assert.equal(s.ok("task", "T2"), `T2 framed · small · round 0 · route build,code-review,qa · program PG1 · waits ${loop("T1")}, ${OPEN} · unmet T1, the breakdown of PG1`);
+  assert.equal(s.ok("status").split("\n").find((l) => l.startsWith("waits ")), `waits   2 waiting · T1 for ${loop("T2")}, ${OPEN} · T2 for ${loop("T1")}, ${OPEN}`);
+  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 2 merged · breakdown waits for you (G1) · name: Codex support");
 });
 
 test("T337: a logbook made before programs has no programs.tsv: it passes the integrity check and the merge check, and only program propose writes the file", async () => {
@@ -2927,8 +2945,8 @@ test("T337: a task that names a program without programs.tsv is a loss: every wr
   assert.equal(s.no("merge-check", "--sha", SHA), `sage: the merge check refuses every merge, because ${why}`);
   assert.equal(s.ok("logbook", "repair", "--accept-loss", "programs"), "programs.tsv started again without rows. The decision is in decisions.tsv.");
   // The task still names PG1, which is lost: it never builds until it leaves the program.
-  assert.equal(s.ok("task", "T1"), "T1 framed · small · round 0 · route build,code-review,qa · program PG1 · waits the breakdown of PG1 (not in the logbook) · unmet the breakdown of PG1");
-  assert.match(s.no("run", "add", "T1", "--role", "lead"), / PG1 or its breakdown gate is not in the logbook, so its breakdown is never approved: take T1 out of it \(sage task T1 set program=none\), or ask the owner\.$/);
+  assert.equal(s.ok("task", "T1"), "T1 framed · small · round 0 · route build,code-review,qa · program PG1 · waits the breakdown of PG1 (the program is not in the logbook) · unmet the breakdown of PG1");
+  assert.match(s.no("run", "add", "T1", "--role", "lead"), / The breakdown of PG1 is never approved: take T1 out of it \(sage task T1 set program=none\), or ask the owner\.$/);
   assert.equal(s.ok("task", "T1", "set", "program=none"), "T1 framed · small · round 0 · route build,code-review,qa");
   assert.match(s.ok("run", "add", "T1", "--role", "lead"), /^R1 running · lead on T1/);
 });
@@ -2978,7 +2996,22 @@ test("T337: a program's state comes from its breakdown gate's answer: proposed, 
   propose(s, "T7", "Lost gate");
   byHand(s.dir, "gates", 0, "G5", () => null);
   assert.equal(programsLine(s).split("\n").at(-1), "program PG3 · pilot T7: 0 of 1 merged · its breakdown gate G5 is not in the logbook · name: Lost gate");
-  assert.match(s.no("run", "add", "T7", "--role", "lead"), /^sage: T7 waits for the breakdown of PG3 \(its gate G5 is not in the logbook\), so it takes no lead run\. Its design and PE may run\. PG3 or its breakdown gate is not in the logbook/);
+  assert.match(s.no("run", "add", "T7", "--role", "lead"), /^sage: T7 waits for the breakdown of PG3 \(its breakdown gate G5 is not in the logbook\), so it takes no lead run\. Its design and PE may run\. The breakdown of PG3 is never approved/);
+});
+
+test("R1534-1: a program row with an empty gate cell names no breakdown gate in the status, the task line and a refusal; only a missing row is not in the logbook", () => {
+  const s = store();
+  for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
+  propose(s, "T1", "Codex support", "T2");
+  byHand(s.dir, "programs", 0, "PG1", (cells) => cells.with(4, ""));
+  const why = "the breakdown of PG1 (the program names no breakdown gate)";
+  assert.equal(programsLine(s), "program PG1 · pilot T1: 0 of 2 merged · the program names no breakdown gate · name: Codex support");
+  assert.equal(s.ok("task", "T2"), `T2 framed · small · round 0 · route build,code-review,qa · program PG1 · waits ${why} · unmet the breakdown of PG1`);
+  const refused = s.no("run", "add", "T1", "--role", "lead");
+  assert.ok(refused.startsWith(`sage: T1 waits for ${why}`) && refused.endsWith(" The breakdown of PG1 is never approved: propose it again (sage program propose PG1), or ask the owner."), refused);
+  // The row gone: the task's program is not in the logbook.
+  byHand(s.dir, "programs", 0, "PG1", (cells) => cells.with(0, "PG9"));
+  assert.ok(s.ok("task", "T2").includes(" · waits the breakdown of PG1 (the program is not in the logbook) · "), s.ok("task", "T2"));
 });
 
 test("R1208-3: a program's state reads only from a breakdown gate on its pilot; any other gate that its gate cell names reads as lost", () => {
@@ -2992,7 +3025,7 @@ test("R1208-3: a program's state reads only from a breakdown gate on its pilot; 
     byHand(s.dir, "programs", 0, "PG1", (cells) => cells.with(4, g));
     assert.equal(programsLine(s), `program PG1 · pilot T1: 0 of 2 merged · its gate ${g} is not a breakdown gate on its pilot T1 · name: Codex support`, g); // F-T233-2: the row is there
     // R1308-1: the refusal says why, as status does: the gate row is there, and it is not a breakdown gate.
-    assert.match(s.no("run", "add", "T1", "--role", "lead"), new RegExp(`^sage: T1 waits for the breakdown of PG1 \\(its gate ${g} is not a breakdown gate\\)`), g);
+    assert.match(s.no("run", "add", "T1", "--role", "lead"), new RegExp(`^sage: T1 waits for the breakdown of PG1 \\(its gate ${g} is not a breakdown gate on its pilot T1\\)`), g);
   }
   byHand(s.dir, "programs", 0, "PG1", (cells) => cells.with(4, "G1"));
   s.ok("gate", "answer", "G1", "--option", "1");
@@ -3526,7 +3559,7 @@ test("R1203-1, R1203-2: an id that only a program's pilot or gate cell, or a tas
   assert.match(s.ok("task", "add", "--title", "New", "--size", "small"), /^T3 framed/, "T2 is not given again (IDS.programs pilot)");
   assert.equal(s.ok("gate", "add", "T2", "--question", "Approve?", "--options", "approve|change|drop", "--recommend", "approve"), "G2 open · Approve?", "G1 is not given again (IDS.programs gate)");
   s.ok("gate", "answer", "G2", "--option", "1");
-  assert.match(s.no("run", "add", "T1", "--role", "lead"), /^sage: T1 waits for the breakdown of PG1 \(its gate G1 is not in the logbook\)/, "the program does not turn active");
+  assert.match(s.no("run", "add", "T1", "--role", "lead"), /^sage: T1 waits for the breakdown of PG1 \(its breakdown gate G1 is not in the logbook\)/, "the program does not turn active");
   // A task's waits cell: the waited-for task's row is lost, and no other cell names it.
   s.ok("task", "add", "--title", "Up", "--size", "small"); // T4
   s.ok("task", "T3", "set", "waits=T4");
@@ -4674,7 +4707,7 @@ test("R1255-1: the refusal for a lost breakdown gate names program propose as th
   for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--title", title, "--size", "small");
   propose(s, "T1", "Codex support", "T2");
   byHand(s.dir, "gates", 0, "G1", () => null);
-  assert.match(s.no("run", "add", "T1", "--role", "lead"), / PG1 or its breakdown gate is not in the logbook, so its breakdown is never approved: propose it again \(sage program propose PG1\), or ask the owner\.$/);
+  assert.match(s.no("run", "add", "T1", "--role", "lead"), / The breakdown of PG1 is never approved: propose it again \(sage program propose PG1\), or ask the owner\.$/);
   assert.match(s.no("run", "add", "T2", "--role", "lead"), / never approved: take T2 out of it \(sage task T2 set program=none\), or ask the owner\.$/);
   assert.match(s.ok("program", "propose", "PG1"), /^PG1 proposed · pilot T1 · tasks T2 · G2 open: /, "the named fix works");
 });
@@ -4868,7 +4901,7 @@ test("R1279-2: after a loss of gates.tsv, only a row of the owner's answer reads
   writeFileSync(f, `${text.trimEnd()}\n${answer.replace("→ change\tthe user's answer", "→ drop\ttask set")}\n`);
   writeFileSync(join(s.dir, "gates.tsv"), "");
   s.ok("logbook", "repair", "--accept-loss", "gates");
-  assert.match(s.ok("task", "T2"), / · waits the breakdown of PG1 \(its gate G1 is not in the logbook\) · /);
+  assert.match(s.ok("task", "T2"), / · waits the breakdown of PG1 \(its breakdown gate G1 is not in the logbook\) · /);
   assert.match(s.ok("program", "propose", "PG1"), /^PG1 proposed · pilot T1 · tasks T2 · G2 open: /, "a dropped program refuses this");
   // The owner's drop, after the same loss: the merge check and the task line say dropped.
   const d = store();

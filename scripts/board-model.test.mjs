@@ -705,8 +705,9 @@ test("T383 item 9: a live task whose program row is missing, or whose program ce
     tables.tasks.push({ ...one, id: "T95", state: "framed", program: "PG20" }, { ...one, id: "T96", state: "building", program: "PG20" }, { ...one, id: "T97", state: "framed", program: "?" }, { ...one, id: "T98", state: "merged", program: "PG21" });
   });
   assert.deepEqual(needsOf(model).slice(2), [
-    ["missing", "The program PG20 is not in the logbook", "T95 and T96 name PG20, so they cannot start. Ask the chief to repair the logbook, or to take each task out of the program."],
-    ["missing", "A program cell is not a program id", "The program cell of T97 is not a program id, so it cannot start. Ask the chief to repair the logbook, or to take the task out of the program."]]);
+    // R1391-4: T96 is building, so "cannot go on", not "cannot start".
+    ["missing", "The program PG20 is not in the logbook", "T95 and T96 name PG20, so they cannot go on. Ask the chief to repair the logbook, or to take each task out of the program."],
+    ["missing", "A program cell is not a program id", "The program cell of T97 is not a program id, so it cannot go on. Ask the chief to repair the logbook, or to take the task out of the program."]]);
   assert.equal(model.counts.needsOwner, 6);
 });
 
@@ -761,11 +762,18 @@ function large(n) {
   return { tasks, gates, programs, runs, ledger, decisions, findings };
 }
 
-// A quadratic step gives about 4 times the work for twice the rows; 2.5 leaves room for a sort (n log n) and fixed costs.
-test("T383 item 14: the board model is linear in a large logbook: twice the rows is about twice the work", () => {
-  const board = n => work(() => buildBoardModel([programsSource("claude", large(n))], { now: PROGRAMS_NOW }));
-  const [small, big] = [board(400), board(800)];
-  assert.ok(big / small < 2.5, `the board's work: ${small} units for 400 tasks, ${big} for 800 (linear is about 2 times)`);
+/** The large logbook as a source, with an observed PR for each task, so the records index is in the work too (R1390-2). */
+function largeSource(n) {
+  const source = programsSource("claude", large(n));
+  source.projects[0].observations.records = source.projects[0].tables.tasks.map(row => observation("pr", { number: Number(row.pr), head, state: "open" }, { id: `O${row.pr}`, task: row.id }));
+  return source;
+}
+// Four times the rows: linear work is about 4 times, a quadratic step about 16 times. A scan of the records or of the
+// programs for each card (in place of the records and byGate indexes) passes 5 (R1390-2); 5 leaves room for fixed costs.
+test("T383 item 14: the board model is linear in a large logbook: four times the rows is about four times the work", () => {
+  const board = n => work(() => buildBoardModel([largeSource(n)], { now: PROGRAMS_NOW }));
+  const [small, big] = [board(400), board(1600)];
+  assert.ok(big / small < 5, `the board's work: ${small} units for 400 tasks, ${big} for 1600 (linear is about 4 times)`);
 });
 
 test("T383 item 14: the printers' wait graph (status and the task line) is linear in a large logbook", () => {
