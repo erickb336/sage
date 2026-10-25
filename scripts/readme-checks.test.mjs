@@ -181,3 +181,34 @@ test("npm run check fails on a README with no changelog link, a missing screensh
   assert.match(r.stderr, /^✗ docs\/assets\/board-dark\.png: missing; run node scripts\/board-shots\.mjs \(see CONTRIBUTING\.md\)$/m);
   assert.match(r.stderr, /^✗ docs\/assets\/board-shots\.json: the sample logbook changed after the board screenshots; run node scripts\/board-shots\.mjs/m);
 });
+
+// T467: three lines a new reader sees must be true. Each claim is read from the real README and compared with its source.
+const realReadme = () => readFileSync(join(ROOT, "README.md"), "utf8");
+
+test("the README names the system and Node version that CI runs, and the minimum in package.json (T467-1)", () => {
+  const ci = readFileSync(join(ROOT, ".github/workflows/check.yml"), "utf8");
+  const ciNode = ci.match(/node-version:\s*(\d+)/)[1];
+  const ciOs = ci.match(/runs-on:\s*(ubuntu)-/)[1];
+  const minNode = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).engines.node.match(/>=(\d+)/)[1];
+  const readme = realReadme();
+  assert.match(readme, new RegExp(`^\\*\\*Status:\\*\\*.*in CI on ${ciOs}`, "im"), "the status line says that CI runs Ubuntu");
+  assert.doesNotMatch(readme, /Linux is not yet tested/);
+  assert.match(readme, new RegExp(`Node\\.js ${minNode} or later \\(the minimum; CI runs the tests on Node ${ciNode}\\)`), "the install steps give the minimum and the CI version");
+});
+
+test("the Codex install line names a GitHub remote, as docs/guide/codex.md does (T467-2)", () => {
+  assert.match(realReadme(), /`gh` logged in, and a GitHub remote for the project \(see \[What you need\]/);
+  assert.match(readFileSync(join(ROOT, "docs/guide/codex.md"), "utf8"), /a GitHub remote for the project/);
+});
+
+test("the board image's alt text says its two Needs you items are program items, not questions (T467-3)", () => {
+  const alt = realReadme().match(/<img alt="The board page[^"]*"/)[0];
+  assert.match(alt, /a Needs you box with two program items,/);
+  assert.doesNotMatch(alt, /program questions/);
+});
+
+test("the README defines the on phrase and the update warning in words the reader has met (R1661)", () => {
+  const readme = realReadme();
+  assert.match(readme, /Send the on phrase, the words below, as a message of its own/);
+  assert.match(readme, /> \*\*Warning:\*\* before you use programs \(tasks of one goal\) or tasks that wait for other tasks, update sage/);
+});
