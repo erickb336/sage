@@ -69,7 +69,7 @@ To update, run `claude plugin update sage@sage` and start a new session. To stop
 
 ### In Codex
 
-In Codex 0.160 to 0.164, the CLI or the desktop app: run `codex plugin marketplace add https://github.com/erickb336/sage.git`, then `codex plugin add sage@sage`. Start `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)).
+In the Codex CLI 0.160 to 0.164 (the desktop app should work the same way, but it is not checked yet, and it needs the CLI for these commands): run `codex plugin marketplace add https://github.com/erickb336/sage.git`, then `codex plugin add sage@sage`. Start `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)).
 
 ## The board
 
@@ -104,7 +104,7 @@ Every phrase, also the board forms, and the exact rules: [Every phrase](docs/gui
 | An agent that pushes to main, force-pushes or merges. | An agent that hides a command from the hook on purpose. A sandbox is planned. |
 | A merge without its clean review cycles on that exact commit. A task with no review or QA in its route needs only its checks to pass. | Anyone with your GitHub token who removes branch protection. |
 | A mode turned on by an agent's text: only your own message turns a mode on. | The cost of many agents: each one is a run on your plan or API credits. |
-| In Codex: an unverified merge, the chief's own edits in sage mode, a reviewer's shell write, a role agent's new Codex session, and any edit under a `.codex` folder ([The rules in Codex](docs/guide/codex.md#the-rules-in-codex)). | In Codex: a shell write that hides a `.codex` folder name, for example in a variable. |
+| In Codex: an unverified merge, a push outside the push form, the chief's own edits in sage mode, a reviewer's plain shell write, a role agent's logbook write, new agent or new Codex session, and any edit under a project's `.codex` folder ([The rules in Codex](docs/guide/codex.md#the-rules-in-codex)). | In Codex: a shell write that hides a `.codex` folder name, for example in a variable; a reviewer's write through `git apply`, `git commit`, a script or `make`; anything under full access. |
 
 Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). Report a vulnerability: [SECURITY.md](SECURITY.md).
 
