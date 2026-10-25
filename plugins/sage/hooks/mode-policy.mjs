@@ -1,1 +1,1 @@
-export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp } from "../core/index.mjs";
+export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp, switchModes } from "../core/index.mjs";

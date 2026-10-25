@@ -9,7 +9,7 @@ export { fileWriteOutsideRoots } from "./protected-paths.mjs";
 export { commandWrites } from "./shell-write-policy.mjs";
 export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";
-export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp } from "./mode-policy.mjs";
+export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp, switchModes } from "./mode-policy.mjs";
 export { createAssignment, correlateReport } from "./assignments.mjs";
 export { AdmissionError, configureAdmission, activateAdmission, changeAdmissionMode, reserveAdmission, reserveRoleAdmission, reserveBriefAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, bindAdmission, bindContinuationAdmission, completeAdmission, recordReportAdmission, interruptAdmission, failAdmission, failContinuationAdmission, readAdmission } from "./admission.mjs";
 export { BRIEF_FIELDS, parseBrief, renderBrief } from "./brief.mjs";

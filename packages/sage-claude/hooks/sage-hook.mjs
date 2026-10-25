@@ -200,75 +200,21 @@ export function promptOf(input) {
 }
 
 /**
- * Switches the modes, and returns the notes for the chief. Only a message of the owner that is exactly one phrase
- * switches a mode (T240): the text before the first frame and after the last frame, and each queued message at the
- * tail, each as a whole message. Text in an agent's frame switches nothing (T215). When the hook cannot read the
- * frames, nothing switches; when the prompt has a phrase, a note asks the owner to send it again alone (F-T215-1).
+ * Switches the modes, and returns the notes for the chief: the mode rules of core (switchModes, T240), with this hook's
+ * frames (promptOf) and the autopilot note from its state tool. When the mode rules cannot load, autopilot turns off.
  */
-function switchModes({ owner, text, queued = [], all, stray = "" }, state) {
+function switchModes(prompt, state) {
   if (modePolicy.error) {
     state.autopilot = false;
     return ["sage: the mode policy cannot load. Autopilot is off. Reinstall or update the sage plugin."];
   }
-  // A stray queued message is text the hook cannot attribute, as is an unreadable prompt (F-T215-12).
-  const notes = (!owner && modePolicy.hasPhrase(all)) || modePolicy.hasPhrase(stray) ? ["sage: the hook could not read the frames of this prompt, so it switched no mode. A switch phrase in this prompt was not applied: if the user sent one, ask the user to send it again as a message alone."] : [];
-  const near = new Set(); // the phrases that a near miss of the owner's own text asks for
-  let strong = false;
-  const queuedOff = new Set(); // the off phrases to ask for after a queued message that did not switch
-  let queuedMiss = false;
-  let help = false;
-  const quote = (phrases) => [...phrases].map((p) => `"${p}"`).join(" or ");
-  for (const [i, message] of (owner ? [text, ...queued] : []).entries()) {
-    const phrase = modePolicy.exactPhrase(message);
-    let change = modePolicy.PHRASES[phrase] ?? {};
-    const miss = modePolicy.phrasesNear(message);
-    if (i > 0) {
-      // A queued message switches only autopilot off: an agent can forge the queued shape at the end of a bare
-      // reminder, and sage mode off would drop every guard of this hook (T240 Q1, F-T240-10). Its notes never offer
-      // an on phrase (F-T240-3).
-      const off = (p) => modePolicy.PHRASES[p].sage !== true && modePolicy.PHRASES[p].autopilot !== true && !modePolicy.PHRASES[p].help;
-      if (change.sage === false && state.sage) queuedOff.add(phrase);
-      queuedMiss ||= Boolean(miss) || change.sage === true || change.autopilot === true || (change.sage === false && state.sage);
-      for (const p of miss?.phrases ?? []) if (off(p)) queuedOff.add(p);
-      change = { autopilot: change.autopilot === false ? false : undefined, help: change.help };
-    } else if (miss) {
-      for (const p of miss.phrases) near.add(p);
-      strong ||= miss.strong;
-    }
-    help ||= Boolean(change.help);
-    // A switch that changes nothing gives no note (F-T240-9).
-    if (change.sage === false) {
-      if (state.sage) notes.push("sage: sage mode is off. This is a normal session for the rest of it, also when it started as the chief: you may change files yourself again.");
-      // off: "owner" marks the owner's own off phrase: any other off value is no choice of the owner (F-R1516-2).
-      Object.assign(state, { sage: false, off: "owner", given: false, autopilot: false });
-    } else if (change.sage) {
-      state.sage = true;
-      delete state.off;
-    }
-    if (change.autopilot === false) {
-      if (state.autopilot) notes.push("sage: autopilot is off. Work stops at verified, and the user merges.");
-      state.autopilot = false;
-    } else if (change.autopilot && !state.sage) {
-      notes.push('sage: autopilot did not switch on, because it turns on only while sage mode is on. Ask the user to send "sage mode" first, then "autopilot on", each as a message alone.');
-    } else if (change.autopilot && !state.autopilot) {
-      state.autopilot = true;
-      const c = stateTool.config();
-      const broken = Object.keys(c).find((k) => c[k] === "invalid");
-      const [small, large, risky] = [{}, { size: "large" }, { risk: "auth" }].map((task) => stateTool.cyclesFor(task, c));
-      if (broken) notes.push(`sage: autopilot is on. ${broken} in config.json is not a number: no merge until it is fixed (sage config ${broken}=<n>).`);
-      else notes.push(`sage: autopilot is on. A pull request merges on its head SHA after ${small} clean cycle${small === 1 ? "" : "s"} for a small task, ${large} for a large task and ${risky} for a task with a risk flag; a large task with a risk flag needs the larger count. A task with no review or QA in its route needs only checks-pass; a tiny task with an added review needs ${small}. Merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.`);
-    }
-  }
-  // A near miss is never silent: a session's hook stayed off for two days when nothing said that a message missed (T194).
-  // The note names the exact phrases: it goes to the chief, and only a whole message of the owner switches (T240). Each
-  // note names only what did not switch, so it stays true when another message of the prompt switched (F-T240-11). A
-  // mention in a sentence gets the softer note (F-T240-7).
-  const ask = "Tell the user only if the message was not a question.";
-  if (near.size && strong) notes.push(`sage: the user's message did not switch, because a switch needs the exact phrase as the whole message. Ask the user to send ${quote(near)} alone, as a message of its own. ${ask}`);
-  else if (near.size) notes.push(`sage: the user's message names sage mode or autopilot with an on or off word, and did not switch. Only if the user meant a switch, ask the user to send ${quote(near)} alone, as a message of its own. ${ask}`);
-  if (queuedMiss || queuedOff.size) notes.push(`sage: a message sent while Claude works did not switch a mode. The hook cannot tell such a message from an agent's text, so it lets it switch autopilot off only.${queuedOff.size ? ` If the user sent it, ask the user to send ${quote(queuedOff)} alone when Claude is idle.` : ""} Tell the user only if the user sent it.`);
-  if (help) notes.push(modePolicy.phraseHelp(state));
-  return notes;
+  return modePolicy.switchModes(prompt, state, { autopilotOn: () => {
+    const c = stateTool.config();
+    const broken = Object.keys(c).find((k) => c[k] === "invalid");
+    const [small, large, risky] = [{}, { size: "large" }, { risk: "auth" }].map((task) => stateTool.cyclesFor(task, c));
+    if (broken) return `sage: autopilot is on. ${broken} in config.json is not a number: no merge until it is fixed (sage config ${broken}=<n>).`;
+    return `sage: autopilot is on. A pull request merges on its head SHA after ${small} clean cycle${small === 1 ? "" : "s"} for a small task, ${large} for a large task and ${risky} for a task with a risk flag; a large task with a risk flag needs the larger count. A task with no review or QA in its route needs only checks-pass; a tiny task with an added review needs ${small}. Merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.`;
+  } });
 }
 
 /**
