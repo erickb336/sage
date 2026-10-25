@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, writeSync} from 'node:fs';
+import {relative, resolve, sep} from 'node:path';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
 import {bindTask, resolveControllerBinary} from './controller-binding.mjs';
@@ -66,12 +67,16 @@ const PASTE_START = '\x1b[200~', PASTE_END = '\x1b[201~';
 const TOKEN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O.|.)?|./gsu;
 // The start of a key sequence at the end of a read: its rest comes in the next read (R1575-4).
 const PARTIAL = /\x1b(?:\[[0-?]*[ -/]*|O)?$/u;
+// `line(text, pasted)` gets each line; `pasted` says that some of its text came from a paste. `clear()` clears the
+// typed line and drops the rest of the current read (only paste marks and Ctrl-C still act in it); it returns true
+// when the typed line had text.
 function readTerminal(input, write, {line, interrupt, end}) {
-  let text = '', afterReturn = false, pasting = false, pending = '', ended = false;
+  let text = '', afterReturn = false, pasting = false, pending = '', ended = false, pasted = false, dropping = false;
   input.setRawMode(true);
   input.setEncoding('utf8');
   write(PASTE_ON);
   input.on('data', chunk => {
+    dropping = false;
     // An Escape key alone at the end of a read, with no sequence after it, is the Escape key only.
     let all = pending === '\x1b' && !/^[[O]/u.test(chunk) ? chunk : pending + chunk;
     pending = PARTIAL.exec(all)?.[0] ?? '';
@@ -82,23 +87,25 @@ function readTerminal(input, write, {line, interrupt, end}) {
       if (key.startsWith('\x1b')) { if (key === PASTE_START) pasting = true; else if (key === PASTE_END) pasting = false; continue; }
       // Raw mode stays on until the client ends, so after the end of input Ctrl-C still stops the turn (R1577-3).
       if (ended) { if (key === '\x03') interrupt(false); continue; }
+      if (dropping) { if (key === '\x03' && !pasting) interrupt(false); continue; }
       // A paste can give \r\n: one line end.
       if (key === '\n' && afterReturn) { afterReturn = false; continue; }
       afterReturn = key === '\r';
       if (key === '\r' || key === '\n') {
         echo += '\n';
-        if (pasting) { text += '\n'; continue; }
-        show(); const done = text; text = ''; line(done);
-      } else if (key === '\t' || oneLine(key) === key) { text += key; echo += key; }
+        if (pasting) { text += '\n'; pasted = true; continue; }
+        show(); const done = text, fromPaste = pasted; text = ''; pasted = false; line(done, fromPaste);
+      } else if (key === '\t' || oneLine(key) === key) { text += key; echo += key; if (pasting) pasted = true; }
       // A control character in a paste is text of the paste, not a key: the client drops it.
       else if (pasting) continue;
       // Ctrl-C clears the line, so that the next Enter never sends the cleared text (R1575-2).
-      else if (key === '\x03') { const cleared = text !== ''; text = ''; if (cleared) echo += '\n'; show(); interrupt(cleared); }
+      else if (key === '\x03') { const cleared = text !== ''; text = ''; pasted = false; if (cleared) echo += '\n'; show(); interrupt(cleared); }
       else if (key === '\x04') { if (!text) { show(); ended = true; end(); } }
       else if (key === '\x7f' || key === '\b') { if (text) { text = text.replace(/.$/su, ''); echo += '\b \b'; } }
     }
     show();
   });
+  return {clear() { const had = text !== ''; text = ''; pasted = false; dropping = true; return had; }};
 }
 // The process gives a lost request as "Connection closed; outcome uncertain: <reason>" or "<reason>; outcome uncertain".
 const plain = text => {
@@ -162,55 +169,113 @@ function turnLine(result, then, terminalFull) {
 // acceptForSession, no amendment from availableDecisions, no session scope and no persist value.
 const ASK = 'Type y to allow it once, or n to refuse it.';
 const YES = new Set(['y', 'yes']), NO = new Set(['n', 'no']);
+const CLEARED = '[Your typed text was cleared, because an approval request came. Type it again after you answer.]';
+const NOT_SENT = '[Your line did not go to the chief, because an approval request waits. Answer it, then type your line again.]';
+const NO_QUESTION = '[No approval request waits, so your line did not go to the chief.]';
 const isText = value => typeof value === 'string' && value !== '';
-const listed = paths => paths.slice(0, 3).map(path => `"${path}"`).join(', ') + (paths.length > 3 ? ` and ${paths.length - 3} more` : '');
-const pathsOf = value => (Array.isArray(value) ? value.filter(isText) : []);
-function permissionWords(profile) {
-  const words = profile?.network?.enabled ? ['network access'] : [];
-  for (const mode of ['read', 'write']) if (pathsOf(profile?.fileSystem?.[mode]).length) words.push(`${mode} access to ${listed(pathsOf(profile.fileSystem[mode]))}`);
-  if (profile?.fileSystem?.entries?.length) words.push('more file access');
-  return words.join(' and ');
+// A shown value is a JSON string, so a quote or a line end in it shows escaped (\" and \n) and it cannot draw a fake
+// end of the question; the control-character filter then runs on each shown line. A value over LIMIT characters, or a
+// request with over MAX_ITEMS files or access items, is not shown: the client refuses it (TOO_LONG).
+const LIMIT = 2000, MAX_ITEMS = 50, TOO_LONG = Symbol('too long');
+const quoted = value => { const text = String(value); if (text.length > LIMIT) throw TOO_LONG; return JSON.stringify(text); };
+// A path inside the project shows relative to it ("." for the project folder); a path outside it, absolute.
+const shownPath = (path, project) => {
+  const full = resolve(project, String(path));
+  return quoted(full === project ? '.' : full.startsWith(`${project}${sep}`) ? relative(project, full) : full);
+};
+// A list of paths: null or missing is none; anything else that is not a list of paths cannot be read (undefined).
+const pathList = value => (value == null ? [] : Array.isArray(value) && value.every(isText) ? value : undefined);
+const SPECIAL = {root: 'the whole disk', home: 'your home folder'};
+function target(path, project) {
+  if (path?.type === 'path' && isText(path.path)) return shownPath(path.path, project);
+  if (path?.type === 'glob_pattern' && isText(path.pattern)) return `the files that match ${quoted(path.pattern)}`;
+  const kind = path?.value?.kind;
+  if (path?.type !== 'special' || !isText(kind)) return undefined;
+  const name = SPECIAL[kind] ?? `the special path ${quoted(kind === 'unknown' && isText(path.value.path) ? path.value.path : kind)}`;
+  return isText(path.value.subpath) ? `${name}, subpath ${quoted(path.value.subpath)}` : name;
+}
+// The access items of a permission profile, each as "<target> (<access>)"; undefined when one cannot be read. A legacy
+// read or write root that only repeats an entry shows once.
+function accessItems(profile, project) {
+  const items = profile?.network?.enabled === true ? ['the network'] : [];
+  const fileSystem = profile?.fileSystem ?? {};
+  const entries = fileSystem.entries == null ? [] : fileSystem.entries;
+  if (!Array.isArray(entries)) return undefined;
+  for (const entry of entries) {
+    const shown = target(entry?.path, project);
+    if (!shown || !['read', 'write', 'deny'].includes(entry.access)) return undefined;
+    items.push(`${shown} (${entry.access})`);
+  }
+  for (const mode of ['read', 'write']) {
+    const paths = pathList(fileSystem[mode]);
+    if (!paths) return undefined;
+    items.push(...paths.map(path => `${shownPath(path, project)} (${mode})`));
+  }
+  return [...new Set(items)];
 }
 const DECISION = {accept: {decision: 'accept'}, decline: {decision: 'decline'}};
 // The question id that the controller gives an MCP tool approval through requestUserInput, and its one-time option.
-const MCP_APPROVAL = 'mcp_tool_call_approval', MCP_ALLOW = 'Allow', MCP_CANCEL = 'Cancel';
+// The fork makes it as `mcp_tool_call_approval_<call id>` (core/src/mcp_tool_call.rs), after the mcpToolCall item of
+// that call id started, and sends the request with that call id as its itemId.
+const MCP_APPROVAL = 'mcp_tool_call_approval_', MCP_ALLOW = 'Allow', MCP_CANCEL = 'Cancel';
+const emptySchema = schema => schema?.type === 'object' && schema.properties && typeof schema.properties === 'object'
+  && !Object.keys(schema.properties).length && (schema.required == null || (Array.isArray(schema.required) && !schema.required.length));
 /**
- * What one server request asks, as `{what, accept, decline}` (the two replies). `{refused}` is a request that is not an
- * approval: the client refuses it with a line. Null is an approval request that the client cannot read.
+ * What one server request asks, as `{action, fields, accept, decline}`: the action and the fields of the question
+ * block, and the two replies. `{refused}` is a request that is not an approval: the client refuses it with a line.
+ * Null is an approval request that the client cannot read. It throws TOO_LONG for a request too long to show.
  */
-function approvalOf(method, params, files) {
-  const reason = isText(params.reason) ? ` (${params.reason})` : '';
+function approvalOf(method, params, {files, calls, project}) {
+  const reason = isText(params.reason) ? [['reason', quoted(params.reason)]] : [];
+  const items = (name, list) => { if (list.length > MAX_ITEMS) throw TOO_LONG; return list.map(item => [name, item]); };
   if (method === 'item/commandExecution/requestApproval') {
+    const access = accessItems(params.additionalPermissions, project);
+    const host = params.networkApprovalContext;
+    if (!access) return null;
+    if (host != null) {
+      if (!isText(host.host) || !isText(host.protocol)) return null;
+      const command = isText(params.command) ? [['command', quoted(params.command)]] : [];
+      const folder = isText(params.cwd) ? [['folder', shownPath(params.cwd, project)]] : [];
+      return {action: 'connect to a host', fields: [['host', `${quoted(host.host)}, protocol ${quoted(host.protocol)}`], ...command, ...folder, ...reason, ...items('access', access)], ...DECISION};
+    }
     if (!isText(params.command) || !isText(params.cwd)) return null;
-    const more = permissionWords(params.additionalPermissions);
-    const verb = params.kind === 'writeStdin' ? 'send input to the running command' : 'run';
-    return {what: `asks to ${verb} "${params.command}" in "${params.cwd}"${more ? ` with ${more}` : ''}${reason}`, ...DECISION};
+    return {action: params.kind === 'writeStdin' ? 'send input to a running command' : 'run a command',
+      fields: [['command', quoted(params.command)], ['folder', shownPath(params.cwd, project)], ...reason, ...items('access', access)], ...DECISION};
   }
   if (method === 'item/fileChange/requestApproval') {
-    const paths = files.get(params.itemId) ?? [];
-    return {what: `asks to change ${paths.length === 1 ? 'the file ' : paths.length ? `${paths.length} files: ` : 'files'}${listed(paths)}${reason}`, ...DECISION};
+    return {action: 'change files', fields: [...items('file', (files.get(params.itemId) ?? []).map(path => shownPath(path, project))), ...reason], ...DECISION};
   }
   if (method === 'item/permissions/requestApproval') {
-    const words = permissionWords(params.permissions);
-    if (!words || !isText(params.cwd)) return null;
+    const access = accessItems(params.permissions, project);
+    if (!access?.length || !isText(params.cwd)) return null;
     const asked = Object.fromEntries(['network', 'fileSystem'].filter(key => params.permissions[key]).map(key => [key, params.permissions[key]]));
-    return {what: `asks for ${words} in "${params.cwd}"${reason}`, accept: {permissions: asked, scope: 'turn'}, decline: {permissions: {}, scope: 'turn'}};
+    return {action: 'get file access', fields: [['folder', shownPath(params.cwd, project)], ...reason, ...items('access', access)],
+      accept: {permissions: asked, scope: 'turn'}, decline: {permissions: {}, scope: 'turn'}};
   }
   if (method === 'mcpServer/elicitation/request') {
-    if (params.mode !== 'form' || params._meta?.codex_approval_kind !== 'mcp_tool_call') return {refused: `sent a form from the MCP server "${params.serverName}": "${params.message}". The client cannot show forms, so it refused the form`};
+    // A tool approval asks only yes or no: a schema with a field is a form.
+    if (params.mode !== 'form' || params._meta?.codex_approval_kind !== 'mcp_tool_call' || !emptySchema(params.requestedSchema)) {
+      return {refused: `sent a form from the MCP server ${quoted(params.serverName)}: ${quoted(params.message)}. The client cannot show forms, so it refused the form`};
+    }
     const reply = action => ({action, content: null, _meta: null});
-    return {what: `asks to use a tool of the MCP server "${params.serverName}": "${params.message}"`, accept: reply('accept'), decline: reply('decline')};
+    return {action: 'use an MCP tool', fields: [['server', quoted(params.serverName)], ['message', quoted(params.message)]], accept: reply('accept'), decline: reply('decline')};
   }
   if (method === 'item/tool/requestUserInput') {
     const questions = Array.isArray(params.questions) ? params.questions : [];
     const [question] = questions;
-    if (questions.length !== 1 || !question?.id?.startsWith?.(MCP_APPROVAL) || !question.options?.some?.(option => option.label === MCP_ALLOW)) {
-      return {refused: `asked you ${questions.length === 1 ? `a question: "${question?.question}"` : `${questions.length} questions`}. The client cannot answer questions, so it refused ${questions.length === 1 ? 'the question' : 'them'}`};
+    const call = calls.get(params.itemId);
+    if (questions.length !== 1 || call?.threadId !== params.threadId || question?.id !== `${MCP_APPROVAL}${params.itemId}`
+      || !question.options?.some?.(option => option.label === MCP_ALLOW)) {
+      // The question text shows cut at LIMIT characters, so a long question still shows what it asked.
+      const text = questions.map(each => JSON.stringify(String(each?.question ?? ''))).join(', ');
+      const shown = text.length > LIMIT ? `${text.slice(0, LIMIT)}… (cut at ${LIMIT} characters)` : text;
+      return {refused: `asked you ${questions.length === 1 ? 'a question' : `${questions.length} questions`}: ${shown}. The client cannot show questions, so it refused ${questions.length === 1 ? 'it' : 'them'}. The agent goes on without your answer`};
     }
     const reply = label => ({answers: {[question.id]: {answers: [label]}}});
-    return {what: `asks to use an MCP tool: "${question.question}"`, accept: reply(MCP_ALLOW), decline: reply(MCP_CANCEL)};
+    return {action: 'use an MCP tool', fields: [['server', quoted(call.server)], ['tool', quoted(call.tool)], ['message', quoted(question.question)]],
+      accept: reply(MCP_ALLOW), decline: reply(MCP_CANCEL)};
   }
-  return {refused: `sent the request ${method}. The client answers only approval requests, so it refused it`};
+  return {refused: `sent the request ${quoted(method)}. The client answers only approval requests, so it refused it`};
 }
 // The agent of a thread: the chief for the root thread, else its agent path (from thread/started or an item).
 function agentPathOf(params) {
@@ -250,10 +315,19 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     const all = held.splice(0).join('') + text;
     if (all) output.write(all);
   };
-  const say = (...lines) => { for (const line of lines) write(`${oneLine(line)}\n`); };
-  const tell = line => write(`${oneLine(line)}\n`, true);
+  // After any other output while an approval request waits (a chief line, a child line, a notice), its question block
+  // shows again, so that the question is the last text on the screen when the owner answers.
+  let blockLast = false, reshow = false;
+  const printed = () => {
+    blockLast = false;
+    if (!questions.length || reshow) return;
+    reshow = true;
+    queueMicrotask(() => { reshow = false; if (questions.length && !blockLast) ask(); });
+  };
+  const say = (...lines) => { for (const line of lines) { write(`${oneLine(line)}\n`); printed(); } };
+  const tell = line => { write(`${oneLine(line)}\n`, true); printed(); };
   // The line ends at the end of a message give no empty chief line (R1578-1).
-  const chief = text => { for (const line of String(text).replace(/(\r?\n)+$/, '').split(/\r?\n/)) write(`chief> ${oneLine(line)}\n`); };
+  const chief = text => { for (const line of String(text).replace(/(\r?\n)+$/, '').split(/\r?\n/)) write(`chief> ${oneLine(line)}\n`); printed(); };
   // A controller text of several lines gives several lines, each with the prefix, so no line of it looks like the client's.
   const framed = (prefix, text, suffix) => {
     const lines = String(text).split(/\r?\n/).filter(line => line.trim());
@@ -286,9 +360,21 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   const warnOnce = (...parts) => { const key = parts.join('\0'); if (!warned.has(key)) { warned.add(key); framed(...parts); } };
   // `questions` holds the approval requests that wait for the owner, in order; the first one shows. `agents` names
   // each child thread, and `files` keeps the paths of each file change item until its end.
-  const agents = new Map(), files = new Map();
-  const agent = threadId => (threadId === rootThread ? '/root (the chief)' : agents.get(threadId) ?? `with thread id ${threadId}`);
-  const ask = () => { if (!questions.length) return; cancelWait(); say(questions[0].line); };
+  // `calls` keeps the server and tool of each mcpToolCall item until its end. A thread with no known name is never the chief.
+  const agents = new Map(), files = new Map(), calls = new Map();
+  const agent = threadId => (isText(threadId) && threadId === rootThread ? '/root (the chief)' : agents.get(threadId) ?? `(unknown child ${threadId})`);
+  // The reader of a terminal on stdin; it clears the typed line when a question shows.
+  let terminal = null;
+  // Each show of a question clears the typed line and drops the rest of the current terminal read, so no text typed or
+  // pasted before the question can answer it.
+  const ask = () => {
+    if (!questions.length) return;
+    cancelWait();
+    const cleared = terminal?.clear() ?? false;
+    if (cleared) write('\n');
+    for (const line of [...(cleared ? [CLEARED] : []), ...questions[0].block]) write(`${oneLine(line)}\n`);
+    blockLast = true;
+  };
   const answer = allow => {
     const question = questions.shift();
     owner.answer(question.id, allow ? question.accept : question.decline);
@@ -303,15 +389,27 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   };
   function serverRequest({id, method, params = {}}) {
     const name = agent(params.threadId);
-    const found = approvalOf(method, params, files);
+    let found;
+    try { found = approvalOf(method, params, {files, calls, project}); } catch (error) {
+      if (error !== TOO_LONG) throw error;
+      owner.refuse(id);
+      say(`[Agent ${name} sent an approval request that is too long to show, so the client refused it.]`);
+      return;
+    }
     if (!found || found.refused) {
       owner.refuse(id);
       say(found ? `[Agent ${name} ${found.refused}.]` : `[Agent ${name} sent an approval request (${method}) that the client cannot read, so the client refused it.]`);
       return;
     }
-    questions.push({id, threadId: params.threadId, line: `[Approval: agent ${name} ${found.what}. ${ASK}]`, accept: found.accept, decline: found.decline});
+    // After the end of input or a stop, no answer can come: the client refuses the request and shows no question.
+    if (stopAsked || inputEnded) {
+      owner.answer(id, found.decline);
+      say(`[${stopAsked ? 'The controller stops' : 'Your input ended'}, so the client refused the approval request of agent ${name}.]`);
+      return;
+    }
+    const block = [`[Approval: agent ${name} asks to ${found.action}.]`, ...found.fields.map(([field, value]) => `  ${field}: ${value}`), ASK];
+    questions.push({id, block, accept: found.accept, decline: found.decline});
     if (questions.length === 1) ask();
-    if (stopAsked || inputEnded) declineAll(stopAsked ? 'The controller stops' : 'Your input ended');
   }
   owner = createControllerProcess({executable: binary.path, executableSha256: binary.sha256, cwd: project,
     env: Object.fromEntries(Object.entries(env).filter(([, value]) => typeof value === 'string')),
@@ -319,9 +417,12 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       if (turnActive) awaitModel();
       const params = event.message.params ?? {};
       const named = agentPathOf(params);
-      if (named) agents.set(...named);
-      if (event.method === 'item/started' && params.item?.type === 'fileChange') files.set(params.item.id, pathsOf(params.item.changes?.map?.(change => change.path)));
-      if (event.method === 'item/completed') files.delete(params.item?.id);
+      // The first name of a thread stays; no event renames the chief.
+      if (named && named[0] !== rootThread && !agents.has(named[0])) agents.set(...named);
+      const item = params.item;
+      if (event.method === 'item/started' && item?.type === 'fileChange') files.set(item.id, (Array.isArray(item.changes) ? item.changes : []).map(change => change?.path).filter(isText));
+      if (event.method === 'item/started' && item?.type === 'mcpToolCall' && isText(item.id)) calls.set(item.id, {threadId: params.threadId, server: item.server, tool: item.tool});
+      if (event.method === 'item/completed') { files.delete(item?.id); calls.delete(item?.id); }
       if (event.kind === 'server-request') serverRequest(event.message);
       // The controller closed a request that waits (its turn ended): the next one shows.
       else if (event.method === 'serverRequest/resolved') {
@@ -378,14 +479,18 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     }
     rootThread = opened.policy.threadId;
     const {model, approvalPolicy, sandbox} = opened.policy.selection;
-    const line = text => {
-      // While an approval request waits, a line is its answer: y or n; any other line shows the question again.
-      if (questions.length && !stopAsked) {
-        const word = text.trim().toLowerCase();
-        if (YES.has(word) || NO.has(word)) answer(YES.has(word)); else ask();
+    const line = (text, pasted = false) => {
+      if (stopAsked) return;
+      const word = text.trim().toLowerCase(), yesNo = YES.has(word) || NO.has(word);
+      // While an approval request waits, a typed y or n is its answer (text from a paste never is); any other line is
+      // no turn, and the question shows again.
+      if (questions.length) {
+        if (yesNo && !pasted) answer(YES.has(word)); else { say(NOT_SENT); ask(); }
         return;
       }
-      if (!text.trim() || stopAsked) return;
+      if (!text.trim()) return;
+      // A lone y or n with no question is an answer that came late (or early): it never goes to the chief.
+      if (yesNo) { say(NO_QUESTION); return; }
       if (turnActive) say('[The chief is on a turn. Your line runs after it.]');
       queue.push(text); wake();
     };
@@ -397,7 +502,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       if (turnActive && !stopAsked) say('[Your input ended. The controller stops after the lines that you typed. Press Ctrl-C to stop the turn now.]');
       wake();
     };
-    if (input.isTTY) readTerminal(input, write, {line, end, interrupt: cleared => onSignalOrKey('SIGINT', cleared)});
+    if (input.isTTY) terminal = readTerminal(input, write, {line, end, interrupt: cleared => onSignalOrKey('SIGINT', cleared)});
     else createInterface({input, crlfDelay: Infinity, terminal: false}).on('line', line).on('close', end);
     // The terminal is raw before the Ready lines, so the terminal never echoes the start of a paste that comes at once.
     say(`[Ready: task ${args.task}, run ${args.run}. The chief uses your Codex config: model ${shown(model.value)}${model.origin === 'default' ? ' (the Codex default)' : ''}, approval ${shown(approvalPolicy.value)}, sandbox ${shown(sandbox.value)}.]`, howTo(input.isTTY));
