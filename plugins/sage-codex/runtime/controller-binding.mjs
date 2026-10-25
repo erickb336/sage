@@ -99,7 +99,7 @@ export function bindTurnText(text) {
 const OWNER_LAYERS = new Set(['user', 'sessionFlags', 'mdm', 'system', 'enterpriseManaged', 'legacyManagedConfigTomlFromFile', 'legacyManagedConfigTomlFromMdm']);
 function layer(origin) {
   const name = origin?.name ?? {};
-  if (name.type === 'user') return `your user config (${name.file}${name.profile ? `, profile ${name.profile}` : ''})`;
+  if (name.type === 'user') return `your Codex config (${name.file}${name.profile ? `, profile ${name.profile}` : ''})`;
   if (name.type === 'project') return `the project config in ${name.dotCodexFolder}`;
   if (name.type === 'sessionFlags') return 'the launch flags';
   return `the ${String(name.type ?? 'unknown')} config layer${name.file ? ` (${name.file})` : ''}`;
@@ -123,18 +123,24 @@ const SELECTION = [
   ['sandbox', 'sandbox_mode', (value, reply) => (typeof value === 'string' ? {...reply, type: camel(value)} : value), true],
 ];
 const RESTART = 'then start the client again';
+// The owner's Codex folder: CODEX_HOME, or ~/.codex. A refusal that says to move a setting or a file names its path there.
+export const codexHome = env => env.CODEX_HOME || (env.HOME ? join(env.HOME, '.codex') : '');
+const homePath = (home, name) => (home ? join(home, name) : `${name} in your Codex folder`);
+// An agent may have written the setting or the file, so the owner checks it before moving it.
+const checkIt = (what, it, target, home) => `Check ${what}. If you trust ${it}, move ${it} to your Codex config (${homePath(home, target)}). If not, remove ${it}. Then start the client again.`;
+const EXAMPLE = {approval_policy: '"on-request"', sandbox_mode: '"read-only"'};
 // Each key that changes the sandbox or where an approval goes, or that starts a program (an MCP server, or a hook at
 // an event). Each must come from a layer that an agent cannot write.
 const OWNER_ONLY = ['sandbox_mode', 'sandbox_workspace_write', 'permissions', 'default_permissions', 'approval_policy', 'approvals_reviewer', 'auto_review',
   'mcp_servers', 'hooks', 'features.request_permissions_tool', 'features.exec_permission_approvals', 'features.write_stdin_approval'];
 // An MCP server or a hook event is one entry of its table, so the message names the entry, not one of its fields.
 const ENTRIES = new Set(['mcp_servers', 'hooks']);
-function requireOwner(key, origin) {
+function requireOwner(key, origin, home) {
   if (OWNER_LAYERS.has(origin?.name?.type)) return;
   // config/read names a list item by its index (sandbox_workspace_write.writable_roots.0); the owner edits the list.
   const [table, entry] = key.split('.');
   const name = ENTRIES.has(table) && entry ? `${table}.${entry}` : key.replace(/(\.[0-9]+)+$/, '');
-  throw refuse('selection-origin', `The setting ${name} comes from ${layer(origin)}. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, ${RESTART}.`);
+  throw refuse('selection-origin', `The setting ${name} comes from ${layer(origin)}. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. ${checkIt(`the setting ${name}`, 'it', 'config.toml', home)}`);
 }
 const FORK = `Use the fork binary of version ${CONTROLLER_VERSION}, ${RESTART}`;
 // config/read gives a key that no layer sets as null with no origin: the controller uses its default.
@@ -148,7 +154,7 @@ function configured(config, origins, key) {
  * owned launch key has its value from the launch flags, and each owner-only key comes from an owner layer. Returns
  * the config and its origins, or throws a refusal with a fixed code.
  */
-export function checkConfig(read) {
+export function checkConfig(read, home = '') {
   const config = read?.config, origins = read?.origins;
   if (!config || typeof config !== 'object' || !origins || typeof origins !== 'object') throw refuse('policy-missing', `The controller gave no config layers. ${FORK}.`);
   for (const [key, required] of Object.entries(OWNED_CONTROLLER_CONFIG)) {
@@ -160,12 +166,11 @@ export function checkConfig(read) {
     if (value !== required) throw refuse('policy-value', `The setting ${key} is ${JSON.stringify(value)}, but the client needs ${JSON.stringify(required)}. ${FORK}.`);
   }
   for (const [key, origin] of Object.entries(origins))
-    if (OWNER_ONLY.some(guarded => key === guarded || key.startsWith(`${guarded}.`))) requireOwner(key, origin);
-  for (const [, key, , owned] of SELECTION) {
-    if (!owned) continue;
-    if (configured(config, origins, key) === undefined) throw refuse('selection-missing', `Your Codex config does not set ${key}. Set it in your user config, ${RESTART}.`);
-    requireOwner(key, origins[key]);
-  }
+    if (OWNER_ONLY.some(guarded => key === guarded || key.startsWith(`${guarded}.`))) requireOwner(key, origin, home);
+  // Each missing key in one refusal, so that the owner fixes them all before one restart.
+  const missing = SELECTION.filter(([, key, , owned]) => owned && configured(config, origins, key) === undefined).map(([, key]) => key);
+  if (missing.length) throw refuse('selection-missing', `Your Codex config does not set ${missing.join(' and ')}. Set ${missing.length > 1 ? 'them' : 'it'} in your Codex config (${homePath(home, 'config.toml')}), for example ${missing.map(key => `${key} = ${EXAMPLE[key]}`).join(' and ')}, ${RESTART}.`);
+  for (const [, key, , owned] of SELECTION) if (owned) requireOwner(key, origins[key], home);
   return {config, origins};
 }
 
@@ -219,16 +224,18 @@ function mainCheckoutFolders(project) {
  * folder up to the filesystem root. The .codex folder that is CODEX_HOME holds the owner's own rules and hooks.
  */
 export function checkProjectFiles(project, env) {
-  const home = realOrNull(env.CODEX_HOME || (env.HOME ? join(env.HOME, '.codex') : ''));
+  const home = codexHome(env), realHome = realOrNull(home);
   const why = 'An agent can change project files, so the client refuses the rules and hooks files of the project and of each folder above it.';
-  for (const folder of new Set([...upward(project), ...mainCheckoutFolders(project)])) {
+  const above = upward(project);
+  for (const folder of new Set([...above, ...mainCheckoutFolders(project)])) {
     const dotCodex = join(folder, '.codex');
-    if (home && realOrNull(dotCodex) === home) continue;
+    if (realHome && realOrNull(dotCodex) === realHome) continue;
+    const where = folder === project ? 'in the project' : above.includes(folder) ? 'in a folder above the project' : 'in the main checkout of the project worktree';
     let rules = [];
     try { rules = readdirSync(join(dotCodex, 'rules')).filter(name => name.endsWith('.rules')).sort(); }
     catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw refuse('project-files', `The client cannot read ${join(dotCodex, 'rules')} (${error.code}), so it cannot check it for rules files. Make the folder readable, or remove it, ${RESTART}.`); }
-    if (rules.length) throw refuse('project-rules', `The rules file ${join(dotCodex, 'rules', rules[0])} is in a project folder. A rule can let a command run with no approval or outside the sandbox. ${why} Move the rules to ${home ? join(home, 'rules') : 'the rules folder of your Codex home'}, or remove the file, ${RESTART}.`);
-    if (existsSync(join(dotCodex, 'hooks.json'))) throw refuse('project-hooks', `The hooks file ${join(dotCodex, 'hooks.json')} is in a project folder. A hook runs a command at its event. ${why} Move the hooks to your user Codex config, or remove the file, ${RESTART}.`);
+    if (rules.length) throw refuse('project-rules', `The rules file ${join(dotCodex, 'rules', rules[0])} is ${where}. A rule can let a command run with no approval or outside the sandbox. ${why} ${checkIt('the rules', 'them', 'rules/', home)}`);
+    if (existsSync(join(dotCodex, 'hooks.json'))) throw refuse('project-hooks', `The hooks file ${join(dotCodex, 'hooks.json')} is ${where}. A hook runs a command at its event. ${why} ${checkIt('the hooks', 'them', 'hooks.json', home)}`);
   }
 }
 

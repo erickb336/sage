@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {bindPolicy, bindTask, bindTurnText, resolveControllerBinary, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, resolveControllerBinary, turnOutcome} from './controller-binding.mjs';
 import {OWNED_LAUNCH_ARGS} from './controller-process.mjs';
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sage-binding-')));
@@ -164,18 +164,23 @@ test('bindPolicy: one case for each refusal row', () => {
 
 test('bindPolicy takes the sandbox and the approval policy only from a layer that an agent cannot write, and never as a default (R1503-4)', () => {
   const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
-  const refusal = edit => { const value = observed(); edit(value); try { bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
+  // The process checks the config with the owner's Codex folder before thread/start; bindPolicy checks it again.
+  const refusal = edit => { const value = observed(); edit(value); try { checkConfig(value.config, '/home/.codex'); bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
   assert.equal(refusal(value => { value.config.origins.sandbox_mode = project; }),
-    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move sandbox_mode to your user config, then start the client again.');
+    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting sandbox_mode. If you trust it, move it to your Codex config (/home/.codex/config.toml). If not, remove it. Then start the client again.');
   assert.match(refusal(value => { value.config.origins.approval_policy = project; }), /^selection-origin: The setting approval_policy comes from the project config/);
   assert.match(refusal(value => { value.config.origins.approval_policy = {name: {type: 'packagedDefaults', file: '/opt/codex/defaults.toml'}}; }), /^selection-origin: .*packagedDefaults config layer \(\/opt\/codex\/defaults.toml\)/);
+  const example = {approval_policy: 'approval_policy = "on-request"', sandbox_mode: 'sandbox_mode = "read-only"'};
   for (const key of ['approval_policy', 'sandbox_mode']) {
     assert.equal(refusal(value => { delete value.config.config[key]; delete value.config.origins[key]; }),
-      `selection-missing: Your Codex config does not set ${key}. Set it in your user config, then start the client again.`);
+      `selection-missing: Your Codex config does not set ${key}. Set it in your Codex config (/home/.codex/config.toml), for example ${example[key]}, then start the client again.`);
     // config/read gives a key that no layer sets as null, with no origin (R1526-2).
     assert.equal(refusal(value => { value.config.config[key] = null; delete value.config.origins[key]; }),
-      `selection-missing: Your Codex config does not set ${key}. Set it in your user config, then start the client again.`);
+      `selection-missing: Your Codex config does not set ${key}. Set it in your Codex config (/home/.codex/config.toml), for example ${example[key]}, then start the client again.`);
   }
+  // A config that sets neither gets one refusal that names both, so one restart fixes it (R1565-2).
+  assert.equal(refusal(value => { for (const key of ['approval_policy', 'sandbox_mode']) { value.config.config[key] = null; delete value.config.origins[key]; } }),
+    'selection-missing: Your Codex config does not set approval_policy and sandbox_mode. Set them in your Codex config (/home/.codex/config.toml), for example approval_policy = "on-request" and sandbox_mode = "read-only", then start the client again.');
   // The owner's layers pass: user (above), a managed file, and the launch flags.
   assert.equal(refusal(value => { value.config.origins.sandbox_mode = {name: {type: 'system', file: '/etc/codex/managed_config.toml'}}; }), 'pass');
   assert.equal(refusal(value => { value.config.origins.approval_policy = sessionFlags; }), 'pass');
@@ -195,7 +200,7 @@ test('bindPolicy: a model and a provider that no layer sets are the default, as 
 test('bindPolicy refuses each key that changes the sandbox or the approval route from a project layer (R1524-1, R1524-2)', () => {
   const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
   const refusal = (key, origin = project) => { const value = observed(); value.config.origins[key] = origin; try { bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
-  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, then start the client again.`;
+  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (config.toml in your Codex folder). If not, remove it. Then start the client again.`;
   // The keys as the real config/read names them: a list item has its index.
   for (const [key, name] of [['sandbox_workspace_write.network_access', 'sandbox_workspace_write.network_access'],
     ['sandbox_workspace_write.writable_roots.0', 'sandbox_workspace_write.writable_roots'], ['sandbox_workspace_write.exclude_slash_tmp', 'sandbox_workspace_write.exclude_slash_tmp'],
@@ -214,7 +219,7 @@ test('bindPolicy: a version or a policy refusal names what it found and what to 
   assert.equal(message(value => { value.thread.thread.cliVersion = '0.161.0'; }),
     'The controller is version 0.161.0, but this client needs 0.160.0. Set SAGE_CODEX_CONTROLLER_BIN to the fork binary of version 0.160.0, then start the client again.');
   assert.equal(message(value => { value.config.origins['features.multi_agent_v2.enabled'] = user; }),
-    'The setting features.multi_agent_v2 comes from your user config (/home/config.toml), not from the launch flags of the client. Remove features.multi_agent_v2 from there, then start the client again.');
+    'The setting features.multi_agent_v2 comes from your Codex config (/home/config.toml), not from the launch flags of the client. Remove features.multi_agent_v2 from there, then start the client again.');
   assert.equal(message(value => { value.config.config.features.goals = true; }),
     'The setting features.goals is true, but the client needs false. Use the fork binary of version 0.160.0, then start the client again.');
 });

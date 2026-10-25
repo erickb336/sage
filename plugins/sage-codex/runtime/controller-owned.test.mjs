@@ -131,8 +131,9 @@ for (const [name, edit, code, sent] of [
 });
 
 test('fake 24: an MCP server or a hook from the project names its entry and says where to move it (R1543-1, R1544-2)', async () => {
-  const message = async edit => (await bound(fake({edit}))).error.message;
-  const refused = name => `The setting ${name} comes from the project config in ${PROJECT}/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, then start the client again.`;
+  const message = async edit => (await bound(fake({edit, env: {PATH: '/fixture/bin', CODEX_HOME: '/fixture/home'}}))).error.message;
+  // An agent may have written the entry, so the owner checks it before moving it (R1565-1); the target is a path (R1554-3).
+  const refused = name => `The setting ${name} comes from the project config in ${PROJECT}/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (/fixture/home/config.toml). If not, remove it. Then start the client again.`;
   assert.equal(await message(fromProject('mcp_servers.probe.command')), refused('mcp_servers.probe'));
   assert.equal(await message(fromProject('hooks.SessionStart.0.hooks.0.command')), refused('hooks.SessionStart'));
   assert.equal(await message(fromProject('features.write_stdin_approval')), refused('features.write_stdin_approval'));
@@ -166,19 +167,20 @@ test('fake 25: a rules or hooks file in the project or a folder above it refuses
     assert.deepEqual((await open({HOME: root}))[0], 'bound', 'HOME/.codex is CODEX_HOME when CODEX_HOME is not set');
     // With another CODEX_HOME, the same folder is a folder above the project.
     assert.deepEqual(await open({CODEX_HOME: join(root, 'codex-home')}), ['refused', 'project-rules',
-      `The rules file <root>/.codex/rules/user.rules is in a project folder. A rule can let a command run with no approval or outside the sandbox. ${why} Move the rules to the rules folder of your Codex home, or remove the file, then start the client again.`, ['initialize', 'initialized']]);
+      `The rules file <root>/.codex/rules/user.rules is in a folder above the project. A rule can let a command run with no approval or outside the sandbox. ${why} Check the rules. If you trust them, move them to your Codex config (<root>/codex-home/rules/). If not, remove them. Then start the client again.`, ['initialize', 'initialized']]);
     put('work/.codex/rules/parent.rules', 'prefix_rule(pattern = ["sh"], decision = "allow")\n');
     put('work/project/.codex/rules/default.rules', 'prefix_rule(pattern = ["sh"], decision = "allow")\n');
-    const refused = path => ['refused', 'project-rules', `The rules file <root>/${path} is in a project folder. A rule can let a command run with no approval or outside the sandbox. ${why} Move the rules to <root>/.codex/rules, or remove the file, then start the client again.`, ['initialize', 'initialized']];
-    assert.deepEqual(await open({CODEX_HOME: join(root, '.codex')}), refused('work/project/.codex/rules/default.rules'));
+    // The project and a folder above it have their own words (R1554-4).
+    const refused = (path, where) => ['refused', 'project-rules', `The rules file <root>/${path} is ${where}. A rule can let a command run with no approval or outside the sandbox. ${why} Check the rules. If you trust them, move them to your Codex config (<root>/.codex/rules/). If not, remove them. Then start the client again.`, ['initialize', 'initialized']];
+    assert.deepEqual(await open({CODEX_HOME: join(root, '.codex')}), refused('work/project/.codex/rules/default.rules', 'in the project'));
     rmSync(join(project, '.codex'), {recursive: true});
-    assert.deepEqual(await open({CODEX_HOME: join(root, '.codex')}), refused('work/.codex/rules/parent.rules'));
+    assert.deepEqual(await open({CODEX_HOME: join(root, '.codex')}), refused('work/.codex/rules/parent.rules', 'in a folder above the project'));
     // A file that does not end in .rules is not a rules file, as Codex reads them.
     rmSync(join(root, 'work', '.codex', 'rules', 'parent.rules')); put('work/.codex/rules/notes.txt');
     assert.deepEqual((await open({CODEX_HOME: join(root, '.codex')}))[0], 'bound');
     put('work/project/.codex/hooks.json', '{"hooks": {}}');
     assert.deepEqual(await open({CODEX_HOME: join(root, '.codex')}), ['refused', 'project-hooks',
-      `The hooks file <root>/work/project/.codex/hooks.json is in a project folder. A hook runs a command at its event. ${why} Move the hooks to your user Codex config, or remove the file, then start the client again.`, ['initialize', 'initialized']]);
+      `The hooks file <root>/work/project/.codex/hooks.json is in the project. A hook runs a command at its event. ${why} Check the hooks. If you trust them, move them to your Codex config (<root>/.codex/hooks.json). If not, remove them. Then start the client again.`, ['initialize', 'initialized']]);
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
 
@@ -196,7 +198,7 @@ test('fake 26: a hooks file in the main checkout of a linked worktree refuses (R
     const opened = await owner.openThread({project, task: 'T400', run: 'R1461', instructions: INSTRUCTIONS});
     await owner.stop();
     assert.deepEqual([opened.code, f.methods()], ['project-hooks', ['initialize', 'initialized']]);
-    assert.match(opened.error.message, /^The hooks file .*\/main\/app\/\.codex\/hooks\.json is in a project folder\./);
+    assert.match(opened.error.message, /^The hooks file .*\/main\/app\/\.codex\/hooks\.json is in the main checkout of the project worktree\./);
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
 
@@ -472,7 +474,8 @@ function clientRun({fakeOptions = {}, env = {}, argv = CLIENT_ARGS} = {}) {
   const f = fakeChild(fakeOptions);
   let text = '', handler, ended = false;
   // writableLength is the output that waits for the terminal, as a stream gives it; a test can raise it.
-  const output = {writableLength: 0, write(chunk) { text += chunk; return true; }};
+  // It says 'drain' when a test emits it, as a stream does when the terminal took all that waited.
+  const output = Object.assign(new EventEmitter(), {writableLength: 0, write(chunk) { text += chunk; return true; }});
   const input = new PassThrough();
   // An undefined value removes that variable.
   const merged = Object.fromEntries(Object.entries({...CLIENT_ENV, ...env}).filter(([, value]) => value !== undefined));
@@ -517,14 +520,17 @@ test('client: the start lines name the binary and its hash, warn without a pin, 
   assert.deepEqual(pinned.lines(), [HEADER[0], ...READY, STOPPED]);
 });
 
+// The fixture gives the same warning at each turn: the client shows it once in the session (R1565-4). A near line
+// that means one phrase says "this", not "one of these" (R1565-3).
 test('client: a mode phrase note says that the line goes to the chief; a near line says that no mode changed (R1504-9)', async () => {
-  const run = await client(['sage mode', '', 'sage mode please']);
+  const run = await client(['sage mode', '', 'sage mode please', 'please turn sage mode on']);
   assert.equal(run.code, 0);
   assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [
     '[You typed the mode phrase "sage mode". The client sends it to the chief, which switches the mode and says so.]', WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]',
-    '[No mode changed: this line is not a mode phrase, so the chief gets it as a normal line. To switch, type one of these alone: sage mode, sage mode off.]', WARNING, `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]',
+    '[No mode changed: this line is not a mode phrase, so the chief gets it as a normal line. To switch, type one of these alone: sage mode, sage mode off.]', `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]',
+    '[No mode changed: this line is not a mode phrase, so the chief gets it as a normal line. To switch, type this alone: sage mode.]', `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]',
     STOPPED]);
-  assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/start').map(message => message.params.input[0].text), ['sage mode', 'sage mode please']);
+  assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/start').map(message => message.params.input[0].text), ['sage mode', 'sage mode please', 'please turn sage mode on']);
 });
 
 test('client: model text and controller strings cannot forge a client line or send control bytes (R1505-1, R1503-2, R1502-4)', async () => {
@@ -799,6 +805,39 @@ test('client: a terminal that takes no output stops the turn once with a message
   assert.deepEqual(run.f.methods().filter(method => method === 'turn/interrupt'), ['turn/interrupt']);
 });
 
+// The terminal stays paused past the end of the stopped turn and through the next turn. The result lines wait, and
+// show when the stream says 'drain'; other output of that time is dropped, and the result says so (R1554-2, R1555-1).
+test('client: after the 8 MiB stop, each turn result shows when the terminal takes output again, also when it is still paused at the end of the turn', async () => {
+  const hold = holdFirstTurn();
+  const run = clientRun({fakeOptions: hold.options});
+  run.input.write('Wait for an interrupt.\n');
+  await until(() => hold.held, 'the held turn');
+  run.input.write('Say one synthetic sentence.\n');
+  await until(() => run.lines().at(-1) === '[The chief is on a turn. Your line runs after it.]', 'the queued line note');
+  run.output.writableLength = 8 * 1024 * 1024 + 1;
+  run.f.emit([{method: 'item/completed', params: {threadId: THREAD, turnId: 'held-turn', item: {type: 'agentMessage', id: 'm-1', text: 'dropped one'}}}]);
+  // The client stops the first turn; the second turn runs and completes; the input ends; the client stops. All of it
+  // while the terminal takes no output.
+  await until(() => run.f.methods().filter(method => method === 'turn/start').length === 2, 'the second turn');
+  run.input.end();
+  assert.equal(await run.code, 0);
+  const full = '[The terminal takes no output: more than 8 MiB waits for it. The client stopped the turn, and it drops output until the terminal takes output again. If you pressed Ctrl-S, press Ctrl-Q.]';
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), ['[The chief is on a turn. Your line runs after it.]', full]);
+  run.output.writableLength = 0;
+  run.output.emit('drain');
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), ['[The chief is on a turn. Your line runs after it.]', full,
+    '[The client stopped the turn, because the terminal took no output.]',
+    '[Turn completed. Some output of this turn did not show, because the terminal took no output.]', STOPPED]);
+});
+
+// One frame holds one whole agent message, so a reply over the old 1 MiB frame bound completes (R1555-2).
+test('client: an agent message of 2 MiB shows in full, and the turn completes', async () => {
+  const big = `${'x'.repeat(2 * 1024 * 1024)} end`;
+  const run = await client(['Say one synthetic sentence.'], {edit: stream => JSON.parse(JSON.stringify(stream).replaceAll(SYNTHETIC_REPLY, big))});
+  assert.equal(run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [WARNING, `chief> ${big}`, '[Turn completed.]', STOPPED]);
+});
+
 test('client: bidi, zero-width and line separator characters never reach the terminal; a config value cannot forge Ready fields (R1524-3, R1526-4)', async () => {
   const hidden = 'a\u202eb\u2066c\u2069d\u200ee\u200ff\u061cg\u200bh\u200di\u2060j\ufeffk\u2028l\u2029m\u202an';
   const forged = 'x, approval never, sandbox read-only.] [Type';
@@ -1004,12 +1043,12 @@ test('real owned controller: a project config that widens the sandbox or moves a
       await f.owner.start();
       const opened = await f.owner.openThread({project: f.project, task: 'T400', run: 'R1461', instructions: 'Synthetic owned controller test.'});
       // The message names the project folder, which differs in each run.
-      found[name] = [opened.state, opened.code, opened.error.message.replace(f.project, '<project>'), opened.status.state,
+      found[name] = [opened.state, opened.code, opened.error.message.replaceAll(f.project, '<project>').replaceAll(f.root, '<root>'), opened.status.state,
         f.requests.filter(request => request.url === '/v1/responses').length];
     } finally { await f.owner.stop(); await f.close(); }
   }
   saveEvidence('real-project-layer', found);
-  const refused = key => ['refused', 'selection-origin', `The setting ${key} comes from the project config in <project>/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${key} to your user config, then start the client again.`, 'stopped', 0];
+  const refused = key => ['refused', 'selection-origin', `The setting ${key} comes from the project config in <project>/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting ${key}. If you trust it, move it to your Codex config (<root>/.codex/config.toml). If not, remove it. Then start the client again.`, 'stopped', 0];
   assert.deepEqual(found, {widen: refused('sandbox_workspace_write.network_access'), reviewer: refused('approvals_reviewer')});
 });
 
@@ -1037,17 +1076,17 @@ test('real owned controller: a project MCP server, hook, approval feature, rules
   }
   saveEvidence('real-project-programs', found);
   const config = ['initialize', 'initialized', 'config/read'], files = ['initialize', 'initialized'];
-  const origin = name => `The setting ${name} comes from the project config in <root>/work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your user config, a managed config or the launch flags. Move ${name} to your user config, then start the client again.`;
+  const origin = name => `The setting ${name} comes from the project config in <root>/work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (<root>/.codex/config.toml). If not, remove it. Then start the client again.`;
   const why = 'An agent can change project files, so the client refuses the rules and hooks files of the project and of each folder above it.';
-  const rules = path => `The rules file <root>/${path} is in a project folder. A rule can let a command run with no approval or outside the sandbox. ${why} Move the rules to <root>/.codex/rules, or remove the file, then start the client again.`;
+  const rules = (path, where) => `The rules file <root>/${path} is ${where}. A rule can let a command run with no approval or outside the sandbox. ${why} Check the rules. If you trust them, move them to your Codex config (<root>/.codex/rules/). If not, remove them. Then start the client again.`;
   const refused = (code, message, sent) => ({state: 'refused', code, message, status: 'stopped', sent, marker: false, posts: 0});
   assert.deepEqual(found, {
     mcp: refused('selection-origin', origin('mcp_servers.probe'), config),
     hook: refused('selection-origin', origin('hooks.SessionStart'), config),
     feature: refused('selection-origin', origin('features.request_permissions_tool'), config),
-    rules: refused('project-rules', rules('work/project/.codex/rules/default.rules'), files),
-    parentRules: refused('project-rules', rules('work/.codex/rules/parent.rules'), files),
-    hooksFile: refused('project-hooks', `The hooks file <root>/work/project/.codex/hooks.json is in a project folder. A hook runs a command at its event. ${why} Move the hooks to your user Codex config, or remove the file, then start the client again.`, files),
+    rules: refused('project-rules', rules('work/project/.codex/rules/default.rules', 'in the project'), files),
+    parentRules: refused('project-rules', rules('work/.codex/rules/parent.rules', 'in a folder above the project'), files),
+    hooksFile: refused('project-hooks', `The hooks file <root>/work/project/.codex/hooks.json is in the project. A hook runs a command at its event. ${why} Check the hooks. If you trust them, move them to your Codex config (<root>/.codex/hooks.json). If not, remove them. Then start the client again.`, files),
   });
 });
 
@@ -1112,7 +1151,8 @@ const reader = createInterface({input: process.stdin});
 reader.on('line', line => {
   const message = JSON.parse(line);
   if (!message.method) return;
-  if (message.method === 'turn/start') mark('turn-' + ++turns);
+  // The mark of each turn holds the text of its line.
+  if (message.method === 'turn/start') writeFileSync(marks + '/turn-' + ++turns, message.params.input[0].text);
   if (message.method === 'turn/start' && turns === 1 && process.env.FAKE_BIG) {
     // One agent message larger than the buffer of a terminal, then the end of the turn.
     const id = 'big-turn';
@@ -1142,7 +1182,7 @@ reader.on('line', line => {
 });
 reader.on('close', () => process.exit(0));
 `;
-async function signalFixture({pty, mark = 'turn-started', pump = true, env = {}} = {}) {
+async function signalFixture({pty, script = PTY, mark = 'turn-started', pump = true, env = {}} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-signal-')));
   const project = join(root, 'project'), marks = join(root, 'marks');
   mkdirSync(project); mkdirSync(marks);
@@ -1153,7 +1193,7 @@ async function signalFixture({pty, mark = 'turn-started', pump = true, env = {}}
   // detached: the client leads its own process group, as a job in a terminal does. With `pty`, the Python helper
   // runs the client on a pseudo terminal, types the `pty` text when it is not empty, waits for the `mark` (reading the
   // terminal only with `pump`), and closes the terminal.
-  const [file, ...args] = pty === undefined ? command : ['python3', '-I', '-c', PTY, pty, join(marks, mark), pump ? '1' : '0', ...command];
+  const [file, ...args] = pty === undefined ? command : ['python3', '-I', '-c', script, pty, join(marks, mark), pump ? '1' : '0', ...command];
   const client = spawn(file, args, {
     detached: true, stdio: ['pipe', 'pipe', 'pipe'],
     env: {PATH: process.env.PATH, SAGE_CODEX_CONTROLLER_BIN: join(root, 'codex'), FAKE_FIXTURE: fileURLToPath(new URL('./controller-fixture.json', import.meta.url)), FAKE_PROJECT: project, FAKE_MARKS: marks, ...env},
@@ -1276,4 +1316,72 @@ test('pty: closing the terminal during a turn stops the client with code 1 and e
 test('pty: a terminal that takes no output does not stop the client; it runs the next line, and a close then stops it (R1543-3)', {skip: PYTHON, timeout: 120000}, async () => {
   assert.deepEqual(await closedTerminal('Write a long text.\nSay one synthetic sentence.', {mark: 'turn-2', pump: false, env: {FAKE_BIG: String(512 * 1024)}}),
     {ready: true, marked: true, code: 1, killed: false, helperCode: 0, controllerExit: '0'});
+});
+
+// The owner pastes into a terminal of 80 columns, as a terminal app gives a paste: in pieces, with the echo read
+// meanwhile. Each step types its keys and waits a bounded count of short reads for its text; at the end the helper
+// waits for the client's exit, and stops only its own child, by its pid from fork, if the client stays up.
+const PASTE = `
+import fcntl, json, os, pty, select, struct, sys, termios, time
+steps, args = json.loads(sys.argv[1]), sys.argv[4:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(args[0], args)
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 80, 0, 0))
+out = bytearray()
+def pump():
+    if select.select([fd], [], [], 0.02)[0]:
+        try:
+            out.extend(os.read(fd, 65536))
+        except OSError:
+            pass
+def wait(text):
+    for _ in range(500):
+        if os.path.exists(sys.argv[2]) if text == '' else text.encode() in out:
+            return True
+        pump()
+    return False
+seen = [wait('[Type a line')]
+for keys, text in steps:
+    data, sent = keys.encode(), 0
+    for _ in range(20000):
+        if sent >= len(data):
+            break
+        if select.select([], [fd], [], 0.02)[1]:
+            sent += os.write(fd, data[sent:sent + 1024])
+        pump()
+    seen.append(wait(text))
+code = None
+for _ in range(500):
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done:
+        code = os.waitstatus_to_exitcode(status)
+        break
+    pump()
+killed = code is None
+if killed:
+    os.kill(pid, 9)
+    code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+os.close(fd)
+print(json.dumps({'seen': seen, 'code': code, 'killed': killed, 'escape': b'\\x1b' in out}))
+`;
+// A terminal in line mode keeps at most 1024 bytes of one line on macOS (MAX_CANON), so these lines never reached the
+// client before it read the terminal raw (R1554-1).
+test('pty: a pasted line of 3000 bytes and one of 60000 bytes each run as one turn with the full text; Ctrl-C and Ctrl-D still work', {skip: PYTHON, timeout: 120000}, async () => {
+  const first = `${'é'.repeat(700)}${'a'.repeat(1600)}`, second = `${'w'.repeat(59998)}é`;
+  assert.deepEqual([Buffer.byteLength(first), Buffer.byteLength(second)], [3000, 60000]);
+  // In the first line, the owner presses Left (a key sequence that the client ignores), then types two letters and
+  // removes them with Backspace.
+  // Each step types its keys, then waits for its text in the terminal ('' waits for the mark of the first turn).
+  const steps = [[`${first.slice(0, 700)}\x1b[Dxy\x7f\x7f${first.slice(700)}\r`, ''], ['\x03', '[You stopped the turn.'],
+    [`${second}\r`, '[Turn completed.]'], ['\x03', '[No turn is running.'], ['\x04', '[You stopped the controller. The session ended.]']];
+  const s = await signalFixture({pty: JSON.stringify(steps), script: PASTE, mark: 'turn-1'});
+  try {
+    assert.equal(await s.exited, 0);
+    assert.deepEqual(JSON.parse(s.out()), {seen: [true, true, true, true, true, true], code: 0, killed: false, escape: false});
+    assert.deepEqual(readdirSync(s.marks).filter(name => name.startsWith('turn-')).sort(), ['turn-1', 'turn-2', 'turn-started']);
+    assert.equal(readFileSync(join(s.marks, 'turn-1'), 'utf8'), first);
+    assert.equal(readFileSync(join(s.marks, 'turn-2'), 'utf8'), second);
+    assert.equal(readFileSync(join(s.marks, 'exited'), 'utf8'), '0', 'the controller ended by its own exit');
+  } finally { await s.close(); }
 });

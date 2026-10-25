@@ -19,7 +19,8 @@ const WAITING = '[Waiting for the model. Press Ctrl-C to stop the turn.]';
 // A turn with no event from the controller for this long shows WAITING, once.
 const WAIT_MS = 15000;
 // The output that may wait for a terminal that takes none (a paused or a stopped terminal). Past it, the client
-// stops the turn and drops output until the terminal takes it again, so its memory stays bounded.
+// stops the turn and drops output until the terminal takes it again, so its memory stays bounded. The client's own
+// result lines wait and show when the terminal takes output again, so each turn still shows how it ended.
 const TERMINAL_QUEUE_BYTES = 8 * 1024 * 1024;
 const TERMINAL_FULL = '[The terminal takes no output: more than 8 MiB waits for it. The client stopped the turn, and it drops output until the terminal takes output again. If you pressed Ctrl-S, press Ctrl-Q.]';
 
@@ -48,6 +49,34 @@ const REASONS = new Map([
   ['No terminal event within the interrupt grace', 'the controller did not end the turn after the client stopped it'],
   ['The turn/start reply has no turn id', 'the controller gave the turn no id'],
 ]);
+// A terminal in line mode keeps at most MAX_CANON bytes of one line (1024 on macOS), so a longer typed or pasted
+// line never reaches the client. So on a terminal the client reads each key (raw mode) and keeps the line itself:
+// Enter sends the line, Backspace removes the last character, Ctrl-C is the same as SIGINT, and Ctrl-D on an empty
+// line ends the input. It echoes only printable text and tabs; a key sequence (such as an arrow) and each other
+// control character are ignored. Node's readline in terminal mode does this too, but it draws the line again at
+// each wrap of the terminal width, so a paste of 12000 bytes into 80 columns takes minutes.
+const KEY_SEQUENCE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O.|.)?/gsu;
+function readTerminal(input, write, {line, interrupt, end}) {
+  let text = '', afterReturn = false;
+  input.setRawMode(true);
+  input.setEncoding('utf8');
+  const data = chunk => {
+    let echo = '';
+    const show = () => { if (echo) write(echo); echo = ''; };
+    for (const char of chunk.replace(KEY_SEQUENCE, '')) {
+      // A paste can give \r\n: one line end.
+      if (char === '\n' && afterReturn) { afterReturn = false; continue; }
+      afterReturn = char === '\r';
+      if (char === '\r' || char === '\n') { echo += '\n'; show(); const done = text; text = ''; line(done); }
+      else if (char === '\x03') { show(); interrupt(); }
+      else if (char === '\x04') { if (!text) { show(); input.off('data', data); input.setRawMode(false); end(); return; } }
+      else if (char === '\x7f' || char === '\b') { if (text) { text = text.replace(/.$/su, ''); echo += '\b \b'; } }
+      else if (char === '\t' || oneLine(char) === char) { text += char; echo += char; }
+    }
+    show();
+  };
+  input.on('data', data);
+}
 // The process gives a lost request as "Connection closed; outcome uncertain: <reason>" or "<reason>; outcome uncertain".
 const plain = text => {
   const reason = String(text).replace(/^Connection closed; outcome uncertain: /, '').replace(/; outcome uncertain$/, '');
@@ -111,20 +140,27 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   // The stop: end of input, a second Ctrl-C, SIGTERM, or a lost terminal (SIGHUP). Each wakes the loop below.
   let ready = false, stopAsked = false, inputEnded = false, turnActive = false, hinted = false, wake = () => {};
   // After the terminal is lost, a write gives EIO or EPIPE, so the client writes nothing more.
-  let terminalLost = false, terminalFull = false, fullStop = false, owner;
-  const write = text => {
+  let terminalLost = false, terminalFull = false, fullStop = false, dropped = false, owner;
+  // The client's result lines that wait while the terminal takes no output (`keep`); other output is dropped then.
+  const held = [];
+  const write = (text, keep = false) => {
     if (terminalLost) return;
     if ((output.writableLength ?? 0) > TERMINAL_QUEUE_BYTES) {
+      if (keep) held.push(text); else dropped = true;
       if (terminalFull) return;
       terminalFull = true;
       output.write(`${TERMINAL_FULL}\n`);
+      // The stream says 'drain' when the terminal took all that waited: the held lines show then.
+      output.once?.('drain', () => write(''));
       if (turnActive && !fullStop) { fullStop = true; owner.interrupt().catch(() => {}); }
       return;
     }
     terminalFull = false;
-    output.write(text);
+    const all = held.splice(0).join('') + text;
+    if (all) output.write(all);
   };
   const say = (...lines) => { for (const line of lines) write(`${oneLine(line)}\n`); };
+  const tell = line => write(`${oneLine(line)}\n`, true);
   const chief = text => { for (const line of String(text).split(/\r?\n/)) write(`chief> ${oneLine(line)}\n`); };
   // A controller text of several lines gives several lines, each with the prefix, so no line of it looks like the client's.
   const framed = (prefix, text, suffix) => {
@@ -152,14 +188,17 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   if (!binary.expectedSha256) say('[Warning: SAGE_CODEX_CONTROLLER_SHA256 is not set, so the client did not compare the binary with a known hash. To pin this binary, set it to the hash above.]');
 
   let rootThread = null;
+  const warned = new Set();
+  const warnOnce = (...parts) => { const key = parts.join('\0'); if (!warned.has(key)) { warned.add(key); framed(...parts); } };
   owner = createControllerProcess({executable: binary.path, executableSha256: binary.sha256, cwd: project,
     env: Object.fromEntries(Object.entries(env).filter(([, value]) => typeof value === 'string')),
     onEvent(event) {
       if (turnActive) awaitModel();
       const params = event.message.params ?? {};
       if (event.kind === 'server-request-refused') say(requestLine(event.method, params));
-      else if (event.method === 'warning' && typeof params.message === 'string') framed('Warning from the controller: ', params.message, '');
-      else if (event.method === 'configWarning' && typeof params.summary === 'string') framed('Warning about your Codex config: ', params.summary, params.path ? ` (${params.path})` : '');
+      // The controller can give the same warning at each turn; the client shows each warning once in a session.
+      else if (event.method === 'warning' && typeof params.message === 'string') warnOnce('Warning from the controller: ', params.message, '');
+      else if (event.method === 'configWarning' && typeof params.summary === 'string') warnOnce('Warning about your Codex config: ', params.summary, params.path ? ` (${params.path})` : '');
       else if (event.method === 'item/completed' && params.threadId === rootThread && params.item?.type === 'agentMessage') chief(params.item.text);
     }}, {spawn, schedule});
 
@@ -173,14 +212,15 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   };
   // After the turn: the controller stops now, the fix for the line, a typed line waits, or the owner types the next line.
   const then = (hint, fix = false) => (stopAsked || (inputEnded && !queue.length) ? ' The controller stops now.' : fix || !queue.length ? ` ${hint}` : '');
-  onSignal(signal => {
+  const onSignalOrKey = signal => {
     if (signal === 'SIGHUP') { terminalLost = true; requestStop(); return; }
     if (signal !== 'SIGINT' || !ready || hinted) { requestStop(); return; }
     hinted = true;
     if (!turnActive) { say('[No turn is running. Press Ctrl-C again or Ctrl-D to stop the controller.]'); return; }
     say('[Stopping the turn... Press Ctrl-C again to stop the controller.]');
     owner.interrupt().catch(() => {});
-  });
+  };
+  onSignal(onSignalOrKey);
 
   async function session() {
     try { await owner.start(); } catch (error) {
@@ -199,19 +239,20 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     say(`[Ready: task ${args.task}, run ${args.run}. The chief uses your Codex config: model ${shown(model.value)}${model.origin === 'default' ? ' (the Codex default)' : ''}, approval ${shown(approvalPolicy.value)}, sandbox ${shown(sandbox.value)}.]`, HOW_TO);
     ready = true;
 
-    const reader = createInterface({input, crlfDelay: Infinity, terminal: false});
-    reader.on('line', text => {
+    const line = text => {
       if (!text.trim() || stopAsked) return;
       if (turnActive) say('[The chief is on a turn. Your line runs after it.]');
       queue.push(text); wake();
-    });
-    reader.on('close', () => {
+    };
+    const end = () => {
       inputEnded = true;
       // The lines already typed still run, then the controller stops. A pipe's end can come in any read, so the end
       // of input never stops a turn by itself: Ctrl-C does that.
       if (turnActive && !stopAsked) say('[Your input ended. The controller stops after the lines that you typed. Press Ctrl-C to stop the turn now.]');
       wake();
-    });
+    };
+    if (input.isTTY) readTerminal(input, write, {line, end, interrupt: () => onSignalOrKey('SIGINT')});
+    else createInterface({input, crlfDelay: Infinity, terminal: false}).on('line', line).on('close', end);
     owner.fenced().then(() => wake());
     for (;;) {
       if (stopAsked) break;
@@ -219,33 +260,36 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       if (owner.status().reason) break;
       if (queue.length) {
         const text = queue.shift();
-        hinted = false; turnActive = true; waited = false; fullStop = false;
+        hinted = false; turnActive = true; waited = false; fullStop = false; dropped = false;
         const command = classify({text});
         if (command.kind === 'phrase') say(`[You typed the mode phrase "${command.phrase}". The client sends it to the chief, which switches the mode and says so.]`);
-        if (command.kind === 'near') say(`[No mode changed: this line is not a mode phrase, so the chief gets it as a normal line. To switch, type one of these alone: ${command.phrases.join(', ')}.]`);
+        if (command.kind === 'near') say(`[No mode changed: this line is not a mode phrase, so the chief gets it as a normal line. To switch, type ${command.phrases.length > 1 ? 'one of these' : 'this'} alone: ${command.phrases.join(', ')}.]`);
         awaitModel();
         const result = await owner.runTurn(text).catch(error => ({state: 'not-sent', error}));
         turnActive = false; cancelWait();
-        say(turnLine(result, then, fullStop));
+        const ended = turnLine(result, then, fullStop);
+        tell(dropped && !fullStop ? ended.replace(/]$/, ' Some output of this turn did not show, because the terminal took no output.]') : ended);
         // After a Ctrl-C the owner may not expect the line that waits, so the client says that it starts.
-        if (hinted && result.state === 'interrupted' && queue.length && !stopAsked) say('[The line that you typed during the turn starts now.]');
+        if (hinted && result.state === 'interrupted' && queue.length && !stopAsked) tell('[The line that you typed during the turn starts now.]');
         continue;
       }
       if (inputEnded) break;
       await new Promise(resolve => { wake = resolve; });
     }
-    if (queue.length) say(`[${queue.length} typed line${queue.length === 1 ? '' : 's'} did not run.]`);
+    if (queue.length) tell(`[${queue.length} typed line${queue.length === 1 ? '' : 's'} did not run.]`);
     return 'session';
   }
   // stop() runs on every path, so the controller never outlives the client.
   const outcome = await session().catch(error => { say(`[The client failed: ${error.message}]`); return 'failed'; });
-  // An open input keeps the process alive after a stop by Ctrl-C or a signal, so the client releases it.
+  // An open input keeps the process alive after a stop by Ctrl-C or a signal, so the client releases it, and gives
+  // the terminal back its line mode.
+  if (input.isRaw) input.setRawMode(false);
   input.destroy?.();
   const status = await owner.stop();
   const clean = !terminalLost && (stopAsked || inputEnded) && status.state === 'stopped' && status.reason === 'Stop requested';
-  if (status.state !== 'stopped') say('[The controller did not stop after SIGTERM and SIGKILL. Find its codex app-server process and stop it.]');
-  else if (clean) say('[You stopped the controller. The session ended.]');
-  else if (outcome !== 'refused') say(`[The session ended early: ${plain(status.reason)}. ${RESTART}]`);
+  if (status.state !== 'stopped') tell('[The controller did not stop after SIGTERM and SIGKILL. Find its codex app-server process and stop it.]');
+  else if (clean) tell('[You stopped the controller. The session ended.]');
+  else if (outcome !== 'refused') tell(`[The session ended early: ${plain(status.reason)}. ${RESTART}]`);
   return clean ? 0 : 1;
 }
 

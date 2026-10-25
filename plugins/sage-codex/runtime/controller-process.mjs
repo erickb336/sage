@@ -2,10 +2,11 @@ import {spawn as nativeSpawn} from 'node:child_process';
 import {realpathSync} from 'node:fs';
 import {isAbsolute} from 'node:path';
 import {createControllerTransport, OWNED_CONTROLLER_CONFIG} from './controller-transport.mjs';
-import {bindPolicy, bindTask, bindTurnText, checkConfig, checkProjectFiles, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, checkProjectFiles, codexHome, turnOutcome} from './controller-binding.mjs';
 
 // Limits bound one wire frame and retained stderr bytes, not total process output.
-const DEFAULT_FRAME_BYTES = 1024 * 1024;
+// One frame can hold one whole agent message, so the frame bound is the event bound of a turn (maxEventBytes).
+const DEFAULT_FRAME_BYTES = 64 * 1024 * 1024;
 const DEFAULT_DIAGNOSTIC_BYTES = 16 * 1024;
 function positive(value, name) {
   if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`Invalid ${name}`);
@@ -55,7 +56,9 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
   let windowEvents = 0, windowDeltas = 0, windowBytes = 0, sequence = 0;
   let resolveFenced;
   const fencedPromise = new Promise(resolve => { resolveFenced = resolve; });
-  let buffered = Buffer.alloc(0);
+  // The bytes of the frame that is not complete yet. Only its count is kept: a copy of each piece would cost the
+  // square of a large frame.
+  let frameBytes = 0;
   const decoder = new TextDecoder('utf-8', {fatal: true});
   let text = '';
   function status() {
@@ -141,13 +144,13 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
         const newline = bytes.indexOf(10, offset);
         const end = newline === -1 ? bytes.length : newline;
         const segment = bytes.subarray(offset, end);
-        if (buffered.length + segment.length > maxFrameBytes) throw new Error('Frame byte limit exceeded');
-        buffered = Buffer.concat([buffered, segment]);
+        if (frameBytes + segment.length > maxFrameBytes) throw new Error('Frame byte limit exceeded');
+        frameBytes += segment.length;
         text += decoder.decode(segment, {stream: true});
         if (newline === -1) break;
         text += decoder.decode();
-        const length = buffered.length;
-        buffered = Buffer.alloc(0);
+        const length = frameBytes;
+        frameBytes = 0;
         const line = text; text = '';
         observe(connection.receive(line, 'owned-process'), length);
         offset = newline + 1;
@@ -181,7 +184,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
         }
         child.stdout.on('data', parse);
         child.stdout.on('end', () => {
-          try { decoder.decode(); if (buffered.length) throw new Error('Incomplete frame'); }
+          try { decoder.decode(); if (frameBytes) throw new Error('Incomplete frame'); }
           catch { fence('Incomplete protocol stream'); }
           fence('Protocol stream ended');
         });
@@ -217,7 +220,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
       if (realpathSync(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
       checkProjectFiles(task.project, environment);
       const config = await inspect();
-      checkConfig(config);
+      checkConfig(config, codexHome(environment));
       const thread = await bounded(connection.startThread({cwd, ephemeral: true, developerInstructions: input.instructions}), inspectionTimeoutMs, 'Thread start observation expired');
       binding = bindPolicy({binary: {path: executable, sha256: executableSha256}, args: OWNED_LAUNCH_ARGS, initialize: initialized, config, thread, task});
       return Object.freeze({state: 'bound', policy: binding});
