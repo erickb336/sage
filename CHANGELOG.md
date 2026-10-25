@@ -7,6 +7,7 @@ Each date is the day of the first commit that made the change. Older changes are
 
 ## 2026-10-25
 
+- **Waits in the chat's task lookup and on the programs list.** When you ask about a task that waits, the chat now gives the task page's Now and Next lines: for example "Waits for T10 (abandoned): it cannot start", and "Next: Nothing until the wait changes". Before, it said "In the backlog" and "Next: The build". On the programs list and in the chat's programs lines, a program whose breakdown waits for you, or that the chief revises, now names each task that cannot start.
 - **Harder Codex rules.** The Codex hook now also blocks these ways around a sage rule:
   - in sage mode, a role agent's command that names codex and pipes text into a shell or an interpreter with no script and no `-c` or `-e` text (also `bash --norc`, `sh -s --`, `busybox sh`, `node --input-type=commonjs`), or runs a program or a script that a link, a copy or a redirection of the same command makes (`ln -s`, `cp`, `printf … > r.sh; sh r.sh`);
   - a role agent's message to another thread: `send_input` (multi-agent v1), and `send_message` and `followup_task` (multi-agent v2, in the default `collaboration` namespace), because a message to the chief's thread would count as typed by you, and a reviewer's message could make the implementer change the branch. The chief, and agents without a `sage_` name, send as usual;
