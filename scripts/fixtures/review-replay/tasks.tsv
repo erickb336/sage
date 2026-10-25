@@ -1,0 +1,6 @@
+id	title	size	risk	route	state	branch	pr	round	keys	hold	extra	priority	kind	waits	program
+T1	Save names	small	input	build,code-review,security-review,qa	merged	sample/t1	11	1	R2-1,R3-1			P1	bug-fix		
+T2	Help text	large		build,code-review,ux-review,qa	merged	sample/t2	12	0				P2	docs		
+T3	Old task with a run without tokens	small		build,code-review,qa	merged	sample/t3	13	0							
+T4	Not merged yet	small		build,code-review,qa	framed			0							
+T5	Follow-up of T1	tiny		build	merged	sample/t5	14	0
