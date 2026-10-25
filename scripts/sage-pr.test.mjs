@@ -290,6 +290,22 @@ test("merge runs the merge check, merges only the reviewed head, and fetches the
   assert.notEqual(main, head); // the stand-in squashed: the new main is a new commit that the mirror fetched
 });
 
+test("R1708-1: merge runs the head branch rule too: a task that shares the branch but is not on the pull request refuses it", () => {
+  const w = world();
+  const head = w.commit("b.txt");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
+  w.pr("create", "T1");
+  w.forge("T1", "state", "verified");
+  w.sage("task", "add", "--title", "second", "--size", "small"); // T2
+  w.sage("task", "T2", "set", "branch=claude/t1"); // the sage shares T1's branch with T2, with no pr=
+  refused(w.pr("merge", "T1"), /merge check: PR 1's head branch "claude\/t1" is also the branch of \S+ T2, which is not on PR 1/);
+  assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0, "no gh pr merge ran");
+  w.sage("task", "T2", "set", "branch=");
+  const r = w.pr("merge", "T1");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^merged claude\/t1 at /);
+});
+
 test("the argument grammar: exactly import, create, view or merge and a task id; everything else refuses before any git or gh", () => {
   const w = world();
   const head = w.commit("b.txt", { imported: false });
