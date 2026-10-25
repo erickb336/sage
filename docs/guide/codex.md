@@ -17,6 +17,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The stop check | Yes | No, until native captures prove it |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
 | Role agents (lead, implementer, reviewers, QA) | Yes | Yes: the chief puts the role text at the top of each spawn message, and starts every role agent itself (no lead yet: the chief does the lead's work). See [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md) |
+| The brief check | Yes: the hook refuses a brief without every field | Yes, as a check, not a block: the chief runs the `brief` tool before each spawn. Each role agent starts with the project's standing orders and its checked brief, and a spawn with no checked brief gives the chief a warning ([The brief check](#the-brief-check)) |
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
 | sage mode: agent caps and the push rules in code | Yes | No |
 | Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt |
@@ -49,14 +50,14 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 
    You see ``Added plugin `sage` from marketplace `sage`.`` Then `codex plugin list` shows `sage@sage  installed, enabled`.
 
-3. Run `codex` in a project folder. At the "Hooks need review" screen ("8 hooks are new or changed"), choose **Trust all and continue**. Codex runs the sage hooks only after this step.
+3. Run `codex` in a project folder. At the "Hooks need review" screen ("10 hooks are new or changed"), choose **Trust all and continue**. Codex runs the sage hooks only after this step.
 
    > **Note:** `codex exec` skips hooks without your trust, and it gives no warning.
 
 4. Send a message. Above the reply, you see one status, for example:
 
    ```text
-   ↳ Hook · sage 0.1.0 is installed. Codex 0.160.0. sage hooks: all 8 trusted. To start sage mode, send this message alone: sage mode
+   ↳ Hook · sage 0.1.0 is installed. Codex 0.160.0. sage hooks: all 10 trusted. To start sage mode, send this message alone: sage mode
    ```
 
    The status says when some sage hooks do not have your trust yet, and it warns when your Codex version is outside the tested range. Codex starts a session at your first message, so the status comes then.
@@ -106,11 +107,23 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `verdict`, `round`, `merge_check`, `log` | `verdict`, `round`, `merge-check`, `log` |
 | `standing`, `standing_add`, `pages` | `standing`, `standing add`, `pages` |
 | `gate_add`, `gate_answer` | `gate add`, `gate answer` |
+| `brief` | None: the brief check ([next section](#the-brief-check)) |
 
 - Each tool takes `project`, the absolute path of the project's checkout, and the command's options by their names.
 - The tools run the same checks as the commands. A refusal comes back as a tool error with the reason of the command.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it. Under full access, an agent's shell can still change the logbook.
 - The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.
+
+## The brief check
+
+In Codex, a hook cannot read a spawn message: with a real model, Codex sends it encrypted. So the chief checks each brief with a tool before the spawn, and the hooks read what the tool keeps.
+
+1. Before each spawn, the chief calls `brief` with the task name (for example `sage_implementer_t12`) and the whole brief. The tool names each missing field of `GOAL` to `STANDING`, by the same field list as Claude Code. It keeps the brief in the logbook (`briefs/<task name>.json`).
+2. The chief fixes the missing fields and calls `brief` again, until the tool says `checked: all 10 fields`. Then it spawns the agent.
+3. When the agent starts (`SubagentStart`), the hook gives it a note: the project's standing orders, the `FORBIDDEN` field of its checked brief, and the brief. With no checked brief on record, the note says `sage: no checked brief for this task.`
+4. After the spawn (`PostToolUse`), when no checked brief is on record for that task name, the chief gets one warning that names the missing fields and says to run the brief check.
+
+The check does not block a spawn, and no hook changes the spawn message. The hooks find the record by the folder that Codex runs in, so start Codex in the project folder.
 
 ## The rules in Codex
 
@@ -120,7 +133,8 @@ The hook `hooks/gate-hook.mjs` holds these rules. Codex runs it before each shel
 | --- | --- | --- |
 | A merge runs only with autopilot on and a passing merge check for that head commit, in the one form `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, from the main thread | sage mode | Codex blocks any other merge, and the chief gets one line with the reason. A verified merge runs with no approval prompt: the hook allows its network approval itself |
 | The chief changes no files | sage mode, the main thread | Codex blocks the chief's `apply_patch` edit. The chief briefs an implementer, and agents edit as before |
-| A reviewer, QA or the PE changes no files | sage mode, a role agent whose task name names that role | Codex blocks its `apply_patch` edit, with one line: the agent reports a finding instead |
+| A reviewer, QA or the PE changes no files | sage mode, a role agent whose task name names that role | Codex blocks its `apply_patch` edit and its shell commands that write a file, with one line: the agent reports a finding instead. It still reads files and runs the checks |
+| A role agent starts no Codex from the shell | Every mode, a role agent whose task name starts with `sage_` | Codex blocks `codex exec`, `codex` and every other `codex` command of the agent, with one line: a new Codex session would run outside the hooks of this session |
 | No one changes files under a `.codex` folder | Every mode, every thread | Codex blocks the `apply_patch` edit, or the shell write that names the folder. Codex reads project settings from that folder, so you make such changes yourself |
 | No shell command names the Codex sage folder, and none resumes or forks a Codex session | Every mode, every thread | Codex blocks the command, with one line. The sage folder holds the logbook and the mode files; the logbook tools change them |
 
@@ -128,7 +142,7 @@ For every other approval, the hook does not decide, so Codex shows its own promp
 
 The hook reads sage mode from the mode file of the session (in `SAGE_HOME`, or `CODEX_HOME/sage`, under `.hooks/codex/`), with the same reader as the mode hook: a damaged file is off. Autopilot counts only when the mode file and your own typed messages in Codex's record of the thread both turn it on, so an agent that writes a mode file unlocks no merge. The merge check needs `gh`, logged in, and the logbook's verdicts for the head commit, as in Claude Code.
 
-Limits: the hook reads a shell command's text, so a command that hides a folder name (for example in a variable) is not blocked; Codex's own sandbox keeps `.codex` and the Codex home read-only in the workspace-write mode. A shell write by the chief or a reviewer is not blocked either: the edit rules cover `apply_patch`.
+Limits: the hook reads a shell command's text, so a command that hides a folder name (for example in a variable) is not blocked; Codex's own sandbox keeps `.codex` and the Codex home read-only in the workspace-write mode. A shell write by the chief is not blocked either: the chief's edit rule covers `apply_patch`.
 
 ## What comes next
 

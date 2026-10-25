@@ -104,7 +104,7 @@ Every phrase, also the board forms, and the exact rules: [Every phrase](docs/gui
 | An agent that pushes to main, force-pushes or merges. | An agent that hides a command from the hook on purpose. A sandbox is planned. |
 | A merge without its clean review cycles on that exact commit. A task with no review or QA in its route needs only its checks to pass. | Anyone with your GitHub token who removes branch protection. |
 | A mode turned on by an agent's text: only your own message turns a mode on. | The cost of many agents: each one is a run on your plan or API credits. |
-| In Codex: an unverified merge, the chief's own edits in sage mode, and any edit under a `.codex` folder ([The rules in Codex](docs/guide/codex.md#the-rules-in-codex)). | In Codex: a shell write that hides a `.codex` folder name, for example in a variable. |
+| In Codex: an unverified merge, the chief's own edits in sage mode, a reviewer's shell write, a role agent's new Codex session, and any edit under a `.codex` folder ([The rules in Codex](docs/guide/codex.md#the-rules-in-codex)). | In Codex: a shell write that hides a `.codex` folder name, for example in a variable. |
 
 Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). Report a vulnerability: [SECURITY.md](SECURITY.md).
 
