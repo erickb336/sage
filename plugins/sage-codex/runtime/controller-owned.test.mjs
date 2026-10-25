@@ -1652,16 +1652,26 @@ test('client: on a terminal, paste text that holds the paste end mark never answ
   await run.type('Do the work.\r');
   await until(() => run.lines().includes(ASK), 'the question');
   await run.settle();
+  // The probe, in one read. Its last end mark has no start mark, so the next line is pasted too: an empty line here.
   await run.type(`${PASTE_START}${PASTE_END}y\r${PASTE_END}`);
-  // The same paste in three reads: a key in a read with a paste mark is not typed, and an end mark with no start mark
-  // makes its line pasted.
+  await run.type('\r');
+  // Each rule alone, each line in its own reads. A key in a read with a paste mark is not typed:
+  await run.type(`${PASTE_START}${PASTE_END}y`);
+  await run.type('\r');
+  // a line with a paste mark answers only when a typed character comes after its last mark:
+  await run.type('n');
+  await run.type(`${PASTE_START}x${PASTE_END}`);
+  await run.type('\x7f');
+  await run.type('\r');
+  // an end mark with no start mark makes its line pasted:
+  await run.type(`${PASTE_START}${PASTE_END}${PASTE_END}`);
+  await run.type('y');
+  await run.type('\r');
+  // and an Enter in a read with a paste mark is not typed (the end mark after it makes the next line pasted too).
   await run.type(`${PASTE_START}${PASTE_END}`);
   await run.type('y');
   await run.type(`\r${PASTE_END}`);
-  // A line with a paste mark answers only when a typed character comes after its last mark.
-  await run.type(`${PASTE_START}zz${PASTE_END}`);
-  await run.type('\x7f\x7f');
-  await run.type('\r');
+  await run.type('n\r');
   assert.deepEqual(replies(run, ['s-1']), []);
   await run.type('n\r');
   run.f.emit([turnEnd('completed')]);
@@ -1669,7 +1679,7 @@ test('client: on a terminal, paste text that holds the paste end mark never answ
   await run.type('\x04');
   assert.equal(await run.code, 0);
   assert.deepEqual(replies(run, ['s-1']), [{id: 's-1', result: {decision: 'decline'}}]);
-  assert.deepEqual(run.shown(), ['Do the work.', ...COMMAND_BLOCK, 'y', PASTED, ...COMMAND_BLOCK, 'y', PASTED, ...COMMAND_BLOCK, 'zz\b \b\b \b', PASTED, ...COMMAND_BLOCK,
+  assert.deepEqual(run.shown(), ['Do the work.', ...COMMAND_BLOCK, ...['y', '', 'y', 'nx\b \b', 'y', 'y', 'n'].flatMap(line => [line, PASTED, ...COMMAND_BLOCK]),
     'n', '[You refused it.]', '[Turn completed.]', STOPPED]);
 });
 
