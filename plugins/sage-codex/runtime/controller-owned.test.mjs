@@ -2090,6 +2090,8 @@ for _ in range(500):
         code = os.waitstatus_to_exitcode(status)
         break
     pump()
+    # A closed terminal makes pump() return at once, so each try also waits 20 ms: up to 10 s in all (R1647).
+    time.sleep(0.02)
 killed = code is None
 if killed:
     os.kill(pid, 9)
