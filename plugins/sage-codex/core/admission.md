@@ -47,7 +47,7 @@ and other current workflows. The chief itself is the owner session, never a
 child role.
 
 The project holds at most three leads across its participating sessions. Each
-lead holds at most three children in its session and epoch. All reservations
+lead holds at most nine children in its session and epoch. All reservations
 also count toward project and total limits, so the lowest applicable limit wins.
 No stop, report, or mode change releases these slots. Completion and recovery
 still need their separate protocol.
