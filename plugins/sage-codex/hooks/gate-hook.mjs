@@ -261,65 +261,15 @@ function codexExecutables(env) {
 const printsOnly = (args) => args.length > 0 && args.every((word) => /^(?:--version|-V|--help|-h)$/.test(word));
 
 /**
- * The shells and interpreters that run a script, or the text piped into them as code, with the option that gives them
- * code as text instead (-c of a shell, -e of node, perl and ruby): with that option, the piped text is data.
- */
-const SHELL = /^(?:sh|bash|zsh|dash|ksh|csh|tcsh|fish)$/;
-const CODE_OPTION = [[SHELL, /^-[A-Za-z]*c[A-Za-z]*$/], [/^(?:node|nodejs)$/, /^-[A-Za-z]*[ep][A-Za-z]*$|^--(?:eval|print)(?:=|$)/],
-  [/^python\d*(?:\.\d+)?$/, /^-[A-Za-z]*[cm][A-Za-z]*$/], [/^perl\d*(?:\.[\d.]+)?$/, /^-[A-Za-z]*[eE][A-Za-z]*$/], [/^ruby\d*(?:\.[\d.]+)?$/, /^-[A-Za-z]*e[A-Za-z]*$/], [/^osascript$/, /^-e$/]];
-/** A run of a shell or an interpreter (busybox sh counts as sh): its code option and its arguments, or undefined. */
-function interpreter(p) {
-  const [name, args] = programName(p.word) === "busybox" ? [p.args[0] ?? "", p.args.slice(1)] : [programName(p.word), p.args];
-  const code = CODE_OPTION.find(([program]) => program.test(name))?.[1];
-  return code && { code, args, shell: SHELL.test(name) };
-}
-/** The script word of a shell or an interpreter, or "-" when it runs its standard input, or null when it runs -c or -e text. */
-function scriptOf({ code, args, shell }) {
-  for (let i = 0; i < args.length; i++) {
-    const word = args[i];
-    if (word === "--") return shell && args.slice(0, i).some((a) => /^-[A-Za-z]*s[A-Za-z]*$/.test(a)) ? "-" : args[i + 1] ?? "-";
-    if (word === "-" || code.test(word)) return word === "-" ? "-" : null;
-    if (shell && /^-[A-Za-z]*s[A-Za-z]*$/.test(word)) return "-";
-    if (!word.startsWith("-")) return word;
-  }
-  return "-";
-}
-/** The base names of the files that a command makes: each target of a > or >> redirection, and the last word of each ln, cp, mv or install. */
-function filesMade(runs, command, cwd, env) {
-  const made = new Set();
-  for (const p of runs) if (/^(?:ln|cp|mv|install)$/.test(programName(p.word)) && p.args.length) made.add(basename(p.args.at(-1)));
-  try {
-    for (const r of programsRun(command, cwd, env.PATH ?? "", { redirectEvidence: true, redirectParts: true })) if (/>/.test(r.operator ?? "") && r.target) made.add(basename(r.target));
-  } catch { /* the runs were read, so the redirections are too */ }
-  return made;
-}
-/**
- * Whether the reader cannot see which program a run starts (F-T471-1, R1711-1): a word from an expansion ($X, $(…), a
- * backtick); a path to a program that is no file yet (./y); a program, or a script of a shell or an interpreter, that a
- * link, a copy or a redirection of the same command makes (ln -s <codex> y; PATH=. y, or printf … > r.sh; sh r.sh); or
- * a shell or an interpreter that runs the text piped into it as code (echo codex exec hi | bash --norc, | sh -s --,
- * | node --input-type=commonjs).
- */
-function hidden(p, made) {
-  if (/[$`]/.test(p.word) || (!p.file && p.word.includes("/") && !CODEX_NAME.test(p.word)) || made.has(basename(p.word))) return true;
-  const run = interpreter(p);
-  const script = run && scriptOf(run);
-  return Boolean(script && (script === "-" ? p.piped : made.has(basename(script))));
-}
-
-/**
  * The arguments of each codex program that a shell command runs (after the program, or after node's script), read by
  * core's command reader (also after wrappers and in the -c text of a shell), or null when the reader cannot read the
- * command, or when the command names codex and runs a program that the reader cannot see (hidden). A program is
+ * command, or when the command names codex and runs a program from an expansion ($X, $(…), a backtick). A program is
  * Codex by its name, by the real file of a Codex executable, or as node's script. Codex's apply_patch links are not.
  */
 export function codexRuns(command, cwd = "/", env = process.env) {
   let runs;
   try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return null; }
-  if (/codex/i.test(command)) {
-    const made = filesMade(runs, command, cwd, env);
-    if (runs.some((p) => hidden(p, made))) return null;
-  }
+  if (/codex/i.test(command) && runs.some((p) => /[$`]/.test(p.word))) return null;
   const executables = codexExecutables(env);
   const codex = (word, file) => CODEX_NAME.test(word) || (Boolean(file) && executables.has(real(file)));
   const found = [];
@@ -336,9 +286,12 @@ const resumes = (args) => args.some((word) => /^(?:resume|fork)$/i.test(word));
 /** Whether a shell command runs Codex's apply_patch program, which writes files as the apply_patch tool does. */
 const runsPatch = (command, cwd, env) => { try { return programsRun(command, cwd, env.PATH ?? "").some((p) => PATCH_NAME.test(programName(p.word))); } catch { return true; } };
 
-/** The read commands of the state tool, which a child may run from the shell (pages only without record, logbook only without repair). */
-const STATE_READS = new Set(["status", "standing", "merge-check", "logbook"]);
-const readsOnly = (words) => (STATE_READS.has(words[0]) && !(words[0] === "logbook" && words.includes("repair"))) || (words[0] === "pages" && !words.includes("record"));
+/**
+ * The read commands of the state tool, which a child may run from the shell: pages without record, logbook without
+ * repair and standing without add (the state tool writes the logbook for each of these words).
+ */
+const STATE_READS = new Map([["status", null], ["merge-check", null], ["logbook", "repair"], ["standing", "add"], ["pages", "record"]]);
+const readsOnly = ([command, ...rest]) => STATE_READS.has(command) && !rest.includes(STATE_READS.get(command));
 const STATE_SCRIPT = /(?:^|\/)(?:skills\/sage\/sage\.mjs|mcp\/state-server\.mjs)$/;
 /**
  * Whether a shell command runs the plugin's MCP server or a state tool command that writes the logbook: the plugin's

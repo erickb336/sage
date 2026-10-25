@@ -645,35 +645,26 @@ test("a project under the desktop app's ~/.codex/worktrees edits as usual, with 
 /** A sage child's event fields: its agent_id and Codex's record of it, with its agent path. */
 const sageChild = (t, path) => ({ agent_id: "agent-9", transcript_path: record(t, { id: "019a0000-0000-7000-8000-0000000000ee", agent_path: path, source: { subagent: { thread_spawn: { depth: 1 } } } }) });
 
-test("a command that names codex and pipes text into a shell, or runs a link or copy that the same line makes, is unreadable (F-T471-1)", async (t) => {
-  const hidden = ["echo codex exec hi | sh", "printf 'codex exec hi' | bash -s", "echo 'require(\"child_process\").execSync(\"codex exec hi\")' | node -",
-    "ln -s /opt/homebrew/bin/codex y; ./y exec hi", `cp /opt/homebrew/bin/codex ${CWD}/c && ${CWD}/c exec hi`,
-    // R1711-1: a shell or an interpreter with options but no script and no -c or -e text, and a program or a script that the same command makes.
-    "echo codex exec hi | bash --norc", "echo codex exec hi | sh -s --", "echo codex exec hi | busybox sh", "echo codex exec hi | csh",
-    "echo 'require(\"child_process\").execSync(\"codex exec hi\")' | node --input-type=commonjs",
-    "ln -s /opt/homebrew/bin/codex y ; PATH=.:/usr/bin y exec hi", "cp /opt/homebrew/bin/codex ./node_modules/.bin/zz && npx zz exec hi", "printf 'codex exec hi' > r.sh ; sh r.sh"];
-  const others = ["echo codex | grep codex", "git log --oneline | grep codex", "cat notes.txt | sh", "./scripts/build.sh", "codex --version | head -1",
-    "rg -n codex src", "git log --grep codex | node scripts/count.mjs", "git diff | node scripts/count.mjs codex", "node scripts/codex-x.mjs", "npm test -- codex",
-    "cat .codex/config.toml", "echo codex | sh -c cat", "echo codex | node -e 'process.stdin.pipe(process.stdout)'", "printf codex > out.txt; grep codex out.txt", "git diff codex | python3 -c 'print(1)'"];
-  assert.deepEqual(hidden.filter((c) => codexRuns(c, CWD) !== null), []);
-  assert.deepEqual(others.filter((c) => codexRuns(c, CWD) === null), []);
-  assert.deepEqual(others.slice(0, 5).map((c) => codexRuns(c, CWD)?.length), [0, 0, 0, 0, 1]);
-  const reviewer = sageChild(t, "/root/sage_code_reviewer_t1_r1");
+test("in sage mode, normal commands that name codex run for every agent: a program by a path, in a subfolder, or behind a pipe (R1733-1)", async (t) => {
+  const reads = ["~/bin/tool codex", "pushd packages/sage-codex && ../../node_modules/.bin/esbuild hooks/gate-hook.mjs",
+    "(cd packages/sage-codex && ../../node_modules/.bin/esbuild hooks/gate-hook.mjs)", "cat codex.json | python3 -mjson.tool",
+    "rg -n codex src | node scripts/count.mjs", "codex --version", "cat .codex/config.toml"];
   const g = fixed({ sage: true });
-  assert.deepEqual(await Promise.all(hidden.map(async (c) => denied(await g.run(pre("Bash", c, reviewer))))), hidden.map(() => UNREAD_CODEX));
-  // The last four are shell writes for a read-only role (-c and -e text, a redirection): the implementer runs them.
-  const implementer = sageChild(t, "/root/sage_implementer_t1_r1");
-  for (const [who, list] of [[reviewer, others.slice(0, -4)], [implementer, others]]) {
-    assert.deepEqual(await Promise.all(list.map(async (c) => denied(await g.run(pre("Bash", c, who))))), list.map(() => undefined));
+  for (const [who, list] of [[{}, reads], [sageChild(t, "/root/sage_code_reviewer_t1_r1"), reads], [sageChild(t, "/root/helper_1"), reads],
+    [sageChild(t, "/root/sage_implementer_t1_r1"), [...reads, "cat x.json | python3 -mjson.tool > codex.json"]]]) {
+    assert.deepEqual(await Promise.all(list.map(async (c) => denied(await g.run(pre("Bash", c, who))))), list.map(() => undefined), who.transcript_path ?? "the chief");
   }
-  assert.equal(denied(await g.run(pre("Bash", hidden[0]))), undefined, "the chief");
+  // A program from an expansion stays unreadable for a role agent in sage mode.
+  assert.equal(denied(await g.run(pre("Bash", "$EDITOR codex/a.txt", sageChild(t, "/root/sage_implementer_t1_r1")))), UNREAD_CODEX);
 });
 
-test("a child's node run of a file that only has the state tool's name in it, or of a script that reads the state tool as data, runs; logbook repair is a write (R1713-1, R1711-2, R1712-4)", async (t) => {
+test("a child's node run of a file that only has the state tool's name in it, or of a script that reads the state tool as data, runs; logbook repair and standing add are writes (R1713-1, R1711-2, R1712-4, R1733-3)", async (t) => {
   const server = fileURLToPath(new URL("../plugins/sage-codex/mcp/state-server.mjs", import.meta.url));
   const runs = ["node src/message.mjs", "node src/usage.mjs", "node passage.mjs", "node my-state-server.js", `node scripts/lint.mjs ${TOOL}`,
-    `rg -l x ${server} | node scripts/count.mjs`, `git diff | node scripts/count.mjs`, `node ${TOOL} logbook`, `node ${TOOL} logbook --project ${CWD}`];
-  const writes = [`node ${TOOL} logbook repair --accept-loss runs --project ${CWD}`, `node ${TOOL} logbook --project ${CWD} repair --accept-loss runs`];
+    `rg -l x ${server} | node scripts/count.mjs`, `git diff | node scripts/count.mjs`, `node ${TOOL} logbook`, `node ${TOOL} logbook --project ${CWD}`,
+    `node ${TOOL} standing`, `node ${TOOL} standing --project ${CWD}`];
+  const writes = [`node ${TOOL} logbook repair --accept-loss runs --project ${CWD}`, `node ${TOOL} logbook --project ${CWD} repair --accept-loss runs`,
+    `node ${TOOL} standing add x --project ${CWD}`, `node ${TOOL} standing --project ${CWD} add x`];
   for (const mode of [{ sage: false }, { sage: true }]) {
     const g = fixed(mode);
     for (const path of ["/root/sage_qa_t1_r2", "/root/helper_1"]) {
