@@ -5570,7 +5570,10 @@ test("T439: a lead adds a run on its task's shared branch, but only the sage put
   assert.equal(denied(stateRun(s, "run add T1 --role implementer --branch claude/t2")), undefined, "its task's branch=");
   assert.match(denied(stateRun(s, "run add T1 --role implementer --branch claude/t3")) ?? "", NOT_OWN, "a branch of neither");
   assert.match(denied(stateRun(s, "task T1 set branch=claude/t2")) ?? "", NOT_OWN, "a lead never names another task's branch");
-  assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1")), undefined, "a branch named for its task");
+  // R1709-1: its runs pushed to the shared branch, so only the sage takes its task off it.
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1")) ?? "", NOT_OWN, "a lead never moves its task off a shared branch");
+  s.sage("task", "T1", "set", "branch=claude/t1-old"); // the sage moves it to a branch named for T1
+  assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1")), undefined, "from a branch named for its task, to another one");
 });
 
 test("F-T273-8: merge-check --head runs the same check by hand, and needs --pr", () => {

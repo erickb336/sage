@@ -973,8 +973,9 @@ const digest = (text) => createHash("sha256").update(text).digest("hex");
 const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task, or its task's branch=); run done <a run of these roles on its task>; finding add <its task> (no --key; --run only of a run that it added, and --class); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round or of an earlier one; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch= of a branch named for its task, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, while its lead run runs";
 /** Each key=value of task set: a key at most once, and each value as the lead may set it on this task (F-T273-2, F-T273-7). */
 const LEAD_PAIRS = {
-  // Only a branch named for its task: a lead never clears it (T275), and only the sage puts a task on another task's branch (T439).
-  branch: (branch, task, view, own) => branch !== "" && Boolean(stateTool.ofTask(own, branch)),
+  // Only a branch named for its task: a lead never clears it (T275), and only the sage puts a task on another task's branch
+  // (T439) or takes it off one, so a lead cannot move its task off a shared branch after its runs pushed there (R1709-1).
+  branch: (branch, task, view, own) => branch !== "" && Boolean(stateTool.ofTask(own, branch)) && (!task.branch || Boolean(stateTool.ofTask(own, task.branch))),
   pr: (pr, task, view, own) => /^[1-9]\d*$/.test(pr) && !task.pr && [...view.prTasks(pr)].every((id) => id === own),
   // Option A (F-T284-12): the lead closes the round's fix findings while repairing, and leaves repairing only after.
   // A refused move says which moves there are (F-T289-36).
