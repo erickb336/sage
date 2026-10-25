@@ -15,10 +15,11 @@ import { fileURLToPath } from "node:url";
 import { BRIEF_FIELDS, briefSections, missingBriefFields } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
 import { childTask, sageName, TASK_NAME } from "./report-gate.mjs";
+import { TESTED_CODEX } from "./sage-codex-hook.mjs";
 
 /** The largest brief, as core's brief reader: 32 KiB. */
 export const BRIEF_LIMIT = 32 * 1024;
-const UNREAD = "sage: the brief check could not read what Codex sent it, so this agent starts without its brief note. If this comes again, update the sage plugin or Codex.";
+const UNREAD = `sage: the brief check could not read what Codex sent it, so this agent starts without its brief note. If this comes again, update the sage plugin, and keep Codex in the tested range (${TESTED_CODEX.join(" to ")}).`;
 export const NAME_RULE = "sage_, the role with _ for -, the task, and the run, for example sage_implementer_t12_r40";
 
 const briefFile = (project, task, env) => join(tool.storeDir(project, env), "briefs", `${task}.json`);
