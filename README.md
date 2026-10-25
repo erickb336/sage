@@ -8,7 +8,7 @@ You say what you want in a session; the agents design, build, review and test it
   <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage"></a>
 </p>
 
-**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex, sage mode and autopilot now work through the sage plugin, and the lead and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS; Linux is not yet tested; Windows is not supported.
+**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex, sage mode and autopilot now work through the sage plugin, and the lead and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
 
 Start with the [Quick start](#quick-start). Then follow one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
 
@@ -36,7 +36,7 @@ And the toad? In the story, toads teach Sage Mode. So sage's mascot is a toad sa
 For Claude Code. For Codex, see [In Codex](#in-codex) below. Before you start:
 
 - Install Claude Code and sign in, with a Claude plan or API credits ([install Claude Code](https://code.claude.com/docs/en/setup)).
-- Install Node.js 20 or later, and git.
+- Install Node.js 20 or later (the minimum; CI runs the tests on Node 24), and git.
 - Install `gh` and log in (`gh auth login`). sage uses it for pull requests and the merge check.
 - Give your project a GitHub remote, if you can: without one, work stops at a verified branch.
 
@@ -52,7 +52,7 @@ For Claude Code. For Codex, see [In Codex](#in-codex) below. Before you start:
 
    You see `Successfully installed plugin: sage@sage (scope: user)`.
 2. Start a new session in a project folder: run `claude`. The first time, Claude Code asks you to trust the folder. A session that was already open does not get sage.
-3. Send the on phrase as a message of its own, with no other words:
+3. Send the on phrase, the words below, as a message of its own, with no other words:
 
    ```text
    sage mode
@@ -65,11 +65,11 @@ For Claude Code. For Codex, see [In Codex](#in-codex) below. Before you start:
 
 To update, run `claude plugin update sage@sage` and start a new session. To stop a task or uninstall sage, see [Using sage](docs/guide/using-sage.md).
 
-> **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
+> **Warning:** before you use programs (tasks of one goal) or tasks that wait for other tasks, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
 ### In Codex
 
-In the Codex CLI 0.160 to 0.164 (the desktop app should work the same way, but it is not checked yet, and it needs the CLI for these commands): run `codex plugin marketplace add https://github.com/erickb336/sage.git`, then `codex plugin add sage@sage`. Start `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). You also need Node.js 20 and `gh`, logged in (see [What you need](docs/guide/codex.md#what-you-need)).
+In the Codex CLI 0.160 to 0.164 (the desktop app should work the same way, but it is not checked yet, and it needs the CLI for these commands): run `codex plugin marketplace add https://github.com/erickb336/sage.git`, then `codex plugin add sage@sage`. Start `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
 
 ## The board
 
@@ -77,7 +77,7 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/board-dark.png">
-  <img alt="The board page on a laptop screen, with SAMPLE DATA: the project picker, the filter bar, a Needs you box with two program questions, and six columns side by side, from Backlog to Done. The first card of the Backlog column asks you to approve a program." src="docs/assets/board-light.png" width="100%">
+  <img alt="The board page on a laptop screen, with SAMPLE DATA: the project picker, the filter bar, a Needs you box with two program items, and six columns side by side, from Backlog to Done. The first card of the Backlog column asks you to approve a program." src="docs/assets/board-light.png" width="100%">
 </picture>
 
 *Sample data: every task and program in the screenshot is made up. The screenshot shows the first screen of the board on a laptop (1280 by 800 pixels): the project picker, the filters, the Needs you box and the columns, from Backlog to Done. The [board guide](docs/guide/board.md) describes the full board.*
