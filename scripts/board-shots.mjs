@@ -5,9 +5,9 @@
 // to the first card, and a shot of the worked example shows only the column with the task.
 // It also writes docs/assets/board-shots.json with the hash of the sample data, so that `npm run check` fails when the
 // sample changes and the screenshots do not. It serves the page from memory to Playwright's bundled Chromium (or the
-// headless shell at BOARD_BROWSER_PATH): no server, no port, and every other request fails. Playwright is not a
-// dependency of sage: give it through NODE_PATH.
-// Example: NODE_PATH="$PLAYWRIGHT_MODULES" PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" node scripts/board-shots.mjs
+// headless shell at BOARD_BROWSER_PATH): no server, no port, and every other request fails. Playwright is a pinned
+// devDependency; install its browser once with `npx playwright install --only-shell chromium`.
+// Example: node scripts/board-shots.mjs
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";

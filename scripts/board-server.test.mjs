@@ -337,6 +337,21 @@ test("board event streams keep the last valid content while an incomplete write 
   const repaired = await stream.next(p => !p.stale && p.html.includes("Sample repaired title")); assert.deepEqual(repaired.diagnostics, []);
 });
 
+test("R1506-F1: a table written in place after an earlier rename onto it still updates the board, on Linux too", async t => {
+  // Node's recursive fs.watch on Linux (24.21) watched each file's inode. After the rename, the path's watch stayed on the
+  // old inode and its folder's event named a known file, so the in-place writes below sent nothing (CI run 40140060375).
+  const f = await fixture(t), stream = events(f); t.after(() => stream.close());
+  assert.equal((await stream.next()).stale, false);
+  const target = join(f.project, "tasks.tsv"), temporary = join(f.project, "tasks.pending");
+  writeFileSync(temporary, tasks(row("Sample renamed title"))); renameSync(temporary, target);
+  await stream.next(p => !p.stale && p.html.includes("Sample renamed title"));
+  writeFileSync(target, "Sample invalid table header\nSample incomplete write\n");
+  const stale = await stream.next(p => p.stale);
+  assert.match(stale.html, /Sample renamed title/); assert.doesNotMatch(stale.html, /Sample incomplete write/);
+  writeFileSync(target, tasks(row("Sample written in place")));
+  await stream.next(p => !p.stale && p.html.includes("Sample written in place"));
+});
+
 test("T314 R1042-2: a bad name or archived value in a logbook's config.json is a warning: the board stays live and shows the warning", async t => {
   const f = await fixture(t), stream = events(f); t.after(() => stream.close());
   const initial = await stream.next(); assert.equal(initial.stale, false);
@@ -380,12 +395,12 @@ test("board watches a missing root and reattaches after root replacement without
 
 test("board watcher errors publish a stale diagnostic and recover on an observed root change", async t => {
   const original = fs.watch, captured = [];
-  fs.watch = (...args) => { const watcher = original(...args); captured.push({ path: args[0], options: args[1], watcher }); return watcher; };
+  fs.watch = (...args) => { const watcher = original(...args); captured.push({ path: args[0], watcher }); return watcher; };
   syncBuiltinESMExports();
   let f;
   try { f = await fixture(t); } finally { fs.watch = original; syncBuiltinESMExports(); }
   const stream = events(f); t.after(() => stream.close()); await stream.next();
-  const root = captured.find(item => item.path === f.root && item.options.recursive); assert.ok(root);
+  const root = captured.find(item => item.path === f.root); assert.ok(root);
   root.watcher.emit("error", new Error("sample watcher failure"));
   const stale = await stream.next(p => p.stale && p.diagnostics.some(d => /File watching/.test(d.message)));
   assert.match(stale.html, /Sample first task/); assert.doesNotMatch(stale.html, /sample watcher failure/);
@@ -399,9 +414,9 @@ test("board watcher errors publish a stale diagnostic and recover on an observed
 test("a parent rename that names only the destination refreshes the missing board root", async t => {
   const original = fs.watch, captured = [];
   // Simulate the allowed rename notification with no old-name event. No real watcher delivers extra events.
-  fs.watch = (path, options, callback) => {
+  fs.watch = (path, callback) => {
     const watcher = new EventEmitter(); watcher.close = () => { watcher.closed = true; };
-    captured.push({ path, options, callback, watcher });
+    captured.push({ path, callback, watcher });
     return watcher;
   };
   syncBuiltinESMExports();
@@ -410,7 +425,7 @@ test("a parent rename that names only the destination refreshes the missing boar
   const stream = events(f); t.after(() => stream.close());
   await stream.next(p => !p.stale);
   renameSync(f.root, join(f.dir, "renamed-source"));
-  const parent = captured.find(entry => entry.path === f.dir && !entry.options.recursive);
+  const parent = captured.find(entry => entry.path === f.dir);
   assert.ok(parent);
   parent.callback("rename", "renamed-source");
   // T216: a missing root is a quiet note, not a stale board.
