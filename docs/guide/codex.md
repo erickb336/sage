@@ -9,7 +9,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | Part of sage | Claude Code | Codex today |
 | --- | --- | --- |
 | Install from the sage marketplace | Yes | Yes: `codex plugin marketplace add`, then `codex plugin add sage@sage` |
-| A status at the start of each session | No | Yes: the chief gets the sage version, the Codex version, the trust of the sage hooks and the on phrase. You see a warning only when a sage hook has no trust yet or your Codex is outside the tested range |
+| A status at the start of each session | No | Yes: the chief gets the sage version, the Codex version, how many sage hooks have a trust record and the on phrase. You see a warning only when a sage hook has no trust record yet or your Codex is outside the tested range |
 | Principles and the writing skills | Yes | Yes: the same skills, including the `sage` skill for manual logbook commands |
 | A principle at the moment it applies | Yes | Yes, for a design request, a test or document patch, a README and a commit |
 | Advice after a failed check | Yes | No: Codex's shell hook output does not give a reliable exit status |
@@ -31,7 +31,7 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 ## What you need
 
 - Codex 0.160 to 0.164. sage was checked with the Codex CLI 0.160.0 and 0.164.0 on macOS, with a test model. The desktop app carries its own Codex (0.164.0-alpha in ChatGPT 26.1021); sage should work the same way there, but it was not run in the app yet.
-- The Codex CLI on your PATH, in that range, also when you use only the desktop app: the install commands below are CLI commands. To get it, run `npm install -g @openai/codex`.
+- The Codex CLI on your PATH, in that range, also when you use only the desktop app: the install commands below are CLI commands. To get it, run `npm install -g @openai/codex@0.164.0`.
 - Node.js 20 or later, on your PATH: the sage hooks are Node scripts.
 
 ## Install
@@ -56,13 +56,21 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 
    > **Note:** `codex exec` skips hooks without your trust, and it gives no warning.
 
-4. Send a message. When all is well, you see no sage line: the chief gets the status (the sage version, the Codex version, the trust of the 10 sage hooks, and how to start sage mode). You see a warning line only for a limit, for example:
+4. Send a message. When all is well, you see no sage line: the chief gets the status (the sage version, the Codex version, how many of the 10 sage hooks have a trust record, and how to start sage mode). You see a warning line only for a limit, for example:
 
    ```text
    sage: 3 of the 10 sage hooks are not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.
    ```
 
-   The other limit is a Codex version outside the tested range. Codex starts a session at your first message, so a warning comes then.
+   The other limit is a Codex version outside the tested range, for example:
+
+   ```text
+   sage: this is Codex 0.165.0, and sage is tested only with Codex 0.160 to 0.164. Some sage rules may not run.
+   ```
+
+   Codex starts a session at your first message, so a warning comes then. The status counts the trust records in your Codex config; Codex itself checks the hash of each hook and of the plugin's files, and it runs a hook only when both match.
+
+   > **Warning:** when no sage hook is trusted, no sage hook runs, so you see no sage line at all, also no warning. If sage mode does not start, type `/hooks` in the Codex CLI and trust the sage hooks.
 
 In the desktop app, do steps 1 and 2 in a terminal, with the Codex CLI (see [What you need](#what-you-need)). The app reads the same Codex home (`~/.codex`), so sage shows under the sage marketplace in its plugins list. An install from the app's own plugin list is not checked yet.
 
@@ -73,7 +81,7 @@ The desktop app puts its worktree threads under `~/.codex/worktrees`. sage's `.c
 ## Update and remove
 
 - To update, run `codex plugin marketplace upgrade sage`, then `codex plugin add sage@sage` again. A new sage version needs your trust again: Codex 0.164 asks for it again for every sage hook when any file of the plugin changes. At the next start, choose **Trust all and continue** again.
-- To remove sage, run `codex plugin remove sage@sage`, then `codex plugin marketplace remove sage`.
+- To remove sage, run `codex plugin remove sage@sage`, then `codex plugin marketplace remove sage`. Codex keeps the trust records of the sage hooks in your Codex config (`~/.codex/config.toml`, the `[hooks.state."sage@sage:..."]` tables), where they do nothing. To remove them too, delete those tables from the file.
 
 ## Turn on sage mode
 
@@ -100,7 +108,7 @@ The hooks run only after you trust them (step 3). In `codex exec`, Codex skips h
 
 ## The logbook tools
 
-The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI. Its tools write the logbook: one tool for each command of the state tool that the chief and the leads use.
+The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI. Its tools write the logbook: one tool for each command of the state tool that the chief uses.
 
 | Tool | Command of the state tool |
 | --- | --- |
@@ -115,7 +123,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 
 - Each tool takes `project`, the absolute path of the project's checkout, and the command's options by their names.
 - The tools run the same checks as the commands. A refusal comes back as a tool error with the reason of the command.
-- Only the chief records the logbook. Codex blocks a role agent's call of a tool that writes (for example `verdict`, `gate_answer` or `brief`), and the agent gets one line that says to put it in its report.
+- Only the chief records the logbook. Codex blocks a role agent's call of a tool that writes (for example `verdict`, `gate_answer` or `brief`), and the agent gets one line that says to put it in its report. Codex's own review thread (`/review`, the app's review button) and its approval check count as role agents here.
 - A role agent may call `status`, `standing`, `merge_check`, and `pages` without `record`.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it.
 - Under full access (`danger-full-access`), an agent's shell can write any file, also the logbook, the mode files and Codex's record of your messages. So sage mode gives no guarantee there.
@@ -141,11 +149,11 @@ The hook `hooks/gate-hook.mjs` holds these rules. Codex runs it before each shel
 | A merge runs only with autopilot on and a passing merge check for that head commit, in the one form `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, from the main thread | sage mode | Codex blocks any other merge, and the chief gets one line with the reason. A verified merge runs with no approval prompt: the hook allows its network approval itself |
 | A push takes the one push form of Claude Code: `git push [-u] origin <branch>`, with the literal name of the task's branch, never main, never a force-push | sage mode, every thread | Codex blocks any other push, with one line that gives the form |
 | The chief changes no files | sage mode, the main thread | Codex blocks the chief's `apply_patch` edit. The chief briefs an implementer, and agents edit as before |
-| A reviewer or QA changes no files | sage mode, a role agent whose task name names that role, and every agent under it | Codex blocks its `apply_patch` edit and its shell commands that write a file, with one line: the agent reports a finding instead. It still reads files and runs the checks. The same rule holds the PE and the lead when they come to Codex |
+| A reviewer or QA changes no files | sage mode, a role agent whose task name names that role, and every agent under it; also Codex's own review thread and approval check | Codex blocks its `apply_patch` edit and its shell commands that write a file (also Codex's own `apply_patch` program), with one line: the agent reports a finding instead. It still reads files and runs the checks. The same rule holds the PE and the lead when they come to Codex |
 | A name that starts with `sage_` but is not a sage task name counts as a read-only role | sage mode | Codex blocks its edits and shell writes, with one line that names the task name form |
-| Only the chief records the logbook | Every mode, every role agent | Codex blocks a role agent's call of a logbook tool that writes, also `gate_answer` and `brief`, with one line: the agent puts it in its report |
-| A role agent starts no agents | Every mode, a role agent whose task name starts with `sage_`, and every agent under it | Codex blocks its `spawn_agent`, with one line |
-| A role agent starts no Codex from the shell | Every mode, a role agent whose task name starts with `sage_` | Codex blocks `codex exec`, `codex` and every other run of the installed Codex: by its name, by its real file (also through a link or as `node <codex.js>`), and a command that names codex and runs a program from a variable or a substitution. One line says why: a new Codex session would run outside the hooks of this session |
+| Only the chief records the logbook | Every mode, every agent that is not the chief, also Codex's own review thread and approval check | Codex blocks the agent's call of a logbook tool that writes, also `gate_answer` and `brief`, and its shell run of the state tool's write commands or of the `sage` MCP server, with one line: the agent puts it in its report. The read commands (`status`, `standing`, `merge-check`, `logbook`, and `pages` without `record`) run. The hook tells the chief from the other threads by Codex's record of the thread: Codex's review thread has the session's id and no agent id, but its record names a review source |
+| A role agent starts no agents | Every mode, a role agent whose task name starts with `sage_`, every agent under it, and Codex's own review thread and approval check | Codex blocks its `spawn_agent`, with one line. An agent whose record the hook cannot read is blocked too |
+| A role agent starts no Codex from the shell | Every mode, a role agent whose task name starts with `sage_`, and Codex's own review thread and approval check | Codex blocks `codex exec`, `codex` and every other run of a Codex executable, by its name or by its real file (also through a link or as `node <codex.js>`), with one line: a new Codex session would run outside the hooks of this session. `codex --version`, `codex --help` and the other programs of Codex's package (for example the `rg` that Codex puts first on the shell's PATH) run. In sage mode, a command that names codex and runs a program from a variable or a substitution is blocked too |
 | No one changes files under a `.codex` folder of the project | Every mode, every thread | Codex blocks the `apply_patch` edit, or the shell write that names the folder. Codex reads project settings from that folder, so you make such changes yourself. Only the path from the project folder down counts, so a project under `~/.codex/worktrees` edits as usual |
 | No shell command names the Codex sage folder or the Codex sessions folder, and none resumes or forks a Codex session | Every mode, every thread | Codex blocks the command, with one line. The sage folder holds the logbook and the mode files, and the sessions folder holds Codex's record of your typed messages; the logbook tools change the logbook |
 
@@ -157,6 +165,7 @@ Limits:
 
 - The hook reads a shell command's text, so a command that hides a folder name (for example in a variable) is not blocked. Codex's own sandbox keeps `.codex` and the Codex home read-only in the workspace-write mode.
 - A reviewer's or QA's shell write is blocked only in the plain write forms that the hook reads: a redirection, `tee`, `cp`, `mv`, `rm`, `sed -i` and a short `node -e` or `bash -c` text. A write through `git apply`, `git commit`, a script file that `node` or `python` runs, or `make` is not blocked. The reviewer's brief and role text tell it to change no files, and the review checks the branch.
+- A reviewer's commit through these forms can also be pushed to the task's branch. Read the branch's commits before a merge, or keep autopilot off for such a task.
 - A shell write by the chief is not blocked either: the chief's edit rule covers `apply_patch`.
 - Under full access (`danger-full-access`), sage mode gives no guarantee: an agent can write any file, also the mode files, the logbook and Codex's record of your messages.
 

@@ -15,12 +15,16 @@ export const TASK_NAME = /^sage_([a-z]+(?:_[a-z]+)*)_t[1-9]\d*(?:_r[1-9]\d*)?$/;
 /** A name that claims a sage agent: it starts with sage_, in any letter case. */
 export const sageName = (name) => /^sage_/i.test(name);
 
-/** Every part of a Codex child's agent path (its own task name last), from the session_meta line that starts its transcript. */
-export function agentPath(path) {
+/** Codex's record of a thread: the payload of the session_meta line that starts its transcript. It throws when there is none. */
+export function sessionMeta(path) {
   const meta = JSON.parse(readFileSync(path, "utf8").split("\n", 1)[0]);
-  if (meta?.type !== "session_meta") throw Error("no session_meta");
-  return String(meta.payload?.agent_path ?? "").split("/").filter(Boolean);
+  if (meta?.type !== "session_meta" || meta.payload === null || typeof meta.payload !== "object") throw Error("no session_meta");
+  return meta.payload;
 }
+
+/** Every part of a Codex child's agent path (its own task name last), from its session record. */
+export const agentPathOf = (meta) => String(meta.agent_path ?? "").split("/").filter(Boolean);
+export const agentPath = (path) => agentPathOf(sessionMeta(path));
 
 /** The task name of a Codex child: the last part of its agent path. */
 export const childTask = (path) => agentPath(path).at(-1) ?? "";
