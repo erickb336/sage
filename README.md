@@ -8,7 +8,7 @@ You say what you want in a session; the agents design, build, review and test it
   <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage"></a>
 </p>
 
-**Status:** early, used every day by its author to build sage itself. Claude Code is supported; Codex support is in progress, and sage mode and autopilot do not work there yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS; Linux is not yet tested; Windows is not supported.
+**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex, sage mode and autopilot now work through the sage plugin, and the lead and the board phrases do not yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS; Linux is not yet tested; Windows is not supported.
 
 Start with the [Quick start](#quick-start). Then follow one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
 
@@ -33,7 +33,7 @@ And the toad? In the story, toads teach Sage Mode. So sage's mascot is a toad sa
 
 ## Quick start
 
-For Claude Code. For Codex (Codex CLI 0.159.2 or 0.160.0), see [sage in Codex](docs/guide/codex.md). Before you start:
+For Claude Code. For Codex, see [In Codex](#in-codex) below. Before you start:
 
 - Install Claude Code and sign in, with a Claude plan or API credits ([install Claude Code](https://code.claude.com/docs/en/setup)).
 - Install Node.js 20 or later, and git.
@@ -67,6 +67,10 @@ To update, run `claude plugin update sage@sage` and start a new session. To stop
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
+### In Codex
+
+In the Codex CLI 0.160 to 0.164 (the desktop app should work the same way, but it is not checked yet, and it needs the CLI for these commands): run `codex plugin marketplace add https://github.com/erickb336/sage.git`, then `codex plugin add sage@sage`. Start `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)).
+
 ## The board
 
 Send `show board` to see what needs you, the agents at work, and each task in its column. On the Mac, it also starts the board page and gives its address. The board server, and [Remote Control](docs/guide/remote-control.md) (sessions from your phone), need macOS.
@@ -91,7 +95,7 @@ Send each phrase alone, as the whole message.
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase).
+Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase). In Codex, the mode phrases and `sage help` work, and the board phrases do not yet ([sage in Codex](docs/guide/codex.md#turn-on-sage-mode)).
 
 ## Safety and limits
 
@@ -100,6 +104,7 @@ Every phrase, also the board forms, and the exact rules: [Every phrase](docs/gui
 | An agent that pushes to main, force-pushes or merges. | An agent that hides a command from the hook on purpose. A sandbox is planned. |
 | A merge without its clean review cycles on that exact commit. A task with no review or QA in its route needs only its checks to pass. | Anyone with your GitHub token who removes branch protection. |
 | A mode turned on by an agent's text: only your own message turns a mode on. | The cost of many agents: each one is a run on your plan or API credits. |
+| In Codex: an unverified merge, a push outside the push form, the chief's own edits in sage mode, a reviewer's plain shell write, any edit under a project's `.codex` folder, a role agent's logbook write, and a new agent or a new Codex session that a role agent starts ([The rules in Codex](docs/guide/codex.md#the-rules-in-codex)). | In Codex: a shell write that hides a `.codex` folder name, for example in a variable; a reviewer's write through `git apply`, `git commit`, a script or `make`; anything under full access. |
 
 Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). Report a vulnerability: [SECURITY.md](SECURITY.md).
 

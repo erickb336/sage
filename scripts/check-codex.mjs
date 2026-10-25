@@ -1,10 +1,14 @@
 // Read-only native packaging check: no installation, configuration writes or model turn.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "./build.mjs";
 import { waitNative } from "./fixtures/codex-native/wait-native.mjs";
+
+// Codex names each event of hooks.json in camel case, one entry for each handler.
+const hookEvents = Object.entries(JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/hooks/hooks.json"), "utf8")).hooks)
+  .flatMap(([event, groups]) => groups.flatMap((group) => group.hooks.map(() => event[0].toLowerCase() + event.slice(1)))).sort();
 
 const binary = process.env.SAGE_CODEX_BIN ?? "codex";
 const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("CODEX_FLORA_CCA_") && !["CODEX_EXEC_SERVER_REMOTE", "CODEX_SESSION_ID", "CODEX_THREAD_ID", "CODEX_ENVIRONMENT_ID"].includes(key)));
@@ -58,7 +62,7 @@ if (versionResult.code !== 0 || !/^codex-cli \d+\.\d+\.\d+(?:[-+.][A-Za-z0-9.-]+
           const plugin = reply.result.plugin;
           const expected = readdirSync(join(ROOT, "plugins/sage-codex/skills")).map((name) => `sage:${name}`).sort();
           assert.deepEqual(plugin.skills.map((skill) => skill.name).sort(), expected);
-          assert.deepEqual(plugin.hooks.map((hook) => hook.eventName).sort(), ["preToolUse", "userPromptSubmit"]);
+          assert.deepEqual(plugin.hooks.map((hook) => hook.eventName).sort(), hookEvents);
           assert.equal(plugin.summary.source.path, join(ROOT, "plugins/sage-codex"));
           discovered = expected.length;
           finish();
@@ -75,6 +79,6 @@ if (versionResult.code !== 0 || !/^codex-cli \d+\.\d+\.\d+(?:[-+.][A-Za-z0-9.-]+
     console.error(`Codex package check failed: ${failure.message}`);
     process.exitCode = 1;
   } else {
-    console.log(`${version}: discovered ${discovered} skills and 2 hooks from the Codex package. No model turn or install was attempted.`);
+    console.log(`${version}: discovered ${discovered} skills and ${hookEvents.length} hooks from the Codex package. No model turn or install was attempted.`);
   }
 }

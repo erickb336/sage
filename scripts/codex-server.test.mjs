@@ -754,7 +754,7 @@ test('chief context replays activation across connections without repeating on o
   const strip = text => text.replace(/^Sage chief instructions: part [12] of [12]\n\n/, '');
   assert.equal(strip(first.hookSpecificOutput.additionalContext) + strip(second.hookSpecificOutput.additionalContext), expected);
   for (const output of [first, second]) assert.ok(Buffer.byteLength(output.hookSpecificOutput.additionalContext, 'utf8') < 8_000);
-  assert.match(expected, /sage_prepare_task/); assert.match(expected, /Autopilot remains off/);
+  assert.match(expected, /spawn_agent/); assert.match(expected, /Autopilot off:\*\* the user merges/);
   await client.close();
   const retry = await connect(t, f);
   assert.deepEqual(await retry.call(f.prompt('sage mode')), first);
@@ -788,7 +788,7 @@ test('chief context retries rendering failure without losing the saved activatio
   assert.equal(readAdmission(f.mode.directory).modes.length, 1);
   writeFileSync(bindings, saved);
   const restored = await client.call(f.prompt('sage mode'));
-  assert.match(restored.hookSpecificOutput?.additionalContext, /sage_prepare_task/);
+  assert.match(restored.hookSpecificOutput?.additionalContext, /spawn_agent/);
   assert.deepEqual(await client.call(f.prompt('sage mode')), restored);
   assert.equal(readAdmission(f.mode.directory).modes.length, 1);
   await client.close();

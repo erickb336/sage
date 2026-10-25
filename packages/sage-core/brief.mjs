@@ -15,6 +15,27 @@ export function parseBrief(input) {
   return brief;
 }
 
+/** A field's first line: its name at the start of a line, after spaces or marks such as - or **, as in the report check. */
+const HEADER = new RegExp(`^[ \\t*_#|>-]*(${BRIEF_FIELDS.join("|")})\\b[*_]*:?[*_ \\t]*(.*)$`);
+
+/** The text of each field that a brief gives, by name. A field runs to the next field; a name given twice is text. */
+export function briefSections(text) {
+  const fields = {};
+  let field;
+  for (const line of String(text).split(/\r?\n/)) {
+    const match = HEADER.exec(line);
+    if (match && !Object.hasOwn(fields, match[1])) [field, fields[match[1]]] = [match[1], match[2]];
+    else if (field) fields[field] += `\n${line}`;
+  }
+  return Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, value.trim()]));
+}
+
+/** The fields that a brief's text does not give, or gives with no text, in BRIEF_FIELDS order. */
+export function missingBriefFields(text) {
+  const given = briefSections(text);
+  return BRIEF_FIELDS.filter(field => !given[field]);
+}
+
 export function renderBrief(input) {
   const brief = parseBrief(input);
   return BRIEF_FIELDS.map(field => `${field}\n${brief[field]}`).join("\n\n");

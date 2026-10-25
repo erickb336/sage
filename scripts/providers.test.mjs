@@ -457,7 +457,7 @@ test("manifests point to disjoint plugin roots and only supported Codex hooks", 
   const manifest = json("plugins/sage-codex/.codex-plugin/plugin.json");
   assert.equal(manifest.hooks, "./hooks/hooks.json");
   const hooks = json("plugins/sage-codex/hooks/hooks.json").hooks;
-  assert.deepEqual(Object.keys(hooks), ["UserPromptSubmit", "PreToolUse"]);
+  assert.deepEqual(Object.keys(hooks), ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "SubagentStart", "SubagentStop"]);
   assert.deepEqual([...outputs()], [...outputs()], "packaging is deterministic");
 });
 
@@ -2445,7 +2445,7 @@ test("shared chief instructions preserve the packaged agent and every brief fiel
   assert.match(text, /model sonnet/);
 });
 
-test("shared chief Codex instructions keep unsupported routes and automatic merges inactive", async t => {
+test("shared chief Codex instructions keep unsupported routes inactive, and merge only by autopilot through the plugin's hook", async t => {
   const f = isolated(t, "codex");
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   assert.equal(typeof api.renderChiefInstructions, "function");
@@ -2456,16 +2456,16 @@ test("shared chief Codex instructions keep unsupported routes and automatic merg
   assert.match(prepared, /prepared native adapter renders these shared rules on verified owner\s+activation and restores them after supported native compaction/);
   assert.match(prepared, /installed manual preview does not load this automatic chief role/);
   assert.match(prepared, /Full automatic Sage remains disabled/);
-  assert.match(text, /the chief starts a lead, and the lead starts its permitted team/);
-  assert.match(text, /a tiny task goes through a lead to an implementer/);
-  assert.match(text, /Wait for a successful preparation receipt before the native spawn call/);
-  assert.match(text, /same unique name/);
-  assert.match(text, /does not create an assignment, start an agent, or grant a slot/);
+  assert.match(text, /you start every agent yourself, and you do the lead's work/);
+  assert.match(text, /a tiny task goes to an implementer/);
+  assert.match(text, /call `spawn_agent` in the `collaboration` namespace/);
+  assert.match(text, /`fork_turns: "none"`/);
+  assert.doesNotMatch(text, /sage_prepare_task|admission|preparation/i);
   assert.match(text, /PE, designer, and arena-judge routes are not yet integrated and verified/);
-  assert.match(text, /Autopilot remains off/);
-  assert.match(text, /Never merge, push to the main branch, or force-push/);
+  assert.match(text, /Autopilot off:\*\* the user merges\. Never push to main, force-push/);
+  assert.match(text, /The plugin's hook allows only this exact command when the merge check passes/);
   assert.match(text, /state tool checks at least one cycle/);
-  assert.doesNotMatch(text, /CLAUDE\.md|~\/workspace|\.claude|sage:report|model fable|opus|sonnet|gh pr merge|gh api|gate G15|\{\{|sage-core-chief/);
+  assert.doesNotMatch(text, /CLAUDE\.md|~\/workspace|\.claude|sage:report|model fable|opus|sonnet|gh api|gate G15|\{\{|sage-core-chief/);
   // Rendering this document must not register the chief as an admitted child role.
   assert.throws(() => api.renderRoleInstructions("chief-of-staff", bindings), /Unknown child role/);
 });
@@ -3092,7 +3092,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   writeFileSync(preload, `import {ChildProcess} from 'node:child_process';\nimport {appendFileSync} from 'node:fs';\nChildProcess.prototype.kill = function(signal) { appendFileSync(${JSON.stringify(signalLog)}, String(signal)+'\\n'); this.stdin?.end(); return true; };\n`);
   const plugin = {
     skills: readdirSync(join(ROOT, 'plugins/sage-codex/skills')).map(name => ({name: `sage:${name}`})),
-    hooks: ['preToolUse', 'userPromptSubmit'].map(eventName => ({eventName})),
+    hooks: ['permissionRequest', 'postToolUse', 'preToolUse', 'preToolUse', 'sessionStart', 'sessionStart', 'subagentStart', 'subagentStop', 'userPromptSubmit', 'userPromptSubmit'].map(eventName => ({eventName})),
     summary: {source: {path: join(ROOT, 'plugins/sage-codex')}},
   };
   if (scenario === 'bad-manifest') plugin.hooks = [];
@@ -3109,7 +3109,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   assert.equal(readFileSync(closed, 'utf8'), 'stdin closed', 'the child acknowledged transport closure');
   if (scenario === 'success') {
     assert.equal(result.code, 0, stderr);
-    assert.match(stdout, /discovered \d+ skills and 2 hooks/);
+    assert.match(stdout, /discovered \d+ skills and 10 hooks/);
   } else {
     assert.equal(result.code, 1, stdout + stderr);
     assert.doesNotMatch(stdout, /discovered \d+ skills/);
