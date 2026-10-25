@@ -40,7 +40,9 @@ test('owned startup launches only the owned entry and inspects the fixed cwd', a
   assert.equal(f.launch.options.env.CODEX_HOME, '/fixture/home');
   assert.deepEqual(f.launch.args, ['app-server', '--stdio', '--owned-controller', '--strict-config',
     '-c', 'agents.enabled=true', '-c', 'features.multi_agent=false', '-c', 'features.multi_agent_v2=true', '-c', 'features.goals=false',
-    '-c', 'web_search="disabled"', '-c', 'features.plugins=false', '-c', 'features.apps=false', '-c', 'features.remote_plugin=false']);
+    '-c', 'web_search="disabled"', '-c', 'features.plugins=false', '-c', 'features.apps=false', '-c', 'features.remote_plugin=false',
+    // The cwd and each folder above it are untrusted, so the controller loads no project layer at any load (T435).
+    '-c', 'projects={ "/fixture/project"={ trust_level="untrusted" }, "/fixture"={ trust_level="untrusted" }, "/"={ trust_level="untrusted" } }']);
   assert.deepEqual(f.sent.at(-1).params, {cwd: '/fixture/project', includeLayers: true});
   assert.deepEqual(Object.keys(f.owner).sort(), ['events', 'fenced', 'inspect', 'interrupt', 'openThread', 'runTurn', 'start', 'status', 'stop']);
   await assert.rejects(f.owner.runTurn('no thread yet'), /No bound root thread/);
