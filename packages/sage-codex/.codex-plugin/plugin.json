@@ -1,7 +1,7 @@
 {
   "name": "sage",
   "version": "0.1.0",
-  "description": "Sage principles, writing guides, a task logbook and guided agent workflows for Codex. Automatic enforcement and autopilot remain unavailable.",
+  "description": "sage for Codex, in the desktop app and the CLI: principles, writing skills, the logbook, and a status at the start of each session. sage mode and autopilot are in progress.",
   "author": {
     "name": "Erick Benitez-Ramos"
   },
@@ -10,6 +10,9 @@
   "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Sage for Codex",
-    "shortDescription": "Principles, task tracking and guided agent workflows"
+    "shortDescription": "Principles, task tracking and guided agent workflows",
+    "developerName": "Erick Benitez-Ramos",
+    "category": "Productivity",
+    "websiteURL": "https://github.com/erickb336/sage"
   }
 }
