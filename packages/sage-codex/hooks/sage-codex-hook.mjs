@@ -34,8 +34,11 @@ const CODEX_HOST = {
   update: null,
 };
 
-const AUTOPILOT_ON = "sage: autopilot is on. In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. After a task's clean cycles and a passing merge_check, merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.";
-const UNKNOWN = "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin or Codex.";
+/** The Codex versions (major.minor, both ends included) that sage was checked with. */
+export const TESTED_CODEX = ["0.160", "0.164"];
+
+const AUTOPILOT_ON ="sage: autopilot is on. In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. After a task's clean cycles and a passing merge_check, merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.";
+const UNKNOWN = `sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (${TESTED_CODEX.join(" to ")}).`;
 const HOOK_OFF = "sage: the sage hook is off (SAGE_HOOKS=off), so this phrase switched no mode. Start Codex without SAGE_HOOKS=off to use the phrases.";
 const DAMAGED_NOTE = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off. This is a normal session until the user sends "sage mode" alone, also if the history shows the chief role: you may change files yourself. Tell the user this in one line of your reply.';
 const FORK_NOTE = 'sage: this thread is a fork, so sage mode and autopilot are off in it, also if the history shows the chief role: this is a normal session, and you may change files yourself. If the history shows the chief role, tell the user in one line of your reply that sage mode is off in this fork, and that the message "sage mode" alone turns it on.';
@@ -46,7 +49,7 @@ export function chiefText() {
   const bindings = JSON.parse(readFileSync(join(ROOT, "chief-bindings.json"), "utf8"));
   return [
     'sage: sage mode is on. You are the user\'s chief of staff until the user sends the message "sage mode off", alone.',
-    `The state tool: node "${TOOL}" <command> --project <path>. Each shell call starts fresh, so write this full command every time.`,
+    `The state tool, for reads only: node "${TOOL}" <command> --project <path>. Write the logbook only with the sage MCP tools.`,
     renderChiefInstructions(bindings),
   ].join("\n\n");
 }

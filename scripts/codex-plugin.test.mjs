@@ -115,7 +115,7 @@ test("on resume of a session over Node's string limit, the SessionStart hook sti
 test("the SessionStart hook says when it cannot read the Codex version, and ignores other events", (t) => {
   const { run } = installed(t, { trust: ALL });
   assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex version unknown. sage hooks: 10 of 10 have a trust record (Codex checks each hash).\n${START}`,
-    "sage: sage could not read the Codex version, and sage is tested only with Codex 0.160 to 0.164. Some sage rules may not run."));
+    "sage: the hook could not read the Codex version, and sage is tested only with Codex 0.160 to 0.164. Some sage rules may not run."));
   assert.equal(run({ hook_event_name: "UserPromptSubmit", prompt: "hello" }), "");
 });
 
@@ -140,9 +140,45 @@ test("the Codex guide and the README carry the owner's lines for install, trust,
     "Codex keeps the trust records of the sage hooks in your Codex config", // R1671-3
     "sage: this is Codex 0.165.0, and sage is tested only with Codex 0.160 to 0.164. Some sage rules may not run.", // R1670-7
     "Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule", // R1675-2
-    "also a push or a merge, but the workspace-write sandbox still keeps the logbook and the sessions folder closed. Keep the sandbox's network access off for role agents, or keep autopilot off.", // R1675-2
   ]) assert.ok(guide.includes(line), line);
   assert.match(readFileSync(join(ROOT, "CHANGELOG.md"), "utf8"), /- A limit: Codex 0\.164\.0 runs no hook for text that an agent types into a shell that still runs \(`write_stdin`\)/, "R1675-2");
   assert.doesNotMatch(guide, /the chief and the leads use/);
   assert.ok(readme.includes("a role agent's logbook write, and a new agent or a new Codex session that a role agent starts"), "R1670-8");
+});
+
+test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy before the pilot", () => {
+  const flat = (path) => readFileSync(join(ROOT, path), "utf8").replace(/\s+/g, " ");
+  const texts = { guide: flat("docs/guide/codex.md"), readme: flat("README.md"), changelog: flat("CHANGELOG.md") };
+  const lines = {
+    guide: [
+      "Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule, also a push or a merge. Autopilot off does not stop such a merge.", // F-T470-13
+      "- In workspace-write, the sandbox keeps this text off the network and keeps the logbook and the sessions folder closed. Keep network access off for the session (`[sandbox_workspace_write] network_access = false`, the default). When Codex asks to run an interactive shell (for example `zsh -i`) outside the sandbox, refuse.", // F-T470-13
+      "- `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch and autopilot merges nothing.", // F-T470-15
+      "Codex's review thread runs in the chief's session and has no agent id, but its record names a review source |", // F-T470-1, a table cell
+      "If an agent says that the hook could not read Codex's record of its thread, start a new session in the project folder. If it happens again, report it with your Codex version.", // F-T470-2
+      "4. Send the on phrase alone (see [Turn on sage mode](#turn-on-sage-mode)). When all is well, you see no sage line", // F-T470-8
+      "To stop merges at once, press Esc to stop Codex's turn, then send the off phrase for autopilot alone.", // F-T470-9
+      "For a local clone, run `git pull` in the clone instead of the upgrade command.", // F-T470-12
+      "The Codex logbook in `~/.codex/sage` stays; delete that folder yourself to remove it.", // F-T470-12
+    ],
+    readme: [
+      "**sage is a Claude Code and Codex plugin for developers who", // F-T470-11
+      "and the lead and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md))", // F-T470-11
+      "You also need Node.js 20 and `gh`, logged in (see [What you need](docs/guide/codex.md#what-you-need)).", // F-T470-15
+      "text that an agent types into a shell that still runs (`write_stdin`); anything under full access. |", // F-T470-14
+    ],
+    changelog: [
+      "and a command such as `$EDITOR codex/a.txt` runs, except for a role agent while the mode is on.", // F-T470-3
+      "so that text passes every sage rule, also a push or a merge. In workspace-write, the sandbox keeps this text off the network and keeps the logbook closed: keep network access off, and refuse an interactive shell outside the sandbox. Autopilot off does not stop such a merge.", // F-T470-13
+    ],
+  };
+  const missing = Object.entries(lines).flatMap(([name, list]) => list.filter((line) => !texts[name].includes(line)).map((line) => `${name}: ${line}`));
+  assert.deepEqual(missing, []);
+  const wrong = { // the old lines, which misled
+    "guide: autopilot off as a mitigation of write_stdin": /network access off for role agents, or keep autopilot off/.test(texts.guide),
+    "guide: step 4 says any message": /4\. Send a message\./.test(texts.guide),
+    "CHANGELOG: outside sage mode only": /and outside sage mode a command such as/.test(texts.changelog),
+    "README: a Claude Code plugin only": /sage is a Claude Code plugin for developers/.test(texts.readme),
+  };
+  assert.deepEqual(Object.entries(wrong).filter(([, found]) => found).map(([name]) => name), []);
 });

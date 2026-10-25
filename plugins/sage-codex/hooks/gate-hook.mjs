@@ -55,7 +55,7 @@ const branchAt = (dir) => {
 };
 const pushes = createPushPolicy({ stateToolPath: TOOL, readBranch: branchAt });
 
-export const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user.";
+const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user.";
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
 const AGENT_MERGE = "sage: an agent never merges. Report the pull request as ready.";
@@ -64,7 +64,7 @@ const SAGE_FOLDER = "sage: no agent runs a shell command that names the Codex sa
 const RESUME = "sage: no agent resumes or forks a Codex session from the shell, because its prompts would count as the user's. Ask the user.";
 const READ_ONLY = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.`;
 const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead.`;
-const UNREAD_ROLE = "sage: the hook could not read this agent's task name from its transcript, so it refuses this call. Tell the user.";
+const UNREAD_ROLE = "sage: the hook could not read this agent's task name from Codex's record of its thread, so it refuses this call. Tell the user.";
 const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.";
 const CHILD_CODEX = "sage: role agents never start Codex from the shell, because a new Codex session runs outside the hooks of this session. Put what you need in your report.";
 const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report.";
@@ -167,13 +167,16 @@ export function threadOf(f) {
   return { child: true, ...(/^[a-z][\w-]{0,39}$/i.test(name ?? "") ? { codex: name.replaceAll("_", " ") } : {}) };
 }
 
+/** The names that the user knows for the threads that Codex starts itself, where Codex's own name differs: its guardian is the approval check. */
+const CODEX_THREADS = { guardian: "approval check" };
+
 /** Whether a child thread is under a sage_ name (a thread that Codex starts itself counts), or undefined when its record cannot be read. */
 const underSage = (t) => (t.codex ? true : t.parts?.some(sageName));
 
 /** Why the gate refuses a child's change of files in sage mode, or undefined: a read-only role at any part of its agent path. */
 function childChange(t, sage) {
   if (!sage || !t.child) return undefined;
-  if (t.codex) return READ_ONLY(`Codex ${t.codex}`);
+  if (t.codex) return READ_ONLY(`Codex ${CODEX_THREADS[t.codex] ?? t.codex}`);
   if (!t.parts) return UNREAD_ROLE;
   for (const name of t.parts.filter(sageName)) {
     const role = taskRole(name);
@@ -345,7 +348,8 @@ export async function checkMerge({ pr, sha }, cwd, env = process.env) {
   }
 }
 
-const deny = (reason) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
+// Codex adds ". Command: <the command>" after the reason, so a reason ends with no period of its own.
+const deny = (reason) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason.replace(/\.$/, "") } });
 const UNREAD_THREAD = "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user.";
 /** A refusal of a child rule; a thread whose record the hook cannot read gets the line that says so. */
 const refuse = (thread, reason) => deny(thread.unread ? UNREAD_THREAD : reason);
