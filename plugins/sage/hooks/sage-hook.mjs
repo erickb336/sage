@@ -328,7 +328,13 @@ export function handle(input, state, slots) {
     if (!main && (/^(r\d+|lead-t\d+|main)$/.test(name) || slots.holds(id))) return deny(event, `an agent stops no agent: only the main session does, and ${id} is an agent. Stop only your own shell tasks; report to your lead or the sage what needs a stop.`);
     // The main session stops a lead by its exact name, in any letter case: a look-alike form may name no agent for Claude
     // Code, and its stop would free the slot of a lead that still runs (F-T301-71).
-    return void (main && (/^lead-t[1-9]\d*$/i.test(String(id ?? "")) ? slots.stopLead(`T${String(id).slice("lead-t".length)}`) : slots.release(id)));
+    if (!main) return undefined;
+    if (!/^lead-t[1-9]\d*$/i.test(String(id ?? ""))) return void slots.release(id);
+    const task = `T${String(id).slice("lead-t".length)}`;
+    // A lead that started with no name field has no name for Claude Code: its stop by name would fail and still free the
+    // slot of a lead that runs (T434).
+    if (slots.unnamedLead(task)) return deny(event, `the lead of ${task} started with no name field, so Claude Code knows it only by its agent id. Stop it with TaskStop and the agent id from its start's result.`);
+    return void slots.stopLead(task);
   }
   // An agent's SendMessage can wake a stopped agent outside every cap, and its event cannot tell a stopped target from a
   // live one. So an agent sends a message only to the main session: in sage mode, and for a sage agent in any mode, the
@@ -364,7 +370,9 @@ export function handle(input, state, slots) {
   // The spawned type in lower case: a sage type in another letter case meets the same rules (F-T255-5). The caller's type
   // stays exact: "sage:lead" is the one type that may start agents, and another case of it gets no such right.
   const spawned = String(ti.subagent_type ?? "").toLowerCase();
-  const spawnName = ti.name ?? ti.description ?? ""; // the Agent tool's name, or its description when it has no name
+  // The Agent tool's name, or else the first word of its description: the desktop app's Agent tool has no name field (T434),
+  // and an empty name falls back too (T262).
+  const spawnName = String(ti.name ?? "").trim() ? String(ti.name) : String(ti.description ?? "").trim().split(/\s+/)[0];
   // An agent never gives a spawn a reserved name: the chief's SendMessage or TaskStop to main or to a lead would then reach
   // that agent, which a message can wake with no slot (F-T255-4, F-T255-10). The scope of the SendMessage rule.
   if (event === "PreToolUse" && !main && (state.sage || ours) && AGENT_TOOLS.test(tool) && reservedName(spawnName)) {
@@ -395,9 +403,11 @@ export function handle(input, state, slots) {
   if (event !== "PreToolUse" || (!state.sage && !nestedSpawn)) return undefined;
   let leadMark;
   if (main && AGENT_TOOLS.test(tool) && spawned === "sage:lead") {
-    if (!/^lead-T\d+$/.test(spawnName)) return deny(event, "the sage starts a lead only with the name lead-T<n> of its task (the Agent tool's name, or its description when it has no name).");
-    // A foreground lead's slot binds only when the lead ends, so its children's events could not renew it (F-T255-7).
-    if (ti.run_in_background !== true) return deny(event, "a lead always starts in the background: set run_in_background to true.");
+    if (!/^lead-T\d+$/.test(spawnName)) return deny(event, 'the sage starts a lead only with the name lead-T<n> of its task: start the description with lead-T<n> and a space, for example "lead-T12 fix the form" (or give the name lead-T<n> when the Agent tool has a name field).');
+    // A foreground lead's slot binds only when the lead ends, so its children's events could not renew it (F-T255-7). The
+    // desktop app's Agent tool has no run_in_background field and starts every agent in the background, so only an
+    // explicit false is refused (T434).
+    if (ti.run_in_background === false) return deny(event, "a lead always starts in the background: leave run_in_background out, or set it to true.");
     // A lead starts only for a task with a running lead run (#118 point 4), in the logbook that its writes use (leadProblem).
     const task = spawnName.slice("lead-".length);
     let project, view;
@@ -411,7 +421,7 @@ export function handle(input, state, slots) {
     const run = view.leadRun(task);
     if (!run) return deny(event, `${task} has no running lead run in the logbook of ${project}. Record it first, as a command of its own: ${stateCommand(`run add ${task} --role lead`)}. A lead starts only from a session opened in the project's folder or one of its worktrees, so that the lead's logbook is the one that the session uses (F-T284-7).`);
     // The slot keeps the task, its logbook and its lead run, for the lead's writes (F-T273-1, F-T273-4).
-    leadMark = { task, logbook: digest(view.dir), run: run.id, folder: project };
+    leadMark = { task, logbook: digest(view.dir), run: run.id, folder: project, named: Boolean(String(ti.name ?? "").trim()) };
     // The helper notes of the logbook's ended lead runs are of no more use: no lead can use those runs (F-T289-13).
     slots.prune(view.endedLeadRuns().map((r) => digest(`${leadMark.logbook}:${r.id}`)));
   }
@@ -2264,6 +2274,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
         const initial = [`project-${project}`, `session-${session}`, `tool-${id(tu)}`, `pending-${id(tu)}`, `call-${call}`, `caller-${owner}`, `scope-${scope}`, `input-${hash(input)}`];
         if (role) initial.push(`role-${safe(role)}`);
         if (role === "sage:lead" && lead) initial.push(`task-${lead.task}`, `logbook-${lead.logbook}`); // the lead's own task and logbook (T273)
+        if (role === "sage:lead" && lead?.named) initial.push("named"); // Claude Code knows the lead by its name lead-T<n> too (T434)
         // The slot's run, so that the board's Agents page joins it to its logbook row (T308): a lead's lead run (T273), a
         // helper's run (its name), else the run of the brief's first line.
         const run = role === "sage:lead" && lead ? lead.run : helper ? helper.run : briefRun(input?.prompt);
@@ -2380,6 +2391,8 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
       const name = valid(agent) && agentName(agent);
       return Boolean(name) && ofSession().some((slot) => ownsAgent(slot, agent) || mark(slot, "folded-") === hash(name) || mark(slot, "agent-")?.toLowerCase() === id(name));
     },
+    /** Does this session hold a lead slot of this task whose spawn had no name field (T434)? */
+    unnamedLead: (task) => ofSession().some(slot => mark(slot, "role-") === "sage_lead" && mark(slot, "task-") === task && !has(slot, "named")),
     stopLead: transaction((task) => {
       for (const slot of ofSession().filter(slot => mark(slot, "role-") === "sage_lead" && mark(slot, "task-") === task)) {
         const bound = mark(slot, "bound-");

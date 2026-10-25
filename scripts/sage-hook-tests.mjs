@@ -4661,8 +4661,10 @@ const resultOf = (id, agentId, extra = {}, status = "async_launched") => ({ hook
 const ended = (agent_id, agent_type = "sage:qa", extra = {}) => ({ hook_event_name: "SubagentStop", agent_id, agent_type, stop_hook_active: true, ...extra });
 /** The folder of the main session's lead spawns: its logbook has a running lead run for each task that a test starts a lead for (#118 point 4). */
 const LEAD_DIR = realpathSync(mkdtempSync(join(tmpdir(), "sage-leads-")));
-/** The main session's spawn of a lead, with the name lead-T<n> in the description (T255 L1). */
-const leadSpawn = (id, n = 1, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: id, cwd: LEAD_DIR, ...extra });
+/** The main session's spawn of a lead in the terminal's form: the name lead-T<n>, also in the description, and in the background (T255 L1). */
+const leadSpawn = (id, n = 1, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, name: `lead-T${n}`, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: id, cwd: LEAD_DIR, ...extra });
+/** The same spawn in the desktop app's form (T434): its Agent tool has no name and no run_in_background field, and starts every agent in the background. */
+const desktopLead = (id, description, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description }, { tool_use_id: id, cwd: LEAD_DIR, ...extra });
 /** A logbook for LEAD_DIR in the session's sage home, with a running lead run for T1 to T9 and T181. The rows go in directly: the state tool holds 3 running leads per project, and these tests check the hook's own limits. */
 function leadRuns(s) {
   spawnSync("node", [TOOL, "init", "--project", LEAD_DIR], { encoding: "utf8", env: s.vars });
@@ -5069,11 +5071,14 @@ test("T255 M3: only the main session's TaskStop frees a slot", () => {
 test("T255 L1: the main session starts a lead only with the name lead-T<n>", () => {
   const s = nestedSession();
   const lead = (id, names) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, run_in_background: true, ...names }, { tool_use_id: id, cwd: LEAD_DIR });
-  for (const [n, names] of [{ description: "d" }, { description: "lead" }, { description: "lead-T" }, { description: "lead-t1" }, { description: "lead-T1 x" }, {}, { name: "worker", description: "lead-T7" }].entries()) {
-    assert.match(denied(s.send(lead(`bad-${n}`, names))) ?? "", /only with the name lead-T<n>/, JSON.stringify(names));
+  for (const [n, names] of [{ description: "d" }, { description: "lead" }, { description: "lead-T" }, { description: "lead-t1" }, { description: "lead-T1: x" }, { description: "fix lead-T1" }, {}, { name: "worker", description: "lead-T7" }].entries()) {
+    assert.match(denied(s.send(lead(`bad-${n}`, names))) ?? "", /only with the name lead-T<n> of its task: start the description with lead-T<n> and a space/, JSON.stringify(names));
   }
   assert.equal(s.send(lead("ok-1", { description: "lead-T181" })), undefined);
   assert.equal(s.send(lead("ok-2", { name: "lead-T7", description: "a lead" })), undefined, "the name wins over the description");
+  const t = nestedSession(); // a project runs at most 3 leads
+  assert.equal(t.send(lead("ok-3", { description: "  lead-T2 fix the form" })), undefined, "the first word of the description names the lead");
+  assert.equal(t.send(lead("ok-4", { name: " ", description: "lead-T3 fix" })), undefined, "an empty name falls back to the description (T262)");
 });
 
 test("T255 L2: a spawn that never starts frees after 10 minutes, and a failed spawn frees at once", () => {
@@ -5091,13 +5096,36 @@ test("T255 L2: a spawn that never starts frees after 10 minutes, and a failed sp
   assert.equal(s.send(nested("sage:qa", "l2-6")), undefined, "a failed spawn frees its slot, also after a start of its role");
 });
 
-test("F-T255-7: the main session starts a lead only in the background", () => {
+test("F-T255-7: the main session starts a lead only in the background: run_in_background false is refused", () => {
   const s = nestedSession();
-  const lead = (id, extra) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: "lead-T1", ...extra }, { tool_use_id: id, cwd: LEAD_DIR });
-  for (const [n, extra] of [{}, { run_in_background: false }, { run_in_background: "true" }].entries()) {
-    assert.match(denied(s.send(lead(`fg-${n}`, extra))) ?? "", /a lead always starts in the background: set run_in_background to true/, JSON.stringify(extra));
+  const lead = (id, n, extra) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description: `lead-T${n}`, ...extra }, { tool_use_id: id, cwd: LEAD_DIR });
+  for (const [n, name] of [undefined, "lead-T1"].entries()) {
+    assert.match(denied(s.send(lead(`fg-${n}`, 1, { name, run_in_background: false }))) ?? "", /a lead always starts in the background: leave run_in_background out, or set it to true/, String(name));
   }
-  assert.equal(s.send(lead("bg", { run_in_background: true })), undefined);
+  assert.equal(s.send(lead("bg", 1, { run_in_background: true })), undefined);
+  assert.equal(s.send(lead("no-field", 2, {})), undefined, "the desktop app's tool sends no field, and starts every agent in the background (T434)");
+});
+
+test("T434: the main session starts a lead with the desktop app's Agent input: no name, no run_in_background", () => {
+  const s = nestedSession();
+  // The input shape of the chief's refused call (R1693's brief), with the description in the form of the chief's instructions.
+  const call = { subagent_type: "sage:lead", description: "lead-T7 Codex doc and copy fixes", prompt: BRIEF };
+  assert.equal(s.send(tool("Agent", call, { tool_use_id: "desk", cwd: LEAD_DIR })), undefined);
+  s.send(resultOf("desk", "lead-desk"));
+  assert.match(denied(s.send(desktopLead("desk-2", "lead-T7 again"))) ?? "", /a lead named lead-T7 already holds a slot/, "the description's lead-T7 is one lead per task");
+  assert.match(denied(s.send(desktopLead("old-form", "Lead T8 Codex doc and copy fixes"))) ?? "",
+    /start the description with lead-T<n> and a space, for example "lead-T12 fix the form"/, "the refusal says how to name the lead");
+  // Claude Code knows a lead with no name field only by its agent id: a stop by name would fail and still free the slot.
+  assert.match(denied(s.send(tool("TaskStop", { task_id: "lead-T7" }))) ?? "", /the lead of T7 started with no name field, so Claude Code knows it only by its agent id/);
+  assert.match(denied(s.send(desktopLead("desk-3", "lead-T7 again"))) ?? "", /already holds a slot/, "the refused stop freed nothing");
+  assert.equal(s.send(tool("TaskStop", { task_id: "lead-desk" })), undefined, "the stop by agent id passes");
+  assert.equal(s.send(desktopLead("desk-4", "lead-T7 fresh")), undefined, "and frees the slot");
+});
+
+test("T434: a lead names a helper by the first word of the description when its Agent tool has no name field", () => {
+  const s = leadSession();
+  const run = leadAdd(s, "code-reviewer");
+  assert.equal(s.send(tool("Agent", { subagent_type: "sage:code-reviewer", prompt: BRIEF, description: `${run} code review of T1` }, { tool_use_id: "desc", ...LEAD })), undefined);
 });
 
 test("F-T255-4: a sage agent, or any agent in sage mode, never names a spawn main; plain use outside sage mode is unchanged", () => {
@@ -6258,7 +6286,7 @@ test("F-T301-57: a lead names each helper by its run id: a spawn with another na
   const run = leadAdd(s, "code-reviewer"); // R5
   const spawn = (input, id) => denied(s.send(tool("Agent", { subagent_type: "sage:code-reviewer", prompt: BRIEF, ...input }, { tool_use_id: id, ...LEAD })));
   assert.match(spawn({ name: "reviewer" }, "n-1") ?? "", /a lead names each helper by its run id \(R<n>, the id that run add printed\), and "reviewer" is not one\./);
-  assert.match(spawn({ description: "review the fix" }, "n-2") ?? "", /and "review the fix" is not one\./, "a description stands for the name");
+  assert.match(spawn({ description: "review the fix" }, "n-2") ?? "", /and "review" is not one\./, "the description's first word stands for the name");
   assert.match(spawn({ name: `${run} ` }, "n-3") ?? "", /is not one\./, "the run id with a space is not the run id");
   assert.equal(spawn({ name: run }, "n-4"), undefined, "the run id passes");
 });
