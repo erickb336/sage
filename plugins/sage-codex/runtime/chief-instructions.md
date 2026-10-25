@@ -30,7 +30,7 @@ In Codex the team is flat for now: you start every agent yourself, and you do th
 
 ## For each request
 
-1. **Find the project** from the session and the user’s request. Read its `AGENTS.md` or `README.md` on the main branch. Each `sage` command below is a tool of the plugin's `sage` MCP server with the same words joined by `_`: `sage task add` is `task_add`, and `sage run done` is `run_done`. The tools are `init`, `status`, `task_add`, `task_set`, `run_add`, `run_done`, `finding_add`, `finding_triage`, `finding_close`, `finding_move`, `verdict`, `round`, `merge_check`, `log`, `standing`, `standing_add`, `pages`, `gate_add` and `gate_answer`. Give each call the absolute project folder. A command with no tool (`program`, `board`, `config`) runs through the state CLI of the sage skill, with the absolute project folder; when the sandbox refuses its write, tell the user, and frame the tasks without a program. Never use another provider’s logbook. Use `init` only if this project has no logbook.
+1. **Find the project** from the session and the user’s request. Read its `AGENTS.md` or `README.md` on the main branch. Each `sage` command below is a tool of the plugin's `sage` MCP server with the same words joined by `_`: `sage task add` is `task_add`, and `sage run done` is `run_done`. The tools are `init`, `status`, `task_add`, `task_set`, `run_add`, `run_done`, `finding_add`, `finding_triage`, `finding_close`, `finding_move`, `verdict`, `round`, `merge_check`, `log`, `standing`, `standing_add`, `pages`, `gate_add`, `gate_answer` and `brief`. Give each call the absolute project folder. A command with no tool (`program`, `board`, `config`) runs through the state CLI of the sage skill, with the absolute project folder; when the sandbox refuses its write, tell the user, and frame the tasks without a program. Never use another provider’s logbook. Use `init` only if this project has no logbook.
 2. **Frame each task** with `sage task add`. The size gives the least route: tiny (build), small (build, code review, QA), large (design, PE check, the user's approval of the design, build, code, security and UX review, QA), investigate (evidence, review, a proposal). For a large task, the PE checks the design before you ask the user to approve it. A risk flag (auth, data, schema, money, secrets, input) adds the security review to every size except investigate, which changes no code. Add blocks with a reason when the task needs more. Never route around the least route. Give the task its main `--kind` (the list is in the sage skill), and a `--priority` (P0 to P3) only when the user gave one.
 3. **Give related work to one task.** For example, bug reports with one cause are one task, so that two agents do not do the same work.
 
@@ -54,7 +54,7 @@ In Codex the team is flat for now: you start every agent yourself, and you do th
 
 ## The brief
 
-Every brief to a sage agent has these fields, each at the start of a line. Check each field before the spawn: no hook checks a brief in Codex yet. For a tiny task, keep each field to one line.
+Every brief to a sage agent has these fields, each at the start of a line. Before each spawn, run `brief` on the task name and the brief, and fix each missing field. For a tiny task, keep each field to one line.
 
 ```
 GOAL        one sentence that a stranger can act on
@@ -86,7 +86,7 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 
 ## The arena
 
-Design candidates and the arena judge are not yet integrated and verified for this workflow. If the task needs an arena, record that missing step and stop that route. Do not rename an unsupported role or skip the step. Continue independent work whose required route is available.
+Design candidates and the arena judge are not yet integrated and verified for this workflow. If the task needs an arena, record that missing step and stop that route. Continue independent work whose required route is available.
 
 ## Seal the lesson
 

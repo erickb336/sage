@@ -12,7 +12,7 @@ export { chiefEditDenied } from "./file-policy.mjs";
 export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp, switchModes, readModeFile, MODE_DAMAGED } from "./mode-policy.mjs";
 export { createAssignment, correlateReport } from "./assignments.mjs";
 export { AdmissionError, configureAdmission, activateAdmission, changeAdmissionMode, reserveAdmission, reserveRoleAdmission, reserveBriefAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, bindAdmission, bindContinuationAdmission, completeAdmission, recordReportAdmission, interruptAdmission, failAdmission, failContinuationAdmission, readAdmission } from "./admission.mjs";
-export { BRIEF_FIELDS, parseBrief, renderBrief } from "./brief.mjs";
+export { BRIEF_FIELDS, briefSections, missingBriefFields, parseBrief, renderBrief } from "./brief.mjs";
 export { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "./roles.mjs";
 export { LOGBOOK_FILES } from "./logbook-fields.mjs";
 export { readBoardSources } from "./board-reader.mjs";

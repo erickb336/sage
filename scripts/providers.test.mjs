@@ -457,7 +457,7 @@ test("manifests point to disjoint plugin roots and only supported Codex hooks", 
   const manifest = json("plugins/sage-codex/.codex-plugin/plugin.json");
   assert.equal(manifest.hooks, "./hooks/hooks.json");
   const hooks = json("plugins/sage-codex/hooks/hooks.json").hooks;
-  assert.deepEqual(Object.keys(hooks), ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "SubagentStop"]);
+  assert.deepEqual(Object.keys(hooks), ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "SubagentStart", "SubagentStop"]);
   assert.deepEqual([...outputs()], [...outputs()], "packaging is deterministic");
 });
 
@@ -3092,7 +3092,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   writeFileSync(preload, `import {ChildProcess} from 'node:child_process';\nimport {appendFileSync} from 'node:fs';\nChildProcess.prototype.kill = function(signal) { appendFileSync(${JSON.stringify(signalLog)}, String(signal)+'\\n'); this.stdin?.end(); return true; };\n`);
   const plugin = {
     skills: readdirSync(join(ROOT, 'plugins/sage-codex/skills')).map(name => ({name: `sage:${name}`})),
-    hooks: ['permissionRequest', 'preToolUse', 'preToolUse', 'sessionStart', 'sessionStart', 'subagentStop', 'userPromptSubmit', 'userPromptSubmit'].map(eventName => ({eventName})),
+    hooks: ['permissionRequest', 'postToolUse', 'preToolUse', 'preToolUse', 'sessionStart', 'sessionStart', 'subagentStart', 'subagentStop', 'userPromptSubmit', 'userPromptSubmit'].map(eventName => ({eventName})),
     summary: {source: {path: join(ROOT, 'plugins/sage-codex')}},
   };
   if (scenario === 'bad-manifest') plugin.hooks = [];
@@ -3109,7 +3109,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   assert.equal(readFileSync(closed, 'utf8'), 'stdin closed', 'the child acknowledged transport closure');
   if (scenario === 'success') {
     assert.equal(result.code, 0, stderr);
-    assert.match(stdout, /discovered \d+ skills and 8 hooks/);
+    assert.match(stdout, /discovered \d+ skills and 10 hooks/);
   } else {
     assert.equal(result.code, 1, stdout + stderr);
     assert.doesNotMatch(stdout, /discovered \d+ skills/);

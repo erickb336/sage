@@ -4,6 +4,8 @@ import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer, serveStdio, z } from "../runtime/mcp-sdk.mjs";
 import { tool } from "../skills/sage/sage.mjs";
+import { BRIEF_FIELDS } from "sage-core";
+import { BRIEF_LIMIT, TASK_NAME, recordBrief } from "../hooks/brief-hook.mjs";
 
 // The state tool as MCP tools. Codex starts this server outside the shell sandbox, so it can write the logbook
 // ($CODEX_HOME/sage, or SAGE_HOME) while agent shells under workspace-write cannot. Each tool runs one command of the
@@ -128,6 +130,20 @@ export function createStateServer({ env = process.env } = {}) {
       return { ...(code ? { isError: true } : {}), content: [{ type: "text", text }] };
     });
   }
+  // The brief check (T462): no state-tool command, because the hooks read the record by task name.
+  server.registerTool("brief", {
+    description: `Check a role agent's brief before you spawn it: it names each missing field of ${BRIEF_FIELDS.join(", ")}, and keeps the brief for the agent's start note. Fix the brief and run it again until no field is missing, then spawn the agent with the same task name and brief.`,
+    inputSchema: z.object({ project, task_name: z.string().regex(TASK_NAME, "sage_, the role with _ for -, and the task, for example sage_implementer_t12").describe("the task_name of the spawn"),
+      brief: z.string().max(BRIEF_LIMIT).describe("the whole brief, each field at the start of a line") }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  }, async ({ project: folder, task_name: task, brief }) => {
+    let missing;
+    try { missing = recordBrief(folder, task, brief, env); } catch (error) { return { isError: true, content: [{ type: "text", text: `sage: ${error.message}` }] }; }
+    const text = missing.length
+      ? `sage: the brief of ${task} has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line. Add them, then run brief again.`
+      : `brief ${task} checked: all ${BRIEF_FIELDS.length} fields. Spawn the agent with this task name and this brief.`;
+    return { ...(missing.length ? { isError: true } : {}), content: [{ type: "text", text }] };
+  });
   return server;
 }
 
