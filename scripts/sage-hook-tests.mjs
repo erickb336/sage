@@ -5590,7 +5590,7 @@ test("T439: two tasks on one branch and PR merge under autopilot only when each 
   lend.sage("task", "add", "--title", "other", "--size", "small"); // T2
   lend.sage("task", "T2", "set", "branch=claude/t2");
   lend.sage("task", "T1", "set", "branch=claude/t2", "pr=41");
-  assert.match(denied(lend.send(bash(MERGE))) ?? "", /^sage: the merge check refuses: PR 41's head branch "claude\/t2" is also the branch of \S+ T2, which is not on PR 41/);
+  assert.match(denied(lend.send(bash(MERGE))) ?? "", /^sage: the merge check refuses: PR 41's head branch "claude\/t2" also belongs to \S+ T2 \(by its name\), which is not on PR 41/);
 });
 
 test("T439: a lead adds a run on its task's shared branch, but only the sage puts its task on another task's branch", () => {
@@ -5604,6 +5604,34 @@ test("T439: a lead adds a run on its task's shared branch, but only the sage put
   assert.match(denied(stateRun(s, "task T1 set branch=claude/t1")) ?? "", NOT_OWN, "a lead never moves its task off a shared branch");
   s.sage("task", "T1", "set", "branch=claude/t1-old"); // the sage moves it to a branch named for T1
   assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1")), undefined, "from a branch named for its task, to another one");
+});
+
+// R1740-1: the lead of T1 on claude/t1-x, which the sage shared with T2, and a run of T2's implementer on it.
+function sharedLeadSession() {
+  const s = leadSession(); // the lead of T1, at briefed
+  s.sage("task", "T1", "set", "branch=claude/t1-x");
+  s.sage("task", "T2", "set", "branch=claude/t1-x"); // the sage shares T1's branch with T2
+  s.sage("run", "add", "T2", "--role", "implementer", "--branch", "claude/t1-x"); // T2's implementer pushes to it
+  return s;
+}
+const SHARED_X = /claude\/t1-x is shared with T2: only the sage moves a task onto a shared branch or off it\./;
+
+test("R1740-1: a lead never moves its task off a branch named for it that another task uses", () => {
+  const s = sharedLeadSession();
+  assert.equal(denied(stateRun(s, "task T1 set state=building branch=claude/t1-x")), undefined, "the build step names the branch that it has");
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1-y")) ?? "", SHARED_X, "the move off, with T2's commits");
+  s.sage("task", "T2", "set", "branch="); // T2 leaves by its branch=, but its run stays on the branch
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1-y")) ?? "", SHARED_X, "a run on it shares it too");
+});
+
+test("R1740-1: a lead never moves its task back onto a branch named for it that another task uses", () => {
+  const s = sharedLeadSession();
+  s.sage("task", "T1", "set", "branch=claude/t1-y"); // the sage moves T1 off
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1-x")) ?? "", SHARED_X, "the rejoin, while T2 names it");
+  s.sage("task", "T2", "set", "branch="); // T2 leaves by its branch=, but its run stays on the branch
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1-x")) ?? "", SHARED_X, "the rejoin, while T2's run is on it");
+  assert.match(denied(stateRun(s, "task T1 set branch=CLAUDE/T1-X")) ?? "", /CLAUDE\/T1-X is shared with T2: only the sage/, "in any letter case");
+  assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1-z")), undefined, "between branches that no other task uses");
 });
 
 test("F-T273-8: merge-check --head runs the same check by hand, and needs --pr", () => {

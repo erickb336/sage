@@ -59,7 +59,7 @@ For agents and the main session in sage mode, the hook refuses `{`, `[`, `*` or 
 - A new medium or low finding that a round raises goes to a follow-up task with `finding move`, not to another round. A high finding always blocks.
 - With autopilot on, merge with `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`. The sage hook runs `merge-check` first and refuses a SHA that is not ready. It refuses every merge by an agent.
 - A new commit is a new SHA. Its verdicts start again from cycle 1.
-- Every task with verdicts on a SHA counts, also an abandoned one. When two tasks share a pull request, give both the same `branch=` and `pr=`, and record each verdict under both: autopilot merges it when each task passes on its own verdicts. Only the chief puts a task on another task's branch or takes it off one. To leave an old task's verdicts behind, push a new commit.
+- Every task with verdicts on a SHA counts, also an abandoned one. When two tasks share a pull request, give both the same `branch=` and `pr=`, and record each verdict under both: autopilot merges it when each task passes on its own verdicts. Only the chief puts a task on a shared branch or takes it off one: a branch that another task names by its `branch=` or ran work on. To leave an old task's verdicts behind, push a new commit.
 
 ## What the hook refuses an agent
 
