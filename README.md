@@ -25,14 +25,14 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 | --- | --- |
 | Maturity | Early: used daily by its author to build sage itself; one recorded dry run. |
 | Claude Code | Supported: sage mode, the team of agents, the rules in code, autopilot and the board. |
-| Codex | In progress. The principles, the writing skills, the advice hooks, and the logbook and board by manual commands work; sage mode and autopilot do not work yet ([sage in Codex](docs/guide/codex.md)). |
+| Codex | In progress. sage installs as a Codex plugin in the CLI and the desktop app. The principles, the writing skills, the advice hooks, a status at the start of each session, and the logbook and board by manual commands work; sage mode and autopilot do not work yet ([sage in Codex](docs/guide/codex.md)). |
 | Systems | macOS: tested. Linux: not yet tested. Windows: not supported. |
 
 ## Requirements
 
 | You need | Claude Code | Codex |
 | --- | --- | --- |
-| The agent tool | Claude Code, with a Claude plan or API credits | Codex CLI 0.159.2 or 0.160.0 |
+| The agent tool | Claude Code, with a Claude plan or API credits | Codex 0.160 to 0.164: the CLI, or the Codex desktop app in the ChatGPT app |
 | Node.js 20 or later, and git | Yes | Yes |
 | `gh`, logged in (`gh auth login`) | Yes: for pull requests and the merge check | No |
 | A GitHub remote for your project | Recommended: without one, work stops at a verified branch | No |
@@ -40,7 +40,7 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 
 ## Quick start
 
-For Claude Code. For Codex, see [sage in Codex](docs/guide/codex.md). Claude Code must be installed and signed in ([install Claude Code](https://code.claude.com/docs/en/setup)).
+For Claude Code. For Codex, see [Quick start in Codex](#quick-start-in-codex). Claude Code must be installed and signed in ([install Claude Code](https://code.claude.com/docs/en/setup)).
 
 1. Install sage, in a terminal:
 
@@ -66,6 +66,23 @@ For Claude Code. For Codex, see [sage in Codex](docs/guide/codex.md). Claude Cod
    You see: the chief frames the task, asks its product questions in one batch, then brings evidence and a pull request.
 
 To update, run `claude plugin update sage@sage` and start a new session. To stop a task or uninstall sage, see [Using sage](docs/guide/using-sage.md).
+
+### Quick start in Codex
+
+For the Codex CLI and the Codex desktop app. sage mode does not work in Codex yet ([sage in Codex](docs/guide/codex.md)).
+
+1. Add the sage marketplace and install the plugin, in a terminal:
+
+   ```sh
+   codex plugin marketplace add https://github.com/erickb336/sage.git
+   ```
+
+   ```sh
+   codex plugin add sage@sage
+   ```
+
+2. Run `codex` in a project folder. At the "Hooks need review" screen, choose **Trust all and continue**. Do this again after each sage update.
+3. Send a message. You see `Hook · sage 0.1.0 is installed.`, the Codex version, the trust of the sage hooks and the on phrase.
 
 ## The board
 
@@ -107,11 +124,11 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
+- **sage installs in Codex** from its marketplace, in the CLI and the desktop app, and each Codex session starts with a sage status ([Quick start in Codex](#quick-start-in-codex)).
 - **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
 - **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.
 - **Programs:** you approve the breakdown of a multi-task goal before any task of it builds.
-- **A task can wait for other tasks**, and the board has an Agents page and a project picker.
 
 All changes: [CHANGELOG.md](CHANGELOG.md).
 

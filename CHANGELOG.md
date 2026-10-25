@@ -5,6 +5,10 @@ Each date is the day of the first commit that made the change. Older changes are
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve. See [To update sage](docs/guide/using-sage.md#to-update-sage).
 
+## 2026-10-25
+
+- **sage installs in Codex as a plugin, in the CLI and the desktop app.** Add the sage marketplace with `codex plugin marketplace add https://github.com/erickb336/sage.git`, install with `codex plugin add sage@sage`, and choose "Trust all and continue" at Codex's "Hooks need review" screen. A new `SessionStart` hook then shows one status at the start of each session: the sage version, the Codex version, how many sage hooks have your trust, and the on phrase. It warns when the Codex version is outside the tested range (0.160 to 0.164). sage mode and autopilot do not work in Codex yet. See [sage in Codex](docs/guide/codex.md).
+
 ## 2026-10-24
 
 - **The off phrase holds in every session.** In a folder whose `.claude/settings.json` starts every session as the chief, `sage mode off` now gives a normal session for the rest of the session, as in any other session. Before, sage mode came back on at the next event, and the session had no file tools. Now the chief agent has every tool, and the sage hook alone refuses the chief's file edits while sage mode is on. `sage mode` turns it on again. A new session, or `/clear`, in that folder starts in sage mode again.
