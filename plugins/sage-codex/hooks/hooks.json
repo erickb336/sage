@@ -1,6 +1,10 @@
 {
   "hooks": {
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/hooks/principles-hook.mjs\"", "timeout": 10 }] }],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/hooks/principles-hook.mjs\"", "timeout": 10 }] },
+      { "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/hooks/sage-codex-hook.mjs\"", "timeout": 10, "additionalContextLimit": 6000 }] }
+    ],
+    "SessionStart": [{ "matcher": "compact|fork", "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/hooks/sage-codex-hook.mjs\"", "timeout": 10, "additionalContextLimit": 6000 }] }],
     "PreToolUse": [{ "matcher": "apply_patch|Bash", "hooks": [{ "type": "command", "command": "node \"${PLUGIN_ROOT}/hooks/principles-hook.mjs\"", "timeout": 10 }] }]
   }
 }

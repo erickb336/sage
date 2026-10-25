@@ -1,1 +1,1 @@
-export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp } from "sage-core";
+export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp, switchModes } from "sage-core";

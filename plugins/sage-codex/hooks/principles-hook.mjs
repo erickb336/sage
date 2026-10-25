@@ -42,7 +42,7 @@ export function stateKey(input) {
 
 // Refuse links and ancestors controlled by another user. Root-owned system parents are trusted.
 // Existing state directories must be private and owned by this user.
-function privateDirectory(path) {
+export function privateDirectory(path) {
   const parent = dirname(path);
   if (parent !== path) {
     try {
@@ -65,7 +65,7 @@ function privateDirectory(path) {
   if (!info.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o077)) throw new Error("unsafe advice directory");
 }
 
-function readState(file) {
+export function readState(file) {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const info = fstatSync(fd);
@@ -74,7 +74,7 @@ function readState(file) {
   } finally { closeSync(fd); }
 }
 
-function saveState(file, state) {
+export function saveState(file, state) {
   const temporary = `${file}.${randomUUID()}`;
   let fd, created = false;
   try {
