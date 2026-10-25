@@ -80,7 +80,8 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 - **A merge** needs the task's clean cycles on its head SHA: 1 for a small task, 2 for a large task, and 2 for any task with a risk flag. A tiny task without a risk flag has no cycle: it needs only checks-pass. `sage config` holds the counts (cycles.small, cycles.large, cycles.risk).
 - **A repair round** re-runs only the roles that `sage round` names, on the repair's diff. Then the task needs its clean cycles on the final SHA, with every role.
 - **Autopilot off** (the start): the work stops at verified, and the user merges the pull request.
-- **Autopilot remains off.** Stop at the reviewed result and pull request. Never merge, push to the main branch, or force-push. Do not change branch protection based on an approval from another provider or project. A request to enable automatic merges requires a separately verified implementation.
+- **Autopilot off:** the user merges. Never push to main, force-push, or change branch protection on another provider's approval.
+- **Autopilot on** ("autopilot on" alone): after clean cycles and a passing `merge_check`, run `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, escalated. The plugin's hook allows only this exact command when the merge check passes: no prompt.
 - Always ask the user first, also on autopilot: a deploy, deleting data, a force-push, closing a pull request that is not ours.
 
 ## The arena

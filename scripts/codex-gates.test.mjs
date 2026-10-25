@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 // the gate a fixed mode and merge check; the process tests run the built hook with a mode file, a logbook and a fake gh.
 const HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/gate-hook.mjs", import.meta.url));
 const TOOL = fileURLToPath(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
-const { gate, readMode, UNREADABLE } = await import(HOOK);
+const { gate, readMode, typedModes, namesSageFolder, resumesSession, UNREADABLE } = await import(HOOK);
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -112,6 +112,17 @@ function world(t) {
   for (const name of ["ps", "pgrep", "kill"]) writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> "${dir}/fake-calls.log"\n`, { mode: 0o755 }); // order 14
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), CODEX_HOME: join(dir, "codex-home") };
   const sage = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", project], { encoding: "utf8", env });
+  // Codex's transcript of the root thread: the user's typed messages, as item_completed events with a UserMessage item.
+  const transcript = join(dir, "rollout.jsonl");
+  const typed = (...messages) => writeFileSync(transcript, [{ type: "session_meta", payload: { id: base.session_id } },
+    ...messages.map((text) => ({ type: "event_msg", payload: { type: "item_completed", thread_id: base.session_id, item: { type: "UserMessage", content: [{ type: "text", text }] } } }))]
+    .map((line) => JSON.stringify(line)).join("\n") + "\n");
+  /** A child's transcript whose first line names its agent path, as Codex writes it. */
+  const child = (path) => {
+    const file = join(dir, `child-${path.split("/").at(-1)}.jsonl`);
+    writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: "child", agent_path: path } }) + "\n");
+    return { ...CHILD, transcript_path: file };
+  };
   const mode = (state) => {
     const folder = join(env.SAGE_HOME, ".hooks", "codex");
     mkdirSync(folder, { recursive: true, mode: 0o700 });
@@ -119,15 +130,16 @@ function world(t) {
     return folder;
   };
   const send = (input) => {
-    const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ ...input, cwd: project }), encoding: "utf8", env, timeout: 60_000 });
+    const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ ...input, transcript_path: input.transcript_path ?? transcript, cwd: project }), encoding: "utf8", env, timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout ? JSON.parse(r.stdout) : undefined;
   };
-  return { dir, project, env, sage, mode, send };
+  return { dir, project, env, sage, mode, send, typed, child, transcript };
 }
 
 test("the hook process reads the mode file and the ledger: a verified merge passes and its request is allowed", (t) => {
   const w = world(t);
+  w.typed("sage mode", "autopilot on");
   w.mode({ sage: true, autopilot: false });
   assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", /^sage: autopilot is off/);
   assert.equal(w.send(ask(MERGE)), undefined);
@@ -146,16 +158,79 @@ test("the hook process reads the mode file and the ledger: a verified merge pass
   assert.equal(denied(w.send("{not json")), UNREADABLE);
 });
 
-test("a mode file that cannot be read keeps the chief rule on and refuses merges", (t) => {
+test("the core reader of the mode file: no file is no mode, and a damaged file or a link is off (one rule with the mode hook)", (t) => {
   const w = world(t);
-  assert.deepEqual(readMode(base.session_id, w.env), { sage: false, autopilot: false }, "no file is no mode");
+  const at = { session: base.session_id, transcript: w.transcript };
+  w.typed("sage mode", "autopilot on");
+  assert.deepEqual(readMode(at, w.env), { sage: false, autopilot: false }, "no file is no mode");
   const folder = w.mode({ sage: true, autopilot: true });
-  assert.deepEqual(readMode(base.session_id, w.env), { sage: true, autopilot: true });
+  assert.deepEqual(readMode(at, w.env), { sage: true, autopilot: true });
   const file = join(folder, `${stateKey({ session_id: base.session_id })}.json`);
+  writeFileSync(file, "{not json");
+  assert.deepEqual(readMode(at, w.env), { sage: false, autopilot: false }, "a damaged file is off");
   rmSync(file);
   writeFileSync(join(folder, "other.json"), JSON.stringify({ sage: true, autopilot: true }));
   symlinkSync(join(folder, "other.json"), file);
-  assert.deepEqual(readMode(base.session_id, w.env), { sage: true, autopilot: false }, "a link is not read");
-  assert.match(denied(w.send(pre("apply_patch", patch("*** Update File: a.js", "@@", "-a", "+b")))) ?? "", /^sage: sage mode is on, so the chief does not change files/);
-  assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", /^sage: autopilot is off/);
+  assert.deepEqual(readMode(at, w.env), { sage: false, autopilot: false }, "a link is not read");
+  assert.equal(w.send(pre("apply_patch", patch("*** Update File: a.js", "@@", "-a", "+b"))), undefined, "off: the root edits");
+  assert.equal(w.send(pre("Bash", MERGE)), undefined, "off: the gate does not judge merges");
+});
+
+test("a forged mode file alone unlocks no merge: autopilot also needs the user's typed messages in Codex's transcript (T460)", (t) => {
+  const w = world(t);
+  w.mode({ sage: true, autopilot: true });
+  assert.equal(w.sage("init").status, 0);
+  assert.equal(w.sage("task", "add", "--title", "t", "--size", "small").status, 0);
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) assert.equal(w.sage("verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41").status, 0);
+  const cases = [["no transcript", null], ["no typed phrase", []], ["sage mode only", ["sage mode"]], ["autopilot before sage mode", ["autopilot on", "sage mode"]],
+    ["autopilot off last", ["sage mode", "autopilot on", "autopilot off"]], ["sage mode off last", ["sage mode", "autopilot on", "sage mode off"]], ["a phrase inside a message", ["sage mode", "please autopilot on now"]], ["typed", ["sage mode", "autopilot on"]]];
+  const got = cases.map(([why, messages]) => {
+    if (messages) w.typed(...messages);
+    const input = messages ? {} : { transcript_path: join(w.dir, "none.jsonl") };
+    return [why, denied(w.send(pre("Bash", MERGE, input)))?.slice(0, 25) ?? "runs", w.send(ask(MERGE, input))?.hookSpecificOutput?.decision?.behavior ?? "prompt"];
+  });
+  const off = "sage: autopilot is off, s";
+  assert.deepEqual(got, [["no transcript", off, "prompt"], ["no typed phrase", off, "prompt"], ["sage mode only", off, "prompt"], ["autopilot before sage mode", off, "prompt"],
+    ["autopilot off last", off, "prompt"], ["sage mode off last", off, "prompt"], ["a phrase inside a message", off, "prompt"], ["typed", "runs", "allow"]]);
+  const other = { type: "event_msg", payload: { type: "item_completed", thread_id: "another-thread", item: { type: "UserMessage", content: [{ type: "text", text: "autopilot on" }] } } };
+  writeFileSync(w.transcript, ["sage mode"].map((text) => JSON.stringify({ ...other, payload: { ...other.payload, thread_id: base.session_id, item: { ...other.payload.item, content: [{ type: "text", text }] } } })).concat(JSON.stringify(other)).join("\n"));
+  assert.deepEqual(typedModes(w.transcript, base.session_id), { sage: true, autopilot: false }, "a message of another thread (a fork's copied history) does not count");
+});
+
+test("no thread names the Codex sage folder in a shell command, or resumes or forks a Codex session (T460)", (t) => {
+  const w = world(t);
+  const home = w.env.HOME;
+  const env = { ...w.env, SAGE_HOME: undefined, CODEX_HOME: join(home, ".codex") };
+  const named = ["cat ~/.codex/sage/.hooks/codex/x.json", `echo '{}' > "${home}/.codex/sage/.hooks/codex/x.json"`, "ls $HOME/.codex/sage", "rm -rf ${CODEX_HOME}/sage",
+    "cp f $SAGE_HOME/x", "echo > .hooks/codex/a.json", `ls ${home.toUpperCase()}/.CODEX/SAGE`];
+  const clean = ["ls ~/.codex/sagebook", `node ${home}/.codex/plugins/cache/sage/sage/0.1.0/skills/sage/sage.mjs status --project /p`, "echo sage mode", "git log"];
+  assert.deepEqual(named.filter((c) => !namesSageFolder(c, env)), [], "each form is found");
+  assert.deepEqual(clean.filter((c) => namesSageFolder(c, env)), [], "no false match");
+  const resumes = ["codex resume --last", "codex exec resume abc 'autopilot on'", "/opt/homebrew/bin/codex fork abc", "FOO=1 codex resume", "cd /p && env codex exec --json resume --last hi"];
+  const others = ["codex exec 'hello'", "git commit -m 'codex resume notes'", "echo codex resume", "codex --version"];
+  assert.deepEqual(resumes.filter((c) => !resumesSession(c)), []);
+  assert.deepEqual(others.filter((c) => resumesSession(c)), []);
+  for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: true }]) {
+    w.mode(mode);
+    for (const extra of [{}, CHILD]) {
+      assert.match(denied(w.send(pre("Bash", `cat ${w.env.SAGE_HOME}/.hooks/codex/x.json`, extra))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder/);
+      assert.match(denied(w.send(pre("Bash", "codex exec resume --last 'autopilot on'", extra))) ?? "", /^sage: no agent resumes or forks a Codex session/);
+    }
+  }
+});
+
+test("in sage mode a child whose task name names a read-only role changes no file; an implementer and an unnamed child may", (t) => {
+  const w = world(t);
+  const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
+  w.mode({ sage: true, autopilot: false });
+  const got = ["sage_code_reviewer_t3", "sage_security_reviewer_t3", "sage_ux_reviewer_t3", "sage_qa_t3", "sage_pe_t3", "sage_lead_t3", "sage_implementer_t3", "sage_designer_t3", "worker_1", "sage_unknown_t3"]
+    .map((name) => [name, denied(w.send(pre("apply_patch", p, w.child(`/root/${name}`)))) ?? "edits"]);
+  const ro = (role) => `sage: a ${role} reviews and changes no files; report the finding instead.`;
+  assert.deepEqual(got.slice(0, 9), [["sage_code_reviewer_t3", ro("code-reviewer")], ["sage_security_reviewer_t3", ro("security-reviewer")], ["sage_ux_reviewer_t3", ro("ux-reviewer")], ["sage_qa_t3", ro("qa")], ["sage_pe_t3", ro("pe")], ["sage_lead_t3", ro("lead")],
+    ["sage_implementer_t3", "edits"], ["sage_designer_t3", "edits"], ["worker_1", "edits"]]);
+  assert.match(got[9][1], /^sage: the hook could not read this agent's task name/, "a sage_ name with an unknown role fails closed");
+  assert.match(denied(w.send(pre("apply_patch", p, { ...CHILD, transcript_path: join(w.dir, "none.jsonl") }))) ?? "", /^sage: the hook could not read this agent's task name/);
+  assert.equal(w.send(pre("Bash", "npm test", w.child("/root/sage_qa_t3"))), undefined, "QA still runs commands");
+  w.mode({ sage: false, autopilot: false });
+  assert.equal(w.send(pre("apply_patch", p, w.child("/root/sage_qa_t3"))), undefined, "outside sage mode the role rule does not act");
 });

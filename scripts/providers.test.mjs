@@ -2445,7 +2445,7 @@ test("shared chief instructions preserve the packaged agent and every brief fiel
   assert.match(text, /model sonnet/);
 });
 
-test("shared chief Codex instructions keep unsupported routes and automatic merges inactive", async t => {
+test("shared chief Codex instructions keep unsupported routes inactive, and merge only by autopilot through the plugin's hook", async t => {
   const f = isolated(t, "codex");
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   assert.equal(typeof api.renderChiefInstructions, "function");
@@ -2462,10 +2462,10 @@ test("shared chief Codex instructions keep unsupported routes and automatic merg
   assert.match(text, /`fork_turns: "none"`/);
   assert.doesNotMatch(text, /sage_prepare_task|admission|preparation/i);
   assert.match(text, /PE, designer, and arena-judge routes are not yet integrated and verified/);
-  assert.match(text, /Autopilot remains off/);
-  assert.match(text, /Never merge, push to the main branch, or force-push/);
+  assert.match(text, /Autopilot off:\*\* the user merges\. Never push to main, force-push/);
+  assert.match(text, /The plugin's hook allows only this exact command when the merge check passes/);
   assert.match(text, /state tool checks at least one cycle/);
-  assert.doesNotMatch(text, /CLAUDE\.md|~\/workspace|\.claude|sage:report|model fable|opus|sonnet|gh pr merge|gh api|gate G15|\{\{|sage-core-chief/);
+  assert.doesNotMatch(text, /CLAUDE\.md|~\/workspace|\.claude|sage:report|model fable|opus|sonnet|gh api|gate G15|\{\{|sage-core-chief/);
   // Rendering this document must not register the chief as an admitted child role.
   assert.throws(() => api.renderRoleInstructions("chief-of-staff", bindings), /Unknown child role/);
 });

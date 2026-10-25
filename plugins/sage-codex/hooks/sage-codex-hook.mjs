@@ -12,10 +12,9 @@
 //   - SessionStart with source fork: a fork has a new session id, and Codex does not give the hook the parent's id.
 //     So a fork starts with sage mode off, and the hook tells the chief so, because its history can show the role.
 //   - A subagent's event (agent_id) switches nothing and gets no role.
-//   - The hook tells the user directly (a systemMessage) only for a limit or a fault: the autopilot limit, a damaged
-//     mode file, an unknown input shape, a mode folder that it cannot use, or SAGE_HOOKS=off. For a normal switch, the
+//   - The hook tells the user directly (a systemMessage) only for a limit or a fault: a damaged mode file, an unknown input shape, a mode folder that it cannot use, or SAGE_HOOKS=off. For a normal switch, the
 //     note tells the chief to confirm the switch in one line of its reply.
-// Autopilot is recorded, but this hook has no merge check yet: so the chief merges nothing (chief-bindings.json).
+// Autopilot is recorded here; the gate hook (gate-hook.mjs) holds the merge rule, and it reads this mode file.
 // SAGE_HOOKS=off turns it off.
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -27,16 +26,17 @@ import { privateDirectory, readState, saveState, stateKey } from "./principles-h
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
 
+const AUTOPILOT_MERGES = "In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt.";
+
 /** What the mode notes say about Codex. Codex has no queued messages and no board phrase in this hook. */
 const CODEX_HOST = {
   name: "Codex",
-  timing: "Send a phrase when Codex is idle. In Codex, autopilot merges nothing yet: work stops at verified, and you merge.",
+  timing: `Send a phrase when Codex is idle. ${AUTOPILOT_MERGES}`,
   board: false,
   update: null,
 };
 
-const AUTOPILOT_ON = "sage: autopilot is on. In Codex, sage has no merge check yet, so autopilot merges nothing: work stops at verified, and the user merges.";
-const AUTOPILOT_LIMIT = "sage: autopilot is on, but in Codex it merges nothing yet: work stops at verified, and you merge.";
+const AUTOPILOT_ON = `sage: autopilot is on. ${AUTOPILOT_MERGES} After a task's clean cycles and a passing merge_check, merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.`;
 const UNKNOWN = "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin or Codex.";
 const HOOK_OFF = "sage: the sage hook is off (SAGE_HOOKS=off), so this phrase switched no mode. Start Codex without SAGE_HOOKS=off to use the phrases.";
 const DAMAGED_NOTE = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off. This is a normal session until the user sends "sage mode" alone, also if the history shows the chief role: you may change files yourself. Tell the user this in one line of your reply.';
@@ -85,8 +85,7 @@ export function handle(input, state) {
   if (was.sage !== Boolean(state.sage) || was.autopilot !== Boolean(state.autopilot)) {
     notes.push(`sage: confirm the switch to the user in one line of your reply: sage mode is ${onOff(state.sage)}, and autopilot is ${onOff(state.autopilot)}.`);
   }
-  const limit = state.autopilot && !was.autopilot ? { systemMessage: AUTOPILOT_LIMIT } : {};
-  return notes.length ? { ...limit, ...context(event, notes.join("\n\n---\n\n")) } : undefined;
+  return notes.length ? context(event, notes.join("\n\n---\n\n")) : undefined;
 }
 
 /** The mode files: under the Codex logbook root (SAGE_HOME, or CODEX_HOME/sage), as the Codex state tool finds it. */

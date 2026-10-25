@@ -87,22 +87,21 @@ test("T453: the on phrase gives the chief role once; the off phrase ends it; a c
   assert.match(contextOf(await s.prompt("SAGE MODE ON.")), ROLE, "the on phrase gives the role again");
 });
 
-test("T453: the autopilot phrases record autopilot; the user gets the limit line, and the chief confirms the switch", async () => {
+test("T453: the autopilot phrases record autopilot with no warning line, and the chief confirms the switch", async () => {
   const s = session();
   assert.deepEqual(await s.prompt("autopilot on"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: 'sage: autopilot did not switch on, because it turns on only while sage mode is on. Ask the user to send "sage mode" first, then "autopilot on", each as a message alone.' } });
   await s.prompt("sage mode");
   assert.deepEqual(await s.prompt("autopilot on"), {
-    systemMessage: "sage: autopilot is on, but in Codex it merges nothing yet: work stops at verified, and you merge.",
-    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is on. In Codex, sage has no merge check yet, so autopilot merges nothing: work stops at verified, and the user merges.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is on." },
+    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is on. In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. After a task's clean cycles and a passing merge_check, merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is on." },
   });
   assert.equal(await modes(s), "sage mode on, autopilot on");
   assert.deepEqual(await s.prompt("autopilot off"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is off. Work stops at verified, and the user merges.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is off." } });
   assert.equal(await modes(s), "sage mode on, autopilot off");
 });
 
-test("T453: the help phrase says when to send a phrase and that autopilot merges nothing in Codex, with no board phrase or Claude command", async () => {
+test("T453: the help phrase says when to send a phrase and that autopilot merges verified work in Codex, with no board phrase or Claude command", async () => {
   const help = contextOf(await session().prompt("sage help"));
-  assert.match(help, /^Switches: send the phrase alone, as the whole message, in any letter case\. Spaces at the ends and one full stop are fine\. Any other message switches nothing\.\nSend a phrase when Codex is idle\. In Codex, autopilot merges nothing yet: work stops at verified, and you merge\.\n- "sage mode": turns sage mode on\.$/m);
+  assert.match(help, /^Switches: send the phrase alone, as the whole message, in any letter case\. Spaces at the ends and one full stop are fine\. Any other message switches nothing\.\nSend a phrase when Codex is idle\. In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt\.\n- "sage mode": turns sage mode on\.$/m);
   assert.doesNotMatch(help, /Board:|claude plugin update|Claude|switches when its turn starts/);
 });
 
