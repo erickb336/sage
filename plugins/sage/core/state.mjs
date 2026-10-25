@@ -1768,8 +1768,9 @@ function rebuild(root) {
  * clean cycles of its size and risk (cyclesFor), or cycles when it is given and higher: cycles only raises. The hook calls this, so it
  * never throws: what it cannot read refuses the merge. With readOnly (the board), it takes no lock and writes nothing, so
  * it refuses when the known project list is missing instead of making it. With head (it needs pr), the name of the pull
- * request's head branch on GitHub: each task of that pull request, now or in its PR history, must own it, by its branch=
- * or as a branch of the task (ofTask), so a task cannot lend its verdicts to another task's pull request (F-T273-8).
+ * request's head branch on GitHub: each task of that pull request, now or in its PR history, must own it, by its
+ * branch=, as a branch of the task (ofTask) or by a run of it on that branch, so a task cannot lend its verdicts to another task's
+ * pull request (F-T273-8). Each task of the logbook that owns it must be on the pull request too (T439).
  * With project, the folder of the project being merged: only a task of its logbook counts as a task of the pull request
  * that may approve the merge. A task of another logbook with verdicts on the SHA must still pass (F-T273-9).
  */
@@ -1799,11 +1800,15 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       const [tasks, findings, decisions, runs] = book ? [rowsOf(book.tasks), rowsOf(book.findings), rowsOf(book.decisions), rowsOf(book.runs)] : [[], [], [], []];
       const repaired = decisions.some((d) => d.decision.startsWith("tasks.tsv started again without rows"));
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
-      // A shared head branch (T439): each task that owns it, by its branch= or its name, must be a task of the PR too, so
-      // a task that joins another task's branch cannot merge that task's work on its own verdicts (F-T273-8).
-      if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && (t.branch === head || ofTask(t.id, String(head)))).map((t) => `${visible(dir)} ${t.id}`));
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
       const [byId, ownOf, findingsOf, runsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs)];
+      // A task owns the head branch by its branch=, by its name, or by a run of it on that branch: a task that ran work
+      // there and then moved to another branch still owns it (R1709-1).
+      const ranOn = new Set(runs.filter((r) => r.branch === head).map((r) => r.task));
+      const owns = (id) => byId.get(id)?.branch === head || ofTask(id, String(head)) || ranOn.has(id);
+      // A shared head branch (T439): each task that owns it must be a task of the PR too, so a task that joins another
+      // task's branch cannot merge that task's work on its own verdicts (F-T273-8).
+      if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && owns(t.id)).map((t) => `${visible(dir)} ${t.id}`));
       const graph = waitGraph(tasks, book ? rowsOf(book.programs) : [], book ? rowsOf(book.gates) : [], decisions);
       const checked = [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
@@ -1814,7 +1819,7 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         // would pass, so a refusal still names an open finding first.
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
-        return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...verdict, ...busy, ...held };
+        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), own: own.length, ...verdict, ...busy, ...held };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
       // too, its own waits included: else two tasks of one PR could never merge. The same PR is the PR of --pr for both

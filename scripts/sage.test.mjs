@@ -3952,6 +3952,39 @@ test("T439: two tasks share one branch and PR; the merge check passes only when 
   assert.match(lend.stderr, /PR 77's head branch "sage\/t1-shared" is also the branch of \S+ T1, which is not on PR 77, so the merge check refuses/);
 });
 
+test("R1709-1: a task that ran work on the head branch owns it after it moves to another branch, so its absence from the PR refuses the merge", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--title", title, "--size", "small");
+  const check = () => s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t2");
+  s.ok("task", "T2", "set", "branch=sage/t2", "pr=41");
+  s.ok("task", "T1", "set", "branch=sage/t2"); // the sage shares T2's branch with T1, with no pr=
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t2"); // T1's implementer pushes to sage/t2
+  s.ok("task", "T1", "set", "branch=sage/t1"); // then T1 moves off the shared branch
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T2", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  const lend = check();
+  assert.equal(lend.status, 1, "T2's verdicts do not merge T1's work");
+  assert.match(lend.stderr, /PR 41's head branch "sage\/t2" is also the branch of \S+ T1, which is not on PR 41, so the merge check refuses/);
+  // On the PR with its own clean verdicts, T1 owns the head by its run, so it is no stray, and the PR merges.
+  s.ok("task", "T1", "set", "pr=41");
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  const both = check();
+  assert.equal(both.status, 0, both.stderr);
+  assert.match(both.stdout.trim(), /^2 tasks have verdicts on a1b2c3d or belong to PR 41, and each must pass: \S+ T2 may merge: 1 clean cycle on this SHA; \S+ T1 may merge: 1 clean cycle on this SHA$/);
+});
+
+test("R1708-2: a run on its task's shared branch is a valid assignment for a provider's spawn", async () => {
+  const { createStateTool } = await import(new URL("../plugins/sage/core/state.mjs", import.meta.url));
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--title", title, "--size", "small");
+  s.ok("task", "T2", "set", "branch=sage/t2");
+  s.ok("task", "T1", "set", "branch=sage/t2"); // the sage shares T2's branch with T1
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t2"); // R1
+  const tool = createStateTool({ defaultRoot: () => s.home });
+  const capture = (task, run, role) => tool.captureRunAssignment({ project: s.project, task, run, role }, testEnv({ SAGE_HOME: s.home }));
+  assert.deepEqual(capture("T1", "R1", "implementer"), { task: "T1", run: "R1", role: "implementer", round: 0, taskBranch: "sage/t2", runBranch: "sage/t2", candidate: "" });
+  assert.throws(() => capture("T1", "R1", "qa"), /The assignment needs one active run on its current task, role, branch, and round\./, "another role refuses");
+});
+
 test("T94: every git call of the state tool carries the neutral options and environment", () => {
   const { base, env, project, sage } = sandboxPrep();
   // A fake git first on PATH records its arguments and the neutral environment, then runs the real git.
