@@ -5542,6 +5542,37 @@ test("F-T273-8: a failed, slow or fork read of the head branch refuses the merge
   }
 });
 
+test("T439: two tasks on one branch and PR merge under autopilot only when each passes; another branch for one task refuses", () => {
+  const s = autopilotSession(); // T1 has clean cycles on SHA under PR 41; the head branch is claude/t1
+  const merge = () => denied(s.send(bash(MERGE)));
+  const verdicts = (...kinds) => { for (const kind of kinds) s.sage("verdict", "T2", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41"); };
+  s.sage("task", "add", "--title", "second", "--size", "small"); // T2
+  s.sage("task", "T1", "set", "branch=claude/t1", "pr=41");
+  assert.match(s.sage("task", "T2", "set", "branch=claude/t1", "pr=41"), /· claude\/t1 · PR 41$/, "T2 shares T1's branch");
+  verdicts("checks-pass", "review-clean");
+  assert.match(merge() ?? "", /^sage: the merge check refuses: 2 tasks have verdicts on .* T2: 0 of 1 clean cycles on this SHA; never recorded: qa-pass\./, "T2 is not clean");
+  verdicts("qa-pass");
+  assert.equal(merge(), undefined, "each task of the PR passes on its own verdicts");
+  s.sage("task", "T2", "set", "branch=claude/t2");
+  assert.match(merge() ?? "", /^sage: the merge check refuses: PR 41's head branch "claude\/t1" is not a branch of \S+ T2/, "T2 names another branch for the same PR");
+  // B1 of F-T273-8 with a shared branch: T1 on T2's branch, but T2 not on the PR, does not merge T2's work.
+  const lend = autopilotSession({ FAKE_PR_HEAD: "claude/t2" });
+  lend.sage("task", "add", "--title", "other", "--size", "small"); // T2
+  lend.sage("task", "T2", "set", "branch=claude/t2");
+  lend.sage("task", "T1", "set", "branch=claude/t2", "pr=41");
+  assert.match(denied(lend.send(bash(MERGE))) ?? "", /^sage: the merge check refuses: PR 41's head branch "claude\/t2" is also the branch of \S+ T2, which is not on PR 41/);
+});
+
+test("T439: a lead adds a run on its task's shared branch, but only the sage puts its task on another task's branch", () => {
+  const s = leadSession(); // the lead of T1
+  s.sage("task", "T2", "set", "branch=claude/t2");
+  s.sage("task", "T1", "set", "branch=claude/t2"); // the sage shares T2's branch with T1
+  assert.equal(denied(stateRun(s, "run add T1 --role implementer --branch claude/t2")), undefined, "its task's branch=");
+  assert.match(denied(stateRun(s, "run add T1 --role implementer --branch claude/t3")) ?? "", NOT_OWN, "a branch of neither");
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t2")) ?? "", NOT_OWN, "a lead never names another task's branch");
+  assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1")), undefined, "a branch named for its task");
+});
+
 test("F-T273-8: merge-check --head runs the same check by hand, and needs --pr", () => {
   const s = autopilotSession();
   const check = (...args) => spawnSync("node", [TOOL, "merge-check", "--sha", SHA, ...args, "--project", FEATURE], { encoding: "utf8", env: s.vars });

@@ -970,10 +970,11 @@ const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: 
  */
 const LEAD_READ_MAX = 4 * 1024 * 1024;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
-const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task); run done <a run of these roles on its task>; finding add <its task> (no --key; --run only of a run that it added, and --class); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round or of an earlier one; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch=, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, while its lead run runs";
+const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task, or its task's branch=); run done <a run of these roles on its task>; finding add <its task> (no --key; --run only of a run that it added, and --class); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round or of an earlier one; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch= of a branch named for its task, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, while its lead run runs";
 /** Each key=value of task set: a key at most once, and each value as the lead may set it on this task (F-T273-2, F-T273-7). */
 const LEAD_PAIRS = {
-  branch: (branch) => branch !== "", // the state tool takes only a branch of the task; a lead never clears it (T275)
+  // Only a branch named for its task: a lead never clears it (T275), and only the sage puts a task on another task's branch (T439).
+  branch: (branch, task, view, own) => branch !== "" && Boolean(stateTool.ofTask(own, branch)),
   pr: (pr, task, view, own) => /^[1-9]\d*$/.test(pr) && !task.pr && [...view.prTasks(pr)].every((id) => id === own),
   // Option A (F-T284-12): the lead closes the round's fix findings while repairing, and leaves repairing only after.
   // A refused move says which moves there are (F-T289-36).
@@ -1183,7 +1184,8 @@ function gap(role, view, task, ctx) {
 }
 const LEAD_WRITES = {
   // No new run of a role while the findings of its round's reports are not all recorded (F-T289-18).
-  "run add": ([, t], opt, own, view, task, ctx) => t === own && TEAM.includes(opt.role) && (opt.branch === undefined || Boolean(stateTool.ofTask(own, opt.branch))) && (gap(opt.role, view, task, ctx) ?? true),
+  // --branch: a branch named for its task, or its task's branch= that the sage shares with another task (T439).
+  "run add": ([, t], opt, own, view, task, ctx) => t === own && TEAM.includes(opt.role) && (opt.branch === undefined || Boolean(stateTool.ofTask(own, opt.branch)) || opt.branch === task.branch) && (gap(opt.role, view, task, ctx) ?? true),
   // A run of the team ends only after its child, named by the run's id, stopped (F-T284-9). A run whose child gave no
   // report (it never started, it left with no stop, or the sage stopped it) ends as failed or blocked and backs no
   // verdict (F-T289-3, F-T289-13, F-T289-20). A review or QA run whose report was not clean ends only after the findings
