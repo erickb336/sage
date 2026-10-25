@@ -79,7 +79,7 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
 
 ## The board screenshots
 
-The board screenshots of the README and of [Learn sage in 5 minutes](docs/guide/learn-sage.md) come from `scripts/board-shots.mjs`. It renders the built board with fixed sample logbooks (made-up data, from `scripts/fixtures/board-programs.mjs` and `scripts/fixtures/board-walkthrough.mjs`) in Playwright's Chromium. Each shot is at phone width and 2x, and carries a SAMPLE DATA label. It uses the same browser as the browser tests (step 7 above):
+The board screenshots of the README and of [Learn sage in 5 minutes](docs/guide/learn-sage.md) come from `scripts/board-shots.mjs`. It renders the built board with fixed sample logbooks (made-up data, from `scripts/fixtures/board-programs.mjs` and `scripts/fixtures/board-walkthrough.mjs`) in Playwright's Chromium. Each shot is at laptop width (1280 by 800 CSS pixels, so the board shows its desktop layout) and 2x, and carries a SAMPLE DATA label. It uses the same browser as the browser tests (step 7 above):
 
 ```sh
 node scripts/board-shots.mjs

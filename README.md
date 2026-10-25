@@ -77,10 +77,10 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/board-dark.png">
-  <img alt="The top of the board page at phone width, with SAMPLE DATA: the project picker, the filter bar, a Needs you box, and the first card of the Backlog column, which asks you to approve a program." src="docs/assets/board-light.png" width="400">
+  <img alt="The board page on a laptop screen, with SAMPLE DATA: the project picker, the filter bar, a Needs you box with two program questions, and six columns side by side, from Backlog to Done. The first card of the Backlog column asks you to approve a program." src="docs/assets/board-light.png" width="100%">
 </picture>
 
-*Sample data: every task and program in the screenshot is made up. The screenshot shows only the top of the page: the project picker, the filters, the Needs you box and the first card of the first column. The [board guide](docs/guide/board.md) describes the full board.*
+*Sample data: every task and program in the screenshot is made up. The screenshot shows the first screen of the board on a laptop (1280 by 800 pixels): the project picker, the filters, the Needs you box and the columns, from Backlog to Done. The [board guide](docs/guide/board.md) describes the full board.*
 
 ## What to say
 
