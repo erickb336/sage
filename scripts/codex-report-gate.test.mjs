@@ -44,7 +44,13 @@ test("a sage agent's report without fields continues once, with the missing fiel
 });
 
 test("a second miss stops the agent with one plain line", () => {
-  assert.deepEqual(gate(stop({ stop_hook_active: true })), { systemMessage: "sage: sage_implementer_t1 stopped, and its report still has no EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH. Read the report as it is." });
+  assert.deepEqual(gate(stop({ stop_hook_active: true })), { systemMessage: "sage: the agent sage_implementer_t1 ended without a full report (no EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH). The chief reads it as it is." });
+});
+
+test("a task name with a run, or a sage_ name in another letter case, gets the report check too (R1663-2, R1664-6)", () => {
+  for (const path of ["/root/sage_code_reviewer_t12_r40", "/root/Sage_QA_T1", "/root/SAGE_implementer_t01"]) {
+    assert.deepEqual(gate(stop({ agent_transcript_path: transcript(path) })), BLOCK, path);
+  }
 });
 
 test("an agent without the sage_ task name passes, with or without a report", () => {
@@ -68,7 +74,7 @@ const STOCK = ["exec", "wait", "request_user_input", "request_user_input_async",
   "write_stdin", "view_image", "close_agent", "resume_agent", "send_input", "fork_context", "get_goal", "create_goal", "update_goal", "web_search"];
 const MCP = Object.keys((await import(pathToFileURL(join(ROOT, "plugins/sage-codex/mcp/state-server.mjs")))).TOOLS);
 /** Each tool-like name (snake case in a code span) that a binding text names, except an example sage task name. */
-const named = (text) => [...text.matchAll(/`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`/g)].map((m) => m[1]).filter((name) => !/^sage_[a-z_]+_t\d+$/.test(name));
+const named = (text) => [...text.matchAll(/`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`/g)].map((m) => m[1]).filter((name) => !/^sage_[a-z_]+_t\d+(?:_r\d+)?$/.test(name));
 
 test("every tool that a Codex chief or role binding names is a stock Codex tool or a sage MCP tool", () => {
   const texts = [JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8")),

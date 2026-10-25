@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The brief check of Codex 0.160.0 (T462, form A of T463). Before each spawn the chief runs the sage MCP tool `brief`:
+// The brief check of Codex (T462, form A of T463). Before each spawn the chief runs the sage MCP tool `brief`:
 // it checks the brief's fields with core's BRIEF_FIELDS and keeps the brief in the project's logbook by task name
 // (briefs/<task name>.json). This hook reads that record. It never blocks a spawn and never changes the spawn message,
 // because with a real model the message is encrypted:
@@ -14,19 +14,18 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BRIEF_FIELDS, briefSections, missingBriefFields } from "../core/index.mjs";
 import { tool } from "../skills/sage/sage.mjs";
-import { childTask } from "./report-gate.mjs";
+import { childTask, sageName, TASK_NAME } from "./report-gate.mjs";
 
-/** A sage role agent's task name: sage_, the role with _ for -, and the task, for example sage_implementer_t12. */
-export const TASK_NAME = /^sage_[a-z_]+_t[1-9]\d*$/;
 /** The largest brief, as core's brief reader: 32 KiB. */
 export const BRIEF_LIMIT = 32 * 1024;
-const UNREAD = "sage: the brief check could not read this hook input, so it added no brief note.";
+const UNREAD = "sage: the brief check could not read what Codex sent it, so this agent starts without its brief note. If this comes again, update the sage plugin or Codex.";
+export const NAME_RULE = "sage_, the role with _ for -, the task, and the run, for example sage_implementer_t12_r40";
 
 const briefFile = (project, task, env) => join(tool.storeDir(project, env), "briefs", `${task}.json`);
 
 /** Check a brief and keep it by task name. It returns the missing fields, and throws without the project's logbook. */
 export function recordBrief(project, task, text, env = process.env) {
-  if (!TASK_NAME.test(task)) throw Error(`"${task}" is not a sage task name: sage_, the role with _ for -, and the task, for example sage_implementer_t12`);
+  if (!TASK_NAME.test(task)) throw Error(`"${task}" is not a sage task name: ${NAME_RULE}`);
   if (Buffer.byteLength(text, "utf8") > BRIEF_LIMIT) throw Error("the brief is over 32 KiB");
   const file = briefFile(project, task, env);
   if (!existsSync(dirname(file))) throw Error(`no logbook for the project ${project}. Run init first.`);
@@ -49,7 +48,7 @@ function startNote(input, env) {
   if (typeof input.transcript_path !== "string" || typeof input.cwd !== "string") return { systemMessage: UNREAD };
   let task;
   try { task = childTask(input.transcript_path); } catch { return { systemMessage: UNREAD }; }
-  if (!task.startsWith("sage_")) return {};
+  if (!sageName(task)) return {};
   const standing = tool.command(["standing", `--project=${input.cwd}`], env);
   const brief = readBrief(input.cwd, task, env);
   const parts = standing.code === 0 ? [`sage: the standing orders of this project, from its logbook. Follow each one.\n\n${standing.text}`] : [];
@@ -61,7 +60,7 @@ function startNote(input, env) {
 /** The warning to the chief after a spawn of a sage child with no checked brief on record. */
 function spawnWarning(input, env) {
   const task = typeof input.tool_input?.task_name === "string" ? input.tool_input.task_name.split("/").at(-1) : "";
-  if (!/spawn_agent$/.test(String(input.tool_name)) || !task.startsWith("sage_") || typeof input.cwd !== "string") return {};
+  if (!/spawn_agent$/.test(String(input.tool_name)) || !sageName(task) || typeof input.cwd !== "string") return {};
   const brief = readBrief(input.cwd, task, env);
   if (brief && !brief.missing.length) return {};
   const missing = brief ? `the recorded brief has no ${brief.missing.join(", ")}` : `no brief is on record, so ${BRIEF_FIELDS.join(", ")} are not checked`;

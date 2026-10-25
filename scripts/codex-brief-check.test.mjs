@@ -69,6 +69,16 @@ test("the start note of a sage child: the standing orders, the FORBIDDEN field a
   assert.doesNotMatch(note, /no checked brief/);
 });
 
+test("a second run of a role on the same task has its own task name, sage_<role>_t<n>_r<k>, and its own checked brief (R1663-2)", (t) => {
+  const w = world(t);
+  assert.equal(w.sage("init").status, 0);
+  assert.deepEqual(recordBrief(w.project, "sage_code_reviewer_t1_r7", brief(), w.env), []);
+  assert.match(w.context(w.send(w.start("sage_code_reviewer_t1_r7"))), /\n\nYour checked brief \(sage_code_reviewer_t1_r7\), as the chief recorded it:\n\nGOAL: /);
+  assert.ok(w.context(w.send(w.start("sage_code_reviewer_t1_r8"))).endsWith(`\n\n${NO_BRIEF}`), "the next run has no brief yet");
+  assert.deepEqual(w.send(w.spawned("sage_code_reviewer_t1_r7")), {}, "no warning for the checked run");
+  for (const bad of ["sage_code_reviewer_t1_r0", "sage_code_reviewer_t1_r", "sage_code_reviewer_r7_t1"]) assert.throws(() => recordBrief(w.project, bad, brief(), w.env), /is not a sage task name: sage_, the role with _ for -, the task, and the run/, bad);
+});
+
 test("the start note says that no checked brief is on record: for no brief, and for a brief with a missing field", (t) => {
   const w = world(t);
   assert.equal(w.sage("init").status, 0);
@@ -98,7 +108,7 @@ test("after a spawn with no checked brief, the chief gets a warning that names t
 
 test("an input that the hook cannot read gives one plain line and no note", (t) => {
   const w = world(t);
-  const UNREAD = { systemMessage: "sage: the brief check could not read this hook input, so it added no brief note." };
+  const UNREAD = { systemMessage: "sage: the brief check could not read what Codex sent it, so this agent starts without its brief note. If this comes again, update the sage plugin or Codex." };
   for (const input of ["not json", "null", { hook_event_name: "Stop" }, { ...w.start("sage_qa_t1"), transcript_path: join(w.dir, "none.jsonl") }, { ...w.start("sage_qa_t1"), cwd: 7 }]) {
     assert.deepEqual(w.send(input), UNREAD, JSON.stringify(input));
   }

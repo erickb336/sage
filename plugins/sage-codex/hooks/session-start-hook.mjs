@@ -6,7 +6,9 @@ import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PHRASES } from "../core/index.mjs";
+import { PHRASES, readModeFile } from "../core/index.mjs";
+import { readState, stateKey } from "./principles-hook.mjs";
+import { modeDirectory } from "./sage-codex-hook.mjs";
 
 /** The Codex versions (major.minor, both ends included) that sage was checked with. */
 export const TESTED_CODEX = ["0.160", "0.164"];
@@ -50,8 +52,17 @@ function trustedCount(keys, codexHome) {
   return keys.filter((key) => trusted.has(key)).length;
 }
 
-/** The hook's output JSON for one SessionStart input, or undefined for any other event. */
-export function sessionStatus(input, { pluginRoot, codexHome }) {
+/** Whether sage mode is on in the session, from the mode hook's file (a resumed session keeps it). */
+function sageOn(input, env) {
+  try { return readModeFile(readState, join(modeDirectory(env), `${stateKey(input)}.json`)).state.sage === true; } catch { return false; }
+}
+
+/**
+ * The hook's output JSON for one SessionStart input, or undefined for any other event. The chief always gets the
+ * status. The user gets a warning (a systemMessage) only for a limit: a sage hook without a trust record, or a Codex
+ * outside the tested range.
+ */
+export function sessionStatus(input, { pluginRoot, codexHome, env = process.env }) {
   if (input?.hook_event_name !== "SessionStart") return undefined;
   const plugin = readJson(join(pluginRoot, ".codex-plugin/plugin.json")).version;
   const version = codexVersion(input.transcript_path);
@@ -60,15 +71,15 @@ export function sessionStatus(input, { pluginRoot, codexHome }) {
   const [low, high] = TESTED_CODEX.map(minor);
   const at = version && minor(version);
   const inRange = at && (at[0] - low[0] || at[1] - low[1]) >= 0 && (at[0] - high[0] || at[1] - high[1]) <= 0;
-  const lines = [
-    `sage ${plugin} is installed. Codex ${version ?? "version unknown"}.`,
-    trusted === keys.length ? `sage hooks: all ${keys.length} trusted.`
-      : `sage hooks: ${trusted} of ${keys.length} trusted. Type /hooks in the Codex CLI to review the others.`,
-    `To start sage mode, send this message alone: ${ON_PHRASE}`,
-  ];
-  if (!inRange) lines.push(`Warning: sage is tested with Codex ${TESTED_CODEX.join(" to ")}${version ? `, not ${version}` : ""}. Some sage hooks may not work.`);
-  const text = lines.join("\n");
-  return { systemMessage: text, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } };
+  const limits = [];
+  if (trusted < keys.length) limits.push(`sage: ${keys.length - trusted} of the ${keys.length} sage hooks ${keys.length - trusted === 1 ? "is" : "are"} not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.`);
+  if (!inRange) limits.push(`sage: sage is tested with Codex ${TESTED_CODEX.join(" to ")}, ${version ? `not ${version}` : "and it could not read this Codex version"}. Some sage hooks may not work.`);
+  const status = [
+    `sage ${plugin} is installed. Codex ${version ?? "version unknown"}. sage hooks: ${trusted === keys.length ? "all" : `${trusted} of`} ${keys.length} trusted.`,
+    sageOn(input, env) ? "sage mode is on in this session." : `To start sage mode, the user sends this message alone: ${ON_PHRASE}`,
+    ...limits,
+  ].join("\n");
+  return { ...(limits.length ? { systemMessage: limits.join("\n") } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: status } };
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

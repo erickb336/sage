@@ -1,7 +1,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 // the gate a fixed mode and merge check; the process tests run the built hook with a mode file, a logbook and a fake gh.
 const HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/gate-hook.mjs", import.meta.url));
 const TOOL = fileURLToPath(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
-const { gate, readMode, typedModes, namesSageFolder, resumesSession, UNREADABLE } = await import(HOOK);
+const { gate, readMode, typedModes, namesSageFolder, resumesSession, codexRuns, UNREADABLE } = await import(HOOK);
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -24,6 +24,14 @@ const patch = (...lines) => `*** Begin Patch\n${lines.join("\n")}\n*** End Patch
 const CHILD = { agent_id: "agent-1", agent_type: "worker" };
 const denied = (out) => (out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined);
 const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
+const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead.`;
+const RO = (role) => `sage: a ${role} reviews and changes no files; report the finding instead.`;
+const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report.";
+const SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report.";
+const CHILD_CODEX = "sage: a sage agent never starts Codex from the shell, because a new Codex session runs outside the hooks of this session. Report what you need instead.";
+const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.";
+/** A call of a tool of the plugin's sage MCP server, as Codex gives it to PreToolUse: mcp__sage__<tool>, with the call's arguments. */
+const mcp = (name, args = {}, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name: `mcp__sage__${name}`, tool_use_id: "call_1", tool_input: { project: CWD, ...args }, ...extra });
 
 /** A gate with a fixed mode and merge check; checks counts the merge checks it ran. */
 function fixed({ sage = true, autopilot = false, ok = true } = {}) {
@@ -100,11 +108,12 @@ test("the approval request of the verified merge is allowed; every other request
 });
 
 /** A git checkout on the task's branch, a sage home and a fake gh that answers gh pr view and logs every call. */
-function world(t) {
+function world(t, { at = "project" } = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-gate-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const project = join(dir, "project"), bin = join(dir, "bin");
+  const project = join(dir, at), bin = join(dir, "bin");
   mkdirSync(bin);
+  mkdirSync(project, { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "sage/t1", project]);
   spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"]);
   writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${dir}/gh-calls.log"\n[ "$1 $2" = "pr view" ] && printf '{"headRefName":"sage/t1","isCrossRepository":false}'\nexit 0\n`);
@@ -230,7 +239,7 @@ test("in sage mode a child whose task name names a read-only role changes no fil
   const ro = (role) => `sage: a ${role} reviews and changes no files; report the finding instead.`;
   assert.deepEqual(got.slice(0, 9), [["sage_code_reviewer_t3", ro("code-reviewer")], ["sage_security_reviewer_t3", ro("security-reviewer")], ["sage_ux_reviewer_t3", ro("ux-reviewer")], ["sage_qa_t3", ro("qa")], ["sage_pe_t3", ro("pe")], ["sage_lead_t3", ro("lead")],
     ["sage_implementer_t3", "edits"], ["sage_designer_t3", "edits"], ["worker_1", "edits"]]);
-  assert.match(got[9][1], /^sage: the hook could not read this agent's task name/, "a sage_ name with an unknown role fails closed");
+  assert.equal(got[9][1], BAD_NAME("sage_unknown_t3"), "a sage_ name with an unknown role fails closed");
   assert.match(denied(w.send(pre("apply_patch", p, { ...CHILD, transcript_path: join(w.dir, "none.jsonl") }))) ?? "", /^sage: the hook could not read this agent's task name/);
   assert.equal(w.send(pre("Bash", "npm test", w.child("/root/sage_qa_t3"))), undefined, "QA still runs commands");
   w.mode({ sage: false, autopilot: false });
@@ -248,7 +257,7 @@ test("in sage mode a read-only role writes no file from the shell either; it sti
     assert.deepEqual(reads.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), reads.map(() => undefined), name);
   }
   for (const name of ["sage_implementer_t3", "worker_1"]) assert.equal(denied(w.send(pre("Bash", writes[0], w.child(`/root/${name}`)))), undefined, name);
-  assert.match(denied(w.send(pre("Bash", writes[0], w.child("/root/sage_unknown_t3")))) ?? "", /^sage: the hook could not read this agent's task name/);
+  assert.equal(denied(w.send(pre("Bash", writes[0], w.child("/root/sage_unknown_t3")))), BAD_NAME("sage_unknown_t3"));
   w.mode({ sage: false, autopilot: false });
   assert.equal(denied(w.send(pre("Bash", writes[0], w.child("/root/sage_qa_t3")))), undefined, "outside sage mode the role rule does not act");
 });
@@ -268,4 +277,152 @@ test("no sage child starts Codex from the shell, in any mode: the new session wo
     assert.equal(denied(w.send(pre("Bash", "codex --version"))), undefined, "the main thread");
   }
   assert.match(denied(w.send(pre("Bash", starts[0], { ...CHILD, transcript_path: join(w.dir, "none.jsonl") }))) ?? "", /^sage: the hook could not read this agent's task name/);
+});
+
+test("only the chief records the logbook: a child's sage tool that writes is denied with one line, in any mode; reads pass (R1664-1, R1664-2)", async (t) => {
+  const writes = [["verdict", { task: "T1", kind: "review-clean", sha: SHA, cycle: 1, pr: 41 }], ["gate_answer", { gate: "G1", option: 1 }], ["brief", { task_name: "sage_qa_t1", brief: "GOAL x" }],
+    ["finding_add", { task: "T1", source: "qa", severity: "low" }], ["finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "x" }], ["finding_close", { task: "T1", key: "F-T1-1" }],
+    ["task_set", { task: "T1", fields: { state: "verified" } }], ["task_add", { title: "x", size: "tiny" }], ["standing_add", { order: "x" }], ["run_add", { task: "T1", role: "qa" }],
+    ["run_done", { run: "R1", status: "done" }], ["round", { task: "T1" }], ["log", { task: "T1", decision: "x", why: "y" }], ["gate_add", { task: "T1", question: "q", options: "a|b", recommend: "a" }],
+    ["finding_move", { task: "T1", key: "F-T1-1", to: "x" }], ["init", {}], ["pages", { task: "T1", record: "/p/page.html" }], ["unknown_tool", {}]];
+  const reads = [["status", {}], ["standing", {}], ["merge_check", { sha: SHA }], ["pages", { task: "T1" }]];
+  for (const mode of [{ sage: false }, { sage: true, autopilot: true }]) {
+    const g = fixed(mode);
+    for (const extra of [CHILD, { agent_id: "" }, { ...CHILD, transcript_path: "/none.jsonl" }]) {
+      assert.deepEqual(await Promise.all(writes.map(([name, args]) => g.run(mcp(name, args, extra)).then(denied))), writes.map(() => LOGBOOK), JSON.stringify(mode));
+      assert.deepEqual(await Promise.all(reads.map(([name, args]) => g.run(mcp(name, args, extra)))), reads.map(() => undefined));
+    }
+    assert.deepEqual(await Promise.all(writes.map(([name, args]) => g.run(mcp(name, args)))), writes.map(() => undefined), "the chief records the logbook");
+  }
+  assert.equal(denied(await fixed().run({ ...mcp("verdict"), tool_input: "x" })), UNREADABLE, "an input that it cannot read");
+  // The built hook process, with the matcher of hooks.json: Codex runs the gate for these tools.
+  const w = world(t);
+  assert.equal(denied(w.send(mcp("verdict", { task: "T1", kind: "qa-pass", sha: SHA }, w.child("/root/sage_code_reviewer_t1")))), LOGBOOK);
+  assert.equal(w.send(mcp("verdict", { task: "T1", kind: "qa-pass", sha: SHA })), undefined);
+  const { hooks } = JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8"));
+  const gateMatcher = new RegExp(hooks.PreToolUse.find((g) => g.hooks.some((h) => h.command.endsWith('/hooks/gate-hook.mjs"'))).matcher);
+  const names = ["mcp__sage__verdict", "mcp__sage__gate_answer", "mcp__sage__brief", "spawn_agent", "collaborationspawn_agent", "Bash", "apply_patch", "mcp__github__create_issue", "exec_command", "wait_agent"];
+  assert.deepEqual(names.filter((name) => gateMatcher.test(name)), names.slice(0, 7));
+});
+
+test("a role agent starts no agents, in any mode, and a thread under a read-only role at any part of its agent path is read-only (R1664-3)", async (t) => {
+  const w = world(t);
+  const spawn = (extra, tool_name = "collaborationspawn_agent") => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { task_name: "helper", message: "write a file", fork_turns: "none" }, ...extra });
+  for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
+    w.mode(mode);
+    for (const path of ["/root/sage_code_reviewer_t1", "/root/sage_implementer_t1_r4", "/root/Sage_QA_T1", "/root/worker_1/sage_qa_t1", "/root/sage_qa_t1/helper"]) {
+      for (const tool of ["collaborationspawn_agent", "spawn_agent"]) assert.equal(denied(w.send(spawn(w.child(path), tool))), SPAWN, `${path} ${tool}`);
+    }
+    assert.equal(w.send(spawn(w.child("/root/worker_1"))), undefined, "a child that is not a sage role agent");
+    assert.equal(w.send(spawn({})), undefined, "the chief starts agents");
+    assert.match(denied(w.send(spawn({ ...CHILD, transcript_path: join(w.dir, "none.jsonl") }))) ?? "", /^sage: the hook could not read this agent's task name/);
+  }
+  w.mode({ sage: true, autopilot: false });
+  const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
+  const got = ["/root/sage_code_reviewer_t1/helper", "/root/sage_qa_t1/worker_2/helper", "/root/worker_1/sage_pe_t2", "/root/sage_implementer_t1/helper", "/root/worker_1/helper"]
+    .map((path) => [path, denied(w.send(pre("apply_patch", p, w.child(path)))) ?? "edits", denied(w.send(pre("Bash", "echo x > notes.txt", w.child(path)))) ?? "writes"]);
+  assert.deepEqual(got, [["/root/sage_code_reviewer_t1/helper", RO("code-reviewer"), RO("code-reviewer")], ["/root/sage_qa_t1/worker_2/helper", RO("qa"), RO("qa")],
+    ["/root/worker_1/sage_pe_t2", RO("pe"), RO("pe")], ["/root/sage_implementer_t1/helper", "edits", "writes"], ["/root/worker_1/helper", "edits", "writes"]]);
+  assert.equal(denied(w.send(pre("Bash", "codex exec hi", w.child("/root/worker_1/sage_implementer_t1/helper")))), CHILD_CODEX, "a helper under a sage agent starts no Codex either");
+});
+
+test("a sage_ name that is not a sage task name counts as a read-only role; a name with a run is read by its role (R1664-6, R1663-2)", (t) => {
+  const w = world(t);
+  w.mode({ sage: true, autopilot: false });
+  const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
+  const names = ["Sage_Code_Reviewer_T1", "sage_qa_T1", "sage_security_reviewer_t01", "sage_code_reviewer_t1x", "SAGE_implementer_t1", "sage_implementer_t1_r0", "sage__t1"];
+  for (const name of names) {
+    assert.equal(denied(w.send(pre("apply_patch", p, w.child(`/root/${name}`)))), BAD_NAME(name), name);
+    assert.equal(denied(w.send(pre("Bash", "echo x > notes.txt", w.child(`/root/${name}`)))), BAD_NAME(name), name);
+    assert.equal(denied(w.send(pre("Bash", "codex exec hi", w.child(`/root/${name}`)))), CHILD_CODEX, name);
+  }
+  assert.equal(denied(w.send(pre("apply_patch", p, w.child("/root/sage_code_reviewer_t3_r9")))), RO("code-reviewer"));
+  assert.equal(denied(w.send(pre("apply_patch", p, w.child("/root/sage_security_reviewer_t3_r12")))), RO("security-reviewer"));
+  assert.equal(w.send(pre("apply_patch", p, w.child("/root/sage_implementer_t3_r9"))), undefined, "an implementer's second run edits");
+  assert.equal(w.send(pre("apply_patch", p, w.child("/root/sagebrush_t1"))), undefined, "a name that only starts with sage, not sage_");
+});
+
+test("a codex program is found by its real file, as node's script, and through an expansion, also for resume (R1664-4)", (t) => {
+  const w = world(t);
+  // A fake installed Codex: an npm package @openai/codex with its launcher and a native binary, and the codex link on PATH. Nothing here runs.
+  const pkg = join(w.dir, "lib/node_modules/@openai/codex");
+  mkdirSync(join(pkg, "bin"), { recursive: true });
+  mkdirSync(join(pkg, "node_modules/@openai/codex-darwin-arm64/vendor/bin"), { recursive: true });
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@openai/codex", version: "0.164.0" }));
+  writeFileSync(join(pkg, "bin/codex.js"), "#!/usr/bin/env node\nprocess.exit(3);\n", { mode: 0o755 });
+  writeFileSync(join(pkg, "node_modules/@openai/codex-darwin-arm64/vendor/bin/codex"), "#!/bin/sh\nexit 3\n", { mode: 0o755 });
+  symlinkSync(join(pkg, "bin/codex.js"), join(w.dir, "bin/codex"));
+  symlinkSync(join(pkg, "bin/codex.js"), join(w.dir, "bin/helper-tool"));
+  const env = { ...w.env, PATH: `${join(w.dir, "bin")}:/usr/bin:/bin` };
+  const starts = [`node ${pkg}/bin/codex.js exec hi`, `node --no-warnings ${pkg}/bin/codex.js`, `${w.dir}/bin/helper-tool exec hi`, "helper-tool exec hi",
+    `${pkg}/node_modules/@openai/codex-darwin-arm64/vendor/bin/codex exec hi`, "npx @openai/codex@0.164.0 exec hi", `cd ${w.dir}/bin && ./helper-tool exec hi`];
+  const expansions = ["C=codex; $C exec hi", '"$(command -v codex)" exec hi', "`which codex` exec hi", "X=helper-tool; $X --codex"];
+  const others = ["node scripts/build.mjs", "npm test", "grep -rn codex src", `cat ${pkg}/package.json`, "echo $HOME", "ls $HOME"];
+  assert.deepEqual(starts.map((c) => codexRuns(c, w.project, env)?.length), starts.map(() => 1), "each start is found");
+  assert.deepEqual(expansions.map((c) => codexRuns(c, w.project, env)), expansions.map(() => null), "an expansion with codex named is unreadable");
+  assert.deepEqual(others.map((c) => codexRuns(c, w.project, env)), others.map(() => []));
+  const reviewer = { ...w.child("/root/sage_code_reviewer_t1") };
+  const send = (input) => {
+    const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ ...input, transcript_path: input.transcript_path ?? w.transcript, cwd: w.project }), encoding: "utf8", env, timeout: 60_000 });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout ? denied(JSON.parse(r.stdout)) : undefined;
+  };
+  assert.deepEqual(starts.map((c) => send(pre("Bash", c, reviewer))), starts.map(() => CHILD_CODEX));
+  assert.deepEqual(expansions.map((c) => send(pre("Bash", c, reviewer))), expansions.map(() => UNREAD_CODEX));
+  assert.deepEqual(others.map((c) => send(pre("Bash", c, reviewer))), others.map(() => undefined));
+  for (const command of [`node ${pkg}/bin/codex.js resume --last`, "helper-tool exec resume --last 'autopilot on'"]) {
+    assert.match(send(pre("Bash", command)) ?? "", /^sage: no agent resumes or forks a Codex session/, command);
+  }
+  assert.equal(send(pre("Bash", "helper-tool --version")), undefined, "the chief may run Codex, without resume or fork");
+  assert.deepEqual(resumesSession(`node ${pkg}/bin/codex.js fork abc`, w.project, env), true);
+});
+
+test("in sage mode a push takes core's push form, as in the Claude hook; outside sage mode the gate does not judge it (R1664-5)", (t) => {
+  const w = world(t);
+  const pushes = { "git push --force origin sage/t1": /^sage: sage mode never force-pushes/, "git push origin main": /^sage: work reaches main only through a pull request/,
+    "git push": /^sage: name the remote and the branch/, "git push upstream sage/t1": /^sage: push to origin/, "git push origin HEAD:main": /^sage: work reaches main only through a pull request/,
+    "bash -c 'git push -f origin sage/t1'": /^sage: /, "gh api -X PUT repos/o/r/contents/a.txt -f branch=main -f message=x -f content=eA==": /^sage: /, "git push origin +sage/t1": /^sage: sage mode never force-pushes/ };
+  for (const mode of [{ sage: true, autopilot: false }, { sage: true, autopilot: true }]) {
+    w.mode(mode);
+    w.typed("sage mode", "autopilot on");
+    for (const extra of [{}, w.child("/root/sage_implementer_t1")]) {
+      for (const [command, why] of Object.entries(pushes)) assert.match(denied(w.send(pre("Bash", command, extra))) ?? "runs", why, command);
+      assert.equal(w.send(pre("Bash", "git push -u origin sage/t1", extra)), undefined, "the push form runs");
+      assert.equal(w.send(pre("Bash", "git push --delete origin sage/t9", extra)), undefined, "a branch delete");
+    }
+  }
+  w.mode({ sage: false, autopilot: false });
+  assert.equal(w.send(pre("Bash", "git push --force origin sage/t1")), undefined, "outside sage mode");
+});
+
+test("the sage folder rule also covers the Codex sessions folder, where the typed messages are (R1664-8)", (t) => {
+  const w = world(t);
+  const home = w.env.HOME;
+  const env = { ...w.env, SAGE_HOME: undefined, CODEX_HOME: join(home, ".codex") };
+  const named = ["cat ~/.codex/sessions/2026/10/25/rollout-x.jsonl", `echo '{}' >> ${home}/.codex/sessions/2026/10/25/rollout-x.jsonl`, "ls $CODEX_HOME/sessions", "ls ${CODEX_HOME}/sessions/2026", "grep -r autopilot $HOME/.codex/sessions"];
+  const clean = ["ls ~/.codex/sessionsx", "ls ~/.codex/worktrees", "echo sessions", "cat notes/sessions/a.md"];
+  assert.deepEqual(named.filter((c) => !namesSageFolder(c, env)), []);
+  assert.deepEqual(clean.filter((c) => namesSageFolder(c, env)), []);
+  w.mode({ sage: false, autopilot: false });
+  assert.match(denied(w.send(pre("Bash", "ls $CODEX_HOME/sessions", CHILD))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder or the Codex sessions folder/);
+});
+
+test("a project under the desktop app's ~/.codex/worktrees edits as usual, with sage mode off and on; its own .codex folder stays closed (R1666-1)", (t) => {
+  const w = world(t, { at: "home/.codex/worktrees/w1/app" });
+  const p = (path) => patch(`*** Add File: ${path}`, "+x");
+  const project = w.project;
+  w.mode({ sage: false, autopilot: false });
+  for (const path of ["notes.md", "src/a.js", `${project}/src/b.js`]) assert.equal(w.send(pre("apply_patch", p(path))), undefined, path);
+  assert.equal(w.send(pre("Bash", `echo x > ${project}/notes.txt`)), undefined);
+  assert.equal(w.send(pre("Bash", "echo x > notes.txt")), undefined);
+  w.mode({ sage: true, autopilot: false });
+  for (const path of ["notes.md", `${project}/src/b.js`]) assert.equal(w.send(pre("apply_patch", p(path), w.child("/root/sage_implementer_t1"))), undefined, path);
+  assert.equal(w.send(pre("Bash", `echo x > ${project}/notes.txt`, w.child("/root/sage_implementer_t1"))), undefined);
+  for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
+    w.mode(mode);
+    for (const path of [".codex/config.toml", "sub/.codex/hooks.json", `${project}/.codex/config.toml`, "../../../config.toml", `${w.dir}/home/.codex/config.toml`]) {
+      assert.match(denied(w.send(pre("apply_patch", p(path), w.child("/root/sage_implementer_t1")))) ?? "", /^sage: no agent changes files under a \.codex folder/, path);
+    }
+    assert.match(denied(w.send(pre("Bash", `echo x > ${project}/.codex/config.toml`, w.child("/root/sage_implementer_t1")))) ?? "", /^sage: no agent changes files under a \.codex folder/);
+  }
 });

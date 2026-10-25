@@ -76,34 +76,49 @@ function installed(t, { trust = [], cliVersion } = {}) {
     trust.map((key) => `\n[hooks.state."sage@sage:hooks/hooks.json:${key}"]\ntrusted_hash = "sha256:00"\n`).join(""));
   const transcript = join(home, "rollout.jsonl");
   if (cliVersion) writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cli_version: cliVersion } }) + "\n");
+  const { SAGE_HOME, ...inherited } = process.env;
   const run = (input) => {
-    const r = spawnSync("node", [join(root, "hooks/session-start-hook.mjs")], { input: JSON.stringify({ session_id: "s1", cwd: home, transcript_path: transcript, ...input }), encoding: "utf8", env: { ...process.env, CODEX_HOME: home } });
+    const r = spawnSync("node", [join(root, "hooks/session-start-hook.mjs")], { input: JSON.stringify({ session_id: "s1", cwd: home, transcript_path: transcript, ...input }), encoding: "utf8", env: { ...inherited, CODEX_HOME: home } });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout ? JSON.parse(r.stdout) : "";
   };
-  return { run };
+  return { run, home };
 }
+const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
 
-const output = (text) => ({ systemMessage: text, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } });
+/** The hook's output: the status for the chief always, and a warning for the user only when there is a limit. */
+const output = (status, warning) => ({ ...(warning ? { systemMessage: warning } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: warning ? `${status}\n${warning}` : status } });
 const ALL = ["session_start:0:0", "session_start:1:0", "user_prompt_submit:0:0", "user_prompt_submit:1:0", "pre_tool_use:0:0", "pre_tool_use:1:0", "permission_request:0:0", "post_tool_use:0:0", "subagent_start:0:0", "subagent_stop:0:0"];
+const START = "To start sage mode, the user sends this message alone: sage mode";
 
-test("the SessionStart hook gives the status of a trusted install on a tested Codex", (t) => {
-  const { run } = installed(t, { trust: ALL, cliVersion: "0.164.0-alpha.11.1" });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(
-    "sage 0.1.0 is installed. Codex 0.164.0-alpha.11.1.\nsage hooks: all 10 trusted.\nTo start sage mode, send this message alone: sage mode"));
+test("the SessionStart hook gives a trusted install on a tested Codex no warning: the status goes to the chief only (R1665-3)", (t) => {
+  const { run } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
+  for (const source of ["startup", "resume", "clear"]) {
+    assert.deepEqual(run({ hook_event_name: "SessionStart", source }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: all 10 trusted.\n${START}`), source);
+  }
+  assert.deepEqual(installed(t, { trust: ALL, cliVersion: "0.160.0" }).run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex 0.160.0. sage hooks: all 10 trusted.\n${START}`));
 });
 
-test("the SessionStart hook names hooks without trust and warns outside the tested Codex range", (t) => {
+test("the SessionStart hook warns the user for hooks without trust and outside the tested Codex range", (t) => {
   const { run } = installed(t, { trust: ["session_start:0:0"], cliVersion: "0.165.0" });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(
-    "sage 0.1.0 is installed. Codex 0.165.0.\nsage hooks: 1 of 10 trusted. Type /hooks in the Codex CLI to review the others.\n" +
-    "To start sage mode, send this message alone: sage mode\nWarning: sage is tested with Codex 0.160 to 0.164, not 0.165.0. Some sage hooks may not work."));
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.165.0. sage hooks: 1 of 10 trusted.\n${START}`,
+    "sage: 9 of the 10 sage hooks are not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.\n" +
+    "sage: sage is tested with Codex 0.160 to 0.164, not 0.165.0. Some sage hooks may not work."));
 });
 
 test("the SessionStart hook says when it cannot read the Codex version, and ignores other events", (t) => {
   const { run } = installed(t, { trust: ALL });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(
-    "sage 0.1.0 is installed. Codex version unknown.\nsage hooks: all 10 trusted.\nTo start sage mode, send this message alone: sage mode\n" +
-    "Warning: sage is tested with Codex 0.160 to 0.164. Some sage hooks may not work."));
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex version unknown. sage hooks: all 10 trusted.\n${START}`,
+    "sage: sage is tested with Codex 0.160 to 0.164, and it could not read this Codex version. Some sage hooks may not work."));
   assert.equal(run({ hook_event_name: "UserPromptSubmit", prompt: "hello" }), "");
+});
+
+test("on resume with sage mode on, the status says that sage mode is on, not how to start it (R1663-3)", (t) => {
+  const { run, home } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
+  const folder = join(home, "sage/.hooks/codex");
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  writeFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), JSON.stringify({ sage: true, autopilot: false, given: true }), { mode: 0o600 });
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output("sage 0.1.0 is installed. Codex 0.164.0. sage hooks: all 10 trusted.\nsage mode is on in this session."));
+  writeFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), JSON.stringify({ sage: false, autopilot: false }), { mode: 0o600 });
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: all 10 trusted.\n${START}`));
 });

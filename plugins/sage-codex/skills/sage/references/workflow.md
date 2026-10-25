@@ -6,7 +6,7 @@ The parent is the chief and the sole logbook writer. The chief frames work, asks
 2. Frame a task through the CLI. Follow its route and risks. Resolve product decisions before dependent implementation.
 3. Confirm the host supports the required hierarchy and roles. Use its actual agent tools and capacity, not tool names from another provider.
 4. Keep one active build team per project. Give each writer exclusive paths or a separate worktree. Known checks do not provide atomic exclusion across sessions.
-5. The team is flat for now: the chief does the lead's work and starts every role agent (implementers, code reviewers, security reviewers, UX reviewers and QA), as [start a role agent](roles.md) says. Leads come later. Role agents do not start agents. Keep at most three agents for one task, within the lower host, project and owner limit.
+5. The team is flat for now: the chief does the lead's work and starts every role agent (implementers, code reviewers, security reviewers, UX reviewers and QA), as [start a role agent](roles.md) says. Leads come later. Role agents start no agents and record nothing in the logbook; the plugin's hook refuses both. Keep at most three agents for one task, within the lower host, project and owner limit.
 6. The chief records each run before its work starts and sends the complete brief. Role agents never write logbook tables or invoke state mutations.
 7. The implementer makes the scoped change and runs appropriate checks. An independent reviewer examines the change; the implementer cannot certify its own review.
 8. Record findings before verdicts. Repair on the same task branch. Use the CLI's repair/held/replan rules, not a new task to hide unresolved findings.

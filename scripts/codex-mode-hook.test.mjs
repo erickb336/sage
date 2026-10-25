@@ -101,7 +101,8 @@ test("T453: the autopilot phrases record autopilot with no warning line, and the
 
 test("T453: the help phrase says when to send a phrase and that autopilot merges verified work in Codex, with no board phrase or Claude command", async () => {
   const help = contextOf(await session().prompt("sage help"));
-  assert.match(help, /^Switches: send the phrase alone, as the whole message, in any letter case\. Spaces at the ends and one full stop are fine\. Any other message switches nothing\.\nSend a phrase when Codex is idle\. In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt\.\n- "sage mode": turns sage mode on\.$/m);
+  assert.match(help, /^Switches: send the phrase alone, as the whole message, in any letter case\. Spaces at the ends and one full stop are fine\. Any other message switches nothing\.\nSend a phrase when Codex is idle\. With autopilot on, sage merges a pull request by itself after its clean reviews and checks, and Codex does not ask you first\.\n- "sage mode": turns sage mode on\.$/m);
+  assert.doesNotMatch(help, /the hook allows|exact merge command|merge_check/, "the help list is in the user's words (R1665-5)");
   assert.doesNotMatch(help, /Board:|claude plugin update|Claude|switches when its turn starts/);
 });
 
@@ -219,6 +220,13 @@ test("T453: the README and the Codex guide say what the hook really does in Code
     "guide: step 3 starts Codex with no flags and trusts the hooks": found(guide, /3\. Run `codex` in a project folder\. At the "Hooks need review" screen .*choose \*\*Trust all and continue\*\*/),
     "guide: a fork starts with sage mode off": found(guide, /A forked thread starts with sage mode and autopilot off/),
   }, Object.fromEntries(["guide: autopilot merges verified work in Codex", "README: no claim that every phrase works as in Claude Code", "guide: the warning line, and that codex exec does not show it", "guide: no claim that the hook shows one line", "guide: a damaged mode file", "guide: send a phrase when Codex is idle", "guide: no exact phrase for a question", "guide: the desktop app, not yet checked", "guide: step 3 starts Codex with no flags and trusts the hooks", "guide: a fork starts with sage mode off"].map((k) => [k, true])));
+});
+
+test("T462: the chief role says what the hooks hold: role agents start no agents and record nothing, and each spawn names its run (R1664-3, R1663-2)", async () => {
+  const role = contextOf(await session().prompt("sage mode")).replace(/\s+/g, " ");
+  assert.match(role, /Role agents start no agents and record nothing in the logbook: the plugin's hook refuses a role agent's `spawn_agent` and its sage tools that write/);
+  assert.match(role, /the task and the run id that `run_add` printed \(for example `sage_implementer_t12_r40` for run R40\)/);
+  assert.doesNotMatch(role, /cannot start more agents/);
 });
 
 test("T453: the chief role fits the hooks.json context limit, counted at 3 bytes for each token (English text has about 4)", async () => {

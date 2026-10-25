@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 import { McpServer, serveStdio, z } from "../runtime/mcp-sdk.mjs";
 import { tool } from "../skills/sage/sage.mjs";
 import { BRIEF_FIELDS } from "sage-core";
-import { BRIEF_LIMIT, TASK_NAME, recordBrief } from "../hooks/brief-hook.mjs";
+import { BRIEF_LIMIT, NAME_RULE, recordBrief } from "../hooks/brief-hook.mjs";
+import { CHILD_READS } from "../hooks/gate-hook.mjs";
+import { TASK_NAME } from "../hooks/report-gate.mjs";
 
 // The state tool as MCP tools. Codex starts this server outside the shell sandbox, so it can write the logbook
 // ($CODEX_HOME/sage, or SAGE_HOME) while agent shells under workspace-write cannot. Each tool runs one command of the
@@ -22,8 +24,8 @@ const sha = z.string().describe("the full 40-character SHA of the head commit");
  * field is an option of the command, given as --field=value so that a value that starts with -- stays a value.
  */
 export const TOOLS = {
-  init: { read: false, describe: "Make the project's logbook and its standing orders, or check an existing one. Run it once for a new project.", argv: () => ["init"] },
-  status: { read: true, describe: "Print the status lines of the project's logbook: tasks, runs, gates and programs.", argv: () => ["status"] },
+  init: { describe: "Make the project's logbook and its standing orders, or check an existing one. Run it once for a new project.", argv: () => ["init"] },
+  status: { describe: "Print the status lines of the project's logbook: tasks, runs, gates and programs.", argv: () => ["status"] },
   task_add: {
     describe: "Frame a task and its route. The size gives the least route; a risk flag adds the security review.",
     input: { title: z.string(), size: z.enum(Object.keys(tool.SIZES)), risk: optional(`risk flags joined by a comma: ${tool.RISKS.join(", ")}`),
@@ -80,7 +82,6 @@ export const TOOLS = {
   },
   round: { describe: "Start a repair round on the open findings marked fix. It names the roles to run again.", input: { task }, pos: ["task"], argv: (i) => ["round", i.task] },
   merge_check: {
-    read: true,
     describe: "Check that the logbook allows the merge of this head SHA: clean cycles, no open findings, no open gates.",
     input: { sha, pr: count("the pull request number"), cycles: count("a higher count of clean cycles"), head: optional("the pull request's branch") },
     argv: () => ["merge-check"],
@@ -90,7 +91,7 @@ export const TOOLS = {
     input: { task: z.union([task, z.literal("-")]).describe("the task id, or - for none"), decision: word.describe("the decision"), why: z.string().describe("the reason") },
     pos: ["task", "decision"], argv: (i) => ["log", i.task, i.decision],
   },
-  standing: { read: true, describe: "Print the standing orders as written. Every brief carries them word for word.", argv: () => ["standing"] },
+  standing: { describe: "Print the standing orders as written. Every brief carries them word for word.", argv: () => ["standing"] },
   standing_add: { describe: "Add one standing order.", input: { order: word.describe("the order") }, pos: ["order"], argv: (i) => ["standing", "add", i.order] },
   pages: {
     describe: "Make and print the folder where agents save the task's pages, or record a page there (its path and sha256) in the decision trail.",
@@ -124,7 +125,7 @@ export function createStateServer({ env = process.env } = {}) {
     server.registerTool(name, {
       description: spec.describe,
       inputSchema: z.object({ project, ...spec.input }).strict(),
-      annotations: { readOnlyHint: spec.read === true, destructiveHint: false },
+      annotations: { readOnlyHint: CHILD_READS.has(name), destructiveHint: false },
     }, async (input) => {
       const { code, text } = tool.command(argvFor(name, input), env);
       return { ...(code ? { isError: true } : {}), content: [{ type: "text", text }] };
@@ -133,7 +134,7 @@ export function createStateServer({ env = process.env } = {}) {
   // The brief check (T462): no state-tool command, because the hooks read the record by task name.
   server.registerTool("brief", {
     description: `Check a role agent's brief before you spawn it: it names each missing field of ${BRIEF_FIELDS.join(", ")}, and keeps the brief for the agent's start note. Fix the brief and run it again until no field is missing, then spawn the agent with the same task name and brief.`,
-    inputSchema: z.object({ project, task_name: z.string().regex(TASK_NAME, "sage_, the role with _ for -, and the task, for example sage_implementer_t12").describe("the task_name of the spawn"),
+    inputSchema: z.object({ project, task_name: z.string().regex(TASK_NAME, NAME_RULE).describe("the task_name of the spawn"),
       brief: z.string().max(BRIEF_LIMIT).describe("the whole brief, each field at the start of a line") }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: false },
   }, async ({ project: folder, task_name: task, brief }) => {
