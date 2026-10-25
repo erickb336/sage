@@ -144,6 +144,8 @@ To stop the prompts for later tasks, do this at the first prompt of each kind:
 
 The model proposes the prefix. In the check with a test model, every prefix was the whole command, with the task's branch and folder, so each later task would ask again. A real model can propose a shorter prefix, but sage did not check this.
 
+The owner's first try in the desktop app checks which prefix Codex offers with a real model.
+
 The desktop app gets the same choices from Codex, but its docs do not name their text, and sage was not run in the app yet.
 
 ## The logbook tools

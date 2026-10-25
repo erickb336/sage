@@ -5210,9 +5210,9 @@ function leadSession(env = {}) {
   s.sage("init");
   for (const title of ["mine", "theirs"]) s.sage("task", "add", "--title", title, "--size", "small");
   s.sage("run", "add", "T1", "--role", "lead"); // R1, the lead's own run
-  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a"); // F-T1-1
-  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "b"); // F-T1-2
-  s.sage("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "c"); // F-T2-1
+  // The sage's fixture findings name the lead run, the only run of T1 yet, as a review or QA finding needs a run (T490).
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a", "--run", "R1", "--class", "other"); // F-T1-1
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "b", "--run", "R1", "--class", "other"); // F-T1-2
   s.sage("task", "T1", "set", "state=briefed", "pr=5");
   s.sage("finding", "triage", "T1", "F-T1-1", "fix"); // a low fix: it needs no round
   s.sage("task", "T2", "set", "pr=6");
@@ -5226,6 +5226,7 @@ function leadSession(env = {}) {
   s.send(resultOf("lead-call", "lead-a"));
   leadAdd(s, "qa"); // R2, the lead's own run (F-T289-16)
   s.sage("run", "add", "T2", "--role", "qa"); // R3
+  s.sage("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "c", "--run", "R3", "--class", "other"); // F-T2-1
   leadAdd(s, "qa"); // R4, finished with its real child: the run of the lead's qa verdicts (F-T284-6, F-T284-9)
   helpRun(s, "R2", "qa");
   helpRun(s, "R4", "qa");
@@ -5436,9 +5437,17 @@ function leadAdd(s, role, actor = LEAD, ...more) {
   s.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: { stdout, stderr: "", interrupted: false }, cwd: s.dir, ...actor });
   return stdout.split(" ")[0];
 }
+/** The --run and --class that a review or QA finding needs (T490): the task's latest run of the role, and the class other. */
+function tags(s, task, role) {
+  const [head, ...rows] = readFileSync(join(s.sage("logbook"), "runs.tsv"), "utf8").trimEnd().split("\n").map((line) => line.split("\t"));
+  const run = rows.filter((v) => v[head.indexOf("task")] === task && v[head.indexOf("role")] === role).at(-1)?.[head.indexOf("id")];
+  return ["--run", run ?? assert.fail(`no ${role} run of ${task} for its finding`), "--class", "other"];
+}
+/** The sage's finding add of a review or QA finding, with its tags. Its output. */
+const sageFind = (s, task, role, ...more) => s.sage("finding", "add", task, "--source", role, ...more, ...tags(s, task, role));
 /** The lead's own finding add on T1, with the hook's events around it, as leadAdd: the finding counts for its lead run (F-T289-42, F-T289-43). Its key. */
 function leadFind(s, role, severity, actor = LEAD) {
-  const args = ["finding", "add", "T1", "--source", role, "--severity", severity, "--summary=found"], command = `node ${TOOL} ${args.join(" ")}`;
+  const args = ["finding", "add", "T1", "--source", role, "--severity", severity, "--summary=found", ...tags(s, "T1", role)], command = `node ${TOOL} ${args.join(" ")}`;
   assert.equal(denied(s.send(tool("Bash", { command }, { cwd: s.dir, ...actor }))), undefined, `the lead's ${command}`);
   const env = { ...s.vars };
   delete env.SAGE_PROJECT;
@@ -5808,7 +5817,7 @@ test("F-T284-12 and F-T284-8: while repairing, the lead closes only the round's 
   s.sage("finding", "triage", "T1", "F-T1-2", "fix");
   setState(s, "T1", "repairing", { keys: "F-T1-2", round: "1" });
   assert.match(denied(stateRun(s, "task T1 set state=reviewing")) ?? "", /T1 has an open fix finding of its round: close each one after the repair's commit \(finding close\), then move it to reviewing\./, "the round's fix finding is open");
-  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "new"); // F-T1-3, during the round
+  sageFind(s, "T1", "qa", "--severity", "medium", "--summary", "new"); // F-T1-3, during the round
   s.sage("finding", "triage", "T1", "F-T1-3", "fix");
   assert.match(denied(stateRun(s, "finding close T1 F-T1-3")) ?? "", NOT_OWN, "a new finding waits for the next round");
   assert.equal(denied(stateRun(s, "finding close T1 F-T1-2")), undefined, "the round's own fix finding");
@@ -5942,7 +5951,7 @@ test("F-T289-3: a lead ends a run whose helper never started as failed or blocke
 test("F-T289-6: a lead closes a round's finding only on a new commit, not on the one where its helper found the problem", () => {
   const s = leadSession();
   helpedRun(s, "code-reviewer", report("FINDINGS", "- Y1 medium a.mjs:1 run x")); // R5, at the head
-  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "y1"); // F-T1-3
+  sageFind(s, "T1", "code-reviewer", "--severity", "medium", "--summary", "y1"); // F-T1-3
   s.sage("finding", "triage", "T1", "F-T1-3", "fix");
   setState(s, "T1", "repairing", { keys: "F-T1-3", round: "1" });
   assert.match(denied(stateRun(s, "finding close T1 F-T1-3")) ?? "", /F-T1-3 is a finding of the round, and the head of T1's branch \(\w{7}\) is a commit on which a helper found problems: commit the repair first \(F-T289-6\)/);
@@ -6016,7 +6025,7 @@ test("F-T289-15: a lead ends a review run whose report was not clean only after 
 test("F-T289-12: a lead closes a round's finding on the repair's commit, also when the re-review of that commit finds a new problem", () => {
   const s = leadSession();
   helpedRun(s, "code-reviewer", report("FINDINGS", "- Y1 medium a.mjs:1 the bug")); // R5, round 0, at the first commit
-  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "y1"); // F-T1-3
+  sageFind(s, "T1", "code-reviewer", "--severity", "medium", "--summary", "y1"); // F-T1-3
   s.sage("finding", "triage", "T1", "F-T1-3", "fix");
   setState(s, "T1", "repairing", { keys: "F-T1-3", round: "1" });
   s.commit(); // the repair
@@ -6252,7 +6261,7 @@ test("F-T301-72: after a replan cleared the round's keys, a fresh lead still doe
   s.sage("task", "T1", "set", "state=building");
   s.sage("task", "T1", "set", "state=reviewing");
   s.sage("finding", "triage", "T1", "F-T1-2", "fix");
-  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "early"); // F-T1-3, of round 0, not triaged: no key
+  sageFind(s, "T1", "qa", "--severity", "low", "--summary", "early"); // F-T1-3, of round 0, not triaged: no key
   assert.match(s.sage("round", "T1"), /^T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 /);
   s.sage("task", "T1", "set", "state=reviewing");
   assert.match(s.sage("round", "T1"), /^T1 replan: /);
@@ -6266,7 +6275,7 @@ test("F-T301-72: after a replan cleared the round's keys, a fresh lead still doe
   assert.equal(denied(stateRun(s, "task T1 set state=building", fresh)), undefined, "the fresh lead writes");
   assert.match(denied(stateRun(s, "finding triage T1 F-T1-1 dismiss --reason=old-low-after-replan", fresh)) ?? "", /^sage: F-T1-1 is a fix key of an earlier round of T1: only the sage dismisses it\./, "R1027 runY");
   assert.equal(denied(stateRun(s, "finding triage T1 F-T1-3 dismiss --reason=not-worth-it", fresh)), undefined, "a low finding of round 0 that was never triaged fix is dismissed");
-  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "new"); // F-T1-4, of round 1
+  sageFind(s, "T1", "qa", "--severity", "low", "--summary", "new"); // F-T1-4, of round 1
   s.sage("finding", "triage", "T1", "F-T1-4", "fix");
   assert.equal(denied(stateRun(s, "finding triage T1 F-T1-4 dismiss --reason=not-worth-it", fresh)), undefined, "a low fix of this round that is no key is dismissed");
 });
@@ -6301,7 +6310,7 @@ test("F-T301-60: a lead never dismisses a fix key of the round, also a low one; 
   assert.match(s.sage("round", "T1"), /^T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 /);
   assert.match(denied(stateRun(s, "finding triage T1 F-T1-1 dismiss --reason=not-worth-it")) ?? "", /^sage: F-T1-1 is a fix of T1's current round: only the sage dismisses it\. End blocked and list it \(F-T301-60\)\./);
   assert.equal(denied(stateRun(s, "finding triage T1 F-T1-1 fix")), undefined, "a fix triage of the key still passes");
-  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "new"); // F-T1-3, not a key
+  sageFind(s, "T1", "qa", "--severity", "low", "--summary", "new"); // F-T1-3, not a key
   assert.equal(denied(stateRun(s, "finding triage T1 F-T1-3 dismiss --reason=not-worth-it")), undefined, "a low finding that is no key is dismissed");
 });
 
@@ -6488,7 +6497,7 @@ test("F-T289-43: a finding that the sage added, also on an old key, never covers
   const s = leadSession();
   const run = leadAdd(s, "code-reviewer"); // R5
   helpRun(s, run, "code-reviewer", LEAD, HIGH_ONE);
-  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "high", "--summary", "another problem"); // F-T1-3, the sage's
+  sageFind(s, "T1", "code-reviewer", "--severity", "high", "--summary", "another problem"); // F-T1-3, the sage's
   s.sage("finding", "triage", "T1", "F-T1-3", "fix");
   s.sage("finding", "close", "T1", "F-T1-3");
   s.sage("finding", "add", "T1", "--key", "F-T1-2", "--source", "code-reviewer", "--severity", "high", "--summary", "b"); // an old key, added again by the sage
@@ -6501,7 +6510,7 @@ test("F-T289-43: a finding that the sage added, also on an old key, never covers
 
 test("F-T289-44: a decision in the shape of a move counts only when it is the state tool's own move of this lead's finding", () => {
   const s = leadSession();
-  s.sage("finding", "add", "T2", "--source", "code-reviewer", "--severity", "high", "--summary", "x"); // F-T2-2, another task's high
+  s.sage("finding", "add", "T2", "--source", "code-reviewer", "--severity", "high", "--summary", "x", "--run", "R3", "--class", "other"); // F-T2-2, another task's high, on T2's only run
   const run = leadAdd(s, "code-reviewer"); // R5
   helpRun(s, run, "code-reviewer", LEAD, HIGH_ONE);
   s.sage("log", "T1", "F-T1-9 moved to T2 as F-T2-2: x", "--why", "a note in the shape of a move");
@@ -6526,7 +6535,7 @@ test("F-T289-50: a lead slot of the old form, with a floor and no recorded keys,
   writeFileSync(join(dir, slot, "floor-0"), ""); // the old lead counted every finding above its floor
   const run = leadAdd(s, "code-reviewer");
   helpRun(s, run, "code-reviewer", LEAD, HIGH_ONE);
-  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "high", "--summary", "y1"); // F-T1-3, above the floor
+  sageFind(s, "T1", "code-reviewer", "--severity", "high", "--summary", "y1"); // F-T1-3, above the floor
   assert.match(denied(stateRun(s, `run done ${run} --status done`)) ?? "", /\(R5 high\), and T1 holds 0 medium or high code-reviewer finding/);
 });
 
