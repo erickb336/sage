@@ -6510,7 +6510,7 @@ test("F-T289-43: a finding that the sage added, also on an old key, never covers
 
 test("F-T289-44: a decision in the shape of a move counts only when it is the state tool's own move of this lead's finding", () => {
   const s = leadSession();
-  sageFind(s, "T2", "code-reviewer", "--severity", "high", "--summary", "x"); // F-T2-2, another task's high
+  s.sage("finding", "add", "T2", "--source", "code-reviewer", "--severity", "high", "--summary", "x", "--run", "R3", "--class", "other"); // F-T2-2, another task's high, on T2's only run
   const run = leadAdd(s, "code-reviewer"); // R5
   helpRun(s, run, "code-reviewer", LEAD, HIGH_ONE);
   s.sage("log", "T1", "F-T1-9 moved to T2 as F-T2-2: x", "--why", "a note in the shape of a move");
