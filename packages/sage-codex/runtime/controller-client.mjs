@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {readFileSync, realpathSync, statSync} from 'node:fs';
+import {closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync} from 'node:fs';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
 import {bindTask, resolveControllerBinary} from './controller-binding.mjs';
@@ -22,7 +22,8 @@ const WAIT_MS = 15000;
 // stops the turn and drops output until the terminal takes it again, so its memory stays bounded. The client's own
 // result lines wait and show when the terminal takes output again, so each turn still shows how it ended.
 const TERMINAL_QUEUE_BYTES = 8 * 1024 * 1024;
-const TERMINAL_FULL = '[The terminal takes no output: more than 8 MiB waits for it. The client stopped the turn, and it drops output until the terminal takes output again. If you pressed Ctrl-S, press Ctrl-Q.]';
+// In raw mode (a terminal on stdin) the terminal's own Ctrl-S is off, so only a pipe on stdin gets the Ctrl-Q hint.
+const fullText = raw =>`[The terminal takes no output: more than 8 MiB waits for it. The client stopped the turn, and it drops output until the terminal takes output again.${raw ? '' : ' If you pressed Ctrl-S, press Ctrl-Q.'}]`;
 
 // Controller text never reaches the terminal raw. Each of these characters becomes U+FFFD: the controls (C0, C1 and
 // the newline too), the format characters (bidi controls, zero-width characters, tags, the soft hyphen), the line and
@@ -102,9 +103,20 @@ function projectFolder(path) {
   if (!statSync(real).isDirectory()) throw new Error(`${path} is not a folder. Give the project folder with --project.`);
   return real;
 }
+// A named pipe, a device or a folder is not an instructions file: a read of a pipe or a device can wait for ever. The
+// open does not wait (O_NONBLOCK), and the type check is on the open file, so a swap after the check changes nothing.
+const KINDS = [['isDirectory', 'a folder'], ['isFIFO', 'a named pipe'], ['isSocket', 'a socket'], ['isCharacterDevice', 'a device'], ['isBlockDevice', 'a device']];
 function instructionsText(path) {
-  try { return readFileSync(path, 'utf8'); }
-  catch (error) { throw new Error(error.code === 'ENOENT' ? `The instructions file ${path} does not exist. Give the chief instructions file with --instructions.` : `The client cannot read the instructions file ${path} (${error.code}). Give a file that you can read with --instructions.`); }
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw Object.assign(new Error(), {kind: KINDS.find(([test]) => stat[test]())?.[1] ?? 'a special file'});
+    return readFileSync(fd, 'utf8');
+  } catch (error) {
+    if (error.kind) throw new Error(`The instructions file ${path} is ${error.kind}, not a regular file. Give the chief instructions file with --instructions.`);
+    throw new Error(error.code === 'ENOENT' ? `The instructions file ${path} does not exist. Give the chief instructions file with --instructions.` : `The client cannot read the instructions file ${path} (${error.code}). Give a file that you can read with --instructions.`);
+  } finally { if (fd !== undefined) closeSync(fd); }
 }
 // The thread reply gives the sandbox as {type: 'readOnly'}; the owner's config says read-only. A config value is
 // quoted (JSON escapes a quote in it), so a model name such as `x, approval never` cannot look like a client field.
@@ -149,7 +161,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       if (keep) held.push(text); else dropped = true;
       if (terminalFull) return;
       terminalFull = true;
-      output.write(`${TERMINAL_FULL}\n`);
+      output.write(`${fullText(input.isRaw)}\n`);
       // The stream says 'drain' when the terminal took all that waited: the held lines show then.
       output.once?.('drain', () => write(''));
       if (turnActive && !fullStop) { fullStop = true; owner.interrupt().catch(() => {}); }

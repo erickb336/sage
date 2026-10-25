@@ -120,6 +120,9 @@ for (const [name, edit, code, sent] of [
   ['fake 22: a project hook (R1544-2)', fromProject('hooks.SessionStart.0.hooks.0.command'), 'selection-origin', SENT],
   ...['request_permissions_tool', 'exec_permission_approvals', 'write_stdin_approval'].map(feature =>
     [`fake 23: the project approval feature ${feature}`, fromProject(`features.${feature}`), 'selection-origin', SENT]),
+  // Each key out of the allow-list of the project (R1563-1, R1564-1, R1564-2).
+  ...['shell_environment_policy.set.ZDOTDIR', 'shell_environment_policy.set.PATH', 'allow_login_shell', 'zsh_path', 'agents.reviewer.config_file', 'tools.web_search', 'experimental_use_unified_exec_tool'].map(key =>
+    [`fake 28: the project key ${key}`, fromProject(key), 'selection-origin', SENT]),
 ]) test(`${name} refuses and sends no turn/start`, async () => {
   const f = fake({edit});
   const opened = await bound(f);
@@ -133,7 +136,7 @@ for (const [name, edit, code, sent] of [
 test('fake 24: an MCP server or a hook from the project names its entry and says where to move it (R1543-1, R1544-2)', async () => {
   const message = async edit => (await bound(fake({edit, env: {PATH: '/fixture/bin', CODEX_HOME: '/fixture/home'}}))).error.message;
   // An agent may have written the entry, so the owner checks it before moving it (R1565-1); the target is a path (R1554-3).
-  const refused = name => `The setting ${name} comes from the project config in ${PROJECT}/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (/fixture/home/config.toml). If not, remove it. Then start the client again.`;
+  const refused = name => `The setting ${name} comes from the project config in ${PROJECT}/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (/fixture/home/config.toml). If not, remove it. Then start the client again.`;
   assert.equal(await message(fromProject('mcp_servers.probe.command')), refused('mcp_servers.probe'));
   assert.equal(await message(fromProject('hooks.SessionStart.0.hooks.0.command')), refused('hooks.SessionStart'));
   assert.equal(await message(fromProject('features.write_stdin_approval')), refused('features.write_stdin_approval'));
@@ -141,6 +144,8 @@ test('fake 24: an MCP server or a hook from the project names its entry and says
   const user = {name: {type: 'user', file: '/fixture/home/config.toml', profile: null}, version: 'sha256:user'};
   const fromUser = stream => { const {origins} = stream.find(entry => entry.after === 'config/read').reply; origins['mcp_servers.probe.command'] = user; origins['hooks.Stop.0.hooks.0.command'] = user; return stream; };
   assert.equal((await bound(fake({edit: fromUser}))).state, 'bound');
+  // The settings of the model's text from the project bind.
+  assert.equal((await bound(fake({edit: fromProject('model', 'model_reasoning_effort', 'developer_instructions', 'tui.animations')}))).state, 'bound');
 });
 
 // The project files that Codex loads with no config key (R1544-1): a rules file in the .codex folder of the project or
@@ -160,7 +165,7 @@ test('fake 25: a rules or hooks file in the project or a folder above it refuses
       await owner.stop();
       return [opened.state, opened.code ?? null, opened.error?.message.replaceAll(root, '<root>') ?? null, f.methods()];
     };
-    const why = 'An agent can change project files, so the client refuses the rules and hooks files of the project and of each folder above it.';
+    const why = 'An agent can change project files, so the client refuses the rules, hooks and agent role files of the project and of each folder above it.';
     // The owner's own rules: CODEX_HOME is the .codex folder above the project, as ~/.codex is above ~/workspace/x.
     put('.codex/rules/user.rules', 'prefix_rule(pattern = ["true"], decision = "allow")\n');
     assert.deepEqual((await open({CODEX_HOME: join(root, '.codex')}))[0], 'bound');
@@ -181,6 +186,35 @@ test('fake 25: a rules or hooks file in the project or a folder above it refuses
     put('work/project/.codex/hooks.json', '{"hooks": {}}');
     assert.deepEqual(await open({CODEX_HOME: join(root, '.codex')}), ['refused', 'project-hooks',
       `The hooks file <root>/work/project/.codex/hooks.json is in the project. A hook runs a command at its event. ${why} Check the hooks. If you trust them, move them to your Codex config (<root>/.codex/hooks.json). If not, remove them. Then start the client again.`, ['initialize', 'initialized']]);
+  } finally { rmSync(root, {recursive: true, force: true}); }
+});
+
+// Codex reads each .toml file in a .codex/agents folder, also in a folder below it, as an agent role (R1564-1).
+test('fake 29: an agent role file in the project or a folder above it refuses before config/read; CODEX_HOME roles pass (R1564-1)', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-owned-roles-')));
+  try {
+    const project = join(root, 'work', 'project');
+    mkdirSync(project, {recursive: true});
+    const put = (path, text = '') => { mkdirSync(join(root, path, '..'), {recursive: true}); writeFileSync(join(root, path), text); };
+    const open = async () => {
+      const f = fakeChild({edit: stream => JSON.parse(JSON.stringify(stream).replaceAll(PROJECT, project))});
+      const owner = createControllerProcess({executable: '/fixture/codex', executableSha256: HASH, cwd: project, env: {PATH: '/fixture/bin', CODEX_HOME: join(root, '.codex')},
+        startupTimeoutMs: DELAY.startup, inspectionTimeoutMs: DELAY.inspection, stopGraceMs: DELAY.stop}, {spawn: f.spawn, schedule: f.schedule});
+      await owner.start();
+      const opened = await owner.openThread({project, task: 'T400', run: 'R1461', instructions: INSTRUCTIONS});
+      await owner.stop();
+      return [opened.state, opened.code ?? null, opened.error?.message.replaceAll(root, '<root>') ?? null, f.methods()];
+    };
+    const role = 'name = "reviewer"\ndescription = "A role"\n';
+    // The owner's own roles, and a file that does not end in .toml, pass.
+    put('.codex/agents/owner.toml', role); put('work/project/.codex/agents/notes.md');
+    assert.equal((await open())[0], 'bound');
+    const refused = (path, where) => ['refused', 'project-agents', `The agent role file <root>/${path} is ${where}. A role sets the config of each agent that the chief starts with it: its instructions, model, sandbox and MCP servers. An agent can change project files, so the client refuses the rules, hooks and agent role files of the project and of each folder above it. Check the role. If you trust it, move it to your Codex config (<root>/.codex/agents/). If not, remove it. Then start the client again.`, ['initialize', 'initialized']];
+    put('work/project/.codex/agents/team/reviewer.toml', role);
+    assert.deepEqual(await open(), refused('work/project/.codex/agents/team/reviewer.toml', 'in the project'));
+    rmSync(join(project, '.codex'), {recursive: true});
+    put('work/.codex/agents/parent.toml', role);
+    assert.deepEqual(await open(), refused('work/.codex/agents/parent.toml', 'in a folder above the project'));
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
 
@@ -470,13 +504,14 @@ const STOPPED = '[You stopped the controller. The session ended.]';
 const WARNING = '[Warning from the controller: Model metadata for `synthetic` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.]';
 const NEXT = 'Type the next line, or press Ctrl-D to stop the controller.';
 /** Starts the client on the fake. The caller writes to `input`; `signal` plays a signal; `code` resolves with the exit code. */
-function clientRun({fakeOptions = {}, env = {}, argv = CLIENT_ARGS} = {}) {
+function clientRun({fakeOptions = {}, env = {}, argv = CLIENT_ARGS, tty = false} = {}) {
   const f = fakeChild(fakeOptions);
   let text = '', handler, ended = false;
   // writableLength is the output that waits for the terminal, as a stream gives it; a test can raise it.
   // It says 'drain' when a test emits it, as a stream does when the terminal took all that waited.
   const output = Object.assign(new EventEmitter(), {writableLength: 0, write(chunk) { text += chunk; return true; }});
-  const input = new PassThrough();
+  // With `tty`, the input is a terminal as the client sees one: it has isTTY, and setRawMode sets isRaw.
+  const input = tty ? Object.assign(new PassThrough(), {isTTY: true, isRaw: false, setRawMode(on) { this.isRaw = on; return this; }}) : new PassThrough();
   // An undefined value removes that variable.
   const merged = Object.fromEntries(Object.entries({...CLIENT_ENV, ...env}).filter(([, value]) => value !== undefined));
   const code = runClient({argv, env: merged, input, output, classify: parseCommand,
@@ -590,6 +625,32 @@ test('client: a start refusal says what it found and what to do, and starts no c
     assert.equal(await run.code, 1);
     assert.deepEqual(run.lines(), expected, JSON.stringify(options));
     assert.equal(run.f.launch, undefined, 'no controller started');
+  }
+});
+
+// A read of a named pipe waits for a writer, and the old client then never answered (R1566-1). The client runs in its
+// own node process here, so a client that waits ends at the deadline of spawnSync, by its handle, and the test fails.
+const ONE_CLIENT = `
+const {runClient} = await import(process.argv[1]);
+const {PassThrough} = await import('node:stream');
+let text = '';
+const input = new PassThrough(); input.end();
+const output = {writableLength: 0, write(chunk) { text += chunk; return true; }, once() {}};
+const code = await runClient({argv: JSON.parse(process.argv[2]), env: JSON.parse(process.argv[3]), input, output, classify: () => ({kind: 'line'}),
+  spawn: () => { throw new Error('the client started a controller'); }});
+process.stdout.write(JSON.stringify({code, text}));
+`;
+test('client: an instructions file that is a named pipe, a device or a folder refuses at once with its type (R1566-1)', () => {
+  const fifo = join(CLIENT_DIR, 'chief.fifo');
+  assert.equal(spawnSync('mkfifo', [fifo]).status, 0);
+  const url = new URL('./controller-client.mjs', import.meta.url).href;
+  for (const [path, kind] of [[fifo, 'a named pipe'], ['/dev/null', 'a device'], [CLIENT_DIR, 'a folder']]) {
+    const argv = CLIENT_ARGS.map(value => (value.endsWith('chief.md') ? path : value));
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', ONE_CLIENT, url, JSON.stringify(argv), JSON.stringify(CLIENT_ENV)],
+      {encoding: 'utf8', timeout: 20000, killSignal: 'SIGKILL'});
+    assert.equal(run.signal, null, `${kind}: the client waited until the deadline`);
+    assert.deepEqual(JSON.parse(run.stdout), {code: 1,
+      text: `[The client did not start: The instructions file ${path} is ${kind}, not a regular file. Give the chief instructions file with --instructions.]\n`}, kind);
   }
 });
 
@@ -803,6 +864,28 @@ test('client: a terminal that takes no output stops the turn once with a message
     '[The terminal takes no output: more than 8 MiB waits for it. The client stopped the turn, and it drops output until the terminal takes output again. If you pressed Ctrl-S, press Ctrl-Q.]',
     `[The client stopped the turn, because the terminal took no output. ${NEXT}]`, STOPPED]);
   assert.deepEqual(run.f.methods().filter(method => method === 'turn/interrupt'), ['turn/interrupt']);
+});
+
+// The client reads a terminal on stdin in raw mode, which turns the terminal's own Ctrl-S off: the 8 MiB message then
+// says nothing about Ctrl-S or Ctrl-Q (T424 F1).
+test('client: in raw mode, the 8 MiB message does not name Ctrl-S or Ctrl-Q (T424 F1)', async () => {
+  const hold = holdFirstTurn({answerInterrupt: false});
+  const run = clientRun({fakeOptions: hold.options, tty: true});
+  await until(() => run.lines().at(-1) === READY[1], 'the Ready lines');
+  assert.equal(run.input.isRaw, true);
+  run.input.write('Wait for an interrupt.\r');
+  await until(() => hold.held, 'the held turn');
+  run.output.writableLength = 8 * 1024 * 1024 + 1;
+  run.f.emit([{method: 'item/completed', params: {threadId: THREAD, turnId: 'held-turn', item: {type: 'agentMessage', id: 'm-1', text: 'dropped one'}}}]);
+  await until(() => run.f.methods().includes('turn/interrupt'), 'the stop of the turn');
+  run.output.writableLength = 0;
+  run.f.emit([{method: 'turn/completed', params: {threadId: THREAD, turn: {id: 'held-turn', items: [], status: 'interrupted', error: null}}}]);
+  await until(() => run.lines().at(-1).startsWith('[The client stopped the turn'), 'the turn result');
+  run.input.write('\x04');
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), ['Wait for an interrupt.',
+    '[The terminal takes no output: more than 8 MiB waits for it. The client stopped the turn, and it drops output until the terminal takes output again.]',
+    `[The client stopped the turn, because the terminal took no output. ${NEXT}]`, STOPPED]);
 });
 
 // The terminal stays paused past the end of the stopped turn and through the next turn. The result lines wait, and
@@ -1048,13 +1131,13 @@ test('real owned controller: a project config that widens the sandbox or moves a
     } finally { await f.owner.stop(); await f.close(); }
   }
   saveEvidence('real-project-layer', found);
-  const refused = key => ['refused', 'selection-origin', `The setting ${key} comes from the project config in <project>/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting ${key}. If you trust it, move it to your Codex config (<root>/.codex/config.toml). If not, remove it. Then start the client again.`, 'stopped', 0];
+  const refused = key => ['refused', 'selection-origin', `The setting ${key} comes from the project config in <project>/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting ${key}. If you trust it, move it to your Codex config (<root>/.codex/config.toml). If not, remove it. Then start the client again.`, 'stopped', 0];
   assert.deepEqual(found, {widen: refused('sandbox_workspace_write.network_access'), reviewer: refused('approvals_reviewer')});
 });
 
 // Each project way to start a program or to change approvals refuses before thread/start: thread/start starts the MCP
 // servers, and the rules and hooks files have no config key (R1543-1, R1543-2, R1544-1, R1544-2, R1546-1).
-test('real owned controller: a project MCP server, hook, approval feature, rules file, parent rules file or hooks file refuses before thread/start', {skip: REAL, timeout: 300000}, async () => {
+test('real owned controller: a project MCP server, hook, approval feature, rules file, parent rules file, hooks file, shell environment, login shell or agent role file refuses before thread/start', {skip: REAL, timeout: 300000}, async () => {
   const allow = 'prefix_rule(pattern = ["sh"], decision = "allow")\n';
   const variants = {
     mcp: {projectConfig: '[mcp_servers.probe]\ncommand = "/usr/bin/touch"\nargs = ["{{marker}}"]\n'},
@@ -1063,6 +1146,10 @@ test('real owned controller: a project MCP server, hook, approval feature, rules
     rules: {projectConfig: '', files: {'work/project/.codex/rules/default.rules': allow}},
     parentRules: {files: {'work/.codex/rules/parent.rules': allow}},
     hooksFile: {projectConfig: '', files: {'work/project/.codex/hooks.json': JSON.stringify({hooks: {SessionStart: [{hooks: [{type: 'command', command: '/usr/bin/touch {{marker}}'}]}]}})}},
+    // The R1563 probe: zsh read the .zshenv of a project ZDOTDIR outside the sandbox (R1563-1).
+    zdotdir: {projectConfig: '[shell_environment_policy.set]\nZDOTDIR = "{{marker}}-zdot"\n', files: {'marker-zdot/.zshenv': '/usr/bin/touch {{marker}}\n'}},
+    loginShell: {projectConfig: 'allow_login_shell = true\n'},
+    roleFile: {projectConfig: '', files: {'work/project/.codex/agents/reviewer.toml': 'name = "reviewer"\ndescription = "A synthetic role"\ndeveloper_instructions = "Synthetic."\n'}},
   };
   const found = {};
   for (const [name, options] of Object.entries(variants)) {
@@ -1076,8 +1163,8 @@ test('real owned controller: a project MCP server, hook, approval feature, rules
   }
   saveEvidence('real-project-programs', found);
   const config = ['initialize', 'initialized', 'config/read'], files = ['initialize', 'initialized'];
-  const origin = name => `The setting ${name} comes from the project config in <root>/work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (<root>/.codex/config.toml). If not, remove it. Then start the client again.`;
-  const why = 'An agent can change project files, so the client refuses the rules and hooks files of the project and of each folder above it.';
+  const origin = name => `The setting ${name} comes from the project config in <root>/work/project/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (<root>/.codex/config.toml). If not, remove it. Then start the client again.`;
+  const why = 'An agent can change project files, so the client refuses the rules, hooks and agent role files of the project and of each folder above it.';
   const rules = (path, where) => `The rules file <root>/${path} is ${where}. A rule can let a command run with no approval or outside the sandbox. ${why} Check the rules. If you trust them, move them to your Codex config (<root>/.codex/rules/). If not, remove them. Then start the client again.`;
   const refused = (code, message, sent) => ({state: 'refused', code, message, status: 'stopped', sent, marker: false, posts: 0});
   assert.deepEqual(found, {
@@ -1087,7 +1174,22 @@ test('real owned controller: a project MCP server, hook, approval feature, rules
     rules: refused('project-rules', rules('work/project/.codex/rules/default.rules', 'in the project'), files),
     parentRules: refused('project-rules', rules('work/.codex/rules/parent.rules', 'in a folder above the project'), files),
     hooksFile: refused('project-hooks', `The hooks file <root>/work/project/.codex/hooks.json is in the project. A hook runs a command at its event. ${why} Check the hooks. If you trust them, move them to your Codex config (<root>/.codex/hooks.json). If not, remove them. Then start the client again.`, files),
+    zdotdir: refused('selection-origin', origin('shell_environment_policy.set.ZDOTDIR'), config),
+    loginShell: refused('selection-origin', origin('allow_login_shell'), config),
+    roleFile: refused('project-agents', `The agent role file <root>/work/project/.codex/agents/reviewer.toml is in the project. A role sets the config of each agent that the chief starts with it: its instructions, model, sandbox and MCP servers. ${why} Check the role. If you trust it, move it to your Codex config (<root>/.codex/agents/). If not, remove it. Then start the client again.`, files),
   });
+});
+
+// A setting of the model's text from the project binds, as the real config/read reports it (R1563-1).
+test('real owned controller: a project config with only allowed keys binds', {skip: REAL, timeout: 180000}, async () => {
+  const f = await realFixture({projectConfig: 'model_reasoning_effort = "low"\nmodel_verbosity = "low"\ndeveloper_instructions = "Synthetic project text."\n'});
+  try {
+    await f.owner.start();
+    const opened = await f.owner.openThread({project: f.project, task: 'T400', run: 'R1461', instructions: 'Synthetic owned controller test.'});
+    saveEvidence('real-project-allowed', {state: opened.state, code: opened.code ?? null, message: opened.error?.message ?? null, sent: [...f.sent]});
+    assert.equal(opened.state, 'bound', opened.error?.message);
+    assert.deepEqual(f.sent, ['initialize', 'initialized', 'config/read', 'thread/start']);
+  } finally { await f.owner.stop(); await f.close(); }
 });
 
 // A killed client closes the pipe to the controller's stdin, and nothing else ends the controller then, because it

@@ -129,10 +129,12 @@ const homePath = (home, name) => (home ? join(home, name) : `${name} in your Cod
 // An agent may have written the setting or the file, so the owner checks it before moving it.
 const checkIt = (what, it, target, home) => `Check ${what}. If you trust ${it}, move ${it} to your Codex config (${homePath(home, target)}). If not, remove ${it}. Then start the client again.`;
 const EXAMPLE = {approval_policy: '"on-request"', sandbox_mode: '"read-only"'};
-// Each key that changes the sandbox or where an approval goes, or that starts a program (an MCP server, or a hook at
-// an event). Each must come from a layer that an agent cannot write.
-const OWNER_ONLY = ['sandbox_mode', 'sandbox_workspace_write', 'permissions', 'default_permissions', 'approval_policy', 'approvals_reviewer', 'auto_review',
-  'mcp_servers', 'hooks', 'features.request_permissions_tool', 'features.exec_permission_approvals', 'features.write_stdin_approval'];
+// The only settings that a layer an agent can write (the project) may set. Each changes only the text work of the
+// model: none runs a program, names a path, changes the environment, adds a tool or a role, or changes approvals.
+// controller.md gives the reason for each. A name that ends in a dot allows each key of that table.
+const PROJECT_ALLOWED = ['model', 'model_reasoning_effort', 'model_reasoning_summary', 'model_verbosity', 'personality',
+  'developer_instructions', 'file_opener', 'history.persistence', 'history.max_bytes', 'tui.'];
+const projectAllowed = key => PROJECT_ALLOWED.some(name => key === name || (name.endsWith('.') && key.startsWith(name)));
 // An MCP server or a hook event is one entry of its table, so the message names the entry, not one of its fields.
 const ENTRIES = new Set(['mcp_servers', 'hooks']);
 function requireOwner(key, origin, home) {
@@ -140,7 +142,7 @@ function requireOwner(key, origin, home) {
   // config/read names a list item by its index (sandbox_workspace_write.writable_roots.0); the owner edits the list.
   const [table, entry] = key.split('.');
   const name = ENTRIES.has(table) && entry ? `${table}.${entry}` : key.replace(/(\.[0-9]+)+$/, '');
-  throw refuse('selection-origin', `The setting ${name} comes from ${layer(origin)}. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. ${checkIt(`the setting ${name}`, 'it', 'config.toml', home)}`);
+  throw refuse('selection-origin', `The setting ${name} comes from ${layer(origin)}. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. ${checkIt(`the setting ${name}`, 'it', 'config.toml', home)}`);
 }
 const FORK = `Use the fork binary of version ${CONTROLLER_VERSION}, ${RESTART}`;
 // config/read gives a key that no layer sets as null with no origin: the controller uses its default.
@@ -151,7 +153,8 @@ function configured(config, origins, key) {
 
 /**
  * Pure. Checks the config/read reply before thread/start, because thread/start already starts the MCP servers: each
- * owned launch key has its value from the launch flags, and each owner-only key comes from an owner layer. Returns
+ * owned launch key has its value from the launch flags, and each key that PROJECT_ALLOWED does not name comes from an
+ * owner layer. Returns
  * the config and its origins, or throws a refusal with a fixed code.
  */
 export function checkConfig(read, home = '') {
@@ -165,8 +168,7 @@ export function checkConfig(read, home = '') {
     if (origins[switchKey]?.name?.type !== 'sessionFlags') throw refuse('policy-origin', `The setting ${key} comes from ${layer(origins[switchKey])}, not from the launch flags of the client. Remove ${key} from there, ${RESTART}.`);
     if (value !== required) throw refuse('policy-value', `The setting ${key} is ${JSON.stringify(value)}, but the client needs ${JSON.stringify(required)}. ${FORK}.`);
   }
-  for (const [key, origin] of Object.entries(origins))
-    if (OWNER_ONLY.some(guarded => key === guarded || key.startsWith(`${guarded}.`))) requireOwner(key, origin, home);
+  for (const [key, origin] of Object.entries(origins)) if (!projectAllowed(key)) requireOwner(key, origin, home);
   // Each missing key in one refusal, so that the owner fixes them all before one restart.
   const missing = SELECTION.filter(([, key, , owned]) => owned && configured(config, origins, key) === undefined).map(([, key]) => key);
   if (missing.length) throw refuse('selection-missing', `Your Codex config does not set ${missing.join(' and ')}. Set ${missing.length > 1 ? 'them' : 'it'} in your Codex config (${homePath(home, 'config.toml')}), for example ${missing.map(key => `${key} = ${EXAMPLE[key]}`).join(' and ')}, ${RESTART}.`);
@@ -219,13 +221,14 @@ function mainCheckoutFolders(project) {
 /**
  * Refuses the project files that Codex loads with no config key, so config/read never shows them: a rules file
  * (.codex/rules/*.rules) can let a command run with no approval or outside the sandbox, and a hooks file
- * (.codex/hooks.json) runs commands at hook events. Codex loads them from the .codex folder of each folder from the
+ * (.codex/hooks.json) runs commands at hook events, and an agent role file (.codex/agents/**.toml) sets the config of
+ * the agents that start with that role. Codex loads them from the .codex folder of each folder from the
  * project root down to the cwd, and the hooks of a linked worktree from its main checkout; the check covers each
  * folder up to the filesystem root. The .codex folder that is CODEX_HOME holds the owner's own rules and hooks.
  */
 export function checkProjectFiles(project, env) {
   const home = codexHome(env), realHome = realOrNull(home);
-  const why = 'An agent can change project files, so the client refuses the rules and hooks files of the project and of each folder above it.';
+  const why = 'An agent can change project files, so the client refuses the rules, hooks and agent role files of the project and of each folder above it.';
   const above = upward(project);
   for (const folder of new Set([...above, ...mainCheckoutFolders(project)])) {
     const dotCodex = join(folder, '.codex');
@@ -236,7 +239,28 @@ export function checkProjectFiles(project, env) {
     catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw refuse('project-files', `The client cannot read ${join(dotCodex, 'rules')} (${error.code}), so it cannot check it for rules files. Make the folder readable, or remove it, ${RESTART}.`); }
     if (rules.length) throw refuse('project-rules', `The rules file ${join(dotCodex, 'rules', rules[0])} is ${where}. A rule can let a command run with no approval or outside the sandbox. ${why} ${checkIt('the rules', 'them', 'rules/', home)}`);
     if (existsSync(join(dotCodex, 'hooks.json'))) throw refuse('project-hooks', `The hooks file ${join(dotCodex, 'hooks.json')} is ${where}. A hook runs a command at its event. ${why} ${checkIt('the hooks', 'them', 'hooks.json', home)}`);
+    const role = roleFile(join(dotCodex, 'agents'));
+    if (role) throw refuse('project-agents', `The agent role file ${role} is ${where}. A role sets the config of each agent that the chief starts with it: its instructions, model, sandbox and MCP servers. ${why} ${checkIt('the role', 'it', 'agents/', home)}`);
   }
+}
+// Codex reads each .toml file in the agents folder and in each folder below it as an agent role. A link to a folder
+// counts as a folder; `seen` stops a loop of links.
+function roleFile(folder, seen = new Set()) {
+  const real = realOrNull(folder);
+  if (!real || seen.has(real)) return null;
+  seen.add(real);
+  let entries;
+  try { entries = readdirSync(folder, {withFileTypes: true}).sort((a, b) => (a.name < b.name ? -1 : 1)); }
+  catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+    throw refuse('project-files', `The client cannot read ${folder} (${error.code}), so it cannot check it for agent role files. Make the folder readable, or remove it, ${RESTART}.`);
+  }
+  for (const entry of entries) {
+    const path = join(folder, entry.name);
+    if (entry.name.endsWith('.toml')) return path;
+    if (entry.isDirectory() || (entry.isSymbolicLink() && statSync(path, {throwIfNoEntry: false})?.isDirectory())) { const found = roleFile(path, seen); if (found) return found; }
+  }
+  return null;
 }
 
 function agentText(items) {

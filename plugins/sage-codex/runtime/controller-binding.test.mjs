@@ -167,7 +167,7 @@ test('bindPolicy takes the sandbox and the approval policy only from a layer tha
   // The process checks the config with the owner's Codex folder before thread/start; bindPolicy checks it again.
   const refusal = edit => { const value = observed(); edit(value); try { checkConfig(value.config, '/home/.codex'); bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
   assert.equal(refusal(value => { value.config.origins.sandbox_mode = project; }),
-    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting sandbox_mode. If you trust it, move it to your Codex config (/home/.codex/config.toml). If not, remove it. Then start the client again.');
+    'selection-origin: The setting sandbox_mode comes from the project config in /work/project/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting sandbox_mode. If you trust it, move it to your Codex config (/home/.codex/config.toml). If not, remove it. Then start the client again.');
   assert.match(refusal(value => { value.config.origins.approval_policy = project; }), /^selection-origin: The setting approval_policy comes from the project config/);
   assert.match(refusal(value => { value.config.origins.approval_policy = {name: {type: 'packagedDefaults', file: '/opt/codex/defaults.toml'}}; }), /^selection-origin: .*packagedDefaults config layer \(\/opt\/codex\/defaults.toml\)/);
   const example = {approval_policy: 'approval_policy = "on-request"', sandbox_mode: 'sandbox_mode = "read-only"'};
@@ -200,7 +200,7 @@ test('bindPolicy: a model and a provider that no layer sets are the default, as 
 test('bindPolicy refuses each key that changes the sandbox or the approval route from a project layer (R1524-1, R1524-2)', () => {
   const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
   const refusal = (key, origin = project) => { const value = observed(); value.config.origins[key] = origin; try { bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
-  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes the sandbox, approval, MCP server and hook settings only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (config.toml in your Codex folder). If not, remove it. Then start the client again.`;
+  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (config.toml in your Codex folder). If not, remove it. Then start the client again.`;
   // The keys as the real config/read names them: a list item has its index.
   for (const [key, name] of [['sandbox_workspace_write.network_access', 'sandbox_workspace_write.network_access'],
     ['sandbox_workspace_write.writable_roots.0', 'sandbox_workspace_write.writable_roots'], ['sandbox_workspace_write.exclude_slash_tmp', 'sandbox_workspace_write.exclude_slash_tmp'],
@@ -209,9 +209,30 @@ test('bindPolicy refuses each key that changes the sandbox or the approval route
     assert.equal(refusal(key), refused(name), key);
     assert.equal(refusal(key, user), 'pass', `${key} from the user layer`);
   }
-  // A key that only shares the start of a name is not one of them.
-  assert.equal(refusal('sandbox_mode_note'), 'pass');
-  assert.equal(refusal('model_reasoning_effort'), 'pass');
+});
+
+// The project may set only the settings of the model's text; each other key refuses, also a key that the client does
+// not know (R1563-1, R1564-1, R1564-2).
+test('bindPolicy takes from the project only the keys of its allow-list; each other key refuses with its name (R1563-1, R1564-1, R1564-2)', () => {
+  const project = {name: {type: 'project', dotCodexFolder: '/work/project/.codex'}, version: 'sha256:p'};
+  const refusal = (key, origin = project) => { const value = observed(); value.config.origins[key] = origin; try { checkConfig(value.config, '/home/.codex'); bindPolicy(value); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
+  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (/home/.codex/config.toml). If not, remove it. Then start the client again.`;
+  for (const key of ['model', 'model_reasoning_effort', 'model_reasoning_summary', 'model_verbosity', 'personality', 'developer_instructions',
+    'file_opener', 'history.persistence', 'history.max_bytes', 'tui.animations', 'tui.notifications.0'])
+    assert.equal(refusal(key), 'pass', key);
+  for (const [key, name] of [
+    ['shell_environment_policy.set.ZDOTDIR', 'shell_environment_policy.set.ZDOTDIR'], ['shell_environment_policy.set.PATH', 'shell_environment_policy.set.PATH'],
+    ['shell_environment_policy.inherit', 'shell_environment_policy.inherit'], ['allow_login_shell', 'allow_login_shell'], ['zsh_path', 'zsh_path'],
+    ['agents.reviewer.config_file', 'agents.reviewer.config_file'], ['agents.max_depth', 'agents.max_depth'],
+    ['mcp_servers.probe.command', 'mcp_servers.probe'], ['hooks.Stop.0.hooks.0.command', 'hooks.Stop'], ['features.shell_tool', 'features.shell_tool'],
+    ['tools.web_search', 'tools.web_search'], ['experimental_use_unified_exec_tool', 'experimental_use_unified_exec_tool'], ['notify.0', 'notify'],
+    ['model_provider', 'model_provider'], ['model_providers.local.base_url', 'model_providers.local.base_url'], ['model_instructions_file', 'model_instructions_file'],
+    ['profile', 'profile'], ['openai_base_url', 'openai_base_url'], ['js_repl_node_path', 'js_repl_node_path'], ['history.file', 'history.file'],
+    // A name that only starts like an allowed one, and a key that the client does not know.
+    ['model_x', 'model_x'], ['tuix', 'tuix'], ['sandbox_mode_note', 'sandbox_mode_note'], ['future_key', 'future_key']]) {
+    assert.equal(refusal(key), refused(name), key);
+    assert.equal(refusal(key, user), 'pass', `${key} from the user layer`);
+  }
 });
 
 test('bindPolicy: a version or a policy refusal names what it found and what to change (R1504-3)', () => {
