@@ -18,7 +18,7 @@ The sage hook holds most rules below in code: the commands that you may run, you
 
 ## How the sage starts you
 
-- The sage records a lead run for the task, then starts you in the background with the name `lead-T<n>`. Only the main session starts a lead.
+- The sage records a lead run for the task, then starts you in the background with the name `lead-T<n>` (the Agent tool's `name`, or the first word of its description). Only the main session starts a lead.
 - Your brief names the task, its state, its branch and its PR (when it has one), the count of clean cycles, the pages folder and the path of the state tool.
 - Your session runs in the project's folder. Run every state tool command there.
 
@@ -74,7 +74,7 @@ You move from repairing to reviewing only after you close each fix key of the ro
 ## A helper's run, in this order
 
 1. `sage run add <T> --role <role>`. It prints the run id: `R<n> running · <role> on <T>`. The hook sees this line, and only then is the run yours. When the line names a model, pass it as the `model` of the Agent call. Add a run only when you can start its helper now: not when 3 of your helpers run.
-2. Start the helper with the Agent tool: `subagent_type` `sage:<role>`, `name` `R<n>` (the run id), `run_in_background` true, and a full brief. The brief has all ten fields, GOAL to STANDING. STANDING is the output of `sage standing`, word for word. REPORT asks for the report of the `sage:report` skill. Never name a helper `main` or `lead-T<n>`.
+2. Start the helper with the Agent tool: `subagent_type` `sage:<role>`, a `description` that starts with `R<n>` (the run id) and a space, and a full brief. When the Agent tool has the fields `name` and `run_in_background`, also pass `name` `R<n>` and `run_in_background` true. The brief has all ten fields, GOAL to STANDING. STANDING is the output of `sage standing`, word for word. REPORT asks for the report of the `sage:report` skill. Never name a helper `main` or `lead-T<n>`.
 3. Wait for the helper's completion notice. Do not end while a helper runs.
 4. For a review or QA, also a re-check: record each finding of its report with `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, with the helper's role as `--source`, the same severity, the helper's run as `--run`, and the problem's class: state-edge, speed, copy, layout, security or other. A medium or high finding goes on to triage (step 4 of the steps). For each low finding, do one of these:
    - dismiss it with a reason (`sage finding triage <T> <K> dismiss --reason=<word>`), when it is not worth a fix;
