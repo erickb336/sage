@@ -4,7 +4,7 @@
 // Its first stop without every report field continues it once with the missing fields; the second stop
 // goes through with one plain line, as the Claude stop gate. Other agents pass. An input that the gate
 // cannot read stops nothing: it gives one plain line, and the gate never reads it as a checked report.
-import { readFileSync, realpathSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { REPORT_FIELDS, missingReportFields } from "../core/index.mjs";
 
@@ -15,9 +15,18 @@ export const TASK_NAME = /^sage_([a-z]+(?:_[a-z]+)*)_t[1-9]\d*(?:_r[1-9]\d*)?$/;
 /** A name that claims a sage agent: it starts with sage_, in any letter case. */
 export const sageName = (name) => /^sage_/i.test(name);
 
-/** Codex's record of a thread: the payload of the session_meta line that starts its transcript. It throws when there is none. */
+/** The most of a transcript that sessionMeta reads. A real session_meta line is about 20 KB. */
+export const META_BYTES = 1 << 20;
+
+/** Codex's record of a thread: the payload of the session_meta line that starts its transcript. It throws when there is none,
+ * and when the first line does not end in the first META_BYTES, so a long transcript never has to fit in one string. */
 export function sessionMeta(path) {
-  const meta = JSON.parse(readFileSync(path, "utf8").split("\n", 1)[0]);
+  const chunk = Buffer.alloc(META_BYTES + 1), fd = openSync(path, "r");
+  let size;
+  try { size = readSync(fd, chunk, 0, chunk.length, 0); } finally { closeSync(fd); }
+  const end = chunk.subarray(0, size).indexOf(10);
+  if (end < 0 && size > META_BYTES) throw Error("no session_meta in the first line");
+  const meta = JSON.parse(chunk.subarray(0, end < 0 ? size : end).toString("utf8"));
   if (meta?.type !== "session_meta" || meta.payload === null || typeof meta.payload !== "object") throw Error("no session_meta");
   return meta.payload;
 }

@@ -1,7 +1,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -147,6 +147,16 @@ test("a child with an agent_id and no transcript fails closed: read-only, it sta
   const unread = "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user.";
   assert.equal(denied(await g.run(mcp("verdict", { task: "T1" }, { transcript_path: "/none/rollout.jsonl" }))), unread, "a thread with no agent_id and a record that the hook cannot read");
   assert.equal(await g.run(mcp("verdict", { task: "T1" })), undefined, "an ephemeral root thread (no transcript) is the chief");
+});
+
+test("a chief's transcript over Node's string limit still reads as the chief; a first line over 1 MiB fails closed (R1675-5)", async (t) => {
+  const g = fixed({ sage: true });
+  const long = record(t, { id: base.session_id });
+  truncateSync(long, 600 * 2 ** 20); // sparse: the 600 MiB after the first line cost no disk
+  assert.equal(await g.run(mcp("verdict", { task: "T1" }, { transcript_path: long })), undefined, "a long session keeps its logbook tools");
+  const wide = record(t, { id: base.session_id, base_instructions: "a".repeat(2 ** 20) });
+  assert.equal(denied(await g.run(mcp("verdict", { task: "T1" }, { transcript_path: wide }))),
+    "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user.");
 });
 
 test("a merge runs only on the root thread, with autopilot on and a passing merge check", async () => {
