@@ -133,7 +133,10 @@ test("the Codex guide and the README carry the owner's lines for install, trust,
     "when no sage hook is trusted, no sage hook runs, so you see no sage line at all, also no warning. If sage mode does not start, type `/hooks` in the Codex CLI", // R1671-1
     "Codex keeps the trust records of the sage hooks in your Codex config", // R1671-3
     "sage: this is Codex 0.165.0, and sage is tested only with Codex 0.160 to 0.164. Some sage rules may not run.", // R1670-7
+    "Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule", // R1675-2
+    "also a push or a merge, but the workspace-write sandbox still keeps the logbook and the sessions folder closed. Keep the sandbox's network access off for role agents, or keep autopilot off.", // R1675-2
   ]) assert.ok(guide.includes(line), line);
+  assert.match(readFileSync(join(ROOT, "CHANGELOG.md"), "utf8"), /- A limit: Codex 0\.164\.0 runs no hook for text that an agent types into a shell that still runs \(`write_stdin`\)/, "R1675-2");
   assert.doesNotMatch(guide, /the chief and the leads use/);
   assert.ok(readme.includes("a role agent's logbook write, and a new agent or a new Codex session that a role agent starts"), "R1670-8");
 });
