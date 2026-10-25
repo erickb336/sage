@@ -1,6 +1,6 @@
 # sage in Codex
 
-This page tells you what sage does in Codex today, how to try it, and what does not work yet. Codex support is in progress. In Codex, sage mode gives the session the chief's role, but the rules that Claude Code's hook holds in code do not apply yet.
+This page tells you how to install sage in Codex, what it does there today, and what does not work yet. sage installs as a Codex plugin from its own marketplace, with your normal Codex: the terminal CLI or the Codex desktop app in the ChatGPT app. In Codex, sage mode gives the session the chief's role, but the rules that Claude Code's hook holds in code do not apply yet.
 
 The design of the two provider plugins is in [Separate provider packages](../design/provider-packages.md).
 
@@ -8,6 +8,8 @@ The design of the two provider plugins is in [Separate provider packages](../des
 
 | Part of sage | Claude Code | Codex today |
 | --- | --- | --- |
+| Install from the sage marketplace | Yes | Yes: `codex plugin marketplace add`, then `codex plugin add sage@sage` |
+| A status at the start of each session | No | Yes: the sage version, the Codex version, the trust of the sage hooks and the on phrase |
 | Principles and the writing skills | Yes | Yes: the same skills, including the `sage` skill for manual logbook commands |
 | A principle at the moment it applies | Yes | Yes, for a design request, a test or document patch, a README and a commit |
 | Advice after a failed check | Yes | No: Codex's shell hook output does not give a reliable exit status |
@@ -23,51 +25,47 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 
 ## What you need
 
-- Codex CLI: sage's plugin discovery was checked with Codex CLI 0.159.2 on Linux and 0.160.0 on macOS. CI runs the tests on Linux, but no real install or session of sage is tested on Linux yet. A discovery check does not prove that each hook runs in a real session.
-- Node.js 20 or later.
-- git, and a clone of this repository.
+- Codex 0.160 to 0.164. sage was checked with Codex CLI 0.160.0 on macOS. The desktop app carries its own Codex (0.164.0-alpha in ChatGPT 26.1021); sage was not run in it yet.
+- Node.js 20 or later, on your PATH: the sage hooks are Node scripts.
 
-## Try it
+## Install
 
-Treat this as a preview. Check each step in your own Codex before you rely on it.
-
-1. Clone the repository, and go into its folder:
+1. Add the sage marketplace, in a terminal:
 
    ```sh
-   git clone https://github.com/erickb336/sage.git
+   codex plugin marketplace add https://github.com/erickb336/sage.git
    ```
 
-   ```sh
-   cd sage
-   ```
+   You see ``Added marketplace `sage` ``. To try a local clone instead, give its folder: `codex plugin marketplace add ./sage`.
 
-   The repository holds the built Codex plugin in `plugins/sage-codex/`, so you do not need to build it.
-
-2. Add the clone as a marketplace:
-
-   ```sh
-   codex plugin marketplace add .
-   ```
-
-3. Install sage's Codex plugin:
+2. Install the plugin:
 
    ```sh
    codex plugin add sage@sage
    ```
 
-4. Start a new Codex session:
+   You see ``Added plugin `sage` from marketplace `sage`.`` Then `codex plugin list` shows `sage@sage  installed, enabled`.
 
-   ```sh
-   codex
+3. Run `codex` in a project folder. At the "Hooks need review" screen ("5 hooks are new or changed"), choose **Trust all and continue**. Codex runs the sage hooks only after this step.
+
+   > **Note:** `codex exec` skips hooks without your trust, and it gives no warning.
+
+4. Send a message. Above the reply, you see one status, for example:
+
+   ```text
+   ↳ Hook · sage 0.1.0 is installed. Codex 0.160.0. sage hooks: all 5 trusted. To start sage mode, send this message alone: sage mode
    ```
 
-   Codex 0.160.0 runs hooks by default, so you need no flags. If sage's hooks do not run in an older Codex, start it with `codex --enable codex_hooks --enable plugin_hooks`.
+   The status says when some sage hooks do not have your trust yet, and it warns when your Codex version is outside the tested range. Codex starts a session at your first message, so the status comes then.
 
-5. When Codex asks, review and trust sage's hook commands. sage does not bypass Codex's hook trust or change its global configuration.
+In the desktop app, do steps 1 and 2 in a terminal. The app reads the same Codex home (`~/.codex`), so sage shows under the sage marketplace in its plugins list.
 
-In the Codex desktop app, install the plugin with the same commands, and then start a new thread. If the app shows no review screen for the hooks, trust them once in the CLI (steps 4 and 5). This app path is not yet checked.
+If the app does not ask you to trust the hooks, do step 3 once in the terminal. This desktop path is not checked yet.
 
-You see: a design request, or a patch to a test file, adds the principle's text to the session once. The `sage` skill gives the logbook commands.
+## Update and remove
+
+- To update, run `codex plugin marketplace upgrade sage`, then `codex plugin add sage@sage` again. A changed hook needs your trust again: at the next start, choose **Trust all and continue** again.
+- To remove sage, run `codex plugin remove sage@sage`, then `codex plugin marketplace remove sage`.
 
 ## Turn on sage mode
 
@@ -90,8 +88,8 @@ Send each phrase alone, as the whole message, in any letter case.
 - With `SAGE_HOOKS=off`, a phrase switches nothing, and the hook gives one warning line that says so.
 - The hook keeps the mode of each session in `~/.codex/sage/.hooks/codex/` (or under `SAGE_HOME`).
 
-The hooks run only after you trust them (step 5). In `codex exec`, Codex skips hooks that you have not trusted, with no warning.
+The hooks run only after you trust them (step 3). In `codex exec`, Codex skips hooks that you have not trusted, with no warning.
 
 ## What comes next
 
-Full sage mode in Codex needs verified answers for each case that Claude Code's hook holds: a failed agent start, an agent's later turns, an interrupted run, who wrote a prompt, and the agent caps. sage keeps it off until each one has evidence. The progress is in the Codex runtime notes, for example the [Claude parity audit](../../packages/sage-codex/runtime/claude-parity-audit.md).
+Full sage mode in Codex comes as more parts of the same plugin: a hook for the mode phrases and the chief's role, a local MCP server for the logbook, and hooks for the report fields and the merge rules. Codex draws its own approval prompts in both front ends, so sage adds none. The runtime notes of the parked Codex fork, for example the [Claude parity audit](../../packages/sage-codex/runtime/claude-parity-audit.md), stay as evidence.

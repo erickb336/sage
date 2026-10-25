@@ -8,6 +8,7 @@ Each date is the day of the first commit that made the change. Older changes are
 ## 2026-10-25
 
 - **The mode phrases work in Codex.** With the sage plugin installed in Codex and its hooks trusted, `sage mode` gives the session the chief's role in that turn, and the role comes back after each compaction. `sage mode off` ends it: the hook adds the role no more. `autopilot on` and `autopilot off` record autopilot while sage mode is on, but in Codex autopilot merges nothing yet: you merge. `sage help` lists the phrases and the modes. The rules are the same as in Claude Code, from one place in the shared core. The rules that Claude Code's hook holds in code (no file edits by the chief, agent caps, the merge check) do not apply in Codex yet. See [sage in Codex](docs/guide/codex.md#turn-on-sage-mode).
+- **sage installs in Codex as a plugin, in the CLI and the desktop app.** Add the sage marketplace with `codex plugin marketplace add https://github.com/erickb336/sage.git`, install with `codex plugin add sage@sage`, and choose "Trust all and continue" at Codex's "Hooks need review" screen. A new `SessionStart` hook then shows one status at the start of each session: the sage version, the Codex version, how many sage hooks have your trust, and the on phrase. It warns when the Codex version is outside the tested range (0.160 to 0.164). See [sage in Codex](docs/guide/codex.md).
 
 ## 2026-10-24
 

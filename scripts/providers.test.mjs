@@ -457,7 +457,7 @@ test("manifests point to disjoint plugin roots and only supported Codex hooks", 
   const manifest = json("plugins/sage-codex/.codex-plugin/plugin.json");
   assert.equal(manifest.hooks, "./hooks/hooks.json");
   const hooks = json("plugins/sage-codex/hooks/hooks.json").hooks;
-  assert.deepEqual(Object.keys(hooks), ["UserPromptSubmit", "SessionStart", "PreToolUse"]);
+  assert.deepEqual(Object.keys(hooks), ["SessionStart", "UserPromptSubmit", "PreToolUse"]);
   assert.deepEqual([...outputs()], [...outputs()], "packaging is deterministic");
 });
 
