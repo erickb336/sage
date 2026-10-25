@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, writeSync} from 'node:fs';
+import {closeSync, constants, existsSync, fstatSync, openSync, readFileSync, readlinkSync, realpathSync, statSync, writeSync} from 'node:fs';
 import {basename, dirname, relative, resolve, sep} from 'node:path';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
@@ -67,15 +67,25 @@ const PASTE_START = '\x1b[200~', PASTE_END = '\x1b[201~';
 const TOKEN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O.|.)?|./gsu;
 // The start of a key sequence at the end of a read: its rest comes in the next read (R1575-4).
 const PARTIAL = /\x1b(?:\[[0-?]*[ -/]*|O)?$/u;
-// `line(text, pasted)` gets each line; `pasted` says that some of its text came from a paste (Backspace can remove that
-// text again, R1608-1). `clear()` clears the typed line and drops the rest of the current read (only paste marks and
-// Ctrl-C still act in it); it returns true when the typed line had text. `hold()` drops each later read in the same
+// `line(text, pasted)` gets each line; `pasted` says that the line may hold text of a paste, so it cannot answer an
+// approval request. Pasted text is the text between the paste marks and each key in a read that holds a paste mark: a
+// terminal sends a paste in one burst, so a key in that read is not typed. Backspace can remove pasted text again
+// (R1608-1). A line with a paste mark is pasted until a typed character comes after its last mark, and an end mark with
+// no start mark before it (paste text that holds the end mark) makes the whole line pasted (R1616-5). `clear()` clears
+// the typed line and drops the rest of the current read (only paste marks and Ctrl-C still act in it); it returns true
+// when the typed line had text. `hold()` drops each later read in the same
 // way until `release()`, which returns true when a dropped read had text.
 function readTerminal(input, write, {line, interrupt, end}) {
   let text = '', afterReturn = false, pasting = false, pending = '', ended = false, dropping = false, held = false, heldText = false;
-  // The index in `text` of the first pasted character, or -1.
-  let firstPasted = -1;
-  const add = key => { if (pasting && firstPasted < 0) firstPasted = text.length; text += key; };
+  // The index in `text` of the first pasted character, or -1; a paste mark with no typed character after it; an end mark
+  // with no start mark; a paste mark in the current read.
+  let firstPasted = -1, afterMark = false, forged = false, marked = false;
+  const add = key => {
+    const typed = !pasting && !marked;
+    if (typed) afterMark = false; else if (firstPasted < 0) firstPasted = text.length;
+    text += key;
+  };
+  const reset = () => { text = ''; firstPasted = -1; afterMark = false; forged = false; };
   input.setRawMode(true);
   input.setEncoding('utf8');
   write(PASTE_ON);
@@ -85,10 +95,14 @@ function readTerminal(input, write, {line, interrupt, end}) {
     let all = pending === '\x1b' && !/^[[O]/u.test(chunk) ? chunk : pending + chunk;
     pending = PARTIAL.exec(all)?.[0] ?? '';
     all = all.slice(0, all.length - pending.length);
+    marked = all.includes(PASTE_START) || all.includes(PASTE_END);
     let echo = '';
     const show = () => { if (echo) write(echo); echo = ''; };
     for (const [key] of all.matchAll(TOKEN)) {
-      if (key.startsWith('\x1b')) { if (key === PASTE_START) pasting = true; else if (key === PASTE_END) pasting = false; continue; }
+      if (key.startsWith('\x1b')) {
+        if (key === PASTE_START || key === PASTE_END) { if (key === PASTE_END && !pasting) forged = true; pasting = key === PASTE_START; afterMark = true; }
+        continue;
+      }
       // Raw mode stays on until the client ends, so after the end of input Ctrl-C still stops the turn (R1577-3).
       if (ended) { if (key === '\x03') interrupt(false); continue; }
       const printable = key === '\t' || oneLine(key) === key;
@@ -99,12 +113,12 @@ function readTerminal(input, write, {line, interrupt, end}) {
       if (key === '\r' || key === '\n') {
         echo += '\n';
         if (pasting) { add('\n'); continue; }
-        show(); const done = text, fromPaste = firstPasted >= 0; text = ''; firstPasted = -1; line(done, fromPaste);
+        show(); const done = text, fromPaste = firstPasted >= 0 || afterMark || forged || marked; reset(); line(done, fromPaste);
       } else if (printable) { add(key); echo += key; }
       // A control character in a paste is text of the paste, not a key: the client drops it.
       else if (pasting) continue;
       // Ctrl-C clears the line, so that the next Enter never sends the cleared text (R1575-2).
-      else if (key === '\x03') { const cleared = text !== ''; text = ''; firstPasted = -1; if (cleared) echo += '\n'; show(); interrupt(cleared); }
+      else if (key === '\x03') { const cleared = text !== ''; reset(); if (cleared) echo += '\n'; show(); interrupt(cleared); }
       else if (key === '\x04') { if (!text) { show(); ended = true; end(); } }
       else if (key === '\x7f' || key === '\b') {
         if (text) { text = text.replace(/.$/su, ''); echo += '\b \b'; if (text.length <= firstPasted) firstPasted = -1; }
@@ -113,7 +127,7 @@ function readTerminal(input, write, {line, interrupt, end}) {
     show();
   });
   return {
-    clear() { const had = text !== ''; text = ''; firstPasted = -1; dropping = true; return had; },
+    clear() { const had = text !== ''; reset(); dropping = true; return had; },
     hold() { held = true; },
     release() { const had = heldText; held = false; heldText = false; return had; },
   };
@@ -183,46 +197,49 @@ const YES = new Set(['y', 'yes']), NO = new Set(['n', 'no']);
 const CLEARED = '[The client cleared your typed text, because an approval request came. Type it again after you answer.]';
 const NOT_SENT = '[Your line did not go to the chief, because an approval request waits. Answer it, then type your line again.]';
 const PASTED = '[A pasted line cannot answer an approval request, and it did not go to the chief. Type y or n.]';
-const NO_QUESTION = '[No approval request waits, so your line did not go to the chief.]';
+const NO_QUESTION = '[No approval request waits, so your line did not go to the chief. To answer the chief, type yes or no.]';
 // Terminal input in the first SETTLE_MS after a question first shows is dropped, so a key that the owner pressed
 // before the question came never answers it (R1606-4).
 const SETTLE_MS = 300;
+const SETTLED = '[The client dropped the keys that you pressed as the approval request showed. Read it, then type y or n.]';
 const isText = value => typeof value === 'string' && value !== '';
-// The shown values. A code value (command, folder, host, file, access, arguments) is JSON with each character outside
-// printable ASCII as \uXXXX. A text value (reason, message) is JSON too; letters (not modifier letters such as the
-// quote look-alike U+02BA), digits and marks of any script stay, and each other character outside printable ASCII is
-// \uXXXX. In both, a run of 3 or more spaces shows as its count. So a value cannot draw a fake end of the question, and
-// padding cannot push the real question off the screen.
-const units = text => Array.from({length: text.length}, (_, index) => `\\u${text.charCodeAt(index).toString(16).padStart(4, '0')}`).join('');
-const counted = text => text.replace(/ {3,}/g, run => ` (${run.length} spaces) `);
-const NOT_TEXT = /[^\x20-\x7e\p{L}\p{Nd}\p{M}]|[\p{Lm}\p{Default_Ignorable_Code_Point}]/gu;
-const ascii = text => counted(text.replace(/[^\x20-\x7e]/g, units));
-const asCode = text => ascii(JSON.stringify(String(text)));
-const asProse = text => counted(JSON.stringify(String(text)).replace(NOT_TEXT, units));
+// The shown values. Every value is JSON with each character outside printable ASCII (0x20 to 0x7E) as \uXXXX (a
+// surrogate pair as two escapes), so each shown character is 1 column and no value can hold a line end, a look-alike
+// letter or a wide or zero-width character. A run of 3 or more spaces shows as its count outside the quotes:
+// "a" (40 spaces) "b". Inside a JSON string a quote has a backslash, so a value cannot hold that form.
+const units = text => text.replace(/[^\x20-\x7e]/g, unit => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`);
+const spaced = text => text.replace(/ {3,}/g, run => `" (${run.length} spaces) "`);
+const asCode = text => spaced(units(JSON.stringify(String(text))));
+// An agent name or a thread id shows with no quotes, escaped as in a JSON string.
+const asName = text => units(JSON.stringify(String(text)).slice(1, -1));
+// A shown escape: \u after an odd count of backslashes. A block with one gets the note line.
+const ESCAPE = /(?:^|[^\\])(?:\\\\)*\\u[0-9a-f]{4}/;
+const NOTE = ['note', '\\uXXXX is one character, shown as its code.'];
 // A value over LIMIT characters, or a request with over MAX_ITEMS files, moves or access items, is not shown: the
 // client refuses it with the reason.
 const LIMIT = 2000, MAX_ITEMS = 50;
 const TOO_LONG = {why: `a value in the request is over ${LIMIT} characters`}, TOO_MANY = {why: `the request lists more than ${MAX_ITEMS} items`};
 const long = value => { const text = String(value); if (text.length > LIMIT) throw TOO_LONG; return text; };
-const code = value => asCode(long(value)), prose = value => asProse(long(value));
-const json = value => (value == null ? 'none' : ascii(long(JSON.stringify(value))));
+const code = value => asCode(long(value));
+const json = value => (value == null ? 'not in the request' : spaced(units(long(JSON.stringify(value)))));
 const cut = text => (text.length > LIMIT ? `${text.slice(0, LIMIT)}… (cut at ${LIMIT} characters)` : text);
-// The terminal rows that shown lines take at a width of `columns`. A wide character (East Asian Wide or Fullwidth: CJK,
-// Hangul, kana, fullwidth forms, emoji) takes 2 columns, and moves to the next row when only 1 is left; a mark takes none.
-const WIDE = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\ua960-\ua97f\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{16fe0}-\u{18aff}\u{1b000}-\u{1b2ff}\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
-const rowsOf = (lines, columns) => lines.reduce((rows, line) => {
-  let row = 1, column = 0;
-  for (const char of oneLine(line)) {
-    const width = /[\p{Mn}\p{Me}]/u.test(char) ? 0 : WIDE.test(char) ? 2 : 1;
-    if (column + width > columns) { row += 1; column = 0; }
-    column += width;
-  }
-  return rows + row;
-}, 0);
-// The real path of a path that may not exist yet: the real path of its longest existing part, then the rest.
-function realOf(full) {
+// The client wraps each line of a question block itself, at the terminal width: the first row starts as the line does,
+// and each later row starts with GUTTER. Each character is 1 column, so the rows are exact, and no value row starts at
+// column 0 or with a field name.
+const GUTTER = '  | ';
+const wrapped = (line, columns) => {
+  const width = Math.max(columns, GUTTER.length + 1), rows = [line.slice(0, width)];
+  for (let at = width; at < line.length; at += width - GUTTER.length) rows.push(GUTTER + line.slice(at, at + width - GUTTER.length));
+  return rows;
+};
+// The real path of a path that may not exist yet: the real path of its longest existing part, then the rest. A link
+// whose target does not exist is followed too (at most 40 links, as the system follows).
+function realOf(full, links = 0) {
   for (let head = full, rest = []; ;) {
     try { return resolve(realpathSync(head), ...rest); } catch {
+      let target;
+      try { target = readlinkSync(head); } catch { /* Not a link. */ }
+      if (target !== undefined && links < 40) return realOf(resolve(dirname(head), target, ...rest), links + 1);
       if (dirname(head) === head) return full;
       rest.unshift(basename(head)); head = dirname(head);
     }
@@ -240,7 +257,7 @@ function pathsOf(project) {
     if (!inside(full)) return code(full);
     relativeShown = true;
     const real = realOf(full);
-    return `${code(relative(project, full))}${inside(real) ? '' : ` (a link to ${code(real)})`}`;
+    return `${code(relative(project, full))}${inside(real) ? '' : ` (a link to ${code(real)}${existsSync(real) ? '' : ', which does not exist yet'})`}`;
   };
   return {show, footer: () => (relativeShown ? [['paths', 'relative to the project folder']] : [])};
 }
@@ -300,9 +317,11 @@ const emptySchema = schema => schema?.type === 'object' && schema.properties && 
  * block, and the two replies. `{refused}` is a request that the client refuses with that line. Null is an approval
  * request that the client cannot read. It throws TOO_LONG or TOO_MANY for a request too long to show.
  */
+// The kinds of a file change (PatchChangeKind of the fork).
+const CHANGE = {add: 'new', delete: 'delete', update: 'change'};
 function approvalOf(method, params, {files, calls, project}) {
   const action = actionOf(method, params), paths = pathsOf(project);
-  const reason = isText(params.reason) ? [['reason', prose(params.reason)]] : [];
+  const reason = isText(params.reason) ? [['reason', code(params.reason)]] : [];
   const items = (name, list) => list.map(item => [name, item]);
   // The fields end with the line on relative paths, so `shown` is called after the fields are made.
   const shown = (fields, accept = DECISION.accept, decline = DECISION.decline) => ({action, fields: [...fields, ...paths.footer()], accept, decline});
@@ -323,10 +342,12 @@ function approvalOf(method, params, {files, calls, project}) {
     // The files come from the fileChange item of item/started: with no such item, the client cannot say what y allows.
     const changes = files.get(params.itemId);
     if (!changes?.length) return {refused: 'asked to change files, but the client does not know which files, so the client refused it'};
-    if (params.grantRoot != null || !changes.every(change => isText(change?.path) && (change.kind?.move_path == null || isText(change.kind.move_path)))) return null;
-    if (changes.reduce((count, change) => count + (change.kind?.move_path == null ? 1 : 2), 0) > MAX_ITEMS) throw TOO_MANY;
-    // A move shows its target under its file.
-    const fields = changes.flatMap(change => [['file', paths.show(change.path)], ...(change.kind?.move_path == null ? [] : [['moves to', paths.show(change.kind.move_path)]])]);
+    if (params.grantRoot != null || !changes.every(change => isText(change?.path) && Object.hasOwn(CHANGE, change.kind?.type ?? '')
+      && (change.kind.move_path == null || (change.kind.type === 'update' && isText(change.kind.move_path))))) return null;
+    if (changes.reduce((count, change) => count + (change.kind.move_path == null ? 1 : 2), 0) > MAX_ITEMS) throw TOO_MANY;
+    // Each file shows its kind of change, and a move shows its target under its file.
+    const fields = changes.flatMap(change => [['file', `${paths.show(change.path)} (${CHANGE[change.kind.type]})`],
+      ...(change.kind.move_path == null ? [] : [['moves to', paths.show(change.kind.move_path)]])]);
     return shown([...fields, ...reason]);
   }
   if (method === 'item/permissions/requestApproval') {
@@ -339,11 +360,11 @@ function approvalOf(method, params, {files, calls, project}) {
   if (method === 'mcpServer/elicitation/request') {
     // A tool approval asks only yes or no: a schema with a field is a form.
     if (params.mode !== 'form' || params._meta?.codex_approval_kind !== 'mcp_tool_call' || !emptySchema(params.requestedSchema)) {
-      return {refused: `sent a form from the MCP server ${cut(asCode(params.serverName))}: ${cut(asProse(params.message))}. The client cannot show forms, so it refused the form`};
+      return {refused: `sent a form from the MCP server ${cut(asCode(params.serverName))}: ${cut(asCode(params.message))}. The client cannot show forms, so it refused the form`};
     }
     const reply = choice => ({action: choice, content: null, _meta: null});
     // The fork puts the tool arguments in _meta.tool_params.
-    return shown([['server', code(params.serverName)], ['message', prose(params.message)], ['arguments', json(params._meta.tool_params)]], reply('accept'), reply('decline'));
+    return shown([['server', code(params.serverName)], ['message', code(params.message)], ['arguments', json(params._meta.tool_params)]], reply('accept'), reply('decline'));
   }
   if (method === 'item/tool/requestUserInput') {
     const questions = Array.isArray(params.questions) ? params.questions : [];
@@ -352,11 +373,11 @@ function approvalOf(method, params, {files, calls, project}) {
     if (questions.length !== 1 || call?.threadId !== params.threadId || question?.id !== `${MCP_APPROVAL}${params.itemId}`
       || !question.options?.some?.(option => option.label === MCP_ALLOW)) {
       // The question text shows cut at LIMIT characters, so a long question still shows what it asked.
-      const text = cut(questions.map(each => asProse(each?.question ?? '')).join(', '));
+      const text = cut(questions.map(each => asCode(each?.question ?? '')).join(', '));
       return {refused: `asked you ${questions.length === 1 ? 'a question' : `${questions.length} questions`}: ${text}. The client cannot show questions, so it refused ${questions.length === 1 ? 'it' : 'them'}. The agent goes on without your answer`};
     }
     const reply = label => ({answers: {[question.id]: {answers: [label]}}});
-    return shown([['server', code(call.server)], ['tool', code(call.tool)], ['message', prose(question.question)], ['arguments', json(call.arguments)]],
+    return shown([['server', code(call.server)], ['tool', code(call.tool)], ['message', code(question.question)], ['arguments', json(call.arguments)]],
       reply(MCP_ALLOW), reply(MCP_CANCEL));
   }
   return {refused: 'sent a request that is not an approval request, so the client refused it'};
@@ -445,35 +466,44 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   // `questions` holds the approval requests that wait for the owner, in order; the first one shows. `agents` names
   // each child thread, and `files` keeps the changes of each file change item until its end.
   // `calls` keeps the server, tool and arguments of each mcpToolCall item until its end. A thread with no known name is
-  // never the chief. An agent name shows by the rule of a code value, with no quotes.
+  // never the chief. An agent name and a thread id show escaped, with no quotes.
   const agents = new Map(), files = new Map(), calls = new Map();
-  const agent = threadId => (isText(threadId) && threadId === rootThread ? '/root (the chief)'
-    : ascii(agents.get(threadId) ?? (isText(threadId) ? `(unknown child ${threadId})` : '(an unknown agent with no thread id)')));
+  const agent = threadId => (isText(threadId) && threadId === rootThread ? '/root (the chief)' : agents.has(threadId) ? asName(agents.get(threadId))
+    : isText(threadId) ? `(unknown child ${asName(threadId)})` : '(an unknown agent with no thread id)');
   // The reader of a terminal on stdin; it clears the typed line when a question shows.
   let terminal = null, cancelSettle = () => {};
-  // Each show of a question clears the typed line and drops the rest of the current terminal read, so no text typed or
-  // pasted before the question can answer it. The first show of a question also drops the terminal input of the next
-  // SETTLE_MS, with a note if it had text.
+  // Each show of a question checks that it fits the terminal at its size then. The block, the note above it (its rows
+  // are kept free on each show) and the input line below it must fit the rows of the terminal, so the real first line
+  // of the block is on the screen when the owner answers, and no value can push it off and draw a fake one (R1606-1,
+  // R1616-2). A block that does not fit is refused at once. Each show clears the typed line and drops the rest of the
+  // current terminal read, so no text typed or pasted before the question can answer it. The first show of a question
+  // also drops the terminal input of the next SETTLE_MS, with a note if it had text.
   const ask = () => {
     if (!questions.length) return;
     cancelWait();
     const [question] = questions;
+    const columns = output.columns > 0 ? output.columns : 80, height = output.rows > 0 ? output.rows : 24;
+    const rows = question.block.flatMap(line => wrapped(line, columns)), need = rows.length + Math.ceil(CLEARED.length / columns) + 1;
+    if (need > height) {
+      answer(false, `[Agent ${question.name} asked to ${question.action}, but the request needs ${need} rows and your terminal shows ${height}, so the client refused it. Make the terminal window larger to see such a request.]`);
+      return;
+    }
     const cleared = terminal?.clear() ?? false;
     if (cleared) write('\n');
-    for (const line of [...(cleared ? [CLEARED] : []), ...question.block]) write(`${oneLine(line)}\n`);
+    for (const row of [...(cleared ? [CLEARED] : []), ...rows]) write(`${row}\n`);
     blockLast = true;
     if (terminal && !question.shown) {
       cancelSettle(); terminal.hold();
-      cancelSettle = timer(() => { cancelSettle = () => {}; if (terminal.release()) say(CLEARED); }, SETTLE_MS);
+      cancelSettle = timer(() => { cancelSettle = () => {}; if (terminal.release()) say(SETTLED); }, SETTLE_MS);
     }
     question.shown = true;
   };
-  const answer = allow => {
+  function answer(allow, said = allow ? '[You allowed it once.]' : '[You refused it.]') {
     const question = questions.shift();
     owner.answer(question.id, allow ? question.accept : question.decline);
-    say(allow ? '[You allowed it once.]' : '[You refused it.]');
+    say(said);
     if (questions.length) ask(); else if (turnActive) awaitModel();
-  };
+  }
   // Ctrl-C, the end of input and a stop refuse each request that waits.
   const declineAll = cause => {
     const waiting = questions.splice(0);
@@ -491,7 +521,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     }
     if (!found || found.refused) {
       owner.refuse(id);
-      say(found ? `[Agent ${name} ${found.refused}.]` : `[Agent ${name} sent an approval request to ${actionOf(method, params)} that the client cannot read, so the client refused it.]`);
+      say(found ? `[Agent ${name} ${found.refused}.]` : `[Agent ${name} asked to ${actionOf(method, params)}, but the client cannot read the request, so the client refused it.]`);
       return;
     }
     // After the end of input or a stop, no answer can come: the client refuses the request and shows no question.
@@ -500,11 +530,10 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       say(`[${stopAsked ? 'The controller stops' : 'Your input ended'}, so the client refused the approval request of agent ${name}.]`);
       return;
     }
-    const block = [`[Approval: agent ${name} asks to ${found.action}.]`, ...found.fields.map(([field, value]) => `  ${field}: ${value}`), ASK];
-    // The whole block must show on the screen, with 2 rows left (a note above it and the input line below it), so that
-    // no value can push the real question off the screen and draw a fake one (R1606-1).
-    if (rowsOf(block, output.columns > 0 ? output.columns : 80) > (output.rows > 0 ? output.rows : 24) - 2) { tooBig('the request is too big to show on your screen'); return; }
-    questions.push({id, block, accept: found.accept, decline: found.decline});
+    // Every line of the block is printable ASCII. A block with an escape says what an escape is.
+    const fields = found.fields.some(([, value]) => ESCAPE.test(value)) || ESCAPE.test(name) ? [...found.fields, NOTE] : found.fields;
+    const block = [`[Approval: agent ${name} asks to ${found.action}.]`, ...fields.map(([field, value]) => `  ${field}: ${value}`), ASK];
+    questions.push({id, name, action: found.action, block, accept: found.accept, decline: found.decline});
     if (questions.length === 1) ask();
   }
   owner = createControllerProcess({executable: binary.path, executableSha256: binary.sha256, cwd: project,
@@ -634,6 +663,8 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   }
   // stop() runs on every path, so the controller never outlives the client.
   const outcome = await session().catch(error => { say(`[The client failed: ${error.message}]`); return 'failed'; });
+  // No timer of the session prints after its last line (R1615-2).
+  cancelSettle(); cancelWait();
   // An open input keeps the process alive after a stop by Ctrl-C or a signal, so the client releases it, and gives
   // the terminal back its line mode, with bracketed paste off.
   if (input.isRaw) { write(PASTE_OFF, true); input.setRawMode(false); }
