@@ -25,7 +25,7 @@ Start with the [Quick start](#quick-start). Then follow one task from start to m
 | --- | --- |
 | Maturity | Early: used daily by its author to build sage itself; one recorded dry run. |
 | Claude Code | Supported: sage mode, the team of agents, the rules in code, autopilot and the board. |
-| Codex | In progress. The principles, the writing skills, the advice hooks, and the logbook and board by manual commands work; sage mode and autopilot do not work yet ([sage in Codex](docs/guide/codex.md)). |
+| Codex | In progress. The principles, the writing skills, the advice hooks, and the logbook and board by manual commands work. The mode phrases work: sage mode gives the session the chief's role, but the rules in code and the merges of autopilot do not work yet ([sage in Codex](docs/guide/codex.md)). |
 | Systems | macOS: tested. Linux: not yet tested. Windows: not supported. |
 
 ## Requirements
@@ -91,7 +91,7 @@ Send each phrase alone, as the whole message.
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase).
+Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase). In Codex, the mode phrases and `sage help` work; the board phrases do not yet, and autopilot merges nothing yet ([sage in Codex](docs/guide/codex.md#turn-on-sage-mode)).
 
 ## Safety and limits
 
@@ -107,11 +107,11 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
+- **The mode phrases work in Codex:** `sage mode` gives a Codex session the chief's role, also after a compaction; `sage mode off`, `autopilot on`, `autopilot off` and `sage help` work as in Claude Code.
 - **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
 - **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.
 - **Programs:** you approve the breakdown of a multi-task goal before any task of it builds.
-- **A task can wait for other tasks**, and the board has an Agents page and a project picker.
 
 All changes: [CHANGELOG.md](CHANGELOG.md).
 

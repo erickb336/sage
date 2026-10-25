@@ -5,6 +5,10 @@ Each date is the day of the first commit that made the change. Older changes are
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve. See [To update sage](docs/guide/using-sage.md#to-update-sage).
 
+## 2026-10-25
+
+- **The mode phrases work in Codex.** With the sage plugin installed in Codex and its hooks trusted, `sage mode` gives the session the chief's role in that turn, and the role comes back after each compaction. `sage mode off` ends it: the hook adds the role no more. `autopilot on` and `autopilot off` record autopilot while sage mode is on, but in Codex autopilot merges nothing yet: you merge. `sage help` lists the phrases and the modes. The rules are the same as in Claude Code, from one place in the shared core. The rules that Claude Code's hook holds in code (no file edits by the chief, agent caps, the merge check) do not apply in Codex yet. See [sage in Codex](docs/guide/codex.md#turn-on-sage-mode).
+
 ## 2026-10-24
 
 - **The off phrase holds in every session.** In a folder whose `.claude/settings.json` starts every session as the chief, `sage mode off` now gives a normal session for the rest of the session, as in any other session. Before, sage mode came back on at the next event, and the session had no file tools. Now the chief agent has every tool, and the sage hook alone refuses the chief's file edits while sage mode is on. `sage mode` turns it on again. A new session, or `/clear`, in that folder starts in sage mode again.
