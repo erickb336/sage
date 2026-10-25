@@ -2,7 +2,7 @@
 import {closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, writeSync} from 'node:fs';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
-import {bindTask, resolveControllerBinary} from './controller-binding.mjs';
+import {bindTask, projectTrustFlags, resolveControllerBinary} from './controller-binding.mjs';
 import {createControllerProcess, defaultSchedule} from './controller-process.mjs';
 
 const USAGE = [
@@ -50,7 +50,6 @@ const REASONS = new Map([
   ['Invalid or oversized protocol frame', 'the controller sent a message that the client cannot read'],
   ['No terminal event within the interrupt grace', 'the controller did not end the turn after the client stopped it'],
   ['The turn/start reply has no turn id', 'the controller gave the turn no id'],
-  ['Unchecked MCP server', 'the controller started an MCP server that is not in the config that the client checked (an agent may have added it to a .codex/config.toml file after the check); check the project config'],
 ]);
 // A terminal in line mode keeps at most MAX_CANON bytes of one line (1024 on macOS), so a longer typed or pasted
 // line never reaches the client. So on a terminal the client reads each key (raw mode) and keeps the line itself:
@@ -119,6 +118,8 @@ function parseArgs(argv) {
   if (missing.length) throw new Error(`The client needs ${missing.join(', ')}.`);
   return args;
 }
+// The project folder with its links resolved, in the spelling that the owner typed. The controller process runs in its
+// canonical spelling (realpath(3)), and the trust flag names both (R1600-1, R1601-1).
 function projectFolder(path) {
   let real;
   try { real = realpathSync(path); } catch { throw new Error(`The project folder ${path} does not exist. Give an existing folder with --project.`); }
@@ -140,6 +141,9 @@ function instructionsText(path) {
     throw new Error(error.code === 'ENOENT' ? `The instructions file ${path} does not exist. Give the chief instructions file with --instructions.` : `The client cannot read the instructions file ${path} (${error.code}). Give a file that you can read with --instructions.`);
   } finally { if (fd !== undefined) closeSync(fd); }
 }
+// The controller's own warning for the disabled project layers says to trust the project. Under sage a trust entry
+// changes nothing, so the client shows the notice of openThread (settingsNotice) instead.
+const UNTRUSTED_WARNING = 'Project-local config, hooks, and exec policies are disabled in the following folders';
 // The thread reply gives the sandbox as {type: 'readOnly'}; the owner's config says read-only. A config value is
 // quoted (JSON escapes a quote in it), so a model name such as `x, approval never` cannot look like a client field.
 const shown = value => (typeof value?.type === 'string' ? JSON.stringify(value.type.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`))
@@ -212,6 +216,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     args = parseArgs(argv);
     binary = resolveControllerBinary(env);
     project = projectFolder(args.project);
+    projectTrustFlags(project, realpathSync.native(project));
     instructions = instructionsText(args.instructions);
     bindTask({project, task: args.task, run: args.run, instructions}, project);
   } catch (error) {
@@ -233,7 +238,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       if (event.kind === 'server-request-refused') say(requestLine(event.method, params));
       // The controller can give the same warning at each turn; the client shows each warning once in a session.
       else if (event.method === 'warning' && typeof params.message === 'string') warnOnce('Warning from the controller: ', params.message, '');
-      else if (event.method === 'configWarning' && typeof params.summary === 'string') warnOnce('Warning about your Codex config: ', params.summary, params.path ? ` (${params.path})` : '');
+      else if (event.method === 'configWarning' && typeof params.summary === 'string' && !params.summary.startsWith(UNTRUSTED_WARNING)) warnOnce('Warning about your Codex config: ', params.summary, params.path ? ` (${params.path})` : '');
       else if (event.method === 'item/completed' && params.threadId === rootThread && params.item?.type === 'agentMessage') chief(params.item.text);
     }}, {spawn, schedule});
 
@@ -274,6 +279,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       return 'refused';
     }
     rootThread = opened.policy.threadId;
+    say(...opened.notices);
     const {model, approvalPolicy, sandbox} = opened.policy.selection;
     const line = text => {
       if (!text.trim() || stopAsked) return;

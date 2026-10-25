@@ -2,7 +2,7 @@ import {spawn as nativeSpawn} from 'node:child_process';
 import {realpathSync} from 'node:fs';
 import {isAbsolute} from 'node:path';
 import {createControllerTransport, OWNED_CONTROLLER_CONFIG} from './controller-transport.mjs';
-import {bindPolicy, bindTask, bindTurnText, checkConfig, checkProjectFiles, codexHome, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, codexHome, projectInstructions, settingsNotice, trustFlags, turnOutcome, unflaggedTrustKeys} from './controller-binding.mjs';
 
 // Limits bound one wire frame and retained stderr bytes, not total process output.
 // One frame can hold one whole agent message, so the frame bound is the event bound of a turn (maxEventBytes).
@@ -14,8 +14,6 @@ function positive(value, name) {
 }
 // The streamed pieces of one item, such as item/agentMessage/delta and item/commandExecution/outputDelta.
 const DELTA = /^item\/.+(\/d|D)elta$/;
-// The MCP servers that the controller starts by itself, with no config key (the fixture and the real binary give it).
-const BUILT_IN_MCP = new Set(['codex_apps']);
 export const defaultSchedule = (callback, delay) => { const timer = setTimeout(callback, delay); return () => clearTimeout(timer); };
 export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owned-controller', '--strict-config',
   ...Object.entries(OWNED_CONTROLLER_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])]);
@@ -24,8 +22,29 @@ export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owne
  * Trusted launch inputs only. One process launches the owned controller entry, binds one task to one root thread
  * after the policy check, and runs one turn at a time. It keeps every notification and refused server request, and
  * gives each turn an honest terminal result: EOF, a crash, a fence or a timeout never count as completed.
+ * When config/read shows an owner trust entry that the trust flag does not name (unflaggedTrustKeys), openThread stops
+ * the controller and starts it once more with those keys in the trust flag (R1611-1, R1620-1). The methods then act on
+ * the second controller, so the caller takes fenced() after openThread, as the client does.
  */
-export function createControllerProcess(options, {spawn = nativeSpawn, schedule = defaultSchedule} = {}) {
+const RESTART_FIX = 'Check that SAGE_CODEX_CONTROLLER_BIN is the fork binary and that your Codex config file loads, then start the client again.';
+export function createControllerProcess(options, dependencies = {}) {
+  let current = ownedProcess(options, dependencies, []), stopping = false;
+  const refused = (code, message, status) => Object.freeze({state: 'refused', code, error: Object.freeze({message}), status});
+  async function openThread(input) {
+    const opened = await current.openThread(input);
+    if (opened.state !== 'restart') return opened;
+    if (stopping || opened.status.state !== 'stopped') return refused('restart', `the controller did not stop for its restart, so the client did not start it again. ${RESTART_FIX}`, opened.status);
+    current = ownedProcess(options, dependencies, opened.ownerKeys);
+    try { await current.start(); } catch { return refused('restart', `the controller did not start again after its restart. ${RESTART_FIX}`, await current.stop()); }
+    return current.openThread(input);
+  }
+  return Object.freeze({start: () => current.start(), inspect: () => current.inspect(), openThread, runTurn: text => current.runTurn(text),
+    interrupt: () => current.interrupt(), stop: () => { stopping = true; return current.stop(); }, status: () => current.status(),
+    events: () => current.events(), fenced: () => current.fenced()});
+}
+
+// One controller process. `ownerKeys` are the owner trust keys that its flag names too (none at the first start).
+function ownedProcess(options, {spawn = nativeSpawn, schedule = defaultSchedule}, ownerKeys) {
   if (!options || Object.getPrototypeOf(options) !== Object.prototype) throw new TypeError('Trusted launch options required');
   const allowed = ['executable', 'executableSha256', 'cwd', 'env', 'startupTimeoutMs', 'inspectionTimeoutMs', 'stopGraceMs', 'maxFrameBytes', 'maxDiagnosticBytes',
     'turnTimeoutMs', 'interruptGraceMs', 'maxEvents', 'maxDeltaEvents', 'maxEventBytes', 'onEvent'];
@@ -37,6 +56,12 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     maxFrameBytes = DEFAULT_FRAME_BYTES, maxDiagnosticBytes = DEFAULT_DIAGNOSTIC_BYTES,
     turnTimeoutMs = 2 * 60 * 60 * 1000, interruptGraceMs = 10000, maxEvents = 20000, maxDeltaEvents = 1000000, maxEventBytes = 64 * 1024 * 1024, onEvent} = options;
   if (typeof executable !== 'string' || !isAbsolute(executable) || typeof cwd !== 'string' || !isAbsolute(cwd)) throw new TypeError('Trusted absolute executable and canonical cwd required');
+  // Codex looks up the trust of the canonical spelling of its cwd (realpath(3)), with the letter case and the Unicode
+  // form of the disk. So the controller runs there, and the trust flag names that spelling first, then `cwd` as the
+  // owner typed it, when it differs (R1600-1, R1601-1).
+  const canonical = realpathSync.native(cwd);
+  // The project has another real path now: it moved, a folder above it got another name, or it is gone (R1622-2).
+  const moved = () => { try { return realpathSync.native(canonical) !== canonical; } catch { return true; } };
   if (typeof executableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(executableSha256)) throw new TypeError('Executable sha256 required');
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Invalid event callback');
   if (!env || Object.getPrototypeOf(env) !== Object.prototype) throw new TypeError('Explicit trusted environment required');
@@ -50,9 +75,11 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
   for (const [name, value] of Object.entries({startupTimeoutMs, inspectionTimeoutMs, stopGraceMs, maxFrameBytes, maxDiagnosticBytes,
     turnTimeoutMs, interruptGraceMs, maxEvents, maxDeltaEvents, maxEventBytes})) positive(value, name);
   if (typeof spawn !== 'function' || typeof schedule !== 'function') throw new TypeError('Invalid process dependencies');
+  // The controller loads no project layer of the cwd (projectTrustFlags); the binding record keeps these arguments.
+  const launchArgs = Object.freeze([...OWNED_LAUNCH_ARGS, ...trustFlags([canonical, cwd], ownerKeys)]);
   let child, connection, attempted = false, fenced = false, fenceReason = null, childClosed = false, exitCode = null, exitSignal = null;
   let phase = 'idle', stopPromise, inspectionPromise, diagnosticBytes = 0, diagnosticsTruncated = false;
-  let initialized = null, threadRequested = false, binding = null, turn = null, checkedMcp = null;
+  let initialized = null, threadRequested = false, binding = null, turn = null;
   const streamClosures = new Set(), observations = new Set(), signals = [], events = [], settledTurns = new Set();
   // The event limits count from the start of the current turn, so a long session never reaches them.
   let windowEvents = 0, windowDeltas = 0, windowBytes = 0, sequence = 0;
@@ -130,12 +157,6 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     if (passed) windowDeltas += 1; else { windowEvents += 1; windowBytes += bytes; }
     const event = Object.freeze({seq: ++sequence, kind: notification ? 'notification' : 'server-request-refused', method: message.method, message});
     if (!(passed && onEvent)) events.push(event);
-    // A second guard for a project config that changes after config/read (R1581-1): thread/start reads the config
-    // again, so an MCP server that the check did not see could start. The session then stops before any turn uses it.
-    if (message.method === 'mcpServer/startupStatus/updated' && checkedMcp && !checkedMcp.has(params?.name) && !BUILT_IN_MCP.has(params?.name)) {
-      fence('Unchecked MCP server');
-      return;
-    }
     if (onEvent) { try { onEvent(event); } catch { fence('Event callback failed'); return; } }
     // A terminal for a turn whose result was given already: the earlier result may be wrong, so no later turn runs.
     if (message.method === 'turn/completed' && binding && params?.threadId === binding.threadId && settledTurns.has(params.turn?.id)) {
@@ -184,8 +205,8 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
       try {
         // Its own process group: a Ctrl-C in the owner's terminal reaches the client only, and the client decides.
         // The controller still ends with the client: its stdin closes then, and stop() ends it on every client path.
-        child = spawn(executable, [...OWNED_LAUNCH_ARGS], {cwd, env: environment, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe']});
-        connection = createControllerTransport({generation: 'owned-process', send: write, inspectionCwd: cwd});
+        child = spawn(executable, [...launchArgs], {cwd: canonical, env: environment, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe']});
+        connection = createControllerTransport({generation: 'owned-process', send: write, inspectionCwd: canonical});
         child.on('error', () => fence('Owned process error'));
         child.on('close', (code, signal) => { childClosed = true; exitCode = code; exitSignal = signal; fence('Owned process closed'); notify(); });
         for (const [name, stream] of [['stdin', child.stdin], ['stdout', child.stdout], ['stderr', child.stderr]]) {
@@ -218,8 +239,8 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     return inspectionPromise;
   }
   /**
-   * Binds one task to one root thread. Every check of the project files and of config/read runs before thread/start,
-   * because thread/start starts the MCP servers. No turn can start unless the effective policy passed.
+   * Binds one task to one root thread. The check of config/read runs before thread/start, because thread/start starts
+   * the MCP servers. No turn can start unless the effective policy passed.
    */
   async function openThread(input) {
     if (threadRequested) throw new Error('This process already bound its one task and root thread');
@@ -228,12 +249,23 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     try {
       const task = bindTask(input, cwd);
       if (realpathSync(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
-      checkProjectFiles(task.project, environment);
       const config = await inspect();
-      checkedMcp = new Set(Object.keys(checkConfig(config, codexHome(environment)).config.mcp_servers ?? {}));
-      const thread = await bounded(connection.startThread({cwd, ephemeral: true, developerInstructions: input.instructions}), inspectionTimeoutMs, 'Thread start observation expired');
-      binding = bindPolicy({binary: {path: executable, sha256: executableSha256}, args: OWNED_LAUNCH_ARGS, initialize: initialized, config, thread, task});
-      return Object.freeze({state: 'bound', policy: binding});
+      checkConfig(config, codexHome(environment));
+      // An owner trust entry that the flag does not name: the second start names it as untrusted. Its config/read shows
+      // no such key, unless the owner config changed in between.
+      const missing = unflaggedTrustKeys(config, [canonical, cwd], ownerKeys);
+      if (missing.length && ownerKeys.length) throw Object.assign(new Error(`Your Codex config changed while the client started: it has a new trust entry for ${JSON.stringify(missing[0])}. Start the client again.`), {code: 'project-spelling'});
+      if (missing.length) return Object.freeze({state: 'restart', ownerKeys: Object.freeze(missing), status: await stop()});
+      // The project files (AGENTS.md) after the check, with the owner's limits from config/read. The binding record
+      // keeps the canonical project and the hash of the instructions that the thread gets.
+      const docs = projectInstructions(canonical, config, input.instructions, codexHome(environment));
+      const sent = bindTask({...input, project: canonical, instructions: docs.instructions}, canonical);
+      const thread = await bounded(connection.startThread({cwd: canonical, ephemeral: true, developerInstructions: docs.instructions}), inspectionTimeoutMs, 'Thread start observation expired');
+      // A move or a rename of the project during the start gives the thread another cwd: say so, not a version fault.
+      if (thread?.thread?.cwd !== canonical && moved()) throw Object.assign(new Error('the project folder changed while the client started. Start the client again.'), {code: 'cwd'});
+      binding = bindPolicy({binary: {path: executable, sha256: executableSha256}, args: launchArgs, initialize: initialized, config, thread, task: sent});
+      // The start notices for the owner: the settings that do not load, then each project file that the chief does not get.
+      return Object.freeze({state: 'bound', policy: binding, notices: Object.freeze([...settingsNotice(binding.projectFolders), ...docs.notices])});
     } catch (error) {
       const state = error.code === 'uncertain' ? 'uncertain' : 'refused';
       const code = error.rpcError ? 'rpc' : (error.code ?? 'refused');
