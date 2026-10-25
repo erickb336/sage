@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {bindPolicy, bindTask, bindTurnText, checkConfig, resolveControllerBinary, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, checkProjectFiles, resolveControllerBinary, turnOutcome} from './controller-binding.mjs';
 import {OWNED_LAUNCH_ARGS} from './controller-process.mjs';
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sage-binding-')));
@@ -111,6 +111,8 @@ function observed() {
       origins: {'agents.enabled': sessionFlags, 'features.multi_agent': sessionFlags, 'features.multi_agent_v2.enabled': sessionFlags, 'features.goals': sessionFlags,
         web_search: sessionFlags, 'features.plugins': sessionFlags, 'features.apps': sessionFlags, 'features.remote_plugin': sessionFlags,
         model: user, model_provider: user, approval_policy: user, sandbox_mode: user},
+      // The layers as config/read gives them with includeLayers: each with its own config tree.
+      layers: [{...sessionFlags, config: {web_search: 'disabled'}}, {...user, config: {model: 'gpt-x', approval_policy: 'on-request'}}],
     },
     thread: {thread: {id: 'root-1', cliVersion: '0.160.0', ephemeral: true, parentThreadId: null, cwd: '/work/project'},
       model: 'gpt-x', modelProvider: 'openai', approvalPolicy: 'on-request', sandbox: {type: 'workspaceWrite', writableRoots: ['/work/project'], networkAccess: false}, multiAgentMode: 'explicitRequestOnly'},
@@ -233,6 +235,54 @@ test('bindPolicy takes from the project only the keys of its allow-list; each ot
     assert.equal(refusal(key), refused(name), key);
     assert.equal(refusal(key, user), 'pass', `${key} from the user layer`);
   }
+});
+
+// A list replaces the owner's list, and config/read then still names the owner's items as the origins, so only the
+// project layer's own tree shows it (R1575-1). The real config/read reply for this project config, from the probe:
+// project layer config {shell_environment_policy: {include_only: [], exclude: []}}, origins include_only.0 = user.
+test('checkConfig refuses each key path of a project layer that is not on the allow-list: empty lists and tables too (R1575-1)', () => {
+  const projectName = {type: 'project', dotCodexFolder: '/work/project/.codex'};
+  const refusal = config => {
+    const value = observed();
+    value.config.layers.splice(1, 0, {name: projectName, version: 'sha256:p', config});
+    try { checkConfig(value.config, '/home/.codex'); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; }
+  };
+  const refused = name => `selection-origin: The setting ${name} comes from the project config in /work/project/.codex. An agent can change project files, so the client takes only the model and text settings (such as model_reasoning_effort) from the project, and every other setting only from your Codex config, a managed config or the launch flags. Check the setting ${name}. If you trust it, move it to your Codex config (/home/.codex/config.toml). If not, remove it. Then start the client again.`;
+  assert.equal(refusal({shell_environment_policy: {include_only: []}}), refused('shell_environment_policy.include_only'));
+  assert.equal(refusal({shell_environment_policy: {exclude: []}}), refused('shell_environment_policy.exclude'));
+  assert.equal(refusal({shell_environment_policy: {include_only: [], exclude: []}}), refused('shell_environment_policy.include_only'));
+  assert.equal(refusal({shell_environment_policy: {}}), refused('shell_environment_policy'));
+  assert.equal(refusal({sandbox_workspace_write: {writable_roots: []}}), refused('sandbox_workspace_write.writable_roots'));
+  assert.equal(refusal({mcp_servers: {probe: {}}}), refused('mcp_servers.probe'));
+  assert.equal(refusal({notify: []}), refused('notify'));
+  assert.equal(refusal({model: 'gpt-y', history: {file: '/tmp/h'}}), refused('history.file'));
+  // The keys of the allow-list pass, with an empty table on the way to one, and a list under tui.
+  assert.equal(refusal({model: 'gpt-y', model_reasoning_effort: 'low', history: {persistence: 'none'}, tui: {notifications: []}}), 'pass');
+  assert.equal(refusal({tui: {}, history: {}}), 'pass');
+  assert.equal(refusal({}), 'pass');
+  // A layer of another type that is not the owner's is checked the same way; the owner's own layers set anything.
+  const other = observed(); other.config.layers.push({name: {type: 'packagedDefaults', file: '/opt/codex/defaults.toml'}, version: 'sha256:d', config: {shell_environment_policy: {exclude: []}}});
+  assert.throws(() => checkConfig(other.config), error => error.code === 'selection-origin' && /packagedDefaults config layer/.test(error.message));
+  const owner = observed(); owner.config.layers[1].config.shell_environment_policy = {include_only: [], exclude: []};
+  assert.doesNotThrow(() => checkConfig(owner.config));
+  // A reply with no layers cannot be checked.
+  const none = observed(); delete none.config.layers;
+  assert.throws(() => checkConfig(none.config), error => error.code === 'policy-missing');
+});
+
+test('checkProjectFiles: a link loop in .codex/agents refuses with a fixed code and the fix; a dead link passes (R1575-3)', () => {
+  const project = join(dir, 'loop-project'), agents = join(project, '.codex', 'agents');
+  mkdirSync(agents, {recursive: true});
+  symlinkSync(join(agents, 'dead-target'), join(agents, 'dead'));
+  const result = () => { try { checkProjectFiles(project, {CODEX_HOME: join(dir, 'no-home')}); return 'pass'; } catch (error) { return `${error.code}: ${error.message}`; } };
+  assert.equal(result(), 'pass', 'a dead link is no role file');
+  symlinkSync(join(agents, 'self'), join(agents, 'self'));
+  assert.equal(result(), `project-files: The client cannot read ${join(agents, 'self')} (a loop of links), so it cannot check it for agent role files. Make the folder readable, or remove it, then start the client again.`);
+  rmSync(join(agents, 'self'));
+  // The agents folder itself is a loop of two links.
+  rmSync(agents, {recursive: true});
+  symlinkSync(join(project, '.codex', 'other'), agents); symlinkSync(agents, join(project, '.codex', 'other'));
+  assert.equal(result(), `project-files: The client cannot read ${agents} (a loop of links), so it cannot check it for agent role files. Make the folder readable, or remove it, then start the client again.`);
 });
 
 test('bindPolicy: a version or a policy refusal names what it found and what to change (R1504-3)', () => {
