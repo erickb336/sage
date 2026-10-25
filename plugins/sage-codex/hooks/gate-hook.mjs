@@ -31,7 +31,8 @@
 // It fails closed: a PreToolUse event that it cannot read is denied with one plain line. A PermissionRequest that it
 // cannot read gets no decision, so the user decides in Codex's own prompt.
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, readFileSync } from "node:fs";
+import { constants } from "node:buffer";
+import { closeSync, existsSync, openSync, readdirSync, readSync, realpathSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,23 +80,48 @@ const CODEX_SEGMENT = /(?:^|[\s/\\'"=:<>])\.codex(?=$|[\s/\\'"<>;|&)])/i;
 const text = (value) => typeof value === "string" && value.length > 0 && value.length <= 4096;
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
+/** The bytes that typedModes reads at a time, and the bytes that JSON allows before a value on a line. */
+const PIECE = 1 << 20;
+const JSON_SPACE = new Set([9, 13, 32]);
+
 /**
  * The modes that the user's own typed messages in Codex's transcript of the thread give, replayed with the core rules.
  * Codex writes each typed message as an item_completed event with a UserMessage item and the thread's id. A fork's
  * copied items keep the parent's id, so a fork starts off, as in the mode hook. A transcript that cannot be read gives off.
+ * It reads the file in pieces, so a long session never has to fit in one string (F-T473-1). A line that does not start
+ * with "{" is no event, so it keeps none of its bytes; a line too long for a string cannot be read, so it gives off.
  */
 export function typedModes(transcript, session) {
-  const state = {};
-  let lines = [];
-  try { lines = readFileSync(transcript, "utf8").split("\n"); } catch { return { sage: false, autopilot: false }; }
-  for (const line of lines) {
+  const state = {}, off = { sage: false, autopilot: false };
+  const take = (line) => {
     let item;
-    try { item = JSON.parse(line); } catch { continue; }
+    try { item = JSON.parse(line); } catch { return; }
     const p = item?.payload;
-    if (item?.type !== "event_msg" || p?.type !== "item_completed" || p.thread_id !== session || p.item?.type !== "UserMessage") continue;
+    if (item?.type !== "event_msg" || p?.type !== "item_completed" || p.thread_id !== session || p.item?.type !== "UserMessage") return;
     const text = (Array.isArray(p.item.content) ? p.item.content : []).filter((c) => c?.type === "text").map((c) => c.text).join("");
     switchModes({ owner: true, text, all: text }, state, { autopilotOn: () => "" });
-  }
+  };
+  let fd;
+  try { fd = openSync(transcript, "r"); } catch { return off; }
+  try {
+    const piece = Buffer.alloc(PIECE);
+    let parts = [], length = 0, kind = "blank"; // the line so far: its bytes, their count, and blank, object or other
+    const add = (bytes) => {
+      if (kind === "blank") { const i = bytes.findIndex((b) => !JSON_SPACE.has(b)); if (i >= 0) kind = bytes[i] === 123 ? "object" : "other"; }
+      if (kind === "other") return;
+      length += bytes.length;
+      if (length > constants.MAX_STRING_LENGTH) throw Error("a line too long for a string");
+      parts.push(Buffer.from(bytes));
+    };
+    const endLine = () => { if (kind === "object") take(Buffer.concat(parts, length).toString("utf8")); parts = []; length = 0; kind = "blank"; };
+    for (let size; (size = readSync(fd, piece, 0, PIECE, null)) > 0;) {
+      const bytes = piece.subarray(0, size);
+      let from = 0;
+      for (let nl; (nl = bytes.indexOf(10, from)) >= 0; from = nl + 1) { add(bytes.subarray(from, nl)); endLine(); }
+      add(bytes.subarray(from));
+    }
+    endLine();
+  } catch { return off; } finally { closeSync(fd); }
   return { sage: state.sage === true, autopilot: state.sage === true && state.autopilot === true };
 }
 

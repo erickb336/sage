@@ -8,6 +8,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PHRASES, readModeFile } from "sage-core";
 import { readState, stateKey } from "./principles-hook.mjs";
+import { sessionMeta } from "./report-gate.mjs";
 import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
 
 const ON_PHRASE = Object.keys(PHRASES).find((phrase) => PHRASES[phrase].sage === true);
@@ -15,11 +16,10 @@ const ON_PHRASE = Object.keys(PHRASES).find((phrase) => PHRASES[phrase].sage ===
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
 const minor = (version) => /^(\d+)\.(\d+)/.exec(version)?.slice(1).map(Number);
 
-/** The Codex version from the session's first transcript line (session_meta), or null. */
+/** The Codex version from the session's first transcript line (session_meta, in the file's first MiB), or null. */
 function codexVersion(transcriptPath) {
   try {
-    const first = readFileSync(transcriptPath, "utf8").split("\n", 1)[0];
-    const version = JSON.parse(first).payload?.cli_version;
+    const version = sessionMeta(transcriptPath).cli_version;
     return typeof version === "string" && minor(version) ? version : null;
   } catch { return null; }
 }
