@@ -52,6 +52,8 @@ export function createControllerTransport({generation, send, initialRequestId = 
   if (!nonempty(generation) || typeof send !== 'function' || !validId(initialRequestId)) throw new TypeError('Invalid connection configuration');
   if (inspectionCwd !== undefined && (!nonempty(inspectionCwd) || !isAbsolute(inspectionCwd))) throw new TypeError('Invalid inspection cwd');
   const pending = new Map();
+  // The ids of the server requests that wait for one reply.
+  const serverRequests = new Set();
   let resolveClosed;
   const connectionClosed = new Promise(resolve => { resolveClosed = resolve; });
   let closed = false, initializing = false, initialized = false;
@@ -138,11 +140,12 @@ export function createControllerTransport({generation, send, initialRequestId = 
         if (owns(message, 'emittedAtMs') && !Number.isSafeInteger(message.emittedAtMs)) throw new Error('Invalid notification timestamp');
         if (!nonempty(message.method) || (owns(message, 'params') && (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)))) throw new Error('Malformed method message');
         if (owns(message, 'id')) {
-          if (!validId(message.id)) throw new Error('Invalid server request ID');
-          transmit({id: message.id, error: {code: -32601, message: 'Controller transport does not handle server requests'}});
-          if (closed) throw new Error('Server refusal send failed');
-          return Object.freeze({kind: 'server-request-refused', method: message.method, request: message});
+          if (!validId(message.id) || serverRequests.has(message.id)) throw new Error('Invalid server request ID');
+          serverRequests.add(message.id);
+          return Object.freeze({kind: 'server-request', method: message.method, request: message});
         }
+        // The controller closed a request (its turn ended, or it took a reply): no later reply goes out for it.
+        if (message.method === 'serverRequest/resolved') serverRequests.delete(message.params?.requestId);
         return Object.freeze({kind: 'observation', notification: message});
       }
       object(message, ['id', 'result', 'error']);
@@ -162,5 +165,14 @@ export function createControllerTransport({generation, send, initialRequestId = 
       throw uncertain(error.message);
     }
   }
-  return Object.freeze({initialize, startThread, startTurn, interruptTurn, readConfiguration, receive, disconnect});
+  /** Replies once to a server request that waits. Returns false when the request does not wait or the connection is closed. */
+  function reply(id, message) {
+    if (closed || !serverRequests.delete(id)) return false;
+    transmit({id, ...message});
+    return !closed;
+  }
+  const answer = (id, result) => reply(id, {result});
+  // The controller reads an error reply as a refusal (a decline).
+  const refuse = id => reply(id, {error: {code: -32601, message: 'Controller transport does not handle this server request'}});
+  return Object.freeze({initialize, startThread, startTurn, interruptTurn, readConfiguration, receive, answer, refuse, disconnect});
 }

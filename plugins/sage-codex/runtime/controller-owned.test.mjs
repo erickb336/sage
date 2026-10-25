@@ -476,16 +476,25 @@ test('fake 17: no thread/start reply within the deadline gives uncertain and sto
   assert.equal(f.methods().includes('turn/start'), false);
 });
 
-test('fake 12: a server request is refused with -32601 and kept as an event', async () => {
+test('fake 12: with an onEvent handler a server request waits for the answer of its id; with none it is refused with -32601', async () => {
   const request = {id: 'server-1', method: 'item/commandExecution/requestApproval', params: {threadId: THREAD, turnId: TURN, itemId: 'cmd-1', command: 'true'}};
-  const f = fake({edit: stream => { stream.splice(stream.findIndex(isRootTerminal), 0, {after: 'turn/start', request}); return stream; }});
+  const edit = stream => { stream.splice(stream.findIndex(isRootTerminal), 0, {after: 'turn/start', request}); return stream; };
+  const f = fake({edit});
   assert.equal((await bound(f)).state, 'bound');
-  const result = await f.owner.runTurn('Say one synthetic sentence.');
-  assert.equal(result.state, 'completed');
-  assert.deepEqual(f.sent.find(message => message.id === 'server-1'), {id: 'server-1', error: {code: -32601, message: 'Controller transport does not handle server requests'}});
-  const kept = f.owner.events().find(event => event.kind === 'server-request-refused');
-  assert.deepEqual({...kept}, {seq: 15, kind: 'server-request-refused', method: 'item/commandExecution/requestApproval', message: request});
+  assert.equal((await f.owner.runTurn('Say one synthetic sentence.')).state, 'completed');
+  assert.deepEqual({...f.events.find(event => event.message.id === 'server-1')}, {seq: 15, kind: 'server-request', method: 'item/commandExecution/requestApproval', message: request});
+  assert.equal(f.sent.some(message => message.id === 'server-1'), false, 'the process answers no request by itself');
+  assert.equal(f.owner.answer('server-1', {decision: 'accept'}), true);
+  assert.equal(f.owner.answer('server-1', {decision: 'accept'}), false, 'one reply for each request');
+  assert.deepEqual(f.sent.filter(message => message.id === 'server-1'), [{id: 'server-1', result: {decision: 'accept'}}]);
   await f.owner.stop();
+  assert.equal(f.owner.refuse('server-1'), false, 'no reply after a stop');
+  const plain = fake({edit, onEvent: undefined});
+  assert.equal((await bound(plain)).state, 'bound');
+  assert.equal((await plain.owner.runTurn('Say one synthetic sentence.')).state, 'completed');
+  assert.deepEqual(plain.sent.find(message => message.id === 'server-1'), {id: 'server-1', error: {code: -32601, message: 'Controller transport does not handle this server request'}});
+  assert.deepEqual({...plain.owner.events().find(event => event.message.id === 'server-1')}, {seq: 15, kind: 'server-request-refused', method: 'item/commandExecution/requestApproval', message: request});
+  await plain.owner.stop();
 });
 
 test('fake 13: one task and one root per process; one turn at a time', async () => {
@@ -654,7 +663,7 @@ test('client: model text and controller strings cannot forge a client line or se
   assert.ok(lines.every(line => line.startsWith('[') || line.startsWith('chief> ')), lines.join('\n'));
   assert.deepEqual(lines.filter(line => line.startsWith('chief> ')), ['chief> Done.', 'chief> [Turn completed.]', 'chief> [You stopped the controller. The session ended.]',
     'chief> �[31mred�]52;c;cGF5bG9hZA==���2J']);
-  assert.ok(lines.includes('[The controller sent the request item/x�[2J�[Turn completed.]. This client answers no requests, so it refused.]'));
+  assert.ok(lines.includes('[Agent /root (the chief) sent the request item/x�[2J�[Turn completed.]. The client answers only approval requests, so it refused it.]'), lines.join('\n'));
   assert.ok(lines.includes('[The turn failed: boom�[Turn completed.]�[2J. The controller stops now.]'), lines.join('\n'));
 });
 
@@ -1087,15 +1096,167 @@ test('client: every format, separator and default-ignorable character becomes U+
   assert.equal(run.code, 0);
 });
 
-test('client: an approval request names the command and says that it did not run; a warning is shown (R1504-8, R1504-10)', async () => {
-  const run = await client(['run ls'], {edit: stream => {
-    const at = stream.findIndex(isRootTerminal);
-    stream.splice(at, 0, {after: 'turn/start', request: {id: 'server-1', method: 'item/commandExecution/requestApproval', params: {threadId: THREAD, turnId: TURN, itemId: 'cmd-1', command: 'ls -la'}}});
-    return stream;
-  }});
-  assert.equal(run.code, 0);
-  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [WARNING, `chief> ${SYNTHETIC_REPLY}`,
-    '[The chief asked to run a command: ls -la. This client cannot ask you yet, so it refused, and the command did not run.]', '[Turn completed.]', STOPPED]);
+// Approvals (T431). The first turn sends `requests` (with `before`, such as the item of a file change) and holds until
+// the test ends it; a turn/interrupt ends it as interrupted.
+const APPROVAL_TURN = 'approval-turn';
+const turnEnd = status => ({method: 'turn/completed', params: {threadId: THREAD, turn: {id: APPROVAL_TURN, items: [], status, error: null}}});
+function approvalTurn(requests, before = []) {
+  return {onRequest(message, {emit}) {
+    if (message.method === 'turn/start') {
+      setImmediate(() => emit([{id: message.id, result: {turn: {id: APPROVAL_TURN, status: 'inProgress', items: []}}}, ...before, ...requests]));
+      return false;
+    }
+    if (message.method === 'turn/interrupt') { setImmediate(() => emit([{id: message.id, result: {}}, turnEnd('interrupted')])); return false; }
+  }};
+}
+const ASK = 'Type y to allow it once, or n to refuse it.';
+const replies = (run, ids) => run.f.sent.filter(message => ids.includes(message.id) && !message.method);
+/** Types a line that starts the approval turn, then the answers after the first question shows; ends the turn. */
+async function approvalRun(requests, answers, {before = []} = {}) {
+  const run = clientRun({fakeOptions: approvalTurn(requests, before)});
+  run.input.write('Do the work.\n');
+  await until(() => run.lines().some(line => line.startsWith('[Approval: ')), 'the first question');
+  run.input.write(answers.map(text => `${text}\n`).join(''));
+  await until(() => replies(run, requests.map(request => request.id)).length === requests.length, 'a reply to each request');
+  run.f.emit([turnEnd('completed')]);
+  await until(() => run.lines().includes('[Turn completed.]'), 'the turn end');
+  run.input.end();
+  return {...run, code: await run.code, shown: run.lines().slice(HEADER.length + READY.length)};
+}
+const command = (id, params = {}) => ({id, method: 'item/commandExecution/requestApproval', params: {threadId: THREAD, turnId: APPROVAL_TURN, itemId: `item-${id}`,
+  startedAtMs: 1, command: 'npm install', cwd: PROJECT, reason: 'needs network',
+  // The controller lists a lasting amendment too (T421); the client never offers or sends it.
+  availableDecisions: ['accept', {acceptWithExecpolicyAmendment: {execpolicy_amendment: ['npm', 'install']}}, 'cancel'], ...params}});
+const COMMAND_LINE = `[Approval: agent /root (the chief) asks to run "npm install" in "${PROJECT}" (needs network). ${ASK}]`;
+const PATCH = {method: 'item/started', params: {threadId: THREAD, turnId: APPROVAL_TURN, item: {type: 'fileChange', id: 'patch-1', status: 'inProgress',
+  changes: [{path: `${PROJECT}/a.txt`, kind: {type: 'add'}, diff: 'a'}, {path: `${PROJECT}/b.txt`, kind: {type: 'add'}, diff: 'b'}]}}};
+const KINDS = [
+  ['a command', [command('s-1')], COMMAND_LINE, {decision: 'accept'}, {decision: 'decline'}],
+  ['a file change', [{id: 's-1', method: 'item/fileChange/requestApproval', params: {threadId: THREAD, turnId: APPROVAL_TURN, itemId: 'patch-1', startedAtMs: 1, reason: 'adds two notes', grantRoot: null}}],
+    `[Approval: agent /root (the chief) asks to change 2 files: "${PROJECT}/a.txt", "${PROJECT}/b.txt" (adds two notes). ${ASK}]`, {decision: 'accept'}, {decision: 'decline'}, [PATCH]],
+  ['a permission request', [{id: 's-1', method: 'item/permissions/requestApproval', params: {threadId: THREAD, turnId: APPROVAL_TURN, itemId: 'perm-1', startedAtMs: 1, cwd: PROJECT, reason: 'fetch the docs',
+    permissions: {network: {enabled: true}, fileSystem: {read: null, write: ['/tmp/cache']}}}}],
+  `[Approval: agent /root (the chief) asks for network access and write access to "/tmp/cache" in "${PROJECT}" (fetch the docs). ${ASK}]`,
+  // Yes grants the asked permissions for this turn only; no grants none.
+  {permissions: {network: {enabled: true}, fileSystem: {read: null, write: ['/tmp/cache']}}, scope: 'turn'}, {permissions: {}, scope: 'turn'}],
+  ['an MCP tool approval form', [{id: 's-1', method: 'mcpServer/elicitation/request', params: {threadId: THREAD, turnId: APPROVAL_TURN, serverName: 'docs',
+    mode: 'form', message: 'Allow docs to run tool "search"?', requestedSchema: {type: 'object', properties: {}}, _meta: {codex_approval_kind: 'mcp_tool_call', persist: ['session', 'always']}}}],
+  `[Approval: agent /root (the chief) asks to use a tool of the MCP server "docs": "Allow docs to run tool "search"?". ${ASK}]`,
+  // No persist value: an accept is for this call only.
+  {action: 'accept', content: null, _meta: null}, {action: 'decline', content: null, _meta: null}],
+  ['an MCP tool approval question', [{id: 's-1', method: 'item/tool/requestUserInput', params: {threadId: THREAD, turnId: APPROVAL_TURN, itemId: 'call-1', isBlocking: true,
+    questions: [{id: 'mcp_tool_call_approval_call-1', header: 'Approve app tool call?', question: 'Allow docs to run tool "search"?', isOther: false, isSecret: false,
+      options: [{label: 'Allow', description: 'Run the tool and continue.'}, {label: 'Allow for this session', description: 'Remember.'}, {label: 'Cancel', description: 'Cancel this tool call.'}]}]}}],
+  `[Approval: agent /root (the chief) asks to use an MCP tool: "Allow docs to run tool "search"?". ${ASK}]`,
+  {answers: {'mcp_tool_call_approval_call-1': {answers: ['Allow']}}}, {answers: {'mcp_tool_call_approval_call-1': {answers: ['Cancel']}}}],
+];
+for (const [kind, requests, question, accept, decline, before] of KINDS) {
+  for (const [typed, result, said] of [['y', accept, '[You allowed it once.]'], ['N', decline, '[You refused it.]']]) {
+    test(`client: ${kind} asks the owner; ${typed} sends ${typed === 'y' ? 'accept' : 'decline'} only (T431)`, async () => {
+      const run = await approvalRun(requests, [typed], {before});
+      assert.equal(run.code, 0);
+      assert.deepEqual(run.shown, [question, said, '[Turn completed.]', STOPPED]);
+      assert.deepEqual(replies(run, ['s-1']), [{id: 's-1', result}]);
+      // The answer is no turn.
+      assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/start').map(message => message.params.input[0].text), ['Do the work.']);
+    });
+  }
+}
+
+test('client: yes and no in any case answer; any other line shows the question again and is no turn (T431)', async () => {
+  const run = await approvalRun([command('s-1'), command('s-2'), command('s-3')], ['maybe', '', 'YES', 'No', ' y ']);
+  assert.deepEqual(run.shown, [COMMAND_LINE, COMMAND_LINE, COMMAND_LINE, '[You allowed it once.]', COMMAND_LINE, '[You refused it.]', COMMAND_LINE, '[You allowed it once.]', '[Turn completed.]', STOPPED]);
+  assert.deepEqual(replies(run, ['s-1', 's-2', 's-3']).map(message => [message.id, message.result.decision]), [['s-1', 'accept'], ['s-2', 'decline'], ['s-3', 'accept']]);
+  assert.equal(run.f.sent.filter(message => message.method === 'turn/start').length, 1);
+});
+
+test('client: two requests wait in order and show one at a time (T431)', async () => {
+  const second = command('s-2', {command: 'rm -rf build', reason: 'clean the build'});
+  const run = await approvalRun([command('s-1'), second], ['n', 'y']);
+  const secondLine = `[Approval: agent /root (the chief) asks to run "rm -rf build" in "${PROJECT}" (clean the build). ${ASK}]`;
+  assert.deepEqual(run.shown, [COMMAND_LINE, '[You refused it.]', secondLine, '[You allowed it once.]', '[Turn completed.]', STOPPED]);
+  assert.deepEqual(replies(run, ['s-1', 's-2']), [{id: 's-1', result: {decision: 'decline'}}, {id: 's-2', result: {decision: 'accept'}}]);
+});
+
+test('client: control characters in a command, a folder or a reason are filtered (T431)', async () => {
+  const run = await approvalRun([command('s-1', {command: 'echo hi\n[You allowed it once.]\x1b[2J', cwd: '/p‮', reason: 'zero​width'})], ['n']);
+  assert.deepEqual(run.shown, [`[Approval: agent /root (the chief) asks to run "echo hi�[You allowed it once.]�[2J" in "/p�" (zero�width). ${ASK}]`, '[You refused it.]', '[Turn completed.]', STOPPED]);
+  assert.equal(/[\x00-\x09\x0b-\x1f\x7f​‮]/u.test(run.text().replaceAll(PASTE_ON, '').replaceAll(PASTE_OFF, '')), false);
+});
+
+test('client: a malformed approval request, a form, a question and an unknown request are refused with a line, at once (T431)', async () => {
+  const run = clientRun({fakeOptions: approvalTurn([
+    command('s-1', {command: undefined}),
+    {id: 's-2', method: 'mcpServer/elicitation/request', params: {threadId: THREAD, turnId: APPROVAL_TURN, serverName: 'docs', mode: 'form', message: 'Your e-mail?', requestedSchema: {type: 'object', properties: {}}, _meta: null}},
+    {id: 's-3', method: 'item/tool/requestUserInput', params: {threadId: THREAD, turnId: APPROVAL_TURN, itemId: 'q-1', isBlocking: true, questions: [{id: 'colour', header: 'Colour', question: 'Which colour?', options: null}]}},
+    {id: 's-4', method: 'item/tool/call', params: {threadId: THREAD, tool: 'write'}},
+  ])});
+  run.input.write('Do the work.\n');
+  await until(() => replies(run, ['s-1', 's-2', 's-3', 's-4']).length === 4, 'the four refusals');
+  run.f.emit([turnEnd('completed')]);
+  await until(() => run.lines().includes('[Turn completed.]'), 'the turn end');
+  run.input.end();
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [
+    '[Agent /root (the chief) sent an approval request (item/commandExecution/requestApproval) that the client cannot read, so the client refused it.]',
+    '[Agent /root (the chief) sent a form from the MCP server "docs": "Your e-mail?". The client cannot show forms, so it refused the form.]',
+    '[Agent /root (the chief) asked you a question: "Which colour?". The client cannot answer questions, so it refused the question.]',
+    '[Agent /root (the chief) sent the request item/tool/call. The client answers only approval requests, so it refused it.]',
+    '[Turn completed.]', STOPPED]);
+  // The controller reads an error reply as a refusal.
+  const refusal = {code: -32601, message: 'Controller transport does not handle this server request'};
+  assert.deepEqual(replies(run, ['s-1', 's-2', 's-3', 's-4']), ['s-1', 's-2', 's-3', 's-4'].map(id => ({id, error: refusal})));
+});
+
+test('client: Ctrl-C while a request waits sends decline and stops the turn as before (T431)', async () => {
+  const run = clientRun({fakeOptions: approvalTurn([command('s-1')])});
+  run.input.write('Do the work.\n');
+  await until(() => run.lines().includes(COMMAND_LINE), 'the question');
+  run.signal('SIGINT');
+  await until(() => run.lines().some(line => line.startsWith('[You stopped the turn.')), 'the stopped turn');
+  run.input.end();
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [COMMAND_LINE, '[You pressed Ctrl-C, so the client refused the approval request.]',
+    '[Stopping the turn... Press Ctrl-C again to stop the controller.]', `[You stopped the turn. ${NEXT}]`, STOPPED]);
+  assert.deepEqual(replies(run, ['s-1']), [{id: 's-1', result: {decision: 'decline'}}]);
+  assert.deepEqual(run.f.sent.filter(message => message.method === 'turn/interrupt').map(message => message.params), [{threadId: THREAD, turnId: APPROVAL_TURN}]);
+});
+
+test('client: a child request while the root is idle names the child; y answers it and starts no turn (T431)', async () => {
+  const run = clientRun();
+  await until(() => run.lines().includes(READY[1]), 'the Ready lines');
+  const child = 'child-thread-1';
+  run.f.emit([{method: 'thread/started', params: {thread: {id: child, parentThreadId: THREAD, agentNickname: 'Ada', agentRole: 'implementer',
+    source: {subAgent: {thread_spawn: {parent_thread_id: THREAD, depth: 2, agent_path: '/root/lead_t1/implementer', agent_nickname: 'Ada', agent_role: 'implementer'}}}}}},
+  command('s-1', {threadId: child, turnId: 'child-turn'})]);
+  const line = `[Approval: agent /root/lead_t1/implementer asks to run "npm install" in "${PROJECT}" (needs network). ${ASK}]`;
+  await until(() => run.lines().includes(line), 'the child question');
+  run.input.write('y\n');
+  await until(() => replies(run, ['s-1']).length === 1, 'the reply');
+  run.input.end();
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [line, '[You allowed it once.]', STOPPED]);
+  assert.deepEqual(replies(run, ['s-1']), [{id: 's-1', result: {decision: 'accept'}}]);
+  assert.equal(run.f.sent.some(message => message.method === 'turn/start'), false);
+});
+
+test('client: the end of input refuses a request that waits; a request that the controller closes shows the next one (T431)', async () => {
+  const run = clientRun({fakeOptions: approvalTurn([command('s-1'), command('s-2', {command: 'make'})])});
+  run.input.write('Do the work.\n');
+  await until(() => run.lines().includes(COMMAND_LINE), 'the first question');
+  run.f.emit([{method: 'serverRequest/resolved', params: {threadId: THREAD, requestId: 's-1'}}]);
+  const second = `[Approval: agent /root (the chief) asks to run "make" in "${PROJECT}" (needs network). ${ASK}]`;
+  await until(() => run.lines().includes(second), 'the second question');
+  run.input.end();
+  await until(() => replies(run, ['s-2']).length === 1, 'the refusal at the end of input');
+  run.f.emit([turnEnd('completed')]);
+  assert.equal(await run.code, 0);
+  assert.deepEqual(run.lines().slice(HEADER.length + READY.length), [COMMAND_LINE,
+    '[The controller closed the approval request of agent /root (the chief) before you answered.]', second,
+    '[Your input ended, so the client refused the approval request.]',
+    '[Your input ended. The controller stops after the lines that you typed. Press Ctrl-C to stop the turn now.]',
+    '[Turn completed.]', STOPPED]);
+  assert.deepEqual(replies(run, ['s-1', 's-2']), [{id: 's-2', result: {decision: 'decline'}}]);
 });
 
 // Part 2: one gated test against the real fork binary. It runs only when SAGE_CODEX_CONTROLLER_BIN is set.
@@ -1111,7 +1272,8 @@ const completed = {type: 'response.completed', response: {id: 'resp-1', usage: {
 // `projectConfig` is the text of the project's .codex/config.toml; the user config then trusts the project, so the
 // controller loads that layer. `files` maps a path under the fixture root to its text. CODEX_HOME is the .codex folder
 // above the project, as ~/.codex is above ~/workspace/<project>, and it holds a rules file of the owner.
-async function realFixture({hold = false, projectConfig, files = {}} = {}) {
+// `approval` is the owner's approval policy; `reply(index, marker)` gives the SSE body of each model request.
+async function realFixture({hold = false, projectConfig, files = {}, approval = 'never', reply} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-owned-')));
   const home = join(root, '.codex'), project = join(root, 'work', 'project'), bin = join(root, 'bin'), userHome = join(root, 'home');
   for (const dir of [join(home, 'rules'), project, bin, userHome]) mkdirSync(dir, {recursive: true});
@@ -1130,7 +1292,7 @@ async function realFixture({hold = false, projectConfig, files = {}} = {}) {
       if (request.method !== 'POST' || request.url !== '/v1/responses') { response.writeHead(404, {'content-type': 'application/json'}).end('{}'); return; }
       response.writeHead(200, {'content-type': 'text/event-stream'});
       if (hold) { response.write(sse([created])); held.push(response); return; }
-      response.end(sse([created, message, completed]));
+      response.end(reply ? reply(requests.filter(seen => seen.url === '/v1/responses').length - 1, marker) : sse([created, message, completed]));
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -1139,7 +1301,7 @@ async function realFixture({hold = false, projectConfig, files = {}} = {}) {
   const url = `http://127.0.0.1:${port}`;
   writeFileSync(join(home, 'config.toml'), `model = "synthetic"
 model_provider = "synthetic"
-approval_policy = "never"
+approval_policy = "${approval}"
 sandbox_mode = "read-only"
 chatgpt_base_url = "${url}/backend-api/"
 [model_providers.synthetic]
@@ -1373,6 +1535,41 @@ test('real owned controller: the terminal client runs two typed lines as two tur
     assert.equal(f.requests.filter(request => request.url === '/v1/responses').length, 2);
   } finally { await f.owner.stop(); await f.close(); }
 });
+
+// The synthetic model asks for one escalated command outside the project (the sandbox is read-only), then ends the turn.
+const escalated = (index, marker) => (index === 0 ? sse([created, {type: 'response.output_item.done', item: {type: 'function_call', call_id: 'call-touch', name: 'exec_command',
+  arguments: JSON.stringify({cmd: `touch ${marker}`, yield_time_ms: 5000, sandbox_permissions: 'require_escalated', justification: 'Synthetic approval request.'})}}, completed])
+  : sse([created, message, completed]));
+for (const [typed, made] of [['n', false], ['y', true]]) {
+  test(`real owned controller: the client asks before an escalated command outside the project; ${typed} ${made ? 'creates' : 'leaves out'} the marker (T431)`, {skip: REAL, timeout: 180000}, async () => {
+    const f = await realFixture({approval: 'on-request', reply: escalated});
+    try {
+      writeFileSync(join(f.root, 'chief.md'), 'Synthetic owned controller test.');
+      let text = '';
+      const input = new PassThrough();
+      input.write('Touch the marker.\n');
+      const code = runClient({argv: ['--project', f.project, '--task', 'T431', '--run', 'R1590', '--instructions', join(f.root, 'chief.md')],
+        env: {...f.env, SAGE_CODEX_CONTROLLER_BIN: f.binary.path, SAGE_CODEX_CONTROLLER_SHA256: f.binary.sha256}, input, output: {write(chunk) { text += chunk; return true; }}, classify: parseCommand});
+      for (let i = 0; i < 600 && !text.includes('[Approval: '); i++) await new Promise(resolve => setTimeout(resolve, 100));
+      assert.equal(existsSync(f.marker), false, 'nothing runs before the answer');
+      input.write(`${typed}\n`);
+      for (let i = 0; i < 600 && !text.includes('[Turn completed.]'); i++) await new Promise(resolve => setTimeout(resolve, 100));
+      input.end();
+      const exit = await code;
+      saveEvidence(`real-approval-${typed}`, {code: exit, output: text, marker: existsSync(f.marker)});
+      const lines = text.trimEnd().split('\n').filter(line => !line.startsWith('[Warning from the controller: '));
+      const question = lines.find(line => line.startsWith('[Approval: '));
+      assert.match(question, new RegExp(`^\\[Approval: agent /root \\(the chief\\) asks to run ".*touch ${f.marker}.*" in "${f.project}" \\(Synthetic approval request\\.\\)\\. Type y to allow it once, or n to refuse it\\.\\]$`));
+      assert.deepEqual(lines.slice(lines.indexOf(question)), [question, made ? '[You allowed it once.]' : '[You refused it.]', `chief> ${SYNTHETIC_REPLY}`, '[Turn completed.]', STOPPED]);
+      assert.equal(exit, 0);
+      assert.equal(existsSync(f.marker), made);
+      // The model gets the result of the command: the second request carries the output of the call.
+      const bodies = f.requests.filter(request => request.url === '/v1/responses').map(request => JSON.parse(request.body));
+      assert.equal(bodies.length, 2);
+      assert.ok(bodies[1].input.some(item => item.type === 'function_call_output' && item.call_id === 'call-touch'), JSON.stringify(bodies[1].input));
+    } finally { await f.owner.stop(); await f.close(); }
+  });
+}
 
 // Part 3: real signals. The built client runs as its own process, on a fake controller script that replays the
 // fixture. Node's default for SIGINT ends that script, as the fork's stdio mode does. The test signals only the

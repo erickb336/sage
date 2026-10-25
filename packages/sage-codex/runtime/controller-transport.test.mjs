@@ -100,12 +100,29 @@ test('duplicate reply closes remaining work; notifications are immutable observa
   assert.throws(() => f.reply(1, {})); await check;
 });
 
-test('server requests receive protocol refusal and cannot execute effects', async () => {
+const REFUSAL = {code: -32601, message: 'Controller transport does not handle this server request'};
+test('a server request waits for one reply by its id: an answer or a refusal; a second reply or an unknown id sends nothing', async () => {
   const f = fixture(); await ready(f);
   assert.deepEqual(f.transport.receive({id: 0, method: 'item/tool/call', params: {tool: 'write'}}, 'connection-1'),
-    {kind: 'server-request-refused', method: 'item/tool/call', request: {id: 0, method: 'item/tool/call', params: {tool: 'write'}}});
-  assert.deepEqual(f.sent.at(-1), {id: 0, error: {code: -32601, message: 'Controller transport does not handle server requests'}});
+    {kind: 'server-request', method: 'item/tool/call', request: {id: 0, method: 'item/tool/call', params: {tool: 'write'}}});
+  f.transport.receive({id: 'a-1', method: 'item/commandExecution/requestApproval', params: {}}, 'connection-1');
+  assert.equal(f.sent.length, 2, 'the transport answers no request by itself');
+  assert.equal(f.transport.refuse(0), true);
+  assert.deepEqual(f.sent.at(-1), {id: 0, error: REFUSAL});
+  assert.equal(f.transport.answer('a-1', {decision: 'decline'}), true);
+  assert.deepEqual(f.sent.at(-1), {id: 'a-1', result: {decision: 'decline'}});
+  for (const late of [() => f.transport.answer('a-1', {decision: 'accept'}), () => f.transport.refuse(0), () => f.transport.answer('unknown', {})]) assert.equal(late(), false);
+  assert.equal(f.sent.length, 4);
+  // A request that the controller closed (serverRequest/resolved) takes no later reply.
+  f.transport.receive({id: 7, method: 'item/fileChange/requestApproval', params: {}}, 'connection-1');
+  f.transport.receive({method: 'serverRequest/resolved', params: {threadId: 't', requestId: 7}}, 'connection-1');
+  assert.equal(f.transport.answer(7, {decision: 'accept'}), false);
+  assert.equal(f.sent.length, 4);
   const start = f.transport.startThread(); f.reply(1, {thread: {id: 'safe'}}); await start;
+  // A second request with the id of one that waits is a protocol fault.
+  f.transport.receive({id: 8, method: 'item/tool/call', params: {}}, 'connection-1');
+  assert.throws(() => f.transport.receive({id: 8, method: 'item/tool/call', params: {}}, 'connection-1'), e => e.code === 'uncertain');
+  assert.equal(f.transport.answer(8, {}), false, 'a closed connection sends no reply');
 });
 
 test('caller overrides and non-JSON input fail before send, with valid paired control', async () => {
@@ -173,8 +190,9 @@ test('negative integer request IDs remain distinct from strings and server reque
   assert.equal(f.sent[0].id, -1);
   f.reply(-1, {}); await init;
   assert.deepEqual(f.transport.receive({id: -1, method: 'item/tool/call', params: {}}, 'connection-1'),
-    {kind: 'server-request-refused', method: 'item/tool/call', request: {id: -1, method: 'item/tool/call', params: {}}});
-  assert.deepEqual(f.sent.at(-1), {id: -1, error: {code: -32601, message: 'Controller transport does not handle server requests'}});
+    {kind: 'server-request', method: 'item/tool/call', request: {id: -1, method: 'item/tool/call', params: {}}});
+  f.transport.refuse(-1);
+  assert.deepEqual(f.sent.at(-1), {id: -1, error: REFUSAL});
   const pending = f.transport.startThread();
   assert.equal(f.sent.at(-1).id, 0);
   f.reply(0, {thread: {id: 'negative-control'}});

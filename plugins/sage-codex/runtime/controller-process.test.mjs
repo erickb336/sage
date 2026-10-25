@@ -42,7 +42,7 @@ test('owned startup launches only the owned entry and inspects the fixed cwd', a
     '-c', 'agents.enabled=true', '-c', 'features.multi_agent=false', '-c', 'features.multi_agent_v2=true', '-c', 'features.goals=false',
     '-c', 'web_search="disabled"', '-c', 'features.plugins=false', '-c', 'features.apps=false', '-c', 'features.remote_plugin=false']);
   assert.deepEqual(f.sent.at(-1).params, {cwd: '/fixture/project', includeLayers: true});
-  assert.deepEqual(Object.keys(f.owner).sort(), ['events', 'fenced', 'inspect', 'interrupt', 'openThread', 'runTurn', 'start', 'status', 'stop']);
+  assert.deepEqual(Object.keys(f.owner).sort(), ['answer', 'events', 'fenced', 'inspect', 'interrupt', 'openThread', 'refuse', 'runTurn', 'start', 'status', 'stop']);
   await assert.rejects(f.owner.runTurn('no thread yet'), /No bound root thread/);
   assert.throws(() => f.owner.start(), /already/);
   const stop = f.owner.stop(); f.close(); assert.equal((await stop).state, 'stopped');

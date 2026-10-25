@@ -22,7 +22,7 @@ export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owne
 
 /**
  * Trusted launch inputs only. One process launches the owned controller entry, binds one task to one root thread
- * after the policy check, and runs one turn at a time. It keeps every notification and refused server request, and
+ * after the policy check, and runs one turn at a time. It keeps every notification and server request, and
  * gives each turn an honest terminal result: EOF, a crash, a fence or a timeout never count as completed.
  */
 export function createControllerProcess(options, {spawn = nativeSpawn, schedule = defaultSchedule} = {}) {
@@ -128,7 +128,10 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
       || (binding !== null && typeof params?.threadId === 'string' && params.threadId !== binding.threadId));
     if (passed ? windowDeltas >= maxDeltaEvents : windowEvents >= maxEvents || windowBytes + bytes > maxEventBytes) { fence('Event limit exceeded'); return; }
     if (passed) windowDeltas += 1; else { windowEvents += 1; windowBytes += bytes; }
-    const event = Object.freeze({seq: ++sequence, kind: notification ? 'notification' : 'server-request-refused', method: message.method, message});
+    // With an onEvent handler, the caller answers each server request by its id (answer or refuse); with none, nobody
+    // can answer, so the process refuses it at once.
+    if (!notification && !onEvent) connection.refuse(message.id);
+    const event = Object.freeze({seq: ++sequence, kind: notification ? 'notification' : onEvent ? 'server-request' : 'server-request-refused', method: message.method, message});
     if (!(passed && onEvent)) events.push(event);
     // A second guard for a project config that changes after config/read (R1581-1): thread/start reads the config
     // again, so an MCP server that the check did not see could start. The session then stops before any turn uses it.
@@ -310,8 +313,11 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     })();
     return stopPromise;
   }
+  /** Replies once to a server request that waits: `answer` with a result, `refuse` with an error (a refusal). False when it does not wait. */
+  const answer = (id, result) => connection?.answer(id, result) ?? false;
+  const refuse = id => connection?.refuse(id) ?? false;
   function eventsCopy() { return Object.freeze([...events]); }
   /** Resolves with the first fence reason: a stop, a crash, a fenced turn or a protocol fault. */
   function fencedReason() { return fencedPromise; }
-  return Object.freeze({start, inspect, openThread, runTurn, interrupt, stop, status, events: eventsCopy, fenced: fencedReason});
+  return Object.freeze({start, inspect, openThread, runTurn, interrupt, stop, status, answer, refuse, events: eventsCopy, fenced: fencedReason});
 }

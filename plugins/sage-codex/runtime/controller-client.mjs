@@ -157,10 +157,67 @@ function turnLine(result, then, terminalFull) {
   if (result.state === 'refused') return `[The controller refused the turn: ${why(result.error)}.${then('Change the line, then type it again.', true)}]`;
   return `[The result of the turn is unknown: ${why(result.error)}. No later line can run. Check the project for changes from this turn. ${RESTART}]`;
 }
-function requestLine(method, params = {}) {
-  if (method === 'item/commandExecution/requestApproval') return `[The chief asked to run a command: ${params.command ?? 'no command given'}. This client cannot ask you yet, so it refused, and the command did not run.]`;
-  if (method === 'item/fileChange/requestApproval') return `[The chief asked to change files${params.reason ? ` (${params.reason})` : ''}. This client cannot ask you yet, so it refused, and the files did not change.]`;
-  return `[The controller sent the request ${method}. This client answers no requests, so it refused.]`;
+// Approvals. The owner answers each one with y or n, and the client replies only accept or decline (for a permission
+// request: the asked permissions for this turn, or none). It never offers or sends a lasting choice: no
+// acceptForSession, no amendment from availableDecisions, no session scope and no persist value.
+const ASK = 'Type y to allow it once, or n to refuse it.';
+const YES = new Set(['y', 'yes']), NO = new Set(['n', 'no']);
+const isText = value => typeof value === 'string' && value !== '';
+const listed = paths => paths.slice(0, 3).map(path => `"${path}"`).join(', ') + (paths.length > 3 ? ` and ${paths.length - 3} more` : '');
+const pathsOf = value => (Array.isArray(value) ? value.filter(isText) : []);
+function permissionWords(profile) {
+  const words = profile?.network?.enabled ? ['network access'] : [];
+  for (const mode of ['read', 'write']) if (pathsOf(profile?.fileSystem?.[mode]).length) words.push(`${mode} access to ${listed(pathsOf(profile.fileSystem[mode]))}`);
+  if (profile?.fileSystem?.entries?.length) words.push('more file access');
+  return words.join(' and ');
+}
+const DECISION = {accept: {decision: 'accept'}, decline: {decision: 'decline'}};
+// The question id that the controller gives an MCP tool approval through requestUserInput, and its one-time option.
+const MCP_APPROVAL = 'mcp_tool_call_approval', MCP_ALLOW = 'Allow', MCP_CANCEL = 'Cancel';
+/**
+ * What one server request asks, as `{what, accept, decline}` (the two replies). `{refused}` is a request that is not an
+ * approval: the client refuses it with a line. Null is an approval request that the client cannot read.
+ */
+function approvalOf(method, params, files) {
+  const reason = isText(params.reason) ? ` (${params.reason})` : '';
+  if (method === 'item/commandExecution/requestApproval') {
+    if (!isText(params.command) || !isText(params.cwd)) return null;
+    const more = permissionWords(params.additionalPermissions);
+    const verb = params.kind === 'writeStdin' ? 'send input to the running command' : 'run';
+    return {what: `asks to ${verb} "${params.command}" in "${params.cwd}"${more ? ` with ${more}` : ''}${reason}`, ...DECISION};
+  }
+  if (method === 'item/fileChange/requestApproval') {
+    const paths = files.get(params.itemId) ?? [];
+    return {what: `asks to change ${paths.length === 1 ? 'the file ' : paths.length ? `${paths.length} files: ` : 'files'}${listed(paths)}${reason}`, ...DECISION};
+  }
+  if (method === 'item/permissions/requestApproval') {
+    const words = permissionWords(params.permissions);
+    if (!words || !isText(params.cwd)) return null;
+    const asked = Object.fromEntries(['network', 'fileSystem'].filter(key => params.permissions[key]).map(key => [key, params.permissions[key]]));
+    return {what: `asks for ${words} in "${params.cwd}"${reason}`, accept: {permissions: asked, scope: 'turn'}, decline: {permissions: {}, scope: 'turn'}};
+  }
+  if (method === 'mcpServer/elicitation/request') {
+    if (params.mode !== 'form' || params._meta?.codex_approval_kind !== 'mcp_tool_call') return {refused: `sent a form from the MCP server "${params.serverName}": "${params.message}". The client cannot show forms, so it refused the form`};
+    const reply = action => ({action, content: null, _meta: null});
+    return {what: `asks to use a tool of the MCP server "${params.serverName}": "${params.message}"`, accept: reply('accept'), decline: reply('decline')};
+  }
+  if (method === 'item/tool/requestUserInput') {
+    const questions = Array.isArray(params.questions) ? params.questions : [];
+    const [question] = questions;
+    if (questions.length !== 1 || !question?.id?.startsWith?.(MCP_APPROVAL) || !question.options?.some?.(option => option.label === MCP_ALLOW)) {
+      return {refused: `asked you ${questions.length === 1 ? `a question: "${question?.question}"` : `${questions.length} questions`}. The client cannot answer questions, so it refused ${questions.length === 1 ? 'the question' : 'them'}`};
+    }
+    const reply = label => ({answers: {[question.id]: {answers: [label]}}});
+    return {what: `asks to use an MCP tool: "${question.question}"`, accept: reply(MCP_ALLOW), decline: reply(MCP_CANCEL)};
+  }
+  return {refused: `sent the request ${method}. The client answers only approval requests, so it refused it`};
+}
+// The agent of a thread: the chief for the root thread, else its agent path (from thread/started or an item).
+function agentPathOf(params) {
+  const thread = params.thread, spawn = thread?.source?.subAgent?.thread_spawn;
+  if (isText(thread?.id) && isText(spawn?.agent_path ?? thread.agentNickname)) return [thread.id, spawn?.agent_path ?? thread.agentNickname];
+  if (isText(params.item?.agentThreadId) && isText(params.item.agentPath)) return [params.item.agentThreadId, params.item.agentPath];
+  return null;
 }
 
 /**
@@ -206,7 +263,9 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   // While a turn runs, each controller event starts the wait again; after WAIT_MS with no event, the client says so once.
   const timer = schedule ?? defaultSchedule;
   let cancelWait = () => {}, waited = false;
-  const awaitModel = () => { cancelWait(); cancelWait = waited ? () => {} : timer(() => { waited = true; say(WAITING); }, WAIT_MS); };
+  // While an approval request waits for the owner, the turn waits for the owner, not for the model.
+  const questions = [];
+  const awaitModel = () => { cancelWait(); cancelWait = waited || questions.length ? () => {} : timer(() => { waited = true; say(WAITING); }, WAIT_MS); };
   let args, binary, project, instructions;
   try {
     args = parseArgs(argv);
@@ -225,12 +284,54 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   let rootThread = null;
   const warned = new Set();
   const warnOnce = (...parts) => { const key = parts.join('\0'); if (!warned.has(key)) { warned.add(key); framed(...parts); } };
+  // `questions` holds the approval requests that wait for the owner, in order; the first one shows. `agents` names
+  // each child thread, and `files` keeps the paths of each file change item until its end.
+  const agents = new Map(), files = new Map();
+  const agent = threadId => (threadId === rootThread ? '/root (the chief)' : agents.get(threadId) ?? `with thread id ${threadId}`);
+  const ask = () => { if (!questions.length) return; cancelWait(); say(questions[0].line); };
+  const answer = allow => {
+    const question = questions.shift();
+    owner.answer(question.id, allow ? question.accept : question.decline);
+    say(allow ? '[You allowed it once.]' : '[You refused it.]');
+    if (questions.length) ask(); else if (turnActive) awaitModel();
+  };
+  // Ctrl-C, the end of input and a stop refuse each request that waits.
+  const declineAll = cause => {
+    const waiting = questions.splice(0);
+    for (const question of waiting) owner.answer(question.id, question.decline);
+    if (waiting.length) say(`[${cause}, so the client refused ${waiting.length === 1 ? 'the approval request' : `the ${waiting.length} approval requests`}.]`);
+  };
+  function serverRequest({id, method, params = {}}) {
+    const name = agent(params.threadId);
+    const found = approvalOf(method, params, files);
+    if (!found || found.refused) {
+      owner.refuse(id);
+      say(found ? `[Agent ${name} ${found.refused}.]` : `[Agent ${name} sent an approval request (${method}) that the client cannot read, so the client refused it.]`);
+      return;
+    }
+    questions.push({id, threadId: params.threadId, line: `[Approval: agent ${name} ${found.what}. ${ASK}]`, accept: found.accept, decline: found.decline});
+    if (questions.length === 1) ask();
+    if (stopAsked || inputEnded) declineAll(stopAsked ? 'The controller stops' : 'Your input ended');
+  }
   owner = createControllerProcess({executable: binary.path, executableSha256: binary.sha256, cwd: project,
     env: Object.fromEntries(Object.entries(env).filter(([, value]) => typeof value === 'string')),
     onEvent(event) {
       if (turnActive) awaitModel();
       const params = event.message.params ?? {};
-      if (event.kind === 'server-request-refused') say(requestLine(event.method, params));
+      const named = agentPathOf(params);
+      if (named) agents.set(...named);
+      if (event.method === 'item/started' && params.item?.type === 'fileChange') files.set(params.item.id, pathsOf(params.item.changes?.map?.(change => change.path)));
+      if (event.method === 'item/completed') files.delete(params.item?.id);
+      if (event.kind === 'server-request') serverRequest(event.message);
+      // The controller closed a request that waits (its turn ended): the next one shows.
+      else if (event.method === 'serverRequest/resolved') {
+        const index = questions.findIndex(question => question.id === params.requestId);
+        if (index !== -1) {
+          questions.splice(index, 1);
+          say(`[The controller closed the approval request of agent ${agent(params.threadId)} before you answered.]`);
+          if (index === 0) ask();
+        }
+      }
       // The controller can give the same warning at each turn; the client shows each warning once in a session.
       else if (event.method === 'warning' && typeof params.message === 'string') warnOnce('Warning from the controller: ', params.message, '');
       else if (event.method === 'configWarning' && typeof params.summary === 'string') warnOnce('Warning about your Codex config: ', params.summary, params.path ? ` (${params.path})` : '');
@@ -241,6 +342,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   const requestStop = () => {
     if (stopAsked) return;
     stopAsked = true;
+    declineAll('The controller stops');
     say('[Stopping the controller...]');
     owner.stop();
     wake();
@@ -251,6 +353,7 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   // Ctrl-C that clears a typed line never stops the controller: a later Ctrl-C on an empty line does that.
   const onSignalOrKey = (signal, cleared = false) => {
     if (signal === 'SIGHUP') { terminalLost = true; requestStop(); return; }
+    if (signal === 'SIGINT') declineAll('You pressed Ctrl-C');
     if (signal !== 'SIGINT' || !ready || (hinted && !cleared)) { requestStop(); return; }
     const waited = queue.splice(0).length;
     const dropped = waited === 1 ? ' The line that waited does not run.' : waited ? ` The ${waited} lines that waited do not run.` : '';
@@ -276,12 +379,19 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     rootThread = opened.policy.threadId;
     const {model, approvalPolicy, sandbox} = opened.policy.selection;
     const line = text => {
+      // While an approval request waits, a line is its answer: y or n; any other line shows the question again.
+      if (questions.length && !stopAsked) {
+        const word = text.trim().toLowerCase();
+        if (YES.has(word) || NO.has(word)) answer(YES.has(word)); else ask();
+        return;
+      }
       if (!text.trim() || stopAsked) return;
       if (turnActive) say('[The chief is on a turn. Your line runs after it.]');
       queue.push(text); wake();
     };
     const end = () => {
       inputEnded = true;
+      declineAll('Your input ended');
       // The lines already typed still run, then the controller stops. A pipe's end can come in any read, so the end
       // of input never stops a turn by itself: Ctrl-C does that.
       if (turnActive && !stopAsked) say('[Your input ended. The controller stops after the lines that you typed. Press Ctrl-C to stop the turn now.]');
@@ -292,7 +402,8 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     // The terminal is raw before the Ready lines, so the terminal never echoes the start of a paste that comes at once.
     say(`[Ready: task ${args.task}, run ${args.run}. The chief uses your Codex config: model ${shown(model.value)}${model.origin === 'default' ? ' (the Codex default)' : ''}, approval ${shown(approvalPolicy.value)}, sandbox ${shown(sandbox.value)}.]`, howTo(input.isTTY));
     ready = true;
-    owner.fenced().then(() => wake());
+    // After a fence no reply can go out, so the requests that wait are dropped.
+    owner.fenced().then(() => { questions.length = 0; wake(); });
     for (;;) {
       if (stopAsked) break;
       // The controller fenced between turns (a crash, or a protocol fault): no line can run any more.
