@@ -10,26 +10,24 @@ import { test } from "node:test";
 import { ROOT } from "./build.mjs";
 import { anchors, linkProblems, paragraphProblems, readmeProblems, slug } from "./readme-checks.mjs";
 
-const NEWS = (n) => ["## What's new", "", ...Array.from({ length: n }, (_, i) => `- **Change ${i + 1}.** One line.`), "", "All changes are in [CHANGELOG.md](CHANGELOG.md).", ""];
 const README = (lines = {}) => [
   "<p>", "  <img alt=\"a graphic\" src=\"x.svg\">", "</p>", "",
   lines.pitch ?? "**sage is a plugin for Claude Code that turns a session into your chief of staff.**",
-  "**Status:** early. See [Status](#status) and the [Quick start](#quick-start).", "",
-  "## Status", "", "Early.", "", "## Quick start", "", "Install it.", "",
-  ...NEWS(lines.news ?? 5), ...(lines.more ?? []),
+  "**Status:** early. Start with the [Quick start](#quick-start).", "",
+  "## Quick start", "", "Install it.", "",
+  "## Learn more", "", "- [What's new](CHANGELOG.md): every change.", "", ...(lines.more ?? []),
 ].join("\n");
 
-test("a README within its budget, with 5 What's new items and a first screen that answers, has no problem", () => {
+test("a README within its budget, with a changelog link and a first screen that answers, has no problem", () => {
   assert.deepEqual(readmeProblems(README()), []);
 });
 
-test("a sixth What's new item, a missing changelog link and a first screen without the pitch or its links are problems", () => {
-  assert.deepEqual(readmeProblems(README({ news: 6 })), ["README.md: What's new has 6 items; keep the last 5, and move the others to CHANGELOG.md"]);
-  assert.deepEqual(readmeProblems(README().replace("](CHANGELOG.md)", "](docs/)")), ["README.md: What's new must link to CHANGELOG.md"]);
+test("a missing changelog link and a first screen without the pitch, the status or the quick start link are problems", () => {
+  assert.deepEqual(readmeProblems(README().replace("](CHANGELOG.md)", "](docs/)")), ["README.md: no link to CHANGELOG.md; the changelog holds the list of changes"]);
   assert.deepEqual(readmeProblems(README({ pitch: "sage helps you." })), ['README.md: the first screen (the first 10 lines with text) needs one bold sentence that starts "**sage is a"']);
-  // Ten lines of text before the status line push its links off the first screen.
+  // Ten lines of text before the status line push it and its link off the first screen.
   const late = README().replace("**Status:**", `${Array.from({ length: 10 }, (_, i) => `Line ${i}.`).join("\n")}\n**Status:**`);
-  assert.deepEqual(readmeProblems(late), ["README.md: the first screen (the first 10 lines with text) needs a link to #status", "README.md: the first screen (the first 10 lines with text) needs a link to #quick-start"]);
+  assert.deepEqual(readmeProblems(late), ['README.md: the first screen (the first 10 lines with text) needs a status line that starts "**Status:**"', "README.md: the first screen (the first 10 lines with text) needs a link to #quick-start"]);
 });
 
 test("a paragraph of 4 sentences is a problem at its first line; 3 sentences, code, short items and cells, and quotes are not", () => {
@@ -164,16 +162,14 @@ test("a link to the repository root, a query and a link to a folder on GitHub pa
   ]);
 });
 
-test("npm run check fails on a README with 6 What's new items, a missing screenshot and a stale screenshot record", (t) => {
+test("npm run check fails on a README with no changelog link, a missing screenshot and a stale screenshot record", (t) => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-readme-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   const readme = readFileSync(join(dir, "README.md"), "utf8");
-  // Fill the real What's new list up to 6 items, so that the test holds for any count from 1 to 5.
-  const news = readme.split("## What's new")[1].split("\n## ")[0].split("\n").filter((l) => l.startsWith("- ")).length;
-  const extra = Array.from({ length: 6 - news }, (_, i) => `\n- **Extra change ${i + 1}.** One line.`).join("");
-  writeFileSync(join(dir, "README.md"), readme.replace("\n\nAll changes: [CHANGELOG.md]", `${extra}\n\nAll changes: [CHANGELOG.md]`));
+  // The real README with each changelog link pointed elsewhere.
+  writeFileSync(join(dir, "README.md"), readme.replaceAll("](CHANGELOG.md)", "](docs/README.md)"));
   rmSync(join(dir, "docs/assets/board-dark.png"));
   writeFileSync(join(dir, "docs/assets/board-shots.json"), JSON.stringify({ sample: "0".repeat(64) }));
   const faq = readFileSync(join(dir, "docs/guide/faq.md"), "utf8");
@@ -181,7 +177,7 @@ test("npm run check fails on a README with 6 What's new items, a missing screens
   const r = spawnSync("node", [join(dir, "scripts/check.mjs")], { encoding: "utf8" });
   assert.equal(r.status, 1);
   assert.match(r.stderr, new RegExp(`^✗ docs/guide/faq\\.md:${faq.trimEnd().split("\n").length + 2}: a paragraph of 4 sentences; keep it at 3 or fewer`, "m"));
-  assert.match(r.stderr, /^✗ README\.md: What's new has 6 items; keep the last 5, and move the others to CHANGELOG\.md$/m);
+  assert.match(r.stderr, /^✗ README\.md: no link to CHANGELOG\.md; the changelog holds the list of changes$/m);
   assert.match(r.stderr, /^✗ docs\/assets\/board-dark\.png: missing; run node scripts\/board-shots\.mjs \(see CONTRIBUTING\.md\)$/m);
   assert.match(r.stderr, /^✗ docs\/assets\/board-shots\.json: the sample logbook changed after the board screenshots; run node scripts\/board-shots\.mjs/m);
 });

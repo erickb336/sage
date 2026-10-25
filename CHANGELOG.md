@@ -1,9 +1,13 @@
 # Changelog
 
-This is the full list of user-facing changes to sage, newest first. The README's [What's new](README.md#whats-new) shows five chosen changes.
+This is the full list of user-facing changes to sage, newest first. The README has no list of changes: it links here.
 Each date is the day of the first commit that made the change. Older changes are in the [git log](https://github.com/erickb336/sage/commits/main). In these entries, "the sage" is the chief, the main session in sage mode.
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve. See [To update sage](docs/guide/using-sage.md#to-update-sage).
+
+## 2026-10-25
+
+- **A shorter README.** The README has a "Why sage?" section again, after the hero image. The Status, Requirements and What's new sections are gone. The status line at the top gives the maturity and the systems, each requirement is in the text where you need it (the Quick start and the board), and this changelog alone lists the changes. In the `readme-guide` skill, a link to the changelog now counts as the What's new section.
 
 ## 2026-10-24
 
