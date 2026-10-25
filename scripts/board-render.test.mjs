@@ -1090,3 +1090,29 @@ test("R1509-1, R1535-1: in a proposed program, a loop of waits shows first on th
   assert.ok(board.slice(at, board.indexOf("</a>", at)).includes(`<b>Needs you:</b> the breakdown of PG40.</span></div>${wait}`), board.slice(at, at + 3000));
   assert.ok(renderBoardText(model).includes(`**T66 Sample pilot of a loop**`) && renderBoardText(model).includes(`⊘ ${line("T67").replace(/[().:]/g, c => `\\${c}`)}`), "the chat board says the same");
 });
+test("F-T420-1, R1551: the chat task lookup and the programs card show a stuck wait with the task page's words", () => {
+  const tables = programsTables();
+  // SAMPLE DATA: T33 of the proposed PG3 and T91 of the changing PG9 wait for abandoned tasks; T11 also has an open gate.
+  const sample = (id, program, waits) => ({ ...tables.tasks.find(task => task.id === "T32"), id, title: `Sample ${id}`, program, waits });
+  tables.tasks.push(sample("T33", "PG3", "T52"), sample("T91", "PG9", "T10"));
+  const model = programsModel(tables), lookup = id => renderTaskText(model.tasks.find(task => task.id === id)).split("\n\n**Brief**")[0];
+  const pageNow = id => renderBoardHtml(model, { snapshot: false, taskKey: KEY(id) }).match(/<div class="waitline[\s\S]*?<div class="nextline">[\s\S]*?<\/div>/)[0].replace(/<[^>]+>/g, "");
+  // A wait that is never met: the lookup says what the task page says, not "In the backlog" and "Next: The build".
+  assert.equal(pageNow("T11"), "⊘Now: Waits for T10 (abandoned): it cannot start.Next: Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task.");
+  assert.ok(lookup("T11").includes("\n○ Plan › ○ Build › ○ Review 1 of 1 › ○ Merge\n⊘ Now: Waits for T10 \\(abandoned\\)\\: it cannot start\\.\nNext: Nothing until the wait changes\\. Ask the chief to remove the wait, or to drop this task\\.\n○ Plan: not started"), lookup("T11"));
+  assert.ok(!lookup("T11").includes("Next: The build"), lookup("T11"));
+  // A wait that is not met yet: the lookup says when the task starts, as the page does.
+  assert.equal(pageNow("T13"), "⧗Now: Waits for T12 (in review).Next: Starts when T12 merges.");
+  assert.ok(lookup("T13").includes("\n⧗ Now: Waits for T12 \\(in review\\)\\.\nNext: Starts when T12 merges\\.\n"), lookup("T13"));
+  // A task that needs you keeps its question first; a wait that is never met follows it, as on the page.
+  tables.gates.push({ id: "G40", task: "T11", question: "Sample: go on?", options: "yes|no", recommendation: "yes", default: "", answer: "", at: "2026-10-20T10:00:00Z" });
+  const asked = renderTaskText(programsModel(tables).tasks.find(task => task.id === "T11"));
+  assert.ok(/\nNeeds you: [^\n]*go on\?[^\n]*\n⊘ Waits for T10 \\\(abandoned\\\)\\: it cannot start\\\.\nNext: Nothing until the wait changes/.test(asked), asked);
+  // The programs card and the chat's programs line of a proposed or a changing program name the tasks that cannot start.
+  const list = renderProgramsHtml(model), card = id => list.slice(list.indexOf(`<span class="id">${id}</span>`), list.indexOf("</a></li>", list.indexOf(`<span class="id">${id}</span>`)));
+  assert.ok(card("PG3").endsWith('<div class="nx need">The breakdown waits for you. Open it to see the 4 tasks, then answer in the chat. <span class="stw-cant">T33 cannot start.</span></div>'), card("PG3"));
+  assert.ok(card("PG9").endsWith('<div class="nx">You asked for changes (gate G9). The chief revises the breakdown and proposes it again. <span class="stw-cant">T91 cannot start.</span></div>'), card("PG9"));
+  const text = renderBoardText(model);
+  assert.ok(text.includes("\n- PG3 Board programs · the breakdown waits for you \\(gate G12\\) · pilot T30 · T33 cannot start\n"), text);
+  assert.ok(text.includes("\n- PG9 Changes · the chief revises the breakdown \\(gate G9\\) · T91 cannot start\n"), text);
+});

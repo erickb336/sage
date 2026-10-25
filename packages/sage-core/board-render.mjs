@@ -213,12 +213,15 @@ function programSections(ctx, task) {
  * you keeps its question as its Now line; when a wait is never met, its wait line follows and the Next line says that
  * nothing starts, also after your answer (R1535-1).
  */
-function nowWaits(task) {
-  const needs = task.loop.now.needs;
-  if (!task.waitLine || needs && !task.waitLine.never) return nowNext(task);
+function waitNext(task) {
+  if (!task.waitLine || task.loop.now.needs && !task.waitLine.never) return null;
   const open = task.waits.filter(wait => !wait.met);
-  const next = task.waitLine.never ? "Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task."
+  return task.waitLine.never ? "Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task."
     : `Starts when ${open.map(wait => wait.breakdown ? "you approve the breakdown" : `${wait.id} merges`).join(" and ")}.${task.column === "design" ? " Its design and PE may run before." : ""}`;
+}
+function nowWaits(task) {
+  const needs = task.loop.now.needs, next = waitNext(task);
+  if (next === null) return nowNext(task);
   return `${needs ? nowNext(task, false) : ""}${waitHtml(task, !needs)}<div class="nextline"><b>Next:</b> ${esc(next)}</div>`;
 }
 // A long program name ends with an ellipsis, and its title has the full name, so the page bar keeps its width (R1334-1).
@@ -860,8 +863,11 @@ function nextOf(ctx, program) {
   const task = program.next && ctx.tasks.get(program.next.key), at = roles(task);
   return { first: task, html: (task ? `${esc(task.id)}${program.next.pilot ? " (pilot)" : ""} is ${esc(program.next.word)}${at.length ? `: the ${esc(at.join(" and the "))} at work` : ""}.` : "No task can move now.")
     + (program.waiting ? ` <span class="faint">${program.waiting} more ${program.waiting === 1 ? "waits" : "wait"}.</span>` : "")
-    + (program.cannotStart.length ? ` <span class="stw-cant">${esc(program.cannotStart.join(", "))} cannot start.</span>` : "") };
+    + cannotHtml(program) };
 }
+const cannotHtml = program => program.cannotStart.length ? ` <span class="stw-cant">${esc(program.cannotStart.join(", "))} cannot start.</span>` : "";
+// A proposed or changing program still names its tasks that cannot start, so its approval does not hide a stuck wait (R1551-2).
+const BEFORE_APPROVAL = ["proposed", "changing"];
 const droppedNext = program => program.open ? `${plural(program.open, "task")} still in it: ask the chief to take each task out of the program.` : "No task is in it.";
 /** The line under a program in the list, by its state: what you do, what the sage does, or what moves next. A changing program is a line here, not an item of Needs you (QB). */
 function programNext(ctx, program) {
@@ -874,7 +880,7 @@ function programNext(ctx, program) {
     dropped: droppedNext(program),
   }[program.state];
   // A stuck program's line says what you do next, as the prototype labels it (T374).
-  return fixed === undefined ? `<b>Next:</b> ${nextOf(ctx, program).html}` : `${program.state === "stuck" ? "<b>Next:</b> " : ""}${esc(fixed)}`;
+  return fixed === undefined ? `<b>Next:</b> ${nextOf(ctx, program).html}` : `${program.state === "stuck" ? "<b>Next:</b> " : ""}${esc(fixed)}${BEFORE_APPROVAL.includes(program.state) ? cannotHtml(program) : ""}`;
 }
 function programRow(ctx, program, where) {
   const approval = program.state === "proposed", needs = NEEDS_PROGRAM.includes(program.state);
@@ -1041,7 +1047,12 @@ const columnMark = key => ({ backlog: "📋", design: "🎨", building: "🔨", 
 const providerText = (name, task) => name ? md(name) : `${md(title(task.providerStandIn))} (logbook source)`;
 /** The chat's step line: the same steps, marks and words as the page. */
 const stepText = task => task.loop.steps.map(step => `${MARK[status(step.status)]} ${md(step.label)}`).join(" › ");
-const nowText = task => `${task.loop.now.needs ? "Needs you" : "Now"}: ${mdLines(task.loop.now.text)}${task.loop.next ? `\nNext: ${md(task.loop.next)}` : ""}`;
+/** The chat lookup's Now and Next lines: the task page's lines (nowWaits), also for a task that waits (F-T420-1). */
+const nowText = task => {
+  const needs = task.loop.now.needs, next = waitNext(task), ask = `Needs you: ${mdLines(task.loop.now.text)}`;
+  if (next === null) return `${needs ? ask : `Now: ${mdLines(task.loop.now.text)}`}${task.loop.next ? `\nNext: ${md(task.loop.next)}` : ""}`;
+  return `${needs ? `${ask}\n` : ""}${WAIT_MARK[task.waitLine.never ? "never" : "wait"]} ${needs ? "" : "Now: "}${md(task.waitLine.text)}\nNext: ${md(next)}`;
+};
 const CHAT_SHOWN = 5, TITLE_MAX = 80;
 const tagText = task => `${task.priority ? ` · ${md(task.priority)}` : ""}${task.kind ? ` · ${md(KIND[task.kind][1])}` : ""}`;
 /** A chat title of at most 80 characters, cut with an ellipsis (whole characters, before escaping). */
@@ -1070,14 +1081,15 @@ const programLine = program => {
   const head = `${md(program.id)} ${md(clamp(program.name))}${program.where ? ` · ${program.where}` : ""}`;
   const tasks = n => `${n} ${n === 1 ? "task" : "tasks"}`;
   const pilot = `the pilot ${md(program.pilot)} ${program.pilotState ? "was abandoned" : "is not in the logbook"}`;
+  const cannot = program.cannotStart.length ? ` · ${program.cannotStart.map(md).join(", ")} cannot start` : "";
   const next = program.next ? `${md(program.next.id)} \\(${program.next.pilot ? "pilot, " : ""}${md(program.next.word)}\\)` : "no task can move now";
   return `${head} · ${{
-    proposed: () => `the breakdown waits for you \\(gate ${md(program.gate)}\\) · pilot ${md(program.pilot)}`,
-    changing: () => `the chief revises the breakdown \\(gate ${md(program.gate)}\\)`,
+    proposed: () => `the breakdown waits for you \\(gate ${md(program.gate)}\\) · pilot ${md(program.pilot)}${cannot}`,
+    changing: () => `the chief revises the breakdown \\(gate ${md(program.gate)}\\)${cannot}`,
     lost: () => `${md(lostClause(program))} \\(see Needs you\\)`,
     dropped: () => `dropped · ${tasks(program.open)} still in it: ask the chief to take each task out of the program`,
     stuck: () => `stuck: ${pilot} \\(see Needs you\\)`,
-  }[program.state]?.() ?? `${md(program.progressText)} · next: ${next}${program.waiting ? ` · ${program.waiting} ${program.waiting === 1 ? "waits" : "wait"}` : ""}${program.cannotStart.length ? ` · ${program.cannotStart.map(md).join(", ")} cannot start` : ""}`}`;
+  }[program.state]?.() ?? `${md(program.progressText)} · next: ${next}${program.waiting ? ` · ${program.waiting} ${program.waiting === 1 ? "waits" : "wait"}` : ""}${cannot}`}`;
 };
 
 export function renderBoardText(model) {
