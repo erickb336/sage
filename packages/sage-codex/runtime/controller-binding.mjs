@@ -145,40 +145,40 @@ function requireOwner(key, origin, home) {
  * the project would stay loaded. The inline table keeps each path one key: a dotted key splits a path at each dot.
  * A JSON string is a TOML basic string, except DEL, which TOML wants escaped.
  * Each spelling of the project gets its keys: the canonical one first (the cwd, as realpath(3) gives it, which is the
- * spelling that Codex looks up), then the spelling that the owner typed, when its letter case or Unicode form differs,
- * then each owner trust key that `otherSpellings` gives.
+ * spelling that Codex looks up), then the spelling that the owner typed, when its letter case or Unicode form differs.
+ * The process adds each owner trust key as it is (`trustFlags`, with the keys of `unflaggedTrustKeys`); the client
+ * calls this function only to check the project path before the start.
  */
-export function projectTrustFlags(...spellings) {
-  const keys = trustFolders(spellings).map(folder => `${JSON.stringify(folder).replaceAll('\x7f', '\\u007f')}={ trust_level="untrusted" }`);
+export const projectTrustFlags = (...spellings) => trustFlags(spellings);
+export function trustFlags(spellings, ownerKeys = []) {
+  const keys = trustKeys(spellings, ownerKeys).map(key => `${JSON.stringify(key).replaceAll('\x7f', '\\u007f')}={ trust_level="untrusted" }`);
   return ['-c', `projects={ ${keys.join(', ')} }`];
 }
-function trustFolders(spellings) {
-  const folders = [];
+function trustKeys(spellings, ownerKeys) {
+  const keys = [];
   for (const project of spellings) {
     if (typeof project !== 'string' || !isAbsolute(project) || !project.isWellFormed()) throw refuse('project-path', `The project path ${JSON.stringify(project)} is not valid Unicode, so the client cannot write it in a Codex setting. Rename the folder to a valid name, or use another project folder, ${RESTART}.`);
     for (let folder = project; ; folder = dirname(folder)) {
-      if (!folders.includes(folder)) folders.push(folder);
+      if (!keys.includes(folder)) keys.push(folder);
       if (folder === dirname(folder)) break;
     }
   }
-  return folders;
+  for (const key of ownerKeys) if (!keys.includes(key)) keys.push(key);
+  return keys;
 }
-// Letter case and Unicode form, folded. It can fold more than the file system does (ß and ss): an extra untrusted key
-// names no folder of the project, so it changes nothing.
-const fold = value => value.normalize('NFC').toUpperCase().toLowerCase().normalize('NFC');
 
 /**
- * Pure. The keys of the owner's projects tables (the owner layers of the config/read reply) that name a folder of the
- * flag (the project, or a folder above it) in other letter case or Unicode form, and that the flag does not name. An
- * agent can rename a project folder to that spelling at thread/start, on a file system that ignores letter case and
- * Unicode form; Codex then looks up the new canonical spelling, and the owner's trust entry for it would apply (R1611-1).
- * So these keys go in the flag too.
+ * Pure. Each key of the owner's projects tables (the owner layers of the config/read reply: the user config, its
+ * profile and the managed configs) that the flag of `spellings` and `ownerKeys` does not name. An agent can move or
+ * rename the project at thread/start into any folder that the owner trusts, also by a link at the old path or by a
+ * rename of a folder above a linked worktree, and Codex then looks up that folder (R1611-1, R1620-1, R1620-2). So
+ * every owner trust key goes in the flag as untrusted: no trust entry of the owner applies during the session.
  */
-export function otherSpellings(read, spellings) {
-  const flagged = trustFolders(spellings), folded = new Set(flagged.map(fold));
+export function unflaggedTrustKeys(read, spellings, ownerKeys = []) {
+  const named = trustKeys(spellings, ownerKeys);
   const keys = (Array.isArray(read?.layers) ? read.layers : []).filter(item => OWNER_LAYERS.has(item?.name?.type))
     .flatMap(item => (item.config?.projects && typeof item.config.projects === 'object' ? Object.keys(item.config.projects) : []));
-  return [...new Set(keys)].filter(key => !flagged.includes(key) && folded.has(fold(key)));
+  return [...new Set(keys)].filter(key => !named.includes(key));
 }
 const FORK = `Use the fork binary of version ${CONTROLLER_VERSION}, ${RESTART}`;
 // config/read gives a key that no layer sets as null with no origin: the controller uses its default.
@@ -208,7 +208,7 @@ export function checkConfig(read, home = '') {
   // launch flags) can mark it trusted again; no trust entry of the owner did so in a probe (R1612-1).
   const projects = layers.filter(item => item?.name?.type === 'project');
   const enabled = projects.find(item => !item.disabledReason);
-  if (enabled) throw refuse('project-trusted', `The controller loads the project config in ${enabled.name.dotCodexFolder}, although the client marks the project as untrusted. An agent can change that config. A managed config (/etc/codex/managed_config.toml, or one from your organization) can mark the project as trusted. Ask your administrator to remove that trust entry, ${RESTART}. If you have no managed config, look for a trust entry for this folder in your Codex config (${homePath(home, 'config.toml')}).`);
+  if (enabled) throw refuse('project-trusted', `The controller loads the project config in ${enabled.name.dotCodexFolder}, although the client marks the project as untrusted. An agent can change that config. A managed config (/etc/codex/managed_config.toml, or one from your organization) can mark the project as trusted. Remove that trust entry (if the file belongs to your organization, ask its administrator), ${RESTART}.`);
   for (const [key, origin] of Object.entries(origins)) requireOwner(key, origin, home);
   // Each missing key in one refusal, so that the owner fixes them all before one restart.
   const missing = SELECTION.filter(([, key, , owned]) => owned && configured(config, origins, key) === undefined).map(([, key]) => key);
@@ -228,32 +228,14 @@ export const PROJECT_DOC_BYTES = 32 * 1024;
 const KINDS = [['isDirectory', 'a folder'], ['isFIFO', 'a named pipe'], ['isSocket', 'a socket'], ['isCharacterDevice', 'a device'], ['isBlockDevice', 'a device']];
 // The classes of the client's terminal filter (controller-client.mjs), except the line end and the tab.
 const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu;
-// An end mark of the section: "<", spaces, "/", spaces, INSTRUCTIONS, then anything up to ">". It is found in a folded
-// copy of the text: each character in NFKD with no combining marks, in upper case. So a full-width form, other letter
-// case and a dotted capital I match too (R1611-3). The lookahead keeps one mark from hiding the next one.
-const END_MARK = /<(?=\s*\/\s*INSTRUCTIONS[^>]*>)/g;
-function escapeEndMarks(text) {
-  let folded = '';
-  const from = [];
-  for (let index = 0; index < text.length;) {
-    const character = String.fromCodePoint(text.codePointAt(index));
-    const form = character.normalize('NFKD').replace(/\p{M}/gu, '').toUpperCase();
-    folded += form;
-    for (let unit = 0; unit < form.length; unit++) from.push(index);
-    index += character.length;
-  }
-  const starts = new Set([...folded.matchAll(END_MARK)].map(match => from[match.index]));
-  let out = '', last = 0;
-  for (const start of [...starts].sort((a, b) => a - b)) {
-    out += `${text.slice(last, start)}&lt;`;
-    last = start + String.fromCodePoint(text.codePointAt(start)).length;
-  }
-  return out + text.slice(last);
-}
-// The client writes each hidden character but the line end and the tab as U+FFFD, and the < of each end mark as &lt;,
-// so that neither a file nor the project path can end the section (R1601-2, R1611-2).
-const escape = text => escapeEndMarks(text.replace(HIDDEN, character => (character === '\n' || character === '\t' ? character : '�')));
-const section = (project, texts) => `\n\n# AGENTS.md instructions for ${escape(project)}\n\n<INSTRUCTIONS>\n${texts.join('\n\n')}\n</INSTRUCTIONS>\n`;
+// The client writes each "<" as &lt;, so that no text of a file or of the project path can open or close a mark of
+// the section: no rule for the forms of an end mark is needed (R1601-2, R1611-2, R1620-6). A file keeps its line ends
+// and tabs; each other hidden character becomes U+FFFD. The heading path loses its line ends and tabs too, so the
+// heading stays one line (R1620-5).
+const lessThan = text => text.replaceAll('<', '&lt;');
+const escape = text => lessThan(text.replace(HIDDEN, character => (character === '\n' || character === '\t' ? character : '�')));
+const heading = project => lessThan(project.replace(HIDDEN, '�'));
+const section = (project, texts) => `\n\n# AGENTS.md instructions for ${heading(project)}\n\n<INSTRUCTIONS>\n${texts.join('\n\n')}\n</INSTRUCTIONS>\n`;
 // A marker counts when it is there; an error (a dead link too) counts as no marker, as in Codex.
 const there = path => { try { statSync(path); return true; } catch { return false; } };
 function docFolders(project, markers) {
@@ -274,11 +256,11 @@ function docPath(folder, names) {
   return null;
 }
 // The candidate names, as in Codex: an empty name is skipped; a name with path syntax is skipped with a notice.
-function docNames(fallback, notices) {
+function docNames(fallback, notices, home) {
   const names = [...DOC_NAMES];
   for (const name of Array.isArray(fallback) ? fallback : []) {
     if (typeof name !== 'string' || name === '' || names.includes(name)) continue;
-    if (name === '.' || name === '..' || /[/\0]/.test(name)) notices.push(`[The client ignores the name ${JSON.stringify(name)} in project_doc_fallback_filenames: it is not a file name.]`);
+    if (name === '.' || name === '..' || /[/\0]/.test(name)) notices.push(`[The client ignores the name ${JSON.stringify(name)} in project_doc_fallback_filenames: it is not a file name. In your Codex config (${homePath(home, 'config.toml')}), remove it or give a file name with no folder, then start the client again.]`);
     else names.push(name);
   }
   return names;
@@ -317,7 +299,7 @@ export function projectInstructions(project, read, instructions, home = '') {
   const texts = [], notices = [];
   // A limit of 0 turns the project files off, as in Codex.
   if (!limit) return {instructions, notices};
-  const names = docNames(configured(config, origins, 'project_doc_fallback_filenames'), notices);
+  const names = docNames(configured(config, origins, 'project_doc_fallback_filenames'), notices, home);
   // An empty list is a list: it keeps the walk in the cwd. A value that is not a list of names gives the default, as in Codex.
   const given = configured(config, origins, 'project_root_markers');
   const markers = Array.isArray(given) && given.every(marker => typeof marker === 'string') ? given : ROOT_MARKERS;

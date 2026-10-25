@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {bindPolicy, bindTask, bindTurnText, checkConfig, otherSpellings, projectTrustFlags, resolveControllerBinary, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, projectTrustFlags, resolveControllerBinary, trustFlags, turnOutcome, unflaggedTrustKeys} from './controller-binding.mjs';
 import {OWNED_LAUNCH_ARGS} from './controller-process.mjs';
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sage-binding-')));
@@ -228,7 +228,7 @@ test('checkConfig: disabled project layers pass and give their folders; an enabl
   ['/work/.codex', '/work/project/.codex']);
   // The refusal names a managed config first: no owner trust entry made the controller load a project layer in a
   // probe (R1602-2, R1612-1).
-  const trusted = 'project-trusted: The controller loads the project config in /work/project/.codex, although the client marks the project as untrusted. An agent can change that config. A managed config (/etc/codex/managed_config.toml, or one from your organization) can mark the project as trusted. Ask your administrator to remove that trust entry, then start the client again. If you have no managed config, look for a trust entry for this folder in your Codex config (/home/.codex/config.toml).';
+  const trusted = 'project-trusted: The controller loads the project config in /work/project/.codex, although the client marks the project as untrusted. An agent can change that config. A managed config (/etc/codex/managed_config.toml, or one from your organization) can mark the project as trusted. Remove that trust entry (if the file belongs to your organization, ask its administrator), then start the client again.';
   // A layer with only a model text setting refuses too: the client takes nothing from an enabled project layer.
   assert.equal(check(layers => layers.push(layer('/work/project/.codex', null, {model_verbosity: 'low'}))), trusted);
   assert.equal(check(layers => layers.push(layer('/work/.codex', untrusted, {}), layer('/work/project/.codex', '', {}))), trusted);
@@ -272,27 +272,25 @@ test('projectTrustFlags gives each spelling of the project its keys, the canonic
   assert.deepEqual(projectTrustFlags('/a', '/a'), projectTrustFlags('/a'));
 });
 
-// R1611-1: an owner trust key that names a folder of the flag in other letter case or Unicode form, and that the flag
-// does not name. Only the owner layers count; a key that the flag names, or another folder, is not one.
-test('otherSpellings gives each owner trust key that names the project or a folder above it under another spelling', () => {
-  const user = projects => ({name: {type: 'user', file: '/h/config.toml', profile: null}, version: 'v', config: {projects}});
-  const read = (...layers) => ({config: {}, origins: {}, layers});
+// R1620-1, R1620-2, R1622-1: each key of the owner's projects tables (the user config, its profile and the managed
+// configs) that the flag does not name, as it is: an agent can move the project into any folder that the owner trusts.
+// A key in a project layer is not the owner's. The flag then names each owner key after the project keys.
+test('unflaggedTrustKeys gives each owner trust key that the flag does not name; trustFlags names them as untrusted', () => {
   const trusted = {trust_level: 'trusted'};
-  const keys = ['/work/MYPROJ', '/work/myproj', '/WORK', '/work/MyProj', '/work/MyProj/sub', '/work/MyProj2', '/other', '/', '/work/café', '/w/Ω'];
-  const owner = read(user(Object.fromEntries(keys.map(key => [key, trusted]))));
-  // The flag names the canonical spelling /work/MyProj, its folders and the typed spelling /work/myproj.
-  assert.deepEqual(otherSpellings(owner, ['/work/MyProj', '/work/myproj']), ['/work/MYPROJ', '/WORK']);
-  // NFD on disk, NFC in the owner config; the ohm sign is the Greek capital omega in NFC.
-  assert.deepEqual(otherSpellings(owner, ['/work/café']), ['/WORK', '/work/café']);
-  assert.deepEqual(otherSpellings(owner, ['/w/Ω']), ['/w/Ω']);
-  // A key in a project layer is not the owner's, and a reply with no layers has no keys.
-  const project = {name: {type: 'project', dotCodexFolder: '/work/MyProj/.codex'}, version: 'v', config: {projects: {'/work/MYPROJ': trusted}}};
-  assert.deepEqual(otherSpellings(read(project), ['/work/MyProj']), []);
-  assert.deepEqual(otherSpellings({}, ['/work/MyProj']), []);
-  // A managed layer counts; the keys that the flag names already give none.
-  const managed = {name: {type: 'mdm', domain: 'd', key: 'k'}, version: 'v', config: {projects: {'/Work': trusted}}};
-  assert.deepEqual(otherSpellings(read(managed), ['/work/MyProj']), ['/Work']);
-  assert.deepEqual(otherSpellings(owner, ['/work/MyProj', '/work/myproj', '/work/MYPROJ', '/WORK']), []);
+  const layer = (name, keys) => ({name, version: 'v', config: {projects: Object.fromEntries(keys.map(key => [key, trusted]))}});
+  const user = layer({type: 'user', file: '/h/config.toml', profile: null}, ['/work/MyProj', '/elsewhere/trusted', '/work/MYPROJ', '~/notes']);
+  const profile = layer({type: 'user', file: '/h/config.toml', profile: 'team'}, ['/team', '/elsewhere/trusted']);
+  const managed = layer({type: 'mdm', domain: 'd', key: 'k'}, ['/org']);
+  const project = layer({type: 'project', dotCodexFolder: '/work/MyProj/.codex'}, ['/agent/folder']);
+  const read = {config: {}, origins: {}, layers: [user, profile, managed, project]};
+  const keys = unflaggedTrustKeys(read, ['/work/MyProj', '/work/myproj']);
+  assert.deepEqual(keys, ['/elsewhere/trusted', '/work/MYPROJ', '~/notes', '/team', '/org']);
+  // With those keys in the flag, the same reply gives none; a reply with no layers has none.
+  assert.deepEqual(unflaggedTrustKeys(read, ['/work/MyProj', '/work/myproj'], keys), []);
+  assert.deepEqual(unflaggedTrustKeys({}, ['/work/MyProj']), []);
+  assert.deepEqual(trustFlags(['/w/p'], ['/elsewhere', '/w', '~/notes']),
+    ['-c', 'projects={ "/w/p"={ trust_level="untrusted" }, "/w"={ trust_level="untrusted" }, "/"={ trust_level="untrusted" }, "/elsewhere"={ trust_level="untrusted" }, "~/notes"={ trust_level="untrusted" } }']);
+  assert.deepEqual(trustFlags(['/w/p']), projectTrustFlags('/w/p'));
 });
 
 test('bindPolicy: a version or a policy refusal names what it found and what to change (R1504-3)', () => {
