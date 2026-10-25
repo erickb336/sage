@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, writeSync} from 'node:fs';
-import {relative, resolve, sep} from 'node:path';
+import {basename, dirname, relative, resolve, sep} from 'node:path';
 import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
 import {bindTask, resolveControllerBinary} from './controller-binding.mjs';
@@ -67,11 +67,15 @@ const PASTE_START = '\x1b[200~', PASTE_END = '\x1b[201~';
 const TOKEN = /\x1b(?:\[[0-?]*[ -/]*[@-~]|O.|.)?|./gsu;
 // The start of a key sequence at the end of a read: its rest comes in the next read (R1575-4).
 const PARTIAL = /\x1b(?:\[[0-?]*[ -/]*|O)?$/u;
-// `line(text, pasted)` gets each line; `pasted` says that some of its text came from a paste. `clear()` clears the
-// typed line and drops the rest of the current read (only paste marks and Ctrl-C still act in it); it returns true
-// when the typed line had text.
+// `line(text, pasted)` gets each line; `pasted` says that some of its text came from a paste (Backspace can remove that
+// text again, R1608-1). `clear()` clears the typed line and drops the rest of the current read (only paste marks and
+// Ctrl-C still act in it); it returns true when the typed line had text. `hold()` drops each later read in the same
+// way until `release()`, which returns true when a dropped read had text.
 function readTerminal(input, write, {line, interrupt, end}) {
-  let text = '', afterReturn = false, pasting = false, pending = '', ended = false, pasted = false, dropping = false;
+  let text = '', afterReturn = false, pasting = false, pending = '', ended = false, dropping = false, held = false, heldText = false;
+  // The index in `text` of the first pasted character, or -1.
+  let firstPasted = -1;
+  const add = key => { if (pasting && firstPasted < 0) firstPasted = text.length; text += key; };
   input.setRawMode(true);
   input.setEncoding('utf8');
   write(PASTE_ON);
@@ -87,25 +91,32 @@ function readTerminal(input, write, {line, interrupt, end}) {
       if (key.startsWith('\x1b')) { if (key === PASTE_START) pasting = true; else if (key === PASTE_END) pasting = false; continue; }
       // Raw mode stays on until the client ends, so after the end of input Ctrl-C still stops the turn (R1577-3).
       if (ended) { if (key === '\x03') interrupt(false); continue; }
-      if (dropping) { if (key === '\x03' && !pasting) interrupt(false); continue; }
+      const printable = key === '\t' || oneLine(key) === key;
+      if (dropping || held) { if (key === '\x03' && !pasting) interrupt(false); else if (held && printable) heldText = true; continue; }
       // A paste can give \r\n: one line end.
       if (key === '\n' && afterReturn) { afterReturn = false; continue; }
       afterReturn = key === '\r';
       if (key === '\r' || key === '\n') {
         echo += '\n';
-        if (pasting) { text += '\n'; pasted = true; continue; }
-        show(); const done = text, fromPaste = pasted; text = ''; pasted = false; line(done, fromPaste);
-      } else if (key === '\t' || oneLine(key) === key) { text += key; echo += key; if (pasting) pasted = true; }
+        if (pasting) { add('\n'); continue; }
+        show(); const done = text, fromPaste = firstPasted >= 0; text = ''; firstPasted = -1; line(done, fromPaste);
+      } else if (printable) { add(key); echo += key; }
       // A control character in a paste is text of the paste, not a key: the client drops it.
       else if (pasting) continue;
       // Ctrl-C clears the line, so that the next Enter never sends the cleared text (R1575-2).
-      else if (key === '\x03') { const cleared = text !== ''; text = ''; pasted = false; if (cleared) echo += '\n'; show(); interrupt(cleared); }
+      else if (key === '\x03') { const cleared = text !== ''; text = ''; firstPasted = -1; if (cleared) echo += '\n'; show(); interrupt(cleared); }
       else if (key === '\x04') { if (!text) { show(); ended = true; end(); } }
-      else if (key === '\x7f' || key === '\b') { if (text) { text = text.replace(/.$/su, ''); echo += '\b \b'; } }
+      else if (key === '\x7f' || key === '\b') {
+        if (text) { text = text.replace(/.$/su, ''); echo += '\b \b'; if (text.length <= firstPasted) firstPasted = -1; }
+      }
     }
     show();
   });
-  return {clear() { const had = text !== ''; text = ''; pasted = false; dropping = true; return had; }};
+  return {
+    clear() { const had = text !== ''; text = ''; firstPasted = -1; dropping = true; return had; },
+    hold() { held = true; },
+    release() { const had = heldText; held = false; heldText = false; return had; },
+  };
 }
 // The process gives a lost request as "Connection closed; outcome uncertain: <reason>" or "<reason>; outcome uncertain".
 const plain = text => {
@@ -169,49 +180,113 @@ function turnLine(result, then, terminalFull) {
 // acceptForSession, no amendment from availableDecisions, no session scope and no persist value.
 const ASK = 'Type y to allow it once, or n to refuse it.';
 const YES = new Set(['y', 'yes']), NO = new Set(['n', 'no']);
-const CLEARED = '[Your typed text was cleared, because an approval request came. Type it again after you answer.]';
+const CLEARED = '[The client cleared your typed text, because an approval request came. Type it again after you answer.]';
 const NOT_SENT = '[Your line did not go to the chief, because an approval request waits. Answer it, then type your line again.]';
+const PASTED = '[A pasted line cannot answer an approval request, and it did not go to the chief. Type y or n.]';
 const NO_QUESTION = '[No approval request waits, so your line did not go to the chief.]';
+// Terminal input in the first SETTLE_MS after a question first shows is dropped, so a key that the owner pressed
+// before the question came never answers it (R1606-4).
+const SETTLE_MS = 300;
 const isText = value => typeof value === 'string' && value !== '';
-// A shown value is a JSON string, so a quote or a line end in it shows escaped (\" and \n) and it cannot draw a fake
-// end of the question; the control-character filter then runs on each shown line. A value over LIMIT characters, or a
-// request with over MAX_ITEMS files or access items, is not shown: the client refuses it (TOO_LONG).
-const LIMIT = 2000, MAX_ITEMS = 50, TOO_LONG = Symbol('too long');
-const quoted = value => { const text = String(value); if (text.length > LIMIT) throw TOO_LONG; return JSON.stringify(text); };
-// A path inside the project shows relative to it ("." for the project folder); a path outside it, absolute.
-const shownPath = (path, project) => {
-  const full = resolve(project, String(path));
-  return quoted(full === project ? '.' : full.startsWith(`${project}${sep}`) ? relative(project, full) : full);
-};
+// The shown values. A code value (command, folder, host, file, access, arguments) is JSON with each character outside
+// printable ASCII as \uXXXX. A text value (reason, message) is JSON too; letters (not modifier letters such as the
+// quote look-alike U+02BA), digits and marks of any script stay, and each other character outside printable ASCII is
+// \uXXXX. In both, a run of 3 or more spaces shows as its count. So a value cannot draw a fake end of the question, and
+// padding cannot push the real question off the screen.
+const units = text => Array.from({length: text.length}, (_, index) => `\\u${text.charCodeAt(index).toString(16).padStart(4, '0')}`).join('');
+const counted = text => text.replace(/ {3,}/g, run => ` (${run.length} spaces) `);
+const NOT_TEXT = /[^\x20-\x7e\p{L}\p{Nd}\p{M}]|[\p{Lm}\p{Default_Ignorable_Code_Point}]/gu;
+const ascii = text => counted(text.replace(/[^\x20-\x7e]/g, units));
+const asCode = text => ascii(JSON.stringify(String(text)));
+const asProse = text => counted(JSON.stringify(String(text)).replace(NOT_TEXT, units));
+// A value over LIMIT characters, or a request with over MAX_ITEMS files, moves or access items, is not shown: the
+// client refuses it with the reason.
+const LIMIT = 2000, MAX_ITEMS = 50;
+const TOO_LONG = {why: `a value in the request is over ${LIMIT} characters`}, TOO_MANY = {why: `the request lists more than ${MAX_ITEMS} items`};
+const long = value => { const text = String(value); if (text.length > LIMIT) throw TOO_LONG; return text; };
+const code = value => asCode(long(value)), prose = value => asProse(long(value));
+const json = value => (value == null ? 'none' : ascii(long(JSON.stringify(value))));
+const cut = text => (text.length > LIMIT ? `${text.slice(0, LIMIT)}… (cut at ${LIMIT} characters)` : text);
+// The terminal rows that shown lines take at a width of `columns`. A wide character (East Asian Wide or Fullwidth: CJK,
+// Hangul, kana, fullwidth forms, emoji) takes 2 columns, and moves to the next row when only 1 is left; a mark takes none.
+const WIDE = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\ua960-\ua97f\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{16fe0}-\u{18aff}\u{1b000}-\u{1b2ff}\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
+const rowsOf = (lines, columns) => lines.reduce((rows, line) => {
+  let row = 1, column = 0;
+  for (const char of oneLine(line)) {
+    const width = /[\p{Mn}\p{Me}]/u.test(char) ? 0 : WIDE.test(char) ? 2 : 1;
+    if (column + width > columns) { row += 1; column = 0; }
+    column += width;
+  }
+  return rows + row;
+}, 0);
+// The real path of a path that may not exist yet: the real path of its longest existing part, then the rest.
+function realOf(full) {
+  for (let head = full, rest = []; ;) {
+    try { return resolve(realpathSync(head), ...rest); } catch {
+      if (dirname(head) === head) return full;
+      rest.unshift(basename(head)); head = dirname(head);
+    }
+  }
+}
+// The paths of one request. A path inside the project shows relative to it, and the block then ends with a line that
+// says so; the project folder itself shows as "the project folder"; a path outside it, after its `..` parts resolve, is
+// absolute. A path inside the project that a link takes out of it shows the link target too (R1606-5).
+function pathsOf(project) {
+  const inside = path => path === project || path.startsWith(`${project}${sep}`);
+  let relativeShown = false;
+  const show = (path, base = project) => {
+    const full = resolve(base, long(path));
+    if (full === project) return 'the project folder';
+    if (!inside(full)) return code(full);
+    relativeShown = true;
+    const real = realOf(full);
+    return `${code(relative(project, full))}${inside(real) ? '' : ` (a link to ${code(real)})`}`;
+  };
+  return {show, footer: () => (relativeShown ? [['paths', 'relative to the project folder']] : [])};
+}
 // A list of paths: null or missing is none; anything else that is not a list of paths cannot be read (undefined).
 const pathList = value => (value == null ? [] : Array.isArray(value) && value.every(isText) ? value : undefined);
-const SPECIAL = {root: 'the whole disk', home: 'your home folder'};
-function target(path, project) {
-  if (path?.type === 'path' && isText(path.path)) return shownPath(path.path, project);
-  if (path?.type === 'glob_pattern' && isText(path.pattern)) return `the files that match ${quoted(path.pattern)}`;
-  const kind = path?.value?.kind;
-  if (path?.type !== 'special' || !isText(kind)) return undefined;
-  const name = SPECIAL[kind] ?? `the special path ${quoted(kind === 'unknown' && isText(path.value.path) ? path.value.path : kind)}`;
-  return isText(path.value.subpath) ? `${name}, subpath ${quoted(path.value.subpath)}` : name;
+const SPECIAL = {root: 'the whole disk', minimal: 'the system files that every command needs', tmpdir: 'your temporary folder'};
+// A special path of the fork (FileSystemSpecialPath): the project roots and /tmp are paths, the others plain names.
+function target(path, paths, cwd) {
+  if (path?.type === 'path' && isText(path.path)) return paths.show(path.path);
+  if (path?.type === 'glob_pattern' && isText(path.pattern)) return `the files that match ${code(path.pattern)}`;
+  const value = path?.type === 'special' ? path.value : undefined, subpath = value?.subpath;
+  if (subpath != null && !isText(subpath)) return undefined;
+  if (value?.kind === 'project_roots' || value?.kind === 'current_working_directory') return paths.show(subpath ?? '.', cwd);
+  if (value?.kind === 'slash_tmp') return paths.show('/tmp');
+  if (value?.kind === 'unknown' && isText(value.path)) return `an unknown special path ${code(value.path)}${subpath ? `, subpath ${code(subpath)}` : ''}`;
+  return Object.hasOwn(SPECIAL, value?.kind ?? '') && subpath == null ? SPECIAL[value.kind] : undefined;
 }
 // The access items of a permission profile, each as "<target> (<access>)"; undefined when one cannot be read. A legacy
 // read or write root that only repeats an entry shows once.
-function accessItems(profile, project) {
-  const items = profile?.network?.enabled === true ? ['the network'] : [];
+function accessItems(profile, paths, cwd) {
   const fileSystem = profile?.fileSystem ?? {};
-  const entries = fileSystem.entries == null ? [] : fileSystem.entries;
-  if (!Array.isArray(entries)) return undefined;
+  const entries = fileSystem.entries == null ? [] : fileSystem.entries, read = pathList(fileSystem.read), write = pathList(fileSystem.write);
+  if (!Array.isArray(entries) || !read || !write) return undefined;
+  if (entries.length + read.length + write.length > MAX_ITEMS) throw TOO_MANY;
+  const items = profile?.network?.enabled === true ? ['the network'] : [];
   for (const entry of entries) {
-    const shown = target(entry?.path, project);
+    const shown = target(entry?.path, paths, cwd);
     if (!shown || !['read', 'write', 'deny'].includes(entry.access)) return undefined;
     items.push(`${shown} (${entry.access})`);
   }
-  for (const mode of ['read', 'write']) {
-    const paths = pathList(fileSystem[mode]);
-    if (!paths) return undefined;
-    items.push(...paths.map(path => `${shownPath(path, project)} (${mode})`));
-  }
+  items.push(...read.map(path => `${paths.show(path)} (read)`), ...write.map(path => `${paths.show(path)} (write)`));
   return [...new Set(items)];
+}
+// The action of an approval request, for its question and for each line that refuses it.
+function actionOf(method, params) {
+  if (method === 'item/commandExecution/requestApproval') {
+    return params.networkApprovalContext != null ? 'connect to a host' : params.kind === 'writeStdin' ? 'send input to a running command' : 'run a command';
+  }
+  if (method === 'item/fileChange/requestApproval') return 'change files';
+  if (method === 'item/permissions/requestApproval') {
+    const fileSystem = params.permissions?.fileSystem ?? {};
+    const kinds = [params.permissions?.network?.enabled === true && 'network',
+      ['read', 'write', 'entries'].some(key => (Array.isArray(fileSystem[key]) ? fileSystem[key].length : fileSystem[key] != null)) && 'file'];
+    return `get ${kinds.filter(Boolean).join(' and ') || 'extra'} access`;
+  }
+  return 'use an MCP tool';
 }
 const DECISION = {accept: {decision: 'accept'}, decline: {decision: 'decline'}};
 // The question id that the controller gives an MCP tool approval through requestUserInput, and its one-time option.
@@ -222,43 +297,53 @@ const emptySchema = schema => schema?.type === 'object' && schema.properties && 
   && !Object.keys(schema.properties).length && (schema.required == null || (Array.isArray(schema.required) && !schema.required.length));
 /**
  * What one server request asks, as `{action, fields, accept, decline}`: the action and the fields of the question
- * block, and the two replies. `{refused}` is a request that is not an approval: the client refuses it with a line.
- * Null is an approval request that the client cannot read. It throws TOO_LONG for a request too long to show.
+ * block, and the two replies. `{refused}` is a request that the client refuses with that line. Null is an approval
+ * request that the client cannot read. It throws TOO_LONG or TOO_MANY for a request too long to show.
  */
 function approvalOf(method, params, {files, calls, project}) {
-  const reason = isText(params.reason) ? [['reason', quoted(params.reason)]] : [];
-  const items = (name, list) => { if (list.length > MAX_ITEMS) throw TOO_LONG; return list.map(item => [name, item]); };
+  const action = actionOf(method, params), paths = pathsOf(project);
+  const reason = isText(params.reason) ? [['reason', prose(params.reason)]] : [];
+  const items = (name, list) => list.map(item => [name, item]);
+  // The fields end with the line on relative paths, so `shown` is called after the fields are made.
+  const shown = (fields, accept = DECISION.accept, decline = DECISION.decline) => ({action, fields: [...fields, ...paths.footer()], accept, decline});
   if (method === 'item/commandExecution/requestApproval') {
-    const access = accessItems(params.additionalPermissions, project);
-    const host = params.networkApprovalContext;
+    const cwd = isText(params.cwd) ? resolve(project, params.cwd) : project;
+    const access = accessItems(params.additionalPermissions, paths, cwd), host = params.networkApprovalContext;
     if (!access) return null;
     if (host != null) {
       if (!isText(host.host) || !isText(host.protocol)) return null;
-      const command = isText(params.command) ? [['command', quoted(params.command)]] : [];
-      const folder = isText(params.cwd) ? [['folder', shownPath(params.cwd, project)]] : [];
-      return {action: 'connect to a host', fields: [['host', `${quoted(host.host)}, protocol ${quoted(host.protocol)}`], ...command, ...folder, ...reason, ...items('access', access)], ...DECISION};
+      const command = isText(params.command) ? [['command', code(params.command)]] : [];
+      const folder = isText(params.cwd) ? [['folder', paths.show(params.cwd)]] : [];
+      return shown([['host', `${code(host.host)}, protocol ${code(host.protocol)}`], ...command, ...folder, ...reason, ...items('access', access)]);
     }
     if (!isText(params.command) || !isText(params.cwd)) return null;
-    return {action: params.kind === 'writeStdin' ? 'send input to a running command' : 'run a command',
-      fields: [['command', quoted(params.command)], ['folder', shownPath(params.cwd, project)], ...reason, ...items('access', access)], ...DECISION};
+    return shown([['command', code(params.command)], ['folder', paths.show(params.cwd)], ...reason, ...items('access', access)]);
   }
   if (method === 'item/fileChange/requestApproval') {
-    return {action: 'change files', fields: [...items('file', (files.get(params.itemId) ?? []).map(path => shownPath(path, project))), ...reason], ...DECISION};
+    // The files come from the fileChange item of item/started: with no such item, the client cannot say what y allows.
+    const changes = files.get(params.itemId);
+    if (!changes?.length) return {refused: 'asked to change files, but the client does not know which files, so the client refused it'};
+    if (params.grantRoot != null || !changes.every(change => isText(change?.path) && (change.kind?.move_path == null || isText(change.kind.move_path)))) return null;
+    if (changes.reduce((count, change) => count + (change.kind?.move_path == null ? 1 : 2), 0) > MAX_ITEMS) throw TOO_MANY;
+    // A move shows its target under its file.
+    const fields = changes.flatMap(change => [['file', paths.show(change.path)], ...(change.kind?.move_path == null ? [] : [['moves to', paths.show(change.kind.move_path)]])]);
+    return shown([...fields, ...reason]);
   }
   if (method === 'item/permissions/requestApproval') {
-    const access = accessItems(params.permissions, project);
-    if (!access?.length || !isText(params.cwd)) return null;
+    if (!isText(params.cwd)) return null;
+    const access = accessItems(params.permissions, paths, resolve(project, params.cwd));
+    if (!access?.length) return null;
     const asked = Object.fromEntries(['network', 'fileSystem'].filter(key => params.permissions[key]).map(key => [key, params.permissions[key]]));
-    return {action: 'get file access', fields: [['folder', shownPath(params.cwd, project)], ...reason, ...items('access', access)],
-      accept: {permissions: asked, scope: 'turn'}, decline: {permissions: {}, scope: 'turn'}};
+    return shown([['folder', paths.show(params.cwd)], ...reason, ...items('access', access)], {permissions: asked, scope: 'turn'}, {permissions: {}, scope: 'turn'});
   }
   if (method === 'mcpServer/elicitation/request') {
     // A tool approval asks only yes or no: a schema with a field is a form.
     if (params.mode !== 'form' || params._meta?.codex_approval_kind !== 'mcp_tool_call' || !emptySchema(params.requestedSchema)) {
-      return {refused: `sent a form from the MCP server ${quoted(params.serverName)}: ${quoted(params.message)}. The client cannot show forms, so it refused the form`};
+      return {refused: `sent a form from the MCP server ${cut(asCode(params.serverName))}: ${cut(asProse(params.message))}. The client cannot show forms, so it refused the form`};
     }
-    const reply = action => ({action, content: null, _meta: null});
-    return {action: 'use an MCP tool', fields: [['server', quoted(params.serverName)], ['message', quoted(params.message)]], accept: reply('accept'), decline: reply('decline')};
+    const reply = choice => ({action: choice, content: null, _meta: null});
+    // The fork puts the tool arguments in _meta.tool_params.
+    return shown([['server', code(params.serverName)], ['message', prose(params.message)], ['arguments', json(params._meta.tool_params)]], reply('accept'), reply('decline'));
   }
   if (method === 'item/tool/requestUserInput') {
     const questions = Array.isArray(params.questions) ? params.questions : [];
@@ -267,15 +352,14 @@ function approvalOf(method, params, {files, calls, project}) {
     if (questions.length !== 1 || call?.threadId !== params.threadId || question?.id !== `${MCP_APPROVAL}${params.itemId}`
       || !question.options?.some?.(option => option.label === MCP_ALLOW)) {
       // The question text shows cut at LIMIT characters, so a long question still shows what it asked.
-      const text = questions.map(each => JSON.stringify(String(each?.question ?? ''))).join(', ');
-      const shown = text.length > LIMIT ? `${text.slice(0, LIMIT)}… (cut at ${LIMIT} characters)` : text;
-      return {refused: `asked you ${questions.length === 1 ? 'a question' : `${questions.length} questions`}: ${shown}. The client cannot show questions, so it refused ${questions.length === 1 ? 'it' : 'them'}. The agent goes on without your answer`};
+      const text = cut(questions.map(each => asProse(each?.question ?? '')).join(', '));
+      return {refused: `asked you ${questions.length === 1 ? 'a question' : `${questions.length} questions`}: ${text}. The client cannot show questions, so it refused ${questions.length === 1 ? 'it' : 'them'}. The agent goes on without your answer`};
     }
     const reply = label => ({answers: {[question.id]: {answers: [label]}}});
-    return {action: 'use an MCP tool', fields: [['server', quoted(call.server)], ['tool', quoted(call.tool)], ['message', quoted(question.question)]],
-      accept: reply(MCP_ALLOW), decline: reply(MCP_CANCEL)};
+    return shown([['server', code(call.server)], ['tool', code(call.tool)], ['message', prose(question.question)], ['arguments', json(call.arguments)]],
+      reply(MCP_ALLOW), reply(MCP_CANCEL));
   }
-  return {refused: `sent the request ${quoted(method)}. The client answers only approval requests, so it refused it`};
+  return {refused: 'sent a request that is not an approval request, so the client refused it'};
 }
 // The agent of a thread: the chief for the root thread, else its agent path (from thread/started or an item).
 function agentPathOf(params) {
@@ -359,21 +443,30 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   const warned = new Set();
   const warnOnce = (...parts) => { const key = parts.join('\0'); if (!warned.has(key)) { warned.add(key); framed(...parts); } };
   // `questions` holds the approval requests that wait for the owner, in order; the first one shows. `agents` names
-  // each child thread, and `files` keeps the paths of each file change item until its end.
-  // `calls` keeps the server and tool of each mcpToolCall item until its end. A thread with no known name is never the chief.
+  // each child thread, and `files` keeps the changes of each file change item until its end.
+  // `calls` keeps the server, tool and arguments of each mcpToolCall item until its end. A thread with no known name is
+  // never the chief. An agent name shows by the rule of a code value, with no quotes.
   const agents = new Map(), files = new Map(), calls = new Map();
-  const agent = threadId => (isText(threadId) && threadId === rootThread ? '/root (the chief)' : agents.get(threadId) ?? `(unknown child ${threadId})`);
+  const agent = threadId => (isText(threadId) && threadId === rootThread ? '/root (the chief)'
+    : ascii(agents.get(threadId) ?? (isText(threadId) ? `(unknown child ${threadId})` : '(an unknown agent with no thread id)')));
   // The reader of a terminal on stdin; it clears the typed line when a question shows.
-  let terminal = null;
+  let terminal = null, cancelSettle = () => {};
   // Each show of a question clears the typed line and drops the rest of the current terminal read, so no text typed or
-  // pasted before the question can answer it.
+  // pasted before the question can answer it. The first show of a question also drops the terminal input of the next
+  // SETTLE_MS, with a note if it had text.
   const ask = () => {
     if (!questions.length) return;
     cancelWait();
+    const [question] = questions;
     const cleared = terminal?.clear() ?? false;
     if (cleared) write('\n');
-    for (const line of [...(cleared ? [CLEARED] : []), ...questions[0].block]) write(`${oneLine(line)}\n`);
+    for (const line of [...(cleared ? [CLEARED] : []), ...question.block]) write(`${oneLine(line)}\n`);
     blockLast = true;
+    if (terminal && !question.shown) {
+      cancelSettle(); terminal.hold();
+      cancelSettle = timer(() => { cancelSettle = () => {}; if (terminal.release()) say(CLEARED); }, SETTLE_MS);
+    }
+    question.shown = true;
   };
   const answer = allow => {
     const question = questions.shift();
@@ -389,16 +482,16 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
   };
   function serverRequest({id, method, params = {}}) {
     const name = agent(params.threadId);
+    const tooBig = why => { owner.refuse(id); say(`[Agent ${name} asked to ${actionOf(method, params)}, but ${why}, so the client refused it.]`); };
     let found;
     try { found = approvalOf(method, params, {files, calls, project}); } catch (error) {
-      if (error !== TOO_LONG) throw error;
-      owner.refuse(id);
-      say(`[Agent ${name} sent an approval request that is too long to show, so the client refused it.]`);
+      if (error !== TOO_LONG && error !== TOO_MANY) throw error;
+      tooBig(error.why);
       return;
     }
     if (!found || found.refused) {
       owner.refuse(id);
-      say(found ? `[Agent ${name} ${found.refused}.]` : `[Agent ${name} sent an approval request (${method}) that the client cannot read, so the client refused it.]`);
+      say(found ? `[Agent ${name} ${found.refused}.]` : `[Agent ${name} sent an approval request to ${actionOf(method, params)} that the client cannot read, so the client refused it.]`);
       return;
     }
     // After the end of input or a stop, no answer can come: the client refuses the request and shows no question.
@@ -408,6 +501,9 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       return;
     }
     const block = [`[Approval: agent ${name} asks to ${found.action}.]`, ...found.fields.map(([field, value]) => `  ${field}: ${value}`), ASK];
+    // The whole block must show on the screen, with 2 rows left (a note above it and the input line below it), so that
+    // no value can push the real question off the screen and draw a fake one (R1606-1).
+    if (rowsOf(block, output.columns > 0 ? output.columns : 80) > (output.rows > 0 ? output.rows : 24) - 2) { tooBig('the request is too big to show on your screen'); return; }
     questions.push({id, block, accept: found.accept, decline: found.decline});
     if (questions.length === 1) ask();
   }
@@ -420,8 +516,8 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
       // The first name of a thread stays; no event renames the chief.
       if (named && named[0] !== rootThread && !agents.has(named[0])) agents.set(...named);
       const item = params.item;
-      if (event.method === 'item/started' && item?.type === 'fileChange') files.set(item.id, (Array.isArray(item.changes) ? item.changes : []).map(change => change?.path).filter(isText));
-      if (event.method === 'item/started' && item?.type === 'mcpToolCall' && isText(item.id)) calls.set(item.id, {threadId: params.threadId, server: item.server, tool: item.tool});
+      if (event.method === 'item/started' && item?.type === 'fileChange') files.set(item.id, Array.isArray(item.changes) ? item.changes : []);
+      if (event.method === 'item/started' && item?.type === 'mcpToolCall' && isText(item.id)) calls.set(item.id, {threadId: params.threadId, server: item.server, tool: item.tool, arguments: item.arguments});
       if (event.method === 'item/completed') { files.delete(item?.id); calls.delete(item?.id); }
       if (event.kind === 'server-request') serverRequest(event.message);
       // The controller closed a request that waits (its turn ended): the next one shows.
@@ -481,16 +577,18 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     const {model, approvalPolicy, sandbox} = opened.policy.selection;
     const line = (text, pasted = false) => {
       if (stopAsked) return;
-      const word = text.trim().toLowerCase(), yesNo = YES.has(word) || NO.has(word);
-      // While an approval request waits, a typed y or n is its answer (text from a paste never is); any other line is
-      // no turn, and the question shows again.
+      const word = text.trim().toLowerCase();
+      // While an approval request waits, a typed y, yes, n or no is its answer (text from a paste never is); any other
+      // line is no turn, and the question shows again.
       if (questions.length) {
-        if (yesNo && !pasted) answer(YES.has(word)); else { say(NOT_SENT); ask(); }
+        if (pasted) say(PASTED); else if (YES.has(word) || NO.has(word)) { answer(YES.has(word)); return; } else say(NOT_SENT);
+        ask();
         return;
       }
-      if (!text.trim()) return;
-      // A lone y or n with no question is an answer that came late (or early): it never goes to the chief.
-      if (yesNo) { say(NO_QUESTION); return; }
+      if (!word) return;
+      // A lone y or n with no question is an answer that came late (or early): it never goes to the chief. A yes or a
+      // no goes to the chief, which may have asked it.
+      if (word === 'y' || word === 'n') { say(NO_QUESTION); return; }
       if (turnActive) say('[The chief is on a turn. Your line runs after it.]');
       queue.push(text); wake();
     };
