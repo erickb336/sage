@@ -35,7 +35,7 @@
 // a push, every file change and command of an agent, and a chief's shell write that names a logbook file.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, utimesSync, watch, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,10 @@ const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a li
 const FILE_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/;
 const AGENT_TOOLS = /^(Agent|Task)$/;
 const LEAD_CHILDREN = new Set(["sage:implementer", "sage:code-reviewer", "sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]);
+/** The most helpers that one lead runs at once: the owner's decision of 2026-10-25 (T482). The project and total caps still hold. */
+const LEAD_HELPERS = 9;
+/** The lead's wait command (T482): it waits for a helper's stop with Bash alone, so the lead needs no Monitor tool. */
+const WAIT = join(ROOT, "hooks/wait.mjs");
 /** The tools that run a command. The PreToolUse matcher in claude.json names each of them. */
 const SHELL_TOOLS = /^(?:Bash|Monitor|PowerShell|mcp__terminal__.+)$/;
 const CHIEF = /(^|:)chief-of-staff$/;
@@ -284,6 +288,12 @@ export function handle(input, state, slots) {
   const ours = OURS.test(input.agent_type ?? "");
   // Report validation precedes storage: a failed lease update must not let an incomplete report finish.
   if (event === "SubagentStop") {
+    // A lead does not end while a helper of its lead run runs (T482, K2): Claude Code holds a parent for its background
+    // children only in the terminal, so the hook blocks each stop, also a second one, until the helper stops, the sage
+    // ends its run, or its lease ends. The wait command lets the lead wait with Bash alone.
+    const lead = input.agent_type === "sage:lead" && slots.leadOf(input.agent_id);
+    const live = lead ? slots.running(leadKey(lead)) : [];
+    if (live.length) return { decision: "block", reason: `sage: your helper${live.length === 1 ? "" : "s"} ${live.join(", ")} still run${live.length === 1 ? "s" : ""}, and a lead does not end while a helper runs. Run ${nodeCommand(WAIT, lead.task)} in the project's folder, as a Bash command of its own with the timeout 600000: it waits up to 9 minutes and prints each helper that stopped, with its kept RESULT. Then go on with your steps.` };
     // A sage agent finishes only with the full report. The second stop goes through, so this cannot loop.
     if (ours && !input.stop_hook_active && typeof input.last_assistant_message === "string") {
       const missing = missingFields(REPORT_FIELDS, input.last_assistant_message);
@@ -310,6 +320,7 @@ export function handle(input, state, slots) {
   }
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
   if (event === "PostToolUse" && input.tool_name === "Bash" && input.agent_type === "sage:lead") return void leadWrote(input, slots);
+  if (event === "PostToolUse" && input.tool_name === "Bash" && main) return void chiefEnded(input, slots);
   if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response);
   if (event === "PostToolUseFailure" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
   // The main session's TaskStop ends the named agent and frees its slot, a lead's or a child's too (T255 M3, F-T255-12,
@@ -342,7 +353,13 @@ export function handle(input, state, slots) {
   if (event === "PreToolUse" && !main && (state.sage || ours) && input.tool_name === "SendMessage" && input.tool_input?.to !== "main") {
     return deny(event, "an agent sends a message only to main, because a message can wake a stopped agent. Start a fresh child with a full brief, or report to the sage.");
   }
+  // A message wakes an ended lead with no slot, so each of its writes would be refused (T482, F3): the sage starts a fresh lead.
+  if (event === "PreToolUse" && main && state.sage && input.tool_name === "SendMessage" && slots.endedLead(input.tool_input?.to)) {
+    return deny(event, `${input.tool_input.to} has ended or holds no lead slot, so a message would wake it with no slot, and the hook would refuse its writes. End its lead run, record a new one (${stateCommand("run add <T> --role lead")}) and start a fresh lead with the note in its brief.`);
+  }
   const why = event === "PreToolUse" ? (main ? chiefProblem(input, state.sage) : agentWriteProblem(input, slots)) : undefined;
+  const verdict = event === "PreToolUse" && main && state.sage && !why ? chiefVerdictProblem(input, slots) : undefined;
+  if (verdict) return deny(event, verdict);
   if (why && main) return deny(event, `${why} Only sage.mjs changes the logbook: run the state tool's command for this change (node <path to skills/sage/sage.mjs> ...), as a command of its own. If no command does it, ask the user.`);
   if (why && input.agent_type === "sage:lead") return deny(event, `${why} A lead writes the logbook only with ${LEAD_FORM}. Report to the sage what else the logbook needs.`);
   if (why) return deny(event, `${why} Only the chief writes the logbook. An agent may run only ${READ_FORM}. Report what the logbook needs, and the chief records it.`);
@@ -444,7 +461,7 @@ export function handle(input, state, slots) {
       if (r.refused === "identity") return deny(event, "the spawn has no valid, distinct caller and tool-use identity, so its slot cannot be checked. Report to the sage.");
       if (r.refused === "ended") return deny(event, "this lead or spawn already ended, so it cannot start another agent. Report to the sage.");
       if (r.refused === "leads") return deny(event, `3 leads are running for ${project}. Wait for one to finish. Report to the sage.`);
-      if (r.refused === "children") return deny(event, "this lead already has 3 children. Wait for one to finish. Report to the sage.");
+      if (r.refused === "children") return deny(event, `this lead already has ${LEAD_HELPERS} children. Wait for one to finish. Report to the sage.`);
       if (r.refused === "helper") return deny(event, `${spawnName} already has its helper: one run is backed by one child (F-T284-9). Report to the sage.`);
       // A lead that started with no name field stops only by its agent id: a stop by name is refused (T434).
       const stop = () => slots.unnamedLead(leadMark.task) ? "by its agent id, from its start's result: it started with no name field, so a stop by its name is refused" : `by its agent id or by its name lead-${leadMark.task}`;
@@ -1242,13 +1259,13 @@ const LEAD_WRITES = {
     return how === "fix" || (how === "dismiss" && view.row(key).severity === "low" && Boolean(opt.reason));
   },
   // A verdict names its task's own PR, so a lead's verdicts never count for another PR's merge check (F-T273-2, F-T273-6),
-  // and the finished run of its task whose role gives that kind (F-T284-6). A check verdict needs no run.
+  // and the finished run of its task whose role gives that kind (F-T284-6). A checks verdict is the sage's (T482, T302).
   // The run backs one verdict: finished, with its real child, in the task's current round, and in no verdict yet (F-T284-9).
   // The verdict says what the helper reported, on the commit that it saw (F-T289-4, F-T289-5).
   verdict: ([t], opt, own, view, task, ctx) => {
     const roles = VERDICT_ROLES[opt.kind], run = opt.run === undefined ? undefined : view.row(opt.run);
     if (!(t === own && Boolean(task.pr) && opt.pr === task.pr)) return false;
-    if (roles === null) return opt.run === undefined || run?.task === own;
+    if (roles === null) return "a checks verdict (checks-pass or checks-fail) is the sage's: give the result of gh pr checks <n> in your report (T482).";
     if (!(Array.isArray(roles) && run?.task === own && roles.includes(run.role) && String(run.round) === String(task.round) && !view.verdicts(own).some((v) => v.run === run.id))) return false;
     // The way out of a run that still runs, ended with no verdict to give, or gave no report (F-T289-36). When run done
     // would be refused too, the refusal gives its reason, which names the real next step (F-T289-55).
@@ -1258,13 +1275,8 @@ const LEAD_WRITES = {
     }
     if (run.status !== "done") return `${run.id} ended as ${run.status}, so it backs no verdict: add a new ${run.role} run, or ask the sage (F-T289-36).`;
     if (!ownRun(ctx, run.id)) return `${run.id} is not a run that this lead added, so it backs no verdict of this lead (F-T289-8, F-T289-16).`;
-    const report = ctx.slots.helper(helperOf(ctx.lead, run.id)).stopped;
-    if (!report) return `${run.id}'s helper gave no report, so ${run.id} backs no verdict of this lead: ask the sage (F-T289-36).`;
-    // A run whose helper gave no report, or one that the hook cannot read, backs no verdict of a lead: the sage reads it (F-T289-20, F-T289-23).
-    if (!Array.isArray(report.severities) || report.unreadable) return `${run.id}'s helper gave ${report.unreadable ? `a report that the hook cannot read (${report.problem ?? "an old record"})` : "no report"}, so ${run.id} backs no verdict of this lead: the sage reads it (F-T289-20, F-T289-23).`;
-    if (!report.sha || String(opt.sha ?? "").toLowerCase() !== report.sha) return `${run.id}'s helper reviewed ${report.sha ? report.sha.slice(0, 7) : "no one commit (the branch moved during its run, or the hook could not read it)"}, not this --sha: a verdict names the commit that its helper saw (F-T289-5, F-T289-14).`;
-    const clean = cleanReport(report), wants = ["findings", "qa-fail"].includes(opt.kind) ? "not clean" : "clean";
-    if (clean !== (wants === "clean")) return `${run.id}'s helper reported ${report.result || "no readable RESULT"}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}, so its verdict is ${clean ? "clean" : "findings or qa-fail"}, not ${opt.kind} (F-T289-4).`;
+    const kept = keptProblem(run.id, ctx.slots.helper(helperOf(ctx.lead, run.id)).stopped, opt, true);
+    if (kept) return kept;
     // A clean verdict too: no verdict of a role while another run of that role in the round has findings not recorded (F-T289-18).
     return gap(run.role, view, task, ctx) ?? true;
   },
@@ -1280,7 +1292,20 @@ const LEAD_WRITES = {
     return !keys.includes("state") || (TEAM.map((role) => gap(role, view, task, ctx)).find(Boolean) ?? true);
   },
 };
-/** The roles whose finished run gives each verdict kind that a lead records; null for a check, which needs no run (F-T284-6). */
+/**
+ * Does a helper's kept report back this verdict (F-T289-4, F-T289-5)? A report that the hook read, on the commit of
+ * --sha, whose clean or not clean is the kind's. The reason when it does not, or undefined; lead: the reason is for a lead.
+ * A run with no report, or one that the hook cannot read, backs none: the sage reads it (F-T289-20, F-T289-23).
+ */
+function keptProblem(id, report, opt, lead) {
+  if (!report) return `${id}'s helper gave no report, so ${id} backs no verdict ${lead ? "of this lead: ask the sage" : "of the sage"} (F-T289-36).`;
+  if (!Array.isArray(report.severities) || report.unreadable) return `${id}'s helper gave ${report.unreadable ? `a report that the hook cannot read (${report.problem ?? "an old record"})` : "no report"}, so ${id} backs no verdict ${lead ? "of this lead: the sage reads it" : "of the sage"} (F-T289-20, F-T289-23).`;
+  if (!report.sha || String(opt.sha ?? "").toLowerCase() !== report.sha) return `${id}'s helper reviewed ${report.sha ? report.sha.slice(0, 7) : "no one commit (the branch moved during its run, or the hook could not read it)"}, not this --sha: a verdict names the commit that its helper saw (F-T289-5, F-T289-14).`;
+  const clean = cleanReport(report), wants = ["findings", "qa-fail"].includes(opt.kind) ? "not clean" : "clean";
+  if (clean !== (wants === "clean")) return `${id}'s helper reported ${report.result || "no readable RESULT"}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}, so its verdict is ${clean ? "clean" : "findings or qa-fail"}, not ${opt.kind} (F-T289-4).`;
+  return undefined;
+}
+/** The roles whose finished run gives each verdict kind; null for a checks verdict, which is the sage's (F-T284-6, T482). */
 const VERDICT_ROLES = { "checks-pass": null, "checks-fail": null, "review-clean": ["code-reviewer"], "security-clean": ["security-reviewer"], "ux-clean": ["ux-reviewer"], "qa-pass": ["qa"], "qa-fail": ["qa"], findings: ["code-reviewer", "security-reviewer", "ux-reviewer"] };
 /** The number of words of each lead write, so that no word goes past the hook unread. */
 const LEAD_WORDS = { "run add": 2, "run done": 2, "finding add": 2, "finding close": 3, "finding triage": 4, verdict: 1, round: 1 };
@@ -1346,6 +1371,100 @@ function leadProblem(input, cmd, pos, opt, slots) {
   return ok === true ? undefined : typeof ok === "string" ? ok : `${shown} is on the lead's list, but not as it is written here, or not on its own task ${own}.`;
 }
 const READ_WAY = "To run a read command of the state tool, run node <path to skills/sage/sage.mjs> status (or merge-check, logbook, standing, config) alone; to read the file, use cat <path> or git show <sha>:<path>.";
+/** The words and the options of a state tool command after its path, read as the state tool reads them (sage.mjs parse): --name value or --name=value. */
+function optionsOf(args) {
+  const pos = [], opt = Object.create(null);
+  let twice;
+  for (let k = 0; k < args.length; k++) {
+    const [name, ...value] = args[k].slice(2).split("=");
+    if (!args[k].startsWith("--")) pos.push(args[k]);
+    else [twice, opt[name]] = [twice ?? (Object.hasOwn(opt, name) ? name : undefined), value.length ? value.join("=") : args[++k]];
+  }
+  return { pos, opt, twice };
+}
+/**
+ * The words after the state tool's path in a main-session Bash command that runs this hook's state tool as one plain
+ * command (its path quoted when it has a space, as stateCommand writes it), or undefined.
+ */
+function chiefStateWords(input) {
+  const command = String(input.tool_input?.command ?? "").trim(), quoted = `node "${TOOL}" `;
+  let words;
+  if (command.startsWith(quoted)) words = command.slice(quoted.length).split(/[ \t]+/);
+  else {
+    const [node, path, ...rest] = command.split(/[ \t]+/);
+    if (node !== "node" || !path || !/(?:^|\/)skills\/sage\/sage\.mjs$/.test(path) || canonical(resolve(input.cwd ?? process.cwd(), path)) !== canonical(TOOL)) return undefined;
+    words = rest;
+  }
+  return words.length && PLAIN.test(words.join(" ")) ? words : undefined;
+}
+/**
+ * The sage's review or QA verdict while its task has a running lead run (T482, F2): only a lead's helper's kept report
+ * backs it, on the SHA that the helper saw (keptProblem), so that a lead's relay never becomes a verdict (K4). The
+ * verdict names that run (--run). A checks verdict, and a verdict on a task with no running lead run, pass as before.
+ * The reason, or undefined.
+ */
+function chiefVerdictProblem(input, slots) {
+  if (input.tool_name !== "Bash") return undefined;
+  const words = chiefStateWords(input);
+  if (!words) return /sage\.mjs"?[ \t]+verdict\b/.test(String(input.tool_input?.command ?? "")) ? "the sage records a verdict as one plain command of the state tool, so that the hook can check it against a lead's kept report (T482)." : undefined;
+  const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
+  if (cmd !== "verdict" || !Array.isArray(VERDICT_ROLES[opt.kind])) return undefined;
+  let view;
+  try {
+    view = logbookOf(opt.project ?? process.env.SAGE_PROJECT ?? input.cwd);
+  } catch {
+    return undefined; // the state tool cannot read that logbook either, and refuses the verdict itself
+  }
+  const lead = view.leadRun(pos[0]);
+  if (!lead) return undefined;
+  const why = opt.run === undefined ? `a review or QA verdict names the helper run (--run R<n>) whose report backs it.` : keptProblem(opt.run, slots.helper(helperOf({ logbook: digest(view.dir), run: lead.id }, opt.run)).stopped, opt, false);
+  return why && `${pos[0]} has a running lead run, ${lead.id}, so the sage records a review or QA verdict on it only when a helper's report that the hook kept backs it; the lead records these verdicts itself (T482). ${why}`;
+}
+/**
+ * After the sage's run done of a lead's helper run: the helper's slot frees at once, and the hook notes its stop, so that
+ * the lead can start the next helper and does not wait for it (T482, T371). The helper of a run that ended does no work
+ * that counts. Any doubt frees nothing.
+ */
+function chiefEnded(input, slots) {
+  try {
+    const words = chiefStateWords(input);
+    if (!words || words[0] !== "run") return;
+    const { pos, opt } = optionsOf(words.slice(1));
+    if (pos[0] !== "done" || !/^R[1-9]\d*$/.test(pos[1] ?? "")) return;
+    const view = logbookOf(opt.project ?? process.env.SAGE_PROJECT ?? input.cwd), run = view.row(pos[1]);
+    if (!run || run.status === "running" || !TEAM.includes(run.role)) return;
+    const leads = [view.leadRun(run.task), ...view.endedLeadRuns().filter((r) => r.task === run.task)].filter(Boolean);
+    slots.endHelpers(leads.map((lead) => helperOf({ logbook: digest(view.dir), run: lead.id }, run.id)));
+  } catch {}
+}
+/**
+ * The lead's wait (T482, K2): node wait.mjs <T>, in the project's folder. It returns when a helper of the task's running
+ * lead run stopped and its run still runs (the lead has not ended it), when no helper of that lead run runs, or after ms.
+ * It reads only the logbook and the hook's helper notes, with Bash alone: no Monitor and no notice. Its text for the lead.
+ */
+export async function waitForHelpers(task, cwd, { ms = 9 * 60_000, dir = stateDir() } = {}) {
+  if (!TASK.test(String(task ?? ""))) return "usage: node wait.mjs <T>, in the project's folder, for example node wait.mjs T12";
+  const started = Date.now();
+  for (;;) {
+    const view = logbookOf(cwd), lead = view.leadRun(task);
+    if (!lead) return `${task} has no running lead run in the logbook of this folder, so there is no helper to wait for.`;
+    const key = leadKey({ logbook: digest(view.dir), run: lead.id }), slots = slotsFor(join(dir, "slots"), "wait");
+    const stopped = slots.stops(key).filter((r) => view.row(r?.run)?.status === "running").sort((a, b) => a.run.slice(1) - b.run.slice(1));
+    if (stopped.length) {
+      const line = (r) => [`${r.run} stopped`, r.role, !Array.isArray(r.severities) ? "no report" : r.unreadable ? "a report that the hook cannot read" : r.result || "no RESULT", ...(r.severities?.length ? [`findings ${r.severities.join(",")}`] : []), `sha ${r.sha ? r.sha.slice(0, 7) : "none"}`].join(" · ");
+      return [...stopped.map(line), "End each of these runs (run done), with its findings and its verdict, then go on."].join("\n");
+    }
+    const live = slots.running(key);
+    if (!live.length) return `No helper of ${lead.id} runs.`;
+    if (Date.now() - started >= ms) return `${live.join(", ")} still run${live.length === 1 ? "s" : ""} after ${Math.round(ms / 60_000)} minutes: run this command again.`;
+    await new Promise((done) => {
+      let watcher;
+      const end = () => { watcher?.close(); clearTimeout(timer); done(); };
+      const timer = setTimeout(end, Math.min(5_000, Math.max(0, ms - (Date.now() - started))));
+      try { watcher = watch(join(dir, "helpers"), end); } catch {} // a stop writes a note there; the timer is the fallback
+    });
+  }
+}
 /** An agent's check fails closed: when it throws, the agent's command or file change is refused. */
 function agentWriteProblem(input, slots) {
   const file = FILE_TOOLS.test(input.tool_name ?? "");
@@ -1375,14 +1494,7 @@ function agentCheck(input, file, slots) {
     if (!own || canonical(resolve(cwd, path)) !== canonical(TOOL)) {
       return `an agent runs the state tool only as one plain command, with nothing before or after it, and only the copy that this hook loads: ${quoted(named)} is not that. ${READ_WAY}`;
     }
-    // The words and the options, read as the state tool reads them (sage.mjs parse): --name value or --name=value.
-    const pos = [], opt = Object.create(null);
-    let twice;
-    for (let k = 0; k < args.length; k++) {
-      const [name, ...value] = args[k].slice(2).split("=");
-      if (!args[k].startsWith("--")) pos.push(args[k]);
-      else [twice, opt[name]] = [twice ?? (Object.hasOwn(opt, name) ? name : undefined), value.length ? value.join("=") : args[++k]];
-    }
+    const { pos, opt, twice } = optionsOf(args);
     if (Object.hasOwn(READS, cmd ?? "") && READS[cmd](pos)) return undefined;
     if (input.agent_type === "sage:lead") return twice ? `--${twice} is given twice (T275).` : leadProblem(input, cmd, pos, opt, slots);
     return `"${[cmd, ...pos.slice(0, 1)].join(" ")}" writes the logbook, or is not a read command of the state tool.`;
@@ -2113,7 +2225,7 @@ const briefRun = (prompt) => /^Run (R[1-9]\d{0,8}) · task T[1-9]\d*(?: ·|\s*$)
  * New lead and child slots retain exact call identities and bind only from Agent's structured result. Start order
  * is not parent evidence. Incomplete marks count conservatively; unconfirmed launches retain a one-hour lease.
  */
-export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
+export function slotsFor(dir, session, now = Date.now(), rawSession = session, leadRuns = liveLeadRun) {
   const STALE = { pending: 10 * 60_000, agent: 60 * 60_000 };
   const id = (raw) => safe(raw) || undefined;
   const valid = (raw) => typeof raw === "string" && raw.length > 0;
@@ -2145,7 +2257,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     writeFileSync(join(where, name), value);
     utimesSync(join(where, name), new Date(now), new Date(now));
   };
-  const stopped = agent => noted(`ended-${hash(agent)}`);
+  const stopped = (agent, hashed = false) => noted(`ended-${hashed ? agent : hash(agent)}`);
   // A run's helper notes, shared by every session, so that one child backs one run also across sessions and after a
   // lease ends (F-T286-1, F-T286-7): started-<key> when its slot is taken, stopped-<key> with its report at its stop.
   const helpers = join(dir, "..", "helpers");
@@ -2180,9 +2292,16 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     // possibly launched slot keeps the one-hour lease, which its agent's events renew.
     const age = slot => has(slot, "possible-launch") || mark(slot, "agent-") !== undefined || mark(slot, "bound-") !== undefined ? STALE.agent : STALE.pending;
     const stale = list().filter(slot => now - statSync(join(dir, slot)).mtimeMs > age(slot));
-    // A lead's slot never expires while it has a running child (T255 H1).
+    // A lead's slot never expires while it has a running child (T255 H1), nor while its lead run still runs in its logbook
+    // (T482, T353): a lead that waits keeps its slot however long the wait. The sage's end of the lead run, or its stop of
+    // the lead, ends that.
     const parents = new Set(list().filter(slot => !stale.includes(slot)).map(slot => mark(slot, "parent-")).filter(Boolean));
-    for (const slot of stale) if (!parents.has(mark(slot, "bound-"))) free(slot);
+    const running = slot => {
+      if (mark(slot, "role-") !== "sage_lead" || !has(slot, "ok") || stopped(mark(slot, "bound-") ?? "", true)) return false;
+      try { return leadRuns(readFileSync(join(dir, slot, "folder"), "utf8"), mark(slot, "task-"), mark(slot, "run-")); }
+      catch { return false; }
+    };
+    for (const slot of stale) if (!parents.has(mark(slot, "bound-")) && !running(slot)) free(slot);
   };
   const counts = project => ({ total: list().length, project: list().filter(slot => (mark(slot, "project-") ?? project) === project).length });
   // Roles compare in lower case: take() marks the spawned type in lower case, and an event reports its own case (F-T255-13).
@@ -2235,6 +2354,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     const parents = new Set(slots.map(slot => mark(slot, "parent-")).filter(Boolean));
     for (const slot of [...slots, ...ofSession().filter(slot => parents.has(mark(slot, "bound-")))]) utimesSync(join(dir, slot), new Date(now), new Date(now));
   };
+  const lease = (key) => Math.max(0, ...list().filter((slot) => mark(slot, "helper-") === key).map((slot) => STALE.agent - (now - statSync(join(dir, slot)).mtimeMs)));
   const touch = (agent, role) => {
     if (!valid(agent) || stopped(agent)) return;
     const own = ofSession().filter(slot => ownsAgent(slot, agent));
@@ -2291,7 +2411,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
         let refused;
         if (projectSlots.length >= cap) refused = "project";
         else if (role === "sage:lead" && projectSlots.filter(slot => !mark(slot, "role-") || mark(slot, "role-") === "sage_lead").length >= 3) refused = "leads";
-        else if (caller !== undefined && others.filter(slot => (mark(slot, "scope-") ?? scope) === scope && (mark(slot, "caller-") ?? owner) === owner).length >= 3) refused = "children";
+        else if (caller !== undefined && others.filter(slot => (mark(slot, "scope-") ?? scope) === scope && (mark(slot, "caller-") ?? owner) === owner).length >= LEAD_HELPERS) refused = "children";
         if (refused) { free(mine); return { refused, ...counts(project) }; }
         add(mine, "ok");
         if (helper) note(`started-${helper.key}`, JSON.stringify({ folder: helper.folder, task: helper.task, role: helper.role, run: helper.run, tip: helper.tip }), helpers);
@@ -2335,6 +2455,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
         if (!pending) return;
         note(binding, call);
         renameSync(join(dir, slot, `pending-${pending}`), join(dir, slot, `bound-${hash(agent)}`));
+        if (mark(slot, "role-") === "sage_lead") note(`lead-${hash(agent)}`); // the agent is a lead, also after its slot frees (T482)
         if (!has(slot, "exact")) add(slot, `agent-${id(agent)}`);
         add(slot, `folded-${hash(agentName(agent))}`); // holds compares agent ids case-folded (F-T301-53)
       }
@@ -2364,7 +2485,35 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
     /** A finding that a lead run recorded: the hook saw the lead's finding add print its key (F-T289-42, F-T289-43). */
     found: (key, row) => note(`found-${key}`, JSON.stringify(row), helpers),
     /** The time in ms for which a slot of this helper still holds its lease, or 0: a helper whose slot was freed without a stop left (F-T289-13, F-T289-31). */
-    lease: (key) => Math.max(0, ...list().filter((slot) => mark(slot, "helper-") === key).map((slot) => STALE.agent - (now - statSync(join(dir, slot)).mtimeMs))),
+    lease,
+    /** The runs of the helpers whose keys start with prefix (a lead's helpers) that started and did not stop, while a slot holds their lease (T482). */
+    running: (prefix) => {
+      let names = [];
+      try { names = readdirSync(helpers); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      const keys = names.filter((n) => n.startsWith(`started-${prefix}.`)).map((n) => n.slice("started-".length));
+      return keys.filter((key) => !names.includes(`stopped-${key}`) && lease(key) > 0).map((key) => key.slice(prefix.length + 1)).sort((a, b) => a.slice(1) - b.slice(1));
+    },
+    /** The sage ended these helpers' runs: each one's slot frees, in any session, and its stop is noted with no report (T482, T371). */
+    endHelpers: transaction((keys) => {
+      for (const key of keys) {
+        if (helperNote(`started-${key}`) === undefined) continue;
+        if (helperNote(`stopped-${key}`) === undefined) note(`stopped-${key}`, JSON.stringify(parsed(helperNote(`started-${key}`))), helpers);
+        for (const slot of list().filter((slot) => mark(slot, "helper-") === key)) free(slot);
+      }
+    }),
+    /**
+     * Would the main session's SendMessage to this target wake a lead with no slot (T482, F3)? lead-T<n> (any case, as
+     * TaskStop reads it) with no live lead slot of T<n> in this session, or the agent id of a lead that ended or whose slot
+     * is gone. Any other target: false.
+     */
+    endedLead: (to) => {
+      const name = agentName(to);
+      if (/^lead-t[1-9]\d*$/.test(name)) {
+        const task = `T${name.slice("lead-t".length)}`;
+        return !ofSession().some((slot) => mark(slot, "role-") === "sage_lead" && mark(slot, "task-") === task && has(slot, "ok") && !stopped(mark(slot, "bound-") ?? "", true));
+      }
+      return valid(to) && noted(`lead-${hash(to)}`) && (stopped(to) || !ofSession().some((slot) => ownsAgent(slot, to)));
+    },
     /** Removes the helper notes of the lead runs with these keys (F-T289-13). */
     prune: (leads) => {
       let names = [];
@@ -2425,6 +2574,11 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session) {
       appendFileSync(join(dir, "..", "refusals.log"), `${new Date(now).toISOString()} ${text}\n`);
     },
   };
+}
+
+/** Does this lead run still run for its task in the logbook of this folder? False when the logbook cannot be read. */
+function liveLeadRun(folder, task, run) {
+  try { return logbookOf(folder).leadRun(task)?.id === run; } catch { return false; }
 }
 
 // The mode, autopilot and slot state lives under the sage root, never in the temp folder, which sandboxed commands may write.

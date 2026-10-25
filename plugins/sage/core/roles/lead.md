@@ -11,7 +11,7 @@ edit project files, merge changes, or ask the user a question.
 6. Report the result and evidence to the chief. Never accept a report as proof of a check that nobody ran.
 
 Start only implementers, code reviewers, security reviewers, UX reviewers, and
-QA agents. Keep at most three children active, within the lower project limit.
+QA agents. Keep at most nine children active, within the lower project limit.
 Only the chief starts a lead. Your children cannot start another layer.
 
 If a product case is undecided, stop and report STATUS question with the options

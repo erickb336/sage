@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));
 const LAUNCHER = [at("../plugins/sage/hooks/launcher.mjs"), "sage-hook.mjs"];
 const TOOL = at("../plugins/sage/skills/sage/sage.mjs");
+/** The lead's wait command (T482): `wait <T>` in the file. */
+const WAIT = at("../plugins/sage/hooks/wait.mjs");
 const LEAD_FILE = at("../plugins/sage/agents/lead.md");
 const TEXT = readFileSync(LEAD_FILE, "utf8");
 // Each child call normally takes under 1 s: one that runs 60 s is stuck, and fails instead of stalling the run.
@@ -116,7 +118,8 @@ function project({ size = "small", config = [] } = {}) {
     return r.stdout ? JSON.parse(r.stdout) : undefined;
   };
   // A command as the lead runs it: from the project's folder, without --project or SAGE_PROJECT. git, gh and cat run for real.
-  const run = (program, args) => spawnSync(program === "sage" ? "node" : program, program === "sage" ? [TOOL, ...args] : args, { cwd: folder, env });
+  const scripts = { sage: TOOL, wait: WAIT }; // the file's sage and wait stand for node and a script of the plugin
+  const run = (program, args) => spawnSync(scripts[program] ? "node" : program, scripts[program] ? [scripts[program], ...args] : args, { cwd: folder, env });
   const chief = (...args) => {
     const r = spawnSync("node", [TOOL, ...args, "--project", folder], { env });
     assert.equal(r.status, 0, `the sage's sage ${args.join(" ")}: ${r.stderr}`);
@@ -192,8 +195,8 @@ function play(lines, p) {
     printed = undefined; // a → line compares only with the output of the command just before it
     if (mark === "$") {
       const [program, ...args] = fill(text).split(" ");
-      assert.ok(["sage", "git", "gh", "cat"].includes(program), `agents/lead.md: the lead runs "${line}", which is not a command that the file teaches`);
-      const command = program === "sage" ? `node ${TOOL} ${args.join(" ")}` : [program, ...args].join(" ");
+      assert.ok(["sage", "wait", "git", "gh", "cat"].includes(program), `agents/lead.md: the lead runs "${line}", which is not a command that the file teaches`);
+      const command = program === "sage" ? `node ${TOOL} ${args.join(" ")}` : program === "wait" ? `node ${WAIT} ${args.join(" ")}` : [program, ...args].join(" ");
       assert.equal(p.ask(command), undefined, `the hook refuses: ${line}`);
       // The file says that the checks verdict is the sage's; until the hook refuses it for a lead (T302), the test does.
       assert.ok(!(program === "sage" && args[0] === "verdict" && /^checks-/.test(args[args.indexOf("--kind") + 1])),`${line}: the checks verdict is the sage's (! sage verdict ...)`);
@@ -271,7 +274,7 @@ test("T301: each example of the lead file runs through the hook, from lead-T1's 
     ran.push(...here);
   }
   // Each command form in a code span, run by the lead itself (a form that only the sage ran is not the lead's): the state tool (also as node <path to skills/sage/sage.mjs> ...), git, gh and cat.
-  const taught = [...TEXT.matchAll(/`((?:sage|git|gh|cat|node <path to skills\/sage\/sage\.mjs>) [^`]+)`/g)].map((m) => m[1].replace(/^node <path to skills\/sage\/sage\.mjs> /, "sage "));
+  const taught = [...TEXT.matchAll(/`((?:sage|wait|git|gh|cat|node <path to skills\/sage\/sage\.mjs>) [^`]+)`/g)].map((m) => m[1].replace(/^node <path to skills\/sage\/sage\.mjs> /, "sage "));
   assert.ok(taught.length > 20, "the file teaches its commands in code spans");
   for (const form of taught) {
     // A placeholder such as <T>, <sha> or <word> stands for one word or part of one; the rest of the form must be the same, to its end.
@@ -594,14 +597,23 @@ test("T301: the lead file's helper cap is the hook's, and with the default agent
   const cap = Number(/At most (\d) helpers run at once/.exec(TEXT)?.[1] ?? assert.fail("the file states its helper cap"));
   const stated = Number(/\(`max_agents`, (\d+) by default\)/.exec(TEXT)?.[1] ?? assert.fail("the file states the default agent cap"));
   assert.equal(stated, DEFAULT_CAP, "the file's default agent cap is the state tool's");
-  const p = project({ size: "large" }); // the default max_agents
-  play(["$ sage task T1 set state=building branch=sage/t1-example", "$ sage run add T1 --role implementer --branch sage/t1-example", "> R2 sage:implementer", "< R2 done: none",
-    "$ sage run done R2 --status done --tokens 1", "$ sage task T1 set state=reviewing pr=12"], p);
+  const BUILD = ["$ sage task T1 set state=building branch=sage/t1-example", "$ sage run add T1 --role implementer --branch sage/t1-example", "> R2 sage:implementer", "< R2 done: none",
+    "$ sage run done R2 --status done --tokens 1", "$ sage task T1 set state=reviewing pr=12"];
   const ROLES = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
-  play(ROLES.slice(0, cap).flatMap((role, i) => [`$ sage run add T1 --role ${role}`, `> R${i + 3} sage:${role}`]), p);
-  play([`$ sage run add T1 --role ${ROLES[cap]}`], p);
-  const spawn = { subagent_type: `sage:${ROLES[cap]}`, name: `R${cap + 3}`, description: "one more", prompt: BRIEF, run_in_background: true };
-  assert.match(denied(p.send({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: spawn, tool_use_id: "one-more", ...p.lead })) ?? "", new RegExp(`already has ${cap} children|its cap is`), `helper ${cap + 1} waits`);
+  /** Starts helpers up to n, one more run, and the hook's answer to its helper's spawn. */
+  const fill = (p, n) => {
+    const role = (i) => ROLES[i % ROLES.length];
+    play(Array.from({ length: n }, (_, i) => [`$ sage run add T1 --role ${role(i)}`, `> R${i + 3} sage:${role(i)}`]).flat(), p);
+    play([`$ sage run add T1 --role ${role(n)}`], p);
+    const spawn = { subagent_type: `sage:${role(n)}`, name: `R${n + 3}`, description: "one more", prompt: BRIEF, run_in_background: true };
+    return denied(p.send({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: spawn, tool_use_id: "one-more", ...p.lead })) ?? "";
+  };
+  const raised = project({ size: "large", config: [`max_agents=${cap + 2}`] }); // room for the lead, its helpers and one more
+  play(BUILD, raised);
+  assert.match(fill(raised, cap), new RegExp(`already has ${cap} children`), `helper ${cap + 1} waits for the lead's cap`);
+  const p = project({ size: "large" }); // the default max_agents
+  play(BUILD, p);
+  assert.match(fill(p, DEFAULT_CAP - 1), new RegExp(`its cap is ${DEFAULT_CAP}\\b`), "under the default cap, the project's cap holds first");
   // A second lead finds the project's cap full while lead-T1 and its helpers run.
   p.chief("task", "add", "--title", "second", "--size", "small");
   p.chief("task", "T2", "set", "state=briefed");

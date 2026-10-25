@@ -117,11 +117,11 @@ Each task with a build gets one lead. The chief records a lead run and starts th
 
 The lead does these things:
 
-- It runs the build, the cycles and the repair rounds, with at most 3 helpers at once.
+- It runs the build, the cycles and the repair rounds, with at most 9 helpers at once. It does not end while a helper runs: the hook blocks its stop, and its wait command waits for the helper with Bash alone.
 - It records each finding of its helpers.
 - It leaves the task at verifying and gives the chief one report. So the chat shows a few lines for each pull request, not every report.
 
-The lead and each helper take a slot of the project's agent cap (`max_agents`, 4 by default). One lead with its 3 helpers fills the default cap, so the chief starts a second lead only when the cap has room for it and its helpers.
+The lead and each helper take a slot of the project's agent cap (`max_agents`, 4 by default). One lead with 3 helpers fills the default cap; to let a lead run up to 9 helpers, raise the project's cap to 10 (`sage config cap.<project>=10`). The chief starts a second lead only when the cap has room for it and its helpers.
 
 A tiny task has no review and no QA in its route, so its lead runs only the implementer. A task with no review or QA in its route has no cycle: it needs only checks-pass. A risk flag or an added review puts a review in the route, and then the task needs its clean cycles like any other task.
 
