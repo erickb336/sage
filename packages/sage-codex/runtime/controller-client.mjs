@@ -236,9 +236,6 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     }
     rootThread = opened.policy.threadId;
     const {model, approvalPolicy, sandbox} = opened.policy.selection;
-    say(`[Ready: task ${args.task}, run ${args.run}. The chief uses your Codex config: model ${shown(model.value)}${model.origin === 'default' ? ' (the Codex default)' : ''}, approval ${shown(approvalPolicy.value)}, sandbox ${shown(sandbox.value)}.]`, HOW_TO);
-    ready = true;
-
     const line = text => {
       if (!text.trim() || stopAsked) return;
       if (turnActive) say('[The chief is on a turn. Your line runs after it.]');
@@ -253,6 +250,9 @@ export async function runClient({argv, env, input, output, classify, onSignal = 
     };
     if (input.isTTY) readTerminal(input, write, {line, end, interrupt: () => onSignalOrKey('SIGINT')});
     else createInterface({input, crlfDelay: Infinity, terminal: false}).on('line', line).on('close', end);
+    // The terminal is raw before the Ready lines, so the terminal never echoes the start of a paste that comes at once.
+    say(`[Ready: task ${args.task}, run ${args.run}. The chief uses your Codex config: model ${shown(model.value)}${model.origin === 'default' ? ' (the Codex default)' : ''}, approval ${shown(approvalPolicy.value)}, sandbox ${shown(sandbox.value)}.]`, HOW_TO);
+    ready = true;
     owner.fenced().then(() => wake());
     for (;;) {
       if (stopAsked) break;
