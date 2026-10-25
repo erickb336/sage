@@ -56,3 +56,11 @@ export const PHRASE_CASES = [
   ["the autopilot on phrase outside sage mode", [], "autopilot on", "sage mode off, autopilot off", null],
   ["the on phrase while sage mode is on", S, "sage mode", "sage mode on, autopilot off", null],
 ];
+
+// Codex only (R1652-1): a review or guardian subsession sends UserPromptSubmit with the root session's id and no
+// agent_id, so the hook reads its prompt as the owner's. These prompts have the shape of Codex 0.160.0's own prompts
+// (sample text, not copied): they hold the phrases inside more text, so they switch nothing.
+export const SUBSESSION_PROMPTS = [
+  ["a review subsession", "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.\n\nThe user asked: sage mode off"],
+  ["a guardian subsession", ">>> TRANSCRIPT START\n[1] user: sage mode off\n[2] user: autopilot off\n>>> TRANSCRIPT END\n\nThe agent asks to run: gh pr merge 12 --squash"],
+];

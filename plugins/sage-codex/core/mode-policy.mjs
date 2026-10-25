@@ -43,8 +43,8 @@ export function phrasesNear(message) {
 }
 
 /**
- * What differs between the hosts in the mode notes: the host's name, when a phrase works, whether the board phrases
- * work, and the update command. The default is Claude Code.
+ * What differs between the hosts in the mode notes: the host's name, when a phrase works (and the limits of the host),
+ * whether the board phrases work, and the update command. The default is Claude Code.
  */
 const claudeHost = {
   name: "Claude",
@@ -133,4 +133,25 @@ export function switchModes({ owner, text, queued = [], all, stray = "" }, state
   if (queuedMiss || queuedOff.size) notes.push(`sage: a message sent while ${host.name} works did not switch a mode. The hook cannot tell such a message from an agent's text, so it lets it switch autopilot off only.${queuedOff.size ? ` If the user sent it, ask the user to send ${quote(queuedOff)} alone when ${host.name} is idle.` : ""} Tell the user only if the user sent it.`);
   if (help) notes.push(phraseHelp(state, host));
   return notes;
+}
+
+/** The modes after a damaged mode file: off, as in a new session, but written, so that the user is told only once. */
+const OFF = { sage: false, autopilot: false };
+export const MODE_DAMAGED = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off. Send "sage mode" alone to turn sage mode on again.';
+
+/**
+ * The one reader of a session's mode file, for every hook of a host, with one rule (R1651-1). read(file) gives the
+ * file's JSON, and throws an error with the code ENOENT when there is no file: a new session, with no mode on. A file
+ * that cannot be read, or that holds no mode state, is damaged: sage mode and autopilot are off. Then damaged is true,
+ * and a hook that writes the file replaces it with the clean off state and shows MODE_DAMAGED once.
+ */
+export function readModeFile(read, file) {
+  let state;
+  try {
+    state = read(file);
+  } catch (error) {
+    return error?.code === "ENOENT" ? { state: {}, damaged: false } : { state: { ...OFF }, damaged: true };
+  }
+  const valid = state !== null && typeof state === "object" && !Array.isArray(state) && ["sage", "autopilot", "given"].every((k) => state[k] === undefined || typeof state[k] === "boolean");
+  return valid ? { state, damaged: false } : { state: { ...OFF }, damaged: true };
 }

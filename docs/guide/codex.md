@@ -55,13 +55,17 @@ Treat this as a preview. Check each step in your own Codex before you rely on it
    codex plugin add sage@sage
    ```
 
-4. Start a new Codex session with hooks on:
+4. Start a new Codex session:
 
    ```sh
-   codex --enable codex_hooks --enable plugin_hooks
+   codex
    ```
 
+   Codex 0.160.0 runs hooks by default, so you need no flags. If sage's hooks do not run in an older Codex, start it with `codex --enable codex_hooks --enable plugin_hooks`.
+
 5. When Codex asks, review and trust sage's hook commands. sage does not bypass Codex's hook trust or change its global configuration.
+
+In the Codex desktop app, install the plugin with the same commands, and then start a new thread. If the app shows no review screen for the hooks, trust them once in the CLI (steps 4 and 5). This app path is not yet checked.
 
 You see: a design request, or a patch to a test file, adds the principle's text to the session once. The `sage` skill gives the logbook commands.
 
@@ -76,8 +80,14 @@ Send each phrase alone, as the whole message, in any letter case.
 | `autopilot on` / `autopilot off` | The hook records autopilot, while sage mode is on. It merges nothing yet: work stops at verified, and you merge. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-- Only your own typed message switches a mode: Codex gives the hook no agent text. A message near a phrase switches nothing, and the chief asks you for the exact phrase.
-- When the hook cannot read an event, it switches nothing, turns autopilot off and shows one line.
+- Send a phrase when Codex is idle.
+- Only your own typed message switches a mode: Codex gives the hook no agent text. A Codex review or approval check sends its own prompt, and that prompt switches nothing.
+- A message near a phrase switches nothing. The chief asks you for the exact phrase, unless your message was a question.
+- For a normal switch, the chief confirms the switch in one line of its reply.
+- For a limit or a fault, the hook gives Codex a warning line; the terminal UI and the app show it; `codex exec` does not. The limit: `autopilot on` merges nothing yet. The faults: an event that the hook cannot read (it switches nothing and turns autopilot off), and a mode folder that it cannot use (the line names the folder).
+- A damaged mode file turns sage mode and autopilot off. The hook replaces the file with a clean one and gives one warning line. Send `sage mode` to turn sage mode on again.
+- A forked thread starts with sage mode and autopilot off, because Codex does not tell the hook which thread it came from. If the fork shows the chief's role, the chief tells you this in one line. Send `sage mode` in the fork to turn it on there.
+- With `SAGE_HOOKS=off`, a phrase switches nothing, and the hook gives one warning line that says so.
 - The hook keeps the mode of each session in `~/.codex/sage/.hooks/codex/` (or under `SAGE_HOME`).
 
 The hooks run only after you trust them (step 5). In `codex exec`, Codex skips hooks that you have not trusted, with no warning.
