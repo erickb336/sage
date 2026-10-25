@@ -72,8 +72,8 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
 
 ## The README and the docs
 
-- The README is a short front page. `npm run check` holds it to 150 lines, at most 5 What's new items, a first screen that answers what sage is, and relative links that resolve. A longer text goes into a page under `docs/`, listed in the [docs index](docs/README.md).
-- Each change for users goes into [CHANGELOG.md](CHANGELOG.md), newest first. The README's What's new keeps only the last five.
+- The README is a short front page. `npm run check` holds it to 150 lines, a first screen that answers what sage is and its status, a link to the changelog, and relative links that resolve. A longer text goes into a page under `docs/`, listed in the [docs index](docs/README.md).
+- Each change for users goes into [CHANGELOG.md](CHANGELOG.md), newest first. The README has no list of changes: it links to the changelog.
 - The word table of [Concepts](docs/guide/concepts.md) and the table of [Principles](docs/guide/principles.md) come from the build: edit `writing/dictionary.md` or the principles, then run `npm run build`.
 - Write at about 80% of Simplified Technical English ([writing/ste-80.md](writing/ste-80.md)), with sage's words from [writing/dictionary.md](writing/dictionary.md). `npm run check` fails on a flagged word.
 
