@@ -107,11 +107,11 @@ Every rule and its reason: [Rules held in code](docs/design/rules-in-code.md). R
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
 
+- **Codex: role agents and the report check.** In Codex, the chief starts each role agent with its role text, and a role agent's report without every field gets one more turn ([sage in Codex](docs/guide/codex.md)).
 - **The off phrase holds in every session**, also in a folder that starts every session in sage mode.
 - **The board names more logbook problems:** a stuck program, a missing program and a logbook that it cannot read are items of Needs you.
 - **The board page has a new look:** dark by default, with AA contrast in both themes.
 - **Programs:** you approve the breakdown of a multi-task goal before any task of it builds.
-- **A task can wait for other tasks**, and the board has an Agents page and a project picker.
 
 All changes: [CHANGELOG.md](CHANGELOG.md).
 

@@ -5,6 +5,10 @@ Each date is the day of the first commit that made the change. Older changes are
 
 > **Warning:** before you use waits or programs, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve. See [To update sage](docs/guide/using-sage.md#to-update-sage).
 
+## 2026-10-25
+
+- **Codex: role agents and the report check.** In Codex, the chief starts each role agent (lead, implementer, reviewers, QA) as a Codex child agent. The `role.mjs` script of the `sage` skill prints the role text and the sage report, and the chief puts that text at the top of the spawn message, with a task name that starts with `sage_` and `fork_turns: "none"`. The plugin writes no role files into your Codex home. A new `SubagentStop` hook reads the report of each such agent: a report without every field (`STATUS` to `BRANCH`) gets one more turn that names the missing fields, and at the second stop the agent stops with one plain line. The chief starts every role agent for now: a lead does not start agents yet. The check does not read a review's findings yet. Checked with Codex CLI 0.160.0 and a test model on this machine.
+
 ## 2026-10-24
 
 - **The off phrase holds in every session.** In a folder whose `.claude/settings.json` starts every session as the chief, `sage mode off` now gives a normal session for the rest of the session, as in any other session. Before, sage mode came back on at the next event, and the session had no file tools. Now the chief agent has every tool, and the sage hook alone refuses the chief's file edits while sage mode is on. `sage mode` turns it on again. A new session, or `/clear`, in that folder starts in sage mode again.

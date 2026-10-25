@@ -12,8 +12,9 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | A principle at the moment it applies | Yes | Yes, for a design request, a test or document patch, a README and a commit |
 | Advice after a failed check | Yes | No: Codex's shell hook output does not give a reliable exit status |
 | The logbook and the board | Yes | Yes, through the manual commands of the `sage` skill |
-| The stop check | Yes | No, until native captures prove it |
-| sage mode: the chief, the team, agent caps, report checks, the push and merge rules | Yes | Not enabled. Parts are built and tested, but they are not switched on in the installed plugin |
+| Role agents (lead, implementer, reviewers, QA) | Yes | Yes: the chief puts the role text at the top of each spawn message, and starts every role agent itself (a lead does not start agents yet). See [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md) |
+| The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
+| sage mode: the chief, agent caps, the push and merge rules | Yes | Not enabled. Parts are built and tested, but they are not switched on in the installed plugin |
 | Autopilot | Yes | No |
 | The phrases (`sage mode`, `autopilot on`, `show board`) | Yes | No: use the manual skill commands |
 

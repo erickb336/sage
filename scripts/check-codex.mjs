@@ -58,7 +58,7 @@ if (versionResult.code !== 0 || !/^codex-cli \d+\.\d+\.\d+(?:[-+.][A-Za-z0-9.-]+
           const plugin = reply.result.plugin;
           const expected = readdirSync(join(ROOT, "plugins/sage-codex/skills")).map((name) => `sage:${name}`).sort();
           assert.deepEqual(plugin.skills.map((skill) => skill.name).sort(), expected);
-          assert.deepEqual(plugin.hooks.map((hook) => hook.eventName).sort(), ["preToolUse", "userPromptSubmit"]);
+          assert.deepEqual(plugin.hooks.map((hook) => hook.eventName).sort(), ["preToolUse", "subagentStop", "userPromptSubmit"]);
           assert.equal(plugin.summary.source.path, join(ROOT, "plugins/sage-codex"));
           discovered = expected.length;
           finish();
@@ -75,6 +75,6 @@ if (versionResult.code !== 0 || !/^codex-cli \d+\.\d+\.\d+(?:[-+.][A-Za-z0-9.-]+
     console.error(`Codex package check failed: ${failure.message}`);
     process.exitCode = 1;
   } else {
-    console.log(`${version}: discovered ${discovered} skills and 2 hooks from the Codex package. No model turn or install was attempted.`);
+    console.log(`${version}: discovered ${discovered} skills and 3 hooks from the Codex package. No model turn or install was attempted.`);
   }
 }
