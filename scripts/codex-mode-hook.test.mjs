@@ -148,7 +148,7 @@ test("T453: an unknown input shape switches nothing, turns autopilot off, and sh
 });
 
 const DAMAGED = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off. Send "sage mode" alone to turn sage mode on again.';
-const DAMAGED_NOTE = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off, and this message switched no mode. This is a normal session until the user sends "sage mode" alone, also if the history shows the chief role: you may change files yourself. Tell the user this in one line of your reply.';
+const DAMAGED_NOTE = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off. This is a normal session until the user sends "sage mode" alone, also if the history shows the chief role: you may change files yourself. Tell the user this in one line of your reply.';
 
 test("T453: a damaged mode file turns sage mode and autopilot off, tells the user once, and is replaced by a clean off state", async () => {
   const got = [];

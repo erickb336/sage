@@ -39,7 +39,7 @@ const AUTOPILOT_ON = "sage: autopilot is on. In Codex, sage has no merge check y
 const AUTOPILOT_LIMIT = "sage: autopilot is on, but in Codex it merges nothing yet: work stops at verified, and you merge.";
 const UNKNOWN = "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin or Codex.";
 const HOOK_OFF = "sage: the sage hook is off (SAGE_HOOKS=off), so this phrase switched no mode. Start Codex without SAGE_HOOKS=off to use the phrases.";
-const DAMAGED_NOTE = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off, and this message switched no mode. This is a normal session until the user sends "sage mode" alone, also if the history shows the chief role: you may change files yourself. Tell the user this in one line of your reply.';
+const DAMAGED_NOTE = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off. This is a normal session until the user sends "sage mode" alone, also if the history shows the chief role: you may change files yourself. Tell the user this in one line of your reply.';
 const FORK_NOTE = 'sage: this thread is a fork, so sage mode and autopilot are off in it, also if the history shows the chief role: this is a normal session, and you may change files yourself. If the history shows the chief role, tell the user in one line of your reply that sage mode is off in this fork, and that the message "sage mode" alone turns it on.';
 const onOff = (value) => (value ? "on" : "off");
 
