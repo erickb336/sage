@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {bindPolicy, bindTask, bindTurnText, checkConfig, projectTrustFlags, resolveControllerBinary, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, otherSpellings, projectTrustFlags, resolveControllerBinary, turnOutcome} from './controller-binding.mjs';
 import {OWNED_LAUNCH_ARGS} from './controller-process.mjs';
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sage-binding-')));
@@ -226,8 +226,9 @@ test('checkConfig: disabled project layers pass and give their folders; an enabl
   assert.deepEqual(check(layers => layers.push(layer('/work/.codex', untrusted, {mcp_servers: {x: {command: '/bin/x'}}}),
     layer('/work/project/.codex', untrusted, {features: {request_permissions_tool: true}, shell_environment_policy: {include_only: []}, model_verbosity: 'low'}))),
   ['/work/.codex', '/work/project/.codex']);
-  // The refusal names the likely causes in order: an owner trust entry under another spelling, then a managed config (R1602-2).
-  const trusted = 'project-trusted: The controller loads the project config in /work/project/.codex, although the client marks the project as untrusted. An agent can change the project config, so the client does not start the chief. The likely causes, in order: a trust entry for the project in your Codex config (/home/.codex/config.toml) under another spelling of its path, such as other letter case; or a trust entry in a managed config (/etc/codex/managed_config.toml, or one from your organization). Remove that trust entry (for a managed config, ask your administrator), then start the client again.';
+  // The refusal names a managed config first: no owner trust entry made the controller load a project layer in a
+  // probe (R1602-2, R1612-1).
+  const trusted = 'project-trusted: The controller loads the project config in /work/project/.codex, although the client marks the project as untrusted. An agent can change that config. A managed config (/etc/codex/managed_config.toml, or one from your organization) can mark the project as trusted. Ask your administrator to remove that trust entry, then start the client again. If you have no managed config, look for a trust entry for this folder in your Codex config (/home/.codex/config.toml).';
   // A layer with only a model text setting refuses too: the client takes nothing from an enabled project layer.
   assert.equal(check(layers => layers.push(layer('/work/project/.codex', null, {model_verbosity: 'low'}))), trusted);
   assert.equal(check(layers => layers.push(layer('/work/.codex', untrusted, {}), layer('/work/project/.codex', '', {}))), trusted);
@@ -269,6 +270,29 @@ test('projectTrustFlags gives each spelling of the project its keys, the canonic
   const keys = [...value.matchAll(/("(?:[^"\\]|\\.)*")=\{ trust_level="untrusted" \}/g)].map(match => JSON.parse(match[1]));
   assert.deepEqual(keys, ['/w/café', '/w', '/', '/W/café', '/W']);
   assert.deepEqual(projectTrustFlags('/a', '/a'), projectTrustFlags('/a'));
+});
+
+// R1611-1: an owner trust key that names a folder of the flag in other letter case or Unicode form, and that the flag
+// does not name. Only the owner layers count; a key that the flag names, or another folder, is not one.
+test('otherSpellings gives each owner trust key that names the project or a folder above it under another spelling', () => {
+  const user = projects => ({name: {type: 'user', file: '/h/config.toml', profile: null}, version: 'v', config: {projects}});
+  const read = (...layers) => ({config: {}, origins: {}, layers});
+  const trusted = {trust_level: 'trusted'};
+  const keys = ['/work/MYPROJ', '/work/myproj', '/WORK', '/work/MyProj', '/work/MyProj/sub', '/work/MyProj2', '/other', '/', '/work/café', '/w/Ω'];
+  const owner = read(user(Object.fromEntries(keys.map(key => [key, trusted]))));
+  // The flag names the canonical spelling /work/MyProj, its folders and the typed spelling /work/myproj.
+  assert.deepEqual(otherSpellings(owner, ['/work/MyProj', '/work/myproj']), ['/work/MYPROJ', '/WORK']);
+  // NFD on disk, NFC in the owner config; the ohm sign is the Greek capital omega in NFC.
+  assert.deepEqual(otherSpellings(owner, ['/work/café']), ['/WORK', '/work/café']);
+  assert.deepEqual(otherSpellings(owner, ['/w/Ω']), ['/w/Ω']);
+  // A key in a project layer is not the owner's, and a reply with no layers has no keys.
+  const project = {name: {type: 'project', dotCodexFolder: '/work/MyProj/.codex'}, version: 'v', config: {projects: {'/work/MYPROJ': trusted}}};
+  assert.deepEqual(otherSpellings(read(project), ['/work/MyProj']), []);
+  assert.deepEqual(otherSpellings({}, ['/work/MyProj']), []);
+  // A managed layer counts; the keys that the flag names already give none.
+  const managed = {name: {type: 'mdm', domain: 'd', key: 'k'}, version: 'v', config: {projects: {'/Work': trusted}}};
+  assert.deepEqual(otherSpellings(read(managed), ['/work/MyProj']), ['/Work']);
+  assert.deepEqual(otherSpellings(owner, ['/work/MyProj', '/work/myproj', '/work/MYPROJ', '/WORK']), []);
 });
 
 test('bindPolicy: a version or a policy refusal names what it found and what to change (R1504-3)', () => {

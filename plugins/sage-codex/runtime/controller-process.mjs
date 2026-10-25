@@ -2,7 +2,7 @@ import {spawn as nativeSpawn} from 'node:child_process';
 import {realpathSync} from 'node:fs';
 import {isAbsolute} from 'node:path';
 import {createControllerTransport, OWNED_CONTROLLER_CONFIG} from './controller-transport.mjs';
-import {bindPolicy, bindTask, bindTurnText, checkConfig, codexHome, projectInstructions, projectTrustFlags, settingsNotice, turnOutcome} from './controller-binding.mjs';
+import {bindPolicy, bindTask, bindTurnText, checkConfig, codexHome, otherSpellings, projectInstructions, projectTrustFlags, settingsNotice, turnOutcome} from './controller-binding.mjs';
 
 // Limits bound one wire frame and retained stderr bytes, not total process output.
 // One frame can hold one whole agent message, so the frame bound is the event bound of a turn (maxEventBytes).
@@ -22,8 +22,27 @@ export const OWNED_LAUNCH_ARGS = Object.freeze(['app-server', '--stdio', '--owne
  * Trusted launch inputs only. One process launches the owned controller entry, binds one task to one root thread
  * after the policy check, and runs one turn at a time. It keeps every notification and refused server request, and
  * gives each turn an honest terminal result: EOF, a crash, a fence or a timeout never count as completed.
+ * When config/read shows an owner trust entry under another spelling of the project (otherSpellings), openThread stops
+ * the controller and starts it once more with those keys in the trust flag (R1611-1). The methods then act on the
+ * second controller, so the caller takes fenced() after openThread, as the client does.
  */
-export function createControllerProcess(options, {spawn = nativeSpawn, schedule = defaultSchedule} = {}) {
+export function createControllerProcess(options, dependencies = {}) {
+  let current = ownedProcess(options, dependencies, []), stopping = false;
+  async function openThread(input) {
+    const opened = await current.openThread(input);
+    if (opened.state !== 'restart') return opened;
+    if (stopping || opened.status.state !== 'stopped') return Object.freeze({state: 'refused', code: 'restart', error: Object.freeze({message: 'The controller did not stop for its restart with the other spellings of the project'}), status: opened.status});
+    current = ownedProcess(options, dependencies, opened.spellings);
+    try { await current.start(); } catch (error) { return Object.freeze({state: 'refused', code: 'refused', error: Object.freeze({message: error.message}), status: await current.stop()}); }
+    return current.openThread(input);
+  }
+  return Object.freeze({start: () => current.start(), inspect: () => current.inspect(), openThread, runTurn: text => current.runTurn(text),
+    interrupt: () => current.interrupt(), stop: () => { stopping = true; return current.stop(); }, status: () => current.status(),
+    events: () => current.events(), fenced: () => current.fenced()});
+}
+
+// One controller process. `spellings` are the owner trust keys that its flag names too (none at the first start).
+function ownedProcess(options, {spawn = nativeSpawn, schedule = defaultSchedule}, spellings) {
   if (!options || Object.getPrototypeOf(options) !== Object.prototype) throw new TypeError('Trusted launch options required');
   const allowed = ['executable', 'executableSha256', 'cwd', 'env', 'startupTimeoutMs', 'inspectionTimeoutMs', 'stopGraceMs', 'maxFrameBytes', 'maxDiagnosticBytes',
     'turnTimeoutMs', 'interruptGraceMs', 'maxEvents', 'maxDeltaEvents', 'maxEventBytes', 'onEvent'];
@@ -53,7 +72,7 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
     turnTimeoutMs, interruptGraceMs, maxEvents, maxDeltaEvents, maxEventBytes})) positive(value, name);
   if (typeof spawn !== 'function' || typeof schedule !== 'function') throw new TypeError('Invalid process dependencies');
   // The controller loads no project layer of the cwd (projectTrustFlags); the binding record keeps these arguments.
-  const launchArgs = Object.freeze([...OWNED_LAUNCH_ARGS, ...projectTrustFlags(canonical, cwd)]);
+  const launchArgs = Object.freeze([...OWNED_LAUNCH_ARGS, ...projectTrustFlags(canonical, cwd, ...spellings)]);
   let child, connection, attempted = false, fenced = false, fenceReason = null, childClosed = false, exitCode = null, exitSignal = null;
   let phase = 'idle', stopPromise, inspectionPromise, diagnosticBytes = 0, diagnosticsTruncated = false;
   let initialized = null, threadRequested = false, binding = null, turn = null;
@@ -228,6 +247,11 @@ export function createControllerProcess(options, {spawn = nativeSpawn, schedule 
       if (realpathSync(task.project) !== task.project) throw Object.assign(new Error('Project must be its own real path'), {code: 'task'});
       const config = await inspect();
       checkConfig(config, codexHome(environment));
+      // An owner trust entry under another spelling of the project or a folder above it, which the flag does not name:
+      // the second start names it. Its config/read shows no such key, unless the owner config changed in between.
+      const missing = otherSpellings(config, [canonical, cwd, ...spellings]);
+      if (missing.length && spellings.length) throw Object.assign(new Error(`Your Codex config changed while the client started: it has a trust entry for ${JSON.stringify(missing[0])}, another spelling of the project folder or a folder above it. Start the client again.`), {code: 'project-spelling'});
+      if (missing.length) return Object.freeze({state: 'restart', spellings: Object.freeze(missing), status: await stop()});
       // The project files (AGENTS.md) after the check, with the owner's limits from config/read. The binding record
       // keeps the canonical project and the hash of the instructions that the thread gets.
       const docs = projectInstructions(canonical, config, input.instructions, codexHome(environment));
