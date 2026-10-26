@@ -341,9 +341,18 @@ test("a mode file, a record and a ledger that an agent writes under /tmp turn on
     ({ type: "event_msg", payload: { type: "item_completed", thread_id: base.session_id, item: { type: "UserMessage", content: [{ type: "text", text }] } } }))]
     .map((line) => JSON.stringify(line)).join("\n") + "\n");
   const tool = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", w.project], { encoding: "utf8", env: forgedEnv });
+  const cli = (...args) => {
+    const result = tool(...args);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
   assert.equal(tool("init").status, 0);
   assert.equal(tool("task", "add", "--priority", "P2", "--title", "t", "--size", "small").status, 0);
-  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) assert.equal(tool("verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41").status, 0);
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) {
+    const args = ["verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41"];
+    const result = tool(...backed(args, { cli, keep: fields => codexTool.keepReport(w.project, fields, forgedEnv) }));
+    assert.equal(result.status, 0, result.stderr);
+  }
   // The gate reads its own settings, the session that Codex gives it and Codex's record of that session, never the command's.
   const off = /^sage: (?:autopilot is off|the hook cannot prove that this command is only the merge command)/;
   assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", /^sage: autopilot is off/, "the plain landing command");

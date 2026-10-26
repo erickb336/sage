@@ -1,0 +1,27 @@
+{
+  "base": "9bf43dea015c470e2688ff8a886f4315a5e19a71",
+  "request": {
+    "owner": "sample-owner",
+    "request": "d1111111-1111-4111-8111-111111111111",
+    "title": "Created sample",
+    "size": "small",
+    "risk": [],
+    "add": [
+      "security-review"
+    ],
+    "why": "Sample added review"
+  },
+  "tables": {
+    "decisions.tsv": "at\ttask\tdecision\twhy\n",
+    "findings.tsv": "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\trun\tclass\n",
+    "gates.tsv": "id\ttask\tquestion\toptions\trecommendation\tdefault\tanswer\tat\n",
+    "ledger.tsv": "task\tpr\tsha\tkind\tcycle\trun\tat\n",
+    "programs.tsv": "id\tname\tgoal\tpilot\tgate\tat\n",
+    "runs.tsv": "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel\tusage_provider\tusage_interface\tusage_capability\tusage_binding\tusage_reason\tusage_basis\tusage_status\tusage_source\tusage_evidence\n",
+    "tasks.tsv": "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\tadoption\n"
+  },
+  "pending": "{\"value\":{\"schema\":2,\"receipt\":{\"reference\":{\"owner\":\"sample-owner\",\"request\":\"d1111111-1111-4111-8111-111111111111\",\"title\":\"Created sample\",\"size\":\"small\",\"risk\":[],\"add\":[\"security-review\"],\"why\":\"Sample added review\"},\"result\":{\"id\":\"T1\",\"title\":\"Created sample\",\"size\":\"small\",\"risk\":\"\",\"route\":\"build,code-review,security-review,qa\",\"state\":\"framed\",\"round\":0}},\"tables\":{\"tasks\":{\"before\":\"id\\ttitle\\tsize\\trisk\\troute\\tstate\\tbranch\\tpr\\tround\\tkeys\\thold\\textra\\tpriority\\tkind\\twaits\\tprogram\\tadoption\\n\",\"after\":\"id\\ttitle\\tsize\\trisk\\troute\\tstate\\tbranch\\tpr\\tround\\tkeys\\thold\\textra\\tpriority\\tkind\\twaits\\tprogram\\tadoption\\nT1\\tCreated sample\\tsmall\\t\\tbuild,code-review,security-review,qa\\tframed\\t\\t\\t0\\t\\t\\t\\t\\t\\t\\t\\t\\n\"},\"decisions\":{\"before\":\"at\\ttask\\tdecision\\twhy\\n\",\"after\":\"at\\ttask\\tdecision\\twhy\\n2026-10-26T22:15:05Z\\tT1\\tadded security-review\\tSample added review\\n\"}}},\"hash\":\"7e74b68dd41daf5b5ef977e6b6d00888f0866b8b0e28593e0019063b06cef7d9\"}\n",
+  "receipt": "{\"value\":{\"reference\":{\"owner\":\"sample-owner\",\"request\":\"d1111111-1111-4111-8111-111111111111\",\"title\":\"Created sample\",\"size\":\"small\",\"risk\":[],\"add\":[\"security-review\"],\"why\":\"Sample added review\"},\"result\":{\"id\":\"T1\",\"title\":\"Created sample\",\"size\":\"small\",\"risk\":\"\",\"route\":\"build,code-review,security-review,qa\",\"state\":\"framed\",\"round\":0}},\"hash\":\"8dbc40e5e841aee1523371cbdd785dd6e7c82b8676e3cbc9868c94ab20f5807b\"}\n",
+  "name": "3e58a1d9e9bf378daddbd8fe815e376e6149bdf8f4ef4d4f072f5ef4b5480fda.json",
+  "folder": "task-requests"
+}

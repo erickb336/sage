@@ -5462,6 +5462,32 @@ test('T337: a native task update refuses a move to building while the program br
   assert.equal(f.update(f.request({ state: 'building' }, 'a2222222-2222-4222-8222-222222222222')).task.state, 'building');
 });
 
+test('T48: native task updates require an approval and recover the same grant once', async t => {
+  const f = await nativeTaskUpdateFixture(t), file = join(f.assignmentLogbook, 'tasks.tsv');
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  const [head, ...lines] = readFileSync(file, 'utf8').trimEnd().split('\n');
+  const cols = head.split('\t');
+  writeFileSync(file, [head, ...lines.map(line => {
+    const cells = line.split('\t');
+    if (cells[0] === 'T1') for (const [key, value] of Object.entries({ state: 'held', hold: 'round', round: '4' })) cells[cols.indexOf(key)] = value;
+    return cells.join('\t');
+  })].join('\n') + '\n');
+  const before = updateTableBytes(f);
+  assert.throws(() => f.update(f.request({ state: 'building' })), { code: 'invalid-change' });
+  assert.deepEqual(updateTableBytes(f), before);
+  f.assignmentCli('gate', 'add', 'T1', '--question', 'Approve one more repair round for T1 after 4 spent rounds and limit 3?', '--options', 'approve|decline', '--recommend', 'approve');
+  f.assignmentCli('gate', 'answer', 'G1', '--option', '1');
+  const request = f.request({ state: 'building', approval: 'G1' });
+  const { run, coordination } = await taskUpdateCoordinator(f, request);
+  assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected acknowledgement failure'); } }));
+  const result = f.update(request);
+  assert.equal(result.task.extra, '2'); assert.equal(result.task.round, '4');
+  assert.equal(result.task.approvals, 'G1');
+  const saved = updateTableBytes(f);
+  assert.equal(f.update(request).decision, 'task-update-history');
+  assert.deepEqual(updateTableBytes(f), saved);
+});
+
 test('T13: authenticated metadata update and historical retry preserve later task data', async t => {
   const f = await nativeTaskUpdateFixture(t);
   const first = f.request({ title: 'First title' });
