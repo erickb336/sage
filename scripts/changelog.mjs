@@ -74,7 +74,7 @@ export function changelog(root) {
     const text = readFileSync(file, "utf8");
     const made = new Set([...lines, ...text.split("\n").flatMap((l) => (MARKER_READ.exec(l)?.[1] ?? "").split(" "))]);
     const byHand = textLines(text).filter((l) => !made.has(digest(l)));
-    if (byHand.length) throw new Error(byHand.map((l) => `CHANGELOG.md has a line that no file of ${CHANGES}/ makes, so the build would drop it: "${l.trim().length > 70 ? `${l.trim().slice(0, 70)}...` : l.trim()}". Move it into ${CHANGES}/<task>.md with its date (or into ${CHANGES}/${EARLIER} if it is an older entry or the intro), then run npm run changelog.`).join("\n"));
+    if (byHand.length) throw new Error(byHand.map((l) => `CHANGELOG.md has a line that no file of ${CHANGES}/ makes, so the build would drop it: "${l.trim().length > 70 ? `${l.trim().slice(0, 70)}...` : l.trim()}". Move it into ${CHANGES}/<task>.md with its date (or into ${CHANGES}/${EARLIER} if it is an older entry or the intro). On a task branch, then undo the edit of CHANGELOG.md; only a change-log pull request from main runs npm run changelog.`).join("\n"));
   }
   return `${built}${MARKER}${lines.join(" ")} -->\n`;
 }
