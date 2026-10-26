@@ -53,10 +53,10 @@ export function createPushPolicy({ stateToolPath, readGit, mainReason = "work re
           const why = pushForm([run.word, ...run.args], 0, run.dir);
           if (why) return refuse(why);
         }
-        if (apiWritesMain([run.word, ...run.args])) return mergeIn(command)?.problem ?? refuse(mainReason);
+        if (apiWritesMain([run.word, ...run.args], run.dir ?? cwd)) return mergeIn(command)?.problem ?? refuse(mainReason);
       }
       if (runs.some(run => run.word === "command") && [...externalCommandOperands(command, cwd, options)]
-        .some(({ word, args }) => apiWritesMain([word, ...args]))) return mergeIn(command)?.problem ?? refuse(mainReason);
+        .some(({ word, args }) => apiWritesMain([word, ...args], cwd))) return mergeIn(command)?.problem ?? refuse(mainReason);
     } catch (error) {
       if (error.code === "SAGE_POWERSHELL_LAUNCH") return refuse(error.message);
       return pushText(bare(command)) ? refuse("the hook cannot establish the push command") : unreadableGitHub(command);
@@ -83,6 +83,18 @@ export function createPushPolicy({ stateToolPath, readGit, mainReason = "work re
     const out = readGit(dir, args);
     if (out !== undefined && typeof out !== "string") throw new TypeError("readGit must return git's output or undefined");
     return out;
+  }
+  /** The remote's default branch from refs/remotes/<remote>/HEAD, or undefined when git cannot read it. */
+  function remoteHead(dir, remote) {
+    const prefix = `refs/remotes/${remote}/`;
+    const ref = gitOut(dir, ["symbolic-ref", "--quiet", `${prefix}HEAD`])?.trim() ?? "";
+    return ref.startsWith(prefix) && ref.length > prefix.length ? ref.slice(prefix.length) : undefined;
+  }
+  /** main, master and the default branch of each remote of the checkout that git can read: the names that a gh api write may not change. */
+  function protectedBranches(dir) {
+    const settings = gitOut(dir, ["config", "-z", "--list"]) ?? "";
+    const remotes = [...settings.matchAll(/(?:^|\0)remote\.([\w.-]+)\.url\n/g)].map((m) => m[1]);
+    return ["main", "master", ...remotes.map((r) => remoteHead(dir, r)).filter(Boolean)];
   }
   /** A ref that git reads as main or master: main, heads/main, refs/heads/main. */
   const MAIN_REF = /^(?:refs\/)?(?:heads\/)?(?:main|master)$/i;
@@ -137,8 +149,7 @@ export function createPushPolicy({ stateToolPath, readGit, mainReason = "work re
     if (!remove && values(`remote.${remote}.push`).length) return `git's setting remote.${remote}.push can send the branch to another name, such as the default branch. Ask the user to remove that setting.`;
     const upstream = /^(?:upstream|tracking)$/i.test(values("push.default").at(-1) ?? "");
     const prefix = `refs/remotes/${remote}/`;
-    const ref = gitOut(dir, ["symbolic-ref", "--quiet", `${prefix}HEAD`])?.trim() ?? "";
-    const head = ref.startsWith(prefix) && ref.length > prefix.length ? ref.slice(prefix.length) : undefined;
+    const head = remoteHead(dir, remote);
     for (const name of branches) {
       const to = name.replace(/^(?:refs\/)?(?:heads\/)?/i, "");
       const merge = values(`branch.${name}.merge`);
@@ -153,7 +164,7 @@ export function createPushPolicy({ stateToolPath, readGit, mainReason = "work re
   }
 
   /** Read request options, not display options or unrelated text, as branch evidence. Never open a supplied body file. */
-  function apiWritesMain(words) {
+  function apiWritesMain(words, dir) {
     if (programName(words[0] ?? "") !== "gh") return false;
     let method;
     let endpoint;
@@ -215,7 +226,11 @@ export function createPushPolicy({ stateToolPath, readGit, mainReason = "work re
         opaque: typed && /^(?:@)|\{(?:owner|repo|branch)\}|:(?:owner|repo|branch)\b/.test(value.slice(split + 1)) };
     });
     const bracketedFields = values.some(field => /[\[\]]/.test(field.key));
-    const protectedName = (text) => /(?:^|[\s/=:'"(])(?:refs\/)?(?:heads\/)?(?:main|master)(?=$|[\s/?&#:'"),}])/i.test(text);
+    // main, master and each remote's default branch (T536), read only for a request that can write a branch.
+    let names;
+    const branchNames = () => (names ??= protectedBranches(dir).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"));
+    const protectedName = (text) => new RegExp(`(?:^|[\\s/=:'"(])(?:refs\\/)?(?:heads\\/)?(?:${branchNames()})(?=$|[\\s/?&#:'"),}])`, "i").test(text);
+    const protectedRef = (text) => new RegExp(`^(?:refs\\/)?(?:heads\\/)?(?:${branchNames()})$`, "i").test(text);
     if (path === "graphql") {
       if (opaque || bracketedFields || values.some(field => field.opaque)) return true;
       const query = values.filter(field => field.key === "query").map(field => field.value).join(" ");
@@ -244,7 +259,7 @@ export function createPushPolicy({ stateToolPath, readGit, mainReason = "work re
     if (/^pulls\//.test(route)) return true; // The PR id does not prove which branch this request changes.
     if ((!route.startsWith("contents") && (protectedName(route) || !LITERAL.test(route))) || opaque) return true;
     const destinations = values.filter(field => /^(?:ref|branch|base|new_name)$/.test(field.key));
-    if (destinations.some(field => field.opaque || !LITERAL.test(field.value) || MAIN_REF.test(field.value))) return true;
+    if (destinations.some(field => field.opaque || !LITERAL.test(field.value) || protectedRef(field.value))) return true;
     // The contents API defaults an omitted branch to the repository's default branch, which may be main.
     return /^contents(?:\/|$)/.test(route) && !destinations.some(field => field.key === "branch");
   }
