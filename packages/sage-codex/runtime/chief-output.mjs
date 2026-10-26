@@ -10,7 +10,7 @@ const stamp = state => JSON.stringify([state.owner?.epoch, state.modes.at(-1)]);
 /** Authenticate the owner and replay the same role context for the activation turn.
  * Mode history is the retry record; no unconfirmed 'delivered' flag is written. */
 export function ownerPromptOutput(input, context, options, part = 0) {
-  if (!Number.isInteger(part) || part < 0 || part > 1) throw Error("Sage instruction part is unavailable");
+  if (!Number.isInteger(part) || part < 0 || part >= PARTS) throw Error("Sage instruction part is unavailable");
   const updated = updateOwnerMode(input, context, options);
   if (!updated) throw Error("Sage owner prompt is unavailable");
   if (!updated.sage) return {};
@@ -26,25 +26,31 @@ export function ownerPromptOutput(input, context, options, part = 0) {
 }
 
 
-/** Two fixed native handlers cover these bounded parts. Preserve every source byte. */
-export function chiefInstructionParts() {
-  const bindings = JSON.parse(readFileSync(new URL("../chief-bindings.json", import.meta.url), "utf8"));
-  const text = renderChiefInstructions(bindings);
+/** Codex gives an mcp_tool hook no additionalContextLimit, so its default of 2500 tokens applies, and it counts a
+ * token as 4 bytes (codex-rs 0.164.0: hooks/src/output_spill.rs, utils/string/src/truncate.rs). Codex cuts a longer
+ * part. Two fixed native handlers ask for the two parts. */
+export const PART_BYTES = 2_500 * 4;
+const PARTS = 2;
+const head = (index, count) => `Sage chief instructions: part ${index + 1} of ${count}\n\n`;
+
+/** The bounded parts of the chief text, header included. Preserve every source byte. */
+export function chiefInstructionParts(text = renderChiefInstructions(JSON.parse(readFileSync(new URL("../chief-bindings.json", import.meta.url), "utf8")))) {
   if (typeof text !== "string" || !text.trim() || text.includes("\0")) throw Error("Sage chief instructions are unavailable");
+  const room = PART_BYTES - Buffer.byteLength(head(0, PARTS));
   const parts = []; let part = "";
   for (const line of text.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
-    if (Buffer.byteLength(line, "utf8") > 7_500) throw Error("Sage chief instruction line is too long");
-    if (part && Buffer.byteLength(part + line, "utf8") > 7_500) { parts.push(part); part = ""; }
+    if (part && Buffer.byteLength(part + line, "utf8") > room) { parts.push(part); part = ""; }
     part += line;
   }
   if (part) parts.push(part);
-  if (parts.length > 2 || parts.join("") !== text) throw Error("Sage chief instructions exceed the native hook budget");
-  return parts.map((body, index) => `Sage chief instructions: part ${index + 1} of ${parts.length}\n\n${body}`);
+  if (parts.length > PARTS || parts.some(body => Buffer.byteLength(body, "utf8") > room) || parts.join("") !== text)
+    throw Error(`Sage chief instructions are ${Buffer.byteLength(text, "utf8")} bytes and do not fit in ${PARTS} native hook parts of ${PART_BYTES} bytes: shorten the chief text`);
+  return parts.map((body, index) => head(index, parts.length) + body);
 }
 
 /** Restore active chief context after the observed native compaction event. Never activate or change mode. */
 export function ownerSessionStartOutput(input, context, options, part = 0) {
-  if (!Number.isInteger(part) || part < 0 || part > 1) throw Error("Sage instruction part is unavailable");
+  if (!Number.isInteger(part) || part < 0 || part >= PARTS) throw Error("Sage instruction part is unavailable");
   if (realpathSync(options.projectDirectory) !== options.projectDirectory || input?.cwd !== options.projectDirectory)
     throw Error("Sage owner session is unavailable");
   const metadata = readSessionIdentity(input.transcript_path, { sessionsDir: options.sessionsDir });

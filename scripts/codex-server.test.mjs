@@ -398,10 +398,10 @@ function assignmentLogbookFixture(core, options) {
   const assignmentGit = (...args) => execFileSync("git", ["-C", options.projectDirectory, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
     "-c", "user.name=Fixture", "-c", "user.email=fixture@users.noreply.github.com", ...args], { env: assignmentEnv, encoding: "utf8" });
   assignmentGit("init", "--quiet", "-b", "codex/t1-fixture"); assignmentGit("commit", "--quiet", "--allow-empty", "-m", "fixture");
-  assignmentCli("init"); assignmentCli("task", "add", "--title", "Fixture task", "--size", "small");
+  assignmentCli("init"); assignmentCli("task", "add", "--priority", "P2", "--title", "Fixture task", "--size", "small");
   assignmentCli("task", "T1", "set", "branch=codex/t1-fixture");
   assignmentCli("run", "add", "T1", "--role", "lead"); assignmentCli("run", "add", "T1", "--role", "qa");
-  assignmentCli("task", "add", "--title", "Second fixture task", "--size", "small");
+  assignmentCli("task", "add", "--priority", "P2", "--title", "Second fixture task", "--size", "small");
   assignmentCli("run", "add", "T2", "--role", "lead");
   const assignmentLogbook = assignmentTool.storeDir(options.projectDirectory, assignmentEnv);
   return { assignmentTool, assignmentEnv, assignmentCli, assignmentLogbook };
@@ -753,7 +753,7 @@ test('chief context replays activation across connections without repeating on o
   const second = await client.call({ ...f.prompt('sage mode'), instruction_part: 1 });
   const strip = text => text.replace(/^Sage chief instructions: part [12] of [12]\n\n/, '');
   assert.equal(strip(first.hookSpecificOutput.additionalContext) + strip(second.hookSpecificOutput.additionalContext), expected);
-  for (const output of [first, second]) assert.ok(Buffer.byteLength(output.hookSpecificOutput.additionalContext, 'utf8') < 8_000);
+  for (const output of [first, second]) assert.ok(Buffer.byteLength(output.hookSpecificOutput.additionalContext, 'utf8') <= 10_000); // Codex's mcp_tool hook limit: 2500 tokens at 4 bytes each.
   assert.match(expected, /spawn_agent/); assert.match(expected, /Autopilot off:\*\* the user merges/);
   await client.close();
   const retry = await connect(t, f);
@@ -2827,7 +2827,7 @@ async function runReportFixture(t) {
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
   const env = { ...process.env, SAGE_HOME: logbookRoot };
   const cli = (...args) => tool.sage([...args, "--project", projectDirectory], env);
-  cli("init"); cli("task", "add", "--title", "Native report fixture", "--size", "small");
+  cli("init"); cli("task", "add", "--priority", "P2", "--title", "Native report fixture", "--size", "small");
   cli("run", "add", "T1", "--role", "lead");
   appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
   const reports = await import(pathToFileURL(join(f.plugin, "runtime/report-intake.mjs")));
@@ -3003,7 +3003,7 @@ async function reviewPreparationFixture(t, role = "code-reviewer", size = "small
   git("commit", "--quiet", "--allow-empty", "-m", "fixture");
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
   const cli = (...args) => tool.sage([...args, "--project", projectDirectory], env);
-  cli("init"); cli("task", "add", "--title", "Pinned review", "--size", size);
+  cli("init"); cli("task", "add", "--priority", "P2", "--title", "Pinned review", "--size", size);
   cli("task", "T1", "set", "branch=codex/t1-review");
   cli("run", "add", "T1", "--role", role);
   mkdirSync(f.options.observationsRoot, { recursive: true });
@@ -3547,7 +3547,7 @@ test('native task creation recovers partial publication and blocks unrelated wri
   assert.throws(() => f.create(), /Injected/);
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
   assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
-  assert.throws(() => f.cli('task', 'add', '--title', 'unrelated', '--size', 'tiny'), /incomplete/);
+  assert.throws(() => f.cli('task', 'add', '--priority', 'P2', '--title', 'unrelated', '--size', 'tiny'), /incomplete/);
   assert.equal(f.tool.mergeCheck('1'.repeat(40), f.env).ok, false);
   assert.throws(() => f.create({ ...f.input, title: 'changed retry' }));
   restore();
@@ -3590,7 +3590,7 @@ for (const view of ['merge', 'logbook']) test(`T56: ${view} refuses a fully publ
   const f = await taskCreationFixture(t), fs = (await import('node:fs')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const sha = '1'.repeat(40);
-  f.cli('task', 'add', '--title', 'Reviewed existing task', '--size', 'tiny');
+  f.cli('task', 'add', '--priority', 'P2', '--title', 'Reviewed existing task', '--size', 'tiny');
   for (const kind of ['checks-pass', 'review-clean', 'qa-pass']) f.cli('verdict', 'T1', '--sha', sha, '--kind', kind);
   assert.equal(f.tool.mergeCheck(sha, f.env).ok, true, 'the stable snapshot permits this reviewed merge');
   const original = fs.openSync;
@@ -3726,7 +3726,7 @@ test('T56: malformed saved task results refuse before recovery publishes tables'
 test('T56: recovery preflights table meaning and receipt destinations before publication', async t => {
   for (const damage of ['task-after', 'decision-after', 'receipt-conflict', 'receipt-alias']) await t.test(damage, async t => {
     const f = await taskCreationFixture(t);
-    f.cli('task', 'add', '--title', 'Keep this task', '--size', 'tiny');
+    f.cli('task', 'add', '--priority', 'P2', '--title', 'Keep this task', '--size', 'tiny');
     const restore = await stopTaskWrite(t, f, 'tasks');
     assert.throws(() => f.create());
     restore();
@@ -3861,7 +3861,7 @@ test('native run creation retains merged lead uniqueness and project capacity', 
   const f = await runCreationFixture(t);
   assert.equal(f.createRun().run.id, 'R1');
   assert.throws(() => f.createRun({...f.input, request: turns[2]}), /one running lead/);
-  for (const task of ['T2', 'T3', 'T4']) f.cli('task', 'add', '--title', task, '--size', 'small');
+  for (const task of ['T2', 'T3', 'T4']) f.cli('task', 'add', '--priority', 'P2', '--title', task, '--size', 'small');
   f.cli('run', 'add', 'T2', '--role', 'lead');
   f.cli('run', 'add', 'T3', '--role', 'lead');
   const next = {...f.input, request: turns[2], task: 'T4'};
@@ -3875,7 +3875,7 @@ test('native run creation retains merged lead uniqueness and project capacity', 
 test('native run creation retains merged role and lead task eligibility rules', async t => {
   const f = await runCreationFixture(t);
   assert.throws(() => f.createRun({...f.input, role: 'unknown-role'}), /not a role of a run/);
-  f.cli('task', 'add', '--title', 'investigation', '--size', 'investigate');
+  f.cli('task', 'add', '--priority', 'P2', '--title', 'investigation', '--size', 'investigate');
   assert.throws(() => f.createRun({...f.input, task: 'T2'}), /investigation/);
   f.cli('task', 'T1', 'set', 'state=abandoned');
   assert.throws(() => f.createRun(), /task has ended/);
@@ -3995,7 +3995,7 @@ test('T336: core native run creation refuses a lead run while a wait is unmet, a
   const f = await runCreationFixture(t);
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); } });
   const cli = (...args) => tool.sage([...args, '--project', f.options.projectDirectory], f.env);
-  cli('task', 'add', '--title', 'Upstream', '--size', 'small');
+  cli('task', 'add', '--priority', 'P2', '--title', 'Upstream', '--size', 'small');
   cli('task', 'T1', 'set', 'waits=T2');
   const input = { ...f.input, project: f.options.projectDirectory, owner: 'test-owner' };
   const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
@@ -4289,7 +4289,7 @@ test('T59: checksum-valid malformed review records and deltas refuse before publ
   for (const damage of ['null','false','array-id','array-time','bad-time','extra-result','wrong-kind','missing-key','extra-key','tasks','findings','ledger','decisions','tasks-prior','findings-prior','ledger-prior','decisions-prior','receipt-conflict','receipt-alias']) await t.test(damage, async t => {
     const f = await reviewAcceptanceFixture(t, {findings:[{severity:'high',summary:'Keep this finding'}]});
     fixtureTaskField(f,'state','verified');
-    f.cli('task','add','--title','Keep prior task','--size','tiny');
+    f.cli('task','add', '--priority', 'P2','--title','Keep prior task','--size','tiny');
     const reviewRun = readFileSync(join(f.logbook,'runs.tsv'),'utf8').split('\n').map(line => line.split('\t')).find(([, task, role]) => task === 'T1' && role === 'code-reviewer')[0]; // a review finding names its run (T490)
     f.cli('finding','add','T1','--source','code-reviewer','--severity','low','--summary','Keep prior finding','--run',reviewRun,'--class','other');
     f.cli('verdict','T1','--sha',f.preparation.review.sha,'--kind','checks-pass');
@@ -4714,7 +4714,7 @@ test('T63: native interrupted run refuses malformed requests foreign callers and
 
 test('T63: native interrupted finish works after off and transcript loss and rejects changed saved run targets', async t => {
   const f = await interruptedRunFixture(t);
-  f.cli('task', 'add', '--title', 'Valid other task', '--size', 'small');
+  f.cli('task', 'add', '--priority', 'P2', '--title', 'Valid other task', '--size', 'small');
   f.core.changeAdmissionMode(f.options.directory, { ...f.scope, after: turns[0], turn: turns[2], sage: false });
   rmSync(join(f.mode.sessionsDir, `${childActor}.jsonl`));
   const file = join(f.logbook, 'runs.tsv'), original = readFileSync(file, 'utf8');

@@ -241,6 +241,17 @@ test("T314: a card and a task page show the display name, the priority and the k
   assert.ok(!text.includes("· Old \\<app\\>\n"), "an archived task is not on the chat board");
 });
 
+test("T500: a card of an open task with no priority shows a no priority tag; a card with a priority or of an ended task does not", () => {
+  const data = buildBoardModel([{ id: "sample", label: "sample", diagnostics: [], projects: [{ key: "sample/demos-abcdef", name: "demos-abcdef", diagnostics: [],
+    tables: { tasks: [row("T1", "framed"), row("T2", "framed", { priority: "P2" }), row("T3", "merged"), row("T4", "building")] } }] }], { now: at });
+  const html = renderBoardHtml(data);
+  const tag = '<span class="tag noprio" title="No priority: ask the chief to set P0 to P3">no priority</span>';
+  const cards = Object.fromEntries(html.slice(html.indexOf('<main class="board"'), html.indexOf("</main>")).split('<a class="card').slice(1).map(card => [/data-key="sample\/demos-abcdef\/(T\d+)"/.exec(card)[1], card.includes(tag)]));
+  assert.deepEqual(cards, { T1: true, T2: false, T4: true }, "a merged task with no date has no card");
+  const page = id => renderBoardHtml(data, { snapshot: false, taskKey: data.tasks.find(task => task.id === id).key }).includes(tag);
+  assert.deepEqual([page("T1"), page("T3")], [true, false], "the task page has the tag too, but not for an ended task");
+});
+
 /** One source with a live project and an archived one, each a list of tasks; extra goes to the live project. */
 const twoBooks = (live, old, extra = {}) => buildBoardModel([{ id: "sample", label: "sample", diagnostics: [], projects: [
   { key: "sample/live-abcdef", name: "live-abcdef", diagnostics: [], tables: { tasks: live }, ...extra },

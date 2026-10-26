@@ -129,7 +129,7 @@ function world() {
   p("push", "-q", "origin", "main");
   p("remote", "set-url", "origin", ORIGIN);
   sage("init");
-  sage("task", "add", "--title", "Add b", "--size", "small");
+  sage("task", "add", "--priority", "P2", "--title", "Add b", "--size", "small");
   sage("task", "T1", "set", "branch=claude/t1");
   p("checkout", "-q", "-b", "claude/t1");
   const logbook = sage("logbook").trim();
@@ -642,7 +642,7 @@ test("T96-C2: create takes the task's own reviewed head, not a later verdict of 
   const w = world();
   const head = w.commit("b.txt");
   w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
-  w.sage("task", "add", "--title", "Other", "--size", "small");
+  w.sage("task", "add", "--priority", "P2", "--title", "Other", "--size", "small");
   w.sage("task", "T2", "set", "pr=1");
   w.sage("verdict", "T2", "--sha", w.p("rev-parse", "main"), "--kind", "checks-pass"); // later in the ledger, with PR 1
   const r = w.pr("create", "T1");

@@ -393,7 +393,7 @@ test("provider packages are complete outside the checkout, with no opposite adap
     const env = { ...process.env, SAGE_HOME: join(dir, "logbooks") };
     const run = (...args) => spawnSync(process.execPath, [join(plugin, "skills/sage/sage.mjs"), ...args, "--project", dir], { encoding: "utf8", env });
     assert.equal(run("init").status, 0);
-    const task = run("task", "add", "--title", "Shared behavior", "--size", "small");
+    const task = run("task", "add", "--priority", "P2", "--title", "Shared behavior", "--size", "small");
     assert.equal(task.status, 0, task.stderr);
     assert.match(run("status").stdout, /tasks\s+1 · framed 1/);
     const board = run("board", "this");
@@ -500,7 +500,7 @@ test("T8: command CLI consumes text as data and leaves isolated task state uncha
   const env = { ...process.env, SAGE_HOME: join(f.dir, "logbooks") };
   const cli = (...args) => execFileSync(process.execPath, [join(f.plugin, "skills/sage/sage.mjs"), ...args, "--project", f.dir], { env, encoding: "utf8" });
   cli("init");
-  cli("task", "add", "--title", "Preserve this task", "--size", "small");
+  cli("task", "add", "--priority", "P2", "--title", "Preserve this task", "--size", "small");
   const snapshot = () => filesUnder(env.SAGE_HOME).map(path => [path, readFileSync(path, "utf8")]);
   const before = snapshot();
   const invoke = text => execFileSync(process.execPath, [script], { cwd: f.dir, env, input: JSON.stringify({ text }), encoding: "utf8" });
@@ -533,7 +533,7 @@ test("T10: installed logbook CLI reads and writes through a filesystem alias", t
   const script = join(alias, "skills/sage/sage.mjs");
   const cli = (...args) => execFileSync(process.execPath, [script, ...args, "--project", f.dir], { env, encoding: "utf8" });
   cli("init");
-  assert.match(cli("task", "add", "--title", "Alias task", "--size", "small"), /T1 framed/);
+  assert.match(cli("task", "add", "--priority", "P2", "--title", "Alias task", "--size", "small"), /T1 framed/);
   assert.match(cli("board", "T1", "--view", "task"), /Alias task/);
   const url = pathToFileURL(join(f.plugin, "skills/sage/sage.mjs")).href;
   const imported = spawnSync(process.execPath, ["--input-type=module", "-"], {
@@ -4602,9 +4602,9 @@ async function leadPreparationFixture(t) {
   git('branch','codex/t2-fixture');
   const runTool=f.api.createStateTool({defaultRoot:()=>{throw Error('No ambient logbook');}});
   const cli=(...args)=>runTool.sage([...args,'--project',projectDirectory],runEnv);
-  cli('init');cli('task','add','--title','Lead fixture','--size','small');cli('task','T1','set','branch=codex/t1-fixture');
+  cli('init');cli('task','add', '--priority', 'P2','--title','Lead fixture','--size','small');cli('task','T1','set','branch=codex/t1-fixture');
   cli('run','add','T1','--role','lead');cli('run','add','T1','--role','qa');
-  cli('task','add','--title','Chief fixture','--size','small');cli('task','T2','set','branch=codex/t2-fixture');cli('run','add','T2','--role','qa');
+  cli('task','add', '--priority', 'P2','--title','Chief fixture','--size','small');cli('task','T2','set','branch=codex/t2-fixture');cli('run','add','T2','--role','qa');
   const target=(run,task='T1',role='lead')=>runTool.captureRunAssignment({project:projectDirectory,task,run,role},runEnv);
   const review=(run,task)=>runTool.captureReviewTarget({project:projectDirectory,task,run,role:'qa',cycle:1},runEnv);
   const initial=f.api.prepareAdmission(f.journal,f.scope,{task:'T1',run:'R1',issuer:f.root,name:'agent_1'},
@@ -4775,7 +4775,7 @@ async function reportedRunFixture(t, status = "done") {
   const tool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
   const cli = (...args) => tool.sage([...args, "--project", project], env);
   cli("init");
-  cli("task", "add", "--title", "Report lifecycle", "--size", "small");
+  cli("task", "add", "--priority", "P2", "--title", "Report lifecycle", "--size", "small");
   cli("run", "add", "T1", "--role", "implementer", "--branch", "codex/t1-report");
   const text = `STATUS: ${status}\nRESULT: complete\nEVIDENCE: synthetic fixture\nFINDINGS: none\nQUESTIONS: none\nNOT VERIFIED: real model\nBRANCH: arbitrary report text`;
   const input = { project, task: "T1", run: "R1", role: "implementer",

@@ -23,7 +23,7 @@ function fixture() {
   const run = (...args) => spawnSync(process.execPath, [runner, ...args, "--project", project], { env, encoding: "utf8", timeout: 60_000 });
   const ok = (...args) => { const out = run(...args); assert.equal(out.status, 0, out.stderr); return out.stdout.trim(); };
   const dir = ok("init").slice("logbook ".length);
-  ok("task", "add", "--title", "Sample task", "--size", "small");
+  ok("task", "add", "--priority", "P2", "--title", "Sample task", "--size", "small");
   const args = (kind, data, task = "T1", at = AT) => ["observe", task, "--kind", kind, "--source", "sample-api", "--basis", "observed", "--observed-at", at, "--data-hex", hex(data)];
   const observe = (kind, data, task, at) => ok(...args(kind, data, task, at));
   const file = join(dir, "observations.json");
@@ -52,7 +52,7 @@ test("board observations: PR facts retain provenance without changing tables or 
 test("board observations: run provider metadata belongs to its recorded task and keeps old run columns", () => {
   const f = fixture();
   f.ok("run", "add", "T1", "--role", "qa");
-  f.ok("task", "add", "--title", "Another task", "--size", "small");
+  f.ok("task", "add", "--priority", "P2", "--title", "Another task", "--size", "small");
   const tables = f.tables(), data = { run: "R1", provider: "sample-provider", head: SHA, cycle: 2 };
   assert.equal(f.observe("run", data), "O1 observed run for T1");
   assert.deepEqual(f.records()[0].data, data);

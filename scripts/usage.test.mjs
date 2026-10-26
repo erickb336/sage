@@ -13,7 +13,7 @@ function fixture(t) {
   const project = join(base, 'project');
   const run = (...args) => tool.sage([...args, '--project', project], env);
   const dir = run('init').replace(/^logbook /, '');
-  run('task','add','--title','Usage test','--size','small');
+  run('task','add', '--priority', 'P2','--title','Usage test','--size','small');
   const bytes = () => ['runs','decisions'].map(table => readFileSync(join(dir, table+'.tsv'),'utf8'));
   const rows = () => {
     const [head,...lines] = bytes()[0].trimEnd().split('\n');
@@ -163,7 +163,7 @@ test('T28 modern run-request recovery never drops existing header columns',t=>{
   assert.equal(readFileSync(join(s.dir,'review-pending.json'),'utf8'),pending);
 });
 test('T28 status shows exact per-task measured totals with incomplete accounting',t=>{
-  const s=fixture(t);s.run('task','add','--title','Second','--size','small');
+  const s=fixture(t);s.run('task','add', '--priority', 'P2','--title','Second','--size','small');
   s.run('run','add','T1','--role','qa');s.run('run','done','R1','--status','done','--tokens','1000');
   s.run('run','add','T2','--role','qa');s.run('run','done','R2','--status','done','--tokens','2400');
   s.run('run','add','T2','--role','qa');s.run('run','done','R3','--status','blocked','--tokens','9000');
