@@ -198,7 +198,7 @@ try {
   const current = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
   if (touched.includes("CHANGELOG.md") && touched.length > 1) problems.push(`CHANGELOG.md: a task pull request carries only its changes/<task>.md and leaves CHANGELOG.md as main has it; undo the edit (git checkout ${base.stdout.trim()} -- CHANGELOG.md). The chief rebuilds it on main with npm run changelog, in a change-log pull request that changes only CHANGELOG.md`);
   else if (touched.includes("CHANGELOG.md") && current !== built) problems.push("CHANGELOG.md: a change-log pull request holds exactly the build of changes/; run npm run changelog");
-  else if (current !== built) console.warn("! CHANGELOG.md lags behind changes/ (allowed on main and on a task branch); the chief rebuilds it with npm run changelog in a change-log pull request");
+  else if (base && current !== built) console.warn("! CHANGELOG.md lags behind changes/ (allowed on main and on a task branch); the chief rebuilds it with npm run changelog in a change-log pull request");
 } catch (e) { problems.push(String(e.message)); } // a fragment that the build cannot place, or a line written by hand
 const core = readFileSync(join(ROOT, "instructions/core.md"), "utf8");
 if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${Buffer.byteLength(core)} bytes; keep it under 8 KiB (it loads into every session, so each byte costs context there)`);
