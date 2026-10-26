@@ -21,7 +21,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
 | sage mode: agent caps in code | Yes | No |
-| Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt |
+| Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt. Codex still asks you 4 times in each task, before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)) |
 | The merge rule, the no-edit rules and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)) |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | No: use the manual skill commands |
@@ -94,7 +94,7 @@ Send each phrase alone, as the whole message, in any letter case.
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff: the hook adds the chief's role to that turn. Send your request next. |
 | `sage mode off` | A normal session again. Autopilot goes off too. The hook adds the role no more, also after a compaction. |
-| `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. |
+| `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. Each task still asks you 4 times before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)). |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
 - Send a phrase when Codex is idle. To stop merges at once, press Esc to stop Codex's turn, then send the off phrase for autopilot alone.
@@ -108,6 +108,44 @@ Send each phrase alone, as the whole message, in any letter case.
 - The hook keeps the mode of each session in `~/.codex/sage/.hooks/codex/` (or under `SAGE_HOME`).
 
 The hooks run only after you trust them (step 3). In `codex exec`, Codex skips hooks that you have not trusted, with no warning.
+
+### The approval prompts of each task
+
+With autopilot on, each task still asks you 4 times before its merge: Codex asks, not sage. In the default `workspace-write` sandbox, "`<writable_root>/.git` is protected as read-only", and network access is off ([Codex: Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)). So these commands must run outside the sandbox, and Codex asks you first.
+
+| Prompt | What it is for | Why Codex asks |
+| --- | --- | --- |
+| Create the task worktree (`git worktree add`) | The implementer's own folder and branch for the task | It writes to `.git` |
+| Commit on the task branch (`git -C <folder> add <files> && git -C <folder> commit …`, one prompt for both) | The change of the task | Both commands write to `.git` |
+| Send the task branch (`git -C <folder> push -u origin <branch>`) | The branch of the pull request on GitHub | It writes to `.git` and needs the network |
+| Open the pull request (`gh pr create`) | The pull request that the reviews and the merge check read | It needs the network |
+
+- With sage mode and autopilot on, the merge needs no prompt: the sage hook allows the verified merge command itself.
+- With sage mode on and autopilot off, the hook refuses the merge, and you merge the pull request yourself.
+- With sage mode off, Codex shows its normal prompt for the merge too.
+- The model writes the reason line of each prompt, so its words can be different. The table uses the words of a check with the Codex CLI 0.164.0 and a test model.
+
+In the CLI, Codex 0.164.0 gives these choices for such a prompt ([the choice text](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/tui/src/bottom_pane/approval_overlay.rs#L852-L938), [which choices it offers](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/protocol/src/approvals.rs#L377-L410)):
+
+| Choice | What it does |
+| --- | --- |
+| **Yes, proceed** | Runs this command one time. The next task asks again. |
+| **Yes, and don't ask again for commands that start with `<prefix>`** | Runs the command, and adds an allow rule for that prefix to `~/.codex/rules/default.rules` (or `$CODEX_HOME/rules/default.rules` when you set `CODEX_HOME`) ([the file](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L877-L879), [the write](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L469-L490)). The rule holds for good, in every session: a matching command then runs outside the sandbox with no prompt. Codex shows this choice only when it has a prefix to offer. |
+| **No, and tell Codex what to do differently** | Does not run the command. Codex stops its turn and waits for your message. |
+
+Codex 0.164.0 offers no choice for "this session" only for these prompts.
+
+> **Warning:** never choose "Yes, and don't ask again" at any Codex prompt: at the 4 prompts of a task, and at every other prompt, for example the merge prompt with sage mode off. The rule holds in every session, also outside sage mode, where no sage rule checks a command. A later force-push to main, or a merge, could then run with no prompt.
+
+Each of these commands runs git, and git can run the project's own code, from its hooks or its config. An agent can write that code from inside the sandbox, and a command that a rule allows runs it outside the sandbox.
+
+To allow a command at a Codex prompt, choose **Yes, proceed**, every time. At the 4 prompts of a task, allow each one this way.
+
+When a network proxy is on, the prompt shows **Yes, just this once** in place of **Yes, proceed**: choose it, and never **Yes, and allow this host in the future**, which also saves a rule for good ([the network choices](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/tui/src/bottom_pane/approval_overlay.rs#L862-L913)).
+
+If you saved such a rule earlier, delete its line from `~/.codex/rules/default.rules` (or `$CODEX_HOME/rules/default.rules` when you set `CODEX_HOME`), then restart Codex: Codex reads its rules at startup ([Codex: Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)).
+
+The desktop app gets the same choices from Codex, but its docs do not name their text, and sage was not run in the app yet.
 
 ## The logbook tools
 
