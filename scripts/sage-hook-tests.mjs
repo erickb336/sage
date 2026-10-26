@@ -793,6 +793,11 @@ test("T536: no push reaches the default branch through a remote with another nam
   git("config", "remote.github.push", "refs/heads/claude/t1:refs/heads/main");
   refused("git push github claude/t1", /^sage: git's setting remote\.github\.push can send the branch to another name/);
   git("config", "--unset", "remote.github.push");
+  // R1950-1: no push while push.default is upstream, and no upstream set beside a push.
+  git("config", "push.default", "upstream");
+  refused("git push github claude/t1", /^sage: git's setting push\.default is upstream, so git can send the branch to its upstream/);
+  git("config", "--unset", "push.default");
+  refused("git fetch --set-upstream github main && git push github claude/t1", /^sage: "git fetch --set-upstream github main" runs in the same command line as the push/);
   // R1936 F6: a branch name that is a symbolic ref to main; F2: an alias; F4: a git hook; F9: gh repo sync.
   git("branch", "main");
   git("symbolic-ref", "refs/heads/claude/t5-sym", "refs/heads/main");
@@ -800,7 +805,10 @@ test("T536: no push reaches the default branch through a remote with another nam
   git("config", "alias.ship", "push github HEAD:main");
   refused("git ship", /^sage: "git ship" is not a git command that the hook knows/);
   refused("printf x > .git/hooks/pre-push", /^sage: this command writes a file under a \.git folder/);
-  refused("git config core.hooksPath /tmp/h", /^sage: a command that names core\.hooksPath/);
+  refused("git config core.hooksPath /tmp/h", /^sage: a command that sets core\.hooksPath/);
+  // R1949-1: reads and searches pass, and a description runs nothing.
+  for (const command of ["grep -rn hooksPath packages/", "git log --grep fsmonitor", "git config --get core.hooksPath", "git commit -m 'refuse core.hooksPath'"]) passes(command);
+  assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git config core.hooksPath /tmp/h" }, { cwd: dir }))), undefined, "a description runs nothing");
   refused("gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
   // R1936 F7: GitHub names the default branch, trunk here; a planted local ref that disagrees refuses, and so does a failed read.
   const trunk = session({ FAKE_DEFAULT_BRANCH: "trunk" });

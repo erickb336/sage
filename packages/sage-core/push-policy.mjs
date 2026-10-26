@@ -5,7 +5,9 @@ import { commandWrites } from "./shell-write-policy.mjs";
 
 /** The owner/name of a GitHub repository URL as git writes it (https, ssh or scp form), or undefined for any other URL. */
 export function gitHubRepository(url) {
-  const m = /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(url ?? "");
+  // https or ssh with an optional user (and port), or the scp form user@host:owner/name; the host is github.com or
+  // ssh.github.com in any letter case. An ssh host alias names no host that the hook can read, so it gives undefined.
+  const m = /^(?:(?:https|ssh):\/\/(?:[^@\/\s]+@)?(?:ssh\.)?github\.com(?::\d+)?\/|[^@\/\s:]+@(?:ssh\.)?github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(url ?? "");
   return m && !/^\.+$/.test(m[1]) && !/^\.+$/.test(m[2]) ? `${m[1]}/${m[2]}` : undefined;
 }
 /** A path with a .git folder or file in it: git's own files (hooks, settings, refs). No file tool and no shell write changes them in sage mode. */
@@ -22,7 +24,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
   if (typeof readGh !== "function") throw new TypeError("readGh must be a function");
   if (typeof mainReason !== "string" || !mainReason.trim() || mainReason.length > 2048 || /[\x00-\x1f\x7f]/.test(mainReason)) throw new TypeError("mainReason must be a bounded message without control characters");
   const { runnable, mergeIn } = createCommandPolicy({ stateToolPath });
-  const PUSH_FORM = 'git [-C <dir>] push [-u] [--follow-tags] [-o <option>] <remote> <branch>, with the name of a remote of the checkout and the literal name of the task\'s branch: not the default branch, main or master, HEAD, @, a pattern, a variable, or a refspec with ":" or "+". Beside the push, a command line may only run cd, pwd, git add, commit, status, log, diff, show, fetch or rev-parse, gh, echo, printf, true, cat, head, tail, grep or wc; it sets no variable and writes no file (no tee, no >). To delete a branch: git push --delete <remote> <branch>';
+  const PUSH_FORM = 'git [-C <dir>] push [-u] [--follow-tags] [-o <option>] <remote> <branch>, with the name of a remote of the checkout and the literal name of the task\'s branch: not the default branch, main or master, HEAD, @, a pattern, a variable, or a refspec with ":" or "+". Beside the push, a command line may only run cd, pwd, git add, commit, status, log, diff, show, fetch or rev-parse, gh, echo, printf, true, cat, head, tail, grep or wc; it sets no variable, no upstream (no --set-upstream, no fetch -u) and writes no file (no tee, no >). To delete a branch: git push --delete <remote> <branch>';
   /** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
   const gitThen = (text, word) => new RegExp(`\\b${word}\\b`, "i").test(/\bgit\b([\s\S]*)/i.exec(text)?.[1] ?? "");
   const pushText = (text) => gitThen(text, "push");
@@ -31,7 +33,8 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
   const refuse = (why) => `${why} Push only with ${PUSH_FORM}.`;
   const unreadableGitHub = (command) => /\bgh(?:\.exe)?\b/i.test(bare(command))
     ? mergeIn(command)?.problem ?? refuse("the hook cannot establish the GitHub API command's destination.") : undefined;
-  function pushProblem(command, cwd, options = {}) {
+  /** described: the text is only a tool call's description, which runs nothing, so the git settings rule skips it (R1949-1). */
+  function pushProblem(command, cwd, options = {}, { described = false } = {}) {
     let commands;
     try {
       commands = shellCommands(command);
@@ -39,7 +42,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
       return pushText(bare(command)) ? refuse(`the hook cannot read this command (${e.message}), so it refuses it. Close each quote, substitution and heredoc.`) : unreadableGitHub(command);
     }
     defaults.clear(); // read GitHub's default branch once for each command, never from an earlier command
-    const state = gitStateChange(command, cwd);
+    const state = described ? undefined : gitStateChange(command, commands, cwd);
     if (state) return state;
     let dir = cwd;
     /** The first command beside the push that the line may not run, or undefined. Read only for a line with a push. */
@@ -66,7 +69,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
           if (why) return refuse(why);
         }
         const send = sendsOtherwise(run.word, run.args);
-        if (send) return mergeIn(command)?.problem ?? refuse(send);
+        if (send) return mergeIn(command)?.problem ?? (send.alone ? send.why : refuse(send));
         if (apiWritesMain([run.word, ...run.args], run.dir ?? cwd)) return mergeIn(command)?.problem ?? refuse(mainReason);
       }
       if (runs.some(run => run.word === "command") && [...externalCommandOperands(command, cwd, options)]
@@ -87,7 +90,13 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     const name = programName(words[0] ?? "");
     if (/^\w+=/.test(words[0] ?? "")) return false;
     if (name !== "git") return BESIDE_PROGRAMS.has(name);
-    return BESIDE_GIT.test(gitSubcommand(words, 1)) && !words.some((w) => w === "-c" || /^--(?:git-dir|work-tree|config-env)/.test(w));
+    const sub = gitSubcommand(words, 1);
+    // An upstream set beside a push (fetch --set-upstream, or fetch's -u) can change where the push goes (R1950-1).
+    // Only fetch of the commands allowed here takes -u in that sense; add -u and the push's own -u stay allowed.
+    const setsUpstream = sub !== "push" && words.some((w) => w.startsWith("--")
+      ? longOption(w, ["--set-upstream", "--set-upstream-to", "--update-head-ok"])
+      : sub === "fetch" && /^-[a-z]*u/i.test(w));
+    return BESIDE_GIT.test(sub) && !setsUpstream && !words.some((w) => w === "-c" || /^--(?:git-dir|work-tree|config-env)/.test(w));
   }
   const besideReason = (words) => `"${words.join(" ").slice(0, 80)}" runs in the same command line as the push, and it can change where the push goes. Run the push as a command of its own.`;
   /**
@@ -95,11 +104,28 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
    * (.git/hooks, core.hooksPath) runs on commit or push, and core.fsmonitor runs on status. So in sage mode a command
    * line never names hooksPath or fsmonitor, and never writes a file under a .git folder. A text check, so not complete.
    */
-  function gitStateChange(command, cwd) {
-    if (/hookspath|fsmonitor/i.test(command)) return "a command that names core.hooksPath or core.fsmonitor can make git run a program on a commit or a push, so sage mode refuses it. Ask the user.";
+  function gitStateChange(command, commands, cwd) {
+    if (commands.some((c) => setsRunKey(c.words))) return "a command that sets core.hooksPath or core.fsmonitor can make git run a program on a commit or a push, so sage mode refuses it. Ask the user.";
     if (!commandWrites(command, cwd)) return undefined;
-    if (gitInternalPath(cwd) || /(?:^|[\s'"=:<>])(?:[^\s'"]*\/)?\.git(?:[\/\s'"]|$)/i.test(command)) return "this command writes a file under a .git folder, where git keeps its hooks and settings, so sage mode refuses it. Ask the user.";
+    // The reader keeps each redirection as its operator and target in one string, such as ">.git/hooks/pre-push" or "2>&1".
+    const target = (r) => /^[\w{}]*?(?:&>>?|>>|>\||>&|<>|>)(.*)$/.exec(r)?.[1];
+    if (gitInternalPath(cwd) || commands.some((c) => c.redirects.some((r) => gitInternalPath(target(r)) || /^\.git$/i.test(target(r) ?? ""))
+      || (c.words.length > 1 && !READ_ONLY.has(programName(c.words[0] ?? "")) && c.words.slice(1).some((w) => gitInternalPath(w) || /^\.git$/i.test(w))))) {
+      return "this command writes a file under a .git folder, where git keeps its hooks and settings, so sage mode refuses it. Ask the user.";
+    }
     return undefined;
+  }
+  /** Programs that only read their file arguments: a .git path among them is not a write target. */
+  const READ_ONLY = new Set(["ls", "cat", "head", "tail", "grep", "rg", "wc", "stat", "file", "diff", "less", "git", "echo", "printf"]);
+  const RUN_KEY = /^core\.(?:hookspath|fsmonitor)$/i;
+  /** Does one command set core.hooksPath or core.fsmonitor: git config (not a read), git -c, --config-env or GIT_CONFIG_* variables? */
+  function setsRunKey(words) {
+    if (words.some((w) => /(?:^|[=\s'"])core\.(?:hookspath|fsmonitor)\s*=/i.test(w) || /^GIT_CONFIG_KEY_\d+=core\.(?:hookspath|fsmonitor)$/i.test(w)
+      || /^--config-env=core\.(?:hookspath|fsmonitor)=/i.test(w))) return true;
+    const g = words.findIndex((w) => programName(w) === "git");
+    if (g < 0 || gitSubcommand(words, g + 1).toLowerCase() !== "config" || !words.some((w) => RUN_KEY.test(w))) return false;
+    const read = words.some((w) => /^(?:--get(?:-all|-regexp|-urlmatch)?|--list|-l|--show-origin|--show-scope|get|list)$/.test(w));
+    return !read;
   }
   /**
    * The git subcommands that the hook knows: git's built-ins and git lfs, without the ones that send commits or run a
@@ -112,21 +138,23 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     merge-base merge-file merge-tree mergetool mktag mktree mv name-rev notes pack-refs patch-id prune pull push range-diff
     read-tree rebase reflog remote repack replace rerere reset restore rev-list rev-parse revert rm shortlog show show-branch
     show-ref sparse-checkout stash status submodule subtree switch symbolic-ref tag update-index update-ref var verify-commit
-    verify-tag version whatchanged worktree write-tree`.split(/\s+/));
+    verify-tag version whatchanged worktree write-tree backfill fast-import filter-branch index-pack multi-pack-index replay
+    repo request-pull stripspace verify-pack`.split(/\s+/));
   /** Why a git or gh run sends commits or moves the default branch another way than the push form, or undefined. */
   function sendsOtherwise(word, args) {
     const name = programName(word);
     if (name === "git") {
       const sub = gitSubcommand(args, 0).toLowerCase();
       if (!sub) return undefined;
-      if (!KNOWN_GIT.has(sub)) return `"git ${sub}" is not a git command that the hook knows: a git alias, a git-${sub} program or ${sub} can send commits to a remote.`;
+      // Not a push, so this refusal gives no push form (R1949-2).
+      if (!KNOWN_GIT.has(sub)) return { alone: true, why: `"git ${sub}" is not a git command that the hook knows, and a git alias or a git-${sub} program can send commits to a remote, so sage mode refuses it. Use a git built-in, or ask the user to run it.` };
       if (sub === "subtree" && args.some((a) => /^push$/i.test(a))) return "git subtree push sends commits outside the push form.";
       return undefined;
     }
     if (name !== "gh") return undefined;
     const words = args.filter((a) => !a.startsWith("-"));
-    if (words[0] === "repo" && words[1] === "sync") return "gh repo sync writes a branch on GitHub outside a pull request.";
-    if (words[0] === "repo" && words[1] === "edit" && args.some((a) => /^--default-branch/.test(a))) return "gh repo edit --default-branch moves the default branch, and only the user does that.";
+    if (words[0] === "repo" && words[1] === "sync") return { alone: true, why: "gh repo sync writes a branch on GitHub outside a pull request, so sage mode refuses it. Ask the user." };
+    if (words[0] === "repo" && words[1] === "edit" && args.some((a) => /^--default-branch/.test(a))) return { alone: true, why: "gh repo edit --default-branch moves the default branch, and only the user does that." };
     return undefined;
   }
   /** git's output, or undefined when git fails. Any other value is a broken reader. */
@@ -239,9 +267,10 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
       // A name that git cannot resolve fails the push itself ("src refspec does not match any").
       const full = gitOut(dir, ["rev-parse", "--symbolic-full-name", name])?.trim();
       if (full && full !== `refs/heads/${to}`) return `${name} is not a plain branch of this checkout (git reads it as ${full || "no branch"}), so the hook cannot tell what the push sends.`;
-      const merge = values(`branch.${to}.merge`);
-      if (upstream && merge.length && (merge.length > 1 || merge[0] !== `refs/heads/${to}`)) return `git's setting push.default is upstream, so this push goes to ${merge.join(", ")}, the upstream of ${to}. Push a branch with no other upstream.`;
     }
+    // With push.default upstream (or tracking), git sends a named branch to its upstream, and a command in the same line
+    // (fetch --set-upstream) can set that upstream after the hook read it. So no push runs while it is set (R1950-1).
+    if (!remove && upstream) return "git's setting push.default is upstream, so git can send the branch to its upstream, such as main. The hook refuses every push while it is set: ask the user to change it (git config --unset push.default).";
     if (remove) return undefined;
     const branch = gitOut(dir, ["rev-parse", "--abbrev-ref", "HEAD"])?.trim();
     if (branch !== undefined && (!branch || /[\x00-\x20\x7f]/.test(branch))) throw new TypeError("readGit must return a branch name for rev-parse");

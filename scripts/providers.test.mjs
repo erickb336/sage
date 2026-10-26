@@ -2746,8 +2746,10 @@ test("shared push policy validates and snapshots trusted branch readers and mess
     assert.throws(() => api.createPushPolicy({ readGit: fakeGit("topic"), readGh: () => value }).pushProblem("git push origin topic", f.dir), /readGh/);
   }
   // The repository of a remote URL, in the forms git writes, and nothing for another host.
-  assert.deepEqual(["https://github.com/acme/site.git", "git@github.com:acme/site", "ssh://git@github.com/acme/site.git", "https://gitlab.com/acme/site", "https://github.com/acme/../x", "../site.git"].map(api.gitHubRepository),
-    ["acme/site", "acme/site", "acme/site", undefined, undefined, undefined]);
+  assert.deepEqual(["https://github.com/acme/site.git", "git@github.com:acme/site", "ssh://git@github.com/acme/site.git", "https://gitlab.com/acme/site", "https://github.com/acme/../x", "../site.git",
+    // R1949-2: a user in the URL, a capital host and ssh.github.com:443 name the same repository; an ssh host alias does not.
+    "https://someone@GitHub.com/acme/site", "ssh://git@ssh.github.com:443/acme/site.git", "git@GITHUB.COM:acme/site.git", "github-work:acme/site", "https://github.com.evil.test/acme/site"].map(api.gitHubRepository),
+    ["acme/site", "acme/site", "acme/site", undefined, undefined, undefined, "acme/site", "acme/site", "acme/site", undefined, undefined]);
   for (const mainReason of [null, "", " ", "bad\nmessage", "x".repeat(2049)]) {
     assert.throws(() => api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic"), mainReason }), /mainReason/);
   }

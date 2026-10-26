@@ -386,7 +386,7 @@ export function handle(input, state, slots) {
     const commands = commandFields(ti);
     // Keep expansion, push and merge refusals ahead of the narrower gh exceptions.
     if (state.sage) for (const command of commands) {
-      const result = gitGate(event, command, state, cwd, false, input.tool_name);
+      const result = gitGate(event, command, state, cwd, false, input.tool_name, describedOnly(ti, command));
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
     }
     // Keep alias payloads intact and also read PowerShell's backslash-separated paths.
@@ -497,7 +497,7 @@ export function handle(input, state, slots) {
     }
     let answer;
     for (const command of commands) {
-      const result = gitGate(event, command, state, cwd, main, tool);
+      const result = gitGate(event, command, state, cwd, main, tool, describedOnly(ti, command));
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
       answer ??= result;
     }
@@ -507,10 +507,12 @@ export function handle(input, state, slots) {
 }
 
 /** Shared push classification. Branch reads and the first-upload exception stay in the provider. */
-function pushProblem(command, cwd, options) {
+function pushProblem(command, cwd, options, extra) {
   if (commandPolicy.error) return "the command policy cannot load, so this push is refused.";
-  return commandPolicy.pushes.pushProblem(command, cwd, options);
+  return commandPolicy.pushes.pushProblem(command, cwd, options, extra);
 }
+/** Is this field only the description: the description's text, and no field that runs has the same text (R1949-1)? */
+const describedOnly = (ti, text) => text === ti.description && !runFields(ti).includes(text);
 const subcommand = (words, k) => commandPolicy.gitSubcommand(words, k);
 const programName = word => commandPolicy.programName(word);
 /** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
@@ -2032,7 +2034,7 @@ function powerShellProblem(command) {
     : undefined;
 }
 
-function gitGate(event, command, state, cwd, main, tool) {
+function gitGate(event, command, state, cwd, main, tool, described = false) {
   const powerShell = tool === "PowerShell" && powerShellProblem(command);
   if (powerShell) return deny(event, powerShell);
   const options = { powerShell: tool === "PowerShell" };
@@ -2043,7 +2045,7 @@ function gitGate(event, command, state, cwd, main, tool) {
     const { decision, reason } = firstCreation(first);
     return decide(event, decision, reason);
   }
-  const push = pushProblem(command, cwd, options);
+  const push = pushProblem(command, cwd, options, { described });
   if (push) return deny(event, push);
   const merge = mergeIn(command);
   if (!merge) return undefined;

@@ -658,16 +658,22 @@ test("T536: in sage mode no push reaches the default branch, whatever the remote
   git("config", "remote.github.mirror", "true");
   check({ "git push github sage/t1": /^sage: git's setting remote\.github\.mirror makes every push a mirror push/ }, [], "mirror setting");
   git("config", "--unset", "remote.github.mirror");
+  // push.default upstream sends a named branch to its upstream, and a fetch in the same line can set that upstream after the
+  // hook read it (R1950-1). So no push runs while it is set, whatever the upstream is now (also F5's refs/heads/<branch>).
+  const UPSTREAM = /^sage: git's setting push\.default is upstream, so git can send the branch to its upstream/;
   git("config", "push.default", "upstream");
-  git("config", "branch.sage/t1.merge", "refs/heads/main");
-  check({ "git push github sage/t1": /^sage: git's setting push\.default is upstream, so this push goes to refs\/heads\/main/ }, [], "upstream");
-  git("config", "branch.sage/t1.merge", "refs/heads/sage/t1");
-  check({}, ["git push github sage/t1"], "upstream of the same name");
-  // R1936 F5: the upstream is looked up by the short name, also when the push names refs/heads/<branch>.
   git("branch", "sage/t5-x");
   git("config", "branch.sage/t5-x.merge", "refs/heads/main");
-  check({ "git push github refs/heads/sage/t5-x": /^sage: git's setting push\.default is upstream, so this push goes to refs\/heads\/main/ }, [], "upstream of refs/heads/<branch>");
+  check({ "git push github sage/t1": UPSTREAM, "git push github refs/heads/sage/t5-x": UPSTREAM,
+    "git fetch --set-upstream github main && git push github sage/t1": UPSTREAM }, ["git push --delete github sage/t9"], "push.default upstream");
+  git("config", "push.default", "tracking");
+  check({ "git push github sage/t1": UPSTREAM }, [], "push.default tracking");
   git("config", "--unset", "push.default");
+  // An upstream set beside a push is refused, also when push.default is not upstream now.
+  check({ "git fetch --set-upstream github main && git push github sage/t1": /^sage: "git fetch --set-upstream github main" runs in the same command line as the push/,
+    "git fetch -u github main; git push github sage/t1": /^sage: "git fetch -u github main" runs in the same command line/,
+    "git fetch --set-up github main; git push github sage/t1": /^sage: "git fetch --set-up github main" runs in the same command line/ },
+    ["git fetch github && git push -u github sage/t1", "git add -u && git push github sage/t1"], "upstream beside a push");
   // R1936 F6: a task-branch name that is a symbolic ref to main sends main.
   git("branch", "main");
   git("symbolic-ref", "refs/heads/sage/t5-sym", "refs/heads/main");
@@ -695,9 +701,16 @@ test("T536: in sage mode no push reaches the default branch, whatever the remote
   check({ "git subtree push --prefix=docs github main": /^sage: git subtree push sends commits outside the push form/,
     "git subtree push --prefix=docs github sage/t1": /^sage: git subtree push/,
     "git send-pack https://github.com/acme/site.git main": UNKNOWN, "git ship": UNKNOWN, "git -c alias.xyz=push xyz github HEAD:main": UNKNOWN,
-    "env GIT_TRACE=0 git ship": UNKNOWN, "git xyz": UNKNOWN }, ["git status", "git lfs ls-files", "git subtree split --prefix=docs"], "other senders");
+    "env GIT_TRACE=0 git ship": UNKNOWN, "git xyz": UNKNOWN }, ["git status", "git lfs ls-files", "git subtree split --prefix=docs",
+    "git stripspace", "git verify-pack -v x.idx", "git request-pull main origin"], "other senders");
+  // R1949-2: a refusal of a command that does not push gives no push form.
+  assert.doesNotMatch(denied(w.send(pre("Bash", "git credential fill"))) ?? "", /Push only with/);
+  assert.match(denied(w.send(pre("Bash", "git credential fill"))) ?? "", /^sage: "git credential" is not a git command that the hook knows/);
   // R1936 F4: a git hook or core.hooksPath runs a program on a commit or a push.
-  const HOOKS = /^sage: a command that names core\.hooksPath or core\.fsmonitor/;
+  const HOOKS = /^sage: a command that sets core\.hooksPath or core\.fsmonitor/;
+  // R1949-1: a read or a search that names those keys passes, and so does a read of .git with output elsewhere.
+  check({}, ["grep -rn hooksPath packages/", "git log --grep fsmonitor", "git config --get core.hooksPath", "git config get core.hooksPath",
+    "git commit -m 'refuse core.hooksPath'", "ls .git/ > /tmp/out.txt", "cat .git/HEAD > /tmp/head.txt"], "reads of hook settings");
   const GIT_WRITE = /^sage: this command writes a file under a \.git folder/;
   check({ "echo 'git push github HEAD:main' > .git/hooks/pre-push": GIT_WRITE, "cp /tmp/hook .git/hooks/post-commit": GIT_WRITE,
     "git config core.hooksPath /tmp/h": HOOKS, "git -c core.hooksPath=/tmp/h commit -m x": HOOKS,
