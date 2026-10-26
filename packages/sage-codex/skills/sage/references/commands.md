@@ -19,7 +19,7 @@ Write the logbook only through the plugin's `sage` MCP tools. Codex starts that 
 | Tool | Command | Fields besides `project` |
 | --- | --- | --- |
 | `init`, `status` | `init`, `status` | none |
-| `task_add` | `task add` | `title`, `size`, and `risk`, `add`, `why`, `priority`, `kind`, `waits`, `program` |
+| `task_add` | `task add` | `title`, `size`, `priority`, and `risk`, `add`, `why`, `kind`, `waits`, `program` |
 | `task_set` | `task <T> set` | `task`, `fields` (for example `{"state": "briefed", "branch": "codex/t7-example"}`) |
 | `run_add`, `run_done` | `run add <T>`, `run done <R>` | `task` or `run`, and the command's options |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` | `task`, `key`, `decision` (triage), and the options |
@@ -36,7 +36,7 @@ node "$SAGE_CLI"
 node "$SAGE_CLI" init --project "$PROJECT"
 node "$SAGE_CLI" config --project "$PROJECT"
 node "$SAGE_CLI" standing --project "$PROJECT"
-node "$SAGE_CLI" task add --title "Describe the task" --size small --project "$PROJECT"
+node "$SAGE_CLI" task add --title "Describe the task" --size small --priority P2 --project "$PROJECT"
 node "$SAGE_CLI" task T7 --project "$PROJECT"
 node "$SAGE_CLI" task T7 set branch=codex/t7-example --project "$PROJECT"
 node "$SAGE_CLI" task T7 set state=briefed --project "$PROJECT"
@@ -62,14 +62,14 @@ node "$SAGE_CLI" config name="Council Record" --project "$PROJECT"
 node "$SAGE_CLI" config archived=yes --project "$PROJECT"
 ```
 
-A task's priority and kind are optional, and the board shows them as tags on its card. A priority is `P0`, `P1`, `P2` or `P3`; no priority sorts last. A kind is one of: design, ui, orchestration, optimization, bug-fix, logbook, docs, security, providers, checks. Choose the task's main one. Another value refuses, with the list, and `none` clears either one.
+Every task needs a priority: `task_add` refuses without one, with the scale: P0 the owner's current focus and what blocks it; P1 next: function or safety bugs, work in flight, pre-pilot items; P2 later: polish, hardening lows, follow-ups; P3 parked but kept. An open task's priority does not clear. The kind is optional. The board shows both as tags on its card, and "no priority" on an older open task with none; `status` names those tasks. A kind is one of: design, ui, orchestration, optimization, bug-fix, logbook, docs, security, providers, checks. Choose the task's main one. Another value refuses, with the list, and `none` clears a kind, or the priority of an ended task.
 
 `config name=` and `config archived=` set keys of the project's own logbook, never the config for all projects. Set them in a config command of their own, and only when the owner asks. The name is the project's name on the board: 1 to 60 characters, with no space at an end or two together, and no control, format or hidden character. `name=` alone removes it. Without a name, the board shows the repository name of the checkout's `upstream` remote, then of `origin`, then the folder. `archived=yes` folds the project into the board's Archived group, which shows only a count of its tasks and of what needs the owner there; `archived=no` brings it back.
 
 ## Waits
 
 ```sh
-node "$SAGE_CLI" task add --title "Describe the task" --size small --waits T7,T9 --project "$PROJECT"
+node "$SAGE_CLI" task add --title "Describe the task" --size small --priority P2 --waits T7,T9 --project "$PROJECT"
 node "$SAGE_CLI" task T8 set waits=T7 --project "$PROJECT"
 node "$SAGE_CLI" task T8 set waits= --project "$PROJECT"
 ```
@@ -82,7 +82,7 @@ A task may wait for other tasks of the same logbook. A wait is met when that tas
 node "$SAGE_CLI" program propose --name "Codex support" --goal "Codex runs sage too." --pilot T7 --tasks T8,T9 --project "$PROJECT"
 node "$SAGE_CLI" program propose PG1 --tasks T8 --project "$PROJECT"
 node "$SAGE_CLI" program propose PG1 --pilot T9 --project "$PROJECT"
-node "$SAGE_CLI" task add --title "Describe the task" --size small --program PG1 --waits T7 --project "$PROJECT"
+node "$SAGE_CLI" task add --title "Describe the task" --size small --priority P2 --program PG1 --waits T7 --project "$PROJECT"
 node "$SAGE_CLI" task T8 set program=PG1 --project "$PROJECT"
 node "$SAGE_CLI" task T8 set program=none --project "$PROJECT"
 ```

@@ -38,18 +38,18 @@ export async function setupCompletion(root, { omitStop = false, failedSpawn = fa
   const cli = (...args) => runTool.sage([...args, "--project", options.projectDirectory], runEnv);
   cli("init");
   if (!createTask && !createRun) {
-    cli("task", "add", "--title", readTask ? "Simulated task read fixture" : "Native recorded run", "--size", "small");
+    cli("task", "add", "--priority", "P2", "--title", readTask ? "Simulated task read fixture" : "Native recorded run", "--size", "small");
     cli("task", "T1", "set", "branch=codex/t1-native");
     if (!readTask) cli("run", "add", "T1", "--role", acceptReview ? "code-reviewer" : writer ? "implementer" : "lead", ...(writer ? ["--branch", "codex/t1-native"] : []));
   }
   if(nestedReport) cli("run","add","T1","--role","code-reviewer");
   const reviewTarget=nestedReport ? {branch:"codex/t1-native",sha:git("rev-parse","HEAD").trim(),round:0,cycle:1} : undefined;
   if(followupCapacity) {
-    cli("task","add","--title","Held capacity child","--size","small");
+    cli("task","add", "--priority", "P2","--title","Held capacity child","--size","small");
     cli("run","add","T2","--role","lead");
   }
   if (capacityFailure) {
-    cli("task", "add", "--title", "Native capacity retry", "--size", "small");
+    cli("task", "add", "--priority", "P2", "--title", "Native capacity retry", "--size", "small");
     cli("run", "add", "T2", "--role", "lead");
   }
   const logbook = runTool.storeDir(options.projectDirectory, runEnv);
