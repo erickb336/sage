@@ -3728,7 +3728,7 @@ test("T314: config refuses a name that is too long, empty of text, spaced at an 
   assert.equal(s.no("config", "name= seacc"), 'sage: the name " seacc" has a space at its start or end, or two spaces together. Nothing changed.');
   assert.equal(s.no("config", "name=sea  cc"), 'sage: the name "sea  cc" has a space at its start or end, or two spaces together. Nothing changed.');
   assert.equal(s.no("config", "archived=true"), 'sage: archived is yes or no, not "true". Nothing changed.');
-  assert.equal(s.no("config", "name=x", "arena=2"), 'sage: "arena" is a key for all projects, and name= and archived= are keys of one logbook: set them in a config command of their own.');
+  assert.equal(s.no("config", "name=x", "arena=2"), 'sage: "arena" is a key for all projects, and name=, archived= and repo= are keys of one logbook: set them in a config command of their own.');
   assert.equal(s.no("config", "name"), "sage: name needs a value: write name=<value>");
   assert.equal(existsSync(own), false, "no refusal wrote the file");
   writeFileSync(own, "[1]");

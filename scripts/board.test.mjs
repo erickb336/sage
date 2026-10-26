@@ -188,6 +188,20 @@ test("T174 R650: the reviewed head is the last ledger SHA, as sage-pr merge take
   assert.equal(line("T2"), "- T2 [#7](https://github.com/acme/sage/pull/7) waits for your merge (risk input, as of the last fetch): Sample\\: the chat board");
 });
 
+test("T493: the board never decides a carry-over over a merge of main: it shows one that the merge check recorded, or says to run it with --pr", () => {
+  const w = world();
+  const line = (id) => w.show("this").split("\n").find((l) => l.startsWith(`- ${id} `));
+  const A = w.heads.T2; // 2 clean cycles
+  const B = commit(w.sage, "t2"); // the new head, with only CI's verdict
+  execFileSync("git", ["-C", w.sage, "update-ref", "refs/remotes/origin/t2", B]); // a fetch after the push
+  add(w, w.book, "ledger", ["T2", "7", B, "checks-pass", "1", "", "2026-10-05T02:00:00Z"]);
+  assert.equal(line("T2"), "- T2 [#7](https://github.com/acme/sage/pull/7) cannot merge yet (T2\\: 0 of 2 clean cycles on this SHA; never recorded\\: review-clean, se…): Sample\\: the chat board", "no repository record: no carry-over");
+  writeFileSync(join(w.home, w.book, "config.json"), JSON.stringify({ repo: "acme/sage" }));
+  assert.equal(line("T2"), "- T2 [#7](https://github.com/acme/sage/pull/7) cannot merge yet (T2\\: run the merge check with --pr, verdicts may carry over): Sample\\: the chat board");
+  add(w, w.book, "decisions", ["2026-10-05T03:00:00Z", "T2", `verdicts ${A} → ${B}`, "merge-check: a clean merge of main"]);
+  assert.equal(line("T2"), "- T2 [#7](https://github.com/acme/sage/pull/7) waits for your merge (risk input, as of the last fetch): Sample\\: the chat board", "a recorded carry-over counts");
+});
+
 test("T174 R650: the read-only merge check takes no lock and writes nothing, also when the known project list is missing", () => {
   const w = world();
   const files = () => execFileSync("find", [w.home, "-print"], { encoding: "utf8" }).split("\n").sort().join("\n");

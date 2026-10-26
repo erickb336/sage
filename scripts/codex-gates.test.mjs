@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { fakeGithub, prView } from "./fixtures/fake-github.mjs";
 import { history } from "./fixtures/merge-history.mjs";
 
 // The Codex gates (T456), through Codex's PreToolUse and PermissionRequest input and output shapes. The pure tests give
@@ -276,7 +277,10 @@ test("the Codex merge rule keeps the verdicts over a clean merge of main, throug
   const w = world(t);
   w.typed("sage mode", "autopilot on");
   w.mode({ sage: true, autopilot: true });
+  // GitHub is the project's own repository here, through the fake gh of the carry-over tests.
   const h = history(w.project);
+  fakeGithub(w.dir, w.project, "acme/project");
+  const view = (repo = "acme/project") => writeFileSync(join(w.dir, "pr.json"), prView(repo, h.git("rev-parse", "main")));
   h.start();
   const h0 = h.work({ "src.js": "a\nb\n", "CHANGELOG.md": "- task\n- base\n" });
   assert.equal(w.sage("init").status, 0);
@@ -285,11 +289,14 @@ test("the Codex merge rule keeps the verdicts over a clean merge of main, throug
   const h1 = h.merge(h.main({ "CHANGELOG.md": "- main\n- base\n" }), { "CHANGELOG.md": "- task\n- main\n- base\n" });
   const merge = `gh pr merge 41 --squash --delete-branch --match-head-commit ${h1}`;
   assert.equal(w.sage("verdict", "T1", "--sha", h1, "--kind", "checks-pass", "--cycle", "1", "--pr", "41").status, 0);
-  assert.match(denied(w.send(pre("Bash", merge))) ?? "", /do not carry over: the merge check has no base commit of the pull request from GitHub/, "gh gives no base commit");
-  writeFileSync(join(w.dir, "base"), h.git("rev-parse", "main")); // the base commit on GitHub, which gh pr view gives
+  view();
+  assert.match(denied(w.send(pre("Bash", merge))) ?? "", /^sage: the merge check refuses: T1: 0 of 1 clean cycles on this SHA; never recorded: review-clean, qa-pass\. Run the next cycle of its reviews on this SHA and record each verdict$/, "no repository record: nothing carries");
+  assert.equal(w.sage("config", "repo=acme/project").status, 0);
   assert.equal(w.send(pre("Bash", merge)), undefined, "the merge of main keeps the reviewed head's verdicts");
+  view("acme/elsewhere");
+  assert.match(denied(w.send(pre("Bash", merge))) ?? "", /^sage: the merge check refuses: PR 41 is a pull request of acme\/elsewhere on GitHub, but this project's logbook records the repository acme\/project/);
   const evil = h.merge(h.main({ "other.js": "m\n" }), { "src.js": "a\nb\nevil\n" });
-  writeFileSync(join(w.dir, "base"), h.git("rev-parse", "main"));
+  view();
   assert.equal(w.sage("verdict", "T1", "--sha", evil, "--kind", "checks-pass", "--cycle", "1", "--pr", "41").status, 0);
   assert.match(denied(w.send(pre("Bash", `gh pr merge 41 --squash --delete-branch --match-head-commit ${evil}`))) ?? "", /^sage: the merge check refuses: T1: 0 of 1 clean cycles on this SHA; .* do not carry over: the merge changes "src\.js" otherwise than/);
 });

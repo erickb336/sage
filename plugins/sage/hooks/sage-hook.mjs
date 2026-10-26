@@ -1891,11 +1891,12 @@ function gitGate(event, command, state, cwd, main, tool) {
   // A state tool that cannot load refuses first, before the hook asks GitHub for anything.
   if (stateTool.error) return deny(event, `the merge check refuses: it could not run (${stateTool.error?.message ?? stateTool.error}), so it refuses every merge. Tell the user.`);
   // The pull request's head branch, from GitHub: each task of the pull request must own it (F-T273-8). Its base commit,
-  // from GitHub too: verdicts carry over a merge of main only up to it (T493).
-  let head, base;
+  // from GitHub too: verdicts carry over a merge of main only up to it (T493). Its repository, as gh pr merge resolves it
+  // here: the merge check refuses it when the project's logbook records another one.
+  let head, base, repo;
   try {
     if (boardPolicy.error) throw boardPolicy.error;
-    ({ head, base } = boardPolicy.pullRequest(merge.pr, cwd));
+    ({ head, base, repo } = boardPolicy.pullRequest(merge.pr, cwd));
   } catch (e) {
     return deny(event, `the hook could not read the head branch of PR ${merge.pr} from GitHub (${e?.message ?? e}), so it refuses the merge. Try again, or tell the user.`);
   }
@@ -1903,7 +1904,7 @@ function gitGate(event, command, state, cwd, main, tool) {
   try {
     if (stateTool.error) throw stateTool.error;
     // Only a task of the merged project's logbook approves: its folder, resolved as for a lead (F-T273-9).
-    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head, base, project: realpathSync.native(cwd) });
+    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head, base, repo, project: realpathSync.native(cwd) });
   } catch (e) {
     verdict = { reason: `it could not run (${e?.message ?? e}), so it refuses every merge. Tell the user.` };
   }

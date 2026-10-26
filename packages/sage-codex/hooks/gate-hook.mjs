@@ -324,15 +324,15 @@ export const resumesSession = (command, cwd, env) => (codexRuns(command, cwd, en
 
 /** The merge check for one merge form: the pull request's head branch and base commit from gh, then the state tool's ledger check. */
 export async function checkMerge({ pr, sha }, cwd, env = process.env) {
-  let head, base;
+  let head, base, repo; // repo: as gh pr merge resolves it here, which the merge check compares with the logbook's record
   try {
-    ({ head, base } = pullRequest(pr, cwd, env));
+    ({ head, base, repo } = pullRequest(pr, cwd, env));
   } catch (error) {
     return { ok: false, reason: `sage: the hook could not read the head branch of PR ${pr} from GitHub (${error?.message ?? error}), so it refuses the merge. Try again, or tell the user.` };
   }
   try {
     const { tool } = await import("../skills/sage/sage.mjs");
-    const verdict = tool.mergeCheck(sha, env, { pr, head, base, project: realpathSync.native(cwd) });
+    const verdict = tool.mergeCheck(sha, env, { pr, head, base, repo, project: realpathSync.native(cwd) });
     return verdict?.ok === true ? { ok: true } : { ok: false, reason: `sage: the merge check refuses: ${verdict?.reason}` };
   } catch (error) {
     return { ok: false, reason: `sage: the merge check could not run (${error?.message ?? error}), so it refuses every merge. Tell the user.` };

@@ -153,8 +153,9 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
     const pr = api(path);
     samePr(pr, record, input.sha);
     // Read only: this helper runs in Codex's shell sandbox, where the logbook is not writable, so a carry-over of verdicts
-    // over a merge of main (T493) writes no decision row here; the merge check's line names it. The base is GitHub's.
-    const eligible = tool.mergeCheck(input.sha, env, { pr: record.pr, head: record.branch, project, readOnly: true, base: pr.base?.sha });
+    // over a merge of main (T493) writes no decision row here; the merge check's line names it. The base and every
+    // other fact of a carry-over come from GitHub, through this helper's own API reader, in the registered repository.
+    const eligible = tool.mergeCheck(input.sha, env, { pr: record.pr, head: record.branch, project, readOnly: true, base: pr.base?.sha ?? "", repo: record.repo, get: (path) => api(path) });
     if (!eligible.ok) fail(eligible.reason);
     if (pr.state !== "open" || pr.draft !== false || pr.merged !== false || pr.mergeable !== true || pr.mergeable_state !== "clean")
       fail("PR must be open, ready and mergeable without a queue");

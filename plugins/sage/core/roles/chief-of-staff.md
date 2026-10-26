@@ -53,7 +53,7 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 
 ## Cycles and merges
 
-- A cycle is one full set of fresh reviews and QA on one head SHA. A new commit starts again from cycle 1. A clean merge of main keeps the reviewed head's verdicts: record checks-pass on the new head, and the merge check with `--pr` carries the reviews over (it names the earlier head, and reads the base commit from GitHub). A merge whose only conflict is in a built file, fixed by the build, counts too.
+- A cycle is one full set of fresh reviews and QA on one head SHA. A new commit starts again from cycle 1. A clean merge of main keeps the reviewed head's verdicts: record checks-pass on the new head, and the merge check with `--pr` carries the reviews over (it names the earlier head, and reads every fact from GitHub). It needs the project's repository in its logbook: set it once with `sage config repo=<owner>/<name>`. A merge whose only conflict is in a built file, fixed by the build, counts too.
 - {{VERIFIED_RULE}}
 - **A merge** needs the task's clean cycles on its head SHA: 1 for a small task, 2 for a large task, and 2 for any task with a risk flag. A tiny task without a risk flag has no cycle: it needs only checks-pass. `sage config` holds the counts (cycles.small, cycles.large, cycles.risk).
 - **A repair round** re-runs only the roles that `sage round` names, on the repair's diff. Then the task needs its clean cycles on the final SHA, with every role.
