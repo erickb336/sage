@@ -142,6 +142,9 @@ const checkout = (branch) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-checkout-")));
   spawnSync("git", ["init", "-q", "-b", branch, dir]);
   spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"]);
+  // A remote with a known default branch, as after a clone: the push rule reads both (T536).
+  spawnSync("git", ["-C", dir, "remote", "add", "origin", "https://github.com/acme/project.git"]);
+  spawnSync("git", ["-C", dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
   return dir;
 };
 const FEATURE = checkout("claude/t1");
@@ -548,7 +551,7 @@ test("each project has its own cap, the total across all projects wins, and each
 // The push rule is an allow-list (F-R89-1, F-R89-3, F-R90-2). Each refusal names the one push form.
 const FORCE = /^sage: sage mode never force-pushes\. .*Push only with git \[-C <dir>\] push/;
 const TO_MAIN = /^sage: work reaches main only through a pull request\. .*Push only with git \[-C <dir>\] push/;
-const NOT_FORM = /^sage: .*Push only with git \[-C <dir>\] push \[-u\] \[--follow-tags\] \[-o <option>\] origin <branch>/;
+const NOT_FORM = /^sage: .*Push only with git \[-C <dir>\] push \[-u\] \[--follow-tags\] \[-o <option>\] <remote> <branch>/;
 /** The refusals that differ from the expected one, as "command: reason" lines. */
 const wrongRefusals = (s, cases, expected, cwd) => cases.flatMap((command) => {
   const reason = denied(s.send(bash(command, cwd))) ?? "allowed";
@@ -746,7 +749,6 @@ test("a plain push of a feature branch passes: -u, a quoted name, -C, -o, --foll
     "git push origin --delete feat/old",
     `git -C ${FEATURE} push -u origin claude/t1`,
     "git push origin feat/x 2>&1 | tail -5",
-    "git push origin feat/x 2>&1 | tee /tmp/log",
     "git commit -m 'never git push origin main' && git push -u origin feat",
     "git log origin/main..HEAD && git push origin feat",
     `cd ${FEATURE} && git push -u origin feat/x && gh pr create --title t --body 'never push to main'`,
@@ -767,6 +769,31 @@ test("a push from a checkout of main or master is refused; a push with -C or aft
   assert.equal(s.send(bash(`git -C ${FEATURE} push -u origin claude/t1`, MAIN_CHECKOUT)), undefined);
   assert.equal(s.send(bash(`cd ${FEATURE} && git push -u origin claude/t1`, MAIN_CHECKOUT)), undefined);
   assert.equal(s.send(bash("git push --delete origin claude/t1", MAIN_CHECKOUT)), undefined, "deleting a feature branch is not a push of the checkout");
+});
+
+test("T536: no push reaches the default branch through a remote with another name, a setting or a line beside it; the task's branch goes to any remote", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  // The incident's project: its one remote is github, not origin.
+  const dir = checkout("claude/t1");
+  const git = (...args) => assert.equal(spawnSync("git", ["-C", dir, ...args]).status, 0, args.join(" "));
+  git("remote", "rename", "origin", "github");
+  git("symbolic-ref", "refs/remotes/github/HEAD", "refs/remotes/github/main");
+  const refused = (command, why) => assert.match(denied(s.send(bash(command, dir))) ?? "allowed", why, command);
+  const passes = (command) => assert.equal(denied(s.send(bash(command, dir))), undefined, command);
+  for (const command of ["git push github HEAD:main", "git push github :main", "git push github HEAD:refs/heads/main", "git push --all github"]) refused(command, TO_MAIN);
+  refused("git push https://github.com/acme/project.git claude/t1", /^sage: push to a remote of this checkout/);
+  refused("git config push.default upstream && git push github claude/t1", /^sage: "git config push\.default upstream" runs in the same command line as the push/);
+  passes("git push -u github claude/t1");
+  passes("git push github topic");
+  git("config", "remote.github.push", "refs/heads/claude/t1:refs/heads/main");
+  refused("git push github claude/t1", /^sage: git's setting remote\.github\.push can send the branch to another name/);
+  git("config", "--unset", "remote.github.push");
+  git("symbolic-ref", "refs/remotes/github/HEAD", "refs/remotes/github/trunk");
+  refused("git push github trunk", /^sage: trunk is the default branch of github: work reaches main only through a pull request/);
+  git("symbolic-ref", "--delete", "refs/remotes/github/HEAD");
+  refused("git push github topic", /^sage: the hook cannot read the default branch of github/);
+  passes("git push github claude/t1");
 });
 
 /**
@@ -2490,7 +2517,9 @@ test("R466-CASESUB: the arms of a case inside a subshell or a group are commands
 test("R466-PROCSUB: a process substitution is read as commands of its own, not as a redirection", async () => {
   const s = session(SYSTEM_PATH);
   s.send(prompt("sage mode"));
-  assert.equal(s.send(bash("comm <(git branch) <(git branch -r); git push origin t100-x")), undefined);
+  assert.equal(s.send(bash("cat <(git log) <(git status); git push origin t100-x")), undefined);
+  // A command beside a push that can change git's settings refuses the push (T536); the hook reads it inside <(…).
+  assert.match(denied(s.send(bash("comm <(git branch) <(git branch -r); git push origin t100-x"))) ?? "", /"git branch" runs in the same command line as the push/);
   assert.match(denied(s.send(bash("diff <(git push origin main) x"))) ?? "", TO_MAIN);
   assert.equal(await refusal("diff <(sort a) <(sort b) | grep kill"), undefined);
   for (const command of ["diff <(ps) x", "tee >(kill 1) < f", "cat <(echo $(ps))"]) assert.match((await refusal(command)) ?? "", /standing order 14/, command);

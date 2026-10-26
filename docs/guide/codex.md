@@ -117,7 +117,7 @@ With autopilot on, each task still asks you 4 times before its merge: Codex asks
 | --- | --- | --- |
 | Create the task worktree (`git worktree add`) | The implementer's own folder and branch for the task | It writes to `.git` |
 | Commit on the task branch (`git -C <folder> add <files> && git -C <folder> commit …`, one prompt for both) | The change of the task | Both commands write to `.git` |
-| Send the task branch (`git -C <folder> push -u origin <branch>`) | The branch of the pull request on GitHub | It writes to `.git` and needs the network |
+| Send the task branch (`git -C <folder> push -u <remote> <branch>`) | The branch of the pull request on GitHub | It writes to `.git` and needs the network |
 | Open the pull request (`gh pr create`) | The pull request that the reviews and the merge check read | It needs the network |
 
 - With sage mode and autopilot on, the merge needs no prompt: the sage hook allows the verified merge command itself.
@@ -186,7 +186,7 @@ The hook `hooks/gate-hook.mjs` holds these rules. Codex runs it before each shel
 | Rule | When | What you see |
 | --- | --- | --- |
 | A merge runs only with autopilot on and a passing merge check for that head commit, in the one form `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, from the main thread | sage mode | Codex blocks any other merge, and the chief gets one line with the reason. A verified merge runs with no approval prompt: the hook allows its network approval itself |
-| A push takes the one push form of Claude Code: `git push [-u] origin <branch>`, with the literal name of the task's branch, never main, never a force-push | sage mode, every thread | Codex blocks any other push, with one line that gives the form |
+| A push takes the one push form of Claude Code: `git push [-u] <remote> <branch>`, to a remote of the checkout with any name, with the literal name of the task's branch, never a force-push. It never sends to the default branch: not main or master, and not the branch that `refs/remotes/<remote>/HEAD` names. When the hook cannot read that ref, only a task's branch (`<prefix>/t<n>-<words>`) passes. A setting that sends the branch to another name (`remote.<remote>.push`, or `push.default` upstream with another upstream) refuses it, and so does a command beside the push in the same line other than `cd`, `git add`, `commit`, `status`, `log`, `diff` or `fetch`, `gh` and `echo` | sage mode, every thread | Codex blocks any other push, with one line that gives the reason and the form |
 | The chief changes no files | sage mode, the main thread | Codex blocks the chief's `apply_patch` edit. The chief briefs an implementer, and agents edit as before |
 | A reviewer or QA changes no files | sage mode, a role agent whose task name names that role, and every agent under it; also Codex's own review thread and approval check | Codex blocks its `apply_patch` edit and its shell commands that write a file (also Codex's own `apply_patch` program), with one line: the agent reports a finding instead. It still reads files and runs the checks. The same rule holds the PE and the lead when they come to Codex |
 | A name that starts with `sage_` but is not a sage task name counts as a read-only role | sage mode | Codex blocks its edits and shell writes, with one line that names the task name form |

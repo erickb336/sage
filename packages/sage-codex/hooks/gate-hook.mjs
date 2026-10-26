@@ -47,13 +47,13 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
 const SERVER = join(ROOT, "mcp/state-server.mjs");
 const policy = createCommandPolicy({ stateToolPath: TOOL, prPattern: PR });
-/** The branch of the checkout at dir, or undefined when git cannot read it (the Claude hook's reader). */
-const branchAt = (dir) => {
+/** git's output for args in the checkout at dir, or undefined when git fails (the Claude hook's reader). */
+const readGit = (dir, args) => {
   try {
-    return execFileSync("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
   } catch { return undefined; }
 };
-const pushes = createPushPolicy({ stateToolPath: TOOL, readBranch: branchAt });
+const pushes = createPushPolicy({ stateToolPath: TOOL, readGit });
 
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user.";
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";

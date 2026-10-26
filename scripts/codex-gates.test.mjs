@@ -595,8 +595,9 @@ test("a child runs only the read commands of the state tool from the shell, and 
 
 test("in sage mode a push takes core's push form, as in the Claude hook; outside sage mode the gate does not judge it (R1664-5)", (t) => {
   const w = world(t);
+  spawnSync("git", ["-C", w.project, "remote", "add", "origin", "https://github.com/acme/project.git"]);
   const pushes = { "git push --force origin sage/t1": /^sage: sage mode never force-pushes/, "git push origin main": /^sage: work reaches main only through a pull request/,
-    "git push": /^sage: name the remote and the branch/, "git push upstream sage/t1": /^sage: push to origin/, "git push origin HEAD:main": /^sage: work reaches main only through a pull request/,
+    "git push": /^sage: name the remote and the branch/, "git push upstream sage/t1": /^sage: push to a remote of this checkout/, "git push origin HEAD:main": /^sage: work reaches main only through a pull request/,
     "bash -c 'git push -f origin sage/t1'": /^sage: /, "gh api -X PUT repos/o/r/contents/a.txt -f branch=main -f message=x -f content=eA==": /^sage: /, "git push origin +sage/t1": /^sage: sage mode never force-pushes/ };
   for (const mode of [{ sage: true, autopilot: false }, { sage: true, autopilot: true }]) {
     w.mode(mode);
@@ -609,6 +610,51 @@ test("in sage mode a push takes core's push form, as in the Claude hook; outside
   }
   w.mode({ sage: false, autopilot: false });
   assert.equal(w.send(pre("Bash", "git push --force origin sage/t1")), undefined, "outside sage mode");
+});
+
+test("T536: in sage mode no push reaches the default branch, whatever the remote's name or the command's form; the task's branch goes to any remote", (t) => {
+  const w = world(t);
+  w.mode({ sage: true, autopilot: false });
+  const git = (...args) => assert.equal(spawnSync("git", ["-C", w.project, ...args]).status, 0, args.join(" "));
+  // The incident's project: one remote, named github, not origin. Its default branch is main, as after a clone.
+  git("remote", "add", "github", "https://github.com/acme/site.git");
+  git("symbolic-ref", "refs/remotes/github/HEAD", "refs/remotes/github/main");
+  const MAIN = /^sage: work reaches main only through a pull request/;
+  const refused = {
+    "git push github HEAD:main": MAIN, "git push github main": MAIN, "git push github +main": /^sage: sage mode never force-pushes/,
+    "git push github :main": MAIN, "git push github refs/heads/main": MAIN, "git push github HEAD:refs/heads/main": MAIN,
+    "git push --all github": MAIN, "git push --mirror github": MAIN, [`git -C ${w.project} push github HEAD:main`]: MAIN,
+    "git push https://github.com/acme/site.git HEAD:main": MAIN,
+    "git push https://github.com/acme/site.git sage/t1": /^sage: push to a remote of this checkout \(git remote -v\), not to "https:/,
+    "git -c push.default=upstream push github sage/t1": /^sage: "-c" is not part of the push form/,
+    "git -c remote.github.push=sage/t1:main push github sage/t1": /^sage: "-c" is not part of the push form/,
+    "git config remote.github.push refs/heads/sage/t1:refs/heads/main && git push github sage/t1": /^sage: "git config remote.github.push/,
+    "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=upstream; git push github sage/t1": /^sage: "export GIT_CONFIG_COUNT=1/,
+    "printf x >> .git/config; git push github sage/t1": /^sage: "a file write" runs in the same command line as the push/,
+  };
+  const passes = ["git push -u github sage/t1", "git push github sage/t1 2>&1 | tail -3", "git push --delete github sage/t9",
+    "git add -A && git commit -m x && git push -u github sage/t1 && gh pr create --draft --title t --body b"];
+  const check = (cases, ok, label) => {
+    for (const [command, why] of Object.entries(cases)) assert.match(denied(w.send(pre("Bash", command))) ?? "runs", why, `${label}: ${command}`);
+    for (const command of ok) assert.equal(denied(w.send(pre("Bash", command))), undefined, `${label}: ${command}`);
+  };
+  check(refused, passes, "default main");
+  // Settings that send a plain push of the task's branch to main: remote.<name>.push, and push.default upstream.
+  git("config", "remote.github.push", "refs/heads/sage/t1:refs/heads/main");
+  check({ "git push github sage/t1": /^sage: git's setting remote\.github\.push can send the branch to another name/ }, ["git push --delete github sage/t9"], "remote push setting");
+  git("config", "--unset", "remote.github.push");
+  git("config", "push.default", "upstream");
+  git("config", "branch.sage/t1.merge", "refs/heads/main");
+  check({ "git push github sage/t1": /^sage: git's setting push\.default is upstream, so this push goes to refs\/heads\/main/ }, [], "upstream");
+  git("config", "branch.sage/t1.merge", "refs/heads/sage/t1");
+  check({}, ["git push github sage/t1"], "upstream of the same name");
+  // A default branch with another name, and a default branch that the hook cannot read (fail closed).
+  git("symbolic-ref", "refs/remotes/github/HEAD", "refs/remotes/github/trunk");
+  check({ "git push github trunk": /^sage: trunk is the default branch of github: work reaches main/, "git push --delete github trunk": /^sage: trunk is the default branch/ },
+    ["git push github topic", "git push github sage/t1"], "default trunk");
+  git("symbolic-ref", "--delete", "refs/remotes/github/HEAD");
+  check({ "git push github trunk": /^sage: the hook cannot read the default branch of github/, "git push github topic": /^sage: the hook cannot read the default branch/ },
+    ["git push github sage/t1", "git push -u github sage/t1-short-name"], "default unknown");
 });
 
 test("the sage folder rule also covers the Codex sessions folder, where the typed messages are (R1664-8)", (t) => {

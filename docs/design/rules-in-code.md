@@ -32,7 +32,7 @@ The rules come from two places: the sage hook (`packages/sage-claude/hooks/sage-
 
 | Rule | Why |
 | --- | --- |
-| One writer per branch. Nobody force-pushes or pushes to main. A push is only `git push [-u] origin <branch>`, with the branch's own name. | Parallel writers conflict. Work reaches main only through a pull request. |
+| One writer per branch. Nobody force-pushes or pushes to the default branch. A push is only `git push [-u] <remote> <branch>`, to a remote of the checkout, with the branch's own name, as a command of its own (T536). | Parallel writers conflict. Work reaches main only through a pull request. A project's remote can have any name, so the rule reads the default branch, not the name origin. |
 | An agent never merges. The merge rule and the push rule hold for every command tool: Bash, Monitor, PowerShell and the terminal tool. | An agent that reports a ready pull request leaves the merge to the chief or to you. A second tool must not be a way around the rule. |
 | In sage mode, this rule applies to agents and the main session. The hook refuses `{`, `[`, `*` or `?` in program words, the first git/gh subcommand, and the subcommand after `gh pr`. The literal `[` and `[[` test commands are allowed. It refuses `./scripts/*.sh`, but allows ordinary arguments such as `git log --format='%h {x}'`. | Shell expansion can hide the command from the hook. |
 | An agent never runs `git stash`, in any form. To test old code, it uses `git worktree add --detach <scratch> <sha>` or `git show <sha>:<path>`. | Every worktree of a repo shares one stash list, so another agent can pop or drop the work. |
@@ -70,7 +70,10 @@ The rules come from two places: the sage hook (`packages/sage-claude/hooks/sage-
 The hook catches mistakes and the normal habits of an agent, such as a quoted branch name or a short ref like `heads/main`. It does three things:
 
 1. **It refuses.** The merge rule and the push rule are allow-lists: a command that merges or pushes passes only in its one form, and each refusal names that form.
-   - A push names `origin` and the literal name of a branch that is not main or master. `HEAD`, `@`, a pattern, a variable or a refspec with `:` or `+` is refused.
+   - A push names a remote of the checkout (any name, never a URL) and the literal name of a branch that is not the default branch. `HEAD`, `@`, a pattern, a variable or a refspec with `:` or `+` is refused.
+   - The default branch is main, master, and the branch that `refs/remotes/<remote>/HEAD` names. When the hook cannot read that ref, it fails closed: only a task's branch (`<prefix>/t<n>-<words>`) passes.
+   - git's settings can send a branch to another name. The hook reads them and refuses a push when `remote.<remote>.push` is set, or when `push.default` is upstream and the branch's upstream has another name. When it cannot read them, it refuses.
+   - Another command in the same line can change those settings before the push runs. So beside a push a line may only `cd`, run `git add`, `commit`, `status`, `log`, `diff`, `show`, `fetch` or `rev-parse`, run `gh`, or print and filter (`echo`, `printf`, `cat`, `head`, `tail`, `grep`, `wc`), with no variable set and no file written.
    - The hook reads the branch of the checkout where the push runs (the `-C` folder, a `cd` before it, or the session's folder), and refuses a push from main or master.
    - A git push of main is refused. So is a `gh api` command that names main or master on a `git/refs` endpoint, also behind `env`, `command`, a `NAME=value` or a path to `gh`.
    - When the hook cannot read a command, it refuses the command.

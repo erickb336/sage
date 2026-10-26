@@ -15,6 +15,14 @@ const context = (output) => output?.hookSpecificOutput?.additionalContext ?? "";
 const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
+/**
+ * A fake readGit for the push policy (T536): the checkout's branch (a name, or a function of the folder), git's settings
+ * with one remote named origin, and origin's default branch (main unless given; undefined when git cannot read it).
+ */
+const fakeGit = (branch, { head = "main", settings = "remote.origin.url\nhttps://github.com/acme/project.git\0" } = {}) => (dir, args) =>
+  args[0] === "rev-parse" ? (typeof branch === "function" ? branch(dir) : branch)
+    : args[0] === "config" ? settings
+      : head === undefined ? undefined : `refs/remotes/origin/${head}\n`;
 
 test("T51: external command operands retain executable identity and expansion refusals", async t => {
   for (const provider of ["claude", "codex"]) {
@@ -44,7 +52,7 @@ test("T51: external command operands keep protected API refusals without judging
     const request = "/usr/local/bin/gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111";
     const sample = `A=1 env B=2 command ${request}`;
     assert.deepEqual(api.programsRun(sample, f.dir, "").map(run => run.word), ["command"]);
-    const policy = api.createPushPolicy({ readBranch: () => "topic" });
+    const policy = api.createPushPolicy({ readGit: fakeGit("topic") });
     for (const command of [sample, `env command -p command -- ${request}`])
       assert.match(policy.pushProblem(command, f.dir), /work reaches main only through a pull request/, command);
     for (const command of [sample.replace("heads/main", "heads/topic"), sample.replace("-X POST", "-X GET"),
@@ -131,7 +139,7 @@ test("T51: PowerShell launcher evidence preserves literal arguments and reaches 
       `Start-Process git 'push', 'origin', 'main'`,
       `Start-Process -ArgumentList 'push','--force','origin','topic' -FilePath git`,
     ];
-    const policy = api.createPushPolicy({ readBranch: () => "topic" });
+    const policy = api.createPushPolicy({ readGit: fakeGit("topic") });
     for (const command of forms) {
       const runs = api.programsRun(command, f.dir, "", options);
       assert.equal(runs.length, 1, command);
@@ -744,7 +752,7 @@ test("shared merge and push extraction applies push rules and injected branch ev
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const tool = join(f.plugin, "skills/sage/sage.mjs");
-    const policy = api.createPushPolicy({ stateToolPath: tool, readBranch: dir => dir === join(f.dir, "project/nested") ? "main" : "topic" });
+    const policy = api.createPushPolicy({ stateToolPath: tool, readGit: fakeGit(dir => dir === join(f.dir, "project/nested") ? "main" : "topic") });
     for (const text of ["git push origin topic", "git push -u --follow-tags origin topic", "git push --delete origin topic",
       "echo 'git push origin main'", "git status", `node '${tool}' log --why 'git push origin main'`]) {
       assert.equal(policy.pushProblem(text, f.dir), undefined, text);
@@ -759,11 +767,11 @@ test("shared merge and push extraction applies push rules and injected branch ev
     }
     assert.match(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), /checkout is on main/);
     assert.equal(policy.pushProblem("cd project; git -C nested push --delete origin topic", f.dir), undefined);
-    assert.match(api.createPushPolicy({ readBranch: () => "topic", mainReason: "Use a reviewed pull request." }).pushProblem("git push origin main", f.dir), /^Use a reviewed pull request\./);
-    assert.equal(api.createPushPolicy({ readBranch: () => undefined }).pushProblem("git push origin topic", f.dir), undefined);
+    assert.match(api.createPushPolicy({ readGit: fakeGit("topic"), mainReason: "Use a reviewed pull request." }).pushProblem("git push origin main", f.dir), /^Use a reviewed pull request\./);
+    assert.equal(api.createPushPolicy({ readGit: fakeGit(undefined) }).pushProblem("git push origin topic", f.dir), undefined);
     if (provider === "claude") {
       const adapter = await import(pathToFileURL(join(f.plugin, "hooks/command-policy.mjs")));
-      assert.match(adapter.createPushPolicy({ readBranch: () => "main" }).pushProblem("git push origin topic", f.dir), /checkout is on main/);
+      assert.match(adapter.createPushPolicy({ readGit: fakeGit("main") }).pushProblem("git push origin topic", f.dir), /checkout is on main/);
     }
   }
 });
@@ -772,7 +780,7 @@ test("T42: shared push policy recognizes executable spelling in both bundles", a
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const policy = api.createPushPolicy({ readBranch: () => "Topic" });
+    const policy = api.createPushPolicy({ readGit: fakeGit("Topic") });
     for (const executable of ["GIT", "Git", "git.exe", "GIT.EXE", "/usr/bin/Git", "'C:\\Tools\\Git.EXE'"]) {
       assert.match(policy.pushProblem(`${executable} push origin main`, f.dir), /work reaches main only through a pull request/, executable);
       assert.match(policy.pushProblem(`${executable} push --force origin Topic`, f.dir), /never force-pushes/, executable);
@@ -780,7 +788,7 @@ test("T42: shared push policy recognizes executable spelling in both bundles", a
       assert.equal(policy.pushProblem(`${executable} status`, f.dir), undefined, executable);
     }
     assert.equal(policy.pushProblem("echo 'GIT push origin main'", f.dir), undefined);
-    assert.match(api.createPushPolicy({ readBranch: () => "main" }).pushProblem("GIT -C nested push origin Topic", f.dir), /checkout is on main/);
+    assert.match(api.createPushPolicy({ readGit: fakeGit("main") }).pushProblem("GIT -C nested push origin Topic", f.dir), /checkout is on main/);
     for (const executable of ["GH", "Gh.exe", "/usr/bin/GH", "'C:\\Tools\\GH.EXE'"]) {
       assert.match(policy.pushProblem(`${executable} api repos/o/r/git/refs/heads/main -X PATCH -f sha=abc`, f.dir), /work reaches main only through a pull request/);
       assert.equal(policy.pushProblem(`${executable} api repos/o/r/git/refs/heads/main`, f.dir), undefined);
@@ -820,7 +828,7 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const policy = api.createPushPolicy({ readBranch: () => "topic" });
+    const policy = api.createPushPolicy({ readGit: fakeGit("topic") });
     for (const command of [
       "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
       "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc\nprintf 'unfinished",
@@ -2687,7 +2695,7 @@ test("shared push policy applies the same branch and force rules in both isolate
     const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "runtime/command-policy.mjs")));
     const calls = [];
     let branch = "topic";
-    const policy = adapter.createPushPolicy({ readBranch: dir => { calls.push(dir); return branch; } });
+    const policy = adapter.createPushPolicy({ readGit: fakeGit(dir => { calls.push(dir); return branch; }) });
     for (const text of ["git push origin topic", "git push -u --follow-tags origin topic", "git push --delete origin topic",
       "echo 'git push origin main'", "git status"]) assert.equal(policy.pushProblem(text, f.dir), undefined, text);
     for (const text of ["git push origin main", "git push origin refs/heads/master", "git push origin topic:main",
@@ -2713,7 +2721,7 @@ test("shared push policy derives checkout paths and scopes the state-tool text e
   assert.equal(typeof api.createPushPolicy, "function");
   const tool = join(f.dir, "sage.mjs");
   const calls = [];
-  const policy = api.createPushPolicy({ stateToolPath: tool, readBranch: dir => { calls.push(dir); return "topic"; } });
+  const policy = api.createPushPolicy({ stateToolPath: tool, readGit: fakeGit(dir => { calls.push(dir); return "topic"; }) });
   assert.equal(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), undefined);
   assert.deepEqual(calls, [join(f.dir, "project/nested")]);
   assert.equal(policy.pushProblem(`node '${tool}' log --why 'git push origin main'`, f.dir), undefined);
@@ -2725,27 +2733,29 @@ test("shared push policy validates and snapshots trusted branch readers and mess
   const f = isolated(t, "codex");
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   assert.equal(typeof api.createPushPolicy, "function");
-  assert.throws(() => api.createPushPolicy(), /readBranch/);
+  assert.throws(() => api.createPushPolicy(), /readGit/);
   for (const mainReason of [null, "", " ", "bad\nmessage", "x".repeat(2049)]) {
-    assert.throws(() => api.createPushPolicy({ readBranch: () => "topic", mainReason }), /mainReason/);
+    assert.throws(() => api.createPushPolicy({ readGit: fakeGit("topic"), mainReason }), /mainReason/);
   }
-  const options = { readBranch: () => "main", mainReason: "Use a reviewed pull request." };
+  const options = { readGit: fakeGit("main"), mainReason: "Use a reviewed pull request." };
   const policy = api.createPushPolicy(options);
-  options.readBranch = () => "topic"; options.mainReason = "changed";
+  options.readGit = fakeGit("topic"); options.mainReason = "changed";
   assert.match(policy.pushProblem("git push origin topic", f.dir), /checkout is on main/);
   assert.match(policy.pushProblem("git push origin main", f.dir), /Use a reviewed pull request/);
-  for (const value of [null, "", " ", "main\n", "master\r\n", "topic\tname", "topic\0name", true, Promise.resolve("topic")]) {
-    assert.throws(() => api.createPushPolicy({ readBranch: () => value }).pushProblem("git push origin topic", f.dir), /readBranch/);
+  for (const value of [null, "", " ", "topic\tname", "topic\0name", true, Promise.resolve("topic")]) {
+    assert.throws(() => api.createPushPolicy({ readGit: fakeGit(value) }).pushProblem("git push origin topic", f.dir), /readGit/);
   }
+  // git ends its output with a line break; the policy reads the name without it.
+  for (const value of ["main\n", "master\r\n"]) assert.match(api.createPushPolicy({ readGit: fakeGit(value) }).pushProblem("git push origin topic", f.dir), /checkout is on ma/);
   // Git permits Unicode spaces inside branch names. These strings reach the parser, never a shell.
   for (const value of ["topic\u00a0name", "topic\u2003name"]) {
     assert.equal(execFileSync("git", ["check-ref-format", "--branch", value], { encoding: "utf8" }).trimEnd(), value);
-    assert.equal(api.createPushPolicy({ readBranch: () => value }).pushProblem(`git push origin '${value}'`, f.dir), undefined);
+    assert.equal(api.createPushPolicy({ readGit: fakeGit(value) }).pushProblem(`git push origin '${value}'`, f.dir), undefined);
   }
-  const broken = api.createPushPolicy({ readBranch: () => { throw new Error("fixture read failure"); } });
+  const broken = api.createPushPolicy({ readGit: () => { throw new Error("fixture read failure"); } });
   assert.throws(() => broken.pushProblem("git push origin topic", f.dir), /fixture read failure/);
   // Preserve the existing Claude rule; Codex can require its reader to throw on missing evidence.
-  assert.equal(api.createPushPolicy({ readBranch: () => undefined }).pushProblem("git push origin topic", f.dir), undefined);
+  assert.equal(api.createPushPolicy({ readGit: fakeGit(undefined) }).pushProblem("git push origin topic", f.dir), undefined);
 });
 
 test("shared push policy loading failures deny Claude command tools", async t => {

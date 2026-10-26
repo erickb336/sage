@@ -1,16 +1,19 @@
 import { resolve } from "node:path";
 import { programsRun, shellCommands } from "./command-reader.mjs";
 import { createCommandPolicy, externalCommandOperands, GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
+import { BRANCH } from "./branch.mjs";
+import { commandWrites } from "./shell-write-policy.mjs";
 
-/** Shared push rules. The provider supplies a synchronous reader of the checkout's current branch.
- * This module never executes a command or offers a first-upload exception.
- * Undefined branch evidence retains the existing Claude behavior; a stricter reader can throw.
+/** Shared push rules (T536). The provider supplies readGit(dir, args): git's output for those arguments in dir, or
+ * undefined when git fails. The rules read three things with it: the checkout's branch, git's settings and the
+ * remote's default branch (refs/remotes/<remote>/HEAD). This module never executes a command or offers a first-upload
+ * exception. An unread branch keeps the push; unread settings refuse it; an unread default branch sends only a task's branch.
  */
-export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work reaches main only through a pull request. Push the task's branch and open a pull request." } = {}) {
-  if (typeof readBranch !== "function") throw new TypeError("readBranch must be a function");
+export function createPushPolicy({ stateToolPath, readGit, mainReason = "work reaches main only through a pull request. Push the task's branch and open a pull request." } = {}) {
+  if (typeof readGit !== "function") throw new TypeError("readGit must be a function");
   if (typeof mainReason !== "string" || !mainReason.trim() || mainReason.length > 2048 || /[\x00-\x1f\x7f]/.test(mainReason)) throw new TypeError("mainReason must be a bounded message without control characters");
   const { runnable, mergeIn } = createCommandPolicy({ stateToolPath });
-  const PUSH_FORM = 'git [-C <dir>] push [-u] [--follow-tags] [-o <option>] origin <branch>, as a command of its own, with the literal name of the task\'s branch: not main or master, HEAD, @, a pattern, a variable, or a refspec with ":" or "+". To delete a branch: git push --delete origin <branch>';
+  const PUSH_FORM = 'git [-C <dir>] push [-u] [--follow-tags] [-o <option>] <remote> <branch>, with the name of a remote of the checkout and the literal name of the task\'s branch: not the default branch, main or master, HEAD, @, a pattern, a variable, or a refspec with ":" or "+". Beside the push, a command line may only cd, run git add, commit, status, log, diff or fetch, run gh, or echo. To delete a branch: git push --delete <remote> <branch>';
   /** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
   const gitThen = (text, word) => new RegExp(`\\b${word}\\b`, "i").test(/\bgit\b([\s\S]*)/i.exec(text)?.[1] ?? "");
   const pushText = (text) => gitThen(text, "push");
@@ -27,10 +30,18 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
       return pushText(bare(command)) ? refuse(`the hook cannot read this command (${e.message}), so it refuses it. Close each quote, substitution and heredoc.`) : unreadableGitHub(command);
     }
     let dir = cwd;
+    /** The first command beside the push that the line may not run, or undefined. Read only for a line with a push. */
+    const beside = () => commands.length < 2 ? undefined : commands.find((c) => !besidePush(c.words))?.words
+      ?? (commandWrites(command, cwd) ? ["a file write"] : undefined);
+    const pushWhy = (words, git, dir) => {
+      const why = pushForm(words, git, dir);
+      const other = why ? undefined : beside();
+      return why ?? (other && besideReason(other));
+    };
     for (const { cmd, words, bodies } of runnable(commands)) {
       if (cmd.words[0] === "cd" && cmd.words.length === 2) dir = resolve(dir, cmd.words[1]);
       const git = words.findIndex((w, k) => programName(w) === "git" && /^push$/i.test(gitSubcommand(words, k + 1)));
-      const why = git >= 0 ? pushForm(words, git, dir) : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
+      const why = git >= 0 ? pushWhy(words, git, dir) : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
       if (why) return refuse(why);
     }
     try {
@@ -53,6 +64,26 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     return undefined;
   }
 
+  /** Git's settings can change where a push goes (remote.<name>.push, push.default with branch.<name>.merge), and
+   * another command of the same line can change them after the hook read them. So beside a push a line runs only
+   * these commands, with no variable set before one, and writes no file. */
+  const BESIDE_PROGRAMS = new Set(["cd", "pwd", "echo", "printf", "true", "gh", "cat", "head", "tail", "grep", "wc"]);
+  const BESIDE_GIT = /^(?:add|commit|status|log|diff|show|fetch|push|rev-parse)$/;
+  function besidePush(words) {
+    const name = programName(words[0] ?? "");
+    if (/^\w+=/.test(words[0] ?? "")) return false;
+    if (name !== "git") return BESIDE_PROGRAMS.has(name);
+    return BESIDE_GIT.test(gitSubcommand(words, 1)) && !words.some((w) => w === "-c" || /^--(?:git-dir|work-tree|config-env)/.test(w));
+  }
+  const besideReason = (words) => `"${words.join(" ").slice(0, 80)}" runs in the same command line as the push, and it can change where the push goes. Run the push as a command of its own.`;
+  /** A task's branch: [<prefix>/]t<n>[-<words>], as the state tool reads a branch of a task. */
+  const taskBranch = (name) => BRANCH.test(name) && /^(?:[A-Za-z0-9_-]+\/)?t\d+(?:-[A-Za-z0-9._-]+)?$/i.test(name);
+  /** git's output, or undefined when git fails. Any other value is a broken reader. */
+  function gitOut(dir, args) {
+    const out = readGit(dir, args);
+    if (out !== undefined && typeof out !== "string") throw new TypeError("readGit must return git's output or undefined");
+    return out;
+  }
   /** A ref that git reads as main or master: main, heads/main, refs/heads/main. */
   const MAIN_REF = /^(?:refs\/)?(?:heads\/)?(?:main|master)$/i;
   /** A branch name with no expansion, pattern or special ref in it: not HEAD, @, a variable, a glob or a refspec. */
@@ -97,11 +128,28 @@ export function createPushPolicy({ stateToolPath, readBranch, mainReason = "work
     if (main) return mainReason;
     if (other) return other;
     if (names.length < 2) return "name the remote and the branch: a push with no branch pushes what the checkout's settings say, which can be main.";
-    if (names[0] !== "origin") return `push to origin, not to "${names[0]}".`;
+    const [remote, ...branches] = names;
+    // git config -z --list: each setting is its key, a newline and its value, then a NUL. Section and key are in lower case.
+    const settings = gitOut(dir, ["config", "-z", "--list"]);
+    if (settings === undefined) return "the hook cannot read git's settings for this checkout, so it cannot tell where the push goes.";
+    const values = (key) => settings.split("\0").filter((s) => s.startsWith(`${key}\n`)).map((s) => s.slice(key.length + 1));
+    if (!/^[\w.-]+$/.test(remote) || !values(`remote.${remote}.url`).length) return `push to a remote of this checkout (git remote -v), not to "${remote}".`;
+    if (!remove && values(`remote.${remote}.push`).length) return `git's setting remote.${remote}.push can send the branch to another name, such as the default branch. Ask the user to remove that setting.`;
+    const upstream = /^(?:upstream|tracking)$/i.test(values("push.default").at(-1) ?? "");
+    const prefix = `refs/remotes/${remote}/`;
+    const ref = gitOut(dir, ["symbolic-ref", "--quiet", `${prefix}HEAD`])?.trim() ?? "";
+    const head = ref.startsWith(prefix) && ref.length > prefix.length ? ref.slice(prefix.length) : undefined;
+    for (const name of branches) {
+      const to = name.replace(/^(?:refs\/)?(?:heads\/)?/i, "");
+      const merge = values(`branch.${name}.merge`);
+      if (!remove && upstream && merge.length && (merge.length > 1 || merge[0] !== `refs/heads/${to}`)) return `git's setting push.default is upstream, so this push goes to ${merge.join(", ")}, the upstream of ${name}. Push a branch with no other upstream.`;
+      if (head && to.toLowerCase() === head.toLowerCase()) return `${to} is the default branch of ${remote}: ${mainReason}`;
+      if (!head && !taskBranch(to)) return `the hook cannot read the default branch of ${remote} (${prefix}HEAD), so it sends only a task's branch, such as sage/t12-name.`;
+    }
     if (remove) return undefined;
-    const branch = readBranch(dir);
-    if (branch !== undefined && (typeof branch !== "string" || !branch || /[\x00-\x20\x7f]/.test(branch))) throw new TypeError("readBranch must return a branch name or undefined");
-    return branch && MAIN_REF.test(branch) ? `this checkout is on ${branch}. Push from the task's worktree, on the task's branch.` : undefined;
+    const branch = gitOut(dir, ["rev-parse", "--abbrev-ref", "HEAD"])?.trim();
+    if (branch !== undefined && (!branch || /[\x00-\x20\x7f]/.test(branch))) throw new TypeError("readGit must return a branch name for rev-parse");
+    return branch && (MAIN_REF.test(branch) || branch.toLowerCase() === head?.toLowerCase()) ? `this checkout is on ${branch}. Push from the task's worktree, on the task's branch.` : undefined;
   }
 
   /** Read request options, not display options or unrelated text, as branch evidence. Never open a supplied body file. */

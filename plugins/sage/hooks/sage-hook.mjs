@@ -56,7 +56,7 @@ const TO_MAIN = `work reaches main only through a pull request. Push the task's 
 const commandPolicy = await import("./command-policy.mjs")
   .then((module) => ({ ...module,
     commands: module.createCommandPolicy({ stateToolPath: TOOL, prPattern: stateTool.PR ?? null }),
-    pushes: module.createPushPolicy({ stateToolPath: TOOL, readBranch: branchAt, mainReason: TO_MAIN }),
+    pushes: module.createPushPolicy({ stateToolPath: TOOL, readGit, mainReason: TO_MAIN }),
   }))
   .catch((error) => ({ error }));
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
@@ -519,10 +519,10 @@ const pushText = (text) => gitThen(text, "push");
 /** A command line without quotes, backslashes and line joins: the text that the rules test when the reader cannot read the line (fail closed). */
 const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
 
-/** The branch that the checkout at dir is on, or undefined when git cannot read it. */
-function branchAt(dir) {
+/** git's output for args in the checkout at dir, or undefined when git fails. */
+function readGit(dir, args) {
   try {
-    return execFileSync("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
   } catch {
     return undefined;
   }
