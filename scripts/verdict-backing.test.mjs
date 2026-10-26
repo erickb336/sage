@@ -3,10 +3,10 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, realpathSync, renameSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
 import { reportFor } from "./verdict-backing.mjs";
@@ -18,6 +18,10 @@ const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const OTHER = "0123456789abcdef0123456789abcdef01234567";
 /** The FINDINGS report of a code review with one medium finding. */
 const FINDINGS = reportFor("findings");
+/** A new temp folder (its physical path), removed after the tests. */
+const temps = [];
+const temp = (prefix) => (temps.push(realpathSync(mkdtempSync(join(tmpdir(), prefix)))), temps.at(-1));
+after(() => temps.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
 /**
  * A logbook for one made-up project. cli(args, { cwd, tool }) runs a command as given, with no --project added; ok() and
@@ -26,7 +30,7 @@ const FINDINGS = reportFor("findings");
  */
 function logbook() {
   // The project's physical path, as a process in its folder sees it (macOS gives /private/var for /var).
-  const home = mkdtempSync(join(tmpdir(), "sage-home-")), project = realpathSync(mkdtempSync(join(tmpdir(), "sage-project-")));
+  const home = temp("sage-home-"), project = temp("sage-project-");
   const env = { ...process.env, SAGE_HOME: home, SAGE_TEST_PIDS: "{}", SAGE_TEST_KILLS: join(home, "kills"), NODE_OPTIONS: `--import=${JSON.stringify(SPY)}` };
   const cli = (args, { cwd = project, tool = TOOL } = {}) => spawnSync("node", [tool, ...args], { cwd, env, encoding: "utf8", timeout: 60_000 });
   const ok = (...args) => {
@@ -59,7 +63,7 @@ test("T483: a FINDINGS report never backs review-clean, in every form in which t
   // A copy of the plugin whose state tool is at SKILLS/SAGE/sage.mjs: another letter case of the tool's path, which a
   // case-insensitive file system also gives the real file (R1847-2). Node runs no .MJS file, so the case is in the folders.
   // The copy's code is the same, so it refuses as the tool does.
-  const copy = join(realpathSync(mkdtempSync(join(tmpdir(), "sage-copy-"))), "plugin");
+  const copy = join(temp("sage-copy-"), "plugin");
   cpSync(PLUGIN, copy, { recursive: true });
   renameSync(join(copy, "skills"), join(copy, "SKILLS"));
   renameSync(join(copy, "SKILLS/sage"), join(copy, "SKILLS/SAGE"));
