@@ -409,7 +409,8 @@ test("only the chief records the logbook: a child's sage tool that writes is den
     ["finding_add", { task: "T1", source: "qa", severity: "low" }], ["finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "x" }], ["finding_close", { task: "T1", key: "F-T1-1" }],
     ["task_set", { task: "T1", fields: { state: "verified" } }], ["task_add", { title: "x", size: "tiny" }], ["standing_add", { order: "x" }], ["run_add", { task: "T1", role: "qa" }],
     ["run_done", { run: "R1", status: "done" }], ["round", { task: "T1" }], ["log", { task: "T1", decision: "x", why: "y" }], ["gate_add", { task: "T1", question: "q", options: "a|b", recommend: "a" }],
-    ["finding_move", { task: "T1", key: "F-T1-1", to: "x" }], ["init", {}], ["pages", { task: "T1", record: "/p/page.html" }], ["unknown_tool", {}]];
+    ["finding_move", { task: "T1", key: "F-T1-1", to: "x" }], ["init", {}], ["pages", { task: "T1", record: "/p/page.html" }],
+    ["pages", { task: "T1", run: "R1", text: "STATUS done" }], ["pages", { task: "T1", text: "STATUS done" }], ["unknown_tool", {}]];
   const reads = [["status", {}], ["standing", {}], ["merge_check", { sha: SHA }], ["pages", { task: "T1" }]];
   for (const mode of [{ sage: false }, { sage: true, autopilot: true }]) {
     const g = fixed(mode);

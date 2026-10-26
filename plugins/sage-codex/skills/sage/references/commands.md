@@ -24,7 +24,7 @@ Write the logbook only through the plugin's `sage` MCP tools. Codex starts that 
 | `run_add`, `run_done` | `run add <T>`, `run done <R>` | `task` or `run`, and the command's options |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` | `task`, `key`, `decision` (triage), and the options |
 | `verdict`, `round`, `merge_check`, `log` | `verdict <T>`, `round <T>`, `merge-check`, `log <T> <decision>` | the command's options |
-| `standing`, `standing_add`, `pages` | `standing`, `standing add <order>`, `pages <T> [record <file>]` | `order`, `task`, `record` |
+| `standing`, `standing_add`, `pages` | `standing`, `standing add <order>`, `pages <T> [record <file>]`, `pages <T> record --run <R> --text <report>` | `order`, `task`, `record`, `run`, `text` |
 | `gate_add`, `gate_answer` | `gate add <T>`, `gate answer <G>` | the command's options (`option`, `other-hex`) |
 
 Each tool takes `project`, the verified absolute checkout. An option field has the option's name without `--`, for example `usage-interface`. A tool result is the command's text; a refusal is a tool error that starts with `sage:` and gives the command's reason. The CLI examples below give the syntax and the rules of each command.

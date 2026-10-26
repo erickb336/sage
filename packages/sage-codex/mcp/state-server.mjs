@@ -49,10 +49,10 @@ export const TOOLS = {
   },
   run_done: {
     describe: "Record the end of a run. A done review, QA or evidence-review run needs tokens. A run added with usage-interface collaboration-tools has no token count: "
-      + "end it as done with usage unavailable, usage-source, usage-evidence and report, and no tokens, for example "
-      + '{"run": "R40", "status": "done", "usage": "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "wait_agent gives no token count", "report": "/absolute/path/R40-report.md"}.',
+      + "save its report with pages (task, run and text), then end it as done with usage unavailable, usage-source, usage-evidence, the path that pages printed as report, and no tokens, for example "
+      + '{"project": "/absolute/project", "run": "R40", "status": "done", "usage": "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "wait_agent gives no token count", "report": "<the path that pages printed>"}.',
     input: { run: id("R", "the run id"), status: z.enum(["done", "blocked", "question", "failed"]), tokens: count("the run's tokens, a whole number"),
-      report: optional("the absolute path of the saved report; needed with usage unavailable"),
+      report: optional("the absolute path of the saved report, as pages printed it; needed with usage unavailable"),
       usage: optional("unavailable, only for a run added with usage-interface collaboration-tools; it needs status done, usage-source, usage-evidence and report, and no tokens"),
       "usage-source": optional("where the usage comes from, for example codex collaboration-tools; needed with usage unavailable"),
       "usage-evidence": optional("the evidence of the usage, for example wait_agent gives no token count; needed with usage unavailable") },
@@ -99,9 +99,11 @@ export const TOOLS = {
   standing: { describe: "Print the standing orders as written. Every brief carries them word for word.", argv: () => ["standing"] },
   standing_add: { describe: "Add one standing order.", input: { order: word.describe("the order") }, pos: ["order"], argv: (i) => ["standing", "add", i.order] },
   pages: {
-    describe: "Make and print the folder where agents save the task's pages, or record a page there (its path and sha256) in the decision trail.",
-    input: { task, record: optional("the absolute path of a page in that folder, to record it") },
-    pos: ["task", "record"], argv: (i) => ["pages", i.task, ...(i.record === undefined ? [] : ["record", String(i.record)])],
+    describe: "Make and print the folder where agents save the task's pages, or record a page there (its path and sha256) in the decision trail. "
+      + "With run and text, it saves that run's report in the folder and records it: give the path that it prints as run_done's report.",
+    input: { task, record: optional("the absolute path of a page in that folder, to record it"),
+      run: optional("a run of the task, with text: whose report to save"), text: optional("the run's whole report, with run: the text to save") },
+    pos: ["task", "record"], argv: (i) => ["pages", i.task, ...(i.record === undefined ? (i.text === undefined && i.run === undefined ? [] : ["record"]) : ["record", String(i.record)])],
   },
   gate_add: {
     describe: "Park a question for the owner, with options, a recommendation and a default.",
