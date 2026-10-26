@@ -1986,6 +1986,11 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       // How a task owns the head: the refusal says what will work, for only a task that owns it by branch= alone can move off it (R1741-1).
       const how = (id) => (ofTask(id, String(head)) ? "by its name" : ranOn.has(id) ? `by run ${ranOn.get(id)} on it` : byId.get(id)?.branch === head ? "by its branch=" : "");
       const owns = (id) => how(id) !== "";
+      // The way back for a task of the PR that does not own the head (R1759-1): a rename leaves the other task behind, so
+      // set its branch= to the head. A task shares only another task's branch= (mayName), so the task whose name the head
+      // carries names it first when no task does.
+      const sharer = head !== undefined && (tasks.find((t) => t.branch === head) ?? tasks.find((t) => ofTask(t.id, String(head))));
+      const back = (id) => sharer && [...(sharer.branch === head ? [] : [sharer.id]), id];
       // A shared head branch (T439): each task that owns it must be a task of the PR too, so a task that joins another
       // task's branch cannot merge that task's work on its own verdicts (F-T273-8).
       if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && owns(t.id)).map((t) => ({ name: `${visible(dir)} ${t.id}`, how: how(t.id) })));
@@ -2004,7 +2009,7 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         // would pass, so a refusal still names an open finding first.
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
-        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), own: own.length, ...verdict, ...busy, ...held };
+        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...held };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
       // too, its own waits included: else two tasks of one PR could never merge. The same PR is the PR of --pr for both
@@ -2055,7 +2060,11 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
     if (pr && !each.some((r) => r.ofPr)) return { ok: false, reason: `no task of PR ${pr}${mine === undefined ? "" : ` in this project's logbook (${visible(mine)})`} has verdicts on ${sha.slice(0, 7)}: only ${each.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")} ${each.length === 1 ? "has" : "have"}. Record PR ${pr}'s verdicts under its own task (sage verdict <T> --sha <sha> --pr ${pr}), or set its PR: sage task <T> set pr=${pr}.` };
     // The head branch rule comes after each task's own judgment, so a refusal names a task's missing verdicts first.
     const strays = head === undefined ? [] : each.filter((r) => r.ofPr && !r.owns);
-    if (strays.length && each.every((r) => r.ok)) return { ok: false, reason: `PR ${pr}'s head branch ${JSON.stringify(head)} is not a branch of ${strays.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")}, so the merge check refuses: each task that is or was on a pull request must own its head branch, a branch named for the task. Rename the branch to a task name (for example sage/${strays[0].id.toLowerCase()}-<words>), or the user lands this pull request.` };
+    if (strays.length && each.every((r) => r.ok)) {
+      const back = strays.every((r) => r.back) && [...new Set(strays.flatMap((r) => r.back))].map((id) => `sage task ${id} set branch=${head}`).join(", then ");
+      const fix = back ? `It is the branch of another task, so set the branch= back to it: ${back}` : `Rename the branch to a task name (for example sage/${strays[0].id.toLowerCase()}-<words>)`;
+      return { ok: false, reason: `PR ${pr}'s head branch ${JSON.stringify(head)} is not a branch of ${strays.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")}, so the merge check refuses: each task that is or was on a pull request must own its head branch, a branch named for the task. ${fix}, or the user lands this pull request.` };
+    }
     if (absent.length && each.every((r) => r.ok)) {
       const movable = absent.filter((a) => a.how === "by its branch=").map((a) => a.name);
       const move = !movable.length ? "" : movable.length === absent.length ? `, or move ${absent.length === 1 ? "it" : "them"} to another branch` : `, or move ${movable.join(", ")} to another branch`;
