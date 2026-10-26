@@ -21,7 +21,7 @@ function fixture(t, { cycles = 2 } = {}) {
   git('remote', 'add', 'origin', 'https://github.com/example/project.git');
   const head = git('rev-parse', 'HEAD');
   const core = (...args) => tool.sage([...args, '--project', project], env);
-  core('init'); core('task','add','--title','Publisher fixture','--size','small','--risk','auth');
+  core('init'); core('task','add', '--priority', 'P2','--title','Publisher fixture','--size','small','--risk','auth');
   core('task','T1','set','branch=codex/t1-example','pr=7','state=briefed');
   core('task','T1','set','state=building');
   let nextRun = 0;

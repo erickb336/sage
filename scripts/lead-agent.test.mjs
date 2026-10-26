@@ -138,7 +138,7 @@ function project({ size = "small", config = [] } = {}) {
   send({ hook_event_name: "UserPromptSubmit", prompt: "sage mode" });
   chief("init");
   if (config.length) chief("config", ...config);
-  chief("task", "add", "--title", "example", "--size", size); // T1; small: build, code review, QA
+  chief("task", "add", "--priority", "P2", "--title", "example", "--size", size); // T1; small: build, code review, QA
   chief("task", "T1", "set", "state=briefed");
   chief("run", "add", "T1", "--role", "lead"); // R1
   assert.equal(p.startLead(), undefined, "the sage starts lead-T1");
@@ -430,7 +430,7 @@ test("T301 F-T301-48: a fresh lead at building skips the move to building; after
     ...FRESH, "$ cat <logbook>/runs.tsv"], p);
   assert.match(p.ask(`node ${TOOL} task T1 set state=building branch=sage/t1-example`) ?? "", /T1 is building: a lead moves it only to reviewing/, "the move of step 2 is refused at building");
   play([leadSays("sage task <T> set state=reviewing pr=<n>", "At building", { "<n>": "12" })], p);
-  assert.match(p.chief("task", "T1"), /^T1 reviewing .* PR 12$/, "the fresh lead goes on to reviewing with the PR");
+  assert.match(p.chief("task", "T1"), /^T1 reviewing .* PR 12 · P2$/, "the fresh lead goes on to reviewing with the PR");
 });
 
 test("T301 F-T301-50: a fresh lead at repairing with every fix key of the round closed moves the task to reviewing, then runs the cycle", () => {
@@ -603,7 +603,7 @@ test("T301: the lead file's helper cap is the hook's, and with the default agent
   const spawn = { subagent_type: `sage:${ROLES[cap]}`, name: `R${cap + 3}`, description: "one more", prompt: BRIEF, run_in_background: true };
   assert.match(denied(p.send({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: spawn, tool_use_id: "one-more", ...p.lead })) ?? "", new RegExp(`already has ${cap} children|its cap is`), `helper ${cap + 1} waits`);
   // A second lead finds the project's cap full while lead-T1 and its helpers run.
-  p.chief("task", "add", "--title", "second", "--size", "small");
+  p.chief("task", "add", "--priority", "P2", "--title", "second", "--size", "small");
   p.chief("task", "T2", "set", "state=briefed");
   p.chief("run", "add", "T2", "--role", "lead");
   assert.match(p.startLead("T2") ?? "", new RegExp(`cap is ${DEFAULT_CAP}\\b`), "a second lead waits for room under the default cap");

@@ -23,7 +23,7 @@ import { PR } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
-import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
+import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 
@@ -1538,7 +1538,8 @@ function planTaskChanges(before, id, changes, at, facts) {
     }
     else if (k === "branch") notHeld(task, "branch="), task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
     else if (k === "title") task.title = v;
-    else if (k === "priority" || k === "kind") task[k] = tag(k, v);
+    else if (k === "priority") task.priority = priorityOf(v, task);
+    else if (k === "kind") task.kind = tag(k, v);
     else if (k === "waits") {
       const was = task.waits ?? "";
       task.waits = waitsValue(task, v, tasks);
@@ -1560,10 +1561,20 @@ function planTaskChanges(before, id, changes, at, facts) {
   return { task, tasks, runs, decisions: [...decisions, ...decided], note };
 }
 
-/** A task's priority or kind as its cell holds it: "" for none, else a value of the fixed list. Any other value refuses, with the list. */
-const tag = (key, value) => {
-  const values = key === "priority" ? PRIORITIES : TASK_KINDS;
-  return value === "none" ? "" : values.includes(value) ? value : refuse(`${key} is one of ${values.join(", ")}, or none to clear it; not "${visible(String(value ?? ""))}". Nothing changed.`);
+/** A task's kind as its cell holds it: "" for none, else a value of the fixed list. Any other value refuses, with the list. */
+const tag = (key, value) => value === "none" ? "" : TASK_KINDS.includes(value) ? value
+  : refuse(`${key} is one of ${TASK_KINDS.join(", ")}, or none to clear it; not "${visible(String(value ?? ""))}". Nothing changed.`);
+/**
+ * A task's priority (T500): one of the scale, for task add (no task yet) and task set. Only an ended task's priority
+ * clears, with none. An older row with no priority stays valid; status and the board flag it.
+ */
+const priorityOf = (value, task) => {
+  if (PRIORITIES.includes(value)) return value;
+  if (value === "none" && task && ENDED.includes(task.state)) return "";
+  const why = value === undefined ? "Give it with --priority."
+    : task && ["none", ""].includes(value) && !ENDED.includes(task.state) ? `${task.id} is ${task.state}, so its priority does not clear: set another one.`
+    : `"${visible(String(value))}" is not one of them.`;
+  return refuse(`${PRIORITY_SCALE} ${why} Nothing changed.`);
 };
 
 /** Frames a task with its route and writes it: the least route of its size, the security review for a risk, and the added blocks. */
@@ -1921,6 +1932,9 @@ function status(dir, save) {
   // The open tasks that wait, each with its unmet waits: a line only when one waits. Then the programs: a line only when there is one.
   const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, shownOpen(t, graph)]).filter(([, open]) => open.length);
   if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
+  // The open tasks with no priority (T500): older rows stay valid, so status names them for the chief to set.
+  const none = tasks.filter((t) => !ENDED.includes(t.state) && !t.priority).map((t) => t.id);
+  if (none.length) lines.push(`priority ${none.length} open task${none.length === 1 ? " has" : "s have"} none: ${none.slice(0, 10).join(", ")}${none.length > 10 ? `, and ${none.length - 10} more` : ""} · set them with task <T> set priority=<P0 to P3>`);
   lines.push(...programsLine(graph));
   // The runs by task, once, so the usage lines are linear in the runs.
   const runsOf = new Map();
@@ -2249,7 +2263,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (odd.length) refuse(`unknown: ${odd.join(", ")}. Risks: ${RISKS.join(", ")}. Blocks: ${BLOCKS.join(", ")}`);
         if (size === "investigate" && list(opt.add).includes("build")) refuse("an investigation changes no code, so it takes no build block. Frame the build as its own task: sage task add --size tiny, small or large");
         const why = opt.add ? need(opt.why, "--why for the added blocks") : ""; // refuse before anything is written
-        const tags = Object.fromEntries(["priority", "kind"].filter((k) => opt[k] !== undefined).map((k) => [k, tag(k, opt[k])]));
+        const tags = { priority: priorityOf(opt.priority), ...(opt.kind !== undefined ? { kind: tag("kind", opt.kind) } : {}) };
         const graph = graphOf(dir), next = { id: nextId(dir, "T"), state: "framed" };
         if (opt.waits !== undefined) tags.waits = waitsValue(next, opt.waits, [...graph.byId.values()]);
         if (opt.program !== undefined) tags.program = programValue(next, opt.program, graph); // no loop: no task or pilot cell names a new id (IDS)
@@ -2502,7 +2516,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const title = need(cell(opt.to), '--to "<the follow-up task\'s title>"');
         const size = opt.size ?? "small";
         if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");
-        const to = frame(dir, title, size, [], []);
+        const to = frame(dir, title, size, [], [], { priority: "P2" }); // a follow-up is P2 on the scale; the chief may set another
         const was = f.key;
         Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: 0, triage: "", run: "" }); // its run is a run of the old task
         write(dir, "findings", findings);
