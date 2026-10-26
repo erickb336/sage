@@ -108,7 +108,7 @@ const PHASE = {
  * (running, or stale after 24 h with no news), the cycles and the known head. "judged" says whether the cycles know their
  * verdicts: a build route needs the PR's head; a route without build has no commit, so its verdicts have no SHA (R1081-1).
  */
-function stepLine({ task, route, cycles, required, head, judged, reasons, gates, runs, ledger, rounds, autopilot }) {
+function stepLine({ task, route, cycles, required, head, judged, reasons, merge, gates, runs, ledger, rounds, autopilot }) {
   const state = PHASE[task.state] ? task.state : "abandoned", build = route.includes("build"), sha = head ? head.slice(0, 7) : null;
   const gate = gates.find(row => !row.answer), answered = !gate && gates.length && gates.at(-1).answer ? gates.at(-1) : null;
   const running = runs.filter(run => run.status === "running"), live = running.filter(run => !run.clock.stale), stale = running.filter(run => run.clock.stale);
@@ -185,8 +185,9 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, gates,
 
   // Merge or Conclude.
   const mergeDetail = { before: build ? task.state === "concluded" ? "Closed with no merge." : "Merged." : "The report went to you.", after: build ? `After ${plural(required, "clean cycle")}${required > 1 ? " on one commit" : ""}.` : "The report goes to you." }[place("merge")]
-    ?? heldAt ?? (!build ? "The chief concludes it." : task.state === "verifying" || allClean ? "The chief checks the verdicts first." : autopilot ? "Autopilot merges it."
-      : reasons.some(reason => reason.kind === "merge" && reason.mode) ? "Autopilot is off, so the merge waits for you." : "The board cannot tell if autopilot is on, so the merge waits for you.");
+    ?? heldAt ?? (!build ? "The chief concludes it." : task.state === "verifying" || allClean ? "The chief checks the verdicts first." : merge && !merge.ok ? merge.text
+      : `${merge ? `${merge.text} ` : ""}${autopilot ? "Autopilot merges it."
+      : reasons.some(reason => reason.kind === "merge" && reason.mode) ? "Autopilot is off, so the merge waits for you." : "The board cannot tell if autopilot is on, so the merge waits for you."}`);
   steps.push({ key: "merge", label: build ? "Merge" : "Conclude", status: mark("merge"), detail: mergeDetail });
 
   // Now: what needs you (the reasons, each once), else what happens on the current step.
@@ -281,7 +282,7 @@ function waitLine(task, waits, column) {
   return { never, text: `Waits for ${and(named.map(waitName))}${never ? ": it cannot start." : "."}${odd}${loop}${!never && column === "design" ? " Design and PE may run." : ""}` };
 }
 
-function card(source, project, group, task, now, graph) {
+function card(source, project, group, task, now, graph, landing) {
   const records = (byTask(project.observations?.records ?? NONE).get(task.id) ?? NONE).filter(record => time(record.observedAt) !== null && time(record.observedAt) <= now);
   const pr = latest(records, "pr", data => String(data.number) === task.pr);
   const completion = latest(records, "completion", data => data.state === task.state);
@@ -304,10 +305,6 @@ function card(source, project, group, task, now, graph) {
       breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.programs.get(breakdown).name } : null };
   });
   if (task.state === "awaiting-you" && !gates.length && !allGates.at(-1)?.answer) reasons.push({ kind: "design", text: "The design waits for your answer." });
-  if (["verified", "pr-ready"].includes(task.state) && task.route.split(",").includes("build") && mode?.data.autopilot !== true) {
-    const merge = task.pr ? `review and merge PR ${task.pr}` : "review and merge it";
-    reasons.push({ kind: "merge", mode: !!mode, text: mode ? `Autopilot is off, so ${merge}.` : `The board cannot tell if autopilot is on, so ${merge}.` });
-  }
   // N2: an observed PR head wins. Else the ledger head: the newest commit of the task's PR by its first verdict (the ledger
   // is append-only), when that first verdict comes after every verdict by a run of an earlier round. At round 1 or later, a
   // verdict by a run of round 1 or earlier must show where the round starts. A repairing task pushes a new head, so it
@@ -323,6 +320,20 @@ function card(source, project, group, task, now, graph) {
   const route = task.route.split(",").filter(Boolean), build = route.includes("build");
   // A route without build has no commit: its verdicts are the task's rows, with no SHA (R1081-1).
   const judged = build ? !!head : true;
+  // T280: a verified PR is ready to merge only when sage's own merge check (landing) passes on its known head. With no
+  // head or no merge check, the board says that it did not check, and the task is not ready. The board does not see the
+  // PR's head branch on GitHub, so that part of the rule stays unchecked also when the check passes.
+  const verified = ["verified", "pr-ready"].includes(task.state) && build;
+  const checked = verified && head && landing ? landing(source.id, head, task.pr) : null;
+  const merge = !verified ? null : !head ? { ok: false, text: `The merge check is not checked, because the board does not know ${task.pr ? `the last commit of PR ${task.pr}` : "the task's PR"}.` }
+    : !checked ? { ok: false, text: `The merge check is not checked on ${head.slice(0, 7)}, because this board cannot run it.` }
+    : checked.ok ? { ok: true, text: `The merge check passes on ${head.slice(0, 7)}. The board does not check the PR's head branch.` }
+    : { ok: false, text: `The merge check refuses ${head.slice(0, 7)}. ${cap(checked.reason.split(/\.(?:\s|$)/)[0])}.` };
+  if (merge && !merge.ok) reasons.push({ kind: "merge-check", text: merge.text });
+  else if (merge && mode?.data.autopilot !== true) {
+    const what = task.pr ? `review and merge PR ${task.pr}` : "review and merge it";
+    reasons.push({ kind: "merge", mode: !!mode, text: mode ? `Autopilot is off, so ${what}.` : `The board cannot tell if autopilot is on, so ${what}.` });
+  }
   const current = repairing ? [] : build ? head ? ledger.filter(row => row.sha === head && String(row.pr) === task.pr) : [] : ledger.filter(row => !row.sha);
   const steps = [...(build ? ["checks"] : []), ...route.filter(block => CLEAN[block])];
   const required = Math.max(positive(source.config?.["cycles.small"]) ?? 1, task.size === "large" ? Math.max(2, positive(source.config?.["cycles.large"] ?? source.config?.autopilot_cycles) ?? 2) : 1, task.risk ? Math.max(2, positive(source.config?.["cycles.risk"]) ?? 2) : 1);
@@ -343,7 +354,8 @@ function card(source, project, group, task, now, graph) {
   }
   const inferred = pr?.data.state === "open" && task.branch.startsWith("codex/") && !agents.length;
   if (inferred && !["merged", "concluded", "abandoned"].includes(task.state)) reasons.push({ kind: "review-wait", text: "The PR has inferred provider work and waits for review." });
-  const column = COLUMNS.find(([, , states]) => states.includes(task.state))?.[0] ?? null;
+  // A verified PR that the merge check did not pass stays in review: the Ready to merge column holds only what may land.
+  const column = merge && !merge.ok ? "review" : COLUMNS.find(([, , states]) => states.includes(task.state))?.[0] ?? null;
   const program = task.program ? graph.programs.get(task.program) : null, waits = waitsFor(task, graph);
   const completionDecision = rows(project, "decisions", task).filter(row => row.decision === `state ${task.state}`).at(-1);
   const completedAt = completion ? time(completion.data.at) : ["merged", "concluded", "abandoned"].includes(task.state) ? time(completionDecision?.at) : null;
@@ -355,7 +367,7 @@ function card(source, project, group, task, now, graph) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: (moves.to.get(task.id) ?? NONE).find(({ move }) => move[3] === row.key)?.row.task ?? null })),
     ...(moves.from.get(task.id) ?? NONE).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), mergeCheck: merge, loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, merge, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
 }
 
 const title = value => String(value ?? "").charAt(0).toUpperCase() + String(value ?? "").slice(1);
@@ -698,7 +710,7 @@ function logbookNeeds(source, project, group) {
 /** A logbook whose programs table cannot be read shows its tasks with no program (R1307-1): no tag, and no program wait. */
 const withoutPrograms = project => project.tables.programs || !project.tables.tasks ? project : { ...project, tables: { ...project.tables, tasks: project.tables.tasks.map(task => ({ ...task, program: "" })) } };
 
-export function buildBoardModel(input, { now = new Date().toISOString() } = {}) {
+export function buildBoardModel(input, { now = new Date().toISOString(), landing = null } = {}) {
   const at = time(now);
   if (at === null) throw new TypeError("board time must be an ISO date");
   build++;
@@ -706,7 +718,7 @@ export function buildBoardModel(input, { now = new Date().toISOString() } = {}) 
   const { groups, notes } = projectGroups(sources);
   const groupOf = new Map(groups.flatMap(group => group.books.map(book => [book.project.key, group])));
   const graphs = new Map(sources.flatMap(source => source.projects.map(project => [project.key, graphOf(project)])));
-  const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, groupOf.get(project.key), task, at, graphs.get(project.key)))));
+  const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, groupOf.get(project.key), task, at, graphs.get(project.key), landing))));
   const byKey = new Map(tasks.map(task => [task.key, task]));
   const programs = sources.flatMap(source => source.projects.flatMap(project => programsOf(source, project, groupOf.get(project.key), graphs.get(project.key), byKey)));
   // What needs the owner that no card shows: a stuck program, a lost breakdown gate, a table or a logbook that the board

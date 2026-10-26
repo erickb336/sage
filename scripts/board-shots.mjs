@@ -36,9 +36,11 @@ const LAPTOP = { width: 1280, height: 800 };
 
 async function main() {
   const { chromium } = createRequire(import.meta.url)("playwright");
-  const board = renderBoardHtml(buildBoardModel([programsSource()], { now: NOW }), { snapshot: false });
+  // The sample has no logbook on disk, so a sample merge check passes on every head (T280): the pages show a ready task.
+  const landing = () => ({ ok: true, reason: "" });
+  const board = renderBoardHtml(buildBoardModel([programsSource()], { now: NOW, landing }), { snapshot: false });
   const shots = [["light", "light", board, false], ["dark", "dark", board, false],
-    ...Object.keys(STAGES).map((stage) => [stage, "light", renderBoardHtml(buildBoardModel([walkthroughSource(stage)], { now: WALK_NOW }), { snapshot: false }), true])];
+    ...Object.keys(STAGES).map((stage) => [stage, "light", renderBoardHtml(buildBoardModel([walkthroughSource(stage)], { now: WALK_NOW, landing }), { snapshot: false }), true])];
   const browser = await chromium.launch({ headless: true, ...(process.env.BOARD_BROWSER_PATH ? { executablePath: process.env.BOARD_BROWSER_PATH } : {}) });
   try {
     for (const [shot, theme, html, whole] of shots) {
