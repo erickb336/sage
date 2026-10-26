@@ -149,11 +149,14 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
     const origin = git(["remote", "get-url", "origin"]);
     const repo = /^(?:https:\/\/github\.com\/|git@github\.com:)([^/]+\/[^/]+?)(?:\.git)?$/.exec(origin)?.[1];
     if (repo?.toLowerCase() !== record.repo.toLowerCase()) fail("Checkout origin does not match the registered GitHub repository");
-    const eligible = tool.mergeCheck(input.sha, env, { pr: record.pr, head: record.branch, project, readOnly: true });
-    if (!eligible.ok) fail(eligible.reason);
     const path = `repos/${record.repo}/pulls/${record.pr}`;
     const pr = api(path);
     samePr(pr, record, input.sha);
+    // Read only: this helper runs in Codex's shell sandbox, where the logbook is not writable, so a carry-over of verdicts
+    // over a merge of main (T493) writes no decision row here; the merge check's line names it. The base and every
+    // other fact of a carry-over come from GitHub, through this helper's own API reader, in the registered repository.
+    const eligible = tool.mergeCheck(input.sha, env, { pr: record.pr, head: record.branch, project, readOnly: true, base: pr.base?.sha ?? "", repo: record.repo, get: (path) => api(path) });
+    if (!eligible.ok) fail(eligible.reason);
     if (pr.state !== "open" || pr.draft !== false || pr.merged !== false || pr.mergeable !== true || pr.mergeable_state !== "clean")
       fail("PR must be open, ready and mergeable without a queue");
     const checks = api(`repos/${record.repo}/commits/${input.sha}/check-runs?per_page=100`);

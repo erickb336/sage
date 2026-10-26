@@ -38,7 +38,7 @@ import { closeSync, existsSync, openSync, readdirSync, readSync, realpathSync, r
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, switchModes } from "../core/index.mjs";
+import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, PR, programName, programsRun, pullRequest, readModeFile, roleEditDenied, switchModes } from "../core/index.mjs";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
 import { modeDirectory } from "./sage-codex-hook.mjs";
@@ -322,17 +322,17 @@ export function stateToolWrites(command, cwd = "/", env = process.env) {
 /** Whether a shell command runs codex with resume or fork. */
 export const resumesSession = (command, cwd, env) => (codexRuns(command, cwd, env) ?? []).some(resumes);
 
-/** The merge check for one merge form: the pull request's head branch from gh, then the state tool's ledger check. */
+/** The merge check for one merge form: the pull request's head branch and base commit from gh, then the state tool's ledger check. */
 export async function checkMerge({ pr, sha }, cwd, env = process.env) {
-  let head;
+  let head, base, repo; // repo: as gh pr merge resolves it here, which the merge check compares with the logbook's record
   try {
-    head = pullRequestHead(pr, cwd, env);
+    ({ head, base, repo } = pullRequest(pr, cwd, env));
   } catch (error) {
     return { ok: false, reason: `sage: the hook could not read the head branch of PR ${pr} from GitHub (${error?.message ?? error}), so it refuses the merge. Try again, or tell the user.` };
   }
   try {
     const { tool } = await import("../skills/sage/sage.mjs");
-    const verdict = tool.mergeCheck(sha, env, { pr, head, project: realpathSync.native(cwd) });
+    const verdict = tool.mergeCheck(sha, env, { pr, head, base, repo, project: realpathSync.native(cwd) });
     return verdict?.ok === true ? { ok: true } : { ok: false, reason: `sage: the merge check refuses: ${verdict?.reason}` };
   } catch (error) {
     return { ok: false, reason: `sage: the merge check could not run (${error?.message ?? error}), so it refuses every merge. Tell the user.` };

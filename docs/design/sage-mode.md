@@ -69,7 +69,7 @@ The chief of staff never edits files. It writes briefs, records verdicts and ask
 | --- | --- | --- |
 | A chief that owns the program, never the code | pstack orchestrate, Cursor projects | While sage mode is on, the hook refuses the chief's file edits. After the off phrase, the session edits files as a normal session. |
 | "The brief is the product." A missing field stops the spawn | pstack orchestrate | A brief template with required fields. The hook refuses an agent spawn when a field is missing. |
-| Verdicts recorded by head SHA. A new commit voids them | pstack ledger, Orchestrator "merge the exact checked commit" | A ledger in the logbook. A merge is blocked unless the current SHA has the verdicts its route needs. |
+| Verdicts recorded by head SHA. A new commit voids them | pstack ledger, Orchestrator "merge the exact checked commit" | A ledger in the logbook. A merge is blocked unless the current SHA has the verdicts its route needs. A clean merge of main keeps them ([section 6](#carry-over)). |
 | A mode switched on by name, with playbooks copied into the to-do list | poteto mode | "sage mode" as the whole message. Each route's blocks go into the task list. |
 | Scale the ceremony to the unit | pstack, Anthropic research system | Routes come in sizes: tiny, small, large, program. |
 | A PE that separates "changes" from "questions for you" | Orchestrator, after the PE loop failed to converge | The same verdict shape. A later PE pass checks its earlier asks first. |
@@ -222,6 +222,29 @@ stateDiagram-v2
 ```
 
 A new commit after "verified" voids the verdicts, and the task goes back to reviewing. A `findings`, `qa-fail` or `checks-fail` verdict also returns a verified task to reviewing, with its reason in the decision trail.
+
+<a id="carry-over"></a>
+
+**A clean merge of main keeps the verdicts** (T493). When a new head H1 only merges main into a reviewed head H0, the merge check reads the review and QA verdicts of H0 for H1, so the task needs no fresh cycle. CI still runs: `checks-pass` must be on H1 itself.
+
+**GitHub decides, never the local clone.** Every agent's worktree shares the clone's refs, objects and config, so an agent could forge any of them. So the merge check reads each fact of a carry-over from GitHub's API, with read-only GETs through `gh api --hostname github.com`, with `GH_HOST` and `GH_REPO` cleared:
+
+- the repository: the one that the project's logbook records (`sage config repo=<owner>/<name>`, which only the chief sets). With no record, nothing carries over. The merge rule also reads the repository that `gh pr merge` would act on (the pull request's URL); when it is not the recorded one, the merge refuses.
+- the base commit: `gh pr view <n> --repo <record> --json baseRefOid` (the merge rule reads it with the head branch). With no `--pr`, no `gh` or an error, nothing carries over.
+- H1's parents (`commits/<sha>`), whether main's side is in the base commit and the merge base of H0 and main (`compare`), the four trees (`git/trees/<sha>?recursive=1`) and main's `.gitattributes` (`git/blobs`).
+
+Each of these must hold:
+
+1. H1 is a merge commit with two parents on GitHub: H0, and a commit of the pull request's base branch. GitHub gives the base as of the pull request's last update, so a merge of a newer main refuses and says to update the pull request first.
+2. The pull request's changes, from that main commit to H1, are the changes of H0 from its merge base with main, outside built files: the same mode and blob id for each path. So the two patches are byte-identical, and a file that both main and the pull request changed refuses, also when git merges it with no conflict. A submodule link that the merge adds or changes refuses, also in a built folder. A tree list that GitHub cuts refuses.
+3. H0 passes on its own verdicts: no open finding, and every clean cycle that the task's size and risk need.
+4. H1 has no review or QA verdict of its own. A fresh review on H1 starts its own cycles, and then H1 judges on its own verdicts only.
+
+All GitHub reads of one merge check get 4 seconds together, because the merge rule runs inside the 10 seconds that Claude Code gives a hook. A GitHub answer that does not come, or does not come whole, carries nothing.
+
+A built file is a path that the top `.gitattributes` of the main commit marks `sage-built`, by an exact path or a `<folder>/**` pattern. In sage, `npm run build` writes `.gitattributes` from the files that it makes (`CHANGELOG.md`, `instructions/core.md` and the plugin folders), and `npm run check` fails when a built file is not what the build makes. So a merge whose only conflict is in a built file, fixed by `npm run build`, is a clean merge too. The check reads the list from main's side of the merge, so a pull request cannot add a file to it. A project marks a file `sage-built` only when its CI checks that the build makes that file.
+
+A chain is allowed: H2 merges main into H1, which merges main into H0. Each step must pass the rule. A refusal says why the verdicts did not carry over. When H1 has no verdict yet and is a clean merge of a head with verdicts, the refusal says to record only `checks-pass` for H1. A passing merge check names each earlier head and writes each step in the decision trail (`verdicts <H0> → <H1>`), once, and a recorded step counts as it is: only the state tool writes the trail. The board asks GitHub nothing, so it never decides a carry-over: it shows one that the trail records, or says to run the merge check with `--pr`. The Codex publish helper (`workflow.mjs`) reads GitHub through its own reader, in its registered repository, and writes no row, because it runs in Codex's shell sandbox, where the logbook is not writable.
 
 <a id="data"></a>
 

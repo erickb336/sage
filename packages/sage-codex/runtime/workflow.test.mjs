@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tool } from '../../../plugins/sage-codex/skills/sage/sage.mjs';
 import { workflow } from '../../../plugins/sage-codex/skills/sage/workflow.mjs';
+import { githubAnswer } from '../../../scripts/fixtures/fake-github.mjs';
 const cli = fileURLToPath(new URL('../../../plugins/sage-codex/skills/sage/workflow.mjs', import.meta.url));
 const mergedSha = 'c'.repeat(40);
 function fixture(t, { cycles = 2 } = {}) {
@@ -47,20 +48,24 @@ function fixture(t, { cycles = 2 } = {}) {
     assert.deepEqual(args.slice(0,3), ['api','--hostname','github.com']);
     const endpoint = args[3];
     if (args.includes('PUT')) {
-      assert.deepEqual(args, ['api','--hostname','github.com','repos/example/project/pulls/7/merge','--method','PUT','-f',`sha=${head}`,'-f','merge_method=squash']);
+      assert.deepEqual(args, ['api','--hostname','github.com','repos/example/project/pulls/7/merge','--method','PUT','-f',`sha=${pr.head.sha}`,'-f','merge_method=squash']);
       puts++;
       if (uncertain) throw Error('Simulated lost response');
       pr = {...pr, merged:true, state:'closed', merge_commit_sha:mergedSha};
       return { merged:true, sha:mergedSha };
     }
-    if(endpoint.includes('/check-runs?')) return {total_count:1,check_runs:[{head_sha:head,status:'completed',conclusion:checkConclusion}]};
+    if(endpoint.includes('/check-runs?')) return {total_count:1,check_runs:[{head_sha:pr.head.sha,status:'completed',conclusion:checkConclusion}]};
+    // A carry-over of verdicts over a merge of main (T493) reads commits, comparisons, trees and blobs: the project's own
+    // repository stands in for GitHub's.
+    const carry = githubAnswer(project, 'example/project', endpoint);
+    if (carry) return carry;
     if(endpoint.includes('/status?')) return {total_count:0,statuses:[],state:'pending'};
     assert.equal(endpoint,'repos/example/project/pulls/7'); return structuredClone(pr);
   };
   const invoke = (action, fields = {}, session='session-one') => workflow({action,project,session,...fields},{env,github});
   const owner = text => invoke('owner',{text,directOwner:true,evidence});
   const enable = () => {owner('sage mode on');invoke('capability',{evidence});owner('autopilot on');invoke('register',{task:'T1',repo:'example/project',base:'main',admissionJournals:[],manualConfirmed:true,noKnownNativeAssignment:true});};
-  return {project,env,head,core,invoke,owner,enable,evidence,puts:()=>puts,pr:()=>pr,setPr:value=>pr=value,
+  return {project,env,head,git,core,invoke,owner,enable,evidence,puts:()=>puts,pr:()=>pr,setPr:value=>pr=value,
     failChecks:()=>checkConclusion='failure',loseResponse:()=>uncertain=true,dir:tool.storeDir(project,env)};
 }
 test('workflow CLI persists owner modes per project and session',t=>{
@@ -83,6 +88,20 @@ test('eligible manual publication persists the merge and updates the core task',
   assert.equal(tool.read(f.dir,'tasks')[0].state,'merged');
   assert.equal(f.invoke('status').publications.T1.outcome,'merged');assert.equal(f.puts(),1);
   assert.throws(()=>f.invoke('publish',{task:'T1',sha:f.head}),/already exists/);assert.equal(f.puts(),1);
+});
+test('T493: a publication of a clean merge of main keeps the reviewed head verdicts, from GitHub with the PR base.sha',t=>{
+  const f=fixture(t);f.enable();
+  const id=['-c','user.name=Fixture','-c','user.email=fixture@example.invalid'];
+  f.git('checkout','-q','-b','main');f.git(...id,'commit','--allow-empty','-q','-m','main moves');
+  const main=f.git('rev-parse','HEAD');
+  f.git('checkout','-q','codex/t1-example');f.git(...id,'merge','-q','--no-ff','--no-edit',main);
+  const merged=f.git('rev-parse','HEAD');
+  f.core('verdict','T1','--sha',merged,'--kind','checks-pass','--pr','7');
+  const pr=f.pr();f.setPr({...pr,head:{...pr.head,sha:merged},base:{...pr.base,sha:main}});
+  assert.throws(()=>f.invoke('publish',{task:'T1',sha:merged}),/0 of 2 clean cycles/,'no repository record: nothing carries');
+  f.core('config','repo=example/project');
+  const out=f.invoke('publish',{task:'T1',sha:merged});
+  assert.equal(out.publication.outcome,'merged');assert.equal(f.puts(),1);
 });
 test('off, changed head, missing cycles, checks and active or ambiguous runs refuse',t=>{
   const f=fixture(t);f.enable();f.owner('autopilot off');

@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { fakeGithub, prView } from "./fixtures/fake-github.mjs";
+import { history } from "./fixtures/merge-history.mjs";
 
 // The Codex gates (T456), through Codex's PreToolUse and PermissionRequest input and output shapes. The pure tests give
 // the gate a fixed mode and merge check; the process tests run the built hook with a mode file, a logbook and a fake gh.
@@ -219,7 +221,7 @@ function world(t, { at = "project" } = {}) {
   mkdirSync(project, { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "sage/t1", project]);
   spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"]);
-  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${dir}/gh-calls.log"\n[ "$1 $2" = "pr view" ] && printf '{"headRefName":"sage/t1","isCrossRepository":false}'\nexit 0\n`);
+  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${dir}/gh-calls.log"\n[ "$1 $2" = "pr view" ] && printf '{"headRefName":"sage/t1","isCrossRepository":false,"baseRefOid":"%s"}' "$(cat "${dir}/base" 2>/dev/null)"\nexit 0\n`);
   chmodSync(join(bin, "gh"), 0o755);
   for (const name of ["ps", "pgrep", "kill"]) writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> "${dir}/fake-calls.log"\n`, { mode: 0o755 }); // order 14
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), CODEX_HOME: join(dir, "codex-home") };
@@ -269,6 +271,34 @@ test("the hook process reads the mode file and the ledger: a verified merge pass
   assert.equal(w.send(ask(MERGE)), undefined, "autopilot counts only in sage mode");
   assert.match(denied(w.send(pre("apply_patch", patch("*** Add File: .codex/config.toml", "+x")))) ?? "", /^sage: no agent changes files under a \.codex folder/);
   assert.equal(denied(w.send("{not json")), UNREADABLE);
+});
+
+test("the Codex merge rule keeps the verdicts over a clean merge of main, through core's merge check (T493)", (t) => {
+  const w = world(t);
+  w.typed("sage mode", "autopilot on");
+  w.mode({ sage: true, autopilot: true });
+  // GitHub is the project's own repository here, through the fake gh of the carry-over tests.
+  const h = history(w.project);
+  fakeGithub(w.dir, w.project, "acme/project");
+  const view = (repo = "acme/project") => writeFileSync(join(w.dir, "pr.json"), prView(repo, h.git("rev-parse", "main")));
+  h.start();
+  const h0 = h.work({ "src.js": "a\nb\n", "CHANGELOG.md": "- task\n- base\n" });
+  assert.equal(w.sage("init").status, 0);
+  assert.equal(w.sage("task", "add", "--priority", "P2", "--title", "t", "--size", "small").status, 0);
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) assert.equal(w.sage("verdict", "T1", "--sha", h0, "--kind", kind, "--cycle", "1", "--pr", "41").status, 0);
+  const h1 = h.merge(h.main({ "CHANGELOG.md": "- main\n- base\n" }), { "CHANGELOG.md": "- task\n- main\n- base\n" });
+  const merge = `gh pr merge 41 --squash --delete-branch --match-head-commit ${h1}`;
+  assert.equal(w.sage("verdict", "T1", "--sha", h1, "--kind", "checks-pass", "--cycle", "1", "--pr", "41").status, 0);
+  view();
+  assert.match(denied(w.send(pre("Bash", merge))) ?? "", /^sage: the merge check refuses: T1: 0 of 1 clean cycles on this SHA; never recorded: review-clean, qa-pass\. Run the next cycle of its reviews on this SHA and record each verdict$/, "no repository record: nothing carries");
+  assert.equal(w.sage("config", "repo=acme/project").status, 0);
+  assert.equal(w.send(pre("Bash", merge)), undefined, "the merge of main keeps the reviewed head's verdicts");
+  view("acme/elsewhere");
+  assert.match(denied(w.send(pre("Bash", merge))) ?? "", /^sage: the merge check refuses: PR 41 is a pull request of acme\/elsewhere on GitHub, but this project's logbook records the repository acme\/project/);
+  const evil = h.merge(h.main({ "other.js": "m\n" }), { "src.js": "a\nb\nevil\n" });
+  view();
+  assert.equal(w.sage("verdict", "T1", "--sha", evil, "--kind", "checks-pass", "--cycle", "1", "--pr", "41").status, 0);
+  assert.match(denied(w.send(pre("Bash", `gh pr merge 41 --squash --delete-branch --match-head-commit ${evil}`))) ?? "", /^sage: the merge check refuses: T1: 0 of 1 clean cycles on this SHA; .* do not carry over: the merge changes "src\.js" otherwise than/);
 });
 
 test("the core reader of the mode file: no file is no mode, and a damaged file or a link is off (one rule with the mode hook)", (t) => {

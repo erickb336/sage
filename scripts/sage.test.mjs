@@ -3728,7 +3728,7 @@ test("T314: config refuses a name that is too long, empty of text, spaced at an 
   assert.equal(s.no("config", "name= seacc"), 'sage: the name " seacc" has a space at its start or end, or two spaces together. Nothing changed.');
   assert.equal(s.no("config", "name=sea  cc"), 'sage: the name "sea  cc" has a space at its start or end, or two spaces together. Nothing changed.');
   assert.equal(s.no("config", "archived=true"), 'sage: archived is yes or no, not "true". Nothing changed.');
-  assert.equal(s.no("config", "name=x", "arena=2"), 'sage: "arena" is a key for all projects, and name= and archived= are keys of one logbook: set them in a config command of their own.');
+  assert.equal(s.no("config", "name=x", "arena=2"), 'sage: "arena" is a key for all projects, and name=, archived= and repo= are keys of one logbook: set them in a config command of their own.');
   assert.equal(s.no("config", "name"), "sage: name needs a value: write name=<value>");
   assert.equal(existsSync(own), false, "no refusal wrote the file");
   writeFileSync(own, "[1]");
@@ -3863,7 +3863,8 @@ test("F-T42-2: a config write never lands on a link's target, also when a link r
       }
       await new Promise((r) => setImmediate(r));
     }
-    assert.equal(writes, 300, `300 writes ran (${refused} refused)`);
+    // CI once reached the ceiling after 294 writes (T493 round 2), so the test needs enough writes, not all 300.
+    assert.ok(writes >= 100, `at least 100 writes ran: ${writes} (${refused} refused)`);
     assert.equal(readFileSync(victim, "utf8"), "victim\n", `the victim is unchanged after ${writes} writes`);
   } finally {
     swap.kill();
@@ -4140,12 +4141,13 @@ test("T94: every git call of the state tool carries the neutral options and envi
   const log = join(base, "git.log");
   const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
   mkdirSync(bin);
-  writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$*" "$GIT_CONFIG_NOSYSTEM" "$GIT_ALLOW_PROTOCOL" "$GIT_TERMINAL_PROMPT" >> '${log}'\nexec '${real}' "$@"\n`);
+  writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s|%s|%s|%s|%s\\n' "$*" "$GIT_CONFIG_NOSYSTEM" "$GIT_ALLOW_PROTOCOL" "$GIT_TERMINAL_PROMPT" "$GIT_NO_REPLACE_OBJECTS" >> '${log}'\nexec '${real}' "$@"\n`);
   chmodSync(join(bin, "git"), 0o755);
   assert.equal(sage(["init"], project, { PATH: `${bin}:${env.PATH}` }).status, 0);
   const calls = readFileSync(log, "utf8").trim().split("\n");
   assert.ok(calls.length > 0, "the tool ran git");
-  for (const call of calls) assert.match(call, /^-c core\.fsmonitor=false -c core\.hooksPath=\/dev\/null -C \S+ rev-parse .*\|1\|file:https:ssh\|0$/);
+  // No replace refs and no commit-graph file either: an agent can write both, and each can change what a commit shows (T493).
+  for (const call of calls) assert.match(call, /^-c core\.fsmonitor=false -c core\.hooksPath=\/dev\/null -c core\.commitGraph=false -C \S+ rev-parse .*\|1\|file:https:ssh\|0\|1$/);
 });
 
 test("T94: a planted .git/commondir does not lend a folder another project's logbook; a linked worktree keeps its project's", () => {

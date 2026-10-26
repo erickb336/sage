@@ -79,7 +79,10 @@ function mergeable(b, t, env) {
   const at = [b.tips.get(`refs/heads/${t.branch}`), b.tips.get(`refs/remotes/origin/${t.branch}`)].filter(Boolean);
   if (!at.length) return { ok: false, reason: `head unknown: no branch ${t.branch} in the project's folder` };
   if (at.some((sha) => sha !== head)) return { ok: false, reason: `branch ${t.branch} is not at the reviewed head ${head.slice(0, 7)}` };
-  const r = mergeCheck(head, env, { pr: t.pr, readOnly: true });
+  // The board asks GitHub nothing, so it never decides a carry-over of verdicts over a merge of main (T493): it shows one
+  // that a merge check recorded, or says to run the merge check with --pr.
+  const r = mergeCheck(head, env, { pr: t.pr, readOnly: true, project: b.home });
+  if (!r.ok && r.reason.includes("may carry over: run sage merge-check")) return { ok: false, reason: `${t.id}: run the merge check with --pr, verdicts may carry over` };
   return { ok: r.ok, reason: r.reason.split(/\.(?:\s|$)/)[0] }; // the first sentence says what is missing
 }
 

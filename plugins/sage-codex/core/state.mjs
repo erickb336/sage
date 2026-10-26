@@ -19,7 +19,7 @@ import { boardView } from "./board-view.mjs";
 import { projectName as shownName } from "./board-model.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
 import { createBoard } from "./board.mjs";
-import { PR } from "./pull-request.mjs";
+import { GITHUB_TIME, PR, githubGet, pullRequest } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
@@ -137,11 +137,12 @@ function sageRoot(env = process.env) {
 /**
  * git with neutral options: no fsmonitor, no hooks and no system config of the project's machine, only local, https or
  * ssh transports, and never a prompt. Every git call of the state tool goes through it, because the tool also runs
- * outside the sandbox, on a folder that an agent may have written.
+ * outside the sandbox, on a folder that an agent may have written. It reads no replace refs and no commit-graph file:
+ * an agent can write either, and each can show a commit with other content or parents than its object has (T493).
  */
 function git(args, env = process.env) {
-  const neutral = { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_ALLOW_PROTOCOL: "file:https:ssh", GIT_TERMINAL_PROMPT: "0" };
-  return execFileSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8", env: neutral, stdio: ["ignore", "pipe", "ignore"] });
+  const neutral = { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_ALLOW_PROTOCOL: "file:https:ssh", GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" };
+  return execFileSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.commitGraph=false", ...args], { encoding: "utf8", env: neutral, stdio: ["ignore", "pipe", "ignore"] });
 }
 
 /**
@@ -1657,6 +1658,101 @@ const prHistory = (pr, tasks, decisions, ledger) =>
 /** Why sha cannot name a commit in the ledger, or "". A short SHA could match another commit with the same prefix. Case does not matter. */
 const notFull = (sha) => (/^[0-9a-f]{40}$/i.test(sha) ? "" : `${JSON.stringify(sha)} is not a full commit SHA: a short one can match another commit. Give all 40 characters: git rev-parse <branch>.`);
 
+/** The verdicts of the checks: CI on one SHA, so they never carry over to another head. */
+const CHECKS = ["checks-pass", "checks-fail"];
+/** The longest chain of carry-overs (H0 to H1 to H2 …) that the merge check follows. */
+const CHAIN = 20;
+/** f with each answer kept by its argument. */
+const memo = (f) => {
+  const kept = new Map();
+  return (k) => (kept.has(k) ? kept.get(k) : kept.set(k, f(k)).get(k));
+};
+
+/**
+ * The built files, from the text of a project's top .gitattributes: the paths that it marks sage-built, by an exact path
+ * or a folder/** pattern (T493). Another pattern form marks nothing, and a line that unsets or sets a value of
+ * sage-built takes its paths out (an unknown form takes all), so a pattern can only make the check stricter. The merge
+ * check reads it at the base branch's side of the merge, so a pull request cannot add a file to it.
+ */
+function builtFrom(text) {
+  const [on, off] = [[], []];
+  for (const line of text.split(/\r?\n/)) {
+    const [pattern = "", ...attrs] = line.trim().split(/\s+/);
+    if (!pattern || pattern.startsWith("#")) continue;
+    const path = pattern.replace(/^\//, "");
+    const folder = /^[^*?[\\"]+\/\*\*$/.test(path) && path.slice(0, -2);
+    const match = folder ? (p) => p.startsWith(folder) : /[*?[\\"]/.test(path) ? undefined : (p) => p === path;
+    if (attrs.includes("sage-built") && match) on.push(match);
+    if (attrs.some((a) => /^[-!]sage-built$|^sage-built=/.test(a))) off.push(match ?? (() => true));
+  }
+  return (p) => on.some((m) => m(p)) && !off.some((m) => m(p));
+}
+
+/** The files of one tree as GitHub gives it: "<mode> <id>" of each blob and submodule link, by path. A cut list throws. */
+function filesOf(tree) {
+  if (tree?.truncated !== false || !Array.isArray(tree.tree)) throw new Error("GitHub gave no whole tree");
+  return new Map(tree.tree.filter((e) => e.type !== "tree").map((e) => [e.path, `${e.mode} ${e.sha}`]));
+}
+/** The paths whose entry differs from one list of files to another, each with its entries before and after. */
+const changed = (a, b) => new Map([...new Set([...a.keys(), ...b.keys()])].filter((p) => a.get(p) !== b.get(p)).map((p) => [p, `${a.get(p) ?? "-"} → ${b.get(p) ?? "-"}`]));
+/** The changes outside built files. */
+const outside = (each, built) => new Map([...each].filter(([path]) => !built(path)));
+
+/**
+ * The facts of a carry-over (T493), from GitHub only, never from the local clone: every agent's worktree shares its
+ * refs, objects and config, so an agent could forge any of them. get(path) gives one answer of GitHub's API as JSON, for
+ * repo, the repository that the logbook records; each answer is kept. parents(sha) gives a commit's parents, or [] when
+ * GitHub cannot say. why(sha, from, main, base) is "" when sha merges main into from cleanly: main is in base, the pull
+ * request's base commit on GitHub; the merge adds or changes no submodule link; and the changes from main to sha are the
+ * changes of from from its merge base with main, outside the built files of main's .gitattributes. Equal blob ids give
+ * byte-identical patches. Else it says why not. A GitHub error throws.
+ */
+function githubFacts(get, repo) {
+  const api = memo((path) => get(`repos/${repo}/${path}`));
+  const commit = (sha) => api(`commits/${sha}`);
+  const treeOf = (sha) => filesOf(api(`git/trees/${sha}?recursive=1`));
+  return {
+    parents(sha) {
+      try {
+        const parents = commit(sha).parents.map((p) => p.sha);
+        return parents.every((p) => /^[0-9a-f]{40}$/.test(p)) ? parents : [];
+      } catch {
+        return [];
+      }
+    },
+    why(sha, from, main, base) {
+      const [s7, b7, m7, f7] = [sha, base, main, from].map((x) => x.slice(0, 7));
+      const into = api(`compare/${main}...${base}`).status;
+      // GitHub gives the base as of the pull request's last update, so a merge of a newer main can be ahead of it.
+      if (into === "behind") return `its other parent ${m7} is newer than the pull request's base commit ${b7} that GitHub gives. Update the pull request on GitHub (push the branch again, or wait until GitHub shows the new base), then check again`;
+      if (!["ahead", "identical"].includes(into)) return `its other parent ${m7} is not a commit of the pull request's base branch, which is at ${b7} on GitHub`;
+      const sides = api(`compare/${main}...${from}`);
+      if (sides.base_commit?.sha !== main) throw new Error("GitHub compared other commits");
+      const [onMain, merged, atBase, earlier] = [sides.base_commit, commit(sha), sides.merge_base_commit, commit(from)].map((c) => treeOf(c.commit.tree.sha));
+      const now = changed(onMain, merged);
+      const link = [...now.keys()].find((p) => merged.get(p)?.startsWith("160000 "));
+      if (link !== undefined) return `the merge adds or changes the submodule link ${JSON.stringify(link)}`;
+      const attributes = onMain.get(".gitattributes")?.split(" ")[1];
+      const built = builtFrom(attributes ? Buffer.from(api(`git/blobs/${attributes}`).content ?? "", "base64").toString("utf8") : "");
+      const [mine, theirs] = [outside(now, built), outside(changed(atBase, earlier), built)];
+      const odd = [...new Set([...mine.keys(), ...theirs.keys()])].find((p) => mine.get(p) !== theirs.get(p));
+      return odd === undefined ? "" : `the merge changes ${JSON.stringify(odd)} otherwise than the earlier head ${f7} did, outside built files, so ${s7} needs a fresh review and QA cycle. A file that both main and the pull request changed counts, also when git merges it with no conflict`;
+    },
+  };
+}
+
+/** The GitHub repository that a logbook records (config.json repo=<owner>/<name>), or undefined. Only the state tool writes it. */
+function repoRecord(dir) {
+  try {
+    const repo = JSON.parse(readRegular(join(dir, "config.json")) ?? "{}").repo;
+    return typeof repo === "string" && REPO.test(repo) ? repo : undefined;
+  } catch {
+    return undefined;
+  }
+}
+/** A GitHub repository's full name: owner/name. */
+const REPO = /^(?!\.+\/)[\w.-]+\/(?!\.+$)[\w.-]+$/;
+
 /**
  * Does one task have the clean cycles its route needs on one SHA? tasks and findings are its logbook's tables, read once
  * by the caller; rows are only that task's ledger rows for the SHA. A task without rows is in the merge check only through
@@ -1776,6 +1872,23 @@ function rebuild(root) {
 }
 
 /**
+ * Writes each carry-over of a passing merge check in its logbook's decision trail, once: a row that is there already
+ * stays as it is, so the check can run again. It takes each logbook's lock; a write that fails refuses the merge.
+ */
+function recordCarries(carried) {
+  for (const dir of new Set(carried.map((c) => c.dir)))
+    withLock(dir, () => {
+      ready(dir);
+      const decisions = read(dir, "decisions");
+      const rows = carried.filter((c) => c.dir === dir).flatMap(({ task, steps }) => steps.map(({ from, to, main }) => ({ at: now(), task, decision: `verdicts ${from} → ${to}`, why: `merge-check: a clean merge of main ${main}, with the same diff outside built files and checks-pass on ${to}` })));
+      const fresh = rows.filter((r, i) => !decisions.some((d) => d.task === r.task && d.decision === r.decision) && rows.findIndex((o) => o.task === r.task && o.decision === r.decision) === i);
+      if (!fresh.length) return;
+      write(dir, "decisions", [...decisions, ...fresh]);
+      status(dir, true);
+    });
+}
+
+/**
  * The judgment of the merge check: may this head SHA merge? Every task that has verdicts on the full SHA, in every
  * project's logbook, must pass on its own rows, also an abandoned one, so no other logbook or task can lend its verdicts.
  * With pr, the tasks of that pull request in those logbooks must pass too, and there must be one. Each task wants the
@@ -1787,8 +1900,14 @@ function rebuild(root) {
  * pull request (F-T273-8). Each task of the logbook that owns it must be on the pull request too (T439).
  * With project, the folder of the project being merged: only a task of its logbook counts as a task of the pull request
  * that may approve the merge. A task of another logbook with verdicts on the SHA must still pass (F-T273-9).
+ * With project, a task whose SHA only merges main into an earlier head keeps that head's clean verdicts (T493), when the
+ * project's logbook records its GitHub repository (repoRecord) and base gives the pull request's base commit on GitHub
+ * (a SHA, or a function of the recorded repository that reads it): GitHub's answers decide (githubFacts, through get,
+ * by default gh), never the local clone, and checks-pass must still be on the SHA. A passing check records each
+ * carry-over in the decision trail, and a recorded one counts as it is; with no base (the board), only those count.
+ * With repo, the repository that the merge command acts on: when it is not the recorded one, the merge refuses.
  */
-function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, project } = {}) {
+function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, project, base, repo, get } = {}) {
   const root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
@@ -1800,7 +1919,37 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
     const cfg = config(env); // once: the merge check may judge thousands of tasks
     const broken = Object.keys(cfg).find((k) => cfg[k] === "invalid"); // fail closed: a default would ask fewer cycles than the owner meant
     if (broken) return { ok: false, reason: `the merge check refuses every merge, because ${broken} in ${join(root, "config.json")} is not a number. Set it with sage config ${broken}=<n> (a whole number from ${floor(broken)} to 10), or remove the key.` };
-    const [listed, strangers, absent] = [known(root, undefined, undefined, readOnly), [], []];
+    const [listed, strangers, absent, carried, hints] = [known(root, undefined, undefined, readOnly), [], [], [], []];
+    // The GitHub side of a carry-over (T493). Each answer is read once, all inside GITHUB_TIME, and only when a task has
+    // only checks verdicts on a SHA, so a merge check that cannot carry asks GitHub nothing.
+    const record = project === undefined ? undefined : repoRecord(storeDir(project, env));
+    if (record && repo && record.toLowerCase() !== String(repo).toLowerCase())
+      return { ok: false, reason: `PR ${pr} is a pull request of ${repo} on GitHub, but this project's logbook records the repository ${record}, so the merge command would act on another repository and the merge check refuses. Check the project's git remote, or the record (sage config repo=<owner>/<name>).` };
+    let deadline;
+    const facts = record && base !== undefined ? githubFacts((path) => (get ?? githubGet)(path, env, (deadline ??= Date.now() + GITHUB_TIME)), record) : undefined;
+    const parents = memo((at) => (facts ? facts.parents(at) : []));
+    let baseSha;
+    const baseOf = () => (baseSha ??= (() => {
+      try {
+        const b = typeof base === "function" ? base(record) : base;
+        return /^[0-9a-f]{40}$/.test(b ?? "") ? b : "";
+      } catch {
+        return ""; // GitHub cannot be read: nothing carries
+      }
+    })());
+    // Does at merge main into from cleanly? { step } or { why }.
+    const stepFor = memo((key) => {
+      const [at, from] = key.split(" ");
+      const main = parents(at).length === 2 ? parents(at).find((p) => p !== from) : undefined;
+      if (!main) return { why: `${at.slice(0, 7)} is not a merge of two commits on GitHub` };
+      if (!baseOf()) return { why: "the merge check has no base commit of the pull request from GitHub (gh pr view, with --pr)" };
+      try {
+        const why = facts.why(at, from, main, baseOf());
+        return why ? { why } : { step: { from, main } };
+      } catch {
+        return { why: `GitHub did not give the commits, trees and comparisons of ${at.slice(0, 7)} whole and in time` };
+      }
+    });
     if (!listed) return { ok: false, reason: `the known project list is missing. This read-only check does not make it: sage merge-check --sha <sha> makes ${join(root, "projects.tsv")} or says how to get it back.` };
     const each = folders(root).flatMap((dir) => {
       // A folder with tasks.tsv, also a link, is a logbook, and it must pass the integrity check. A folder without it is
@@ -1809,13 +1958,45 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       if (!book && !readRegular(join(dir, "ledger.tsv"))?.trim()) return [];
       const ledger = rowsOf(book ? book.ledger : sheet(dir, "ledger"));
       const rows = ledger.filter((r) => r.sha === sha);
-      if (!rows.length) return [];
+      if (!rows.length) {
+        // A clean merge of main into a head of this logbook: the refusal says to record checks-pass, not the reviews (T493).
+        const from = book && listed.has(basename(dir)) ? parents(sha).filter((h) => ledger.some((r) => r.sha === h)) : [];
+        for (const f of from) if (stepFor(`${sha} ${f}`).step) hints.push({ from: f, tasks: [...new Set(ledger.filter((r) => r.sha === f).map((r) => r.task))] });
+        return [];
+      }
       if (!listed.has(basename(dir))) return strangers.push(dir), [];
       const [tasks, findings, decisions, runs] = book ? [rowsOf(book.tasks), rowsOf(book.findings), rowsOf(book.decisions), rowsOf(book.runs)] : [[], [], [], []];
       const repaired = decisions.some((d) => d.decision.startsWith("tasks.tsv started again without rows"));
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
-      const [byId, ownOf, findingsOf, runsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs)];
+      const [byId, ownOf, findingsOf, runsOf, ledgerOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs), group(ledger)];
+      const rowsAt = (id, at) => (ledgerOf.get(id) ?? []).filter((r) => r.sha === at);
+      // The carry-overs that a passing merge check recorded: only the state tool writes the decision trail.
+      const recorded = (id, at) => decisions.map((d) => d.task === id && new RegExp(`^verdicts ([0-9a-f]{40}) → ${at}$`).exec(d.decision)?.[1]).find(Boolean);
+      // The rows that judge a task on at: its own, and when at has no review or QA verdict of the task, also the clean
+      // verdicts of the earlier head that at merges main into (stepFor, or a recorded carry-over), when that head passes
+      // on its own rows, which may be carried too (T493). checks-pass never carries: CI must pass on at itself.
+      const verdictsOn = (task, at, want, depth = 0) => {
+        const own = rowsAt(task.id, at);
+        if (depth >= CHAIN || own.some((r) => !CHECKS.includes(r.kind))) return { rows: own, steps: [] };
+        const kept = recorded(task.id, at);
+        let [step, why] = [kept && { from: kept }];
+        if (!step && facts) {
+          for (const f of parents(at).filter((h) => rowsAt(task.id, h).length)) {
+            const r = stepFor(`${at} ${f}`);
+            if (r.step) {
+              [step, why] = [r.step, undefined];
+              break;
+            }
+            why ??= `the verdicts on an earlier head do not carry over: ${r.why}`;
+          }
+        } else if (!step && record && own.length) why = `if ${at.slice(0, 7)} merges main into a reviewed head, that head's verdicts may carry over: run sage merge-check --sha ${at} --pr <n>, which checks it on GitHub`;
+        if (!step) return { rows: own, steps: [], why };
+        const earlier = verdictsOn(task, step.from, want, depth + 1);
+        const judged = judge(dir, task, findingsOf.get(task.id) ?? [], task.id, earlier.rows, want, repaired, cfg, pr);
+        if (!judged.ok) return { rows: own, steps: [], why: `the verdicts of ${step.from} do not carry over, because it does not pass: ${judged.reason}` };
+        return { rows: [...own, ...earlier.rows.filter((r) => !CHECKS.includes(r.kind))], steps: [...earlier.steps, { ...step, to: at }] };
+      };
       // A task owns the head branch by its branch=, by its name, or by a run of it on that branch: a task that ran work
       // there and then moved to another branch still owns it (R1709-1).
       const ranOn = new Map();
@@ -1836,7 +2017,12 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
         // A held task never merges until the sage moves it (F-T273-12).
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
-        const verdict = judge(dir, task, findingsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr);
+        const want = task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles;
+        const carry = task && builds(task) ? verdictsOn(task, sha, want) : { rows: own, steps: [] };
+        const judged = judge(dir, task, findingsOf.get(id) ?? [], id, carry.rows, want, repaired, cfg, pr);
+        const verdict = !judged.ok ? { ...judged, reason: carry.why ? `${judged.reason} Also, ${carry.why.replace(/\.?$/, ".")}` : judged.reason }
+          : !carry.steps.length ? judged : { ...judged, reason: `${judged.reason}, with verdicts carried over ${carry.steps.length === 1 ? "a clean merge" : "clean merges"} of main from ${carry.steps.map((s) => s.from).join(", then ")}` };
+        if (verdict.ok && carry.steps.length) carried.push({ dir, task: id, steps: carry.steps });
         // A review or QA run that still runs may hold a finding that no verdict shows yet (F-T289-18). It refuses a task that
         // would pass, so a refusal still names an open finding first.
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
@@ -1884,6 +2070,10 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
     });
     const one = strangers.length === 1;
     if (strangers.length) return { ok: false, reason: `${strangers.map(visible).join(" and ")} ${one ? "has" : "have"} verdicts on ${sha.slice(0, 7)} but ${one ? "is" : "are"} not in the known project list (${join(root, "projects.tsv")}), so the merge check refuses: a logbook that init did not make may be forged. init adds only a project's own logbook folder, so it does not help here. If ${one ? "it is" : "one is"} a project's logbook under another name (a renamed folder or a link), ask the user to give the folder back its own name, or to run ${REBUILD} and check each folder that it prints. If no project uses ${one ? "it" : "one"}, ask the user to remove it.` };
+    if (!each.length && hints.length) {
+      const tasks = [...new Set(hints.flatMap((h) => h.tasks))].join(", ");
+      return { ok: false, reason: `no verdicts recorded for ${sha}. It is a clean merge of main into ${hints.map((h) => h.from).join(" and ")}, so the review and QA verdicts of ${tasks} there carry over when they pass: record only checks-pass (CI on this SHA) for ${tasks} with sage verdict, then check again.` };
+    }
     if (!each.length) return { ok: false, reason: `no verdicts recorded for ${sha}. Record the reviews and QA with sage verdict first.` };
     if (pr && !each.some((r) => r.ofPr)) return { ok: false, reason: `no task of PR ${pr}${mine === undefined ? "" : ` in this project's logbook (${visible(mine)})`} has verdicts on ${sha.slice(0, 7)}: only ${each.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")} ${each.length === 1 ? "has" : "have"}. Record PR ${pr}'s verdicts under its own task (sage verdict <T> --sha <sha> --pr ${pr}), or set its PR: sage task <T> set pr=${pr}.` };
     // The head branch rule comes after each task's own judgment, so a refusal names a task's missing verdicts first.
@@ -1898,10 +2088,12 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       const move = !movable.length ? "" : movable.length === absent.length ? `, or move ${absent.length === 1 ? "it" : "them"} to another branch` : `, or move ${movable.join(", ")} to another branch`;
       return { ok: false, reason: `PR ${pr}'s head branch ${JSON.stringify(head)} also belongs to ${absent.map((a) => `${a.name} (${a.how})`).join(", ")}, which ${absent.length === 1 ? "is" : "are"} not on PR ${pr}, so the merge check refuses: each task of a shared branch must be on its pull request and pass on its own verdicts. Set ${absent.length === 1 ? "its" : "the"} pr=${pr}${absent.length === 1 ? "" : " of each"} and record its verdicts with --pr ${pr}${move}.` };
     }
-    if (each.length === 1) return { ok: each[0].ok, reason: each[0].reason };
+    // A merge that passes on carried verdicts writes each carry-over in its logbook's decision trail first (T493).
+    const passed = (r) => (r.ok && !readOnly && recordCarries(carried), r);
+    if (each.length === 1) return passed({ ok: each[0].ok, reason: each[0].reason });
     const all = `${each.length} tasks have verdicts on ${sha.slice(0, 7)}${pr ? ` or belong to PR ${pr}` : ""}, and each must pass`;
     const bad = each.filter((r) => !r.ok);
-    if (!bad.length) return { ok: true, reason: `${all}: ${each.map((r) => `${visible(r.dir)} ${r.reason}`).join("; ")}` };
+    if (!bad.length) return passed({ ok: true, reason: `${all}: ${each.map((r) => `${visible(r.dir)} ${r.reason}`).join("; ")}` });
     const out = bad.some((r) => r.own) ? ", or push a new commit and record its verdicts under the live tasks only" : ""; // a new commit leaves behind only verdicts
     return { ok: false, reason: `${all}; ${bad.length} fail${bad.length === 1 ? "s" : ""}. ${bad.map((r) => `${visible(r.dir)} ${r.reason}`).join(" ")} To merge, make each one pass${out}.` };
   } catch (e) {
@@ -2091,23 +2283,26 @@ function fileOrNone(file) {
   if (st && !st.isFile()) refuse(`${file} is ${st.isSymbolicLink() ? "a link" : st.isDirectory() ? "a folder" : st.isFIFO() ? "a named pipe" : st.isSocket() ? "a socket" : "a device"}, not a regular file, so config writes nothing. Replace it with a regular file.`);
 }
 /** The config keys of one logbook, kept in its own config.json: the others are for all projects. */
-const ownKey = (kv) => /^(name|archived)(=|$)/.test(kv);
+const ownKey = (kv) => /^(name|archived|repo)(=|$)/.test(kv);
 
 /**
  * Sets the keys of one logbook in its own config.json: name= (the board's display name of the project; name= alone
- * removes it) and archived=yes or no (the board folds an archived project away). A key of a newer version stays.
+ * removes it), archived=yes or no (the board folds an archived project away) and repo=<owner>/<name> (the project's
+ * GitHub repository, which the merge check reads GitHub in and compares the merge with; repo= alone removes it, T493).
+ * A key of a newer version stays.
  */
 function logbookConfig(dir, pairs) {
   const set = {};
   for (const kv of pairs) {
     const at = kv.indexOf("="), k = at < 0 ? kv : kv.slice(0, at), v = at < 0 ? undefined : kv.slice(at + 1);
-    if (!ownKey(kv)) refuse(`"${visible(k)}" is a key for all projects, and name= and archived= are keys of one logbook: set them in a config command of their own.`);
+    if (!ownKey(kv)) refuse(`"${visible(k)}" is a key for all projects, and name=, archived= and repo= are keys of one logbook: set them in a config command of their own.`);
     if (v === undefined) refuse(`${k} needs a value: write ${k}=<value>`);
     if (k === "name") {
       const name = v.normalize("NFC"), why = name && nameProblem(name);
       if (why) refuse(`the name "${visible(name)}" ${why}. Nothing changed.`);
       set.name = name || undefined; // name= alone removes it
-    } else set.archived = v === "yes" ? true : v === "no" ? undefined : refuse(`archived is yes or no, not "${visible(v)}". Nothing changed.`);
+    } else if (k === "repo") set.repo = v === "" ? undefined : REPO.test(v) ? v : refuse(`repo is the GitHub repository as <owner>/<name>, not "${visible(v)}". Nothing changed.`);
+    else set.archived = v === "yes" ? true : v === "no" ? undefined : refuse(`archived is yes or no, not "${visible(v)}". Nothing changed.`);
   }
   const file = join(dir, "config.json");
   fileOrNone(file);
@@ -2119,7 +2314,7 @@ function logbookConfig(dir, pairs) {
   const next = { ...old, ...set };
   for (const k of Object.keys(set)) if (set[k] === undefined) delete next[k];
   swap(file, JSON.stringify(next, null, 2) + "\n");
-  return `name=${visible(typeof next.name === "string" ? next.name : "")} archived=${next.archived === true ? "yes" : "no"}`;
+  return `name=${visible(typeof next.name === "string" ? next.name : "")} archived=${next.archived === true ? "yes" : "no"}${typeof next.repo === "string" ? ` repo=${visible(next.repo)}` : ""}`;
 }
 
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
@@ -2143,7 +2338,11 @@ function sage(argv, env = process.env) {
   if (cmd === "merge-check") {
     const cycles = opt.cycles === undefined ? undefined : (typed("cycles.small", opt.cycles) ?? refuse("--cycles is a whole number from 1 to 10")); // the chief's explicit count: it only raises a task's own count
     if (opt.pr !== undefined && !PR.test(opt.pr)) refuse("--pr is the pull request's number, with no leading zero, for example --pr 5");
-    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project: resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd()) });
+    const project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
+    // With --pr, a carry-over reads the pull request's base commit from GitHub, in the recorded repository, only when it
+    // needs it (T493).
+    const base = opt.pr === undefined ? undefined : (repo) => pullRequest(opt.pr, project, env, repo).base;
+    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project, base });
     return r.ok ? r.reason : refuse(r.reason);
   }
   if (cmd === "config" && !pos.some(ownKey)) {
