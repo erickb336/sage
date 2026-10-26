@@ -1,9 +1,9 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { ROOT } from "./build.mjs";
@@ -186,4 +186,62 @@ test("the chief's setup text sends only read commands to the state CLI, and says
   assert.deepEqual(cli.filter((command) => !["board", "config", "status", "standing", "merge-check", "logbook"].includes(command)), [], "each command it runs through the CLI only reads");
   assert.equal(Object.hasOwn(TOOLS, "program"), false);
   assert.match(setup, /`program` has no tool yet, so programs do not run in Codex/);
+});
+
+// R1765 F2: a chief that ended a Codex run with only status done and usage unavailable was refused, and learned the
+// fields only from the refusal; until then the open runs held the merge. The tool description and the chief's dispatch
+// text each give an example call. The chief saves the report with pages (its sandbox cannot write the pages folder, and
+// the hook refuses its apply_patch), then each example, with the run id and the path that pages printed, ends the run.
+test("T506: the chief saves a report with pages, and each run_done example ends a Codex run on the first try", async (t) => {
+  const s = await connect(t);
+  const runDone = (await s.tools()).find((tool) => tool.name === "run_done");
+  for (const field of ["usage", "usage-source", "usage-evidence", "report"]) {
+    assert.match(runDone.inputSchema.properties[field].description, /needed with usage unavailable|it needs status done/, field);
+  }
+  const chief = readFileSync(join(ROOT, "plugins/sage-codex/runtime/chief-instructions.md"), "utf8").replace(/\s+/g, " ");
+  const examples = { description: runDone.description.match(/for example (\{.*\})\.$/)?.[1], dispatch: chief.match(/`run_done`, no `tokens` and the path that `pages` printed as `report`, for example `(\{.*?\})`/)?.[1] };
+  const usageInterface = JSON.parse(`{${chief.match(/`run_add` `("usage-interface": "[a-z-]+")`/)?.[1]}}`)["usage-interface"];
+  assert.equal(usageInterface, "collaboration-tools");
+  // Step 6 sends a run without a token count to the dispatch step (R1798-2).
+  assert.match(chief, /`sage run done` with `--tokens` from the agent's usage \(where the host gives no token count, as \*\*Run the route\*\* says\)/);
+  assert.match(chief, /\*\*Run the route\.\*\* [^*]*Codex gives no token count:/);
+
+  const logbook = (await s.call("init")).replace(/^logbook /, "");
+  for (const n of [1, 2]) {
+    await s.call("task_add", { title: `task ${n}`, size: "small", priority: "P1" });
+    await s.call("task_set", { task: `T${n}`, fields: { state: "briefed", branch: `codex/t${n}-a` } });
+  }
+  // The call of R1765, without source, evidence and report, is refused, and the run stays running.
+  assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R1 running · code-reviewer on T1");
+  assert.equal(await s.call("run_add", { task: "T2", role: "qa" }), "R2 running · qa on T2");
+  assert.equal((await s.call("run_done", { run: "R1", status: "done", usage: "unavailable" })).error,
+    "sage: Unavailable usage needs a running run, its unsupported interface snapshot, a report, source and evidence, without tokens. Nothing changed.");
+
+  // pages saves a report only for a run of its task, only with a text, and builds the path itself.
+  const folder = join(s.env.SAGE_WORKTREES, basename(logbook), "pages", "T1");
+  const report = "STATUS done\nRESULT PASS\n";
+  assert.equal((await s.call("pages", { task: "T1", run: "R1", text: " \n" })).error, "sage: --text is the run's whole report, and it is empty. Nothing changed.");
+  for (const run of ["R2", "../R1", "R1/../../T2/R1", "R9"]) {
+    assert.equal((await s.call("pages", { task: "T1", run, text: report })).error, `sage: --run is a run of T1, for example R7; not ${JSON.stringify(run)}. Nothing changed.`, run);
+  }
+  assert.deepEqual(readdirSync(folder), [], "a refused save writes no file");
+
+  // Each example ends a run: the dispatch text's ends R1, the description's a new run R3. Then no run of T1 still runs.
+  for (const [where, example] of Object.entries(examples)) {
+    assert.ok(example, `${where} has an example call`);
+    const run = where === "dispatch" ? "R1" : "R3";
+    if (run === "R3") assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R3 running · code-reviewer on T1");
+    const saved = await s.call("pages", { task: "T1", run, text: `${report}${run}\n` });
+    const path = saved.match(/^page (\/.+) · sha256 [0-9a-f]{64}$/)?.[1];
+    assert.equal(path, join(folder, `${run}-report.md`), saved);
+    assert.equal(readFileSync(path, "utf8"), `${report}${run}\n`);
+    // An exact retry gives the same page; another text never replaces a saved report.
+    assert.equal(await s.call("pages", { task: "T1", run, text: `${report}${run}\n` }), saved);
+    assert.equal((await s.call("pages", { task: "T1", run, text: "STATUS blocked\n" })).error, `sage: ${path} already holds another report of ${run}, and a report is saved once. Nothing changed.`);
+    const call = JSON.parse(example);
+    assert.equal(call.project, "/absolute/project", `${where} names the project`);
+    assert.equal(await s.call("run_done", { ...call, project: s.project, run, report: path }), `${run} done`, where);
+  }
+  assert.deepEqual(readdirSync(folder).sort(), ["R1-report.md", "R3-report.md"]);
+  assert.match(await s.call("status"), /\nagents {2}3 runs · 1 running · about 0k tokens · partial measured total; 0 measured, 2 unavailable, 0 legacy-unrecorded\n/);
 });
