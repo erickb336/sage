@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { exactPhrase, PHRASES, readAdmission } from "../../core/index.mjs";
+import { readAdmission } from "../../core/index.mjs";
+import { readMode, threadOf } from "../../hooks/gate-hook.mjs";
 import { tool } from "./sage.mjs";
 
 const source = fileURLToPath(import.meta.url);
@@ -53,35 +55,46 @@ function publisherFault() {
   } catch { changed.push("skills/sage/publisher.json"); }
   return changed.length ? `The installed publisher does not match its release (changed or missing: ${changed.join(", ")}); reinstall sage from its marketplace` : null;
 }
+/**
+ * Codex's record of the session's root thread: the one rollout file of this session id in the Codex sessions folder,
+ * or null. With no record, the hook's reader gives autopilot off.
+ */
+function rootTranscript(session, env) {
+  const dir = join(resolve(env.CODEX_HOME ?? join(homedir(), ".codex")), "sessions");
+  let names;
+  try { names = readdirSync(dir, { recursive: true }); } catch { return null; }
+  const found = names.map(String).filter(name => basename(name).startsWith("rollout-") && name.endsWith(`-${session}.jsonl`))
+    .map(name => join(dir, name)).filter(path => lstatSync(path).isFile());
+  return found.length === 1 && threadOf({ transcript: found[0], session, child: false }).child === false ? found[0] : null;
+}
 const githubRepo = url => /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(url)?.[1]?.toLowerCase();
 
 /** Chief-only procedural entry point. Caller declarations are not native authentication. */
 export function workflow(input, { env = process.env, github = args => JSON.parse(run("gh", args, env)) } = {}) {
   const fields = {
-    status: [], owner: ["text", "directOwner", "evidence"],
+    status: [],
     register: ["task", "repo", "base", "admissionJournals", "manualConfirmed", "noKnownNativeAssignment"], publish: ["task", "sha"], reconcile: ["task"],
   };
   if (!input || !Object.hasOwn(fields, input.action) || !keys(input, ["action", "project", "session", ...fields[input.action]])
     || !text(input.project) || !isAbsolute(input.project) || !/^[A-Za-z0-9:_-]{1,256}$/.test(input.session ?? "")) fail("Invalid workflow request");
   const project = realpathSync(tool.projectRoot(realpathSync(input.project)));
+  // One autopilot path (T534): the mode is the sage hook's record of the owner's typed phrases, read as the gate reads it.
+  const mode = readMode({ session: input.session, transcript: rootTranscript(input.session, env) }, env);
+  const modes = () => { const fault = publisherFault(); return { project, session: input.session, sage: mode.sage, autopilot: mode.autopilot,
+    publisherVerified: !fault, ...fault && { publisherFault: fault } }; };
   const dir = tool.storeDir(project, env);
   if (input.action === "status" && !lstatSync(dir, { throwIfNoEntry: false })) {
     // A missing leaf can hide a dangling ancestor link. Validate the existing ancestor before reporting off.
     let ancestor = dirname(dir);
     while (!lstatSync(ancestor, { throwIfNoEntry: false })) ancestor = dirname(ancestor);
     if (realpathSync(ancestor) !== ancestor || !lstatSync(ancestor).isDirectory()) fail("Invalid logbook location");
-    const fault = publisherFault();
-    return { project, session: input.session, sage: false, autopilot: false, publisherVerified: !fault, ...fault && { publisherFault: fault }, publications: {} };
+    return { ...modes(), publications: {} };
   }
   if (realpathSync(dir) !== dir) fail("Invalid logbook location");
   const file = join(dir, "codex-workflow.json");
   const sessionKey = hash(input.session);
   const api = (path, extra = []) => github(["api", "--hostname", "github.com", path, ...extra]);
   const git = args => run("git", ["-C", input.project, ...args], Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_"))));
-  const evidence = value => {
-    if (!text(value) || !isAbsolute(value) || !regular(value).trim()) fail("A nonempty local evidence file is required");
-    return { path: realpathSync(value), sha256: hash(regular(value)) };
-  };
   const task = id => {
     if (!taskId(id)) fail("Invalid task");
     const found = tool.read(dir, "tasks").filter(row => row.id === id);
@@ -107,26 +120,12 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
   };
   const result = tool.withLock(dir, () => {
     const state = readState(file, project);
-    const session = state.sessions[sessionKey] ?? { session: input.session, sage: false, autopilot: false, tasks: {} };
-    if (session.session !== input.session || typeof session.sage !== "boolean" || typeof session.autopilot !== "boolean" || !session.tasks)
-      fail("Invalid session state");
+    const session = state.sessions[sessionKey] ?? { session: input.session, tasks: {} };
+    if (session.session !== input.session || !session.tasks || typeof session.tasks !== "object") fail("Invalid session state");
     const persist = () => { state.sessions[sessionKey] = session; save(file, state); };
-    const status = () => { const fault = publisherFault(); return { project, session: input.session, sage: session.sage, autopilot: session.autopilot,
-      publisherVerified: !fault, ...fault && { publisherFault: fault }, publications: state.publications }; };
-    if (input.action === "status") return status();
-    if (input.action === "owner") {
-      if (input.directOwner !== true || typeof input.text !== "string") fail("The chief must record a direct owner instruction");
-      const phrase = exactPhrase(input.text);
-      if (!phrase || PHRASES[phrase].help) fail("Expected an exact owner mode phrase");
-      const proof = evidence(input.evidence);
-      if (phrase === "autopilot on" && !session.sage) fail("Autopilot needs Sage on");
-      if (phrase === "autopilot on" && publisherFault()) fail(publisherFault());
-      for (const key of ["sage", "autopilot"]) if (Object.hasOwn(PHRASES[phrase], key)) session[key] = PHRASES[phrase][key];
-      session.ownerInstruction = { phrase, ...proof, at: new Date().toISOString() };
-      persist(); return status();
-    }
+    if (input.action === "status") return { ...modes(), publications: state.publications };
     if (input.action === "register") {
-      if (!session.sage || input.manualConfirmed !== true || input.noKnownNativeAssignment !== true || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.repo ?? "")
+      if (!mode.sage || input.manualConfirmed !== true || input.noKnownNativeAssignment !== true || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.repo ?? "")
         || !text(input.base) || !Array.isArray(input.admissionJournals) || input.admissionJournals.some(path => !text(path) || !isAbsolute(path)))
         fail("Registration needs Sage on, manual confirmation, repository, base and known admission journals");
       const row = task(input.task);
@@ -150,7 +149,7 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
     }
     if (previous) fail("Publication intent already exists; reconcile it without another submission");
     if (!sha(input.sha)) fail("Publish needs the reviewed full head SHA");
-    if (!session.sage || !session.autopilot) fail("Publication needs active autopilot");
+    if (!mode.sage || !mode.autopilot) fail('Publication needs active autopilot: the owner sends "sage mode", then "autopilot on", each alone');
     if (publisherFault()) fail(publisherFault());
     const record = session.tasks[input.task];
     const runs = manual(record, input.task);

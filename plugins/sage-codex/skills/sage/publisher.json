@@ -1,6 +1,6 @@
 {
   "files": {
-    "skills/sage/workflow.mjs": "fa31c6cac22365f6acf2680443ec22007d2ae55fe4613733a9f22d85af4285ef",
+    "skills/sage/workflow.mjs": "62e49d840eef6ba58410b3b6cb4f5d58d8cb6974635807b2dccbebb67de2cbb7",
     "core/index.mjs": "b8d6e6696fd4613ae809b87c45086add701a6bf0412a87848096486f01d84c1c",
     "core/state.mjs": "04e599efe0dfad9a960344bf1b8d6e2046f49ac13e5efb34f623546e4a7e5ce2",
     "core/usage.mjs": "85ed4148dd083ccbc244380ff95a7b49f1838105afce5f8c524412313ff1b1a8",
@@ -37,6 +37,10 @@
     "core/admission.mjs": "bd776cb895d7145bf3ba43a420bd696625bb3804d4032aee52cac8688fdbfe96",
     "core/role-policy.mjs": "e8f251a1597cddb4d4532a2f92bd65d1dad1647b11b68c59d66f816aded28b5c",
     "core/brief.mjs": "058da044f5c67e7a4ed42397d1fbbb2de4b95d10dd9bdb2c9c90917476fc998c",
+    "hooks/gate-hook.mjs": "d81b9c56cd4608740463f01f8ef1e2ff2fff98158788853b76b514b39b931dbf",
+    "hooks/principles-hook.mjs": "da51f59098d1aa3f063a9bd3f262e8c7d5edc7798586bf67b2c8b63e9ac90c26",
+    "hooks/report-gate.mjs": "8f7a565441ec7ddbce12040f62deb85384191e58c4dab1572c27206fe9db5d9e",
+    "hooks/sage-codex-hook.mjs": "92d8f5ff1b68028b8abda33e5f58a305334a00a25fded84988a22150146bba4f",
     "skills/sage/sage.mjs": "5ad58598c5f220c8b835dafc93b8632e7688874a78d8113ebf8b999b7af0d138"
   }
 }
