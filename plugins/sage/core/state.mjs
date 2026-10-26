@@ -89,7 +89,7 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption"], findings: ["run", "class"] };
+const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption", "approvals"], findings: ["run", "class"] };
 const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
@@ -507,7 +507,7 @@ function updateReference(input) {
     || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
     || typeof input.version !== "string" || !/^[0-9a-f]{64}$/.test(input.version)
     || !input.changes || typeof input.changes !== "object" || Array.isArray(input.changes)) updateDeny();
-  const keys = ["title", "branch", "pr", "state"].filter(key => Object.hasOwn(input.changes, key));
+  const keys = ["title", "branch", "pr", "state", "approval"].filter(key => Object.hasOwn(input.changes, key));
   if (!keys.length || !updateKeys(input.changes, keys) || keys.some(key => typeof input.changes[key] !== "string"
     || input.changes[key].length > 4096 || cell(input.changes[key]) !== input.changes[key])
     || (Object.hasOwn(input.changes, "state") && (!STATES.includes(input.changes.state) || ["merged", "repairing"].includes(input.changes.state)))) updateDeny();
@@ -520,13 +520,16 @@ function updateRows(table, text) {
     || sheet.cols.some(key => !TABLES[table].includes(key)) || new Set(sheet.cols).size !== sheet.cols.length) updateDeny();
   return rowsIn(table, sheet);
 }
-function updateFacts(rows, readiness) {
-  return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, programs: rows.programs, readiness };
+function updateFacts(rows, readiness, maxRounds) {
+  return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, programs: rows.programs, readiness,
+    ...(maxRounds === undefined ? {} : { maxRounds }) };
 }
 function checkUpdateFacts(facts) {
   // The facts of a sage before programs (T337) have no programs: that sage refused a logbook with them, so it read none.
   const tables = ["findings", "ledger", "gates", ...(facts && Object.hasOwn(facts, "programs") ? ["programs"] : [])];
-  if (!updateKeys(facts, [...tables, "readiness"])) updateDeny();
+  const counts = Object.hasOwn(facts ?? {}, "maxRounds") ? ["maxRounds"] : [];
+  if (!updateKeys(facts, [...tables, "readiness", ...counts])
+    || (counts.length && (!Number.isSafeInteger(facts.maxRounds) || valid("max_rounds", facts.maxRounds) !== facts.maxRounds))) updateDeny();
   for (const table of tables) {
     if (!Array.isArray(facts[table]) || facts[table].some(row => !updateKeys(row, TABLES[table])
       || Object.values(row).some(value => typeof value !== "string" || cell(value) !== value))) updateDeny();
@@ -604,7 +607,8 @@ function updateRequestedTask(input, env, coordination) {
       const current = before.tasks.filter(row => row.id === reference.task);
       if (current.length !== 1) throw new TaskUpdateError("invalid-state");
       if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
-      const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null);
+      const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null,
+        Object.hasOwn(reference.changes, "approval") ? config(env).max_rounds : undefined);
       const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
       phase = needsReady ? "readiness" : "plan";
       const openFindings = facts.findings.filter(row => row.task === reference.task && row.status === "open");
@@ -1488,7 +1492,23 @@ const programDecision = (task, was, at, why, { programs }) => {
 };
 
 /** The extra rounds of a task's holds by round: a whole number, and 0 for any other cell, so a hand-written cell never gives NaN (F-T286-2). */
-const extraOf = (task) => (/^\d{1,3}$/.test(task.extra ?? "") ? Number(task.extra) : 0);
+const extraOf = (task) => (/^\d+$/.test(task.extra ?? "") && Number.isSafeInteger(Number(task.extra)) ? Number(task.extra) : 0);
+
+/** Bind a new allowance to the owner's explicit answer, the task, spent rounds and current limit. */
+function repairApproval(task, approval, facts) {
+  const max = facts.maxRounds, spent = Number(task.round), limit = max + extraOf(task);
+  const question = `Approve one more repair round for ${task.id} after ${spent} spent rounds and limit ${limit}?`;
+  const gates = facts.gates.filter(g => g.id === approval);
+  if (!/^G[1-9]\d*$/.test(approval ?? "") || gates.length !== 1
+    || gates[0].task !== task.id || gates[0].question !== question
+    || gates[0].options !== "approve|decline" || gates[0].answer !== "approve"
+    || (task.approvals ?? "").split(",").includes(approval)
+    || !Number.isSafeInteger(max) || max < 1 || max > 10
+    || !Number.isSafeInteger(spent) || spent < 0 || !Number.isSafeInteger(Math.max(spent, limit) + 1)) {
+    refuse(`${task.id} needs a new task-specific repair approval. Ask a gate with question "${question}" and options "approve|decline". After the owner chooses approve, resume with state=building or state=briefed and approval=<G>. Nothing changed.`);
+  }
+  return Math.max(spent, limit) + 1 - max;
+}
 
 /** Refuses an id that the logbook does not have, and names the latest ids that it has, to pick from. */
 const missing = (what, ids) => refuse(`no ${what}. ${ids.length ? `The latest: ${ids.slice(-10).join(", ")}.` : "There is none yet."}`);
@@ -1509,21 +1529,34 @@ function planTaskChanges(before, id, changes, at, facts) {
   if (matches.length !== 1) refuse("The task is missing or ambiguous.");
   let note = "";
   const task = matches[0], decided = [], graph = waitGraph(tasks, facts.programs, facts.gates, decisions), had = prsOf(task, decisions, facts.ledger);
+  const approvals = changes.filter(kv => kv.startsWith("approval="));
+  const states = changes.filter(kv => kv.startsWith("state="));
+  const resume = task.state === "held" && task.hold === "round" && states.some(kv => kv !== "state=abandoned");
+  let allowance;
+  if (resume || approvals.length) {
+    if (approvals.length !== 1 || states.length !== 1 || !["state=building", "state=briefed"].includes(states[0])
+      || task.state !== "held" || task.hold !== "round") refuse(`${task.id} needs one approval=<G> with a move from a round hold to building or briefed. Nothing changed.`);
+    allowance = repairApproval(task, approvals[0].slice(9), facts);
+  }
   for (const kv of changes) {
     const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
+    if (k === "approval") continue; // validated with the whole request before any state transition
     const adoption = adoptionOf(task);
     if (adoption && ((k === "branch" && v !== adoption.branch) || (k === "pr" && v !== adoption.pr))) refuse(`${task.id}'s adoption keeps PR ${adoption.pr} and branch ${adoption.branch}. Nothing changed.`);
     if (k === "state") {
       if (v === "repairing") refuse("start a repair with: sage round <task>");
-      // A move out of a hold that round set gives the task one more repair round, once per such hold (F-T284-14,
-      // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
+      // Only an explicit, unused approval grants a round. Ordinary holds grant none.
       const was = task.state;
       move(task, v); // the design's states first; the table is written only if every check below passes
       if (["building", "merged", "concluded"].includes(v)) waitsMet(task, graph, `move to ${v}`);
       // A move to abandoned gives no round: the task ends (F-T286-3).
       if (was === "held" && task.hold === "round" && v !== "abandoned") {
-        task.extra = String(extraOf(task) + 1);
-        decided.push({ at: at, task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
+        task.extra = String(allowance);
+        const approval = approvals[0].slice(9);
+        task.approvals = [task.approvals, approval].filter(Boolean).join(",");
+        const decision = `held → ${v}: one more repair round (${approval})`;
+        // A CLI retry after the decision write but before the task write completes the same grant.
+        if (!decisions.some(row => row.task === task.id && row.decision === decision)) decided.push({ at, task: task.id, decision, why: "owner approval" });
       }
       if (was === "held" || v === "held") task.hold = "";
       // A new premise starts its own count: the round keys of the old plan go when the task leaves replan (F-T284-19).
@@ -1577,7 +1610,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       const { rows, note: joined } = programDecision(task, was, at, "task set", graph);
       decided.push(...rows);
       note += joined;
-    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits= or program=`);
+    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, program= or approval=`);
   }
   return { task, tasks, runs, decisions: [...decisions, ...decided], note };
 }
@@ -2383,7 +2416,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       let note = "";
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
-        const planned = planTaskChanges(before, task.id, more, now(), Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])));
+        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env).max_rounds });
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);
         if (JSON.stringify(planned.runs) !== JSON.stringify(before.runs)) write(dir, "runs", planned.runs);
         write(dir, "tasks", planned.tasks);

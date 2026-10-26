@@ -83,6 +83,86 @@ test('adoption preserves source identity, PR and spent rounds without copying so
   assert.deepEqual(s.bytes(s.source), before);
 });
 
+test('T48: one explicit approval grants adopted round five, never round six', t => {
+  const s = fixture(t);
+  s.ok(...s.adopt);
+  for (const state of ['briefed', 'building', 'reviewing']) s.ok('task', 'T1', 'set', `state=${state}`);
+  const run = s.ok('run', 'add', 'T1', '--role', 'qa').split(' ')[0];
+  s.ok('run', 'done', run, '--status', 'done', '--tokens', '1');
+  s.ok('finding', 'add', 'T1', '--source', 'qa', '--severity', 'medium', '--summary', 'Repair needed', '--run', run, '--class', 'state-edge');
+  s.ok('finding', 'triage', 'T1', 'F-T1-1', 'fix');
+  assert.match(s.ok('round', 'T1'), /held: 4 repair rounds/);
+  let before = s.bytes(s.dest);
+  assert.match(s.no('task', 'T1', 'set', 'state=building'), /approval/);
+  assert.deepEqual(s.bytes(s.dest), before);
+  const question = 'Approve one more repair round for T1 after 4 spent rounds and limit 3?';
+  s.ok('gate', 'add', 'T1', '--question', question, '--options', 'approve|decline', '--recommend', 'approve');
+  before = s.bytes(s.dest);
+  assert.match(s.no('task', 'T1', 'set', 'state=building', 'approval=G1'), /approval/);
+  assert.deepEqual(s.bytes(s.dest), before);
+  s.ok('gate', 'answer', 'G1', '--option', '1');
+  s.ok('task', 'T1', 'set', 'state=building', 'approval=G1');
+  assert.equal(s.task().extra, '2');
+  assert.equal(s.task().round, '4');
+  before = s.bytes(s.dest);
+  s.no('task', 'T1', 'set', 'state=building', 'approval=G1');
+  assert.deepEqual(s.bytes(s.dest), before, 'a replay adds nothing');
+  s.ok('task', 'T1', 'set', 'state=reviewing');
+  assert.match(s.ok('round', 'T1'), /repairing · round 5 of 5/);
+  s.ok('task', 'T1', 'set', 'state=reviewing');
+  assert.match(s.ok('round', 'T1'), /held: 5 repair rounds/);
+  before = s.bytes(s.dest);
+  s.no('task', 'T1', 'set', 'state=briefed', 'approval=G1');
+  assert.deepEqual(s.bytes(s.dest), before);
+  assert.equal(s.task().pr, '362'); assert.equal(s.task().branch, BRANCH);
+  assert.equal(JSON.parse(s.task().adoption).round, 4);
+  assert.match(s.ok('config'), /max_rounds=3/);
+});
+
+test('T48: invalid approvals refuse the whole update; legacy allowances still count', t => {
+  const s = fixture(t);
+  s.ok(...s.adopt);
+  const file = join(s.dest, 'tasks.tsv');
+  const set = patch => {
+    const [head] = readFileSync(file, 'utf8').split('\n');
+    const row = { ...s.task(), ...patch };
+    writeFileSync(file, `${head}\n${head.split('\t').map(key => row[key] ?? '').join('\t')}\n`);
+  };
+  set({ state: 'held', hold: 'round' });
+  s.ok('task', 'add', '--title', 'Unrelated', '--size', 'small', '--priority', 'P1');
+  const question = 'Approve one more repair round for T1 after 4 spent rounds and limit 3?';
+  for (const [task, text, options, answer] of [
+    ['T1', question, 'approve|decline', '2'],
+    ['T2', question, 'approve|decline', '1'],
+    ['T1', question.replace('4 spent', '3 spent'), 'approve|decline', '1'],
+    ['T1', 'Please continue', 'approve|decline', '1'],
+    ['T1', question, 'yes|no', '1'],
+  ]) {
+    const gate = s.ok('gate', 'add', task, '--question', text, '--options', options, '--recommend', options.split('|')[0]).split(' ')[0];
+    s.ok('gate', 'answer', gate, '--option', answer);
+    const before = snapshot(s.dest);
+    assert.match(s.no('task', 'T1', 'set', 'title=Must not change', 'state=briefed', `approval=${gate}`), /approval/);
+    assert.deepEqual(snapshot(s.dest), before);
+  }
+  for (const approval of ['', 'true', 'G999', 'G1,G2']) {
+    const before = snapshot(s.dest);
+    s.no('task', 'T1', 'set', 'state=building', `approval=${approval}`);
+    assert.deepEqual(snapshot(s.dest), before);
+  }
+  // Simulate a saved allowance from the older tool, which had no approval record.
+  const [head, first, other] = readFileSync(file, 'utf8').trimEnd().split('\n');
+  const cells = first.split('\t'), cols = head.split('\t');
+  cells[cols.indexOf('state')] = 'reviewing'; cells[cols.indexOf('hold')] = ''; cells[cols.indexOf('extra')] = '2';
+  writeFileSync(file, `${head}\n${cells.join('\t')}\n${other}\n`);
+  const run = s.ok('run', 'add', 'T1', '--role', 'qa').split(' ')[0];
+  s.ok('run', 'done', run, '--status', 'done', '--tokens', '1');
+  s.ok('finding', 'add', 'T1', '--source', 'qa', '--severity', 'medium', '--summary', 'Legacy repair', '--run', run, '--class', 'other');
+  s.ok('finding', 'triage', 'T1', 'F-T1-1', 'fix');
+  assert.match(s.ok('round', 'T1'), /round 5 of 5/);
+  assert.equal(tool.read(s.dest, 'tasks')[1].round, '0');
+  assert.equal(tool.read(s.dest, 'tasks')[1].extra, '');
+});
+
 test('inconsistent mappings and conflicting adoption refuse before any destination table changes', t => {
   const s = fixture(t);
   for (const [flag, value] of [['--source-task', 'T483'], ['--pr', '356'], ['--branch', 'sage/t483-other'], ['--branch', 'sage/t536-wrong-head'], ['--source-provider', '../bad']]) {

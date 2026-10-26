@@ -1994,7 +1994,7 @@ test("F-R65-2: only a header with every known column and more is a newer sage's;
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
   const tasks = join(s.dir, "tasks.tsv");
   const text = readFileSync(tasks, "utf8");
-  const why = `sage: ${damaged(tasks, "id, title, size, risk, route, state, branch, pr, round, keys, hold, extra, priority, kind, waits, program, adoption")}`;
+  const why = `sage: ${damaged(tasks, "id, title, size, risk, route, state, branch, pr, round, keys, hold, extra, priority, kind, waits, program, adoption, approvals")}`;
   for (const head of ["\n", "\tkept\n"]) { // a column lost, or renamed: so it lacks one, also with a column more
     writeFileSync(tasks, text.replace(`${TASK_HEADER}\n`, TABLES.tasks.slice(0, TABLES.tasks.indexOf("keys")).join("\t") + head));
     assert.equal(s.no("log", "-", "x", "--why", "y"), why);
@@ -2411,7 +2411,7 @@ test("T314: an older logbook gets the priority and kind columns at its next writ
   writeFileSync(tasks, "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\n");
   assert.equal(s.ok("status").split("\n")[1], "tasks   1 · framed 1", "it reads with the columns empty");
   s.ok("task", "T1", "set", "kind=checks");
-  assert.equal(readFileSync(tasks, "utf8").split("\n")[0], "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\tadoption");
+  assert.equal(readFileSync(tasks, "utf8").split("\n")[0], "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\tadoption\tapprovals");
   // To an older sage these are columns that it does not know: its ready() refuses every write (see unknown-columns).
   assert.equal(rows(s.dir, "tasks")[0].kind, "checks");
 });
@@ -2953,7 +2953,7 @@ test("T336: an older logbook gets the waits column at its next write with no val
   assert.equal(s.ok("status").split("\n")[1], "tasks   1 · framed 1", "it reads with the column empty");
   assert.equal(s.ok("task", "T1"), "T1 framed · small · round 0 · route build,code-review,qa · P1 · kind docs");
   s.ok("task", "add", "--priority", "P2", "--title", "b", "--size", "small", "--waits", "T1");
-  assert.equal(readFileSync(tasks, "utf8"), "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\tadoption\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP1\tdocs\t\t\t\nT2\tb\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP2\t\tT1\t\t\n");
+  assert.equal(readFileSync(tasks, "utf8"), "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\tadoption\tapprovals\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP1\tdocs\t\t\t\t\nT2\tb\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP2\t\tT1\t\t\t\n");
 });
 
 /** Proposes a program with the pilot and the other tasks given, as the chief does: a program of one name and goal. */
@@ -3617,11 +3617,11 @@ test("T337: an older logbook gets the program column at its next write, so an ol
   writeFileSync(tasks, "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP1\tdocs\t\n");
   assert.equal(s.ok("task", "T1"), "T1 framed · small · round 0 · route build,code-review,qa · P1 · kind docs", "it reads with the column empty");
   propose(s);
-  assert.equal(readFileSync(tasks, "utf8"), "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\tadoption\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP1\tdocs\t\tPG1\t\n");
+  assert.equal(readFileSync(tasks, "utf8"), "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\tadoption\tapprovals\nT1\ta\tsmall\t\tbuild,code-review,qa\tframed\t\t\t0\t\t\t\tP1\tdocs\t\tPG1\t\t\n");
   // To the sage of 14c0d0c, as to any sage before T337, program is a column that it does not know: it refuses every write.
   const old = spawnSync("node", [OLD_TOOL, "log", "-", "x", "--why", "y", "--project", s.project], { encoding: "utf8", env: testEnv({ SAGE_HOME: s.home }) });
   assert.equal(old.status, 1);
-  assert.match(old.stderr, /tasks\.tsv has columns that this version of sage does not know \(.*\bprogram, adoption\): a newer sage wrote this logbook/);
+  assert.match(old.stderr, /tasks\.tsv has columns that this version of sage does not know \(.*\bprogram, adoption, approvals\): a newer sage wrote this logbook/);
 });
 
 
@@ -4567,7 +4567,16 @@ test("F-T284-3 and F-T284-1: a held task takes no pr= or branch=; the sage may s
   assert.match(s.ok("task", "T1", "set", "pr=5", "branch=sage/t1"), /PR 5/, "after the hold");
 });
 
-test("F-T284-14: a move out of held gives the task exactly one more repair round", () => {
+function approveRound(s) {
+  const task = rows(s.dir, "tasks")[0];
+  const max = Number(/max_rounds=(\d+)/.exec(s.ok("config"))[1]);
+  const question = `Approve one more repair round for T1 after ${task.round} spent rounds and limit ${max + Number(task.extra || 0)}?`;
+  const gate = s.ok("gate", "add", "T1", "--question", question, "--options", "approve|decline", "--recommend", "approve").split(" ")[0];
+  s.ok("gate", "answer", gate, "--option", "1");
+  return `approval=${gate}`;
+}
+
+test("F-T284-14: an approved move out of held gives the task exactly one more repair round", () => {
   const s = store();
   s.ok("config", "max_rounds=1");
   s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
@@ -4582,8 +4591,8 @@ test("F-T284-14: a move out of held gives the task exactly one more repair round
   s.ok("task", "T1", "set", "state=reviewing");
   fix("two");
   assert.match(s.ok("round", "T1"), /^T1 held: 1 repair rounds did not make it clean/);
-  s.ok("task", "T1", "set", "state=building");
-  assert.match(rows(s.dir, "decisions").at(-1).decision, /^held → building: one more repair round$/);
+  s.ok("task", "T1", "set", "state=building", approveRound(s));
+  assert.match(rows(s.dir, "decisions").at(-1).decision, /^held → building: one more repair round \(G1\)$/);
   s.ok("task", "T1", "set", "state=reviewing");
   fix("three");
   assert.match(s.ok("round", "T1"), /^T1 repairing · round 2/, "one more round after the hold");
@@ -4618,7 +4627,7 @@ test("F-T284-15: only a hold that round set gives one more round; a hold by task
   s.fix("two");
   assert.match(s.ok("round", "T1"), /^T1 held: 1 repair rounds did not make it clean/, "the question's hold added no round");
   assert.equal(rows(s.dir, "tasks")[0].hold, "round");
-  s.ok("task", "T1", "set", "state=building");
+  s.ok("task", "T1", "set", "state=building", approveRound(s));
   assert.deepEqual([rows(s.dir, "tasks")[0].hold, rows(s.dir, "tasks")[0].extra], ["", "1"], "the round's hold gave one round, once");
   s.ok("task", "T1", "set", "state=held"); // a later ordinary hold
   s.ok("task", "T1", "set", "state=building");
@@ -4635,7 +4644,7 @@ test("F-T284-16: the extra rounds come only from the state tool's own field, and
   s.ok("task", "T1", "set", "state=reviewing");
   s.fix("two");
   assert.match(s.ok("round", "T1"), /^T1 held: /, "a decision's text adds no round");
-  s.ok("task", "T1", "set", "state=building");
+  s.ok("task", "T1", "set", "state=building", approveRound(s));
   s.ok("task", "T1", "set", "state=reviewing");
   s.fix("three");
   assert.match(s.ok("round", "T1"), /^T1 repairing · round 2 of 2 /, "the limit with its extra round");
@@ -4649,7 +4658,7 @@ test("F-T284-17: a retry whose last round's findings are still open goes to repl
   s.ok("task", "T1", "set", "state=reviewing");
   s.fix("two");
   assert.match(s.ok("round", "T1"), /^T1 held: /);
-  s.ok("task", "T1", "set", "state=building");
+  s.ok("task", "T1", "set", "state=building", approveRound(s));
   s.ok("task", "T1", "set", "state=reviewing");
   assert.match(s.ok("round", "T1"), /^T1 replan: round 1 did not fix /, "the same open findings: replan, not a second try");
 });

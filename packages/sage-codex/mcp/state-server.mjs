@@ -35,7 +35,7 @@ export const TOOLS = {
     argv: () => ["task", "add"],
   },
   task_set: {
-    describe: "Change a task: its state, branch, pr, priority, kind, waits or program. The tool refuses a move that the route does not allow.",
+    describe: "Change a task: its state, branch, pr, priority, kind, waits or program. Resuming a round hold needs approval=<G>, an unused owner-approved repair gate for this task and round limit. The tool refuses a move that the route does not allow.",
     input: { task, fields: z.record(z.string().regex(/^[a-z]+$/), z.string()).describe('the keys and values to set, for example {"state": "building", "branch": "codex/t7-name"}') },
     pos: ["task", "fields"],
     argv: (i) => ["task", i.task, "set", ...Object.entries(i.fields).map(([k, v]) => `${k}=${v}`)],
