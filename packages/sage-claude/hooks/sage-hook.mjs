@@ -1422,6 +1422,16 @@ function agentCheck(input, file, slots) {
   const command = typeof ti.command === "string" ? ti.command : "";
   const cwd = input.cwd ?? process.cwd();
   const texts = runFields(ti);
+  // T529: a run's own scratch work passes; a scratch script that names the state tool, a merge or a push is refused.
+  const scratch = ownScratch(input, slots, roots[1]);
+  let note = ` ${scratch.why}`;
+  if (scratch.folder) {
+    const script = texts.map((t) => scratchScriptProblem(t, scratch.folder, cwd)).find(Boolean);
+    if (script) return script;
+    const miss = texts.map((t) => scratchMiss(t, scratch.folder, cwd, roots)).find(Boolean);
+    if (texts.length && !miss) return undefined;
+    note = ` Your run's own scratch folder is ${scratch.folder}. This command is not only work there (${miss}), so the usual rules apply. ${SCRATCH_FORMS}`;
+  }
   const named = texts.map((t) => runsNamed(t, cwd)).find(Boolean);
   if (named) {
     if (texts.some((t) => /sage-pr\.mjs/i.test(unquote(t)))) return "only the chief runs the PR script (sage-pr.mjs).";
@@ -1438,7 +1448,149 @@ function agentCheck(input, file, slots) {
   if (!texts.some(t => writes(t, cwd))) return undefined;
   const word = nearLogbook(texts.join("\n"), roots, cwd) ?? texts.map((t) => linksNear(t, roots[1], cwd)).find(Boolean);
   const hint = word && /\$\?/.test(word) ? " The hook does not expand $?, so its ? is a pattern character: to show an exit code, write || echo FAIL or ; echo done after the command instead." : "";
-  return word && `an agent never writes, moves or removes a logbook file from the shell, and never writes near one with a pattern, a variable or a link to it. ${quoted(word)} makes this command near the logbook: change or remove it.${hint}`;
+  return word && `an agent never writes, moves or removes a logbook file from the shell, and never writes near one with a pattern, a variable or a link to it. ${quoted(word)} makes this command near the logbook: change or remove it.${hint}${note}`;
+}
+/**
+ * The run's own scratch subfolder (T529): <temp>/claude-<uid>/<project>/<session>/scratchpad/<run>, as a real path, in
+ * { folder }; else { why }, the reason for an agent (fail closed). Each part comes from a fact that the agent cannot set:
+ * the temp folder of Claude Code (CLAUDE_CODE_TMPDIR, else /tmp), this user's id, the project folder and the session of
+ * the event's transcript_path and session_id, and the run that the hook marked on the agent's slot at its spawn (runOf).
+ * A run id that two slots of the session hold, or a folder that overlaps the sage root, gives no folder. T516 uses it too.
+ */
+export function ownScratch(input, slots, root) {
+  const mark = slots?.runOf?.(input?.agent_id), session = input?.session_id, uid = process.getuid?.();
+  if (!mark) return { why: 'The hook knows no run of this agent, so it has no scratch folder: the first line of the brief that started it must be "Run R<n> · task T<n>".' };
+  if (mark.shared) return { why: `Two agents of this session hold the run ${mark.run}, so the hook cannot tell whose scratch folder it is.` };
+  // The transcript is <config>/projects/<project>/<session>.jsonl, or a subagent's under <project>/<session>/.
+  const parts = String(input.transcript_path ?? "").split("/"), k = typeof session === "string" ? parts.findIndex((p) => p === session || p === `${session}.jsonl`) : -1;
+  const project = k > 0 ? parts[k - 1] : "";
+  const none = { why: `The hook cannot find the scratch folder of ${mark.run}: the event has no session and transcript path that name it.` };
+  if (!/^[\w-]{1,128}$/.test(session) || !/^[\w.-]{1,255}$/.test(project) || /^\.\.?$/.test(project) || uid === undefined) return none;
+  try {
+    const folder = join(realpathSync.native(process.env.CLAUDE_CODE_TMPDIR || "/tmp"), `claude-${uid}`, project, session, "scratchpad", mark.run);
+    return root && overlaps(fold(folder), root) ? { why: `The scratch folder of ${mark.run} overlaps the sage root, so it is none.` } : { folder };
+  } catch {
+    return none;
+  }
+}
+/**
+ * Does a literal path name the scratch folder or a file in it (T529)? It has no variable, pattern, ~ or "..". Its
+ * deepest folder that exists resolves, through every link, to a place in the folder, and the path itself is no link
+ * (also no dangling one) and no hard link of a file outside.
+ */
+export function inScratch(word, folder, cwd) {
+  if (typeof word !== "string" || !word || /[$`*?[\]{}~\\\0]/.test(word) || word.split("/").includes("..")) return false;
+  try {
+    const path = resolve(from(cwd, word));
+    let at = path, rest = [];
+    for (;;) {
+      try { at = realpathSync.native(at); break; } catch (e) {
+        if (e?.code !== "ENOENT" || at === dirname(at)) return false;
+        rest.unshift(basename(at));
+        at = dirname(at);
+      }
+    }
+    const full = fold(join(at, ...rest)), own = fold(folder);
+    if (full !== own && !full.startsWith(own + sep)) return false;
+    const st = lstatSync(path, { throwIfNoEntry: false });
+    return !st || st.isDirectory() || (st.isFile() && st.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+/** The programs of a scratch command (T529): the data writers, the plain readers, and mkdir, chmod and node on scratch paths. */
+const SCRATCH_DATA = /^(?:cat|echo|printf)$/, SCRATCH_READ = /^(?:head|tail|grep|wc)$/;
+/** The variables that move a home, config or sage root folder: in a scratch command, each is set only to a path in the folder (R1896-1). */
+const SCRATCH_HOMES = /^(?:SAGE_HOME|CLAUDE_CONFIG_DIR|CODEX_HOME|HOME)=/i;
+const SCRATCH_FORMS = "Each command of a scratch command is one of: cat with a quoted heredoc (<<'EOF'), echo or printf, with output only into the folder; head, tail, grep or wc of files that are not the logbook, with no output to a file; mkdir or chmod in the folder; node <script in the folder> or node -e <code> whose paths are in the folder, with each argument a path in the folder or a plain word (no . or /), and output only into the folder. SAGE_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME and HOME are set only to paths in the folder.";
+/**
+ * Why this shell text is not only work inside the run's scratch folder (T529), or undefined when it is. Each command is
+ * one of SCRATCH_FORMS, joined by ;, &&, || or a line break, or piped. No substitution, group, cd, or redirection to a
+ * file outside the folder. A heredoc body with $ or a backtick needs a quoted delimiter, so that the shell does not
+ * expand it. No program word names sage.mjs or sage-pr.mjs, and no reader names the logbook (R1898 F4). Anything else
+ * goes to the usual rules.
+ */
+function scratchMiss(text, folder, cwd, roots) {
+  let commands;
+  try { commands = shellCommands(text); } catch { return "the hook cannot read it"; }
+  if (!commands.length) return "it has no command";
+  if (/<<-?[ \t]*(?=[^\s'"\\<])/.test(text) && commands.some((c) => c.bodies.some((b) => /[$`]/.test(b)))) return "a heredoc with $ or a backtick has no quoted delimiter, so the shell expands it";
+  const within = (w) => inScratch(w, folder, cwd);
+  const plain = (a) => within(a) || (/^[\w,+:@%=-]+$/.test(a) && !namesTable(partsOf(a)));
+  for (const c of commands) {
+    if (c.host || c.grouped) return "it has a substitution or a group";
+    const k = c.syntax.findIndex((s) => !s.assignment);
+    if (k < 0) return "a command only sets variables";
+    const [name, ...args] = c.words.slice(k), data = SCRATCH_DATA.test(name);
+    const home = c.words.slice(0, k).find((w) => SCRATCH_HOMES.test(w) && !within(w.slice(w.indexOf("=") + 1)));
+    if (home) return `${quoted(home)} sets a home or config folder outside the folder`;
+    if (c.syntax[k].quoted || (c.bodies.length && name !== "cat") || !(data || SCRATCH_READ.test(name) || /^(?:mkdir|chmod|node)$/.test(name))) return `${quoted(name)} is not one of its programs`;
+    for (const r of c.redirects) {
+      const to = /^(?:&>>?|>>|>\||>&|<>|<&|>|<)([^]*)$/.exec(r)?.[1];
+      if (to === undefined) return "the hook cannot read a redirection";
+      if (toFile(r) && !((data || name === "node") && within(to))) return `its output goes to ${quoted(to)}, and only cat, echo, printf and node write, only into the folder`;
+    }
+    if ([...c.words.slice(0, k), ...(name === "echo" || name === "printf" ? [] : c.words.slice(k))].some((w) => TOOL_NAME.test(w))) return "it names the state tool";
+    if (name === "cat" || SCRATCH_READ.test(name)) {
+      const word = args.find((a) => /[$`]/.test(a)) ?? (args.length ? nearLogbook(args.join(" "), roots, cwd) ?? namesTable(partsOf(args.join(" "))) : undefined);
+      if (word) return `${quoted(word)} may read the logbook`;
+    } else if (name === "mkdir") {
+      if (!args.some((a) => !a.startsWith("-")) || !args.every((a) => /^-[pv]+$/.test(a) || within(a))) return "mkdir names a path outside the folder";
+    } else if (name === "chmod") {
+      if (args.length < 2 || !/^(?:[0-7]{3,4}|[ugoa]*[-+=][rwxX]+)$/.test(args[0]) || !args.slice(1).every(within)) return "chmod names a path outside the folder";
+    } else if (name === "node") {
+      const code = args.findIndex((a) => /^(?:-e|--eval)$/.test(a));
+      // Every argument after the script or the code is a path in the folder or a plain word: code can write to process.argv (R1898-1).
+      const rest = code < 0 ? args.slice(1) : args.slice(code + 2);
+      if (code < 0 ? !within(args[0]) : !args.slice(0, code).every((a) => a === "--input-type=module") || !scratchCode(args[code + 1], folder, cwd)) return "node runs a script or code that is not in the folder";
+      const arg = rest.find((a) => !plain(a) || (code >= 0 && /^-(?:e|p|r|-eval|-print|-require|-import)\b/.test(a)));
+      if (arg !== undefined) return `the argument ${quoted(arg)} is not a path in the folder or a plain word`;
+    }
+  }
+  return undefined;
+}
+/**
+ * Does node -e code read only the scratch folder (T529)? Every quoted text with a slash is a path in the folder (a node:
+ * module name aside), and the code has no template substitution and names no home, config or sage root folder, and no
+ * logbook file. A bare file name in the code still writes in the working folder, as on main (R1896-2). The code can
+ * still build a path while it runs: the sandbox is the full guard, as for node <script>.
+ */
+function scratchCode(code, folder, cwd) {
+  if (typeof code !== "string" || /\$\{|\b(?:SAGE_HOME|CLAUDE_CONFIG_DIR|CODEX_HOME|HOME|homedir|USERPROFILE|tmpdir)\b|\.claude|~/i.test(code)) return false;
+  if (namesTable(partsOf(code))) return false;
+  const strings = [...code.matchAll(/(['"`])((?:\\.|(?!\1)[^\\\n])*)\1/g)].map((m) => m[2]);
+  return strings.every((s) => !s.includes("/") || s.startsWith("node:") || inScratch(s, folder, cwd));
+}
+/** The most bytes of a scratch script that the hook reads. A larger one is refused: the hook cannot check it. */
+const SCRATCH_SCRIPT_MAX = 1024 * 1024;
+/** What a script's text names that only the chief runs: the state tool, a merge or a push (R1897-1). */
+const scriptNames = (text) => TOOL_NAME.exec(text)?.[0] ?? (mentionsMerge(text) === true ? "a merge" : /\bgit\b[^\n]*\bpush\b/i.test(text) ? "a git push" : undefined);
+/**
+ * The refusal of a scratch command that runs node on a script that names the state tool, a merge or a push (R1897-1):
+ * a script in the folder that node runs, read from disk (a regular file of at most 1 MiB), or a heredoc, echo or printf
+ * text that the same command writes while it runs node. Undefined otherwise.
+ */
+function scratchScriptProblem(text, folder, cwd) {
+  let commands;
+  try { commands = shellCommands(text); } catch { return undefined; } // the other rules refuse what the hook cannot read
+  const runs = commands.filter((c) => c.words[c.syntax.findIndex((s) => !s.assignment)] === "node");
+  if (!runs.length) return undefined;
+  const why = (what, where) => `an agent never runs a script that names ${what} (${where}): only the chief runs the state tool, merges and pushes the main branch. Take ${what} out of the script, and report what needs it (T529).`;
+  for (const c of commands) {
+    const name = c.words[c.syntax.findIndex((s) => !s.assignment)];
+    const written = [...c.bodies, ...(name === "echo" || name === "printf" ? c.words : [])].map(scriptNames).find(Boolean);
+    if (written) return why(written, "a text that this command writes, while it runs node");
+  }
+  for (const c of runs) {
+    const script = c.words[c.syntax.findIndex((s) => !s.assignment) + 1];
+    if (!inScratch(script, folder, cwd)) continue;
+    const path = resolve(from(cwd, script)), st = lstatSync(path, { throwIfNoEntry: false });
+    if (!st?.isFile()) continue;
+    if (st.size > SCRATCH_SCRIPT_MAX) return `the scratch script ${path} is over 1 MiB, so the hook cannot check it, and refuses it (T529).`;
+    const named = scriptNames(readFileSync(path, "utf8"));
+    if (named) return why(named, path);
+  }
+  return undefined;
 }
 /**
  * The board password rule (T229): the board password is the owner's alone. No session and no agent, in any mode:
@@ -2152,8 +2304,8 @@ const agentName = (raw) => String(raw ?? "").normalize("NFKC").replace(/\p{Cf}/g
 const decide = (event, decision, reason) => ({ hookSpecificOutput: { hookEventName: event, permissionDecision: decision, permissionDecisionReason: `sage: ${String(reason).replace(/\p{Cc}/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}` } });
 const deny = (event, reason) => decide(event, "deny", reason);
 
-/** The run id of a brief's first line, "Run R<n> · task T<n>" (T308), or undefined: only R and digits pass. */
-const briefRun = (prompt) => /^Run (R[1-9]\d{0,8}) · task T[1-9]\d*(?: ·|\s*$)/.exec(String(prompt ?? "").split("\n", 1)[0])?.[1];
+/** The run id of a brief's first line, "Run R<n> · task T<n>" (T308), with any text after a space (R1898-2), or undefined: only R and digits pass. */
+const briefRun = (prompt) => /^Run (R[1-9]\d{0,8}) · task T[1-9]\d*(?:\s|$)/.exec(String(prompt ?? "").split("\n", 1)[0])?.[1];
 
 /**
  * All sessions share numbered capacity slots. One short filesystem transaction protects allocation and lifecycle
@@ -2490,6 +2642,16 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     helperFor(agent) {
       const slot = valid(agent) && ofSession().find((slot) => ownsAgent(slot, agent) && mark(slot, "helper-"));
       return slot ? { key: mark(slot, "helper-"), ...parsed(helperNote(`started-${mark(slot, "helper-")}`)) } : undefined;
+    },
+    /**
+     * The run of the slot that this session's agent holds, which the hook marked at the spawn (T308), or undefined (T529).
+     * shared: another slot of the session has the same run mark (two projects' runs with one id), so the run names no one folder.
+     */
+    runOf(agent) {
+      const slots = ofSession().filter((slot) => has(slot, "ok"));
+      const slot = valid(agent) && !stopped(agent) && slots.find((slot) => ownsAgent(slot, agent));
+      const run = slot && mark(slot, "run-");
+      return /^R[1-9]\d*$/.test(run ?? "") ? { run, shared: slots.some((other) => other !== slot && mark(other, "run-") === run) } : undefined;
     },
     /** Does a slot of this session hold this agent: a running agent, not a shell task (F-T301-27)? Its id compares case-folded, as agentName gives it (F-T301-53). */
     holds: (agent) => {
