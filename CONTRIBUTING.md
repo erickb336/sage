@@ -89,10 +89,10 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
   - A test that reads a new entry reads its `changes/<task>.md`, because `CHANGELOG.md` gets the entry only later.
   - If you edited `CHANGELOG.md` on a task branch, put the text in `changes/<task>.md`. Then run `git fetch origin main`. Then undo the edit with `git checkout $(git merge-base HEAD origin/main) -- CHANGELOG.md`. Do not run `npm run changelog` on a task branch.
 - **The change log, for the chief.** After task pull requests merge, the chief frames a tiny task with one implementer run that rebuilds `CHANGELOG.md`. No CI job or other automatic job writes to main.
-  - The implementer makes a branch from the latest main (for example `sage/changelog-2026-10-26`) and runs `npm run changelog`.
+  - The implementer runs `git fetch origin main`. Then it makes a branch from the latest main with `git switch -c <branch> origin/main` (for example `sage/changelog-2026-10-26`). Then it runs `npm run changelog`.
   - It opens a change-log pull request that changes only `CHANGELOG.md`. A change-log pull request adds no file to `changes/`.
-  - If the change-log branch is stale (a task merged after the branch was made), merge main into it first. Then run `npm run changelog` again.
-  - If `npm run changelog` stops on a line written by hand in `CHANGELOG.md`, undo the edit with `git checkout origin/main -- CHANGELOG.md`. Then run `npm run changelog`. Put the text in `changes/<task>.md` in a task pull request, not in the change-log pull request.
+  - If the change-log branch is stale (a task merged after the branch was made), run `git fetch origin main`. Then merge main into the branch with `git merge origin/main`. Then run `npm run changelog` again.
+  - If `npm run changelog` stops on a line written by hand in `CHANGELOG.md`, run `git fetch origin main`. Then undo the edit with `git checkout origin/main -- CHANGELOG.md`. Then run `npm run changelog`. Put the text in `changes/<task>.md` in a task pull request, not in the change-log pull request.
 - **What the check does with the change log.** `npm run check` tells the two kinds of pull request apart by the diff of the tracked files from the merge base with `origin/main`, as CI sees it. A new file that is not staged does not count:
   - a diff that changes `CHANGELOG.md` and other files fails: undo the edit of `CHANGELOG.md`;
   - a diff that changes only `CHANGELOG.md` is a change-log pull request. It fails when `CHANGELOG.md` is not exactly what `npm run changelog` makes;
