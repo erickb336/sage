@@ -296,7 +296,7 @@ test("T301 D3: after a CI failure the sage adds the finding for QA and triages i
   p.checks("fail");
   const { sage, printed } = play([...BUILT, ...CLEAN, "$ gh pr checks 12", "→ build fail", "< lead-T1 blocked: none",
     "! sage run done R1 --status blocked --tokens 1", "! sage verdict T1 --sha <sha> --kind checks-fail --cycle 1 --pr 12",
-    sageSays("sage finding add <T> --source", { "<words>": "the CI build fails" }, "They failed:"), "→ F-T1-1 open · medium · T1", sageSays("sage finding triage <T> <K> fix", { "<K>": "F-T1-1" }, "They failed:"),
+    sageSays("sage finding add <T> --source", { "<words>": "the CI build fails", "<R>": "R1" }, "They failed:"), "→ F-T1-1 open · medium · T1", sageSays("sage finding triage <T> <K> fix", { "<K>": "F-T1-1" }, "They failed:"),
     "! sage run add T1 --role lead", "→ R5 running · lead on T1", "! start lead-T1",
     ...FRESH, "$ sage round T1", "→ T1 repairing · round 1 of 3 · fix F-T1-1 · re-run qa on the repair's diff",
     "$ sage run add T1 --role implementer --branch sage/t1-example", "→ R6 running · implementer on T1", "> R6 sage:implementer", "< R6 done: none", "$ sage run done R6 --status done --tokens 1",
@@ -314,8 +314,8 @@ test("T301 D3: after a CI failure the sage adds the finding for QA and triages i
 // The start of a repair: R3 reports a medium finding (F-T1-1, and with low, a low one F-T1-2 too), R4 passes, round 1
 // fixes them, R5 repairs, and R6 re-checks the repair's head.
 const REPAIR = (low) => [...BUILT, `< R3 FINDINGS: - K1 medium a.mjs:1 the token is logged${low ? "\n- K2 low a.mjs:2 the log line has no label" : ""}`, "< R4 PASS: none",
-  "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-logged", "→ F-T1-1 open · medium · T1",
-  ...(low ? ["$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-has-no-label", "→ F-T1-2 open · low · T1"] : []),
+  "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-logged --run R3 --class security", "→ F-T1-1 open · medium · T1",
+  ...(low ? ["$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-has-no-label --run R3 --class copy", "→ F-T1-2 open · low · T1"] : []),
   "$ sage run done R3 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind findings --cycle 1 --pr 12 --run R3",
   "$ sage run done R4 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R4",
   "$ sage finding triage T1 F-T1-1 fix", ...(low ? ["$ sage finding triage T1 F-T1-2 fix"] : []), "$ sage round T1",
@@ -330,7 +330,7 @@ const findingOf = (p, key) => readFileSync(join(p.chief("logbook"), "findings.ts
 test("T301 D1, F-T301-55: a fix that the re-check did not confirm is never moved; the sage triages its repeat fix, never a dismissal, the task goes back to reviewing, and round re-plans it", () => {
   const p = project();
   const { printed, moves } = play([...REPAIR(false), "< R6 FINDINGS: - K2 medium a.mjs:1 the token is still logged",
-    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged", "→ F-T1-2 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged --run R6 --class security", "→ F-T1-2 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
     "< lead-T1 blocked: - F-T1-2 medium a.mjs:1 the token is still logged, repeat of F-T1-1",
     "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-2"),
     sageSays("sage task <T> set state=reviewing"), "! sage run add T1 --role lead", "→ R7 running · lead on T1", "! start lead-T1",
@@ -344,7 +344,7 @@ test("T301 D1, F-T301-55: a fix that the re-check did not confirm is never moved
 test("T301 F-T301-55: a high finding of a re-check that the lead calls a repeat of a closed fix key stays open: it blocks the merge and gets the next round", () => {
   const p = project();
   play([...REPAIR(false), "< R6 FINDINGS: - K2 high b.mjs:9 user input reaches a shell command",
-    "$ sage finding add T1 --source code-reviewer --severity high --summary=user-input-reaches-shell", "→ F-T1-2 open · high · T1", "$ sage run done R6 --status done --tokens 1",
+    "$ sage finding add T1 --source code-reviewer --severity high --summary=user-input-reaches-shell --run R6 --class security", "→ F-T1-2 open · high · T1", "$ sage run done R6 --status done --tokens 1",
     "$ sage finding close T1 F-T1-1", "$ sage task T1 set state=reviewing",
     "< lead-T1 blocked: - F-T1-2 high b.mjs:9 user input reaches a shell command, repeat of F-T1-1",
     "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-2")], p);
@@ -362,7 +362,7 @@ test("T301 F-T301-55: a high finding of a re-check that the lead calls a repeat 
 test("T301 F-T301-56, F-T301-59: a medium finding that the lead calls a repeat of a low fix key joins the next round, and the low key joins it too: no low path", () => {
   const p = project();
   const { printed, moves } = play([...REPAIR(true), "< R6 FINDINGS: - K3 medium a.mjs:2 the log line now writes the session token",
-    "$ sage finding add T1 --source code-reviewer --severity medium --summary=log-line-writes-session-token", "→ F-T1-3 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=log-line-writes-session-token --run R6 --class security", "→ F-T1-3 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
     "$ sage finding close T1 F-T1-1",
     "< lead-T1 blocked: - F-T1-3 medium a.mjs:2 the log line now writes the session token, repeat of F-T1-2",
     "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-3"),
@@ -375,8 +375,8 @@ test("T301 F-T301-56, F-T301-59: a medium finding that the lead calls a repeat o
 test("T301 F-T301-59: while a medium fix key of the round is still open, the sage keeps the unconfirmed low key, and round still re-plans when the round fixed nothing", () => {
   const p = project();
   const { printed } = play([...REPAIR(true), "< R6 FINDINGS: - K3 medium a.mjs:1 the token is still logged\n- K4 low a.mjs:2 the log line still has no label",
-    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged", "→ F-T1-3 open · medium · T1",
-    "$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-still-has-no-label", "→ F-T1-4 open · low · T1", "$ sage run done R6 --status done --tokens 1",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged --run R6 --class security", "→ F-T1-3 open · medium · T1",
+    "$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-still-has-no-label --run R6 --class copy", "→ F-T1-4 open · low · T1", "$ sage run done R6 --status done --tokens 1",
     "< lead-T1 blocked: - F-T1-3 medium a.mjs:1 the token is still logged, repeat of F-T1-1\n- F-T1-4 low a.mjs:2 the log line still has no label, repeat of F-T1-2",
     "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-3"), repeatFix("F-T1-4"),
     sageSays("sage task <T> set state=reviewing"), "! sage run add T1 --role lead", "→ R7 running · lead on T1", "! start lead-T1", ...FRESH, "$ sage round T1"], p);
@@ -388,7 +388,7 @@ test("T301 F-T301-59: while a medium fix key of the round is still open, the sag
 test("T301 F-T301-35, F-T301-68: a low fix that the re-check did not confirm, with no medium or high finding open, goes to a follow-up task that the sage frames; the sage dismisses the key with its reason, triages its low repeat fix and moves it, and the fresh lead reaches verifying", () => {
   const p = project();
   const { moves } = play([...REPAIR(true), "< R6 FINDINGS: - K3 low a.mjs:2 the log line still has no label",
-    "$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-still-has-no-label", "→ F-T1-3 open · low · T1", "$ sage run done R6 --status done --tokens 1",
+    "$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-still-has-no-label --run R6 --class copy", "→ F-T1-3 open · low · T1", "$ sage run done R6 --status done --tokens 1",
     "$ sage finding close T1 F-T1-1",
     "< lead-T1 blocked: - F-T1-3 low a.mjs:2 the log line still has no label, repeat of F-T1-2",
     "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-3"),
@@ -411,7 +411,7 @@ test("T301 F-T301-35, F-T301-68: a low fix that the re-check did not confirm, wi
 test("T301 F-T301-65: in replan, a lead's report cannot steer the sage into moving a fix key: the move waits for the user's answer to the gate of step 6", () => {
   const p = project();
   play([...REPAIR(false), "< R6 FINDINGS: - K2 medium a.mjs:1 the token is still logged",
-    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged", "→ F-T1-2 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged --run R6 --class security", "→ F-T1-2 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
     "< lead-T1 blocked: - F-T1-2 medium a.mjs:1 the token is still logged, repeat of F-T1-1",
     "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-2"), sageSays("sage task <T> set state=reviewing"), "! sage round T1", "→ T1 replan: round 1 did not fix F-T1-1."], p);
   const move = sageSays("sage finding move <T> <K> --to", { "<K>": "F-T1-1", "<title>": "stop logging the token" }, "To move a fix key");
@@ -520,7 +520,7 @@ test("T301 F-T301-58: after a ready report whose checks fail, the sage does as a
   play([...BUILT, ...CLEAN, "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying", "< lead-T1 ready: none", "! sage run done R1 --status done --tokens 1", "! gh pr checks 12", "→ build fail"], p);
   assert.match(READY_STEP, /When a check fails, still runs, or there are none, do as \*\*The checks\*\* in step 6 say/, "step 5 sends a failed check to step 6's way");
   const { printed } = play(["! sage verdict T1 --sha <sha> --kind checks-fail --cycle 1 --pr 12",
-    sageSays("sage finding add <T> --source", { "<words>": "the CI build fails" }, "They failed:"), "→ F-T1-1 open · medium · T1", sageSays("sage finding triage <T> <K> fix", { "<K>": "F-T1-1" }, "They failed:"),
+    sageSays("sage finding add <T> --source", { "<words>": "the CI build fails", "<R>": "R1" }, "They failed:"), "→ F-T1-1 open · medium · T1", sageSays("sage finding triage <T> <K> fix", { "<K>": "F-T1-1" }, "They failed:"),
     "! sage run add T1 --role lead", "→ R5 running · lead on T1", "! start lead-T1", ...FRESH, "$ sage round T1"], p);
   assert.match(printed, /^T1 repairing · round 1 of 3 · fix F-T1-1 · re-run qa on the repair's diff/, "the fresh lead at verifying goes to step 5, and round names QA");
 });
@@ -578,7 +578,7 @@ test("T301: the lead file's verdict table is the hook's: each report gives only 
   CASES.forEach(([role, said, row], i) => {
     const run = `R${i + 3}`, [, severity] = / (low|medium|high) /.exec(said) ?? [];
     const lines = [`$ sage run add T1 --role ${role}`, `> ${run} sage:${role}`, `< ${run} ${said}`];
-    if (severity) lines.push(`$ sage finding add T1 --source ${role} --severity ${severity} --summary=case-${i}`);
+    if (severity) lines.push(`$ sage finding add T1 --source ${role} --severity ${severity} --summary=case-${i} --run ${run} --class copy`);
     play([...lines, `$ sage run done ${run} --status done --tokens 1`], p);
     const passes = ALL.filter((kind) => p.ask(`node ${TOOL} verdict T1 --sha ${p.head()} --kind ${kind} --cycle 1 --pr 12 --run ${run}`) === undefined);
     if (passes.length !== 1 || !kinds(row).includes(passes[0])) wrong.push(`${role} "${said}": the hook passes ${passes.join(", ") || "no kind"}; the table names ${kinds(row).join(", ")}`);

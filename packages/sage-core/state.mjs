@@ -2457,7 +2457,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         notHeld(task, "finding add");
         const severity = need(opt.severity, "--severity");
         if (!["high", "medium", "low"].includes(severity)) refuse("severity is high, medium or low");
-        // The run whose report holds the finding, and its problem class: both optional, and checked when given (T346).
+        // The run whose report holds the finding (a run of the same task), and its problem class, checked when given (T346).
         if (opt.run !== undefined) {
           const run = read(dir, "runs").find((r) => r.id === opt.run) ?? missing(`run ${opt.run}`, read(dir, "runs").filter((r) => r.task === task.id).map((r) => r.id));
           if (run.task !== task.id) refuse(`--run ${run.id} is a run of ${run.task}, not of ${task.id}: give the run whose report holds the finding. Nothing changed.`);
@@ -2468,8 +2468,13 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const again = findings.find((f) => f.task === task.id && f.key === key);
         // Without --summary, a known key keeps its summary. An empty one is refused, so no summary is ever lost.
         const summary = opt.summary === undefined ? again?.summary : cell(opt.summary) || refuse(`${key} on ${task.id}: --summary is empty. Give the finding in a few words${again ? ", or leave out --summary to keep its summary" : ""}.`);
+        // A review or QA finding needs both, given or kept by its known key, so that sage stats counts each class and
+        // cycle (T490). A finding from another source, such as the sage's own note, may leave them out.
+        const source = opt.source ?? again?.source;
+        const lacks = CHECKERS.includes(source) ? ["run", "class"].filter((c) => !(opt[c] ?? again?.[c])) : [];
+        if (lacks.length) refuse(`${source} is a review or QA role, so finding add needs --run with the run whose report holds the finding and --class with one of ${FINDING_CLASSES.join(", ")}; it lacks ${lacks.map((c) => `--${c}`).join(" and ")}. Nothing changed.`);
         if (again && summary !== again.summary) write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: task.id, decision: `${key} opened again: ${summary}`, why: `the summary before: ${again.summary}` }]);
-        if (again) Object.assign(again, { status: "open", triage: "", round: task.round, severity, source: opt.source ?? again.source, summary, ...tags }); // it came back
+        if (again) Object.assign(again, { status: "open", triage: "", round: task.round, severity, source, summary, ...tags }); // it came back
         else findings.push({ task: task.id, key, round: task.round, source: need(opt.source, "--source"), severity, summary: need(summary, "--summary"), status: "open", ...tags });
         write(dir, "findings", findings);
         return `${key} open${again ? " again" : ""} · ${severity} · ${task.id}`;
