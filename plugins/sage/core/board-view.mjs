@@ -1,7 +1,22 @@
-import { basename, resolve } from "node:path";
+import { basename, resolve, sep } from "node:path";
 import { readBoardSources } from "./board-reader.mjs";
 import { buildBoardModel, projectName } from "./board-model.mjs";
 import { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
+import { createStateTool } from "./state.mjs";
+
+/**
+ * T280: the landing rule of each board source, for buildBoardModel: (source id, head SHA, PR) to { ok, reason }. It is
+ * the state tool's own merge check, read-only, on that source's root, so the board never has a second copy of the rule.
+ * The root's path leaves the reason: a remote board page shows it.
+ */
+export function landingRule(sources) {
+  const { mergeCheck } = createStateTool({ defaultRoot: () => { throw new Error("the board names each root"); } });
+  const roots = new Map(sources.map(source => [source.id, source.path]));
+  return (id, sha, pr) => {
+    const root = roots.get(id), result = mergeCheck(sha, { SAGE_HOME: root }, { pr, readOnly: true });
+    return { ok: result.ok, reason: result.reason.split(`${root}${sep}`).join("") };
+  };
+}
 
 const fold = value => String(value).normalize("NFC").toLowerCase();
 export function boardView({ sources, scope = "all", project = null, taskId = null, format = "chat", now = new Date().toISOString() }) {
@@ -27,7 +42,7 @@ export function boardView({ sources, scope = "all", project = null, taskId = nul
     if (!selected.length || scope !== "this" && selected.length !== 1) throw new RangeError(selected.length ? `The project is ambiguous. Choose: ${selected.flatMap(group => group.books).join(", ")}` : "No recorded project matches this board scope.");
     keys = new Set(selected.flatMap(group => group.books));
   }
-  const model = buildBoardModel(snapshots.map(source => ({ ...source, projects: source.projects.filter(book => keys.has(book.key)) })), { now });
+  const model = buildBoardModel(snapshots.map(source => ({ ...source, projects: source.projects.filter(book => keys.has(book.key)) })), { now, landing: landingRule(sources) });
   if (taskId) {
     const tasks = model.tasks.filter(task => task.id === taskId);
     if (tasks.length !== 1) {

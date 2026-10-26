@@ -10,6 +10,8 @@ const now = "2026-10-08T20:00:00.000Z", head = "a".repeat(40), old = "2026-10-05
 export const STATES = ["framed", "designing", "awaiting-you", "briefed", "building", "held", "replan", "reviewing", "repairing", "verifying", "verified", "pr-ready", "merged", "concluded", "abandoned"];
 export const ROUTES = { build: "build,code-review,qa", design: "design,pe,build,code-review,security-review,qa", investigation: "investigate,evidence-review" };
 const FINAL = ["merged", "concluded", "abandoned"];
+// A sample merge check that passes on every head (T280): the matrix checks the step line, not the landing rule.
+const passes = () => ({ ok: true, reason: "" });
 
 /** One case as the logbook and the observations give it. A build route has a risk flag, so it needs 2 clean cycles. */
 export function sample({ state, route, gate, run, known, cycles, autopilot = null, hold = "" }) {
@@ -28,7 +30,7 @@ export function sample({ state, route, gate, run, known, cycles, autopilot = nul
   const gates = gate === "none" ? [] : [{ id: "G3", task: "T1", question: "Sample: keep the old copy?", options: "yes|no", recommendation: "yes", answer: gate === "answered" ? "yes" : "", at: old }];
   const records = [...(known && build ? [{ id: "O1", task: "T1", kind: "pr", source: "sample", basis: "observed", observedAt: now, recordedAt: now, data: { number: 12, head, state: "open" } }] : []),
     ...(autopilot === null ? [] : [{ id: "O2", task: "T1", kind: "mode", source: "sample", basis: "observed", observedAt: now, recordedAt: now, data: { autopilot } }])];
-  const model = buildBoardModel([{ id: "claude", label: "claude", diagnostics: [], projects: [{ key: "claude/sample-abcdef", name: "sample-abcdef", diagnostics: [], tables: { tasks: [task], runs, ledger, gates }, observations: { version: 1, records } }] }], { now });
+  const model = buildBoardModel([{ id: "claude", label: "claude", diagnostics: [], projects: [{ key: "claude/sample-abcdef", name: "sample-abcdef", diagnostics: [], tables: { tasks: [task], runs, ledger, gates }, observations: { version: 1, records } }] }], { now, landing: passes });
   return model.tasks[0];
 }
 

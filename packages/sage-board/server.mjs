@@ -3,7 +3,7 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { lstatSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { readBoardSources, buildBoardModel, renderBoardHtml, renderAgentsHtml, renderProgramsHtml } from "../sage-core/index.mjs";
+import { readBoardSources, buildBoardModel, landingRule, renderBoardHtml, renderAgentsHtml, renderProgramsHtml } from "../sage-core/index.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
@@ -107,6 +107,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     ids.add(source.id);
     return Object.freeze({ id: source.id, path: source.path, ...(own(source, "label") ? { label: source.label } : {}), ...(own(source, "provider") ? { provider: source.provider } : {}) });
   });
+  const landing = landingRule(configured);
   if (!Array.isArray(allowedHosts) || allowedHosts.length > 32) throw new TypeError("invalid allowed board hosts");
   if (id !== undefined && (typeof id !== "string" || !/^[a-f0-9]{16,64}$/.test(id))) throw new TypeError("the board id must be 16 to 64 lowercase hex characters");
   const local = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
@@ -282,7 +283,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
         source.diagnostics = source.diagnostics.filter(message => message !== "ENOENT");
         notSetUp.push(source.label);
       }
-      next = { ...buildBoardModel(read, { now: clock() }), notSetUp };
+      next = { ...buildBoardModel(read, { now: clock(), landing }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
       // Validate the shared pages before replacing a good snapshot: the board, the Agents page and the programs list. A task
       // page or a program page is checked when it is sent (pageFor), so the refresh renders 3 pages, not one per program.

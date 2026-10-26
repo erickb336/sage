@@ -61,10 +61,41 @@ function fixture(t) {
   return { dir, project, sources, add, ...first, invoke, view };
 }
 const cards = html => /<main class="board"[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
+/** The verdicts of one clean cycle of a small task on a head, and the known project list that lets the merge check read the logbook. */
+const clean = (id, number, sha, kinds = ["checks-pass", "review-clean", "qa-pass"]) => kinds.map(kind => ({ task: id, pr: number, sha, kind, cycle: "1", run: "", at: AT }));
+const known = f => writeFileSync(join(f.root, "projects.tsv"), `logbook\tat\thow\nproject-abcdef\t${AT}\tinit\n`);
+/** The column of each task card on the HTML board: the h2 of the section that holds it. */
+const columnsOf = html => Object.fromEntries([...cards(html).matchAll(/<h2>([^<]+?) <span class="n">\d+<\/span><\/h2>([\s\S]*?)(?=<h2>|$)/g)].flatMap(([, name, body]) => [...body.matchAll(/Sample (T\d+)/g)].map(([, id]) => [id, name])));
+
+test("T280 acceptance: the board shows a PR ready to merge only when sage's own merge check passes on its head", t => {
+  const f = fixture(t);
+  const [one, two, three, five] = ["1", "2", "3", "5"].map(digit => digit.repeat(40));
+  table(f.book, "tasks", [task("T1", "verified", { pr: "21" }), task("T2", "verified", { pr: "22" }), task("T3", "verified", { pr: "23" }), task("T4", "verified", { pr: "24" }), task("T5", "verified", { pr: "25" })]);
+  // T1 clean; T2 clean with an open finding; T3 misses its QA verdict; T4 has no verdict, so the board knows no head;
+  // T5 is clean, but a folder that is not in the known project list has a verdict on its head too.
+  table(f.book, "ledger", [...clean("T1", "21", one), ...clean("T2", "22", two), ...clean("T3", "23", three, ["checks-pass", "review-clean"]), ...clean("T5", "25", five)]);
+  const stranger = join(f.root, "stranger-123456"); mkdirSync(stranger);
+  table(stranger, "ledger", clean("T5", "25", five, ["checks-pass"]));
+  table(f.book, "findings", [{ task: "T2", key: "F-T2-1", round: "0", source: "R9", severity: "medium", summary: "Sample finding", triage: "fix", status: "open" }]);
+  known(f);
+  const before = snapshot(f.root), html = f.view("html"), text = f.view("chat");
+  assert.deepEqual(columnsOf(html), { T1: "Ready to merge", T2: "In review", T3: "In review", T4: "In review", T5: "In review" });
+  assert.match(html, /The merge check refuses 5555555\. Stranger-123456 has verdicts on 5555555/, "the reason names the folder, not its path");
+  assert.match(html, /The merge check passes on 1111111\. The board does not check the PR&#39;s head branch\./);
+  assert.match(html, /The merge check refuses 2222222\. T2 has open findings/);
+  assert.match(html, /The merge check refuses 3333333\. T3/);
+  assert.match(html, /The merge check is not checked, because the board does not know the last commit of PR 24\./);
+  assert.doesNotMatch(html, new RegExp(f.root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "no root path on the page");
+  assert.match(text, /### ✅ Ready to merge[\s\S]*Sample T1/);
+  assert.deepEqual(snapshot(f.root), before, "the board's merge check writes nothing");
+});
 
 test("T205 acceptance: HTML state columns and phone text describe the same recorded tasks without logbook writes", t => {
   const f = fixture(t);
-  table(f.book, "tasks", [task("T1", "framed"), task("T2", "designing"), task("T3", "held"), task("T4", "reviewing"), task("T5", "pr-ready"), task("T6", "merged"), task("T7", "abandoned")]);
+  table(f.book, "tasks", [task("T1", "framed"), task("T2", "designing"), task("T3", "held"), task("T4", "reviewing"), task("T5", "pr-ready", { pr: "12" }), task("T6", "merged"), task("T7", "abandoned")]);
+  // T280: T5 is ready to merge only because the merge check passes on its head: one clean cycle in a known logbook.
+  table(f.book, "ledger", clean("T5", "12", HEAD));
+  known(f);
   const recent = new Date(Date.now() - 86400000).toISOString();
   records(f.book, [{ task: "T6", kind: "completion", observedAt: recent, recordedAt: recent, data: { state: "merged", at: recent } }]);
   const before = snapshot(f.root), html = f.view("html"), text = f.view("chat");

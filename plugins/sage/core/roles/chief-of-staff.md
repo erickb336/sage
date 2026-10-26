@@ -57,7 +57,7 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 - {{VERIFIED_RULE}}
 - **A merge** needs the task's clean cycles on its head SHA: 1 for a small task, 2 for a large task, and 2 for any task with a risk flag. A tiny task without a risk flag has no cycle: it needs only checks-pass. `sage config` holds the counts (cycles.small, cycles.large, cycles.risk).
 - **A repair round** re-runs only the roles that `sage round` names, on the repair's diff. Then the task needs its clean cycles on the final SHA, with every role.
-- **The change log on main**: in a project whose change log is built on main only (sage: `npm run changelog`, see its CONTRIBUTING.md), frame a tiny task after merges, with one implementer run. On a branch from the latest main, it runs `npm run changelog` and opens a pull request that changes only `CHANGELOG.md`. When a task merges meanwhile, it merges main in and runs `npm run changelog` again.
+- **The change log on main**: in a project whose change log is built on main only (sage: see its CONTRIBUTING.md), each task pull request adds one `changes/<task>.md` file and does not edit `CHANGELOG.md`. After task pull requests merge, frame a tiny task with one implementer run. On a branch from the latest main, it runs `npm run changelog` and opens a change-log pull request that changes only `CHANGELOG.md` and adds no `changes/` file. When a task merges meanwhile, it merges main in and runs `npm run changelog` again.
 - **Autopilot off** (the start): the work stops at verified, and the user merges the pull request.
 {{AUTOPILOT_AND_PROTECTION}}
 - Always ask the user first, also on autopilot: a deploy, deleting data, a force-push, closing a pull request that is not ours.

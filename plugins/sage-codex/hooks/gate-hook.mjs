@@ -17,13 +17,19 @@
 //     only the read commands of the plugin's state tool from the shell (never its MCP server).
 //   - No role agent starts agents: a child under a sage_ name, in any mode, gets no spawn_agent.
 //   - No sage child, in any mode, sends a message to another thread (multi-agent v1's send_input, v2's send_message
-//     and followup_task): its message to the root thread would start a root turn as if the user typed it.
+//     and followup_task): its message to the root thread would start a root turn as if the user typed it. No thread,
+//     in any mode, also the root, sends to the root thread: Codex records it as the user's typed message (R1940-1).
+//   - gh in sage mode: only the gh command paths that sage uses (a group and its subcommand, such as pr view), by name,
+//     and no setting before gh that changes what it runs or reads (its pager, editor, browser, HOME or config folder),
+//     because an alias, an extension or such a program can run any gh command, also a merge (R1940-2, R1948, F-T534-1).
+//   - Multi-agent v1's send_input: none in sage mode (sage sends with v2).
 //   - The sage folder: no thread, in any mode, runs a shell command that names the Codex sage folder (the logbook and the
-//     mode files) or the Codex sessions folder, or that resumes or forks a Codex session, so an agent cannot forge a
-//     mode file or a typed message.
-//   - A new Codex: no sage child, in any mode, runs codex from the shell, because a new Codex session (codex exec,
-//     codex) runs outside the hooks of this session. Codex is its name, or the real file of a Codex executable (not
-//     every program of its package: Codex puts its own rg first on PATH). codex --version and --help start no session.
+//     mode files) or the Codex sessions folder, so an agent cannot forge a mode file or a typed message.
+//   - Codex from the shell: no thread, in any mode, runs codex except codex --version, -V, --help or -h. A new session
+//     (codex exec) runs outside the hooks of this session, and a resumed session, a fork or a queued message (codex
+//     queue) gives Codex a prompt that it records as the user's typed message, also "autopilot on" (R1981-1). Codex is
+//     its name, or the real file of a Codex executable (not every program of its package: Codex puts its own rg first
+//     on PATH).
 //   - A push (sage mode): only core's push form, as in the Claude hook.
 //   - The gate's proof: for each sage MCP call that it lets through, the gate saves a proof by the call's id, and the
 //     sage MCP server serves no call without one, so sage does not work while Codex runs no sage hook.
@@ -72,15 +78,19 @@ const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief 
 const AGENT_MERGE = "sage: an agent never merges. Report the pull request as ready.";
 const AUTOPILOT_OFF = 'sage: autopilot is off, so the user merges. Report the pull request as ready. The user turns it on with the message "autopilot on", alone.';
 const SAGE_FOLDER = "sage: no agent runs a shell command that names the Codex sage folder or the Codex sessions folder, because the logbook, the mode files and the user's typed messages are there. Use the sage MCP tools for the logbook.";
-const RESUME = "sage: no agent resumes or forks a Codex session from the shell, because its prompts would count as the user's. Ask the user.";
+const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user.";
 const READ_ONLY = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.`;
 const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead.`;
 const UNREAD_ROLE = "sage: the hook could not read this agent's task name from Codex's record of its thread, so it refuses this call. Tell the user.";
 const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.";
-const CHILD_CODEX = "sage: role agents never start Codex from the shell, because a new Codex session runs outside the hooks of this session. Put what you need in your report.";
 const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report.";
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report.";
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
+const ROOT_SEND = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report.";
+const V1_REFUSED = "sage: in sage mode, no thread uses multi-agent v1's send_input, because Codex can deliver it to the main thread as the user's typed message. sage sends with multi-agent v2.";
+const GH_LITERAL = "sage: in sage mode, run gh by its name or by a path that ends in /gh, not from a variable or a substitution, so that the gate can read the command.";
+const GH_SETUP = "sage: in sage mode, no setting before gh changes what it runs or reads: its pager, editor or browser, HOME or its config folder. Ask the user.";
+const GH_PATH = (path) => `sage: in sage mode, gh runs only the commands that sage uses (${GH_LIST}), because "gh ${path}" can be an alias or an extension that runs any gh command, also a merge. Write one of these, or ask the user.`;
 
 /** The sage MCP tools that only read the logbook: a child may call these, and pages without record, run or text. */
 export const CHILD_READS = new Set(["status", "standing", "merge_check"]);
@@ -89,10 +99,66 @@ const SAGE_TOOL = /^mcp__sage__(.+)$/;
 const SPAWN = /spawn_agent$/;
 /**
  * Codex's hook names of the tools that send a message to another thread: multi-agent v1's send_input (with its
- * namespace or not), and v2's send_message and followup_task in the default collaboration namespace (Codex 0.164.0
- * spec_plan.rs:1489-1508; the hook name is the namespace, then the name, registry.rs:943-951).
+ * namespace or not), and v2's send_message and followup_task in any namespace (Codex 0.164.0 spec_plan.rs:1489-1508;
+ * the hook name is the namespace, then the name, registry.rs:943-951; features.multi_agent_v2.tool_namespace renames
+ * the default collaboration, F-T534-3). An MCP tool (mcp__<server>__<tool>) is not one of them.
  */
-const SEND_INPUT = /^(?:(?:multi_agent_v1)?send_input|collaboration(?:send_message|followup_task))$/;
+const SEND_INPUT = /^(?:(?:multi_agent_v1)?send_input|(?!mcp__).*(?:send_message|followup_task))$/;
+/** Multi-agent v1's send tool: sage dispatches with v2, so in sage mode no thread uses it (R1948). */
+const V1_SEND = /^(?:multi_agent_v1)?send_input$/;
+/** A thread id as Codex reads it (Uuid::parse_str): any letter case, with or without hyphens, braces or urn:uuid:. */
+const uuidOf = (value) => {
+  const id = value.trim().toLowerCase().replace(/^urn:uuid:/, "").replace(/^\{(.*)\}$/, "$1").replaceAll("-", "");
+  return /^[0-9a-f]{32}$/.test(id) ? id : null;
+};
+/**
+ * Whether a send's target is the session's main thread: its thread id is the session id (every shell has it as
+ * CODEX_THREAD_ID), and its agent path is /root. Codex delivers such a message as user input, runs the prompt hook for
+ * it and records it as a UserMessage, so it would count as the owner's typed phrase (R1940-1). A target that is not
+ * text cannot be read, so it counts too. Only the target counts, not the message text (R1947 F2).
+ */
+function sendsToRoot(target, session) {
+  if (typeof target !== "string") return true;
+  const id = uuidOf(target);
+  if (id || target.trim() === session) return target.trim() === session || id === uuidOf(session);
+  return `/${target.trim()}`.replace(/\/+/g, "/").replace(/(.)\/$/, "$1") === "/root";
+}
+/**
+ * The gh command paths that sage uses, from the gh 2.101.0 man pages: a group with its subcommands, or a command with
+ * none (null). Any other word path, at either level, can be an alias (also of two words, "pr mrg") or an extension,
+ * which can run any gh command (R1940-2, R1946-2, F-T534-1). So alias, extension and config are not in it.
+ */
+const GH_PATHS = {
+  pr: ["checkout", "checks", "close", "comment", "create", "diff", "edit", "list", "merge", "ready", "reopen", "review", "status", "view"],
+  issue: ["close", "comment", "create", "edit", "list", "reopen", "status", "view"],
+  repo: ["clone", "list", "view"], run: ["list", "rerun", "view", "watch"], workflow: ["list", "view"], release: ["list", "view"],
+  search: ["code", "commits", "issues", "prs", "repos"], auth: ["status"], label: ["list"], api: null, status: null, version: null,
+};
+const GH_LIST = Object.entries(GH_PATHS).map(([group, subs]) => (subs ? `${group} ${subs.join("|")}` : group)).join(", ");
+const GH_HELP = /^(?:--version|--help|-h)$/;
+/** The settings that make gh run another program or read another config (its pager, editor, browser, aliases, F-T534-1 HOME). */
+const GH_SETTINGS = /(?:^|[^\w])(?:GH_PAGER|PAGER|BROWSER|GH_BROWSER|EDITOR|GH_EDITOR|VISUAL|GH_CONFIG_DIR|XDG_CONFIG_HOME|HOME)\s*=/;
+/**
+ * Why a shell command's gh run is refused in sage mode, or undefined (R1940-2, R1946-2, R1947-1, F-T534-1): gh from a
+ * variable or a substitution, a setting before gh that changes what it runs or reads, or a word path that is not in
+ * GH_PATHS. The path is gh's first two words, with no option before or between them. A command that the reader cannot
+ * read is left to the merge rule.
+ */
+function ghProblem(command, cwd, env) {
+  let runs;
+  try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return undefined; }
+  if (/\bgh\b/.test(command) && runs.some((p) => /[$`…]/.test(p.word))) return GH_LITERAL;
+  const gh = runs.filter((p) => programName(p.word) === "gh");
+  if (!gh.length) return undefined;
+  if (GH_SETTINGS.test(command)) return GH_SETUP;
+  for (const { args: [group, sub] } of gh) {
+    if (group === undefined || GH_HELP.test(group)) continue;
+    const subs = Object.hasOwn(GH_PATHS, group) ? GH_PATHS[group] : undefined;
+    if (subs === undefined) return GH_PATH(group);
+    if (subs !== null && sub !== undefined && !GH_HELP.test(sub) && !subs.includes(sub)) return GH_PATH(`${group} ${sub}`);
+  }
+  return undefined;
+}
 const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages" && ["record", "run", "text"].every((key) => input[key] === undefined));
 
 /** A path segment named .codex, in any letter case (the Mac file system ignores case). */
@@ -303,7 +369,6 @@ export function codexRuns(command, cwd = "/", env = process.env) {
   }
   return found;
 }
-const resumes = (args) => args.some((word) => /^(?:resume|fork)$/i.test(word));
 /** Whether a shell command runs Codex's apply_patch program, which writes files as the apply_patch tool does. */
 const runsPatch = (command, cwd, env) => { try { return programsRun(command, cwd, env.PATH ?? "").some((p) => PATCH_NAME.test(programName(p.word))); } catch { return true; } };
 
@@ -340,8 +405,6 @@ export function stateToolWrites(command, cwd = "/", env = process.env) {
   }
   return false;
 }
-/** Whether a shell command runs codex with resume or fork. */
-export const resumesSession = (command, cwd, env) => (codexRuns(command, cwd, env) ?? []).some(resumes);
 
 /**
  * The gate's proof of one sage tool call that it let through (R1916-2). Codex gives the hook the call's id as
@@ -429,6 +492,9 @@ const codexShellWrite = (command, cwd, env) => {
  * reader and the merge check, for tests.
  */
 export async function gate(input, { mode = readMode, check = checkMerge, env = process.env } = {}) {
+  // The manifest's send pattern has no lookahead (Codex reads it with Rust's regex), so it also matches an MCP tool such
+  // as mcp__slack__send_message. The owner allows MCP tools: the gate judges only sage's own (F-T534-3).
+  if (typeof input?.tool_name === "string" && /^mcp__/.test(input.tool_name) && !SAGE_TOOL.test(input.tool_name)) return undefined;
   const f = fieldsOf(input);
   if (!f) return input?.hook_event_name === "PermissionRequest" ? UNREAD_REQUEST : deny(UNREADABLE);
   const thread = threadOf(f);
@@ -447,6 +513,10 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   // A sage child's message to another thread would start a turn there, as the user's on the root thread (F-T471-4),
   // or wake an implementer for a read-only reviewer (R1712-1). The chief and a child that is not a sage child may send.
   if (SEND_INPUT.test(f.tool)) {
+    // In every mode and from every thread: autopilot on must come from the owner, never from a send (R1940-1).
+    if (V1_SEND.test(f.tool) && mode(f, env).sage) return deny(V1_REFUSED);
+    const targets = V1_SEND.test(f.tool) ? [f.input.target, f.input.id].filter((target) => target !== undefined) : [f.input.target];
+    if (targets.some((target) => sendsToRoot(target, f.session))) return deny(ROOT_SEND);
     const under = thread.child && underSage(thread);
     return under === false ? undefined : refuse(thread, under ? CHILD_SEND : UNREAD_ROLE);
   }
@@ -466,24 +536,22 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   }
   if (namesSageFolder(f.command, env, f.cwd)) return deny(SAGE_FOLDER);
   const runs = codexRuns(f.command, f.cwd, env);
-  // A command that the reader cannot read and that names codex: refused when it may resume or fork a session, and for
-  // a role agent in sage mode. Any other thread runs it, for example "$EDITOR codex/a.txt".
+  // A command that the reader cannot read and that names codex: refused when it may resume, fork or queue a turn, and
+  // for a role agent in sage mode. Any other thread runs it, for example "$EDITOR codex/a.txt".
   if (runs === null && /codex/i.test(f.command)
-    && (/\b(?:resume|fork)\b/i.test(f.command) || (thread.child && underSage(thread) !== false && mode(f, env).sage))) return deny(UNREAD_CODEX);
-  if (runs?.some(resumes)) return deny(RESUME);
+    && (/\b(?:resume|fork|queue)\b/i.test(f.command) || (thread.child && underSage(thread) !== false && mode(f, env).sage))) return deny(UNREAD_CODEX);
+  if (runs?.some((args) => !printsOnly(args))) return deny(CODEX_RUN);
   if (codexShellWrite(f.command, f.cwd, env)) return deny(CODEX_FOLDER);
   if (thread.child) {
     if (stateToolWrites(f.command, f.cwd, env)) return refuse(thread, CHILD_LOGBOOK);
-    if (runs?.some((args) => !printsOnly(args))) {
-      const under = underSage(thread);
-      if (under !== false) return refuse(thread, under ? CHILD_CODEX : UNREAD_ROLE);
-    }
     const why = commandWrites(f.command, f.cwd) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage) : undefined;
     if (why) return refuse(thread, why);
   }
   if (commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
   const now = mode(f, env);
   if (!now.sage) return undefined; // outside sage mode the gate does not judge pushes or merges, as in the Claude hook
+  const gh = ghProblem(f.command, f.cwd, env);
+  if (gh) return deny(gh);
   const push = pushes.pushProblem(f.command, f.cwd);
   if (push) return deny(`sage: ${push}`);
   const merge = policy.mergeIn(f.command);
