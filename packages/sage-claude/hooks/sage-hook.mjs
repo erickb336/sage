@@ -67,6 +67,8 @@ const LEAD_CHILDREN = new Set(["sage:implementer", "sage:code-reviewer", "sage:s
 const LEAD_HELPERS = 9;
 /** The lead's wait command (T482): it waits for a helper's stop with Bash alone, so the lead needs no Monitor tool. */
 const WAIT = join(ROOT, "hooks/wait.mjs");
+/** How long the wait waits at most for a helper's stop. The Bash tool's timeout 600000 of waitStep gives it a minute more. */
+const WAIT_MS = 9 * 60_000;
 /** How a lead runs the wait command for its task: each refusal that asks a lead to wait for a helper names it (R1764-2). */
 const waitStep = (task) => `${nodeCommand(WAIT, task ?? "<T>")} in the project's folder, as a Bash command of its own with the timeout 600000`;
 /** The tools that run a command. The PreToolUse matcher in claude.json names each of them. */
@@ -298,7 +300,7 @@ export function handle(input, state, slots) {
     const lead = input.agent_type === "sage:lead" && slots.leadOf(input.agent_id);
     const ended = lead && (() => { try { return logbookOf(lead.folder).leadRun(lead.task)?.id !== lead.run; } catch { return false; } })();
     const live = lead && !ended ? slots.running(leadKey(lead)) : [];
-    if (live.length) return { decision: "block", reason: `sage: your helper${live.length === 1 ? "" : "s"} ${live.join(", ")} still run${live.length === 1 ? "s" : ""}, and a lead does not end while a helper runs. Run ${waitStep(lead.task)}: it waits up to 9 minutes and prints each helper that stopped, with its kept RESULT. Then go on with your steps.` };
+    if (live.length) return { decision: "block", reason: `sage: your helper${live.length === 1 ? "" : "s"} ${live.join(", ")} still run${live.length === 1 ? "s" : ""}, and a lead does not end while a helper runs. Run ${waitStep(lead.task)}: it returns at once with each helper that stopped and whose run you end, else when a helper stops or none runs, and after ${WAIT_MS / 60_000} minutes at the latest. It names once each run whose report the hook cannot read: the sage ends that run, so do not end it, and name it in FINDINGS of your report. Then go on with your steps.` };
     // A sage agent finishes only with the full report. The second stop goes through, so this cannot loop.
     if (ours && !input.stop_hook_active && typeof input.last_assistant_message === "string") {
       const missing = missingFields(REPORT_FIELDS, input.last_assistant_message);
@@ -1486,22 +1488,27 @@ function chiefEnded(input, slots) {
  * The lead's wait (T482, K2): node wait.mjs <T>, in the project's folder. It returns when a helper of the task's running
  * lead run stopped and its run still runs (the lead has not ended it), when no helper of that lead run runs, or after ms.
  * It reads only the logbook and the hook's helper notes, with Bash alone: no Monitor and no notice. Its text for the lead.
+ * Only the sage ends a review or QA run whose report the hook cannot read, so that stop does not end the wait: the wait
+ * names it once (its only write is that told note) and waits for the helpers that run, and lists each one when none
+ * runs (T523, R1847 F1).
  */
-export async function waitForHelpers(task, cwd, { ms = 9 * 60_000, dir = stateDir() } = {}) {
+export async function waitForHelpers(task, cwd, { ms = WAIT_MS, dir = stateDir() } = {}) {
   if (!TASK.test(String(task ?? ""))) return "usage: node wait.mjs <T>, in the project's folder, for example node wait.mjs T12";
   const started = Date.now();
   for (;;) {
     const view = logbookOf(cwd), lead = view.leadRun(task);
     if (!lead) return `${task} has no running lead run in the logbook of this folder, so there is no helper to wait for.`;
     const key = leadKey({ logbook: digest(view.dir), run: lead.id }), slots = slotsFor(join(dir, "slots"), "wait");
-    const stopped = slots.stops(key).filter((r) => view.row(r?.run)?.status === "running").sort((a, b) => a.run.slice(1) - b.run.slice(1));
-    if (stopped.length) {
-      const line = (r) => [`${r.run} stopped`, r.role, !Array.isArray(r.severities) ? "no report" : r.unreadable && REVIEWERS.includes(r.role) ? "a report that the hook cannot read" : r.result || "no RESULT", ...(r.severities?.length ? [`findings ${r.severities.join(",")}`] : []), `sha ${r.sha ? r.sha.slice(0, 7) : "none"}`].join(" · ");
-      return [...stopped.map(line), "End each of these runs (run done), with its findings and its verdict, then go on."].join("\n");
-    }
-    const live = slots.running(key);
-    if (!live.length) return `No helper of ${lead.id} runs.`;
-    if (Date.now() - started >= ms) return `${live.join(", ")} still run${live.length === 1 ? "s" : ""} after ${Math.round(ms / 60_000)} minutes: run this command again.`;
+    const open = slots.stops(key).filter((r) => view.row(r?.run)?.status === "running").sort((a, b) => a.run.slice(1) - b.run.slice(1));
+    const sages = open.filter((r) => Array.isArray(r.severities) && r.unreadable && REVIEWERS.includes(r.role));
+    const stopped = open.filter((r) => !sages.includes(r)), live = slots.running(key);
+    const line = (r) => [`${r.run} stopped`, r.role, !Array.isArray(r.severities) ? "no report" : sages.includes(r) ? "a report that the hook cannot read" : r.result || "no RESULT", ...(r.severities?.length ? [`findings ${r.severities.join(",")}`] : []), `sha ${r.sha ? r.sha.slice(0, 7) : "none"}`].join(" · ");
+    // The lines of these runs, whose reports the hook cannot read, with what to do; the wait notes that it named them.
+    const told = (list, what) => (list.forEach((r) => slots.tell(`${key}.${r.run}`)), list.length ? [...list.map(line), what] : []);
+    const once = () => told(sages.filter((r) => !slots.told(`${key}.${r.run}`)), "The sage ends each run whose report the hook cannot read: do not end it, and name it in FINDINGS of your report as a gap. The wait names it only this once.");
+    if (stopped.length) return [...stopped.map(line), "End each of these runs (run done), with its findings and its verdict, then go on.", ...once()].join("\n");
+    if (!live.length) return [`No helper of ${lead.id} runs.`, ...told(sages, "The sage ends each of these runs, whose reports the hook cannot read: do not end them. Name each one in FINDINGS of your report as a gap, and end blocked.")].join("\n");
+    if (Date.now() - started >= ms) return [`${live.join(", ")} still run${live.length === 1 ? "s" : ""} after ${Math.round(ms / 60_000)} minutes: run this command again.`, ...once()].join("\n");
     await new Promise((done) => {
       let watcher;
       const end = () => { watcher?.close(); clearTimeout(timer); done(); };
@@ -2539,6 +2546,9 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     /** The main session's TaskStop of lead-T<n>: it ends and frees this session's one lead slot of that name, bound or not (F-T273-13, F-T273-14, F-T273-16). */
     /** A run's helper, in any session: did it start, and its stop's record (folder, task, role, result, severities, sha), or undefined. */
     helper: (key) => ({ owned: helperNote(`owned-${key}`) !== undefined, started: helperNote(`started-${key}`) !== undefined, stopped: parsed(helperNote(`stopped-${key}`)) }),
+    /** Did the lead's wait name this helper's report, which the hook cannot read, to its lead (T523)? tell notes that it did. */
+    told: (key) => helperNote(`told-${key}`) !== undefined,
+    tell: (key) => note(`told-${key}`, "", helpers),
     /** A run that its lead added: the hook saw the lead's run add print its id (F-T289-16). */
     own: (key) => note(`owned-${key}`, "", helpers),
     /** A finding that a lead run recorded: the hook saw the lead's finding add print its key (F-T289-42, F-T289-43). */
