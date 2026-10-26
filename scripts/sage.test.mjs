@@ -4140,12 +4140,13 @@ test("T94: every git call of the state tool carries the neutral options and envi
   const log = join(base, "git.log");
   const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
   mkdirSync(bin);
-  writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$*" "$GIT_CONFIG_NOSYSTEM" "$GIT_ALLOW_PROTOCOL" "$GIT_TERMINAL_PROMPT" >> '${log}'\nexec '${real}' "$@"\n`);
+  writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s|%s|%s|%s|%s\\n' "$*" "$GIT_CONFIG_NOSYSTEM" "$GIT_ALLOW_PROTOCOL" "$GIT_TERMINAL_PROMPT" "$GIT_NO_REPLACE_OBJECTS" >> '${log}'\nexec '${real}' "$@"\n`);
   chmodSync(join(bin, "git"), 0o755);
   assert.equal(sage(["init"], project, { PATH: `${bin}:${env.PATH}` }).status, 0);
   const calls = readFileSync(log, "utf8").trim().split("\n");
   assert.ok(calls.length > 0, "the tool ran git");
-  for (const call of calls) assert.match(call, /^-c core\.fsmonitor=false -c core\.hooksPath=\/dev\/null -C \S+ rev-parse .*\|1\|file:https:ssh\|0$/);
+  // No replace refs and no commit-graph file either: an agent can write both, and each can change what a commit shows (T493).
+  for (const call of calls) assert.match(call, /^-c core\.fsmonitor=false -c core\.hooksPath=\/dev\/null -c core\.commitGraph=false -C \S+ rev-parse .*\|1\|file:https:ssh\|0\|1$/);
 });
 
 test("T94: a planted .git/commondir does not lend a folder another project's logbook; a linked worktree keeps its project's", () => {
