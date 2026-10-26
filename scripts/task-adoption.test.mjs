@@ -101,3 +101,16 @@ test('adoption refuses another task claim and another project', t => {
   writeFileSync(join(s.source, 'checkout.txt'), `${join(s.root, 'other-project')}\n`);
   before = s.bytes(s.dest); assert.match(s.no(...s.adopt), /project/); assert.deepEqual(s.bytes(s.dest), before);
 });
+
+test('an ended blocked preparation does not prevent adoption or become review proof', t => {
+  const s = fixture(t);
+  const run = s.ok('run', 'add', 'T1', '--role', 'implementer', '--branch', BRANCH).split(' ')[0];
+  const before = s.bytes(s.dest);
+  assert.match(s.no(...s.adopt), /only ended blocked or failed runs/); assert.deepEqual(s.bytes(s.dest), before);
+  s.ok('run', 'done', run, '--status', 'blocked');
+  assert.match(s.ok(...s.adopt), /T1 adopted/);
+  assert.equal(tool.read(s.dest, 'runs')[0].status, 'blocked');
+  assert.equal(s.task().round, '4');
+  assert.match(s.no('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', 'review-clean', '--run', run), /fresh done code-reviewer/);
+  assert.equal(tool.read(s.dest, 'ledger').length, 0);
+});

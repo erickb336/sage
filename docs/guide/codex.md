@@ -192,7 +192,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 
 ## Task adoption
 
-Ask the chief to take over an existing task and its PR when you change providers. Use the normal Codex app or CLI with the Sage plugin. The chief frames a destination task, then calls `task_adopt` before it starts any runs.
+Ask the chief to take over an existing task and its PR when you change providers. Use the normal Codex app or CLI with the Sage plugin. The chief frames a destination task, then calls `task_adopt` before it starts new work.
 
 Example tool arguments, with sample paths and task numbers:
 
@@ -218,7 +218,7 @@ node <installed-sage-script> task-adopt T42 --project /path/to/project --source-
 | --- | --- |
 | The source belongs to the same project, in another provider root | Sage reads it without a lock or a write. A busy or changed source refuses adoption. |
 | The PR and branch match the source task | Sage checks the live PR head with the existing read-only PR helper. The branch must name the original task. An empty source branch field is allowed. |
-| The destination is framed or briefed, with no runs, findings or verdicts | Sage records the original provider label, task number, logbook path, project, PR, branch, round count and source-task digest. |
+| The destination is framed or briefed, with no findings or verdicts | Sage records the original provider label, task number, logbook path, project, PR, branch, round count and source-task digest. Only ended blocked or failed runs may already exist; they never count as clean proof. |
 | Another task claims the PR or branch | Sage refuses adoption. Shared source work needs an explicit task mapping from the owner first. |
 | The source spent repair rounds | The destination retains at least that count. Adoption grants no extra repair allowance. Four spent rounds still need the owner's decision before another repair. |
 | The source required reviews or had risk flags | The destination keeps those requirements. A large source keeps its two-cycle minimum. |

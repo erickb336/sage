@@ -2259,8 +2259,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const sourceClaim = sourceRows.find(t => t.id !== sourceTask && (prsOf(t, rowsOf(book.decisions), rowsOf(book.ledger)).has(pr) || sameBranch(t.branch, branch)));
       if (sourceClaim) refuse(`${sourceClaim.id} also claims the source PR or branch. Adopt shared work only after the owner resolves its task mapping. Nothing changed.`);
       if (!["framed", "briefed"].includes(task.state) || !builds(task) || (task.branch && task.branch !== branch) || (task.pr && task.pr !== pr)
-        || [...prsOf(task, decisions, ledger)].some(n => n !== pr) || runs.some(r => r.task === task.id)
-        || ledger.some(r => r.task === task.id) || read(dir, "findings").some(f => f.task === task.id)) refuse("adoption needs an unstarted destination task with no runs, findings, verdicts or conflicting PR/branch history. Nothing changed.");
+        || [...prsOf(task, decisions, ledger)].some(n => n !== pr) || runs.some(r => r.task === task.id && (!r.ended || !["blocked", "failed"].includes(r.status)))
+        || ledger.some(r => r.task === task.id) || read(dir, "findings").some(f => f.task === task.id)) refuse("adoption needs a framed or briefed destination with only ended blocked or failed runs, no findings or verdicts, and no conflicting PR/branch history. Nothing changed.");
       if (list(old.risk).some(r => !RISKS.includes(r)) || list(old.route).some(b => !BLOCKS.includes(b))) refuse("the source route or risk flags are unknown. Nothing changed.");
       let head;
       try { head = pullRequestHead(pr, project, env); } catch (error) { refuse(`adoption cannot check the PR: ${error.message}. Nothing changed.`); }
