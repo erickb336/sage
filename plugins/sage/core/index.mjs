@@ -18,7 +18,7 @@ export { LOGBOOK_FILES, PRIORITIES, PRIORITY_SCALE } from "./logbook-fields.mjs"
 export { readBoardSources } from "./board-reader.mjs";
 export { buildBoardModel } from "./board-model.mjs";
 export { renderBoardHtml, renderAgentsHtml, renderProgramsHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
-export { boardView } from "./board-view.mjs";
+export { boardView, landingRule } from "./board-view.mjs";
 export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
 
 export { REPORT_FIELDS, missingReportFields, parseReport } from "./report.mjs";

@@ -18,7 +18,9 @@ test("board columns use every required state and completion dates, not latest ac
   const tasks = states.map((state, i) => task(`T${i + 1}`, state));
   const records = [observation("completion", { state: "merged", at: "2026-10-01T20:00:00Z" }, { task: "T13" }), observation("completion", { state: "concluded", at: "2026-10-01T19:59:59Z" }, { task: "T14" })];
   const model = buildBoardModel([source("one", tasks, { decisions: [{ task: "T14", at: now, decision: "sample recent activity" }] }, records)], { now });
-  assert.deepEqual(model.columns.map(c => c.tasks.length), [1, 2, 5, 2, 2, 1]);
+  // T280: verified and pr-ready (T11, T12) have no PR head, so the board cannot run the merge check: they stay in review.
+  assert.deepEqual(model.columns.map(c => c.tasks.length), [1, 2, 5, 4, 0, 1]);
+  assert.deepEqual(model.columns.find(c => c.key === "review").tasks.map(t => t.id).sort(), ["T11", "T12", "T10", "T9"].sort());
   assert.equal(model.tasks.find(t => t.id === "T15").column, null);
   assert.equal(model.tasks.find(t => t.id === "T14").visible, false);
 });
@@ -352,7 +354,9 @@ test("T314 R1043-4: the board refuses a display name that is not in the composed
 
 // T305: the step line (loop design 1), the merge of one repository's logbooks, and the picker's list. Sample data only.
 const line = card => card.loop.steps.map(step => `${step.label}: ${step.status}`);
-const oneTask = (row, tables = {}, records = [], config = {}) => buildBoardModel([{ ...source("one", [row], tables, records), config }], { now }).tasks[0];
+// A sample merge check that passes on every head (T280), unless a test gives its own.
+const passes = () => ({ ok: true, reason: "" });
+const oneTask = (row, tables = {}, records = [], config = {}, landing = passes) => buildBoardModel([{ ...source("one", [row], tables, records), config }], { now, landing }).tasks[0];
 
 test("T305: the step line and the Now and Next lines follow the fixed rule of each state on a build route", () => {
   const running = role => ({ runs: [{ id: "R7", task: "T1", role, status: "running", started: "2026-10-08T19:20:00Z" }] });
@@ -366,12 +370,30 @@ test("T305: the step line and the Now and Next lines follow the fixed rule of ea
   const verified = oneTask(task("T1", "verified", { pr: "41" }), clean, [observation("mode", { autopilot: false })]);
   assert.deepEqual(line(verified), ["Plan: done", "Build: done", "Review 1 of 1: done", "Merge: need"]);
   assert.deepEqual([verified.loop.now, verified.loop.next], [{ needs: true, text: "Autopilot is off, so review and merge PR 41." }, "Done after the merge."]);
-  const unknown = oneTask(task("T1", "verified", { pr: "41" }));
+  const unknown = oneTask(task("T1", "verified", { pr: "41" }), clean);
   assert.equal(unknown.loop.now.text, "The board cannot tell if autopilot is on, so review and merge PR 41.", "R1075-4: plain words, not 'Autopilot state is unknown'");
-  const auto = oneTask(task("T1", "verified", { pr: "41" }), {}, [observation("mode", { autopilot: true })]);
+  const auto = oneTask(task("T1", "verified", { pr: "41" }), clean, [observation("mode", { autopilot: true })]);
   assert.deepEqual([line(auto).at(-1), auto.loop.now.text, auto.reasons], ["Merge: idle", "Verified. Autopilot merges PR 41.", []]);
   const merged = oneTask(task("T1", "merged", { pr: "41" }), clean);
   assert.deepEqual([line(merged), merged.loop.now.text, merged.loop.next], [["Plan: done", "Build: done", "Review 1 of 1: done", "Merge: done"], "Merged.", null]);
+});
+
+test("T280: a verified PR is ready to merge only when the merge check passes on its known head; else the board says why", () => {
+  const clean = { ledger: ["checks-pass", "review-clean", "qa-pass"].map(kind => ({ task: "T1", pr: "41", sha: head, kind, cycle: "1", at: now })) };
+  const mode = [observation("mode", { autopilot: false })];
+  const calls = [], ready = oneTask(task("T1", "verified", { pr: "41" }), clean, mode, {}, (...args) => (calls.push(args), { ok: true, reason: "" }));
+  assert.deepEqual(calls, [["one", head, "41"]], "the merge check gets the source, the full head and the PR");
+  assert.deepEqual([ready.column, ready.mergeCheck.ok, ready.reasons.map(r => r.kind), ready.loop.steps.at(-1).detail],
+    ["ready", true, ["merge"], "The merge check passes on aaaaaaa. The board does not check the PR's head branch. Autopilot is off, so the merge waits for you."]);
+  const refuses = oneTask(task("T1", "pr-ready", { pr: "41" }), clean, mode, {}, () => ({ ok: false, reason: "T1 has open findings: F-T1-1. Fix them." }));
+  assert.deepEqual([refuses.column, refuses.loop.now, refuses.loop.steps.at(-1).detail],
+    ["review", { needs: true, text: "The merge check refuses aaaaaaa. T1 has open findings: F-T1-1." }, "The merge check refuses aaaaaaa. T1 has open findings: F-T1-1."]);
+  const noHead = oneTask(task("T1", "verified", { pr: "41" }), {}, mode, {}, () => assert.fail("no head: the board does not run the merge check"));
+  assert.deepEqual([noHead.column, noHead.loop.now.text], ["review", "The merge check is not checked, because the board does not know the last commit of PR 41."]);
+  const noCheck = oneTask(task("T1", "verified", { pr: "41" }), clean, mode, {}, null);
+  assert.deepEqual([noCheck.column, noCheck.loop.now.text], ["review", "The merge check is not checked on aaaaaaa, because this board cannot run it."]);
+  const auto = oneTask(task("T1", "verified", { pr: "41" }), clean, [observation("mode", { autopilot: true })], {}, () => ({ ok: false, reason: "T1: 0 of 1 clean cycles on this SHA." }));
+  assert.deepEqual([auto.column, auto.loop.now.text], ["review", "The merge check refuses aaaaaaa. T1: 0 of 1 clean cycles on this SHA."], "autopilot on: a refusal still shows");
 });
 
 test("R1075-1, R1071-1: a step runs now only while a run of the task runs; a gate makes it need you; a stale run shows its mark", () => {
