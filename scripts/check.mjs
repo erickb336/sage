@@ -18,6 +18,7 @@ import { files as graphics } from "./graphics.mjs";
 import { packageBoundaryProblems } from "./package-boundaries.mjs";
 import { docFiles, linkProblems, paragraphProblems, readmeProblems } from "./readme-checks.mjs";
 import { SHOTS, SHOTS_RECORD, sampleHash } from "./board-shots.mjs";
+import { unrunTestFiles } from "./test-commands.mjs";
 
 const problems = [];
 try { problems.push(...packageBoundaryProblems(ROOT)); }
@@ -262,12 +263,8 @@ for (const f of [...new Set([...testFiles, ...imported])].filter((f) => existsSy
   });
 }
 
-// Each test file in scripts/ runs in CI: npm test or npm run test:browser names it (R1534-3).
-{
-  const { scripts } = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  const named = new Set(`${scripts.test} ${scripts["test:browser"]}`.split(/\s+/));
-  for (const f of readdirSync(join(ROOT, "scripts"))) if (f.endsWith(".test.mjs") && !named.has(`scripts/${f}`)) problems.push(`scripts/${f}: no test command runs it; add it to "test" or "test:browser" in package.json`);
-}
+// Each test file of the repository runs in CI: npm test or npm run test:browser names it (R1534-3, T350).
+for (const f of unrunTestFiles(ROOT)) problems.push(`${f}: no test command runs it; add it to "test" or "test:browser" in package.json`);
 
 // Provider build outputs must be exact, including the absence of obsolete or foreign files.
 for (const dir of ["plugins/sage", "plugins/sage-codex"]) {
