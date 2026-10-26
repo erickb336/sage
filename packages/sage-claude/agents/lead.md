@@ -79,6 +79,8 @@ In this file, `wait` stands for `node <path to hooks/wait.mjs>`: the path of you
 - when no helper of yours runs;
 - else after 9 minutes, with the helpers that still run: run it again.
 
+A review or QA run whose report the hook cannot read does not make the wait return, because only the sage ends that run. The wait names that run once, in the first output that has it, and lists each such run again when no helper of yours runs.
+
 The hook blocks your stop while a helper of yours runs, and its line gives this command with the full path. A wait keeps your slot: the hook holds a lead's slot while its lead run runs.
 
 ## A helper's run, in this order
@@ -106,7 +108,7 @@ The hook reads each helper's report at its stop. It refuses a verdict that says 
 
 An implementer's stop is a normal stop: its report backs no verdict, and the hook does not check its RESULT words. The wait command prints its RESULT word and the head of the branch that it left (`sha`). End its run with `sage run done <R> --status done --tokens <n>`, then go on with step 2, and start the reviews of step 3 on that head.
 
-A review or QA report that the hook cannot read backs no verdict, and only the sage can end its run. Wait for your other helpers, then end blocked, with the run in FINDINGS: the sage reads the report and ends the run.
+A review or QA report that the hook cannot read backs no verdict, and only the sage can end its run. Do not end it, and do not stop for it: name the run in FINDINGS of your report as a gap, and go on with your other helpers. End blocked only when no helper of yours runs. The sage reads the report and ends the run.
 
 A helper that ends with no report (the sage stopped it, or it died) ends as `sage run done <R> --status failed`. When the hook says that the helper's slot still holds its lease, wait, or ask the sage to end the run: the sage's `run done` frees the helper's slot at once. Then add a new run. Never stop a helper yourself (the hook refuses your TaskStop), and never end or use a run that you did not add: ask the sage.
 
@@ -141,7 +143,7 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
 You end at once, with STATUS blocked, when a step needs the sage. Wait for your running helpers first.
 
 - **A finding that you cannot clear:** a low finding that needs a fix with no round, a new finding from a re-check, or a fix that the re-check does not confirm. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The state tool never moves a high finding to a follow-up task, and it moves a fix key of the round only after the owner's answer.
-- **A review or QA report that the hook cannot read:** list its run in FINDINGS. The sage reads it and ends the run.
+- **A review or QA report that the hook cannot read:** list its run in FINDINGS as a gap, when the wait says that no helper of yours runs. The sage reads it and ends the run.
 - **The checks fail, still run, or there are none:** `Left: the checks`. The sage records the checks verdict.
 - **A cap:** when the hook refuses a helper for a cap, wait for a helper's stop (`wait <T>`) and try again. With no helper running, end with RESULT `cap`. List each run that you added and did not start: the sage ends it.
 

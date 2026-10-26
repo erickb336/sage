@@ -6852,6 +6852,48 @@ test("T482 K2: a lead does not end while its helper runs, and the wait command w
   assert.equal(leadStop(s), undefined, "with no helper running, the lead ends");
 });
 
+// T523 (R1847 F1): only the sage ends a review or QA run whose report the hook cannot read, so a wait that returned for it
+// returned at once in a loop while another helper ran. The wait names such a run once and waits for the running helpers.
+/** The wait's lines for a review or QA run whose report the hook cannot read. */
+const unread = (s, run, role) => `${run} stopped · ${role} · a report that the hook cannot read · sha ${s.head().slice(0, 7)}`;
+const ONCE = "The sage ends each run whose report the hook cannot read: do not end it, and name it in FINDINGS of your report as a gap. The wait names it only this once.";
+const SAGE_ENDS = "The sage ends each of these runs, whose reports the hook cannot read: do not end them. Name each one in FINDINGS of your report as a gap, and end blocked.";
+
+test("T523: while a helper runs, a review report that the hook cannot read does not end the wait, and the wait names it once", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const reviewer = liveHelper(s, "code-reviewer"), qa = liveHelper(s, "qa");
+  s.send(ended(`child-${reviewer}`, "sage:code-reviewer", { last_assistant_message: report("MAYBE") }));
+  // Each wait runs to its budget of 1.5 s while QA runs. In R1847 it returned in about 60 ms, so 1 s is a wide margin (order 26).
+  const timed = () => { const start = Date.now(), out = waitOut(s, 1_500); return { out, ms: Date.now() - start }; };
+  const first = timed(), second = timed();
+  assert.ok(first.ms >= 1_000, `the first wait waits for QA (${first.ms} ms)`);
+  assert.equal(first.out, `${qa} still runs after 0 minutes: run this command again.\n${unread(s, reviewer, "code-reviewer")}\n${ONCE}`, "the first wait names the unread run once");
+  assert.ok(second.ms >= 1_000, `the second wait waits for QA too (${second.ms} ms)`);
+  assert.equal(second.out, `${qa} still runs after 0 minutes: run this command again.`, "the second wait does not name the unread run again");
+  const block = leadStop(s);
+  assert.equal(block?.decision, "block", "QA runs, so the lead does not end");
+  assert.match(block.reason, new RegExp(`^sage: your helper ${qa} still runs, .*: it returns at once with each helper that stopped and whose run you end, else when a helper stops or none runs, and after 9 minutes at the latest\\. It names once each run whose report the hook cannot read: the sage ends that run, so do not end it, and name it in FINDINGS of your report\\. Then go on with your steps\\.$`));
+  s.send(ended(`child-${qa}`, "sage:qa", { last_assistant_message: report("PASS") }));
+  assert.equal(waitOut(s, 60_000), `${qa} stopped · qa · PASS · sha ${s.head().slice(0, 7)}\nEnd each of these runs (run done), with its findings and its verdict, then go on.`, "QA's stop ends the wait, with no repeat of the unread run");
+  assert.equal(denied(stateRun(s, `run done ${qa} --status done --tokens 1`)), undefined, "the lead ends QA's run");
+  s.sage("run", "done", qa, "--status", "done", "--tokens", "1");
+  assert.equal(waitOut(s), `No helper of R1 runs.\n${unread(s, reviewer, "code-reviewer")}\n${SAGE_ENDS}`, "with no helper running, the wait lists the unread run again");
+  assert.equal(leadStop(s), undefined, "the lead ends (blocked, with the run in its report)");
+});
+
+test("T523: with no helper running, the wait returns at once with each unread run, after the stops that the lead ends", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const reviewer = liveHelper(s, "security-reviewer");
+  s.send(ended(`child-${reviewer}`, "sage:security-reviewer", { last_assistant_message: report("FINDINGS", "none") }));
+  assert.equal(waitOut(s, 60_000), `No helper of R1 runs.\n${unread(s, reviewer, "security-reviewer")}\n${SAGE_ENDS}`, "the wait returns with the list");
+  const qa = liveHelper(s, "qa"), late = liveHelper(s, "ux-reviewer");
+  s.send(ended(`child-${late}`, "sage:ux-reviewer", { last_assistant_message: report("MAYBE") }));
+  s.send(ended(`child-${qa}`, "sage:qa", { last_assistant_message: report("PASS") }));
+  assert.equal(waitOut(s, 60_000), `${qa} stopped · qa · PASS · sha ${s.head().slice(0, 7)}\nEnd each of these runs (run done), with its findings and its verdict, then go on.\n${unread(s, late, "ux-reviewer")}\n${ONCE}`, "a stop to end comes first; only the new unread run is named, once");
+});
+
 
 test("T482 K3: a lead's slot holds through a 2-hour wait while its lead run runs, and gets the one-hour lease again when the sage ends the run", () => {
   const s = leadSession();
@@ -7029,7 +7071,7 @@ test("T482 R1817-1: an implementer's stop is a normal stop with its RESULT word 
   s.sage("run", "done", build, "--status", "done", "--tokens", "1");
   const qa = startHelper(s, "qa");
   s.send(ended(`child-${qa}`, "sage:qa", { last_assistant_message: report("done", "none") }));
-  assert.equal(waitOut(s), `${qa} stopped · qa · a report that the hook cannot read · sha ${head.slice(0, 7)}\nEnd each of these runs (run done), with its findings and its verdict, then go on.`, "a QA RESULT that is no verdict word");
+  assert.equal(waitOut(s), `No helper of R1 runs.\n${qa} stopped · qa · a report that the hook cannot read · sha ${head.slice(0, 7)}\n${SAGE_ENDS}`, "a QA RESULT that is no verdict word: the sage ends that run (T523)");
 });
 
 test("T482 R1817-2: a lead's second verdict on a run that backs one names that verdict and asks for a new run", () => {
