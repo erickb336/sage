@@ -91,7 +91,7 @@ test("npm run check fails on a fragment that the build has not put in CHANGELOG.
   assert.equal(spawnSync("node", [join(dir, "scripts/build.mjs")], { encoding: "utf8" }).status, 0);
   const built = check();
   assert.equal(built.status, 0, built.stderr);
-  assert.match(readFileSync(join(dir, "CHANGELOG.md"), "utf8"), /\n## 2099-01-01\n\n- \*\*A later change\.\*\* Text\.\n\n## 2026-10-25\n/);
+  assert.match(readFileSync(join(dir, "CHANGELOG.md"), "utf8"), /\n## 2099-01-01\n\n- \*\*A later change\.\*\* Text\.\n\n## \d{4}-\d{2}-\d{2}\n/); // the repository's newest date comes next
 });
 
 // R1771: nothing drops without a line that says so. A small checkout with changes/ and CHANGELOG.md.

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tool } from '../../../plugins/sage-codex/skills/sage/sage.mjs';
 import { workflow } from '../../../plugins/sage-codex/skills/sage/workflow.mjs';
+import { reportFor } from '../../../scripts/verdict-backing.mjs';
 const cli = fileURLToPath(new URL('../../../plugins/sage-codex/skills/sage/workflow.mjs', import.meta.url));
 const mergedSha = 'c'.repeat(40);
 function fixture(t, { cycles = 2 } = {}) {
@@ -28,6 +29,8 @@ function fixture(t, { cycles = 2 } = {}) {
   const doneRun = role => {
     core('run','add','T1','--role',role,'--usage-interface','collaboration-tools');
     const id = `R${++nextRun}`;
+    // A review's clean report, kept as the stop hook keeps it, backs its verdict (T483).
+    if (role !== 'lead') tool.keepReport(project, { task: 'T1', run: id, role, sha: head, text: reportFor(role === 'qa' ? 'qa-pass' : 'review-clean') }, env);
     core('run','done',id,'--status','done','--tokens','1','--usage-source','fixture','--usage-evidence','fixture.json','--report','fixture-report.md');
     return id;
   };
