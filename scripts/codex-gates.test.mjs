@@ -694,6 +694,43 @@ test("no sage child sends a message to another thread, with v1's send_input or v
   assert.deepEqual(["mcp__slack__send_input", "collaborationsend_message_x", "xsend_input"].filter((tool) => matcher.test(tool)), [], "and for no other tool");
 });
 
+/** The gate's matcher in the built manifest, read as Codex reads a matcher with other characters than letters, digits, _ and | (hooks/src/engine/matcher.rs:12-22). */
+const gateMatcher = () => new RegExp(JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher);
+
+test("a tool call inside a code-mode exec cell reaches the gate as a direct call does, and the gate applies its rules (T541)", async (t) => {
+  // Codex 0.164.0 runs no PreToolUse for the exec call itself (its input is raw JavaScript, a custom payload:
+  // registry.rs:150-153), and one for each tool that the code calls, with the tool's own hook name and input
+  // (code_mode/mod.rs:337-415 into registry.rs:615-702; Codex's own test hooks.rs:4174-4243). The tool_use_id is exec-<uuid>.
+  const nested = (tool_name, tool_input, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "exec-0b6c3c2e-8d1e-4f55-9d7a-1f0e2a3b4c5d", tool_input, ...extra });
+  const g = fixed({ sage: true });
+  // tools.exec_command({ cmd: "git push github HEAD:main", workdir }) comes as Bash with only the command (exec_command.rs:499-509).
+  assert.match(denied(await g.run(nested("Bash", { command: "git push github HEAD:main" }))) ?? "runs", /^sage: work reaches main only through a pull request/);
+  // tools.apply_patch(patch) is a freeform tool: the patch is the command (apply_patch.rs:277-282, 394-399).
+  assert.match(denied(await g.run(nested("apply_patch", { command: patch("*** Update File: src/a.js", "@@", "-a", "+b") }))) ?? "runs", /^sage: sage mode is on, so the chief does not change files/);
+  // tools.mcp__sage__verdict({...}) keeps its MCP hook name (handlers/mcp.rs:139-161, 487-496).
+  assert.equal(denied(await g.run(nested("mcp__sage__verdict", { project: CWD, task: "T1" }, sageChild(t, "/root/sage_code_reviewer_t1_r1")))), LOGBOOK);
+  assert.equal(await g.run(nested("mcp__sage__verdict", { project: CWD, task: "T1" })), undefined, "the chief records");
+  // tools.spawn_agent({...}) is spawn_agent (registry.rs:943-952).
+  assert.equal(denied(await g.run(nested("spawn_agent", { task_name: "x", message: "y" }, sageChild(t, "/root/sage_qa_t1_r1")))), SPAWN);
+  const matcher = gateMatcher();
+  assert.deepEqual(["Bash", "apply_patch", "mcp__sage__verdict", "spawn_agent", "collaborationspawn_agent"].filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each nested tool");
+});
+
+test("in sage mode the gate refuses every js call of Codex's REPL servers, because it cannot read the code; outside sage mode it runs (T541)", async () => {
+  const REPL = 'sage: the hook cannot read the code of a js call, and that code can run shell commands and change files that no sage rule sees, so in sage mode it refuses every js call. Run a shell command with exec_command and an edit with apply_patch. The user ends sage mode with the message "sage mode off", alone';
+  // The REPL servers' js tool takes { code } (Codex 0.164.0 guardian/tests.rs:208-216); its code runs in the server's own Node process.
+  const js = (tool_name, code, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { code }, ...extra });
+  const code = "require('child_process').execSync('git push github HEAD:main')";
+  for (const tool of ["mcp__node_repl__js", "mcp__cua_repl__js"]) {
+    assert.equal(denied(await fixed({ sage: true }).run(js(tool, code))), REPL, `${tool} the chief`);
+    assert.equal(denied(await fixed({ sage: true }).run(js(tool, "await browser.open('https://example.com')", CHILD))), REPL, `${tool} a child`);
+    assert.equal(await fixed({ sage: false }).run(js(tool, code)), undefined, `${tool} outside sage mode`);
+  }
+  const matcher = gateMatcher();
+  assert.deepEqual(["mcp__node_repl__js", "mcp__cua_repl__js"].filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each js tool");
+  assert.deepEqual(["mcp__node_repl__read_file", "mcp__other__js", "js", "exec"].filter((tool) => matcher.test(tool)), [], "and for no other tool");
+});
+
 test("the sage folder and a .codex folder are found also behind quotes, ~ and a variable, and from the folder a command runs in (R1669-4, R1669-6)", async (t) => {
   const home = "/Users/someone";
   const env = { ...process.env, HOME: home, SAGE_HOME: undefined, CODEX_HOME: `${home}/.codex` };
