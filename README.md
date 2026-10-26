@@ -91,18 +91,17 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 
 ## What to say
 
-Send each phrase alone, as the whole message.
-
 | Say | What happens |
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff. Send your request next. |
 | `show status` | Where each task is: running, waiting for you, verified. It names each open task with no priority. |
+| Ask the chief to adopt another provider's task and PR | The chief uses [task adoption](docs/guide/codex.md#task-adoption). The branch, PR and spent repairs stay; reviews and QA start fresh. |
 | `show board` | The board in the chat, and the address of the board page. |
 | `autopilot on` / `autopilot off` | Verified pull requests merge by themselves, or wait for you again. Off by default. |
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase). In Codex, the mode phrases and `sage help` work, and the board phrases do not yet ([sage in Codex](docs/guide/codex.md#turn-on-sage-mode)).
+Send each phrase alone, as the whole message. Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase). In Codex, the mode phrases and `sage help` work, and the board phrases do not yet ([sage in Codex](docs/guide/codex.md#turn-on-sage-mode)).
 
 ## How sage works
 

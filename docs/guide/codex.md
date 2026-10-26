@@ -174,6 +174,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | --- | --- |
 | `init`, `status` | `init`, `status` |
 | `task_add`, `task_set` | `task add`, `task <T> set` |
+| `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR, with fresh destination reviews |
 | `run_add`, `run_done` | `run add`, `run done` |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` |
 | `verdict`, `round`, `merge_check`, `log` | `verdict`, `round`, `merge-check`, `log` |
@@ -188,6 +189,45 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it.
 - Under full access (`danger-full-access`), an agent's shell can write any file, also the logbook, the mode files and Codex's record of your messages. So sage mode gives no guarantee there.
 - The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.
+
+## Task adoption
+
+Ask the chief to take over an existing task and its PR when you change providers. Use the normal Codex app or CLI with the Sage plugin. The chief frames a destination task, then calls `task_adopt` before it starts new work.
+
+Example tool arguments, with sample paths and task numbers:
+
+```json
+{
+  "project": "/path/to/project",
+  "task": "T42",
+  "source-logbook": "/path/to/source-provider/sage/project-key",
+  "source-provider": "claude",
+  "source-task": "T536",
+  "pr": "362",
+  "branch": "sage/t536-existing-work"
+}
+```
+
+The shared state CLI also accepts this command. Replace each sample path and identity before use:
+
+```sh
+node <installed-sage-script> task-adopt T42 --project /path/to/project --source-logbook /path/to/source-provider/sage/project-key --source-provider claude --source-task T536 --pr 362 --branch sage/t536-existing-work
+```
+
+| Rule | Result |
+| --- | --- |
+| The source belongs to the same project, in another provider root | Sage reads it without a lock or a write. A busy or changed source refuses adoption. |
+| The PR and branch match the source task | Sage checks the live PR head with the existing read-only PR helper. The branch must name the original task. An empty source branch field is allowed. |
+| The destination is framed or briefed, with no findings or verdicts | Sage records the original provider label, task number, logbook path, project, PR, branch, round count and source-task digest. Only ended blocked or failed runs may already exist; they never count as clean proof. |
+| Another task claims the PR or branch, including through a recorded run | Sage refuses adoption. Shared source work needs an explicit task mapping from the owner first. |
+| The source spent repair rounds | The destination retains at least that count. Adoption grants no extra repair allowance. Four spent rounds still need the owner's decision before another repair. |
+| The source required reviews or had risk flags | The destination keeps those requirements and the source's configured cycle minimum. Merge checks require the larger of that saved minimum and the current destination requirement. |
+| The source had clean verdicts | They stay in the source. Fresh destination runs must supply every required verdict on the final SHA. |
+| The same adoption is retried | Sage returns the existing record without changing the current task state, round count, saved cycle minimum or proof. A different identity refuses. |
+
+The adopted PR and branch stay bound to the destination task. Normal task state changes, runs, reviews and merge checks then use that branch. Ordinary tasks keep their existing branch-name rules.
+
+The source provider name is a label supplied by the chief; the logbook path and project identify the actual source. This command does not install a plugin, change a PR, merge code, or copy source findings and verdicts.
 
 ## The brief check
 
