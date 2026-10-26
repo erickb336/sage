@@ -999,10 +999,11 @@ const LEAD_PAIRS = {
       if (view.cleanCycles(task.id, head) > 0) return `${task.id}'s head ${head.slice(0, 7)} has a full clean cycle, so ${task.id} stays at ${task.state}: a lead moves it back to reviewing only after the head moved (F-T301-49).`;
     }
     // To verifying only with a full clean cycle on the head: every clean review and QA verdict of its route (R1836-3, R1846-1).
+    // A route with no review or QA (null) needs no cycle, as the merge check counts it (R1991-1).
     if (state === "verifying") {
       const head = headOf(ctx.lead.folder, task.id);
       if (!head) return `the head of ${task.id}'s branch cannot be read, so ${task.id} stays at ${task.state}.`;
-      if (!(view.cleanCycles(task.id, head) > 0)) return `${task.id}'s head ${head.slice(0, 7)} has no full clean cycle yet (a clean verdict of each review and QA of its route on it), so ${task.id} stays at ${task.state}: record them first (R1836-3, R1846-1).`;
+      if (view.cleanCycles(task.id, head) === 0) return `${task.id}'s head ${head.slice(0, 7)} has no full clean cycle yet (a clean verdict of each review and QA of its route on it), so ${task.id} stays at ${task.state}: record them first (R1836-3, R1846-1).`;
     }
     return !(task.state === "repairing" && roundFixOpen(task, view)) || `${task.id} has an open fix finding of its round: close each one after the repair's commit (finding close), then move it to reviewing.`;
   },

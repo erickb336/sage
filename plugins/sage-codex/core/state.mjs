@@ -2179,10 +2179,13 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     },
     shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
     verdicts: (task) => rows("ledger").filter((r) => r.task === task),
-    /** The clean cycles of a task on one SHA, as the merge check counts them: 0 for a task with no review or QA. */
+    /**
+     * The clean cycles of a task on one SHA, as the merge check counts them: 0 for an unknown task, and null for a task whose
+     * route has no review or QA (a tiny task without a risk flag), which needs no cycle (R1991-1).
+     */
     cleanCycles: (id, sha) => {
       const task = one(rows("tasks").filter((t) => t.id === id)), on = rows("ledger").filter((r) => r.task === id && String(r.sha).toLowerCase() === String(sha).toLowerCase());
-      return task && cleanKinds(task).length ? cleanCycles(task, on) : 0;
+      return !task ? 0 : cleanKinds(task).length ? cleanCycles(task, on) : null;
     },
     endedLeadRuns: () => rows("runs").filter((r) => r.role === "lead" && r.status !== "running"),
     prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),

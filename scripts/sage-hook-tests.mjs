@@ -5374,12 +5374,12 @@ test("F-T255-13: a child whose type comes in another letter case keeps its slot 
  * logbook is the one of the folder's physical path, as the state tool finds it from process.cwd(); the lead's commands
  * run in s.dir, which on macOS goes through the /var link.
  */
-function leadSession(env = {}) {
+function leadSession(env = {}, size = "small") {
   const s = linkedSession(env);
   s.sage("config", "max_agents=20", "cap_total=30");
   s.send(prompt("sage mode"));
   s.sage("init");
-  for (const title of ["mine", "theirs"]) s.sage("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  for (const title of ["mine", "theirs"]) s.sage("task", "add", "--priority", "P2", "--title", title, "--size", size);
   s.sage("run", "add", "T1", "--role", "lead"); // R1, the lead's own run
   // The sage's fixture findings name the lead run, the only run of T1 yet, as a review or QA finding needs a run (T490).
   s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a", "--run", "R1", "--class", "other"); // F-T1-1
@@ -5690,6 +5690,15 @@ test("F-T273-7: a lead makes only the cycle's next state move, and never moves a
   }
   setState(s, "T1", "building");
   assert.match(denied(stateRun(s, "task T1 set state=reviewing state=verifying")) ?? "", NOT_OWN, "one state= per command");
+});
+
+test("R1991-1: a lead moves a tiny task without a risk flag to verifying with no cycle; a small task still needs one", () => {
+  const tiny = leadSession({}, "tiny"); // route ["build"]: no review and no QA, so the merge check needs no cycle
+  setState(tiny, "T1", "reviewing");
+  assert.equal(denied(stateRun(tiny, "task T1 set state=verifying")), undefined, "a tiny task has no cycle to wait for");
+  const small = leadSession();
+  setState(small, "T1", "reviewing");
+  assert.match(denied(stateRun(small, "task T1 set state=verifying")) ?? "", /^sage: T1's head [0-9a-f]{7} has no full clean cycle yet .*\(R1836-3, R1846-1\)\./, "a small task with no clean cycle");
 });
 
 test("F-T273-3: a lead's run add --branch must be a branch of its own task", () => {
