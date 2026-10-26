@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, realpathSync, rmSync, chmodSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { test } from 'node:test';
 import { createStateTool } from '../packages/sage-core/state.mjs';
 
 const SHA = '1'.repeat(40), BRANCH = 'sage/t536-adopt';
 const tool = createStateTool({ defaultRoot: env => env.SAGE_HOME });
+const snapshot = dir => Object.fromEntries(readdirSync(dir, { withFileTypes: true }).map(entry => [entry.name,
+  entry.isDirectory() ? snapshot(join(dir, entry.name)) : readFileSync(join(dir, entry.name), 'utf8')]));
 function fixture(t, sourceTask = 'T536', branch = BRANCH) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-adoption-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -36,7 +38,8 @@ function fixture(t, sourceTask = 'T536', branch = BRANCH) {
   const adopt = ['task-adopt', 'T1', '--source-logbook', source, '--source-provider', 'claude', '--source-task', sourceTask, '--pr', '362', '--branch', branch];
   const bytes = dir => Object.fromEntries(readdirSync(dir).filter(n => n.endsWith('.tsv') || n === 'checkout.txt').map(n => [n, readFileSync(join(dir, n), 'utf8')]));
   const task = () => tool.read(dest, 'tasks')[0];
-  return { root, project, source, dest, env, ok, no, adopt, bytes, task };
+  const sourceOk = (...args) => { const r = command(sourceEnv, ...args); assert.equal(r.code, 0, r.text); return r.text; };
+  return { root, project, source, dest, env, ok, no, adopt, bytes, task, sourceOk };
 }
 
 test('adoption preserves source identity, PR and spent rounds without copying source proof', t => {
@@ -108,14 +111,58 @@ test('adoption refuses destination ownership by task number without any mutation
   const other = tool.read(s.dest, 'tasks').find(task => task.id === 'T2');
   assert.equal(other.pr, ''); assert.equal(other.branch, '');
   assert.deepEqual(tool.read(s.dest, 'runs'), []);
-  const snapshot = dir => Object.fromEntries(readdirSync(dir, { withFileTypes: true }).map(entry => [entry.name,
-    entry.isDirectory() ? snapshot(join(dir, entry.name)) : readFileSync(join(dir, entry.name), 'utf8')]));
   const destination = snapshot(s.dest), source = snapshot(s.source);
   const result = tool.command([...s.adopt, '--project', s.project], s.env);
   assert.deepEqual(snapshot(s.dest), destination, `refused adoption must leave every destination file unchanged: ${result.text}`);
   assert.deepEqual(snapshot(s.source), source);
   assert.equal(result.code, 1, result.text);
   assert.match(result.text, /T2 already claimed this PR or branch/);
+});
+
+test('adoption refuses source run-only ownership without any mutation', t => {
+  const s = fixture(t);
+  s.sourceOk('task', 'add', '--title', 'Other source task', '--size', 'small', '--priority', 'P1');
+  const run = s.sourceOk('run', 'add', 'T537', '--role', 'implementer', '--branch', BRANCH).split(' ')[0];
+  s.sourceOk('run', 'done', run, '--status', 'done', '--tokens', '1');
+  const other = tool.read(s.source, 'tasks').find(task => task.id === 'T537');
+  assert.equal(other.pr, ''); assert.equal(other.branch, '');
+  const destination = snapshot(s.dest), source = snapshot(dirname(s.source));
+  const result = tool.command([...s.adopt, '--project', s.project], s.env);
+  assert.deepEqual(snapshot(s.dest), destination, `refused adoption must leave every destination file unchanged: ${result.text}`);
+  assert.deepEqual(snapshot(dirname(s.source)), source);
+  assert.equal(result.code, 1, result.text);
+  assert.match(result.text, /T537 also claims the source PR or branch/);
+});
+
+test('adoption preserves the source configured cycle minimum and stronger destination requirements', t => {
+  const s = fixture(t), sourceConfig = join(dirname(s.source), 'config.json');
+  writeFileSync(sourceConfig, JSON.stringify({ 'cycles.risk': 3 }));
+  const source = snapshot(dirname(s.source));
+  s.ok(...s.adopt);
+  assert.deepEqual(snapshot(dirname(s.source)), source);
+  s.ok('task', 'T1', 'set', 'state=briefed');
+  s.ok('task', 'T1', 'set', 'state=building'); s.ok('task', 'T1', 'set', 'state=reviewing');
+  s.ok('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', 'checks-pass');
+  const cycle = number => {
+    for (const [role, kind] of [['code-reviewer', 'review-clean'], ['security-reviewer', 'security-clean'], ['qa', 'qa-pass']]) {
+      const id = s.ok('run', 'add', 'T1', '--role', role, '--branch', BRANCH).split(' ')[0];
+      s.ok('run', 'done', id, '--status', 'done', '--tokens', '1');
+      s.ok('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', kind, '--cycle', String(number), '--run', id);
+    }
+  };
+  const merge = ['merge-check', '--sha', SHA, '--pr', '362', '--head', BRANCH];
+  cycle(1); cycle(2);
+  assert.match(s.no(...merge), /3|cycle/);
+  assert.equal(JSON.parse(s.task().adoption).cycles, 3);
+  const saved = snapshot(s.dest);
+  writeFileSync(sourceConfig, JSON.stringify({ 'cycles.risk': 2 }));
+  assert.match(s.ok(...s.adopt), /already recorded/);
+  assert.deepEqual(snapshot(s.dest), saved);
+  assert.match(s.no(...merge), /3|cycle/);
+  cycle(3); assert.match(s.ok(...merge), /3 clean cycles/);
+  writeFileSync(join(dirname(s.dest), 'config.json'), JSON.stringify({ 'cycles.risk': 4 }));
+  assert.match(s.no(...merge), /4|cycle/);
+  cycle(4); assert.match(s.ok(...merge), /4 clean cycles/);
 });
 
 test('an ended blocked preparation does not prevent adoption or become review proof', t => {

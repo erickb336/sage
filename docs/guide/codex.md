@@ -219,11 +219,11 @@ node <installed-sage-script> task-adopt T42 --project /path/to/project --source-
 | The source belongs to the same project, in another provider root | Sage reads it without a lock or a write. A busy or changed source refuses adoption. |
 | The PR and branch match the source task | Sage checks the live PR head with the existing read-only PR helper. The branch must name the original task. An empty source branch field is allowed. |
 | The destination is framed or briefed, with no findings or verdicts | Sage records the original provider label, task number, logbook path, project, PR, branch, round count and source-task digest. Only ended blocked or failed runs may already exist; they never count as clean proof. |
-| Another task claims the PR or branch | Sage refuses adoption. Shared source work needs an explicit task mapping from the owner first. |
+| Another task claims the PR or branch, including through a recorded run | Sage refuses adoption. Shared source work needs an explicit task mapping from the owner first. |
 | The source spent repair rounds | The destination retains at least that count. Adoption grants no extra repair allowance. Four spent rounds still need the owner's decision before another repair. |
-| The source required reviews or had risk flags | The destination keeps those requirements. A large source keeps its two-cycle minimum. |
+| The source required reviews or had risk flags | The destination keeps those requirements and the source's configured cycle minimum. Merge checks require the larger of that saved minimum and the current destination requirement. |
 | The source had clean verdicts | They stay in the source. Fresh destination runs must supply every required verdict on the final SHA. |
-| The same adoption is retried | Sage returns the existing record without changing the current task state, round count or proof. A different identity refuses. |
+| The same adoption is retried | Sage returns the existing record without changing the current task state, round count, saved cycle minimum or proof. A different identity refuses. |
 
 The adopted PR and branch stay bound to the destination task. Normal task state changes, runs, reviews and merge checks then use that branch. Ordinary tasks keep their existing branch-name rules.
 

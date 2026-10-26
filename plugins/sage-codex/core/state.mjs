@@ -214,7 +214,8 @@ const adoptionOf = task => {
   try { a = JSON.parse(task.adoption); } catch { /* Refuse below. */ }
   if (!a || a.version !== 1 || !/^[a-z][a-z0-9-]*$/.test(a.provider ?? "") || !TASK_ID.test(a.task ?? "")
     || !isAbsolute(a.logbook ?? "") || !isAbsolute(a.project ?? "") || !PR.test(a.pr ?? "") || !ofTask(a.task, a.branch)
-    || !Number.isSafeInteger(a.round) || a.round < 0 || !/^[a-f0-9]{64}$/.test(a.digest ?? "")) refuse(`${task.id} has a damaged adoption record.`);
+    || !Number.isSafeInteger(a.round) || a.round < 0 || (a.cycles !== undefined && (!Number.isInteger(a.cycles) || a.cycles < 1))
+    || !/^[a-f0-9]{64}$/.test(a.digest ?? "")) refuse(`${task.id} has a damaged adoption record.`);
   return a;
 };
 const mayName = (tasks, task, name) => ofTask(task.id, name) || adoptionOf(task)?.branch === name || tasks.some((other) => other.id !== task.id && other.branch === name);
@@ -315,9 +316,9 @@ function config(env = process.env) {
   return c;
 }
 
-/** The clean cycles that a task needs before its merge: cycles.small for every task, cycles.large for a large one, and cycles.risk for any task with a risk flag (the largest count wins). */
+/** The clean cycles that a task needs: its current configuration and any saved source minimum from adoption (the largest count wins). */
 function cyclesFor(task, c) {
-  return Math.max(...cycleKeys(task).map((k) => c[k]));
+  return Math.max(adoptionOf(task)?.cycles ?? 0, ...cycleKeys(task).map((k) => c[k]));
 }
 
 /** The cycles keys that apply to a task: cycles.small, and cycles.large or cycles.risk when it is large or has a risk flag. */
@@ -2252,11 +2253,15 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const old = matches[0];
       if (old.adoption || !ofTask(sourceTask, branch) || (old.branch && old.branch !== branch) || prNumber(old.pr) !== pr
         || !builds(old) || ENDED.includes(old.state) || !/^\d+$/.test(old.round) || !Number.isSafeInteger(Number(old.round))) refuse("the source task, PR or branch does not match this adoption. Nothing changed.");
+      const sourceEnv = { ...env, SAGE_HOME: dirname(source) }, sourceConfig = config(sourceEnv);
+      const broken = Object.keys(sourceConfig).find(k => sourceConfig[k] === "invalid");
+      if (broken) refuse(`the source ${broken} is not a number. Nothing changed.`);
       const decisions = read(dir, "decisions"), ledger = read(dir, "ledger"), runs = read(dir, "runs");
-      const claimed = tasks.find(t => t.id !== task.id && (prsOf(t, decisions, ledger).has(pr) || ofTask(t.id, branch) || sameBranch(t.branch, branch)
-        || runs.some(r => r.task === t.id && sameBranch(r.branch, branch))));
+      const claims = (t, decisions, ledger, runs) => prsOf(t, decisions, ledger).has(pr) || ofTask(t.id, branch) || sameBranch(t.branch, branch)
+        || runs.some(r => r.task === t.id && sameBranch(r.branch, branch));
+      const claimed = tasks.find(t => t.id !== task.id && claims(t, decisions, ledger, runs));
       if (claimed) refuse(`${claimed.id} already claimed this PR or branch. Nothing changed.`);
-      const sourceClaim = sourceRows.find(t => t.id !== sourceTask && (prsOf(t, rowsOf(book.decisions), rowsOf(book.ledger)).has(pr) || sameBranch(t.branch, branch)));
+      const sourceClaim = sourceRows.find(t => t.id !== sourceTask && claims(t, rowsOf(book.decisions), rowsOf(book.ledger), rowsOf(book.runs)));
       if (sourceClaim) refuse(`${sourceClaim.id} also claims the source PR or branch. Adopt shared work only after the owner resolves its task mapping. Nothing changed.`);
       if (!["framed", "briefed"].includes(task.state) || !builds(task) || (task.branch && task.branch !== branch) || (task.pr && task.pr !== pr)
         || [...prsOf(task, decisions, ledger)].some(n => n !== pr) || runs.some(r => r.task === task.id && (!r.ended || !["blocked", "failed"].includes(r.status)))
@@ -2269,11 +2274,12 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const adopted = { ...task, pr, branch, round: Math.max(Number(task.round), Number(old.round)),
         risk: RISKS.filter(r => list(task.risk).includes(r) || list(old.risk).includes(r)).join(","),
         route: BLOCKS.filter(b => list(task.route).includes(b) || list(old.route).includes(b)).join(","),
-        adoption: JSON.stringify({ version: 1, ...identity, round: Number(old.round), digest: createHash("sha256").update(JSON.stringify(old)).digest("hex"), at: now() }) };
+        adoption: JSON.stringify({ version: 1, ...identity, round: Number(old.round), cycles: cyclesFor(old, sourceConfig), digest: createHash("sha256").update(JSON.stringify(old)).digest("hex"), at: now() }) };
       // A large source retains its two-cycle floor even when the destination was framed as small.
       if (old.size === "large") adopted.size = "large";
       apartFromPilot(adopted, graph, decisions, ledger, "pr", prsOf(task, decisions, ledger));
-      if (existsSync(join(source, ".lock")) || JSON.stringify(check(source)) !== JSON.stringify(book)) refuse("the source changed during adoption. Nothing changed.");
+      if (existsSync(join(source, ".lock")) || JSON.stringify(check(source)) !== JSON.stringify(book)
+        || JSON.stringify(config(sourceEnv)) !== JSON.stringify(sourceConfig)) refuse("the source changed during adoption. Nothing changed.");
       // All adopted fields and provenance share one atomic task-table replacement. No source proof is copied.
       Object.assign(task, adopted);
       write(dir, "tasks", tasks);
