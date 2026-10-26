@@ -104,7 +104,9 @@ The hook blocks your stop while a helper of yours runs, and its line gives this 
 
 The hook reads each helper's report at its stop. It refuses a verdict that says something else, a SHA other than the one that the helper saw, and a run that already backs a verdict. So no commit lands on the branch while a review or QA runs.
 
-A report that the hook cannot read backs no verdict, and only the sage can end its run. Wait for your other helpers, then end blocked, with the run in FINDINGS: the sage reads the report and ends the run.
+An implementer's stop is a normal stop: its report backs no verdict, and the hook does not check its RESULT words. The wait command prints its RESULT word and the head of the branch that it left (`sha`). End its run with `sage run done <R> --status done --tokens <n>`, then go on with step 2, and start the reviews of step 3 on that head.
+
+A review or QA report that the hook cannot read backs no verdict, and only the sage can end its run. Wait for your other helpers, then end blocked, with the run in FINDINGS: the sage reads the report and ends the run.
 
 A helper that ends with no report (the sage stopped it, or it died) ends as `sage run done <R> --status failed`. When the hook says that the helper's slot still holds its lease, wait, or ask the sage to end the run: the sage's `run done` frees the helper's slot at once. Then add a new run. Never stop a helper yourself (the hook refuses your TaskStop), and never end or use a run that you did not add: ask the sage.
 
@@ -139,7 +141,7 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
 You end at once, with STATUS blocked, when a step needs the sage. Wait for your running helpers first.
 
 - **A finding that you cannot clear:** a low finding that needs a fix with no round, a new finding from a re-check, or a fix that the re-check does not confirm. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The state tool never moves a high finding to a follow-up task, and it moves a fix key of the round only after the owner's answer.
-- **A report that the hook cannot read:** list its run in FINDINGS. The sage reads it and ends the run.
+- **A review or QA report that the hook cannot read:** list its run in FINDINGS. The sage reads it and ends the run.
 - **The checks fail, still run, or there are none:** `Left: the checks`. The sage records the checks verdict.
 - **A cap:** when the hook refuses a helper for a cap, wait for a helper's stop (`wait <T>`) and try again. With no helper running, end with RESULT `cap`. List each run that you added and did not start: the sage ends it.
 
@@ -157,6 +159,8 @@ $ sage run add T1 --role implementer --branch sage/t1-example
 → R2 running · implementer on T1
 > R2 sage:implementer
 < R2 done: none
+$ wait T1
+→ R2 stopped · implementer · DONE · sha
 $ sage run done R2 --status done --tokens 41000
 $ sage task T1 set state=reviewing pr=12
 $ git rev-parse sage/t1-example

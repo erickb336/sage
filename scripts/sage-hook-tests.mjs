@@ -5823,7 +5823,7 @@ test("F-T284-9: a lead's run counts only with a real child of its role, named by
   const HEAD = s.head();
   assert.equal(denied(stateRun(s, `verdict T1 --kind qa-pass --sha ${HEAD} --pr 5 --run R5`)), undefined);
   s.sage("verdict", "T1", "--kind", "qa-pass", "--sha", HEAD, "--pr", "5", "--run", "R5");
-  assert.match(denied(stateRun(s, `verdict T1 --kind qa-pass --sha ${HEAD} --pr 5 --run R5`)) ?? "", NOT_OWN, "R5 already backs a verdict");
+  assert.match(denied(stateRun(s, `verdict T1 --kind qa-pass --sha ${HEAD} --pr 5 --run R5`)) ?? "", /^sage: R5 already backs the qa-pass verdict on [0-9a-f]{7}, and one run backs one verdict: for another verdict, add a new qa run/, "R5 already backs a verdict (R1817-2)");
   setState(s, "T1", "reviewing", { round: "1" });
   assert.match(denied(stateRun(s, `verdict T1 --kind qa-pass --sha ${HEAD} --pr 5 --run R4`)) ?? "", NOT_OWN, "R4 is of round 0");
   // The implementer follows the same rule.
@@ -6911,4 +6911,46 @@ test("T482 R1764-2 R1764-3: a lead's refusal at a cap names the wait command and
   assert.match(total, /^sage: 10 sage agents are running across all projects, and the total cap is 5 /);
   assert.match(total, tail);
   assert.doesNotMatch(total, /config cap_total/);
+});
+
+// T482 repair round 2 (R1823): the findings of R1815, R1817 and R1812.
+/** A lead's helper for a new run of this role: its spawn and its bound result. The run's id. */
+function startHelper(s, role, ...more) {
+  const run = leadAdd(s, role, LEAD, ...more);
+  assert.equal(denied(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name: run }, { tool_use_id: `help-${run}`, ...LEAD }))), undefined, `the helper of ${run}`);
+  s.send(resultOf(`help-${run}`, `child-${run}`, LEAD));
+  return run;
+}
+
+test("T482 R1817-1: an implementer's stop is a normal stop with its RESULT word and the head that it left; a review's unreadable report keeps its line", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const build = startHelper(s, "implementer", "--branch", "claude/t1");
+  const head = s.commit(); // the implementer's build moves the branch
+  s.send(ended(`child-${build}`, "sage:implementer", { last_assistant_message: report("done", "none") }));
+  assert.equal(waitOut(s), `${build} stopped · implementer · DONE · sha ${head.slice(0, 7)}\nEnd each of these runs (run done), with its findings and its verdict, then go on.`, "the R1817 story, step 1");
+  assert.equal(denied(stateRun(s, `run done ${build} --status done --tokens 1`)), undefined, "the lead ends the run, as lead.md says");
+  s.sage("run", "done", build, "--status", "done", "--tokens", "1");
+  const qa = startHelper(s, "qa");
+  s.send(ended(`child-${qa}`, "sage:qa", { last_assistant_message: report("done", "none") }));
+  assert.equal(waitOut(s), `${qa} stopped · qa · a report that the hook cannot read · sha ${head.slice(0, 7)}\nEnd each of these runs (run done), with its findings and its verdict, then go on.`, "a QA RESULT that is no verdict word");
+});
+
+test("T482 R1817-2: a lead's second verdict on a run that backs one names that verdict and asks for a new run", () => {
+  const s = leadSession(); // R4: a done qa run with PASS, in no verdict yet
+  s.sage("verdict", "T1", "--kind", "qa-pass", "--sha", s.head(), "--cycle", "1", "--pr", "5", "--run", "R4");
+  const why = leadVerdict(s, "qa-pass", "R4") ?? "";
+  assert.ok(why.startsWith(`sage: R4 already backs the qa-pass verdict on ${s.head().slice(0, 7)}, and one run backs one verdict: for another verdict, add a new qa run and start its helper (F-T284-9, R1817-2). `), why);
+  assert.match(why, LEAD_TAIL);
+});
+
+test("T482 R1815-1: the sage's verdict in a form that the rule cannot read is refused, and the line gives the plain command that works", () => {
+  const s = leadSession();
+  const tail = `verdict T1 --kind qa-pass --sha ${s.head()} --cycle 1 --pr 5 --run R4`;
+  const works = `Run it as a command of its own, with the absolute path of the state tool that this hook loads, with no ~, no variable and nothing before it (no cd): node ${TOOL} verdict <T> --kind <kind> --sha <sha> --cycle <n> --pr <n> --run <R> (R1815-1).`;
+  for (const command of [`node ~/x/skills/sage/sage.mjs ${tail}`, `node $HOME/x/skills/sage/sage.mjs ${tail}`, `cd ${s.dir} && node ${TOOL} ${tail}`, `node /tmp/another-copy/skills/sage/sage.mjs ${tail}`]) {
+    const why = denied(s.send(bash(command, s.dir))) ?? "";
+    assert.ok(why.includes(works), `${command}: ${why}`);
+  }
+  assert.equal(denied(s.send(bash(`node ${TOOL} ${tail}`, s.dir))), undefined, "the command that the line gives passes");
 });

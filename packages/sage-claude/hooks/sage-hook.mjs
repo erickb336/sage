@@ -315,10 +315,15 @@ export function handle(input, state, slots) {
   if (event === "Stop" && main && Array.isArray(input.background_tasks)) slots.reconcile(input.background_tasks.map((t) => t?.id));
   // A helper's stop keeps its report and the commit that it saw, for its lead's verdict (F-T289-4, F-T289-5).
   if (event === "SubagentStop") {
-    const helper = slots.helperFor(input.agent_id);
-    // The reviewed commit only when the branch did not move during the run: the tip at its start (F-T289-14).
-    const sha = helper && helper.tip && headOf(helper.folder, helper.task) === helper.tip ? helper.tip : "";
-    return void slots.release(input.agent_id, helper && { ...reportOf(input.last_assistant_message), sha });
+    const helper = slots.helperFor(input.agent_id), head = helper && headOf(helper.folder, helper.task);
+    if (!helper || REVIEWERS.includes(helper.role)) {
+      // The reviewed commit only when the branch did not move during the run: the tip at its start (F-T289-14).
+      const sha = helper && helper.tip && head === helper.tip ? helper.tip : "";
+      return void slots.release(input.agent_id, helper && { ...reportOf(input.last_assistant_message), sha });
+    }
+    // An implementer's report backs no verdict, and its RESULT is its own word: a normal stop, with that word and the
+    // head that it left on the branch, so that its lead ends its run and starts the reviews there (R1817-1).
+    return void slots.release(input.agent_id, { result: reportOf(input.last_assistant_message).result, severities: [], sha: head || "" });
   }
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
   if (event === "PostToolUse" && input.tool_name === "Bash" && input.agent_type === "sage:lead") return void leadWrote(input, slots);
@@ -1273,8 +1278,10 @@ const LEAD_WRITES = {
     const roles = VERDICT_ROLES[opt.kind], run = opt.run === undefined ? undefined : view.row(opt.run);
     if (!(t === own && Boolean(task.pr) && opt.pr === task.pr)) return false;
     if (roles === null) return "a checks verdict (checks-pass or checks-fail) is the sage's: give the result of gh pr checks <n> in your report (T482).";
-    if (!(Array.isArray(roles) && run && String(run.round) === String(task.round) && !view.verdicts(own).some((v) => v.run === run.id))) return false;
+    if (!(Array.isArray(roles) && run && String(run.round) === String(task.round))) return false;
     if (!ownRun(ctx, run.id)) return `${run.id} is not a run that this lead added, so it backs no verdict of this lead (F-T289-8, F-T289-16).`;
+    const backed = view.verdicts(own).find((v) => v.run === run.id);
+    if (backed) return `${run.id} already backs the ${backed.kind} verdict on ${String(backed.sha).slice(0, 7)}, and one run backs one verdict: for another verdict, add a new ${run.role} run and start its helper (F-T284-9, R1817-2).`;
     // The way out of a run that still runs (F-T289-36). When run done would be refused too, the refusal gives its reason,
     // which names the real next step (F-T289-55).
     const stillRuns = () => {
@@ -1421,7 +1428,7 @@ function chiefStateWords(input) {
 function chiefVerdictProblem(input, slots) {
   if (input.tool_name !== "Bash") return undefined;
   const words = chiefStateWords(input);
-  if (!words) return /sage\.mjs["']?[\s\\"']+verdict\b/.test(String(input.tool_input?.command ?? "")) ? "the sage records a verdict as one plain command of the state tool, so that the hook can check it against a lead's kept report (T482)." : undefined;
+  if (!words) return /sage\.mjs["']?[\s\\"']+verdict\b/.test(String(input.tool_input?.command ?? "")) ? `the sage records a verdict as one plain command of the state tool, so that the hook can check it against a lead's kept report (T482). Run it as a command of its own, with the absolute path of the state tool that this hook loads, with no ~, no variable and nothing before it (no cd): ${stateCommand("verdict <T> --kind <kind> --sha <sha> --cycle <n> --pr <n> --run <R>")} (R1815-1).` : undefined;
   const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
   if (cmd !== "verdict" || !Array.isArray(VERDICT_ROLES[opt.kind])) return undefined;
   let view;
@@ -1466,7 +1473,7 @@ export async function waitForHelpers(task, cwd, { ms = 9 * 60_000, dir = stateDi
     const key = leadKey({ logbook: digest(view.dir), run: lead.id }), slots = slotsFor(join(dir, "slots"), "wait");
     const stopped = slots.stops(key).filter((r) => view.row(r?.run)?.status === "running").sort((a, b) => a.run.slice(1) - b.run.slice(1));
     if (stopped.length) {
-      const line = (r) => [`${r.run} stopped`, r.role, !Array.isArray(r.severities) ? "no report" : r.unreadable ? "a report that the hook cannot read" : r.result || "no RESULT", ...(r.severities?.length ? [`findings ${r.severities.join(",")}`] : []), `sha ${r.sha ? r.sha.slice(0, 7) : "none"}`].join(" · ");
+      const line = (r) => [`${r.run} stopped`, r.role, !Array.isArray(r.severities) ? "no report" : r.unreadable && REVIEWERS.includes(r.role) ? "a report that the hook cannot read" : r.result || "no RESULT", ...(r.severities?.length ? [`findings ${r.severities.join(",")}`] : []), `sha ${r.sha ? r.sha.slice(0, 7) : "none"}`].join(" · ");
       return [...stopped.map(line), "End each of these runs (run done), with its findings and its verdict, then go on."].join("\n");
     }
     const live = slots.running(key);
