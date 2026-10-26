@@ -9,13 +9,13 @@ import { createStateTool } from '../packages/sage-core/state.mjs';
 
 const SHA = '1'.repeat(40), BRANCH = 'sage/t536-adopt';
 const tool = createStateTool({ defaultRoot: env => env.SAGE_HOME });
-function fixture(t) {
+function fixture(t, sourceTask = 'T536', branch = BRANCH) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-adoption-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const project = join(root, 'project'); mkdirSync(project);
   const bin = join(root, 'bin'); mkdirSync(bin);
   const fake = join(bin, 'gh');
-  writeFileSync(fake, `#!${process.execPath}\nif (process.argv[2] === '--fake-proof') { console.log('FAKE_adoption_gh'); } else if (process.argv.slice(2).join(' ') === 'pr view 362 --json headRefName,isCrossRepository') { console.log(JSON.stringify({headRefName:'${BRANCH}',isCrossRepository:false})); } else { process.exit(1); }\n`);
+  writeFileSync(fake, `#!${process.execPath}\nif (process.argv[2] === '--fake-proof') { console.log('FAKE_adoption_gh'); } else if (process.argv.slice(2).join(' ') === 'pr view 362 --json headRefName,isCrossRepository') { console.log(JSON.stringify({headRefName:'${branch}',isCrossRepository:false})); } else { process.exit(1); }\n`);
   chmodSync(fake, 0o755);
   assert.equal(spawnSync(fake, ['--fake-proof'], { encoding: 'utf8' }).stdout.trim(), 'FAKE_adoption_gh');
   const sourceEnv = { ...process.env, SAGE_HOME: join(root, 'claude', 'sage') };
@@ -28,12 +28,12 @@ function fixture(t) {
   const path = join(source, 'tasks.tsv');
   const lines = readFileSync(path, 'utf8').trimEnd().split('\n'), cols = lines[0].split('\t');
   const row = Object.fromEntries(cols.map((key, i) => [key, lines[1].split('\t')[i] ?? '']));
-  Object.assign(row, { id: 'T536', branch: '', pr: '362', round: '4', state: 'reviewing' });
+  Object.assign(row, { id: sourceTask, branch: '', pr: '362', round: '4', state: 'reviewing' });
   writeFileSync(path, `${lines[0]}\n${cols.map(key => row[key]).join('\t')}\n`);
   const oldProof = [['checks-pass', '1'], ...['1', '2'].flatMap(cycle => ['review-clean', 'security-clean', 'qa-pass'].map(kind => [kind, cycle]))];
-  writeFileSync(join(source, 'ledger.tsv'), `task\tpr\tsha\tkind\tcycle\trun\tat\n${oldProof.map(([kind, cycle]) => `T536\t362\t${SHA}\t${kind}\t${cycle}\t\t2026-01-01T00:00:00Z`).join('\n')}\n`);
+  writeFileSync(join(source, 'ledger.tsv'), `task\tpr\tsha\tkind\tcycle\trun\tat\n${oldProof.map(([kind, cycle]) => `${sourceTask}\t362\t${SHA}\t${kind}\t${cycle}\t\t2026-01-01T00:00:00Z`).join('\n')}\n`);
   ok('task', 'add', '--title', 'Destination', '--size', 'small', '--priority', 'P0');
-  const adopt = ['task-adopt', 'T1', '--source-logbook', source, '--source-provider', 'claude', '--source-task', 'T536', '--pr', '362', '--branch', BRANCH];
+  const adopt = ['task-adopt', 'T1', '--source-logbook', source, '--source-provider', 'claude', '--source-task', sourceTask, '--pr', '362', '--branch', branch];
   const bytes = dir => Object.fromEntries(readdirSync(dir).filter(n => n.endsWith('.tsv') || n === 'checkout.txt').map(n => [n, readFileSync(join(dir, n), 'utf8')]));
   const task = () => tool.read(dest, 'tasks')[0];
   return { root, project, source, dest, env, ok, no, adopt, bytes, task };
@@ -100,6 +100,22 @@ test('adoption refuses another task claim and another project', t => {
   let before = s.bytes(s.dest); assert.match(s.no(...s.adopt), /T2|claimed/); assert.deepEqual(s.bytes(s.dest), before);
   writeFileSync(join(s.source, 'checkout.txt'), `${join(s.root, 'other-project')}\n`);
   before = s.bytes(s.dest); assert.match(s.no(...s.adopt), /project/); assert.deepEqual(s.bytes(s.dest), before);
+});
+
+test('adoption refuses destination ownership by task number without any mutation', t => {
+  const s = fixture(t, 'T2', 'sage/t2-existing');
+  s.ok('task', 'add', '--title', 'Unrelated destination task', '--size', 'tiny', '--priority', 'P1');
+  const other = tool.read(s.dest, 'tasks').find(task => task.id === 'T2');
+  assert.equal(other.pr, ''); assert.equal(other.branch, '');
+  assert.deepEqual(tool.read(s.dest, 'runs'), []);
+  const snapshot = dir => Object.fromEntries(readdirSync(dir, { withFileTypes: true }).map(entry => [entry.name,
+    entry.isDirectory() ? snapshot(join(dir, entry.name)) : readFileSync(join(dir, entry.name), 'utf8')]));
+  const destination = snapshot(s.dest), source = snapshot(s.source);
+  const result = tool.command([...s.adopt, '--project', s.project], s.env);
+  assert.deepEqual(snapshot(s.dest), destination, `refused adoption must leave every destination file unchanged: ${result.text}`);
+  assert.deepEqual(snapshot(s.source), source);
+  assert.equal(result.code, 1, result.text);
+  assert.match(result.text, /T2 already claimed this PR or branch/);
 });
 
 test('an ended blocked preparation does not prevent adoption or become review proof', t => {

@@ -2253,7 +2253,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (old.adoption || !ofTask(sourceTask, branch) || (old.branch && old.branch !== branch) || prNumber(old.pr) !== pr
         || !builds(old) || ENDED.includes(old.state) || !/^\d+$/.test(old.round) || !Number.isSafeInteger(Number(old.round))) refuse("the source task, PR or branch does not match this adoption. Nothing changed.");
       const decisions = read(dir, "decisions"), ledger = read(dir, "ledger"), runs = read(dir, "runs");
-      const claimed = tasks.find(t => t.id !== task.id && (prsOf(t, decisions, ledger).has(pr) || sameBranch(t.branch, branch)
+      const claimed = tasks.find(t => t.id !== task.id && (prsOf(t, decisions, ledger).has(pr) || ofTask(t.id, branch) || sameBranch(t.branch, branch)
         || runs.some(r => r.task === t.id && sameBranch(r.branch, branch))));
       if (claimed) refuse(`${claimed.id} already claimed this PR or branch. Nothing changed.`);
       const sourceClaim = sourceRows.find(t => t.id !== sourceTask && (prsOf(t, rowsOf(book.decisions), rowsOf(book.ledger)).has(pr) || sameBranch(t.branch, branch)));
