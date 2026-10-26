@@ -48,7 +48,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, real
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, switchModes } from "sage-core";
+import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, switchModes } from "sage-core";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
 import { modeDirectory } from "./sage-codex-hook.mjs";
@@ -63,7 +63,14 @@ const readGit = (dir, args) => {
     return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
   } catch { return undefined; }
 };
-const pushes = createPushPolicy({ stateToolPath: TOOL, readGit });
+/** gh's output for args (a GET of GitHub's API), or undefined when gh fails. GH_HOST and GH_REPO never change its target. */
+const readGh = (args) => {
+  try {
+    return execFileSync("gh", args, { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GH_HOST: undefined, GH_REPO: undefined } });
+  } catch { return undefined; }
+};
+const pushes = createPushPolicy({ stateToolPath: TOOL, readGit, readGh });
+const GIT_FOLDER = "sage: in sage mode no thread changes files under a .git folder, where git keeps its hooks and settings. Ask the user";
 
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user.";
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";
@@ -460,6 +467,8 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const root = projectRoot(f.cwd);
     if (paths.some((path) => codexPath(root, resolve(f.cwd, path)))) return deny(CODEX_FOLDER);
     const { sage } = mode(f, env);
+    // git's own files: a git hook or a setting there can push outside the push rule (T536).
+    if (sage && paths.some((path) => gitInternalPath(resolve(f.cwd, path)))) return deny(GIT_FOLDER);
     if (!thread.child) return chiefEditDenied({ sage, chief: true }) ? deny(CHIEF) : undefined;
     const why = childChange(thread, sage);
     return why ? refuse(thread, why) : undefined;

@@ -56,7 +56,7 @@ const TO_MAIN = `work reaches main only through a pull request. Push the task's 
 const commandPolicy = await import("./command-policy.mjs")
   .then((module) => ({ ...module,
     commands: module.createCommandPolicy({ stateToolPath: TOOL, prPattern: stateTool.PR ?? null }),
-    pushes: module.createPushPolicy({ stateToolPath: TOOL, readGit, mainReason: TO_MAIN }),
+    pushes: module.createPushPolicy({ stateToolPath: TOOL, readGit, readGh, mainReason: TO_MAIN }),
   }))
   .catch((error) => ({ error }));
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
@@ -519,6 +519,14 @@ const pushText = (text) => gitThen(text, "push");
 /** A command line without quotes, backslashes and line joins: the text that the rules test when the reader cannot read the line (fail closed). */
 const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
 
+/** gh's output for args (a GET of GitHub's API), or undefined when gh fails. GH_HOST and GH_REPO never change its target. */
+function readGh(args) {
+  try {
+    return execFileSync("gh", args, { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GH_HOST: undefined, GH_REPO: undefined } });
+  } catch {
+    return undefined;
+  }
+}
 /** git's output for args in the checkout at dir, or undefined when git fails. */
 function readGit(dir, args) {
   try {
@@ -1538,7 +1546,9 @@ function agentCheck(input, file, slots) {
   const roots = rootsOf(true); // fail closed: an agent does nothing while the sage root cannot be resolved
   if (file) {
     const at = underRoot(input);
-    return at ? `an agent never writes under ${at}.` : undefined;
+    if (at) return `an agent never writes under ${at}.`;
+    // git's own files: a git hook or a setting there can push outside the push rule (T536).
+    return commandPolicy.gitInternalPath(ti.file_path ?? ti.notebook_path) ? "an agent never writes under a .git folder, where git keeps its hooks and settings. Ask the user." : undefined;
   }
   if (ti.dangerouslyDisableSandbox) return "an agent never runs a command outside the sandbox (dangerouslyDisableSandbox).";
   const command = typeof ti.command === "string" ? ti.command : "";

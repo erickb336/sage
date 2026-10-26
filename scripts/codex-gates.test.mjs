@@ -227,7 +227,8 @@ function world(t, { at = "project" } = {}) {
   mkdirSync(project, { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "sage/t1", project]);
   spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"]);
-  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${dir}/gh-calls.log"\n[ "$1 $2" = "pr view" ] && printf '{"headRefName":"sage/t1","isCrossRepository":false}'\nexit 0\n`);
+  // GitHub's default branch (T536): the text of default-branch in the world's folder, main when there is none, and a failed call for "fail".
+  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${dir}/gh-calls.log"\nif [ "$1" = api ] && [ "$6" = .default_branch ]; then d=main; [ -f "${dir}/default-branch" ] && d=$(cat "${dir}/default-branch"); [ "$d" = fail ] && exit 1; echo "$d"; exit 0; fi\n[ "$1 $2" = "pr view" ] && printf '{"headRefName":"sage/t1","isCrossRepository":false}'\nexit 0\n`);
   chmodSync(join(bin, "gh"), 0o755);
   for (const name of ["ps", "pgrep", "kill"]) writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> "${dir}/fake-calls.log"\n`, { mode: 0o755 }); // order 14
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), CODEX_HOME: join(dir, "codex-home") };
@@ -638,7 +639,9 @@ test("T536: in sage mode no push reaches the default branch, whatever the remote
     "git -c remote.github.push=sage/t1:main push github sage/t1": /^sage: "-c" is not part of the push form/,
     "git config remote.github.push refs/heads/sage/t1:refs/heads/main && git push github sage/t1": /^sage: "git config remote.github.push/,
     "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=upstream; git push github sage/t1": /^sage: "export GIT_CONFIG_COUNT=1/,
-    "printf x >> .git/config; git push github sage/t1": /^sage: "a file write" runs in the same command line as the push/,
+    "printf x >> .git/config; git push github sage/t1": /^sage: this command writes a file under a \.git folder/,
+    "printf x >> notes.txt; git push github sage/t1": /^sage: "a file write" runs in the same command line as the push/,
+    "git push github sage/t1 2>&1 | tee push.log": /^sage: "tee push\.log" runs in the same command line as the push/,
   };
   const passes = ["git push -u github sage/t1", "git push github sage/t1 2>&1 | tail -3", "git push --delete github sage/t9",
     "git add -A && git commit -m x && git push -u github sage/t1 && gh pr create --draft --title t --body b"];
@@ -651,23 +654,64 @@ test("T536: in sage mode no push reaches the default branch, whatever the remote
   git("config", "remote.github.push", "refs/heads/sage/t1:refs/heads/main");
   check({ "git push github sage/t1": /^sage: git's setting remote\.github\.push can send the branch to another name/ }, ["git push --delete github sage/t9"], "remote push setting");
   git("config", "--unset", "remote.github.push");
+  // R1935-1 item 4: remote.<name>.mirror makes a push of one branch a mirror push.
+  git("config", "remote.github.mirror", "true");
+  check({ "git push github sage/t1": /^sage: git's setting remote\.github\.mirror makes every push a mirror push/ }, [], "mirror setting");
+  git("config", "--unset", "remote.github.mirror");
   git("config", "push.default", "upstream");
   git("config", "branch.sage/t1.merge", "refs/heads/main");
   check({ "git push github sage/t1": /^sage: git's setting push\.default is upstream, so this push goes to refs\/heads\/main/ }, [], "upstream");
   git("config", "branch.sage/t1.merge", "refs/heads/sage/t1");
   check({}, ["git push github sage/t1"], "upstream of the same name");
-  // A default branch with another name, and a default branch that the hook cannot read (fail closed).
-  git("symbolic-ref", "refs/remotes/github/HEAD", "refs/remotes/github/trunk");
+  // R1936 F5: the upstream is looked up by the short name, also when the push names refs/heads/<branch>.
+  git("branch", "sage/t5-x");
+  git("config", "branch.sage/t5-x.merge", "refs/heads/main");
+  check({ "git push github refs/heads/sage/t5-x": /^sage: git's setting push\.default is upstream, so this push goes to refs\/heads\/main/ }, [], "upstream of refs/heads/<branch>");
+  git("config", "--unset", "push.default");
+  // R1936 F6: a task-branch name that is a symbolic ref to main sends main.
+  git("branch", "main");
+  git("symbolic-ref", "refs/heads/sage/t5-sym", "refs/heads/main");
+  check({ "git push github sage/t5-sym": /^sage: sage\/t5-sym is not a plain branch of this checkout \(git reads it as refs\/heads\/main\)/ }, [], "symbolic branch");
+  // R1936 F7: GitHub names the default branch; the local ref only has to agree, and a failed read refuses.
   const API_MAIN = /^sage: work reaches main only through a pull request/;
+  git("branch", "trunk");
+  git("branch", "topic");
+  writeFileSync(join(w.dir, "default-branch"), "trunk\n");
+  check({ "git push github topic": /^sage: refs\/remotes\/github\/HEAD names main, but GitHub names trunk as the default branch/ }, [], "planted local default");
+  git("symbolic-ref", "--delete", "refs/remotes/github/HEAD");
   check({ "git push github trunk": /^sage: trunk is the default branch of github: work reaches main/, "git push --delete github trunk": /^sage: trunk is the default branch/,
     // A GitHub API write to that default branch, as to main (F3 of R1893).
     "gh api -X PATCH repos/acme/site/git/refs/heads/trunk -f sha=abc": API_MAIN,
     "gh api -X PUT repos/acme/site/contents/a.txt -f branch=trunk -f message=x -f content=eA==": API_MAIN },
     ["git push github topic", "git push github sage/t1", "gh api -X PATCH repos/acme/site/git/refs/heads/sage/t1 -f sha=abc",
-      "gh api -X PUT repos/acme/site/contents/a.txt -f branch=sage/t1 -f message=x -f content=eA=="], "default trunk");
-  git("symbolic-ref", "--delete", "refs/remotes/github/HEAD");
-  check({ "git push github trunk": /^sage: the hook cannot read the default branch of github/, "git push github topic": /^sage: the hook cannot read the default branch/ },
-    ["git push github sage/t1", "git push -u github sage/t1-short-name"], "default unknown");
+      "gh api -X PUT repos/acme/site/contents/a.txt -f branch=sage/t1 -f message=x -f content=eA=="], "default trunk from GitHub");
+  writeFileSync(join(w.dir, "default-branch"), "fail\n");
+  check({ "git push github sage/t1": /^sage: the hook cannot read the default branch of acme\/site from GitHub/,
+    "gh api -X PATCH repos/acme/site/git/refs/heads/sage/t1 -f sha=abc": API_MAIN }, [], "GitHub read fails");
+  writeFileSync(join(w.dir, "default-branch"), "main\n");
+  // R1936 F1, F2, F3: other ways to send commits: subtree push, send-pack, an alias, a git-<name> program.
+  git("config", "alias.ship", "push github HEAD:main");
+  const UNKNOWN = /^sage: "git (?:ship|send-pack|xyz)" is not a git command that the hook knows/;
+  check({ "git subtree push --prefix=docs github main": /^sage: git subtree push sends commits outside the push form/,
+    "git subtree push --prefix=docs github sage/t1": /^sage: git subtree push/,
+    "git send-pack https://github.com/acme/site.git main": UNKNOWN, "git ship": UNKNOWN, "git -c alias.xyz=push xyz github HEAD:main": UNKNOWN,
+    "env GIT_TRACE=0 git ship": UNKNOWN, "git xyz": UNKNOWN }, ["git status", "git lfs ls-files", "git subtree split --prefix=docs"], "other senders");
+  // R1936 F4: a git hook or core.hooksPath runs a program on a commit or a push.
+  const HOOKS = /^sage: a command that names core\.hooksPath or core\.fsmonitor/;
+  const GIT_WRITE = /^sage: this command writes a file under a \.git folder/;
+  check({ "echo 'git push github HEAD:main' > .git/hooks/pre-push": GIT_WRITE, "cp /tmp/hook .git/hooks/post-commit": GIT_WRITE,
+    "git config core.hooksPath /tmp/h": HOOKS, "git -c core.hooksPath=/tmp/h commit -m x": HOOKS,
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/h git commit -m x": HOOKS,
+    "git config core.fsmonitor /tmp/m": HOOKS }, ["git commit --allow-empty -m x", "echo x > notes.txt"], "git hooks");
+  for (const extra of [{}, w.child("/root/sage_implementer_t1")]) {
+    assert.match(denied(w.send(pre("apply_patch", patch("*** Add File: .git/hooks/pre-push", "+git push github HEAD:main"), extra))) ?? "runs",
+      /^sage: in sage mode no thread changes files under a \.git folder/, "apply_patch to .git/hooks");
+  }
+  // R1936 F8, F9: a move of the default branch and gh repo sync.
+  check({ "gh api -X PATCH repos/acme/site -f default_branch=sage/t1": API_MAIN, "gh api -X PATCH repos/acme/site --input body.json": API_MAIN,
+    "gh repo edit acme/site --default-branch sage/t1": /^sage: gh repo edit --default-branch moves the default branch/,
+    "gh repo sync": /^sage: gh repo sync writes a branch on GitHub/, "gh repo sync acme/site --branch main": /^sage: gh repo sync/ },
+    ["gh api -X PATCH repos/acme/site -f description=x", "gh repo view acme/site"], "default branch moves");
 });
 
 test("the sage folder rule also covers the Codex sessions folder, where the typed messages are (R1664-8)", (t) => {
