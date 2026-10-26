@@ -1,7 +1,9 @@
 // Checks the sources and that the generated files match them. Fails with a list of every problem.
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { GENERATED, ROOT, outputs, filesUnder, parseSource } from "./build.mjs";
+import { changelog } from "./changelog.mjs";
 import { checkWords, flaggedWords, yamlText } from "./dictionary.mjs";
 import { MOMENTS } from "../plugins/sage/hooks/principles-hook.mjs";
 import { BRIEF_FIELDS as CORE_BRIEF_FIELDS } from "../packages/sage-core/index.mjs";
@@ -180,6 +182,24 @@ try {
     if (!existsSync(f) || readFileSync(f, "utf8") !== text) problems.push(`${rel}: out of date; run npm run build`);
   }
 } catch (e) { problems.push(String(e.message)); } // a source that the build cannot read, such as a README without its markers
+
+// T539: CHANGELOG.md is built on main only, so that two task pull requests never conflict in it. The diff of this
+// checkout from its merge base with origin/main tells the two kinds of pull request apart: a diff that touches
+// CHANGELOG.md must touch nothing else (a change-log pull request) and hold exactly the build of changes/; any
+// other diff leaves CHANGELOG.md as main has it, which may lag behind changes/ (a warning, not a failure).
+// A copy with no .git (a test fixture) has no diff to read, so only the build of changes/ is checked there.
+try {
+  const built = changelog(ROOT);
+  const git = (...args) => spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
+  const base = existsSync(join(ROOT, ".git")) ? git("merge-base", "origin/main", "HEAD") : null;
+  if (base?.status) problems.push("CHANGELOG.md: no merge base with origin/main, so the check cannot see what this branch changes; run git fetch origin main (in CI, check out with fetch-depth: 0)");
+  // The diff counts the files of the working tree too, also new ones, so that the check here gives the result of CI.
+  const touched = base?.status === 0 ? `${git("diff", "--name-only", base.stdout.trim()).stdout}\n${git("ls-files", "--others", "--exclude-standard").stdout}`.split("\n").filter(Boolean) : [];
+  const current = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
+  if (touched.includes("CHANGELOG.md") && touched.length > 1) problems.push(`CHANGELOG.md: a task pull request carries only its changes/<task>.md and leaves CHANGELOG.md as main has it; undo the edit (git checkout ${base.stdout.trim()} -- CHANGELOG.md). The chief rebuilds it on main with npm run changelog, in a change-log pull request that changes only CHANGELOG.md`);
+  else if (touched.includes("CHANGELOG.md") && current !== built) problems.push("CHANGELOG.md: a change-log pull request holds exactly the build of changes/; run npm run changelog");
+  else if (current !== built) console.warn("! CHANGELOG.md lags behind changes/ (allowed on main and on a task branch); the chief rebuilds it with npm run changelog in a change-log pull request");
+} catch (e) { problems.push(String(e.message)); } // a fragment that the build cannot place, or a line written by hand
 const core = readFileSync(join(ROOT, "instructions/core.md"), "utf8");
 if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${Buffer.byteLength(core)} bytes; keep it under 8 KiB (it loads into every session, so each byte costs context there)`);
 
