@@ -6,9 +6,8 @@ Send one JSON object through stdin. Use a structured stdin API or a safely writt
 
 | Action | Additional fields | Result |
 | --- | --- | --- |
-| `status` | none | Mode, publisher verification and publication outcomes. |
+| `status` | none | Mode, publisher verification (`publisherVerified`, and `publisherFault` when it fails) and publication outcomes. |
 | `owner` | `text`, `directOwner: true`, `evidence` | Applies one exact owner mode phrase. Evidence is an absolute local file with the direct instruction. |
-| `capability` | `evidence` | Records separate verification evidence for this installed publisher file. |
 | `register` | `task`, `repo`, `base`, `manualConfirmed: true`, `noKnownNativeAssignment: true`, `admissionJournals` | Binds a manual task, its recorded branch and PR to this session. |
 | `publish` | `task`, `sha` | Checks eligibility and submits one exact-head merge. |
 | `reconcile` | `task` | Reads a prior intent's actual PR outcome without another merge submission. |
@@ -19,11 +18,11 @@ Example status input:
 {"action":"status","project":"/absolute/project","session":"actual-current-codex-session"}
 ```
 
-Before `capability`, retain evidence of the required build, checks and independent reviews for the installed publisher. This action records the chief's verification; it does not perform or authenticate those reviews. Autopilot requires this record, Sage on and a direct owner instruction. A changed publisher file invalidates the verification. After uncertain continuity, record Sage off and require direct owner re-entry.
+The reviewed, CI-checked release is the publisher's verification. The build writes the sha256 of `workflow.mjs` and of each file that it imports into `publisher.json` beside it. Before `autopilot on` and before each publication, the helper compares the installed files with these hashes. Do not collect or record other evidence for this. A changed or missing file refuses with a reason that names the file; then the owner reinstalls sage from its marketplace. Autopilot also requires Sage on and a direct owner instruction. After uncertain continuity, record Sage off and require direct owner re-entry.
 
 Before registration, resolve task ownership. The task must use declared Codex `collaboration-tools` manual runs. `admissionJournals` lists every known native journal relevant to this task. Use an empty list only after the chief confirms that none are known. The helper rejects native preparations and assignments in these journals. It cannot discover a hidden journal. A declaration is not cryptographic identity or global admission enforcement. Never register a task to work around a protected API refusal.
 
-The first version supports same-repository PRs on github.com and uses squash. Registration names the expected `repo` (`owner/repository`) and `base` branch. Publication requires the current checkout's matching origin, branch and full reviewed SHA. The core merge check enforces required cycles, findings and program gates. The publisher also refuses unanswered gates on this task or another task of its PR. Every specialist must finish. GitHub must report an open, non-draft, mergeable PR and successful checks. Empty or incomplete check results refuse, including more than 100 checks or statuses.
+The first version supports same-repository PRs on github.com and uses squash. Registration names the expected `repo` (`owner/repository`) and `base` branch. Publication finds the remote by its URL, not by its name: exactly one remote of the checkout must point to the registered repository on github.com (HTTPS, `git@github.com:` or `ssh://git@github.com/`). No match or two matches refuse. Publication also requires the current branch and the full reviewed SHA. The core merge check enforces required cycles, findings and program gates. The publisher also refuses unanswered gates on this task or another task of its PR. Every specialist must finish. GitHub must report an open, non-draft, mergeable PR and successful checks. Empty or incomplete check results refuse, including more than 100 checks or statuses.
 
 The helper writes a durable intent before the fixed-argument GitHub REST merge request. The request includes the expected head SHA. It never uses admin, queue, auto-merge, force or branch deletion. GitHub's merge endpoint does not support merge queues. Branch protection remains effective.
 

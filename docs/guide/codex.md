@@ -97,6 +97,8 @@ Send each phrase alone, as the whole message, in any letter case.
 | `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. Each task still asks you 4 times before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)). |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
+- Autopilot needs no setup after an install. The reviewed release is the check: the build writes the sha256 of the merge helper and of each file that it imports, and the helper compares the installed files with them before `autopilot on` and before each merge. When a file is changed or missing, autopilot stays off, and the chief tells you the reason: reinstall sage from its marketplace.
+- The merge helper finds the project's GitHub remote by its URL, not by its name, so a remote named `github` works too. Exactly one remote must point to the pull request's repository. With none or with two, the merge stops, and the chief tells you why.
 - Send a phrase when Codex is idle. To stop merges at once, press Esc to stop Codex's turn, then send the off phrase for autopilot alone.
 - Only your own typed message switches a mode: Codex gives the hook no agent text. A Codex review or approval check sends its own prompt, and that prompt switches nothing.
 - A message near a phrase switches nothing. The chief asks you for the exact phrase, unless your message was a question.

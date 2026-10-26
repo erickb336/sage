@@ -18,7 +18,7 @@ Only a direct owner message can change mode. Use `commands.mjs` beside this skil
 | --- | --- |
 | `sage mode`, `sage mode on` | Record Sage on through the workflow helper; accept work in the next message. |
 | `sage mode off` | Record Sage off through the workflow helper. Stop dispatch and autopilot. Interrupt only owned active agents through supported tools, inspect the outcome and preserve work. Unknown status stays unresolved. |
-| `autopilot on` | Require Sage on and a separate publisher verification record. Record the direct owner instruction through the workflow helper; otherwise leave autopilot off. |
+| `autopilot on` | Require Sage on. Record the direct owner instruction through the workflow helper. The helper checks the installed publisher against its release; no other evidence is needed. If it refuses, autopilot stays off: give the owner its reason. |
 | `autopilot off` | Record autopilot off through the workflow helper; preserve Sage’s current mode. |
 | `sage help` | Show these phrases, board/status forms, actual known mode and capability limits. Do no work. |
 
@@ -32,4 +32,4 @@ Use the current Codex session identity and canonical project for workflow status
 
 The phrases match Claude's interface. Timing differs: Claude's queued off phrase disables autopilot while its active guards remain. Here, off requests the stop/interruption/preservation procedure above; do not claim timing parity.
 
-Keep the selected Codex model and native permissions, sandbox and hooks. Advice hooks are optional. Do not change settings or defaults to use this skill. A native protected API denial remains a denial: never use the manual CLI to bypass it or fabricate native receipts. Use the guarded publisher only for registered manual work. The installed workflow and automatic recovery need separate evidence.
+Keep the selected Codex model and native permissions, sandbox and hooks. Advice hooks are optional. Do not change settings or defaults to use this skill. A native protected API denial remains a denial: never use the manual CLI to bypass it or fabricate native receipts. Use the guarded publisher only for registered manual work. Automatic recovery needs separate evidence.

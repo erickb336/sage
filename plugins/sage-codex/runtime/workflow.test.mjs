@@ -2,7 +2,7 @@ import '../../../scripts/test-env.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync, readFileSync, chmodSync, readdirSync, symlinkSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync, readFileSync, chmodSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,8 +59,8 @@ function fixture(t, { cycles = 2 } = {}) {
   };
   const invoke = (action, fields = {}, session='session-one') => workflow({action,project,session,...fields},{env,github});
   const owner = text => invoke('owner',{text,directOwner:true,evidence});
-  const enable = () => {owner('sage mode on');invoke('capability',{evidence});owner('autopilot on');invoke('register',{task:'T1',repo:'example/project',base:'main',admissionJournals:[],manualConfirmed:true,noKnownNativeAssignment:true});};
-  return {project,env,head,core,invoke,owner,enable,evidence,puts:()=>puts,pr:()=>pr,setPr:value=>pr=value,
+  const enable = () => {owner('sage mode on');owner('autopilot on');invoke('register',{task:'T1',repo:'example/project',base:'main',admissionJournals:[],manualConfirmed:true,noKnownNativeAssignment:true});};
+  return {project,env,head,git,core,invoke,owner,enable,evidence,puts:()=>puts,pr:()=>pr,setPr:value=>pr=value,
     failChecks:()=>checkConclusion='failure',loseResponse:()=>uncertain=true,dir:tool.storeDir(project,env)};
 }
 test('workflow CLI persists owner modes per project and session',t=>{
@@ -68,8 +68,7 @@ test('workflow CLI persists owner modes per project and session',t=>{
   const call=(action,extra={},session='cli-session')=>JSON.parse(execFileSync(process.execPath,[cli],{env:f.env,input:JSON.stringify({action,project:f.project,session,...extra}),encoding:'utf8'}));
   assert.equal(call('status').sage,false);
   assert.equal(call('owner',{text:'sage mode on',directOwner:true,evidence:f.evidence}).sage,true);
-  assert.throws(()=>call('owner',{text:'autopilot on',directOwner:true,evidence:f.evidence}),/verified publisher/);
-  assert.equal(call('capability',{evidence:f.evidence}).publisherVerified,true);
+  assert.equal(call('status').publisherVerified,true);
   assert.equal(call('owner',{text:'Autopilot on.',directOwner:true,evidence:f.evidence}).autopilot,true);
   assert.equal(call('status',{},'new-session').autopilot,false);
   assert.equal(call('owner',{text:'autopilot off',directOwner:true,evidence:f.evidence}).sage,true);
@@ -86,7 +85,7 @@ test('eligible manual publication persists the merge and updates the core task',
 });
 test('off, changed head, missing cycles, checks and active or ambiguous runs refuse',t=>{
   const f=fixture(t);f.enable();f.owner('autopilot off');
-  assert.throws(()=>f.invoke('publish',{task:'T1',sha:f.head}),/active verified autopilot/);f.owner('autopilot on');
+  assert.throws(()=>f.invoke('publish',{task:'T1',sha:f.head}),/active autopilot/);f.owner('autopilot on');
   const pr=f.pr();f.setPr({...pr,head:{...pr.head,sha:'b'.repeat(40)}});
   assert.throws(()=>f.invoke('publish',{task:'T1',sha:f.head}),/identity or head changed/);f.setPr(pr);
   f.failChecks();assert.throws(()=>f.invoke('publish',{task:'T1',sha:f.head}),/All live checks/);
@@ -167,7 +166,7 @@ test('T36 fresh status succeeds without creating a missing Sage root or project 
     const result = f.call('status');
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { project: f.project, session: 'fresh-session',
-      sage: false, autopilot: false, publisherVerified: false, publications: {} });
+      sage: false, autopilot: false, publisherVerified: true, publications: {} });
     assert.deepEqual(f.snapshot(), before);
     const mutation = f.call('owner', { text: 'sage mode on', directOwner: true, evidence: f.evidence });
     assert.equal(mutation.status, 1); assert.match(mutation.stderr, /ENOENT/);
@@ -190,4 +189,59 @@ test('T36 fresh status preserves invalid storage errors without writes',t=>{
     assert.match(result.stderr, kind === 'malformed-state' ? /JSON/ : /ENOENT|ENOTDIR/, kind);
     assert.deepEqual(f.snapshot(), before);
   }
+});
+
+// T534: the release is the verification. A copy of the built plugin, as an install puts it, needs no evidence of its own.
+function installedPlugin(t) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'sage-install-')));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const codexHome = join(base, 'codex-home'), plugin = join(codexHome, 'plugins', 'cache', 'sage', 'sage', 'local');
+  cpSync(fileURLToPath(new URL('../../../plugins/sage-codex', import.meta.url)), plugin, { recursive: true });
+  const project = join(base, 'project'); mkdirSync(project);
+  const env = { ...process.env, HOME: base, CODEX_HOME: codexHome, SAGE_HOME: join(base, 'sage'), SAGE_TEST_PIDS: '{}' };
+  tool.sage(['init', '--project', project], env);
+  const evidence = join(base, 'owner.md'); writeFileSync(evidence, 'SIMULATED direct owner instruction.');
+  const call = (action, extra = {}) => spawnSync(process.execPath, [join(plugin, 'skills', 'sage', 'workflow.mjs')], { env, encoding: 'utf8',
+    input: JSON.stringify({ action, project, session: 'install-session', ...extra }) });
+  const owner = text => call('owner', { text, directOwner: true, evidence });
+  return { plugin, call, owner };
+}
+test('T534 a fresh install turns autopilot on with no capability evidence', t => {
+  const f = installedPlugin(t);
+  assert.equal(f.owner('sage mode on').status, 0);
+  const on = f.owner('autopilot on');
+  assert.equal(on.status, 0, on.stderr);
+  assert.equal(JSON.parse(on.stdout).autopilot, true);
+  assert.equal(JSON.parse(f.call('status').stdout).publisherVerified, true);
+});
+test('T534 a changed or missing publisher file refuses autopilot and says to reinstall', t => {
+  for (const change of ['workflow', 'core', 'missing']) {
+    const f = installedPlugin(t);
+    assert.equal(f.owner('sage mode on').status, 0);
+    if (change === 'workflow') appendFileSync(join(f.plugin, 'skills', 'sage', 'workflow.mjs'), '\n// changed\n');
+    else if (change === 'core') appendFileSync(join(f.plugin, 'core', 'state.mjs'), '\n// changed\n');
+    else rmSync(join(f.plugin, 'skills', 'sage', 'publisher.json'));
+    const on = f.owner('autopilot on');
+    assert.equal(on.status, 1, change);
+    assert.match(on.stderr, /does not match its release .*reinstall sage/, change);
+    assert.match(on.stderr, change === 'core' ? /core\/state\.mjs/ : change === 'workflow' ? /skills\/sage\/workflow\.mjs/ : /publisher\.json/, change);
+    const status = JSON.parse(f.call('status').stdout);
+    assert.equal(status.autopilot, false); assert.equal(status.publisherVerified, false); assert.match(status.publisherFault, /reinstall sage/);
+  }
+});
+test('T534 publish finds the one remote whose URL is the repository, whatever its name', t => {
+  const f = fixture(t); f.enable();
+  f.git('remote', 'rename', 'origin', 'github');
+  f.git('remote', 'add', 'other', 'git@github.com:example/elsewhere.git');
+  assert.equal(f.invoke('publish', { task: 'T1', sha: f.head }).publication.outcome, 'merged');
+  assert.equal(f.puts(), 1);
+});
+test('T534 publish refuses when no remote or two remotes point to the repository', t => {
+  const none = fixture(t); none.enable();
+  none.git('remote', 'set-url', 'origin', 'https://github.com/example/elsewhere.git');
+  assert.throws(() => none.invoke('publish', { task: 'T1', sha: none.head }), /No remote of this checkout points to github.com\/example\/project/);
+  const two = fixture(t); two.enable();
+  two.git('remote', 'add', 'github', 'git@github.com:Example/Project.git');
+  assert.throws(() => two.invoke('publish', { task: 'T1', sha: two.head }), /More than one remote \(github, origin\) points to github.com\/example\/project/);
+  assert.equal(none.puts() + two.puts(), 0);
 });

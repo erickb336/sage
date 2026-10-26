@@ -38,12 +38,27 @@ function readState(file, project) {
 function run(command, args, env) {
   return execFileSync(command, args, { env, encoding: "utf8", timeout: 30000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
-const currentPublisher = () => hash(readFileSync(source));
+/**
+ * The release check (T534). The build writes the sha256 of this file and of each file that it imports into
+ * publisher.json beside it. The reviewed, CI-checked release is the verification; a changed or missing file refuses.
+ */
+function publisherFault() {
+  const changed = [];
+  try {
+    const { files } = JSON.parse(readFileSync(join(dirname(source), "publisher.json"), "utf8"));
+    if (!Object.hasOwn(files, "skills/sage/workflow.mjs")) changed.push("skills/sage/workflow.mjs");
+    for (const [file, sum] of Object.entries(files)) {
+      try { if (hash(readFileSync(join(dirname(source), "..", "..", file))) !== sum) changed.push(file); } catch { changed.push(file); }
+    }
+  } catch { changed.push("skills/sage/publisher.json"); }
+  return changed.length ? `The installed publisher does not match its release (changed or missing: ${changed.join(", ")}); reinstall sage from its marketplace` : null;
+}
+const githubRepo = url => /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(url)?.[1]?.toLowerCase();
 
 /** Chief-only procedural entry point. Caller declarations are not native authentication. */
 export function workflow(input, { env = process.env, github = args => JSON.parse(run("gh", args, env)) } = {}) {
   const fields = {
-    status: [], owner: ["text", "directOwner", "evidence"], capability: ["evidence"],
+    status: [], owner: ["text", "directOwner", "evidence"],
     register: ["task", "repo", "base", "admissionJournals", "manualConfirmed", "noKnownNativeAssignment"], publish: ["task", "sha"], reconcile: ["task"],
   };
   if (!input || !Object.hasOwn(fields, input.action) || !keys(input, ["action", "project", "session", ...fields[input.action]])
@@ -55,7 +70,8 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
     let ancestor = dirname(dir);
     while (!lstatSync(ancestor, { throwIfNoEntry: false })) ancestor = dirname(ancestor);
     if (realpathSync(ancestor) !== ancestor || !lstatSync(ancestor).isDirectory()) fail("Invalid logbook location");
-    return { project, session: input.session, sage: false, autopilot: false, publisherVerified: false, publications: {} };
+    const fault = publisherFault();
+    return { project, session: input.session, sage: false, autopilot: false, publisherVerified: !fault, ...fault && { publisherFault: fault }, publications: {} };
   }
   if (realpathSync(dir) !== dir) fail("Invalid logbook location");
   const file = join(dir, "codex-workflow.json");
@@ -91,25 +107,22 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
   };
   const result = tool.withLock(dir, () => {
     const state = readState(file, project);
-    const session = state.sessions[sessionKey] ?? { session: input.session, sage: false, autopilot: false, capability: null, tasks: {} };
+    const session = state.sessions[sessionKey] ?? { session: input.session, sage: false, autopilot: false, tasks: {} };
     if (session.session !== input.session || typeof session.sage !== "boolean" || typeof session.autopilot !== "boolean" || !session.tasks)
       fail("Invalid session state");
     const persist = () => { state.sessions[sessionKey] = session; save(file, state); };
-    const status = () => ({ project, session: input.session, sage: session.sage, autopilot: session.autopilot,
-      publisherVerified: session.capability?.publisher === currentPublisher(), publications: state.publications });
+    const status = () => { const fault = publisherFault(); return { project, session: input.session, sage: session.sage, autopilot: session.autopilot,
+      publisherVerified: !fault, ...fault && { publisherFault: fault }, publications: state.publications }; };
     if (input.action === "status") return status();
     if (input.action === "owner") {
       if (input.directOwner !== true || typeof input.text !== "string") fail("The chief must record a direct owner instruction");
       const phrase = exactPhrase(input.text);
       if (!phrase || PHRASES[phrase].help) fail("Expected an exact owner mode phrase");
       const proof = evidence(input.evidence);
-      if (phrase === "autopilot on" && (!session.sage || session.capability?.publisher !== currentPublisher())) fail("Autopilot needs Sage on and verified publisher capability");
+      if (phrase === "autopilot on" && !session.sage) fail("Autopilot needs Sage on");
+      if (phrase === "autopilot on" && publisherFault()) fail(publisherFault());
       for (const key of ["sage", "autopilot"]) if (Object.hasOwn(PHRASES[phrase], key)) session[key] = PHRASES[phrase][key];
       session.ownerInstruction = { phrase, ...proof, at: new Date().toISOString() };
-      persist(); return status();
-    }
-    if (input.action === "capability") {
-      session.capability = { publisher: currentPublisher(), ...evidence(input.evidence), at: new Date().toISOString() };
       persist(); return status();
     }
     if (input.action === "register") {
@@ -137,7 +150,8 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
     }
     if (previous) fail("Publication intent already exists; reconcile it without another submission");
     if (!sha(input.sha)) fail("Publish needs the reviewed full head SHA");
-    if (!session.sage || !session.autopilot || session.capability?.publisher !== currentPublisher()) fail("Publication needs active verified autopilot");
+    if (!session.sage || !session.autopilot) fail("Publication needs active autopilot");
+    if (publisherFault()) fail(publisherFault());
     const record = session.tasks[input.task];
     const runs = manual(record, input.task);
     const prTasks = new Set(tool.read(dir, "tasks").filter(task => task.id === row.id || task.pr === row.pr).map(task => task.id));
@@ -146,9 +160,11 @@ export function workflow(input, { env = process.env, github = args => JSON.parse
     if (!["verified", "pr-ready"].includes(row.state) || row.branch !== record.branch || row.pr !== record.pr
       || runs.some(run => run.status === "running" && run.role !== "lead")) fail("Task is not ready or specialist ownership is active");
     if (git(["branch", "--show-current"]) !== record.branch || git(["rev-parse", "HEAD"]) !== input.sha) fail("Local branch or head changed");
-    const origin = git(["remote", "get-url", "origin"]);
-    const repo = /^(?:https:\/\/github\.com\/|git@github\.com:)([^/]+\/[^/]+?)(?:\.git)?$/.exec(origin)?.[1];
-    if (repo?.toLowerCase() !== record.repo.toLowerCase()) fail("Checkout origin does not match the registered GitHub repository");
+    // The remote is found by its URL, not by its name: one remote of the checkout must point to the PR's repository.
+    const remotes = git(["remote"]).split("\n").filter(Boolean)
+      .filter(name => git(["remote", "get-url", "--all", name]).split("\n").some(url => githubRepo(url) === record.repo.toLowerCase()));
+    if (remotes.length !== 1) fail(remotes.length ? `More than one remote (${remotes.sort().join(", ")}) points to github.com/${record.repo}; keep one`
+      : `No remote of this checkout points to github.com/${record.repo}`);
     const eligible = tool.mergeCheck(input.sha, env, { pr: record.pr, head: record.branch, project, readOnly: true });
     if (!eligible.ok) fail(eligible.reason);
     const path = `repos/${record.repo}/pulls/${record.pr}`;
