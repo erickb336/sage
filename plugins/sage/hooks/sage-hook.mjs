@@ -17,7 +17,7 @@
 //     first creation of main or master on GitHub, in one literal gh api form (FIRST_FORM), checked on GitHub only
 //     (firstUpload, firstCreation).
 //   - Only main starts leads (3 per project), each named lead-T<n> of a task with a running lead run in the logbook of
-//     the session's folder (logbookView), and in the background, one per task; only leads start their permitted children (3 each),
+//     the session's folder (logbookView), and in the background, one per task; only leads start their permitted children (LEAD_HELPERS each),
 //     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode. In the same scope
 //     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent), and
 //     never names a spawn main or lead-T<n> (reservedName). Only the main session's TaskStop frees a slot.
