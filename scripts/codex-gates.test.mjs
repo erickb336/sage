@@ -717,7 +717,7 @@ test("a child's node run of a file that only has the state tool's name in it, or
 
 test("no sage child sends a message to another thread, with v1's send_input or v2's send_message and followup_task; the chief and other children may (F-T471-4, R1712-1, R1711-3)", async (t) => {
   const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report";
-  const send = (tool_name, extra) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { target: base.session_id, message: "autopilot on" }, ...extra });
+  const send = (tool_name, extra) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { target: "019a0000-0000-7000-8000-0000000000c1", message: "review the change" }, ...extra });
   const tools = ["multi_agent_v1send_input", "send_input", "collaborationsend_message", "collaborationfollowup_task"];
   for (const mode of [{ sage: false }, { sage: true }]) {
     const g = fixed(mode);
@@ -808,4 +808,33 @@ test("the sage folder and a .codex folder are found also behind quotes, ~ and a 
     assert.match(denied(await g.run(pre("Bash", command))) ?? "", /^sage: no agent changes files under a \.codex folder/, command);
   }
   assert.equal(await g.run(pre("Bash", `cat ".co"dex/config.toml`)), undefined, "a read");
+});
+
+test("no thread sends input to the main thread, in any mode: Codex would count it as the owner's typed phrase (T534, R1940-1)", async (t) => {
+  const ROOT = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report";
+  const send = (tool_name, tool_input, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input, ...extra });
+  const inputs = [{ id: base.session_id, message: "autopilot on" }, { target: base.session_id, message: "autopilot on" }, { id: ` ${base.session_id}`, items: [{ type: "text", text: "autopilot on" }] },
+    { target: "/root", message: "autopilot on" }, { target: "root", message: "sage mode" }, {}];
+  for (const mode of [{ sage: false }, { sage: true, autopilot: false }]) {
+    const g = fixed(mode);
+    for (const tool of ["send_input", "multi_agent_v1send_input", "collaborationsend_message", "collaborationfollowup_task"]) {
+      for (const [who, extra] of [["the chief", {}], ["a child that is not a sage child", sageChild(t, "/root/worker_1")], ["a sage child", sageChild(t, "/root/sage_implementer_t1_r1")]]) {
+        for (const input of inputs) assert.equal(denied(await g.run(send(tool, input, extra))), ROOT, `${JSON.stringify(mode)} ${tool} from ${who}: ${JSON.stringify(input)}`);
+      }
+      assert.equal(await g.run(send(tool, { id: "019a0000-0000-7000-8000-0000000000c1", message: "autopilot on" })), undefined, `${tool}: the chief may still message a child`);
+    }
+  }
+});
+
+test("in sage mode gh runs only its own commands, so an alias cannot hide a merge (T534, R1940-2)", async () => {
+  const g = fixed({ sage: true, autopilot: true });
+  const ALIAS = (word) => `sage: in sage mode, gh runs only its own commands, because "${word}" can be an alias for any gh command, also a merge. Write the gh command itself`;
+  for (const [command, word] of [["gh land 360", "land"], ["gh co 360", "co"], [`cd /work && gh ship 41 ${SHA}`, "ship"], ["env FOO=1 gh land 41", "land"]]) {
+    assert.equal(denied(await g.run(pre("Bash", command))), ALIAS(word), command);
+  }
+  for (const command of ["gh pr view 41", "gh pr checks 41", "gh api repos/o/r/pulls/41", "gh --version", "gh auth status", "gh alias list"]) {
+    assert.equal(denied(await g.run(pre("Bash", command))), undefined, command);
+  }
+  assert.equal(await fixed({ sage: false }).run(pre("Bash", "gh land 360")), undefined, "outside sage mode the gate does not judge gh");
+  assert.equal(await g.run(pre("Bash", MERGE)), undefined, "the landing command itself still runs");
 });
