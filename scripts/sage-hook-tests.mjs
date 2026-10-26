@@ -1652,14 +1652,15 @@ test("1 MB of padding in an agent's text cannot time out the hook: its time grow
   const small = cases(KB100);
   const big = cases(10 * KB100); // 1000 KB, about 1 MB
   // 10 times the text takes about 10 times as long on a linear path, and about 100 times on a quadratic one. The bound
-  // allows 30 times, and 20 ms more for a garbage collection. A slow linear path also fails: 1000 KB may take at most
-  // 2 s of CPU time (about 60 ms today), well inside the hook's own budget of 10 s.
-  const bound = (t) => Math.min(30 * t + 20, 2000);
+  // allows 30 times, and 20 ms more for a garbage collection. It compares two sizes on the same machine, so a slow
+  // runner slows both: a fixed 2 s cap failed a linear path on a slow CI runner (T505: 164 ms for 100 KB, 2073 ms for
+  // 1000 KB). The only fixed cap is the hook's own budget of 10 s: a call over it times out for real.
+  const bound = (t) => 30 * t + 20;
   const times = big.map(([name, input, stop], i) => {
     const t = timed(small[i][1], stop); // the fastest of 3
     return { name, small: t, big: timed(input, stop, bound(t)) };
   });
-  const slow = times.filter((t) => t.big > bound(t.small)).map((t) => `${t.name}: ${t.small.toFixed(1)} ms for 100 KB, ${t.big.toFixed(1)} ms for 1000 KB`);
+  const slow = times.filter((t) => t.big > bound(t.small) || t.big > 10_000).map((t) => `${t.name}: ${t.small.toFixed(1)} ms for 100 KB, ${t.big.toFixed(1)} ms for 1000 KB`); // timing-ok: the hook's own 10 s budget, 20 times the 0.5 s of CPU that 1000 KB takes on a Mac
   assert.deepEqual(slow, [], "the time of each call grows in line with its text");
 });
 
@@ -3046,7 +3047,8 @@ test("F-T229-17: the board rule is fast on a word of many variable and ? pieces"
 // total probes get 8 per input character; path work gets 128 plus the cwd/home prefix lengths per character.
 // These generous linear allowances permit separate policy passes and path expansion without allowing a
 // million-character path to be walked upward one component at a time. They are not latency guarantees.
-// The 120 s child timeout is only a deadlock guard. Import/setup work is outside the measured handler.
+// No clock decides a result: the test's own timeout is the only guard against a hang (T505: a fixed 120 s child
+// timeout killed a correct child under load). Import/setup work is outside the measured handler.
 // The original one-word agent case fails closed; bounded work does not mean every input parses successfully.
 const PATH_WORK_CHILD = `
   import fs from "node:fs";
@@ -3100,67 +3102,70 @@ const PATH_WORK_CHILD = `
   }
   process.stdout.write(JSON.stringify(out));
 `;
-function pathWorkShapes() {
-  const size = 1 << 20;
-  const many = (f) => { let text = ""; for (let i = 0; text.length < size; i++) text += f(i); return text; };
-  return {
-    "relative words": `cat${many((i) => ` d${i}/f`)}`, "absolute words": `cat${many((i) => ` /tmp/d${i}/f`)}`,
-    "pattern words": `cat${many((i) => ` ~/d${i}/*.json`)}`, "words of a writer": `rm${many((i) => ` d${i}/f`)}`,
-    "code of paths": `node -e '${many((i) => `require("./lib/m${i}.js");`)}'`, "code of one word": `node -e '${"lib/".repeat(size / 4)}'`,
-    "code on stdin": `node <<'EOF'\n${many((i) => `require("./lib/m${i}.js");\n`)}EOF`,
-  };
-}
-function pathWorkChild(calls, home, hook = new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url).href) {
-  return spawnSync("node", ["--input-type=module", "-e", PATH_WORK_CHILD, hook], {
-    input: JSON.stringify(calls), encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 120_000,
+/** Each one-MB input shape, made when a test needs it. */
+const SHAPE_SIZE = 1 << 20;
+const many = (f) => { let text = ""; for (let i = 0; text.length < SHAPE_SIZE; i++) text += f(i); return text; };
+const PATH_WORK_SHAPES = {
+  "relative words": () => `cat${many((i) => ` d${i}/f`)}`, "absolute words": () => `cat${many((i) => ` /tmp/d${i}/f`)}`,
+  "pattern words": () => `cat${many((i) => ` ~/d${i}/*.json`)}`, "words of a writer": () => `rm${many((i) => ` d${i}/f`)}`,
+  "code of paths": () => `node -e '${many((i) => `require("./lib/m${i}.js");`)}'`, "code of one word": () => `node -e '${"lib/".repeat(SHAPE_SIZE / 4)}'`,
+  "code on stdin": () => `node <<'EOF'\n${many((i) => `require("./lib/m${i}.js");\n`)}EOF`,
+};
+/** Runs the calls in the work child. The test's signal kills the child when the test times out, so a hang fails the test. */
+function pathWorkChild(signal, calls, home, hook = new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url).href) {
+  return new Promise((resolve, reject) => {
+    const p = spawn("node", ["--input-type=module", "-e", PATH_WORK_CHILD, hook], { env: { ...process.env, HOME: home }, signal, killSignal: "SIGKILL" });
+    let stdout = "", stderr = "";
+    p.stdout.setEncoding("utf8").on("data", (d) => { stdout += d; });
+    p.stderr.setEncoding("utf8").on("data", (d) => { stderr += d; });
+    p.on("error", reject);
+    p.on("close", (status) => resolve({ status, stdout, stderr }));
+    p.stdin.end(JSON.stringify(calls));
   });
 }
-test("F-T229-20: one-MB parser inputs have bounded path work for the chief and an agent", () => {
+// One test for each shape: each has the file's 5 minute timeout for one child of about 2 s.
+for (const name of Object.keys(PATH_WORK_SHAPES)) test(`F-T229-20: one-MB parser inputs have bounded path work for the chief and an agent: ${name}`, async (t) => {
   const s = session();
   try {
-    for (const [name, command] of Object.entries(pathWorkShapes())) {
-      const calls = [{ who: "the chief", event: bash(command), state: { sage: true, given: true } }, { who: "an agent", event: bash(command, FEATURE, AGENT), state: { sage: true } }];
-      const r = pathWorkChild(calls, join(s.dir, "fake-home"));
-      assert.equal(r.signal, null, `${name}: child exceeded the 120 s deadlock guard`);
-      assert.equal(r.status, 0, `${name}: ${r.stderr}`);
-      const results = JSON.parse(r.stdout);
-      assert.deepEqual(Object.keys(results), ["the chief", "an agent"]);
-      for (const [who, measured] of Object.entries(results)) {
-        assert.ok(measured.probes > 0, `${name}, ${who}: the hook exercised path checks`);
-        if (name === "code of one word" && who === "an agent") {
-          assert.match(denied(measured.result) ?? "", /could not check this agent's command/);
-        } else assert.equal(measured.result, null, `${name}, ${who}: the permitted input stays permitted`);
-      }
+    const command = PATH_WORK_SHAPES[name]();
+    const calls = [{ who: "the chief", event: bash(command), state: { sage: true, given: true } }, { who: "an agent", event: bash(command, FEATURE, AGENT), state: { sage: true } }];
+    const r = await pathWorkChild(t.signal, calls, join(s.dir, "fake-home"));
+    assert.equal(r.status, 0, `${name}: ${r.stderr}`);
+    const results = JSON.parse(r.stdout);
+    assert.deepEqual(Object.keys(results), ["the chief", "an agent"]);
+    for (const [who, measured] of Object.entries(results)) {
+      assert.ok(measured.probes > 0, `${name}, ${who}: the hook exercised path checks`);
+      if (name === "code of one word" && who === "an agent") {
+        assert.match(denied(measured.result) ?? "", /could not check this agent's command/);
+      } else assert.equal(measured.result, null, `${name}, ${who}: the permitted input stays permitted`);
     }
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
 
-test("F-T229-20: the work oracle detects long-prefix walks and repeated uncached prefixes", () => {
+test("F-T229-20: the work oracle detects long-prefix walks and repeated uncached prefixes", async (t) => {
   const s = session();
   try {
     const plugin = join(s.dir, "mutated-plugin");
     cpSync(fileURLToPath(new URL("../plugins/sage", import.meta.url)), plugin, { recursive: true });
     const hook = join(plugin, "hooks/sage-hook.mjs"), original = readFileSync(hook, "utf8");
-    const shapes = pathWorkShapes();
     // A parser-only root assignment in a writer reaches canonical(); node code uses a different path check.
     // Fewer, longer components avoid the engine argument-count limit of the original one-word input.
-    shapes["long components"] = ("x".repeat(127) + "/").repeat(8192);
+    const shapes = { ...PATH_WORK_SHAPES, "long components": () => ("x".repeat(127) + "/").repeat(8192) };
     for (const [before, after, shape, kind] of [
       ["if (!strict && path.length > 4096)", "if (false)", "long components", "characters"],
       ["if (!disk.has(next))", "if (true)", "relative words", "repeated-path"],
     ]) {
       assert.equal(original.split(before).length, 2, "the controlled regression must change exactly one guard");
       const event = shape === "long components"
-        ? bash(`SAGE_HOME=${shapes[shape]} rm x`, FEATURE, AGENT)
-        : bash(shapes[shape], FEATURE, AGENT);
+        ? bash(`SAGE_HOME=${shapes[shape]()} rm x`, FEATURE, AGENT)
+        : bash(shapes[shape](), FEATURE, AGENT);
       const calls = [{ who: "an agent", event, state: { sage: true } }];
       writeFileSync(hook, original);
-      const baseline = pathWorkChild(calls, join(s.dir, "fake-home"), pathToFileURL(hook).href);
+      const baseline = await pathWorkChild(t.signal, calls, join(s.dir, "fake-home"), pathToFileURL(hook).href);
       assert.equal(baseline.status, 0, baseline.stderr);
       assert.equal(JSON.parse(baseline.stdout)["an agent"].result, null, "the unmodified handler must process this path");
       writeFileSync(hook, original.replace(before, after));
-      const r = pathWorkChild(calls, join(s.dir, "fake-home"), pathToFileURL(hook).href);
-      assert.equal(r.signal, null, `${shape}: the work bound must stop the regression before the deadlock guard`);
+      const r = await pathWorkChild(t.signal, calls, join(s.dir, "fake-home"), pathToFileURL(hook).href);
       assert.equal(r.status, 86, `${shape}: ${r.stderr} ${r.stdout}`);
       const failure = JSON.parse(r.stderr.trim());
       assert.equal(failure.error, "path-work-bound");
@@ -5579,6 +5584,68 @@ test("F-T273-8: a failed, slow or fork read of the head branch refuses the merge
     assert.match(reason ?? "", /^sage: the hook could not read the head branch of PR 41 from GitHub \(/, JSON.stringify(env));
     assert.match(reason ?? "", why, JSON.stringify(env));
   }
+});
+
+test("T439: two tasks on one branch and PR merge under autopilot only when each passes; another branch for one task refuses", () => {
+  const s = autopilotSession(); // T1 has clean cycles on SHA under PR 41; the head branch is claude/t1
+  const merge = () => denied(s.send(bash(MERGE)));
+  const verdicts = (...kinds) => { for (const kind of kinds) s.sage("verdict", "T2", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41"); };
+  s.sage("task", "add", "--priority", "P2", "--title", "second", "--size", "small"); // T2
+  s.sage("task", "T1", "set", "branch=claude/t1", "pr=41");
+  assert.match(s.sage("task", "T2", "set", "branch=claude/t1", "pr=41"), /· claude\/t1 · PR 41 · P2$/, "T2 shares T1's branch");
+  verdicts("checks-pass", "review-clean");
+  assert.match(merge() ?? "", /^sage: the merge check refuses: 2 tasks have verdicts on .* T2: 0 of 1 clean cycles on this SHA; never recorded: qa-pass\./, "T2 is not clean");
+  verdicts("qa-pass");
+  assert.equal(merge(), undefined, "each task of the PR passes on its own verdicts");
+  s.sage("task", "T2", "set", "branch=claude/t2");
+  assert.match(merge() ?? "", /^sage: the merge check refuses: PR 41's head branch "claude\/t1" is not a branch of \S+ T2/, "T2 names another branch for the same PR");
+  // B1 of F-T273-8 with a shared branch: T1 on T2's branch, but T2 not on the PR, does not merge T2's work.
+  const lend = autopilotSession({ FAKE_PR_HEAD: "claude/t2" });
+  lend.sage("task", "add", "--priority", "P2", "--title", "other", "--size", "small"); // T2
+  lend.sage("task", "T2", "set", "branch=claude/t2");
+  lend.sage("task", "T1", "set", "branch=claude/t2", "pr=41");
+  assert.match(denied(lend.send(bash(MERGE))) ?? "", /^sage: the merge check refuses: PR 41's head branch "claude\/t2" also belongs to \S+ T2 \(by its name\), which is not on PR 41/);
+});
+
+test("T439: a lead adds a run on its task's shared branch, but only the sage puts its task on another task's branch", () => {
+  const s = leadSession(); // the lead of T1
+  s.sage("task", "T2", "set", "branch=claude/t2");
+  s.sage("task", "T1", "set", "branch=claude/t2"); // the sage shares T2's branch with T1
+  assert.equal(denied(stateRun(s, "run add T1 --role implementer --branch claude/t2")), undefined, "its task's branch=");
+  assert.match(denied(stateRun(s, "run add T1 --role implementer --branch claude/t3")) ?? "", NOT_OWN, "a branch of neither");
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t2")) ?? "", NOT_OWN, "a lead never names another task's branch");
+  // R1709-1: its runs pushed to the shared branch, so only the sage takes its task off it.
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1")) ?? "", NOT_OWN, "a lead never moves its task off a shared branch");
+  s.sage("task", "T1", "set", "branch=claude/t1-old"); // the sage moves it to a branch named for T1
+  assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1")), undefined, "from a branch named for its task, to another one");
+});
+
+// R1740-1: the lead of T1 on claude/t1-x, which the sage shared with T2, and a run of T2's implementer on it.
+function sharedLeadSession() {
+  const s = leadSession(); // the lead of T1, at briefed
+  s.sage("task", "T1", "set", "branch=claude/t1-x");
+  s.sage("task", "T2", "set", "branch=claude/t1-x"); // the sage shares T1's branch with T2
+  s.sage("run", "add", "T2", "--role", "implementer", "--branch", "claude/t1-x"); // T2's implementer pushes to it
+  return s;
+}
+const SHARED_X = /claude\/t1-x is shared with T2: only the sage moves a task onto a shared branch or off it\./;
+
+test("R1740-1: a lead never moves its task off a branch named for it that another task uses", () => {
+  const s = sharedLeadSession();
+  assert.equal(denied(stateRun(s, "task T1 set state=building branch=claude/t1-x")), undefined, "the build step names the branch that it has");
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1-y")) ?? "", SHARED_X, "the move off, with T2's commits");
+  s.sage("task", "T2", "set", "branch="); // T2 leaves by its branch=, but its run stays on the branch
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1-y")) ?? "", SHARED_X, "a run on it shares it too");
+});
+
+test("R1740-1: a lead never moves its task back onto a branch named for it that another task uses", () => {
+  const s = sharedLeadSession();
+  s.sage("task", "T1", "set", "branch=claude/t1-y"); // the sage moves T1 off
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1-x")) ?? "", SHARED_X, "the rejoin, while T2 names it");
+  s.sage("task", "T2", "set", "branch="); // T2 leaves by its branch=, but its run stays on the branch
+  assert.match(denied(stateRun(s, "task T1 set branch=claude/t1-x")) ?? "", SHARED_X, "the rejoin, while T2's run is on it");
+  assert.match(denied(stateRun(s, "task T1 set branch=CLAUDE/T1-X")) ?? "", /CLAUDE\/T1-X is shared with T2: only the sage/, "in any letter case");
+  assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1-z")), undefined, "between branches that no other task uses");
 });
 
 test("F-T273-8: merge-check --head runs the same check by hand, and needs --pr", () => {
