@@ -7,7 +7,6 @@ import { rewriteCoreImports } from "./package-imports.mjs";
 //   → instructions/core.md                        (the always-on file: preferences + writing standard)
 //   writing/dictionary.md → plugins/sage/skills/dictionary/SKILL.md, and the word table in docs/guide/concepts.md (scripts/dictionary.mjs)
 //   principles/*.md and upstream/pstack → the principles table in docs/guide/principles.md (scripts/principles-table.mjs)
-//   changes/*.md → CHANGELOG.md (scripts/changelog.mjs)
 // Run `npm run build` after editing a source; `npm run check` fails when a generated file is out of date.
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, renameSync, writeFileSync, existsSync } from "node:fs";
@@ -18,7 +17,6 @@ import { parse } from "es-module-lexer/minimal";
 import { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "../packages/sage-core/index.mjs";
 import { PRINCIPLES_PAGE, WORDS_PAGE, checkWords, withWordTable, wordTable } from "./dictionary.mjs";
 import { principleRows, principlesTable, withPrinciplesTable } from "./principles-table.mjs";
-import { changelog } from "./changelog.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SKILLS = join(ROOT, "packages/sage-claude/skills");
@@ -94,7 +92,6 @@ export function outputs() {
   out.set("plugins/sage/skills/dictionary/SKILL.md", skill("dictionary", `${d.meta.name}: sage's approved words, one meaning each, and the words not to say. Apply to ${d.meta.applyWhen}`, d.meta.source, `# ${d.meta.name}\n\n${d.body}`));
   const rows = principleRows(ownMeta, upstream.map((u) => ({ id: u.name.slice("principle-".length), description: u.description })));
   out.set(WORDS_PAGE, withWordTable(readFileSync(join(ROOT, WORDS_PAGE), "utf8"), wordTable(d.body)));
-  out.set("CHANGELOG.md", changelog(ROOT));
   out.set(PRINCIPLES_PAGE, withPrinciplesTable(readFileSync(join(ROOT, PRINCIPLES_PAGE), "utf8"), principlesTable(rows)));
   const p = parseSource(readFileSync(join(ROOT, "preferences/working-preferences.md"), "utf8"), "preferences/working-preferences.md");
   out.set("instructions/core.md", `${GENERATED}\n\n# ${p.meta.name}\n\n${p.body}\n\n# ${w.meta.name}\n\n${w.body}\n`);
@@ -183,9 +180,10 @@ function packageOutputs(generated) {
 export const PUBLISHER = "skills/sage/publisher.json";
 
 /**
- * The sha256 of the built workflow.mjs and of each file that it imports, also through core. Before autopilot and
- * before each merge, the publisher compares the installed files with these hashes: the reviewed release is the
- * verification, and a changed or missing file refuses.
+ * The sha256 of the built workflow.mjs and of each file that it imports, also through core and the hooks (the mode
+ * reader and the gate's proof writer), and of the state server with its imports (its proof check, T541): the server
+ * records the verdicts that the merge check reads. Before each merge, the publisher compares the installed files with
+ * these hashes: the reviewed release is the verification, and a changed or missing file refuses.
  */
 function publisherHashes(out, target) {
   const files = {};
@@ -197,6 +195,7 @@ function publisherHashes(out, target) {
     for (const item of parse(text)[0]) if (item.n?.startsWith(".")) visit(join(dirname(rel), item.n));
   };
   visit("skills/sage/workflow.mjs");
+  visit("mcp/state-server.mjs");
   return JSON.stringify({ files }, null, 2) + "\n";
 }
 

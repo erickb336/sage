@@ -37,10 +37,13 @@
     "core/admission.mjs": "bd776cb895d7145bf3ba43a420bd696625bb3804d4032aee52cac8688fdbfe96",
     "core/role-policy.mjs": "e8f251a1597cddb4d4532a2f92bd65d1dad1647b11b68c59d66f816aded28b5c",
     "core/brief.mjs": "058da044f5c67e7a4ed42397d1fbbb2de4b95d10dd9bdb2c9c90917476fc998c",
-    "hooks/gate-hook.mjs": "d81b9c56cd4608740463f01f8ef1e2ff2fff98158788853b76b514b39b931dbf",
+    "hooks/gate-hook.mjs": "aedbde992d10d368821ef5efab455da4732ba24a6378822221433e1635c9322b",
     "hooks/principles-hook.mjs": "da51f59098d1aa3f063a9bd3f262e8c7d5edc7798586bf67b2c8b63e9ac90c26",
     "hooks/report-gate.mjs": "8f7a565441ec7ddbce12040f62deb85384191e58c4dab1572c27206fe9db5d9e",
     "hooks/sage-codex-hook.mjs": "92d8f5ff1b68028b8abda33e5f58a305334a00a25fded84988a22150146bba4f",
-    "skills/sage/sage.mjs": "5ad58598c5f220c8b835dafc93b8632e7688874a78d8113ebf8b999b7af0d138"
+    "skills/sage/sage.mjs": "5ad58598c5f220c8b835dafc93b8632e7688874a78d8113ebf8b999b7af0d138",
+    "mcp/state-server.mjs": "536220878eb1382ff3cb774d6cae41051b2b6c52ed7c23b7bdf77693967773b6",
+    "runtime/mcp-sdk.mjs": "bff328c56c12c462ca6b5c73f4167da1a0852672d760676e9d05fd49b6a52c22",
+    "hooks/brief-hook.mjs": "a513501954d1418dc5523b8c3e46529c5581246cadf487720ebcb211258b6d9a"
   }
 }

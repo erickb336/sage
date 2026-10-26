@@ -25,6 +25,15 @@
 //     codex) runs outside the hooks of this session. Codex is its name, or the real file of a Codex executable (not
 //     every program of its package: Codex puts its own rg first on PATH). codex --version and --help start no session.
 //   - A push (sage mode): only core's push form, as in the Claude hook.
+//   - The gate's proof: for each sage MCP call that it lets through, the gate saves a proof by the call's id, and the
+//     sage MCP server serves no call without one, so sage does not work while Codex runs no sage hook.
+//   - Codex's settings: no thread, in any mode, writes Codex's config file (the hook trust) or this plugin's folder
+//     from the shell.
+//   - Code mode: Codex runs no hook for its exec tool, but each tool call inside the code comes here with its own name,
+//     as a direct call does (T541). The js tool of Codex's REPL servers (mcp__node_repl__js, mcp__cua_repl__js, by the
+//     MCP hook name of Codex 0.164.0 handlers/mcp.rs:139-161) runs
+//     its code in its own process, where no hook sees a shell command. The owner chose to allow it, so the manifest
+//     does not match it and the gate never sees it.
 //   - A merge (sage mode): only the one merge form of core, only on the root thread, only with autopilot on and a passing
 //     merge check for that head SHA. Autopilot counts only when the mode file and the user's own typed messages in
 //     Codex's transcript of the thread both give it, so a forged mode file alone unlocks nothing. PreToolUse denies every
@@ -34,7 +43,8 @@
 // cannot read gets no decision, so the user decides in Codex's own prompt.
 import { execFileSync } from "node:child_process";
 import { constants } from "node:buffer";
-import { closeSync, existsSync, openSync, readdirSync, readSync, realpathSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,6 +67,7 @@ const pushes = createPushPolicy({ stateToolPath: TOOL, readBranch: branchAt });
 
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user.";
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";
+const CODEX_SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change.";
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
 const AGENT_MERGE = "sage: an agent never merges. Report the pull request as ready.";
 const AUTOPILOT_OFF = 'sage: autopilot is off, so the user merges. Report the pull request as ready. The user turns it on with the message "autopilot on", alone.';
@@ -206,19 +217,29 @@ function wordsOf(command, cwd, env) {
   } catch { return []; }
 }
 
+const codexHome = (env) => resolve(env.CODEX_HOME ?? join(homedir(), ".codex"));
 /**
  * Whether a shell command names the Codex sage folder (also from ~ or $HOME, $SAGE_HOME or $CODEX_HOME/sage) or the
  * Codex sessions folder: in its text, or in a word as the shell reads it (without quotes, R1669-4), also as a path
  * from the folder the word runs in.
  */
-export function namesSageFolder(command, env = process.env, cwd = "/") {
-  const dirs = [dirname(dirname(modeDirectory(env))), join(resolve(env.CODEX_HOME ?? join(homedir(), ".codex")), "sessions")];
+export const namesSageFolder = (command, env = process.env, cwd = "/") => names(command, env, cwd,
+  [dirname(dirname(modeDirectory(env))), join(codexHome(env), "sessions")], ["\\$\\{?SAGE_HOME\\b", "\\$\\{?CODEX_HOME\\}?/(?:sage|sessions)(?![\\w.-])", "\\.hooks/codex"]);
+/**
+ * Whether a shell command names Codex's config file, which keeps the trust records of the hooks, or the folder of this
+ * installed plugin, whose hooks are the gate (R1916-2): the same forms as the sage folder.
+ */
+export const namesCodexSettings = (command, env = process.env, cwd = "/") => names(command, env, cwd,
+  [join(codexHome(env), "config.toml"), ROOT], ["\\$\\{?CODEX_HOME\\}?/(?:config\\.toml|plugins)(?![\\w.-])"]);
+
+/** Whether a shell command names one of these paths, or matches one of these patterns, as namesSageFolder says. */
+function names(command, env, cwd, dirs, patterns) {
   const forms = new Set(dirs);
   for (const dir of dirs) try { forms.add(realpathSync.native(dir)); } catch { /* not made yet */ }
   const home = env.HOME || homedir();
   for (const form of [...forms]) if (form.startsWith(`${home}/`)) for (const start of ["~", "$HOME", "${HOME}"]) forms.add(start + form.slice(home.length));
   const paths = [...forms].map((form) => `(?<![\\w.~/$-])${escape(form)}(?=$|[/\\s'"\`;|&)<>:])`);
-  const named = new RegExp([...paths, "\\$\\{?SAGE_HOME\\b", "\\$\\{?CODEX_HOME\\}?/(?:sage|sessions)(?![\\w.-])", "\\.hooks/codex"].join("|"), "i");
+  const named = new RegExp([...paths, ...patterns].join("|"), "i");
   const path = (word, dir) => resolve(dir, word.replace(/^~(?=\/|$)/, home));
   return named.test(command) || wordsOf(command, cwd, env).some(({ word, dir }) => named.test(word) || named.test(path(word, dir)));
 }
@@ -322,6 +343,30 @@ export function stateToolWrites(command, cwd = "/", env = process.env) {
 /** Whether a shell command runs codex with resume or fork. */
 export const resumesSession = (command, cwd, env) => (codexRuns(command, cwd, env) ?? []).some(resumes);
 
+/**
+ * The gate's proof of one sage tool call that it let through (R1916-2). Codex gives the hook the call's id as
+ * tool_use_id and the sage MCP server the same id as _meta.callId, with the session id in both (Codex 0.164.0
+ * registry.rs:701-706, hook_runtime.rs:195-206, mcp_tool_call.rs:542-553 and 1323-1334). So the server serves a call
+ * only when the gate saw it: when Codex runs no sage hook (a sage update makes every hook Modified until the user trusts
+ * it again), the server refuses. The proofs live in the mode folder, which the shell rules keep from every agent.
+ */
+const proofFile = (env, id) => join(modeDirectory(env), "proofs", `${createHash("sha256").update(id).digest("hex")}.json`);
+export function writeProof({ tool_use_id: id, session_id: session, tool_name: tool }, env = process.env) {
+  if (!text(id)) throw Error("the call has no tool_use_id");
+  const file = proofFile(env, id);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, JSON.stringify({ session, tool }), { mode: 0o600 });
+}
+/** Whether the gate saw this MCP call of the sage tool name, from its _meta; the proof serves one call only. */
+export function takeProof(meta, name, env = process.env) {
+  if (!record(meta) || !text(meta.callId)) return false;
+  const file = proofFile(env, meta.callId);
+  let proof;
+  try { proof = JSON.parse(readFileSync(file, "utf8")); rmSync(file); } catch { return false; }
+  return proof?.tool === `mcp__sage__${name}` && proof.session === meta.sessionId;
+}
+export const NO_GATE = "sage's gate is not running: trust sage's hooks with /hooks in the Codex CLI (or the app's hook review), then try again.";
+
 /** The merge check for one merge form: the pull request's head branch from gh, then the state tool's ledger check. */
 export async function checkMerge({ pr, sha }, cwd, env = process.env) {
   let head;
@@ -394,7 +439,11 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     return (await check(merge, f.cwd, env)).ok === true ? ALLOW : undefined;
   }
   const sageTool = SAGE_TOOL.exec(f.tool);
-  if (sageTool) return thread.child && !childMayCall(sageTool[1], f.input) ? refuse(thread, CHILD_LOGBOOK) : undefined;
+  if (sageTool) {
+    if (thread.child && !childMayCall(sageTool[1], f.input)) return refuse(thread, CHILD_LOGBOOK);
+    try { writeProof(input, env); } catch (error) { return deny(`sage: the gate could not save its proof of this call (${error?.message ?? error}), so the sage server would refuse it. Check the folder ${modeDirectory(env)}`); }
+    return undefined;
+  }
   // A sage child's message to another thread would start a turn there, as the user's on the root thread (F-T471-4),
   // or wake an implementer for a read-only reviewer (R1712-1). The chief and a child that is not a sage child may send.
   if (SEND_INPUT.test(f.tool)) {
@@ -432,6 +481,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const why = commandWrites(f.command, f.cwd) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage) : undefined;
     if (why) return refuse(thread, why);
   }
+  if (commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
   const now = mode(f, env);
   if (!now.sage) return undefined; // outside sage mode the gate does not judge pushes or merges, as in the Claude hook
   const push = pushes.pushProblem(f.command, f.cwd);

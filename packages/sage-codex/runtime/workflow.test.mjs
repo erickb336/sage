@@ -230,16 +230,18 @@ test('T534 a fresh install has autopilot on after the two typed phrases, with no
   assert.deepEqual([JSON.parse(status.stdout).autopilot, JSON.parse(status.stdout).publisherVerified], [true, true]);
 });
 test('T534 a changed or missing publisher file refuses autopilot and says to reinstall', t => {
-  for (const change of ['workflow', 'core', 'missing']) {
+  for (const change of ['workflow', 'core', 'gate', 'server', 'missing']) {
     const f = installedPlugin(t);
     f.owner('sage mode on'); f.owner('autopilot on');
     if (change === 'workflow') appendFileSync(join(f.plugin, 'skills', 'sage', 'workflow.mjs'), '\n// changed\n');
     else if (change === 'core') appendFileSync(join(f.plugin, 'core', 'state.mjs'), '\n// changed\n');
+    else if (change === 'gate') appendFileSync(join(f.plugin, 'hooks', 'gate-hook.mjs'), '\n// changed\n');
+    else if (change === 'server') appendFileSync(join(f.plugin, 'mcp', 'state-server.mjs'), '\n// changed\n');
     else rmSync(join(f.plugin, 'skills', 'sage', 'publisher.json'));
     const publish = f.call('publish', { task: 'T1', sha: 'a'.repeat(40) });
     assert.equal(publish.status, 1, change);
     assert.match(publish.stderr, /does not match its release .*reinstall sage/, change);
-    assert.match(publish.stderr, change === 'core' ? /core\/state\.mjs/ : change === 'workflow' ? /skills\/sage\/workflow\.mjs/ : /publisher\.json/, change);
+    assert.match(publish.stderr, { core: /core\/state\.mjs/, workflow: /skills\/sage\/workflow\.mjs/, gate: /hooks\/gate-hook\.mjs/, server: /mcp\/state-server\.mjs/, missing: /publisher\.json/ }[change], change);
     const status = JSON.parse(f.call('status').stdout);
     assert.equal(status.publisherVerified, false); assert.match(status.publisherFault, /reinstall sage/);
   }
