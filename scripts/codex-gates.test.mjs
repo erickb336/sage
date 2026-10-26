@@ -9,6 +9,14 @@ import { fileURLToPath } from "node:url";
 import { tool as codexTool } from "../plugins/sage-codex/skills/sage/sage.mjs";
 import { backed } from "./verdict-backing.mjs";
 
+// The gate saves a proof of each sage tool call in the Codex sage folder (R1916-2), so every test here gets a scratch
+// home, and the Codex home and the sage folder under it: no test writes the real ~/.codex.
+const SCRATCH_HOME = realpathSync(mkdtempSync(join(tmpdir(), "sage-gates-home-")));
+process.env.HOME = SCRATCH_HOME;
+delete process.env.CODEX_HOME;
+delete process.env.SAGE_HOME;
+process.on("exit", () => rmSync(SCRATCH_HOME, { recursive: true, force: true }));
+
 // The Codex gates (T456), through Codex's PreToolUse and PermissionRequest input and output shapes. The pure tests give
 // the gate a fixed mode and merge check; the process tests run the built hook with a mode file, a logbook and a fake gh.
 const HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/gate-hook.mjs", import.meta.url));
@@ -697,6 +705,70 @@ test("no sage child sends a message to another thread, with v1's send_input or v
   const matcher = new RegExp(JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher);
   assert.deepEqual(tools.filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each send tool");
   assert.deepEqual(["mcp__slack__send_input", "collaborationsend_message_x", "xsend_input"].filter((tool) => matcher.test(tool)), [], "and for no other tool");
+});
+
+/** The gate's matcher in the built manifest, read as Codex reads a matcher with other characters than letters, digits, _ and | (hooks/src/engine/matcher.rs:12-22). */
+const gateMatcher = () => new RegExp(JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher);
+
+test("a tool call inside a code-mode exec cell reaches the gate as a direct call does, and the gate applies its rules (T541)", async (t) => {
+  // Codex 0.164.0 runs no PreToolUse for the exec call itself (its input is raw JavaScript, a custom payload:
+  // registry.rs:150-153), and one for each tool that the code calls, with the tool's own hook name and input
+  // (code_mode/mod.rs:337-415 into registry.rs:615-702; Codex's own test hooks.rs:4174-4243). The tool_use_id is exec-<uuid>.
+  const nested = (tool_name, tool_input, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "exec-0b6c3c2e-8d1e-4f55-9d7a-1f0e2a3b4c5d", tool_input, ...extra });
+  const g = fixed({ sage: true });
+  // tools.exec_command({ cmd: "git push github HEAD:main", workdir }) comes as Bash with only the command (exec_command.rs:499-509).
+  assert.match(denied(await g.run(nested("Bash", { command: "git push github HEAD:main" }))) ?? "runs", /^sage: work reaches main only through a pull request/);
+  // tools.apply_patch(patch) is a freeform tool: the patch is the command (apply_patch.rs:277-282, 394-399).
+  assert.match(denied(await g.run(nested("apply_patch", { command: patch("*** Update File: src/a.js", "@@", "-a", "+b") }))) ?? "runs", /^sage: sage mode is on, so the chief does not change files/);
+  // tools.mcp__sage__verdict({...}) keeps its MCP hook name (handlers/mcp.rs:139-161, 487-496).
+  assert.equal(denied(await g.run(nested("mcp__sage__verdict", { project: CWD, task: "T1" }, sageChild(t, "/root/sage_code_reviewer_t1_r1")))), LOGBOOK);
+  assert.equal(await g.run(nested("mcp__sage__verdict", { project: CWD, task: "T1" })), undefined, "the chief records");
+  // tools.spawn_agent({...}) is spawn_agent (registry.rs:943-952).
+  assert.equal(denied(await g.run(nested("spawn_agent", { task_name: "x", message: "y" }, sageChild(t, "/root/sage_qa_t1_r1")))), SPAWN);
+  const matcher = gateMatcher();
+  assert.deepEqual(["Bash", "apply_patch", "mcp__sage__verdict", "spawn_agent", "collaborationspawn_agent"].filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each nested tool");
+});
+
+test("in sage mode a js call of Codex's REPL servers passes: the owner allows it, so Codex runs no sage gate for it (T541)", () => {
+  // Codex's PreToolUse names for the REPL js tool: an MCP tool's hook name is mcp__<server>__<tool> (Codex 0.164.0
+  // core/src/tools/handlers/mcp.rs:139-161), with the servers node_repl and cua_repl (protocol/src/mcp.rs:42-43). Codex runs a hook only
+  // for a tool name that its matcher matches (hooks/src/engine/matcher.rs:32-40), so a name the gate's matcher does not
+  // match runs with no gate, in every mode; the shell command with the same push still reaches the gate.
+  const matcher = gateMatcher();
+  assert.deepEqual(["mcp__node_repl__js", "mcp__cua_repl__js"].filter((tool) => matcher.test(tool)), [], "js passes");
+  assert.equal(matcher.test("Bash"), true, "a shell command reaches the gate");
+});
+
+test("the gate saves a proof of each sage tool call that it lets through, and none for a call that it refuses (R1916-2)", async (t) => {
+  const { takeProof } = await import(HOOK);
+  const meta = (callId) => ({ callId, sessionId: base.session_id });
+  const g = fixed({ sage: true });
+  assert.equal(await g.run(mcp("verdict", { task: "T1" }, { tool_use_id: "call_chief" })), undefined);
+  assert.equal(takeProof(meta("call_chief"), "status"), false, "a proof names its tool");
+  assert.equal(await g.run(mcp("verdict", { task: "T1" }, { tool_use_id: "call_chief" })), undefined);
+  assert.equal(takeProof({ callId: "call_chief", sessionId: "019a0000-0000-7000-8000-0000000000ff" }, "verdict"), false, "and its session");
+  assert.equal(await g.run(mcp("verdict", { task: "T1" }, { tool_use_id: "call_chief" })), undefined);
+  assert.equal(takeProof(meta("call_chief"), "verdict"), true, "the chief's call");
+  assert.equal(takeProof(meta("call_chief"), "verdict"), false, "once");
+  assert.equal(denied(await g.run(mcp("verdict", { task: "T1" }, { ...sageChild(t, "/root/sage_qa_t1_r1"), tool_use_id: "call_child" }))), LOGBOOK);
+  assert.equal(takeProof(meta("call_child"), "verdict"), false, "no proof of a refused call");
+  assert.equal(await g.run(mcp("status", {}, { ...sageChild(t, "/root/sage_qa_t1_r1"), tool_use_id: "call_read" })), undefined);
+  assert.equal(takeProof(meta("call_read"), "status"), true, "a child's read");
+  assert.equal(takeProof(undefined, "status"), false, "a call with no _meta");
+});
+
+test("no thread writes Codex's config file or the sage plugin's folder from the shell, in any mode; reads run (R1916-3)", async () => {
+  const SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change";
+  const plugin = fileURLToPath(new URL("../plugins/sage-codex", import.meta.url));
+  const writes = [`echo x >> "$CODEX_HOME/config.toml"`, "sed -i '' s/a/b/ ${CODEX_HOME}/config.toml", `cp a.json ${plugin}/hooks/hooks.json`, `rm -rf ${plugin}`, "rm -rf $CODEX_HOME/plugins/cache/sage"];
+  for (const mode of [{ sage: false }, { sage: true }]) {
+    const g = fixed(mode);
+    for (const command of writes) assert.equal(denied(await g.run(pre("Bash", command))), SETTINGS, command);
+    for (const command of [`cat "$CODEX_HOME/config.toml"`, `ls ${plugin}/hooks`, "echo x > config.toml"]) assert.equal(await g.run(pre("Bash", command)), undefined, command);
+  }
+  // A Codex home that is not named .codex: its config file still counts by its path.
+  const env = { ...process.env, CODEX_HOME: "/opt/codex-home" };
+  assert.equal(denied(await gate(pre("Bash", "echo x > /opt/codex-home/config.toml"), { mode: () => ({ sage: false }), env })), SETTINGS);
 });
 
 test("the sage folder and a .codex folder are found also behind quotes, ~ and a variable, and from the folder a command runs in (R1669-4, R1669-6)", async (t) => {

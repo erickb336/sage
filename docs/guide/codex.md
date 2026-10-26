@@ -77,14 +77,33 @@ In the desktop app, do steps 1 and 2 in a terminal, with the Codex CLI (see [Wha
 
 If the app does not ask you to trust the hooks, do step 3 once in the terminal. This desktop path is not checked yet.
 
+Then do the [gate check](#check-that-the-sage-gate-runs). Trust the sage hooks again after each update of sage, and do the check again.
+
 The desktop app puts its worktree threads under `~/.codex/worktrees`. sage's `.codex` rule reads only the part of a path from the project folder down, so edits in those worktrees work as usual.
 
 ## Update and remove
 
 - To update, run `codex plugin marketplace upgrade sage`, then `codex plugin add sage@sage` again. For a local clone, run `git pull` in the clone instead of the upgrade command.
-- A new sage version needs your trust again: Codex 0.164 asks for it again for every sage hook when any file of the plugin changes. At the next start, choose **Trust all and continue** again.
+- A new sage version needs your trust again: Codex 0.164 asks for it again for every sage hook when any file of the plugin changes. At the next start, choose **Trust all and continue** again, then do the [gate check](#check-that-the-sage-gate-runs). Until you trust the hooks again, sage's logbook tools refuse every call.
 - To remove sage, run `codex plugin remove sage@sage`, then `codex plugin marketplace remove sage`. The Codex logbook in `~/.codex/sage` stays; delete that folder yourself to remove it.
 - Codex keeps the trust records of the sage hooks in your Codex config (`~/.codex/config.toml`, the `[hooks.state."sage@sage:..."]` tables), where they do nothing. To remove them too, delete those tables from the file.
+
+## Check that the sage gate runs
+
+Do this check after you install sage, after each update, and when a sage rule seems not to run. Codex runs a plugin hook only when you trust it, and each sage update needs your trust again.
+
+1. Trust the hooks:
+   1. Open a terminal, and go to the project folder.
+   2. Run `codex`, with the same Codex home as the app. When you set `CODEX_HOME` for the app, set the same value in the terminal.
+   3. Type `/hooks`. Codex lists each hook and whether you trust it. Each sage hook (its name starts with `sage@sage:`) must show as trusted.
+   4. If a sage hook shows as new, changed or not trusted, trust it there (or choose **Trust all and continue** at the start screen). Then start a new session in the app.
+2. Send the phrase `sage mode` alone (see [Turn on sage mode](#turn-on-sage-mode)), then ask the chief to run the sage status tool. When the gate runs, the chief shows the status lines of the logbook. When it does not run, the chief shows this line, and you do step 1 again: "sage's gate is not running: trust sage's hooks with /hooks in the Codex CLI (or the app's hook review), then try again."
+3. Check the gate on a shell command from code mode.
+
+   > **Warning:** never test the gate with a real push or a merge. If the gate does not run, the command runs.
+
+   Ask the chief to run `ls ~/.codex/sage` with `tools.exec_command` from a code-mode `exec` call. This command changes nothing, and the gate refuses it in every mode. When the gate runs, Codex blocks it with a line that starts with "sage: no agent runs a shell command that names the Codex sage folder". When the command lists files, the gate does not run: stop sage work, and do step 1 again.
+4. If you use the app's browser preview, ask the chief to open a page in it. The preview uses a `js` call, and it runs, because you chose to allow `js` in sage mode. If you do not use the preview, skip this step.
 
 ## Turn on sage mode
 
@@ -182,7 +201,9 @@ The check does not block a spawn, and no hook changes the spawn message. The hoo
 
 ## The rules in Codex
 
-The hook `hooks/gate-hook.mjs` holds these rules. Codex runs it before each shell command, each `apply_patch` edit, each `spawn_agent`, each message to another thread (`send_input`, `send_message`, `followup_task`) and each call of a sage logbook tool (`PreToolUse`), and before it shows an approval prompt for a shell command (`PermissionRequest`).
+The hook `hooks/gate-hook.mjs` holds these rules. Codex runs it before each shell command, each `apply_patch` edit, each `spawn_agent`, each message to another thread (`send_input`, `send_message`, `followup_task`), and each call of a sage logbook tool (`PreToolUse`), and before it shows an approval prompt for a shell command (`PermissionRequest`).
+
+In code mode, the model writes JavaScript for Codex's `exec` tool, and the code calls the other tools, for example `tools.exec_command({ cmd: "git push origin sage/t1" })`. Codex runs no hook for the `exec` call itself, but it runs the hook for each tool call inside the code, with the same name and input as a direct call: a shell command comes as `Bash` with its command, and an edit as `apply_patch`. So each rule below also holds inside code mode: this comes from Codex's source (0.164.0), and step 3 of the [gate check](#check-that-the-sage-gate-runs) checks it in a real session.
 
 | Rule | When | What you see |
 | --- | --- | --- |
@@ -195,6 +216,9 @@ The hook `hooks/gate-hook.mjs` holds these rules. Codex runs it before each shel
 | A role agent starts no agents | Every mode, a role agent whose task name starts with `sage_`, every agent under it, and Codex's own review thread and approval check | Codex blocks its `spawn_agent`, with one line. An agent whose record the hook cannot read is blocked too |
 | A role agent starts no Codex from the shell | Every mode, a role agent whose task name starts with `sage_`, and Codex's own review thread and approval check | Codex blocks `codex exec`, `codex` and every other run of a Codex executable, by its name or by its real file (also through a link or as `node <codex.js>`), with one line: a new Codex session would run outside the hooks of this session. `codex --version`, `codex --help` and the other programs of Codex's package (for example the `rg` that Codex puts first on the shell's PATH) run. In sage mode, a command that names codex and runs a program from a variable or a substitution is blocked too |
 | A role agent sends no message to another thread | Every mode, a role agent whose task name starts with `sage_`, every agent under it, and Codex's own review thread and approval check | Codex blocks its `send_input` (multi-agent v1), and its `send_message` and `followup_task` (multi-agent v2, in the default `collaboration` namespace), with one line: a message to the chief's thread would start a turn as if you typed it, and a reviewer's message to the implementer could make the change that the reviewer may not make. The chief, and an agent without a `sage_` name, send as usual |
+| sage works only while its gate runs | Every mode, every thread | For each sage logbook call that it lets through, the hook saves a proof by the call's id. The sage logbook server serves no call without that proof, and the chief gets one line: "sage's gate is not running: trust sage's hooks with /hooks in the Codex CLI (or the app's hook review), then try again." So when Codex runs no sage hook, for example after an update, sage records nothing |
+| No one writes Codex's config file or the sage plugin's folder from the shell | Every mode, every thread | Codex blocks the shell write that names `config.toml` in the Codex home or the installed sage plugin's folder, also as `$CODEX_HOME/...`, with one line. The trust records of the sage hooks are in that file. A read runs |
+| A `js` call of the desktop app's REPL (`node_repl`, `cua_repl`) is allowed | Every mode, every thread | No sage rule applies: the call runs, so the chief keeps its browser previews. See the limits below |
 | No one changes files under a `.codex` folder of the project | Every mode, every thread | Codex blocks the `apply_patch` edit, or the shell write that names the folder. Codex reads project settings from that folder, so you make such changes yourself. Only the path from the project folder down counts, so a project under `~/.codex/worktrees` edits as usual |
 | No shell command names the Codex sage folder or the Codex sessions folder, and none resumes or forks a Codex session | Every mode, every thread | Codex blocks the command, with one line. The sage folder holds the logbook and the mode files, and the sessions folder holds Codex's record of your typed messages; the logbook tools change the logbook |
 
@@ -222,6 +246,10 @@ Limits:
 - A shell write by the chief is not blocked either: the chief's edit rule covers `apply_patch`.
 - Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule, also a push or a merge. Autopilot off does not stop such a merge.
 - In workspace-write, the sandbox keeps this text off the network and keeps the logbook and the sessions folder closed. Keep network access off for the session (`[sandbox_workspace_write] network_access = false`, the default). When Codex asks to run an interactive shell (for example `zsh -i`) outside the sandbox, refuse.
+- Codex runs a sage hook only when your trust record matches it. When the record does not match, for example after each update of sage, Codex runs the tool call with no hook and no warning; the proof check then refuses every sage logbook tool, so sage does no work until you trust the hooks again. When a hook fails or times out, Codex runs the tool call too, and it shows a Failed line for the hook.
+- A `js` call or a command that runs outside the sandbox can still change Codex's config file or the sage plugin's folder, and so turn the gate off. The proof check then finds it at the next sage logbook call. Do the [gate check](#check-that-the-sage-gate-runs) when a sage rule seems not to run.
+- In sage mode, every tool other than sage's own runs with no sage rule, by your choice: app tools, MCP tools of other servers, and dynamic tools. For example, the Sites publish tool publishes a page with no sage check. The rules above cover only shell commands, `apply_patch`, agent starts, messages to other threads and the sage logbook tools.
+- A `js` call of the desktop app's REPL can run shell commands that no sage hook sees; sage mode allows it so the chief keeps its browser previews. The REPL runs the code in its own Node process, so a push, a merge or a file change in that code passes every sage rule. The `exec` tool of code mode is different: each tool call inside its code reaches the sage hook.
 - Under full access (`danger-full-access`), sage mode gives no guarantee: an agent can write any file, also the mode files, the logbook and Codex's record of your messages.
 
 ## What comes next
