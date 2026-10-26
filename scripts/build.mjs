@@ -8,12 +8,10 @@ import { rewriteCoreImports } from "./package-imports.mjs";
 //   writing/dictionary.md → plugins/sage/skills/dictionary/SKILL.md, and the word table in docs/guide/concepts.md (scripts/dictionary.mjs)
 //   principles/*.md and upstream/pstack → the principles table in docs/guide/principles.md (scripts/principles-table.mjs)
 // Run `npm run build` after editing a source; `npm run check` fails when a generated file is out of date.
-import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, renameSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
-import { parse } from "es-module-lexer/minimal";
 import { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "../packages/sage-core/index.mjs";
 import { PRINCIPLES_PAGE, WORDS_PAGE, checkWords, withWordTable, wordTable } from "./dictionary.mjs";
 import { principleRows, principlesTable, withPrinciplesTable } from "./principles-table.mjs";
@@ -168,35 +166,11 @@ function packageOutputs(generated) {
           `${name} ${installed.version}\n\n${readFileSync(join(dir, "LICENSE"), "utf8")}`);
       }
     }
-    if (provider === "codex") out.set(join(target, PUBLISHER), publisherHashes(out, target));
     out.set(join(target, "LICENSE"), readFileSync(join(ROOT, "LICENSE"), "utf8"));
     out.set(join(target, "LICENSE-pstack"), readFileSync(join(ROOT, "upstream/pstack/LICENSE"), "utf8"));
     out.set(join(target, "build.json"), JSON.stringify({ package: meta.name, version: meta.version, core: core.version }, null, 2) + "\n");
   }
   return out;
-}
-
-/** The release hashes of the Codex publisher (T534), beside it in the built plugin. */
-export const PUBLISHER = "skills/sage/publisher.json";
-
-/**
- * The sha256 of the built workflow.mjs and of each file that it imports, also through core and the hooks (the mode
- * reader and the gate's proof writer), and of the state server with its imports (its proof check, T541): the server
- * records the verdicts that the merge check reads. Before each merge, the publisher compares the installed files with
- * these hashes: the reviewed release is the verification, and a changed or missing file refuses.
- */
-function publisherHashes(out, target) {
-  const files = {};
-  const visit = (rel) => {
-    if (Object.hasOwn(files, rel)) return;
-    const text = out.get(join(target, rel));
-    if (text === undefined) throw new Error(`the publisher imports a file that the build does not make: ${rel}`);
-    files[rel] = createHash("sha256").update(text).digest("hex");
-    for (const item of parse(text)[0]) if (item.n?.startsWith(".")) visit(join(dirname(rel), item.n));
-  };
-  visit("skills/sage/workflow.mjs");
-  visit("mcp/state-server.mjs");
-  return JSON.stringify({ files }, null, 2) + "\n";
 }
 
 function removeEmptyDirectories(dir) {
