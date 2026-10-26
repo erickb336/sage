@@ -130,18 +130,20 @@ In the CLI, Codex 0.164.0 gives these choices for such a prompt ([the choice tex
 | Choice | What it does |
 | --- | --- |
 | **Yes, proceed** | Runs this command one time. The next task asks again. |
-| **Yes, and don't ask again for commands that start with `<prefix>`** | Runs the command, and adds an allow rule for that prefix to `~/.codex/rules/default.rules` ([the file](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L877-L879), [the write](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L469-L490)). The rule holds for good, in every session: a matching command then runs outside the sandbox with no prompt. Codex shows this choice only when it has a prefix to offer. |
+| **Yes, and don't ask again for commands that start with `<prefix>`** | Runs the command, and adds an allow rule for that prefix to `~/.codex/rules/default.rules` (or `$CODEX_HOME/rules/default.rules` when you set `CODEX_HOME`) ([the file](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L877-L879), [the write](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L469-L490)). The rule holds for good, in every session: a matching command then runs outside the sandbox with no prompt. Codex shows this choice only when it has a prefix to offer. |
 | **No, and tell Codex what to do differently** | Does not run the command. Codex stops its turn and waits for your message. |
 
 Codex 0.164.0 offers no choice for "this session" only for these prompts.
 
-> **Warning:** never choose "Yes, and don't ask again" for any of the 4 prompts. The rule holds in every session, also outside sage mode, where no sage rule checks a command. A later force-push to main, or a merge, could then run with no prompt.
+> **Warning:** never choose "Yes, and don't ask again" at any Codex prompt: at the 4 prompts of a task, and at every other prompt, for example the merge prompt with sage mode off. The rule holds in every session, also outside sage mode, where no sage rule checks a command. A later force-push to main, or a merge, could then run with no prompt.
 
 Each of these commands runs git, and git can run the project's own code, from its hooks or its config. An agent can write that code from inside the sandbox, and a command that a rule allows runs it outside the sandbox.
 
-At each of the 4 prompts, choose **Yes, proceed**, every time.
+To allow a command at a Codex prompt, choose **Yes, proceed**, every time. At the 4 prompts of a task, allow each one this way.
 
-If you saved such a rule earlier, delete its line from `~/.codex/rules/default.rules`, then restart Codex: Codex reads its rules at startup ([Codex: Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)).
+When a network proxy is on, the prompt shows **Yes, just this once** in place of **Yes, proceed**: choose it, and never **Yes, and allow this host in the future**, which also saves a rule for good ([the network choices](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/tui/src/bottom_pane/approval_overlay.rs#L862-L913)).
+
+If you saved such a rule earlier, delete its line from `~/.codex/rules/default.rules` (or `$CODEX_HOME/rules/default.rules` when you set `CODEX_HOME`), then restart Codex: Codex reads its rules at startup ([Codex: Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)).
 
 The desktop app gets the same choices from Codex, but its docs do not name their text, and sage was not run in the app yet.
 
