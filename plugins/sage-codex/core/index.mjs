@@ -4,7 +4,7 @@ export { applyPrinciples, MOMENTS, fingerprint } from "./principles.mjs";
 export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
 export { createCommandPolicy, mentionsMerge, gitSubcommand, programName } from "./command-policy.mjs";
 export { createPushPolicy } from "./push-policy.mjs";
-export { PR, pullRequestHead } from "./pull-request.mjs";
+export { PR, pullRequest } from "./pull-request.mjs";
 export { fileWriteOutsideRoots } from "./protected-paths.mjs";
 export { commandWrites } from "./shell-write-policy.mjs";
 export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";

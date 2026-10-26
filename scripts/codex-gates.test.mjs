@@ -220,7 +220,7 @@ function world(t, { at = "project" } = {}) {
   mkdirSync(project, { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "sage/t1", project]);
   spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"]);
-  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${dir}/gh-calls.log"\n[ "$1 $2" = "pr view" ] && printf '{"headRefName":"sage/t1","isCrossRepository":false}'\nexit 0\n`);
+  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${dir}/gh-calls.log"\n[ "$1 $2" = "pr view" ] && printf '{"headRefName":"sage/t1","isCrossRepository":false,"baseRefOid":"%s"}' "$(cat "${dir}/base" 2>/dev/null)"\nexit 0\n`);
   chmodSync(join(bin, "gh"), 0o755);
   for (const name of ["ps", "pgrep", "kill"]) writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> "${dir}/fake-calls.log"\n`, { mode: 0o755 }); // order 14
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), CODEX_HOME: join(dir, "codex-home") };
@@ -285,8 +285,11 @@ test("the Codex merge rule keeps the verdicts over a clean merge of main, throug
   const h1 = h.merge(h.main({ "CHANGELOG.md": "- main\n- base\n" }), { "CHANGELOG.md": "- task\n- main\n- base\n" });
   const merge = `gh pr merge 41 --squash --delete-branch --match-head-commit ${h1}`;
   assert.equal(w.sage("verdict", "T1", "--sha", h1, "--kind", "checks-pass", "--cycle", "1", "--pr", "41").status, 0);
+  assert.match(denied(w.send(pre("Bash", merge))) ?? "", /do not carry over: the merge check has no base commit of the pull request from GitHub/, "gh gives no base commit");
+  writeFileSync(join(w.dir, "base"), h.git("rev-parse", "main")); // the base commit on GitHub, which gh pr view gives
   assert.equal(w.send(pre("Bash", merge)), undefined, "the merge of main keeps the reviewed head's verdicts");
   const evil = h.merge(h.main({ "other.js": "m\n" }), { "src.js": "a\nb\nevil\n" });
+  writeFileSync(join(w.dir, "base"), h.git("rev-parse", "main"));
   assert.equal(w.sage("verdict", "T1", "--sha", evil, "--kind", "checks-pass", "--cycle", "1", "--pr", "41").status, 0);
   assert.match(denied(w.send(pre("Bash", `gh pr merge 41 --squash --delete-branch --match-head-commit ${evil}`))) ?? "", /^sage: the merge check refuses: T1: 0 of 1 clean cycles on this SHA; .* do not carry over: the merge changes "src\.js" otherwise than/);
 });

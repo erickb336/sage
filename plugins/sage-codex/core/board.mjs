@@ -79,7 +79,9 @@ function mergeable(b, t, env) {
   const at = [b.tips.get(`refs/heads/${t.branch}`), b.tips.get(`refs/remotes/origin/${t.branch}`)].filter(Boolean);
   if (!at.length) return { ok: false, reason: `head unknown: no branch ${t.branch} in the project's folder` };
   if (at.some((sha) => sha !== head)) return { ok: false, reason: `branch ${t.branch} is not at the reviewed head ${head.slice(0, 7)}` };
-  const r = mergeCheck(head, env, { pr: t.pr, readOnly: true });
+  // The board asks GitHub nothing, so a carry-over of verdicts over a merge of main (T493) takes origin/main as of the
+  // last fetch as the base. It only shows the state: the merge rule reads the base from GitHub before a merge.
+  const r = mergeCheck(head, env, { pr: t.pr, readOnly: true, project: b.home, base: b.tips.get("refs/remotes/origin/main") });
   return { ok: r.ok, reason: r.reason.split(/\.(?:\s|$)/)[0] }; // the first sentence says what is missing
 }
 
