@@ -4101,6 +4101,35 @@ test("R1741-1: a refusal for a task of the head branch that is not on the PR say
     `PR 41's head branch "sage/t2" also belongs to T1 (by run R1 on it),${rule}.`);
 });
 
+test("R1759-1: when the sage moves a task of a shared PR off its head branch, the refusal gives the branch= that puts it back, and that command works", () => {
+  // T1 and T2 share sage/t1-a on PR 41, each with its own clean verdicts; move(s) takes T2 (and maybe T1) off it.
+  const refusal = (move) => {
+    const s = store();
+    for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+    s.ok("task", "T1", "set", "branch=sage/t1-a", "pr=41");
+    s.ok("task", "T2", "set", "branch=sage/t1-a", "pr=41");
+    for (const id of ["T1", "T2"]) for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", id, "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+    move(s);
+    const check = () => s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t1-a");
+    const r = check();
+    assert.equal(r.status, 1, r.stdout);
+    return { s, check, message: r.stderr.trim().replace(/^sage: /, "").replace(/ \S+ T2,/, " T2,") };
+  };
+  const rule = `PR 41's head branch "sage/t1-a" is not a branch of T2, so the merge check refuses: each task that is or was on a pull request must own its head branch, a branch named for the task.`;
+  // T1 still names the head by its branch=: one command puts T2 back.
+  const one = refusal((s) => s.ok("task", "T2", "set", "branch=sage/t2"));
+  assert.equal(one.message, `${rule} It is the branch of another task, so set the branch= back to it: sage task T2 set branch=sage/t1-a, or the user lands this pull request.`);
+  one.s.ok("task", "T2", "set", "branch=sage/t1-a");
+  assert.equal(one.check().status, 0, "the command of the refusal works");
+  // No task names the head by its branch= now: T1, whose name it carries, names it first, for a task shares only another task's branch=.
+  const two = refusal((s) => { s.ok("task", "T1", "set", "branch=sage/t1-b"); s.ok("task", "T2", "set", "branch=sage/t2"); });
+  assert.equal(two.message, `${rule} It is the branch of another task, so set the branch= back to it: sage task T1 set branch=sage/t1-a, then sage task T2 set branch=sage/t1-a, or the user lands this pull request.`);
+  assert.match(two.s.no("task", "T2", "set", "branch=sage/t1-a"), /is not a branch of T2/, "T2 alone cannot go back first");
+  two.s.ok("task", "T1", "set", "branch=sage/t1-a");
+  two.s.ok("task", "T2", "set", "branch=sage/t1-a");
+  assert.equal(two.check().status, 0, "the commands of the refusal work, in their order");
+});
+
 test("R1740-3: a run on the head branch in another letter case owns it, as a task's name does", () => {
   const s = store();
   for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");

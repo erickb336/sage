@@ -178,6 +178,20 @@ test("merge_check passes for a head with its clean cycle", async (t) => {
   assert.equal(await call("merge_check", { sha: SHA }), "T1 may merge: 1 clean cycle on this SHA");
 });
 
+test("merge_check gives the state tool's refusal for a task moved off a shared PR's head branch unchanged, with the branch= that puts it back (R1759-1)", async (t) => {
+  const { call } = await connect(t);
+  await call("init");
+  for (const title of ["one", "two"]) await call("task_add", { title, size: "tiny", priority: "P1" });
+  for (const task of ["T1", "T2"]) {
+    await call("task_set", { task, fields: { state: "briefed", branch: "codex/t1-a", pr: "41" } });
+    await call("verdict", { task, kind: "checks-pass", sha: SHA, pr: 41 });
+  }
+  assert.match(await call("merge_check", { sha: SHA, pr: 41, head: "codex/t1-a" }), /^2 tasks have verdicts on 1111111 or belong to PR 41, and each must pass/);
+  await call("task_set", { task: "T2", fields: { branch: "codex/t2" } });
+  const { error } = await call("merge_check", { sha: SHA, pr: 41, head: "codex/t1-a" });
+  assert.equal(error.replace(/ \S+ T2,/, " T2,"), `sage: PR 41's head branch "codex/t1-a" is not a branch of T2, so the merge check refuses: each task that is or was on a pull request must own its head branch, a branch named for the task. It is the branch of another task, so set the branch= back to it: sage task T2 set branch=codex/t1-a, or the user lands this pull request.`);
+});
+
 test("the chief's setup text sends only read commands to the state CLI, and says that program, which has no tool, does not run in Codex (F-T471-10)", async () => {
   const setup = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8")).PROJECT_SETUP;
   const { TOOLS } = await import(join(ROOT, "plugins/sage-codex/mcp/state-server.mjs"));
