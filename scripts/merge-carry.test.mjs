@@ -123,6 +123,7 @@ test("the base comes from GitHub: a planted origin/HEAD, a moved origin/main, no
   w.h.git("checkout", "-q", "-b", "side", w.h.git("rev-parse", "main"));
   const side = w.h.work({ "other.js": "unreviewed\n" });
   w.h.git("checkout", "-q", "sage/t1");
+  w.h.main({ "real.js": "r\n" }); // main moves on GitHub, so the side commit is neither in it nor ahead of it
   w.h.git("update-ref", "refs/remotes/origin/side", side);
   w.h.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/side");
   w.h.git("update-ref", "refs/remotes/origin/main", side);
