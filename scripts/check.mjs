@@ -162,6 +162,8 @@ const readByPeople = [
   ...readdirSync(skillsDir).map((d) => `plugins/sage/skills/${d}/SKILL.md`).filter((f) => existsSync(join(ROOT, f)) && !readFileSync(join(ROOT, f), "utf8").includes(GENERATED)),
   // The README and the docs: every page that docFiles reads for links, except the internal Codex probe notes.
   ...docFiles(ROOT).filter((f) => !f.startsWith("docs/verification/")),
+  // The change log fragments, which CHANGELOG.md on main gets only later: so the task pull request that adds one fails.
+  ...readdirSync(join(ROOT, "changes")).filter((f) => f.endsWith(".md")).map((f) => `changes/${f}`),
   ...["packages/sage-codex/runtime", "plugins/sage-codex/runtime"].flatMap(root =>
     ["automatic-workflow-design.md", "claude-parity-audit.md"].map(name => `${root}/${name}`)),
   ...readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg")).map((f) => `docs/assets/${f}`),
@@ -189,16 +191,22 @@ try {
 // other diff leaves CHANGELOG.md as main has it, which may lag behind changes/ (a warning, not a failure).
 // A copy with no .git (a test fixture) has no diff to read, so only the build of changes/ is checked there.
 try {
-  const built = changelog(ROOT);
   const git = (...args) => spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
   const base = existsSync(join(ROOT, ".git")) ? git("merge-base", "origin/main", "HEAD") : null;
   if (base?.status) problems.push("CHANGELOG.md: no merge base with origin/main, so the check cannot see what this branch changes; run git fetch origin main (in CI, check out with fetch-depth: 0)");
-  // The diff counts the files of the working tree too, also new ones, so that the check here gives the result of CI.
-  const touched = base?.status === 0 ? `${git("diff", "--name-only", base.stdout.trim()).stdout}\n${git("ls-files", "--others", "--exclude-standard").stdout}`.split("\n").filter(Boolean) : [];
-  const current = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
-  if (touched.includes("CHANGELOG.md") && touched.length > 1) problems.push(`CHANGELOG.md: a task pull request carries only its changes/<task>.md and leaves CHANGELOG.md as main has it; undo the edit (git checkout ${base.stdout.trim()} -- CHANGELOG.md). The chief rebuilds it on main with npm run changelog, in a change-log pull request that changes only CHANGELOG.md`);
-  else if (touched.includes("CHANGELOG.md") && current !== built) problems.push("CHANGELOG.md: a change-log pull request holds exactly the build of changes/; run npm run changelog");
-  else if (base && current !== built) console.warn("! CHANGELOG.md lags behind changes/ (allowed on main and on a task branch); the chief rebuilds it with npm run changelog in a change-log pull request");
+  // The tracked files only, committed, staged or changed, as CI sees them: a stray new file does not change the kind.
+  const touched = base?.status === 0 ? git("diff", "--name-only", base.stdout.trim()).stdout.split("\n").filter(Boolean) : [];
+  if (touched.includes("CHANGELOG.md") && touched.length > 1) problems.push(`CHANGELOG.md: a task pull request carries only its changes/<task>.md and leaves CHANGELOG.md as main has it; undo the edit of CHANGELOG.md (git checkout ${base.stdout.trim()} -- CHANGELOG.md; run git fetch origin main first if main moved). The chief rebuilds it on main with npm run changelog, in a change-log pull request that changes only CHANGELOG.md`);
+  else {
+    const built = changelog(ROOT), current = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
+    if (touched.includes("CHANGELOG.md") && current !== built) problems.push("CHANGELOG.md: a change-log pull request holds exactly the build of changes/; run npm run changelog");
+    else if (base && current !== built) console.warn("! CHANGELOG.md lags behind changes/ (allowed on main and on a task branch); the chief rebuilds it with npm run changelog in a change-log pull request");
+  }
+  // Each fragment's links resolve as from CHANGELOG.md, where they go, so the task pull request that adds a fragment fails.
+  for (const f of readdirSync(join(ROOT, "changes")).filter((f) => f.endsWith(".md"))) {
+    const text = readFileSync(join(ROOT, "changes", f), "utf8");
+    problems.push(...linkProblems(ROOT, ["CHANGELOG.md"], () => text).map((p) => p.replace(/^CHANGELOG\.md:/, `changes/${f}:`)));
+  }
 } catch (e) { problems.push(String(e.message)); } // a fragment that the build cannot place, or a line written by hand
 const core = readFileSync(join(ROOT, "instructions/core.md"), "utf8");
 if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${Buffer.byteLength(core)} bytes; keep it under 8 KiB (it loads into every session, so each byte costs context there)`);

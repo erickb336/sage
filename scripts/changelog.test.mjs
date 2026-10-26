@@ -76,11 +76,13 @@ test("two task branches from one main, each with its own fragment and npm run bu
   assert.equal(both.status, 0, both.stderr);
 });
 
+const refusal = (base) => `✗ CHANGELOG.md: a task pull request carries only its changes/<task>.md and leaves CHANGELOG.md as main has it; undo the edit of CHANGELOG.md (git checkout ${base} -- CHANGELOG.md; run git fetch origin main first if main moved). The chief rebuilds it on main with npm run changelog, in a change-log pull request that changes only CHANGELOG.md`;
+
 test("a task branch whose diff edits CHANGELOG.md fails the check, committed or not, and passes when the edit is undone", (t) => {
   const { dir, git, run, commit } = fixture(t);
   commit("a", "main", { "changes/T99991.md": T1 }, ["changelog.mjs"]);
   const base = git("rev-parse", "main").stdout.trim();
-  const refused = `✗ CHANGELOG.md: a task pull request carries only its changes/<task>.md and leaves CHANGELOG.md as main has it; undo the edit (git checkout ${base} -- CHANGELOG.md). The chief rebuilds it on main with npm run changelog, in a change-log pull request that changes only CHANGELOG.md`;
+  const refused = refusal(base);
   const committed = run("check.mjs");
   assert.equal(committed.status, 1);
   assert.ok(committed.stderr.split("\n").includes(refused), committed.stderr);
@@ -207,7 +209,7 @@ test("a dot file in changes/ is ignored, but any other file that is not .md stil
 });
 
 test("npm run changelog writes nothing, and npm run check fails, on a hand-written entry or a wrong file name; after the fix both pass", (t) => {
-  const { dir, run, commit } = fixture(t);
+  const { dir, git, run, commit } = fixture(t);
   const file = join(dir, "CHANGELOG.md");
   const edited = readFileSync(file, "utf8").replace("## 2026-10-25\n\n", `## 2026-10-25\n\n${HAND}\n`);
   commit("sage/changelog-2099-01-01", "main", { "CHANGELOG.md": edited });
@@ -225,5 +227,31 @@ test("npm run changelog writes nothing, and npm run check fails, on a hand-writt
   rmSync(join(dir, "changes/T99999.txt"));
   assert.equal(run("changelog.mjs").status, 0);
   assert.equal(readFileSync(file, "utf8").split("\n").filter((l) => l === HAND).length, 1);
-  assert.equal(run("check.mjs").status, 1, "the fragment and CHANGELOG.md in one diff: a task pull request, refused");
+  const stray = run("check.mjs");
+  assert.equal(stray.status, 0, `a new file that is not staged does not make the change-log branch a task branch: ${stray.stderr}`);
+  assert.equal(git("add", "changes/T99998.md").status, 0);
+  const both = run("check.mjs");
+  assert.equal(both.status, 1);
+  assert.ok(both.stderr.split("\n").includes(refusal(git("rev-parse", "main").stdout.trim())), both.stderr);
+});
+
+test("a hand-written line on a task branch gets the refusal, which says to undo the edit, not to run npm run changelog", (t) => {
+  const { dir, git, run, commit } = fixture(t);
+  const edited = readFileSync(join(dir, "CHANGELOG.md"), "utf8").replace("## 2026-10-25\n\n", `## 2026-10-25\n\n${HAND}\n`);
+  commit("a", "main", { "changes/T99991.md": T1, "CHANGELOG.md": edited });
+  const r = run("check.mjs");
+  assert.equal(r.status, 1);
+  assert.deepEqual(r.stderr.split("\n").filter((l) => l.startsWith("✗")), [refusal(git("rev-parse", "main").stdout.trim())]);
+});
+
+test("a flagged word or a broken link in a fragment fails the task branch that adds it, with the fragment's line", (t) => {
+  const { run, commit } = fixture(t);
+  commit("a", "main", { "changes/T99991.md": entry("2099-01-01", "- **A change.** The worker now runs. See [the guide](docs/guide/none.md) and [the docs](docs/README.md).") });
+  const r = run("check.mjs");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^✗ changes\/T99991\.md:4: "worker" is a flagged word; say agent \(writing\/dictionary\.md\)$/m);
+  assert.match(r.stderr, /^✗ changes\/T99991\.md:4: docs\/guide\/none\.md does not exist$/m);
+  assert.doesNotMatch(r.stderr, /docs\/README\.md/, "a link written as from CHANGELOG.md resolves");
+  commit("a", "a", { "changes/T99991.md": T1 });
+  assert.equal(run("check.mjs").status, 0);
 });
