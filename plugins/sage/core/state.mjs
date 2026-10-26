@@ -514,11 +514,12 @@ function updateReference(input) {
   return { owner: input.owner, request: input.request, task: input.task, version: input.version,
     changes: Object.fromEntries(keys.map(key => [key, input.changes[key]])) };
 }
-function updateRows(table, text) {
+function updateRows(table, text, cols = TABLES[table]) {
   const sheet = sheetText(text);
-  if (!TABLES[table].every(key => sheet.cols.includes(key) || ADDED[table]?.includes(key))
-    || sheet.cols.some(key => !TABLES[table].includes(key)) || new Set(sheet.cols).size !== sheet.cols.length) updateDeny();
-  return rowsIn(table, sheet);
+  if (!cols.every(key => sheet.cols.includes(key) || ADDED[table]?.includes(key))
+    || sheet.cols.some(key => !cols.includes(key)) || new Set(sheet.cols).size !== sheet.cols.length) updateDeny();
+  return rowsOf(sheet).map(row => ({ ...row, ...Object.fromEntries((ADDED[table] ?? [])
+    .filter(key => cols.includes(key) && !Object.hasOwn(row, key)).map(key => [key, ""])) }));
 }
 function updateFacts(rows, readiness, maxRounds) {
   return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, programs: rows.programs, readiness,
@@ -541,15 +542,15 @@ function checkUpdateFacts(facts) {
     || !updateKeys(r.config, ["cycles.small", "cycles.large", "cycles.risk"])
     || Object.entries(r.config).some(([key, value]) => !Number.isSafeInteger(value) || valid(key, value) !== value))) updateDeny();
 }
-function planNativeTaskUpdate(before, reference, at, facts) {
+function planNativeTaskUpdate(before, reference, at, facts, columns = TABLES) {
   checkUpdateFacts(facts);
   const old = before.tasks.filter(row => row.id === reference.task);
   if (old.length !== 1 || taskVersion(old[0]) !== reference.version) updateDeny();
   const changes = Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`);
   const planned = planTaskChanges(before, reference.task, changes, at, facts);
-  // Validate the caller's original row version, then publish complete current columns.
+  // A saved update keeps its writer's columns; a new update uses the current columns.
   for (const table of ["tasks", "runs", "decisions"]) planned[table] = planned[table].map(row =>
-    Object.fromEntries(TABLES[table].map(key => [key, row[key] ?? ""])));
+    Object.fromEntries(columns[table].map(key => [key, row[key] ?? ""])));
   planned.task = planned.tasks.find(row => row.id === reference.task);
   const task = planned.task, needsReady = ["verified", "pr-ready"].includes(task.state);
   if (needsReady) {
@@ -578,11 +579,20 @@ function validateTaskUpdateData(intent) {
     || !updateKeys(proposal, ["at", "facts", "task", "version", "disruptive"])
     || typeof proposal.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(proposal.at)
     || !Number.isFinite(Date.parse(proposal.at)) || new Date(proposal.at).toISOString().replace(".000Z", "Z") !== proposal.at) updateDeny();
-  const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, updateRows(table, intent.tables[table].before)]));
-  const planned = planNativeTaskUpdate(before, reference, proposal.at, proposal.facts);
+  // The after-header records the schema used by the original writer, including
+  // columns it added to a legacy before-table. Do not migrate historical hashes.
+  const columns = Object.fromEntries(["tasks", "runs", "decisions"].map(table => {
+    const cols = sheetText(intent.tables[table].after).cols;
+    if (JSON.stringify(cols) !== JSON.stringify(TABLES[table].filter(key => cols.includes(key)))
+      || TABLES[table].some(key => !cols.includes(key) && !ADDED[table]?.includes(key))) updateDeny();
+    return [table, cols];
+  }));
+  if (Object.hasOwn(reference.changes, "approval") && !columns.tasks.includes("approvals")) updateDeny();
+  const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, updateRows(table, intent.tables[table].before, columns[table])]));
+  const planned = planNativeTaskUpdate(before, reference, proposal.at, proposal.facts, columns);
   if (JSON.stringify(proposal.task) !== JSON.stringify(planned.task) || proposal.version !== taskVersion(planned.task)
     || proposal.disruptive !== planned.disruptive) updateDeny();
-  for (const table of ["tasks", "runs", "decisions"]) if (intent.tables[table].after !== tableText(table, planned[table])) updateDeny();
+  for (const table of ["tasks", "runs", "decisions"]) if (intent.tables[table].after !== tableText(table, planned[table], columns[table])) updateDeny();
 }
 function validateTaskUpdate(intent) {
   try { validateTaskUpdateData(intent); } catch { throw new TaskUpdateError("invalid-state"); }
@@ -1240,8 +1250,7 @@ function captureReviewTarget(input, env = process.env) {
   });
 }
 
-function tableText(table, rows) {
-  const cols = TABLES[table];
+function tableText(table, rows, cols = TABLES[table]) {
   return [cols.join("\t"), ...rows.map((r) => cols.map((c) => cell(r[c])).join("\t"))].join("\n") + "\n";
 }
 function write(dir, table, rows) {
