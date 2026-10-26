@@ -71,7 +71,7 @@ const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logb
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report.";
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
 
-/** The sage MCP tools that only read the logbook: a child may call these, and pages without record. */
+/** The sage MCP tools that only read the logbook: a child may call these, and pages without record, run or text. */
 export const CHILD_READS = new Set(["status", "standing", "merge_check"]);
 const SAGE_TOOL = /^mcp__sage__(.+)$/;
 /** Codex's hook name of the spawn tool: spawn_agent (the default and the multi_agent_v1 forms), or with its namespace before it (collaborationspawn_agent). */
@@ -82,7 +82,7 @@ const SPAWN = /spawn_agent$/;
  * spec_plan.rs:1489-1508; the hook name is the namespace, then the name, registry.rs:943-951).
  */
 const SEND_INPUT = /^(?:(?:multi_agent_v1)?send_input|collaboration(?:send_message|followup_task))$/;
-const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages" && input.record === undefined);
+const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages" && ["record", "run", "text"].every((key) => input[key] === undefined));
 
 /** A path segment named .codex, in any letter case (the Mac file system ignores case). */
 const CODEX_SEGMENT = /(?:^|[\s/\\'"=:<>])\.codex(?=$|[\s/\\'"<>;|&)])/i;

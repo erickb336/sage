@@ -111,6 +111,7 @@ const OPTIONS = {
   "merge-check": ["sha", "pr", "cycles", "head"],
   board: ["remember", "name-hex", "view"],
   stats: ["task"],
+  pages: ["run", "text"],
 };
 /** The canonical number of a PR in an older row: "040" is PR 40. */
 const prNumber = (pr) => (/^\d+$/.test(pr ?? "") ? String(BigInt(pr)) : pr);
@@ -2649,10 +2650,28 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       return stats(dir, opt.task === undefined ? undefined : taskOf(dir, opt.task).task.id);
     case "pages": {
       // pages <T> makes the task's pages folder (mode 700) and prints it. pages <T> record <file> logs a page in it, with its sha256.
-      const folder = pagesDir(project, taskOf(dir, need(sub, "the task id")).task.id, env);
+      const taskId = taskOf(dir, need(sub, "the task id")).task.id, folder = pagesDir(project, taskId, env);
       mkdirSync(folder, { recursive: true, mode: 0o700 });
-      if (id === undefined) return folder;
-      if (id !== "record" || more.length !== 1) refuse(`pages takes <task>, or <task> record <file>`);
+      const saves = opt.run !== undefined || opt.text !== undefined;
+      if (id === undefined && !saves) return folder;
+      if (id !== "record" || more.length !== (saves ? 0 : 1)) refuse(`pages takes <task>, <task> record <file>, or <task> record --run <R> --text <report>`);
+      // pages <T> record --run <R> --text <report> saves a run's report as <R>-report.md in the folder, then records it as a page.
+      // The tool builds the path, so a caller that cannot write the folder (a Codex chief in its sandbox) saves the report (T506).
+      if (saves) {
+        const run = read(dir, "runs").find((r) => r.id === opt.run);
+        if (!run || run.task !== taskId) refuse(`--run is a run of ${taskId}, for example R7; not ${JSON.stringify(opt.run ?? "")}. Nothing changed.`);
+        if (!opt.text?.trim()) refuse("--text is the run's whole report, and it is empty. Nothing changed.");
+        if (Buffer.byteLength(opt.text) > PAGE_MAX) refuse("--text is the run's whole report, at most 16 MiB. Nothing changed.");
+        const path = join(folder, `${run.id}-report.md`);
+        try {
+          writeFileSync(path, opt.text, { flag: "wx", mode: 0o600 });
+        } catch (e) {
+          if (e.code !== "EEXIST") throw e;
+          // A report is saved once: an exact retry gives the same page, and another text never replaces it.
+          if (readRegular(path, { link: false, max: PAGE_MAX, encoding: "utf8" }) !== opt.text) refuse(`${path} already holds another report of ${run.id}, and a report is saved once. Nothing changed.`);
+        }
+        more[0] = path;
+      }
       if (/\p{Cc}/u.test(more[0])) refuse(`${JSON.stringify(more[0])} has a control character (a tab, a line break or another): give the page a name without one.`);
       // The page must be inside the folder (by its real path, where its folder exists) before it must exist.
       const path = resolve(more[0]);
