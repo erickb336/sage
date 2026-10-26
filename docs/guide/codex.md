@@ -111,17 +111,18 @@ The hooks run only after you trust them (step 3). In `codex exec`, Codex skips h
 
 ### The approval prompts of each task
 
-With autopilot on, each task still asks you 4 times before its merge: Codex asks, not sage. In the default `workspace-write` sandbox, "`<writable_root>/.git` is protected as read-only", and network access is off ([Codex: Agent approvals & security](https://developers.openai.com/codex/agent-approvals-security.md)). So these commands must run outside the sandbox, and Codex asks you first.
+With autopilot on, each task still asks you 4 times before its merge: Codex asks, not sage. In the default `workspace-write` sandbox, "`<writable_root>/.git` is protected as read-only", and network access is off ([Codex: Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)). So these commands must run outside the sandbox, and Codex asks you first.
 
 | Prompt | What it is for | Why Codex asks |
 | --- | --- | --- |
 | Create the task worktree (`git worktree add`) | The implementer's own folder and branch for the task | It writes to `.git` |
-| Commit on the task branch (`git commit`) | The change of the task | It writes to `.git` |
+| Commit on the task branch (`git -C <folder> add <files> && git -C <folder> commit …`, one prompt for both) | The change of the task | Both commands write to `.git` |
 | Send the task branch (`git push -u origin <branch>`) | The branch of the pull request on GitHub | It writes to `.git` and needs the network |
 | Open the pull request (`gh pr create`) | The pull request that the reviews and the merge check read | It needs the network |
 
-- The merge needs no prompt: with autopilot on, the sage hook allows the verified merge command itself.
-- The off phrase for autopilot, or for sage mode, brings back Codex's normal prompts, also for the merge.
+- With sage mode and autopilot on, the merge needs no prompt: the sage hook allows the verified merge command itself.
+- With sage mode on and autopilot off, the hook refuses the merge, and you merge the pull request yourself.
+- With sage mode off, Codex shows its normal prompt for the merge too.
 - The model writes the reason line of each prompt, so its words can be different. The table uses the words of a check with the Codex CLI 0.164.0 and a test model.
 
 In the CLI, Codex 0.164.0 gives these choices for such a prompt ([the choice text](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/tui/src/bottom_pane/approval_overlay.rs#L852-L938), [which choices it offers](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/protocol/src/approvals.rs#L377-L410)):
@@ -132,17 +133,17 @@ In the CLI, Codex 0.164.0 gives these choices for such a prompt ([the choice tex
 | **Yes, and don't ask again for commands that start with `<prefix>`** | Runs the command, and adds an allow rule for that prefix to `~/.codex/rules/default.rules` ([the file](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L877-L879), [the write](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/exec_policy.rs#L469-L490)). The rule holds for good, in every session: a matching command then runs outside the sandbox with no prompt. Codex shows this choice only when it has a prefix to offer. |
 | **No, and tell Codex what to do differently** | Does not run the command. Codex stops its turn and waits for your message. |
 
-Codex 0.164.0 offers no choice for "this session" only for these prompts. Codex's [Rules page](https://developers.openai.com/codex/rules.md) tells how to read or remove a rule.
+Codex 0.164.0 offers no choice for "this session" only for these prompts. To remove a rule, delete its line from `~/.codex/rules/default.rules`, then restart Codex: Codex reads its rules at startup ([Codex: Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)).
 
-> **Warning:** a rule holds in every Codex session, also outside sage mode, where no sage rule checks a push. Do not allow a prefix that is wider than the command needs.
+> **Warning:** never choose "don't ask again" for a wide prefix such as `git push`, `git -C <folder>`, `gh` or `gh pr`. Codex can offer them, and the rule holds in every session, also outside sage mode, where no sage rule checks a command. A later force-push to main, or a merge, would then run with no prompt.
 
-To stop the prompts for later tasks, do this at the first prompt of each kind:
+At each prompt, choose this way:
 
 1. Read the prefix in the backticks of the second choice.
-2. If the prefix names no branch, folder or title of this task (for example `git worktree add` or `gh pr create`), choose **Yes, and don't ask again for commands that start with `<prefix>`**.
-3. If the prefix names this task's branch or folder, choose **Yes, proceed**. Such a rule never matches the next task.
+2. If the prefix is exactly `git worktree add` or exactly `gh pr create`, you may choose **Yes, and don't ask again for commands that start with `<prefix>`**. Later tasks then do not ask for that command.
+3. For every other prefix, also for the commit and the push, choose **Yes, proceed**, every time.
 
-The model proposes the prefix. In the check with a test model, every prefix was the whole command, with the task's branch and folder, so each later task would ask again. A real model can propose a shorter prefix, but sage did not check this.
+The model proposes the prefix: in the check with a test model, each prefix was the first command of the prompt, whole: for example `git -C <folder> add <files>` for the commit, and `gh pr create` with the task's branch, title and body. So no prefix was one of the two short ones, and each later task would ask 4 times again. A real model can propose a shorter prefix, but sage did not check this.
 
 The owner's first try in the desktop app checks which prefix Codex offers with a real model.
 
