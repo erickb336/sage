@@ -7,11 +7,14 @@ import { commandWrites } from "./shell-write-policy.mjs";
 export function gitHubRepository(url) {
   // https or ssh with an optional user (and port), or the scp form user@host:owner/name; the host is github.com or
   // ssh.github.com in any letter case. An ssh host alias names no host that the hook can read, so it gives undefined.
-  const m = /^(?:(?:https|ssh):\/\/(?:[^@\/\s]+@)?(?:ssh\.)?github\.com(?::\d+)?\/|[^@\/\s:]+@(?:ssh\.)?github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(url ?? "");
+  // The user part has no ?, # or %: with them, "https://evil.example?@github.com/…" names the host evil.example (R1971-2).
+  const m = /^(?:(?:https|ssh):\/\/(?:[^@\/\s?#%]+@)?(?:ssh\.)?github\.com(?::\d+)?\/|[^@\/\s:?#%]+@(?:ssh\.)?github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(url ?? "");
   return m && !/^\.+$/.test(m[1]) && !/^\.+$/.test(m[2]) ? `${m[1]}/${m[2]}` : undefined;
 }
 /** A path with a .git folder or file in it: git's own files (hooks, settings, refs). No file tool and no shell write changes them in sage mode. */
 export const gitInternalPath = (path) => typeof path === "string" && /(?:^|[\\/])\.git(?:[\\/]|$)/i.test(path);
+/** A .git folder or a path under one, also the bare word .git. */
+const gitFile = (path) => gitInternalPath(path) || /^\.git$/i.test(path ?? "");
 
 /** Shared push rules (T536). The provider supplies two readers, which return a program's output, or undefined when it
  * fails: readGit(dir, args) runs git in dir, and readGh(args) runs gh (with GH_HOST and GH_REPO cleared). The rules read
@@ -102,30 +105,74 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
   /**
    * Git's own files and the settings that run a program can send commits outside the hook's view: a git hook
    * (.git/hooks, core.hooksPath) runs on commit or push, and core.fsmonitor runs on status. So in sage mode a command
-   * line never names hooksPath or fsmonitor, and never writes a file under a .git folder. A text check, so not complete.
+   * line never sets hooksPath or fsmonitor, and never writes a file under a .git folder. A text check, so not complete.
    */
   function gitStateChange(command, commands, cwd) {
-    if (commands.some((c) => setsRunKey(c.words))) return "a command that sets core.hooksPath or core.fsmonitor can make git run a program on a commit or a push, so sage mode refuses it. Ask the user.";
+    if (setsRunKey(commands)) return "a command that sets core.hooksPath or core.fsmonitor can make git run a program on a commit or a push, so sage mode refuses it. Ask the user.";
+    const GIT_WRITE = "this command writes a file under a .git folder, where git keeps its hooks and settings, so sage mode refuses it. Ask the user.";
+    if (commands.some((c) => gitOutputs(c.words))) return GIT_WRITE;
     if (!commandWrites(command, cwd)) return undefined;
     // The reader keeps each redirection as its operator and target in one string, such as ">.git/hooks/pre-push" or "2>&1".
     const target = (r) => /^[\w{}]*?(?:&>>?|>>|>\||>&|<>|>)(.*)$/.exec(r)?.[1];
-    if (gitInternalPath(cwd) || commands.some((c) => c.redirects.some((r) => gitInternalPath(target(r)) || /^\.git$/i.test(target(r) ?? ""))
-      || (c.words.length > 1 && !READ_ONLY.has(programName(c.words[0] ?? "")) && c.words.slice(1).some((w) => gitInternalPath(w) || /^\.git$/i.test(w))))) {
-      return "this command writes a file under a .git folder, where git keeps its hooks and settings, so sage mode refuses it. Ask the user.";
-    }
+    if (gitInternalPath(cwd) || commands.some((c) => c.redirects.some((r) => gitFile(target(r)))
+      || (c.words.length > 1 && !READ_ONLY.has(programName(c.words[0] ?? "")) && c.words.slice(1).some(gitFile)))) return GIT_WRITE;
     return undefined;
   }
-  /** Programs that only read their file arguments: a .git path among them is not a write target. */
+  /** Programs that only read their file arguments: a .git path among them is not a write target. git's own output options are read by gitOutputs. */
   const READ_ONLY = new Set(["ls", "cat", "head", "tail", "grep", "rg", "wc", "stat", "file", "diff", "less", "git", "echo", "printf"]);
-  const RUN_KEY = /^core\.(?:hookspath|fsmonitor)$/i;
-  /** Does one command set core.hooksPath or core.fsmonitor: git config (not a read), git -c, --config-env or GIT_CONFIG_* variables? */
-  function setsRunKey(words) {
-    if (words.some((w) => /(?:^|[=\s'"])core\.(?:hookspath|fsmonitor)\s*=/i.test(w) || /^GIT_CONFIG_KEY_\d+=core\.(?:hookspath|fsmonitor)$/i.test(w)
-      || /^--config-env=core\.(?:hookspath|fsmonitor)=/i.test(w))) return true;
+  /** Does a git command write under .git through its own output option: checkout-index --prefix, diff --output, format-patch -o (R1971-2)? */
+  function gitOutputs(words) {
     const g = words.findIndex((w) => programName(w) === "git");
-    if (g < 0 || gitSubcommand(words, g + 1).toLowerCase() !== "config" || !words.some((w) => RUN_KEY.test(w))) return false;
-    const read = words.some((w) => /^(?:--get(?:-all|-regexp|-urlmatch)?|--list|-l|--show-origin|--show-scope|get|list)$/.test(w));
-    return !read;
+    return g >= 0 && words.slice(g + 1).some((w, k, rest) => {
+      const short = /^-o(.*)$/.exec(w);
+      if (short) return gitFile(short[1] || rest[k + 1]);
+      if (!w.startsWith("--") || !longOption(w, ["--prefix", "--output", "--output-directory"])) return false;
+      return gitFile(w.includes("=") ? w.slice(w.indexOf("=") + 1) : rest[k + 1]);
+    });
+  }
+  const RUN_KEY = /^\s*core\.(?:hookspath|fsmonitor)\s*$/i;
+  /**
+   * Does a command of the line set core.hooksPath or core.fsmonitor: a git config write, git -c or --config-env, or a
+   * GIT_CONFIG_KEY_<n> or GIT_CONFIG_PARAMETERS variable? It reads the parsed words, so a commit message, an echo or a
+   * grep pattern that names the key passes. Text that another program runs as a command (sh -c, a heredoc) is read
+   * the same way, up to 3 levels deep; text that the reader cannot read is refused when it names a key (fail closed).
+   */
+  function setsRunKey(commands, depth = 0) {
+    return runnable(commands).some(({ words, bodies }) => setsInWords(words)
+      || [...words, ...bodies].some((t) => /\s/.test(t) && /hookspath|fsmonitor/i.test(t) && nestedSets(t, depth)));
+  }
+  function nestedSets(text, depth) {
+    if (depth >= 3) return true;
+    try {
+      return setsRunKey(shellCommands(text), depth + 1);
+    } catch {
+      return true;
+    }
+  }
+  function setsInWords(words) {
+    const setting = (w) => /^\s*core\.(?:hookspath|fsmonitor)\s*(?:=|$)/i.test(w ?? "");
+    if (words.some((w, k) => /^GIT_CONFIG_PARAMETERS=/i.test(w) && /hookspath|fsmonitor/i.test(w)
+      || /^GIT_CONFIG_KEY_\d+=/i.test(w) && RUN_KEY.test(w.slice(w.indexOf("=") + 1))
+      || /^(?:-c|--config-env)$/.test(words[k - 1] ?? "") && setting(w)
+      || /^--config-env=/.test(w) && setting(w.slice(w.indexOf("=") + 1)))) return true;
+    return configWrites(words);
+  }
+  /**
+   * Is the command a git config write that names core.hooksPath or core.fsmonitor? git reads only with the get or
+   * list subcommand right after config, or with --get, --get-all, --get-regexp, --get-urlmatch, --list or -l before
+   * any "--". Every other form that names the key writes it, also when its value is the word get or list (R1971-1).
+   */
+  function configWrites(words) {
+    const g = words.findIndex((w) => programName(w) === "git");
+    if (g < 0) return false;
+    let c = g + 1;
+    while (words[c]?.startsWith("-")) c += GIT_VALUE.test(words[c]) ? 2 : 1;
+    if (words[c]?.toLowerCase() !== "config") return false;
+    const args = words.slice(c + 1);
+    if (!args.some((w) => RUN_KEY.test(w))) return false;
+    if (/^(?:get|list)$/.test(args[0] ?? "")) return false;
+    const options = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
+    return !options.some((w) => /^(?:--get(?:-all|-regexp|-urlmatch)?|--list|-l)$/.test(w));
   }
   /**
    * The git subcommands that the hook knows: git's built-ins and git lfs, without the ones that send commits or run a

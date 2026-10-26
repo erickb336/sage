@@ -809,6 +809,13 @@ test("T536: no push reaches the default branch through a remote with another nam
   // R1949-1: reads and searches pass, and a description runs nothing.
   for (const command of ["grep -rn hooksPath packages/", "git log --grep fsmonitor", "git config --get core.hooksPath", "git commit -m 'refuse core.hooksPath'"]) passes(command);
   assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git config core.hooksPath /tmp/h" }, { cwd: dir }))), undefined, "a description runs nothing");
+  // R1971-1: get or list as the value is a write; R1972-1: a quoted GIT_CONFIG_PARAMETERS refuses, a message passes.
+  for (const command of ["git config core.hooksPath get", "git config set core.fsmonitor list", "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='list'\" git commit -m x"]) {
+    refused(command, /^sage: a command that sets core\.hooksPath/);
+  }
+  for (const command of ["git config get core.hooksPath", "git config --list", "git commit -m 'set core.hooksPath=/tmp/h'", "grep -rn 'core.fsmonitor=' packages/"]) passes(command);
+  // R1971-2: git's own output option under .git.
+  refused("git checkout-index --prefix=.git/hooks/ -a", /^sage: this command writes a file under a \.git folder/);
   refused("gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
   // R1936 F7: GitHub names the default branch, trunk here; a planted local ref that disagrees refuses, and so does a failed read.
   const trunk = session({ FAKE_DEFAULT_BRANCH: "trunk" });

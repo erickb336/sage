@@ -716,6 +716,21 @@ test("T536: in sage mode no push reaches the default branch, whatever the remote
     "git config core.hooksPath /tmp/h": HOOKS, "git -c core.hooksPath=/tmp/h commit -m x": HOOKS,
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/h git commit -m x": HOOKS,
     "git config core.fsmonitor /tmp/m": HOOKS }, ["git commit --allow-empty -m x", "echo x > notes.txt"], "git hooks");
+  // R1971-1: get or list is a read only right after config; as the value it is a write.
+  check({ "git config core.hooksPath get": HOOKS, "git config core.hooksPath list": HOOKS, "git config set core.hooksPath get": HOOKS,
+    "git config core.fsmonitor get": HOOKS, "git config core.fsmonitor list": HOOKS, "git config set core.fsmonitor list": HOOKS,
+    "git config core.hooksPath -- --get": HOOKS },
+    ["git config --get core.hooksPath", "git config get core.hooksPath", "git config --list", "git config get core.fsmonitor"], "config grammar");
+  // R1972-1: GIT_CONFIG_PARAMETERS in any quoting refuses; a message, a search or an echo that names the setting passes.
+  check({ "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='list'\" git commit -m x": HOOKS, "GIT_CONFIG_PARAMETERS=\"'CORE.FSMONITOR'='x'\" git status": HOOKS,
+    "env GIT_CONFIG_PARAMETERS=\"'core.hookspath'=/tmp/h\" git commit -m x": HOOKS, "git --config-env=core.hooksPath=H commit -m x": HOOKS,
+    "bash -c 'git -c core.hooksPath=/tmp/h commit -m x'": HOOKS },
+    ["git commit -m 'set core.hooksPath=/tmp/h'", "grep -rn 'core.hooksPath=' packages/", "git log --grep 'core.fsmonitor=x'",
+      "echo 'git -c core.hooksPath=/tmp/h'"], "parsed settings");
+  // R1971-2: git's own output options do not write under .git.
+  check({ "git checkout-index --prefix=.git/hooks/ -a": GIT_WRITE, "git checkout-index --prefix .git/hooks/ -a": GIT_WRITE,
+    "git diff --output=.git/hooks/pre-push": GIT_WRITE, "git format-patch -o .git/hooks HEAD~1": GIT_WRITE },
+    ["git checkout-index --prefix=build/ -a", "git format-patch -o patches HEAD~1"], "git output options");
   for (const extra of [{}, w.child("/root/sage_implementer_t1")]) {
     assert.match(denied(w.send(pre("apply_patch", patch("*** Add File: .git/hooks/pre-push", "+git push github HEAD:main"), extra))) ?? "runs",
       /^sage: in sage mode no thread changes files under a \.git folder/, "apply_patch to .git/hooks");

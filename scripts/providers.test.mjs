@@ -2750,6 +2750,9 @@ test("shared push policy validates and snapshots trusted branch readers and mess
     // R1949-2: a user in the URL, a capital host and ssh.github.com:443 name the same repository; an ssh host alias does not.
     "https://someone@GitHub.com/acme/site", "ssh://git@ssh.github.com:443/acme/site.git", "git@GITHUB.COM:acme/site.git", "github-work:acme/site", "https://github.com.evil.test/acme/site"].map(api.gitHubRepository),
     ["acme/site", "acme/site", "acme/site", undefined, undefined, undefined, "acme/site", "acme/site", "acme/site", undefined, undefined]);
+  // R1971-2: a ?, # or % in the user part makes the part before it the host, so the URL is not GitHub's.
+  assert.deepEqual(["https://evil.example?@github.com/acme/site", "https://evil.example#@github.com/acme/site", "https://evil%2eexample@github.com/acme/site",
+    "ssh://evil.example?@github.com/acme/site", "evil?x@github.com:acme/site"].map(api.gitHubRepository), [undefined, undefined, undefined, undefined, undefined]);
   for (const mainReason of [null, "", " ", "bad\nmessage", "x".repeat(2049)]) {
     assert.throws(() => api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic"), mainReason }), /mainReason/);
   }
