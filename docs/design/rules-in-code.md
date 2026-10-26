@@ -1,6 +1,6 @@
 # Rules held in code
 
-This page lists every rule that sage keeps in code, and why. It is reference material for a contributor or a careful user. The README's [Safety and limits](../../README.md#safety-and-limits) gives the short version.
+This page lists every rule that sage keeps in code, and why. It is reference material for a contributor or a careful user. [SECURITY.md](../../SECURITY.md#known-limits) gives the short list of known limits.
 
 A rule written only in a prompt fades over a long session. So sage keeps its important rules in code: a hook that checks each action, and a state tool that refuses a wrong move.
 
