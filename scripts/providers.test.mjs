@@ -900,7 +900,7 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
       "gh api 'repos/{owner}/{repo}/git/refs/heads/topic' -X PATCH -f sha=abc",
       "gh api 'repos/:owner/:repo/git/refs/heads/topic' -X PATCH -f sha=abc",
       "gh api 'repos/o/r/{branch}' -X GET",
-      `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: ":branch"}}) { clientMutationId } }'`,
+      `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {repositoryNameWithOwner: "o/r", branchName: ":branch"}}) { clientMutationId } }'`,
       "gh api repos/o/r/git/refs/heads/main",
       "gh api repos/o/r/contents/file -X GET -f ref=main",
       "gh api --method=GET repos/o/r/contents/file -f ref=master",
@@ -935,6 +935,52 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
           if (!actor.agent_id) assert.match(result.hookSpecificOutput.permissionDecisionReason, /work reaches main only through a pull request/);
         }
       }
+    }
+  }
+});
+
+test("T536 R2003-1, R2002-1: the push rule follows only a plain cd, binds createCommitOnBranch to its repository, reads routes with extra slashes, and reads commit and search text as text", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    // The checkout "bad" sends topic to main by its settings; f.dir is a clean checkout. other/repo's default branch is trunk.
+    const bad = join(f.dir, "bad");
+    const clean = fakeGit("topic");
+    const readGit = (dir, args) => args[0] === "config" && dir === bad ? `${clean(dir, args)}remote.origin.push\nrefs/heads/topic:refs/heads/main\0` : clean(dir, args);
+    const readGh = (args) => (args.at(-1) === ".default_branch" ? (args[3] === "repos/other/repo" ? "trunk\n" : "main\n") : undefined);
+    const policy = api.createPushPolicy({ readGh, readGit });
+    const says = (command, cwd = f.dir) => policy.pushProblem(command, cwd) ?? "allowed";
+    // 1a: a cd that the hook cannot follow beside a push, in the checkout where the push really runs.
+    for (const [command, cwd] of [[`cd -P ${bad} && git push origin topic`], [`cd -L ${bad} && git push origin topic`], [`cd -- ${bad} && git push origin topic`],
+      ["cd && git push origin topic"], [`(cd ${f.dir}) && git push origin topic`, bad], [`true || cd ${f.dir}; git push origin topic`, bad],
+      [`cd ${f.dir} & git push origin topic`, bad]]) {
+      // Refused for the cd beside the push, or for the settings of the checkout where the push really runs.
+      assert.match(says(command, cwd), /runs in the same command line as the push|git's setting remote\.origin\.push/, `${provider}: ${command}`);
+    }
+    assert.match(says(`cd ${bad} && git push origin topic`), /git's setting remote\.origin\.push can send the branch/, "a plain cd moves the read");
+    assert.equal(says(`cd ${f.dir} && git push origin topic`, bad), "allowed", "a plain cd to a clean checkout passes");
+    // 1b: createCommitOnBranch is checked against the default branch of the repository it names, not the checkout's.
+    const commit = (repo, branch) => `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {repositoryNameWithOwner: "${repo}", branchName: "${branch}"}, expectedHeadOid: "abc", message: {headline: "x"}}) { clientMutationId } }'`;
+    for (const command of [commit("other/repo", "trunk"), commit("other/repo", "main"), commit("../x", "topic"),
+      `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: "topic"}}) { clientMutationId } }'`]) {
+      assert.match(says(command), /work reaches main only through a pull request/, `${provider}: ${command}`);
+    }
+    assert.equal(says(commit("other/repo", "topic")), "allowed");
+    // 1c: a doubled or trailing slash does not skip the route checks.
+    for (const command of ["gh api -X PUT repos/o/r//contents/file -f content=abc", "gh api -X PATCH repos/o/r/ -f default_branch=topic",
+      "gh api -X PATCH repos/o/r//git/refs/heads/main -f sha=abc", "gh api -X PATCH https://api.github.com/repos/o/r//git//refs/heads/main -f sha=abc",
+      `gh api graphql/ -f 'query=mutation { updateRef(input: {refId: "id", oid: "abc"}) { clientMutationId } }'`]) {
+      assert.match(says(command), /work reaches main only through a pull request/, `${provider}: ${command}`);
+    }
+    assert.equal(says("gh api repos/o/r//issues -f title=x"), "allowed");
+    // 2: a commit message or a search pattern is text, also after git -C; a setting that runs still refuses.
+    for (const command of [`git -C ${f.dir} commit -m "refuse git config core.hooksPath /tmp/h"`, `git grep -n "git config core.hooksPath /tmp/h"`,
+      `rg "git config core.fsmonitor /tmp/h" docs`, `git -C ${f.dir} commit -m "explain the git push rule"`]) {
+      assert.equal(says(command), "allowed", `${provider}: ${command}`);
+    }
+    for (const command of [`git -C ${f.dir} -c core.hooksPath=/tmp/h commit -m x`, `git grep -O"sh -c 'git config core.hooksPath /tmp/h'" x`,
+      `rg --pre "sh -c 'git config core.hooksPath /tmp/h'" x`, `sh -c "git config core.hooksPath /tmp/h"`]) {
+      assert.match(says(command), /sets core\.hooksPath or core\.fsmonitor/, `${provider}: ${command}`);
     }
   }
 });

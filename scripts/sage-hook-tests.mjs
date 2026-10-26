@@ -809,6 +809,10 @@ test("T536: no push reaches the default branch through a remote with another nam
   // R1949-1: reads and searches pass, and a description runs nothing.
   for (const command of ["grep -rn hooksPath packages/", "git log --grep fsmonitor", "git config --get core.hooksPath", "git commit -m 'refuse core.hooksPath'"]) passes(command);
   assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git config core.hooksPath /tmp/h" }, { cwd: dir }))), undefined, "a description runs nothing");
+  // R2002-1: a description that starts with git and a word is not an unknown git command; commit and search text is text.
+  assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git checks the branch" }, { cwd: dir }))), undefined, "a description names no git command");
+  refused("git checks the branch", /^sage: "git checks" is not a git command that the hook knows/);
+  for (const command of [`git -C ${dir} commit -m "refuse git config core.hooksPath /tmp/h"`, `git grep -n "git config core.hooksPath /tmp/h"`, `rg "git config core.fsmonitor /tmp/h" docs`]) passes(command);
   // R1971-1: get or list as the value is a write; R1972-1: a quoted GIT_CONFIG_PARAMETERS refuses, a message passes.
   for (const command of ["git config core.hooksPath get", "git config set core.fsmonitor list", "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='list'\" git commit -m x"]) {
     refused(command, /^sage: a command that sets core\.hooksPath/);
@@ -864,7 +868,7 @@ if (args[0] === "api" && args.at(-1) === ".default_branch") {
   return;
 }
 const answers = JSON.parse(fs.readFileSync(process.env.FAKE_GH_ANSWERS, "utf8"));
-const host =args[args.indexOf("--hostname") + 1];
+const host = args[args.indexOf("--hostname") + 1];
 const a = host !== "github.com" || process.env.GH_HOST || process.env.GH_REPO ? { status: 500, body: { message: "wrong host" } } : answers[args.at(-1)] ?? { status: 404, body: { message: "Not Found" } };
 if (a.stubborn) process.on("SIGTERM", () => {});
 if (a.sleep || a.stubborn) setTimeout(() => fs.writeFileSync(process.env.FAKE_GH_ANSWERS + ".slept", ""), a.stubborn ? 15000 : 30000);

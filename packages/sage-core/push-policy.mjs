@@ -27,7 +27,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
   if (typeof readGh !== "function") throw new TypeError("readGh must be a function");
   if (typeof mainReason !== "string" || !mainReason.trim() || mainReason.length > 2048 || /[\x00-\x1f\x7f]/.test(mainReason)) throw new TypeError("mainReason must be a bounded message without control characters");
   const { runnable, mergeIn } = createCommandPolicy({ stateToolPath });
-  const PUSH_FORM = 'git [-C <dir>] push [-u] [--follow-tags] [-o <option>] <remote> <branch>, with the name of a remote of the checkout and the literal name of the task\'s branch: not the default branch, main or master, HEAD, @, a pattern, a variable, or a refspec with ":" or "+". Beside the push, a command line may only run cd, pwd, git add, commit, status, log, diff, show, fetch or rev-parse, gh, echo, printf, true, cat, head, tail, grep or wc; it sets no variable, no upstream (no --set-upstream, no fetch -u) and writes no file (no tee, no >). To delete a branch: git push --delete <remote> <branch>';
+  const PUSH_FORM = 'git [-C <dir>] push [-u] [--follow-tags] [-o <option>] <remote> <branch>, with the name of a remote of the checkout and the literal name of the task\'s branch: not the default branch, main or master, HEAD, @, a pattern, a variable, or a refspec with ":" or "+". Beside the push, a command line may only run cd <dir> (no option, no || or &), pwd, git add, commit, status, log, diff, show, fetch or rev-parse, gh, echo, printf, true, cat, head, tail, grep or wc; it sets no variable, no upstream (no --set-upstream, no fetch -u) and writes no file (no tee, no >). To delete a branch: git push --delete <remote> <branch>';
   /** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
   const gitThen = (text, word) => new RegExp(`\\b${word}\\b`, "i").test(/\bgit\b([\s\S]*)/i.exec(text)?.[1] ?? "");
   const pushText = (text) => gitThen(text, "push");
@@ -48,8 +48,11 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     const state = described ? undefined : gitStateChange(command, commands, cwd);
     if (state) return state;
     let dir = cwd;
+    /** A cd that the hook can follow: exactly "cd <dir>", run in the line's own shell, on a line with no || or & (R2003-1). */
+    const plainCd = (c) => c.words[0] === "cd" && c.words.length === 2 && !/^-|[$`~]/.test(c.words[1])
+      && !c.grouped && !c.host && !c.piped && !/\|\||(?:^|[^&>|])&(?![&>])/.test(command);
     /** The first command beside the push that the line may not run, or undefined. Read only for a line with a push. */
-    const beside = () => commands.length < 2 ? undefined : commands.find((c) => !besidePush(c.words))?.words
+    const beside = () => commands.length < 2 ? undefined : commands.find((c) => c.words[0] === "cd" ? !plainCd(c) : !besidePush(c.words))?.words
       ?? (commandWrites(command, cwd) ? ["a file write"] : undefined);
     const pushWhy = (words, git, dir) => {
       const why = pushForm(words, git, dir);
@@ -57,7 +60,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
       return why ?? (other && besideReason(other));
     };
     for (const { cmd, words, bodies } of runnable(commands)) {
-      if (cmd.words[0] === "cd" && cmd.words.length === 2) dir = resolve(dir, cmd.words[1]);
+      if (plainCd(cmd)) dir = resolve(dir, cmd.words[1]);
       const git = words.findIndex((w, k) => programName(w) === "git" && /^push$/i.test(gitSubcommand(words, k + 1)));
       const why = git >= 0 ? pushWhy(words, git, dir) : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
       if (why) return refuse(why);
@@ -71,7 +74,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
           const why = pushWhy([run.word, ...run.args], 0, run.dir);
           if (why) return refuse(why);
         }
-        const send = sendsOtherwise(run.word, run.args);
+        const send = sendsOtherwise(run.word, run.args, described);
         if (send) return mergeIn(command)?.problem ?? (send.alone ? send.why : refuse(send));
         if (apiWritesMain([run.word, ...run.args], run.dir ?? cwd)) return mergeIn(command)?.problem ?? refuse(mainReason);
       }
@@ -87,7 +90,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
   /** Git's settings can change where a push goes (remote.<name>.push, push.default with branch.<name>.merge), and
    * another command of the same line can change them after the hook read them. So beside a push a line runs only
    * these commands, with no variable set before one, and writes no file. */
-  const BESIDE_PROGRAMS = new Set(["cd", "pwd", "echo", "printf", "true", "gh", "cat", "head", "tail", "grep", "wc"]);
+  const BESIDE_PROGRAMS = new Set(["pwd", "echo", "printf", "true", "gh", "cat", "head", "tail", "grep", "wc"]);
   const BESIDE_GIT = /^(?:add|commit|status|log|diff|show|fetch|push|rev-parse)$/;
   function besidePush(words) {
     const name = programName(words[0] ?? "");
@@ -187,12 +190,13 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     show-ref sparse-checkout stash status submodule subtree switch symbolic-ref tag update-index update-ref var verify-commit
     verify-tag version whatchanged worktree write-tree backfill fast-import filter-branch index-pack multi-pack-index replay
     repo request-pull stripspace verify-pack`.split(/\s+/));
-  /** Why a git or gh run sends commits or moves the default branch another way than the push form, or undefined. */
-  function sendsOtherwise(word, args) {
+  /** Why a git or gh run sends commits or moves the default branch another way than the push form, or undefined.
+   * described: the text is only a description, whose words ("git checks …") run nothing, so no subcommand is unknown. */
+  function sendsOtherwise(word, args, described) {
     const name = programName(word);
     if (name === "git") {
       const sub = gitSubcommand(args, 0).toLowerCase();
-      if (!sub) return undefined;
+      if (!sub || described) return undefined;
       // Not a push, so this refusal gives no push form (R1949-2).
       if (!KNOWN_GIT.has(sub)) return { alone: true, why: `"git ${sub}" is not a git command that the hook knows, and a git alias or a git-${sub} program can send commits to a remote, so sage mode refuses it. Use a git built-in, or ask the user to run it.` };
       if (sub === "subtree" && args.some((a) => /^push$/i.test(a))) return "git subtree push sends commits outside the push form.";
@@ -377,7 +381,8 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
       search = path.slice(split);
       path = path.slice(0, split);
     }
-    try { path = decodeURIComponent(path).replace(/^\//, ""); } catch { return true; }
+    // GitHub reads repos/o/r//contents and repos/o/r/ as repos/o/r/contents and repos/o/r, so the routes do too (R2003-1).
+    try { path = decodeURIComponent(path).replace(/\/{2,}/g, "/").replace(/^\/|\/$/g, ""); } catch { return true; }
     path = path.replace(/^api\/v3\//, "").replace(/^api\/graphql$/, "graphql");
     const hasBodyFields = fields.length > 0;
     for (const [key, value] of new URLSearchParams(search)) fields.push({ value: `${key}=${value}`, typed: false });
@@ -388,12 +393,14 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     });
     const bracketedFields = values.some(field => /[\[\]]/.test(field.key));
     // main, master and the default branch that GitHub names (T536): of the request's repository, or for GraphQL of each
-    // GitHub remote of the checkout. Read only for a request that can write a branch; an unread default protects every name.
+    // repositoryNameWithOwner in the query and each GitHub remote of the checkout. Read only for a request that can write
+    // a branch; an unread default protects every name.
     const repoPath = /^(?:repos\/[^/]+\/[^/]+|repositories\/\d+)/.exec(path)?.[0];
+    const named = [];
     let names;
     const branchNames = () => {
       if (names !== undefined) return names;
-      const found = repoPath ? [gitHubDefault(repoPath)] : remoteRepositories(dir).map((r) => gitHubDefault(`repos/${r}`));
+      const found = repoPath ? [gitHubDefault(repoPath)] : [...named, ...remoteRepositories(dir)].map((r) => gitHubDefault(`repos/${r}`));
       return (names = found.some((n) => !n) ? null : ["main", "master", ...found].map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"));
     };
     const protectedName = (text) => branchNames() === null || new RegExp(`(?:^|[\\s/=:'"(])(?:refs\\/)?(?:heads\\/)?(?:${branchNames()})(?=$|[\\s/?&#:'"),}])`, "i").test(text);
@@ -412,6 +419,11 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
       if (/\b(?:updateRefs?|deleteRef|updatePullRequestBranch)\s*\(/.test(operations)) return true;
       if (/\bcreateCommitOnBranch\s*\(/.test(operations) &&
         (/\bbranch\s*:\s*\{[^{}]*\bid\s*:/.test(operations) || !/\bbranchName\s*:\s*"[^"\\]+"/.test(query))) return true;
+      // createCommitOnBranch names its repository: read that repository's default branch, not only the checkout's (R2003-1).
+      if (/\bcreateCommitOnBranch\s*\(/.test(operations)) {
+        named.push(...[...query.matchAll(/\brepositoryNameWithOwner\s*:\s*"([^"]*)"/g)].map((m) => m[1]));
+        if (!named.length || named.some((r) => !/^[\w.-]+\/[\w.-]+$/.test(r) || /(?:^|\/)\.+(?:\/|$)/.test(r))) return true;
+      }
       return /\b(?:createCommitOnBranch|createRef|createLinkedBranch|mergeBranch)\s*\(/.test(operations) &&
         (/\\/.test(query) || values.some(field => protectedName(field.value) ||
           (field.key !== "query" && /[$`\\]/.test(field.value))));
