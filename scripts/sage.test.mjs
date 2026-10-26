@@ -90,6 +90,18 @@ function rows(dir, table) {
   return lines.map((line) => Object.fromEntries(line.split("\t").map((v, i) => [head.split("\t")[i], v])));
 }
 
+/**
+ * A review or QA finding in a test that is not about its run or class (T490): finding add with --run of the task's latest
+ * run of that role, or of a new done run of that role when the task has none, and --class other. It returns the output, as
+ * ok() does.
+ */
+function finding(s, task, ...args) {
+  const role = args[args.indexOf("--source") + 1];
+  const added = () => { const id = s.ok("run", "add", task, "--role", role).split(" ")[0]; s.ok("run", "done", id, "--status", "done", "--tokens", "1"); return id; };
+  const run = rows(s.dir, "runs").filter((r) => r.task === task && r.role === role).at(-1)?.id ?? added();
+  return s.ok("finding", "add", task, ...args, "--run", run, "--class", "other");
+}
+
 /** Changes one row of a table by hand, as a person or a lost write could: edit returns the new cells, or null to remove the row. */
 function byHand(dir, table, col, id, edit) {
   const f = join(dir, `${table}.tsv`);
@@ -154,7 +166,7 @@ test("no dropped findings: a task cannot reach verifying while a finding is open
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "small");
   toReviewing(s, "T1");
-  assert.equal(s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "high", "--summary", "empty date crashes"), "F-T1-1 open · high · T1");
+  assert.equal(finding(s, "T1", "--source", "code-reviewer", "--severity", "high", "--summary", "empty date crashes"), "F-T1-1 open · high · T1");
   assert.match(s.no("task", "T1", "set", "state=verifying"), /open findings: F-T1-1 \(not triaged\)/);
   assert.match(s.no("finding", "triage", "T1", "F-T1-1", "dismiss"), /missing --reason/);
   assert.equal(s.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "the date field is required"), "F-T1-1 dismissed · dismiss");
@@ -166,10 +178,10 @@ test("repair rounds are bounded, and a round that fixes nothing re-plans the tas
   s.ok("task", "add", "--title", "t", "--size", "small");
   toReviewing(s, "T1");
   assert.match(s.no("round", "T1"), /no open findings marked fix/);
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a typo in the error");
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "a typo in the error");
   s.ok("finding", "triage", "T1", "F-T1-1", "fix");
   assert.match(s.no("round", "T1"), /only low findings are marked fix \(F-T1-1\)\. A repair round needs a medium or high finding/);
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "high", "--summary", "crash");
+  finding(s, "T1", "--source", "qa", "--severity", "high", "--summary", "crash");
   s.ok("finding", "triage", "T1", "F-T1-2", "fix");
   assert.equal(s.ok("round", "T1"), "T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 · re-run qa on the repair's diff", "the low finding joins the round");
   s.ok("task", "T1", "set", "state=reviewing");
@@ -179,13 +191,13 @@ test("repair rounds are bounded, and a round that fixes nothing re-plans the tas
   b.ok("task", "add", "--title", "t", "--size", "small");
   toReviewing(b, "T1");
   for (let n = 1; n <= 3; n++) {
-    b.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", `problem ${n}`);
+    finding(b, "T1", "--source", "qa", "--severity", "medium", "--summary", `problem ${n}`);
     b.ok("finding", "triage", "T1", `F-T1-${n}`, "fix");
     if (n > 1) b.ok("finding", "close", "T1", `F-T1-${n - 1}`);
     assert.match(b.ok("round", "T1"), new RegExp(`round ${n} of 3`));
     b.ok("task", "T1", "set", "state=reviewing");
   }
-  b.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "problem 4");
+  finding(b, "T1", "--source", "qa", "--severity", "medium", "--summary", "problem 4");
   b.ok("finding", "triage", "T1", "F-T1-4", "fix");
   b.ok("finding", "close", "T1", "F-T1-3");
   assert.equal(b.ok("round", "T1"), "T1 held: 3 repair rounds did not make it clean. Stop and ask the user.");
@@ -351,14 +363,14 @@ test("T266-TASK-FOR: logbookView gives the row of a run id or a finding key, and
   for (const t of ["a", "b", "c"]) s.ok("task", "add", "--title", t, "--size", "small");
   s.ok("run", "add", "T2", "--role", "lead");
   s.ok("run", "add", "T3", "--role", "qa");
-  s.ok("finding", "add", "T3", "--source", "qa", "--severity", "medium", "--summary", "x");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "y");
+  finding(s, "T3", "--source", "qa", "--severity", "medium", "--summary", "x");
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "y");
   assert.equal(taskFor("R1", s.project, env), "T2");
   assert.equal(taskFor("R2", s.project, env), "T3");
   assert.equal(taskFor("F-T3-1", s.project, env), "T3");
   assert.equal(taskFor("F-T1-1", s.project, env), "T1");
-  for (const id of ["R3", "F-T2-1", "F-T3-2", "T1", "r1", "R01", "R1 ", "F-T3-01", "", undefined]) assert.equal(taskFor(id, s.project, env), undefined, `${JSON.stringify(id)} names no task`);
-  s.ok("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "z", "--key", "F-T3-1");
+  for (const id of ["R9", "F-T2-1", "F-T3-2", "T1", "r1", "R01", "R1 ", "F-T3-01", "", undefined]) assert.equal(taskFor(id, s.project, env), undefined, `${JSON.stringify(id)} names no task`);
+  finding(s, "T2", "--source", "qa", "--severity", "low", "--summary", "z", "--key", "F-T3-1");
   assert.equal(taskFor("F-T3-1", s.project, env), undefined, "a key on two tasks names neither");
   s.ok("finding", "move", "T1", "F-T1-1", "--to", "follow-up");
   assert.equal(taskFor("F-T1-1", s.project, env), undefined, "a moved finding's old key names no task");
@@ -397,7 +409,7 @@ test("the merge check needs no open findings, checks-pass, and the route's verdi
   assert.equal(s.ok("merge-check", "--sha", SHA), "T1 may merge: 2 clean cycles on this SHA");
   assert.match(s.no("merge-check", "--sha", "ffffffffffffffffffffffffffffffffffffffff"), /no verdicts recorded/, "another SHA has none of these verdicts");
 
-  s.ok("finding", "add", "T1", "--source", "security-reviewer", "--severity", "high", "--summary", "token in the log");
+  finding(s, "T1", "--source", "security-reviewer", "--severity", "high", "--summary", "token in the log");
   assert.match(s.no("merge-check", "--sha", SHA), /open findings: F-T1-1/);
   verdict("findings", 3);
   s.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "a test token");
@@ -521,9 +533,9 @@ test("round names the roles to re-run on the repair's diff: the sources of the f
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "small");
   toReviewing(s, "T1");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "the empty search crashes");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo in the error");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the date is off by one");
+  finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "the empty search crashes");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo in the error");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the date is off by one");
   for (const k of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", k, "fix");
   s.ok("finding", "triage", "T1", "F-T1-3", "ask");
   assert.equal(s.ok("round", "T1"), "T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 · re-run code-reviewer,qa on the repair's diff");
@@ -533,8 +545,8 @@ test("finding move: a medium or low finding goes to a follow-up task, which hold
   const s = store();
   s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
   toReviewing(s, "T1");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the export skips the last row");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "high", "--summary", "the save crashes");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the export skips the last row");
+  finding(s, "T1", "--source", "qa", "--severity", "high", "--summary", "the save crashes");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.match(s.no("merge-check", "--sha", SHA), /T1 has open findings: F-T1-1, F-T1-2/);
   assert.equal(s.no("finding", "move", "T1", "F-T1-2", "--to", "Fix the save"), "sage: F-T1-2 is high, so it blocks T1 until it is fixed: a high finding never moves to a follow-up task.");
@@ -556,12 +568,12 @@ test("F-T301-40: an open fix of the current round never moves, at any severity, 
   const s = store();
   s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
   toReviewing(s, "T1");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the export skips the last row");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo in the error");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the export skips the last row");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo in the error");
   for (const k of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", k, "fix");
   assert.equal(s.ok("round", "T1"), "T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 · re-run code-reviewer on the repair's diff");
   for (const k of ["F-T1-1", "F-T1-2"]) assert.equal(s.no("finding", "move", "T1", k, "--to", "later"), KEY_STAYS(k));
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the fix saves a blank row");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the fix saves a blank row");
   assert.match(s.ok("finding", "move", "T1", "F-T1-3", "--to", "Blank rows"), /^F-T1-3 moved to T2 as F-T2-1 /, "a new finding of the round is not a key");
   s.ok("finding", "close", "T1", "F-T1-2");
   s.ok("task", "T1", "set", "state=reviewing");
@@ -576,7 +588,7 @@ test("F-T301-65: a fix key of the round moves only after the owner chose the fir
     s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
     s.ok("task", "add", "--title", "Other", "--size", "small"); // T2
     toReviewing(s, "T1");
-    for (let i = 1; i <= 10; i++) s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", `m${i}`);
+    for (let i = 1; i <= 10; i++) finding(s, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", `m${i}`);
     s.ok("finding", "triage", "T1", "F-T1-1", "fix");
     s.ok("round", "T1");
     if (state !== "repairing") {
@@ -602,8 +614,8 @@ test("F-T301-59, F-T301-66: a low fix key of the round is not dismissed while a 
     const s = store();
     s.ok("task", "add", "--title", "Fix the crash", "--size", "small");
     toReviewing(s, "T1");
-    s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", severity, "--summary", "m"); // F-T1-1
-    s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "l"); // F-T1-2
+    finding(s, "T1", "--source", "code-reviewer", "--severity", severity, "--summary", "m"); // F-T1-1
+    finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "l"); // F-T1-2
     for (const k of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", k, "fix");
     s.ok("round", "T1");
     s.ok("task", "T1", "set", "state=reviewing");
@@ -618,11 +630,11 @@ test("F-T301-59, F-T301-66: a low fix key of the round is not dismissed while a 
   assert.notEqual(dismiss(setup("high")).status, 0, "a high finding blocks it too");
   const fresh = setup();
   fresh.ok("finding", "close", "T1", "F-T1-1");
-  fresh.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "new"); // F-T1-3, untriaged
+  finding(fresh, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "new"); // F-T1-3, untriaged
   assert.notEqual(dismiss(fresh).status, 0, "a new medium finding that is not triaged blocks it (F-T301-66)");
   fresh.ok("finding", "triage", "T1", "F-T1-3", "ask");
   assert.notEqual(dismiss(fresh).status, 0, "so does one triaged ask");
-  fresh.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "other"); // F-T1-4, no key
+  finding(fresh, "T1", "--source", "qa", "--severity", "low", "--summary", "other"); // F-T1-4, no key
   assert.equal(dismiss(fresh, "F-T1-4").status, 0, "a low finding that is no key of the round is dismissed while the medium is open");
   fresh.ok("finding", "triage", "T1", "F-T1-3", "dismiss", "--reason", "not a problem");
   assert.equal(fresh.ok("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "unconfirmed low fix, carried by follow-up T2"), "F-T1-2 dismissed · dismiss", "with no medium or high finding open, the low key is dismissed");
@@ -680,7 +692,7 @@ test("fixes from dry run 1: a value may start with --, status.md never lags, and
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "small");
   assert.match(readFileSync(join(s.dir, "status.md"), "utf8"), /\| T1 \| framed \|/, "status.md follows a change without a status command");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "--since=DATE is ignored");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "--since=DATE is ignored");
   assert.match(readFileSync(join(s.dir, "findings.tsv"), "utf8"), /\t--since=DATE is ignored\t/);
   s.ok("finding", "triage", "T1", "F-T1-1", "fix");
   assert.match(s.ok("verdict", "T1", "--sha", SHA, "--kind", "review-clean"), /still open: F-T1-1\. Close the ones that this review confirmed fixed\./);
@@ -716,7 +728,7 @@ for (const [blocking, clean] of [["findings", "review-clean"], ["qa-fail", "qa-p
     if (blocking !== "checks-fail") {
       assert.match(s.no("verdict", "T1", "--sha", SHA, "--kind", blocking), /no open medium or high finding/);
       assert.equal(rows(s.dir, "tasks")[0].state, "verified", "a refused verdict does not change the state");
-      s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "A new problem");
+      finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "A new problem");
     }
 
     assert.equal(s.ok("verdict", "T1", "--sha", SHA, "--kind", blocking), `T1 ${blocking} · a1b2c3d · cycle 1 · reviewing`);
@@ -743,7 +755,7 @@ test("T180 follow-up: blocking verdicts return a pr-ready task to reviewing with
     for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
     s.ok("task", "T1", "set", "state=verified");
     s.ok("task", "T1", "set", "state=pr-ready");
-    if (blocking !== "checks-fail") s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "A new problem");
+    if (blocking !== "checks-fail") finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "A new problem");
 
     assert.equal(s.ok("verdict", "T1", "--sha", SHA, "--kind", blocking), `T1 ${blocking} · a1b2c3d · cycle 1 · reviewing`);
     assert.equal(rows(s.dir, "tasks")[0].state, "reviewing");
@@ -1183,11 +1195,11 @@ test("ids after a gap are new: a lost row never gives its id again, and a new fi
   for (const q of ["a?", "b?"]) s.ok("gate", "add", "T2", "--question", q, "--options", "yes|no", "--recommend", "no");
   lose("gates", 0, "G1");
   assert.match(s.ok("gate", "add", "T2", "--question", "c?", "--options", "yes|no", "--recommend", "no"), /^G3 open/);
-  s.ok("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "first");
-  s.ok("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "second");
+  finding(s, "T2", "--source", "qa", "--severity", "low", "--summary", "first");
+  finding(s, "T2", "--source", "qa", "--severity", "low", "--summary", "second");
   s.ok("finding", "triage", "T2", "F-T2-2", "dismiss", "--reason", "by design");
   lose("findings", 1, "F-T2-1");
-  assert.equal(s.ok("finding", "add", "T2", "--source", "qa", "--severity", "high", "--summary", "third"), "F-T2-3 open · high · T2");
+  assert.equal(finding(s, "T2", "--source", "qa", "--severity", "high", "--summary", "third"), "F-T2-3 open · high · T2");
   assert.deepEqual(rows(s.dir, "findings").map((f) => `${f.key} ${f.status} ${f.summary}`), ["F-T2-2 dismissed second", "F-T2-3 open third"]);
 });
 
@@ -1241,7 +1253,7 @@ test("an investigation ends at concluded, after a clean evidence review recorded
   assert.match(s.no("task", "T1", "set", "state=verified"), /T1 has no build block, so it ends at concluded/);
   assert.match(s.no("task", "T1", "set", "state=concluded"), /T1 needs a clean evidence review as its latest verdict: sage verdict T1 --kind evidence-clean/);
   assert.equal(s.ok("verdict", "T1", "--kind", "evidence-clean", "--run", "R1"), "T1 evidence-clean · cycle 1");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a claim without its command");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a claim without its command");
   assert.match(s.no("task", "T1", "set", "state=concluded"), /T1 has open findings: F-T1-1 \(not triaged\)/);
   s.ok("verdict", "T1", "--kind", "findings");
   s.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "the command is in the notes");
@@ -1315,11 +1327,11 @@ test("S2: a planted lock never hangs a command, the refusal says which folder to
 test("S3: only digits count in an id, so a new finding never reopens a key that it did not name", () => {
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "small");
-  s.ok("finding", "add", "T1", "--key", "F-T1-Infinity", "--severity", "low", "--source", "qa", "--summary", "old low");
+  finding(s, "T1", "--key", "F-T1-Infinity", "--severity", "low", "--source", "qa", "--summary", "old low");
   s.ok("finding", "triage", "T1", "F-T1-Infinity", "dismiss", "--reason", "cosmetic");
   assert.equal(s.ok("finding", "add", "T1", "--severity", "high", "--source", "sec", "--summary", "new high: auth bypass"), "F-T1-1 open · high · T1");
-  s.ok("finding", "add", "T1", "--key", "F-T1-9007199254740993", "--severity", "low", "--source", "qa", "--summary", "a long number");
-  assert.equal(s.ok("finding", "add", "T1", "--severity", "high", "--source", "qa", "--summary", "next"), "F-T1-9007199254740994 open · high · T1", "a long number stays exact");
+  finding(s, "T1", "--key", "F-T1-9007199254740993", "--severity", "low", "--source", "qa", "--summary", "a long number");
+  assert.equal(finding(s, "T1", "--severity", "high", "--source", "qa", "--summary", "next"), "F-T1-9007199254740994 open · high · T1", "a long number stays exact");
   assert.equal(s.ok("finding", "add", "T1", "--key", "F-T1-Infinity", "--severity", "medium"), "F-T1-Infinity open again · medium · T1", "a named key opens its finding again");
   assert.deepEqual(rows(s.dir, "findings").map((f) => `${f.key} ${f.severity} ${f.status} ${f.summary}`), [
     "F-T1-Infinity medium open old low",
@@ -1333,7 +1345,7 @@ test("S4: every store that has verdicts on a SHA must pass, so a second store ca
   const real = store();
   real.ok("task", "add", "--title", "t", "--size", "small");
   real.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
-  real.ok("finding", "add", "T1", "--source", "security-reviewer", "--severity", "high", "--summary", "auth bypass");
+  finding(real, "T1", "--source", "security-reviewer", "--severity", "high", "--summary", "auth bypass");
   const decoy = store(real.home, "aa-"); // its name comes first
   decoy.ok("task", "add", "--title", "decoy", "--size", "tiny");
   decoy.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
@@ -1431,7 +1443,7 @@ test("F-R44-2: a refusal lists every failing task, marks an abandoned one, which
   };
   clean("T1", SHA);
   s.ok("verdict", "T2", "--sha", SHA, "--kind", "checks-pass", "--pr", "4");
-  s.ok("finding", "add", "T3", "--source", "qa", "--severity", "medium", "--summary", "slow");
+  finding(s, "T3", "--source", "qa", "--severity", "medium", "--summary", "slow");
   s.ok("verdict", "T3", "--sha", SHA, "--kind", "findings");
   s.ok("finding", "triage", "T3", "F-T3-1", "dismiss", "--reason", "abandoned");
   assert.equal(s.no("merge-check", "--sha", SHA, "--cycles", "1"), `sage: 3 tasks have verdicts on a1b2c3d, and each must pass; 2 fail. ${s.dir} T2: 0 of 1 clean cycles on this SHA; never recorded: review-clean, qa-pass. Run the next cycle of its reviews on this SHA and record each verdict. ${s.dir} T3 (abandoned): cycle 1 found problems on this SHA (findings). Repair, then review the new SHA. To merge, make each one pass, or push a new commit and record its verdicts under the live tasks only.`);
@@ -1465,9 +1477,9 @@ test("F3: a ledger of blank lines blocks nothing, and a refusal names the full p
 test("F4: a finding opened again takes the new summary and source, and the decision trail keeps the old summary", () => {
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "small");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "the date is off by one");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "the date is off by one");
   s.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "rare");
-  assert.equal(s.ok("finding", "add", "T1", "--key", "F-T1-1", "--source", "qa", "--severity", "high", "--summary", "every date is off by one day"), "F-T1-1 open again · high · T1");
+  assert.equal(finding(s, "T1", "--key", "F-T1-1", "--source", "qa", "--severity", "high", "--summary", "every date is off by one day"), "F-T1-1 open again · high · T1");
   assert.deepEqual(rows(s.dir, "findings").map((f) => `${f.key} ${f.source} ${f.severity} ${f.status} ${f.summary}`), ["F-T1-1 qa high open every date is off by one day"]);
   assert.match(readFileSync(join(s.dir, "decisions.tsv"), "utf8"), /\tT1\tF-T1-1 opened again: every date is off by one day\tthe summary before: the date is off by one\n$/);
 });
@@ -1623,10 +1635,10 @@ test("QA-4: an id never comes back while a row of the logbook still names it", (
   s.ok("verdict", "T2", "--sha", SHA, "--kind", "checks-pass", "--run", "R2");
   lose("runs", 0, "R2"); // the highest run, which the ledger still names
   assert.match(s.ok("run", "add", "T2", "--role", "qa"), /^R3 running/);
-  s.ok("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "first");
+  finding(s, "T2", "--source", "qa", "--severity", "low", "--summary", "first");
   s.ok("finding", "add", "T2", "--key", "F-T2-1", "--severity", "medium", "--summary", "first, worse");
   lose("findings", 1, "F-T2-1"); // the decision trail still names it
-  assert.equal(s.ok("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "second"), "F-T2-2 open · low · T2");
+  assert.equal(finding(s, "T2", "--source", "qa", "--severity", "low", "--summary", "second"), "F-T2-2 open · low · T2");
   s.ok("gate", "add", "T2", "--question", "a?", "--options", "yes|no", "--recommend", "no");
   s.ok("log", "T2", "G1 was answered by phone", "--why", "the user was away");
   lose("gates", 0, "G1");
@@ -1639,10 +1651,10 @@ test("F-T46-MOVE-KEY: a moved finding's new key and new task never come back whi
   const s = store();
   const lose = (table, col, id) => byHand(s.dir, table, col, id, () => null);
   s.ok("task", "add", "--title", "a", "--size", "small");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "first");
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "first");
   assert.match(s.ok("finding", "move", "T1", "F-T1-1", "--to", "follow"), /^F-T1-1 moved to T2 as F-T2-1 /);
   lose("findings", 1, "F-T2-1"); // only the decision "F-T1-1 moved to T2 as F-T2-1: first" names it now
-  assert.equal(s.ok("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "second"), "F-T2-2 open · low · T2");
+  assert.equal(finding(s, "T2", "--source", "qa", "--severity", "low", "--summary", "second"), "F-T2-2 open · low · T2");
   lose("findings", 1, "F-T2-2");
   lose("tasks", 0, "T2"); // only the same decision names T2 now
   assert.match(s.ok("task", "add", "--title", "c", "--size", "small"), /^T3 framed/);
@@ -1662,7 +1674,7 @@ test("QA-5: a refusal says what to do: finish the other writer or use another br
 test("F-R49-1: an empty --summary is refused, so a finding opened again never loses its summary", () => {
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "the first summary");
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "the first summary");
   assert.equal(s.no("finding", "add", "T1", "--key", "F-T1-1", "--source", "code", "--severity", "medium", "--summary", ""), "sage: F-T1-1 on T1: --summary is empty. Give the finding in a few words, or leave out --summary to keep its summary.");
   assert.equal(s.no("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", " \t "), "sage: F-T1-2 on T1: --summary is empty. Give the finding in a few words.");
   const findings = () => rows(s.dir, "findings").map((f) => `${f.key} ${f.source} ${f.severity} ${f.status} ${f.summary}`);
@@ -1679,7 +1691,7 @@ test("unknown-columns: a logbook that a newer sage wrote refuses every write com
   s.ok("task", "add", "--title", "a", "--size", "small");
   s.ok("task", "add", "--title", "b", "--size", "small");
   toReviewing(s, "T1");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "slow");
+  finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "slow");
   s.ok("gate", "add", "T1", "--question", "q?", "--options", "yes|no", "--recommend", "no");
   s.ok("run", "add", "T1", "--role", "qa");
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
@@ -1736,7 +1748,7 @@ test("unknown-options: a command refuses an option that it does not take, and an
   const r = spawnSync("node", [TOOL, "status", "--project"], { encoding: "utf8", env: testEnv({ SAGE_HOME: s.home }) });
   assert.deepEqual([r.status, r.stderr], [1, "sage: --project needs a value. A value that starts with -- goes after =: --project=<value>.\n"]);
   assert.deepEqual([rows(s.dir, "tasks").length, rows(s.dir, "ledger")], [1, []]);
-  assert.equal(s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary=--risk is ignored"), "F-T1-1 open · low · T1");
+  assert.equal(finding(s, "T1", "--source", "qa", "--severity", "low", "--summary=--risk is ignored"), "F-T1-1 open · low · T1");
   assert.equal(rows(s.dir, "findings")[0].summary, "--risk is ignored");
 });
 
@@ -1745,8 +1757,8 @@ test("clean-rule: a cycle is clean when no medium or high finding is open, and e
   s.ok("task", "add", "--title", "lows only", "--size", "small");
   s.ok("task", "add", "--title", "a medium", "--size", "small");
   for (const kind of ["checks-pass", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo");
-  s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a vague name");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a vague name");
   const clean = (kind, ok) => `sage: T1 has no open medium or high finding, so ${kind} is refused. If this review found a medium or high problem, record it first: sage finding add T1 --source <role> --severity <medium or high> --summary "<the problem>", then ${kind} again. If it found only low ones, its cycle is clean: record ${ok}, and fix, move or dismiss each low finding before the merge.`;
   assert.deepEqual([s.no("verdict", "T1", "--sha", SHA, "--kind", "findings"), s.no("verdict", "T1", "--sha", SHA, "--kind", "qa-fail")], [clean("findings", "review-clean"), clean("qa-fail", "qa-pass")]);
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "review-clean");
@@ -1759,8 +1771,8 @@ test("clean-rule: a cycle is clean when no medium or high finding is open, and e
 
   const other = "0123456789abcdef0123456789abcdef01234567";
   for (const kind of ["checks-pass", "qa-pass"]) s.ok("verdict", "T2", "--sha", other, "--kind", kind);
-  s.ok("finding", "add", "T2", "--source", "code-reviewer", "--severity", "medium", "--summary", "a lost write");
-  s.ok("finding", "add", "T2", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo");
+  finding(s, "T2", "--source", "code-reviewer", "--severity", "medium", "--summary", "a lost write");
+  finding(s, "T2", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo");
   assert.equal(s.ok("verdict", "T2", "--sha", other, "--kind", "findings"), "T2 findings · 0123456 · cycle 1");
   assert.match(s.no("merge-check", "--sha", other, "--cycles", "1"), /^sage: T2 has open findings: F-T2-1, F-T2-2\./);
   s.ok("finding", "triage", "T2", "F-T2-1", "dismiss", "--reason", "by design");
@@ -1772,7 +1784,7 @@ test("F-R50-1: a table that is not a regular file refuses with its path, never h
   const s = store();
   s.ok("task", "add", "--title", "t", "--size", "tiny");
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "high", "--summary", "open one");
+  finding(s, "T1", "--source", "qa", "--severity", "high", "--summary", "open one");
   const [ledger, findings] = [join(s.dir, "ledger.tsv"), join(s.dir, "findings.tsv")];
   const gate = (path) => `sage: the merge check refuses every merge, because ${path} is not a regular file. Ask the user to fix or remove it.`;
   renameSync(findings, `${findings}.keep`);
@@ -1819,7 +1831,7 @@ test("F-R50-2: the merge check reads a logbook that is a link to a folder, as th
   renameSync(real.dir, join(moved, "book"));
   symlinkSync(join(moved, "book"), real.dir); // atk50 B4: the logbook lives elsewhere, through a link
   real.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr", "5");
-  real.ok("finding", "add", "T1", "--source", "security-reviewer", "--severity", "high", "--summary", "auth bypass");
+  finding(real, "T1", "--source", "security-reviewer", "--severity", "high", "--summary", "auth bypass");
   assert.equal(rows(join(moved, "book"), "ledger").length, 1, "the write went through the link");
   assert.equal(real.no("merge-check", "--sha", SHA, "--cycles", "1"), `sage: 2 tasks have verdicts on a1b2c3d, and each must pass; 1 fails. ${real.dir} T1 has open findings: F-T1-1. Triage and close them first. To merge, make each one pass, or push a new commit and record its verdicts under the live tasks only.`);
   rmSync(real.dir);
@@ -1896,8 +1908,8 @@ test("QA-R58-3: a refusal for a missing id names the latest ids that the logbook
   assert.equal(s.no("verdict", "T21", "--sha", SHA, "--kind", "checks-pass"), "sage: no task T21. The latest: T3, T4, T5, T6, T7, T8, T9, T10, T11, T12.");
   s.ok("run", "add", "T1", "--role", "qa");
   assert.equal(s.no("run", "done", "R2", "--status", "done"), "sage: no run R2. The latest: R1.");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "x");
-  s.ok("finding", "add", "T2", "--source", "qa", "--severity", "low", "--summary", "y");
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "x");
+  finding(s, "T2", "--source", "qa", "--severity", "low", "--summary", "y");
   assert.equal(s.no("finding", "triage", "T1", "F-T1-9", "fix"), "sage: no finding F-T1-9 on T1. The latest: F-T1-1.");
   assert.equal(s.no("gate", "answer", "G1", "--option", "1"), "sage: no gate G1. There is none yet.");
 });
@@ -1925,7 +1937,7 @@ test("F-R65-1: a table that lost its header line fails the merge check closed an
   // hdr65b: T1 has clean verdicts on the SHA and two open low findings; then findings.tsv loses its first line.
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "l1");
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "l1");
   s.ok("finding", "add", "T1", "--source", "code-review", "--severity", "low", "--summary", "l2");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "1"), /^sage: T1 has open findings: F-T1-1, F-T1-2\./);
@@ -1938,7 +1950,7 @@ test("F-R65-1: a table that lost its header line fails the merge check closed an
   // hdr65: one SHA in two logbooks. A has an open medium and checks-fail; B (tiny) is clean. A's ledger loses its header.
   const a = store();
   a.ok("task", "add", "--title", "a", "--size", "tiny");
-  a.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "m");
+  finding(a, "T1", "--source", "qa", "--severity", "medium", "--summary", "m");
   for (const kind of ["checks-pass", "checks-fail"]) a.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   const b = store(a.home);
   b.ok("task", "add", "--title", "b", "--size", "tiny");
@@ -1958,9 +1970,9 @@ test("F-R64-1: a refused findings or qa-fail verdict names the finding first, so
   const s = store();
   s.ok("task", "add", "--title", "t4", "--size", "tiny");
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a typo");
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "a typo");
   assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "qa-fail"), `sage: T1 has no open medium or high finding, so qa-fail is refused. If this review found a medium or high problem, record it first: sage finding add T1 --source <role> --severity <medium or high> --summary "<the problem>", then qa-fail again. If it found only low ones, its cycle is clean: record qa-pass, and fix, move or dismiss each low finding before the merge.`);
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "a lost write"); // the first advice
+  finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "a lost write"); // the first advice
   assert.equal(s.ok("verdict", "T1", "--sha", SHA, "--kind", "qa-fail"), "T1 qa-fail · a1b2c3d · cycle 1");
   s.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "cosmetic");
   s.ok("finding", "triage", "T1", "F-T1-2", "fix");
@@ -1976,7 +1988,7 @@ test("F-R64-1: a refused findings or qa-fail verdict names the finding first, so
 test("F-R65-2: only a header with every known column and more is a newer sage's; one without them is damaged; a BOM and CRLF line ends read as plain", () => {
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "high", "--summary", "open one");
+  finding(s, "T1", "--source", "qa", "--severity", "high", "--summary", "open one");
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
   const tasks = join(s.dir, "tasks.tsv");
   const text = readFileSync(tasks, "utf8");
@@ -1991,14 +2003,14 @@ test("F-R65-2: only a header with every known column and more is a newer sage's;
   writeFileSync(findings, `\uFEFF${readFileSync(findings, "utf8").replaceAll("\n", "\r\n")}`);
   assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "1"), /^sage: T1 has open findings: F-T1-1\./, "the open finding stays open");
   assert.equal(s.ok("finding", "triage", "T1", "F-T1-1", "fix"), "F-T1-1 open · fix");
-  assert.equal(readFileSync(findings, "utf8"), "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\trun\tclass\nT1\tF-T1-1\t0\tqa\thigh\topen one\tfix\t\topen\t\t\n");
+  assert.equal(readFileSync(findings, "utf8"), "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\trun\tclass\nT1\tF-T1-1\t0\tqa\thigh\topen one\tfix\t\topen\tR1\tother\n");
 });
 
 test("F-R65-3: no control character reaches the terminal: a cell keeps none, a printed id, column or path shows each as \\xNN, and such a path gets no command", () => {
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
   const key = "K\x1b]0;TITLE\x07\x1b[31mRED";
-  assert.equal(s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "x\x9b2J", "--key", key), "K]0;TITLE[31mRED open · low · T1");
+  assert.equal(finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "x\x9b2J", "--key", key), "K]0;TITLE[31mRED open · low · T1");
   assert.equal(s.ok("finding", "add", "T1", "--severity", "medium", "--key", key), "K]0;TITLE[31mRED open again · medium · T1", "the same --key finds its finding");
   assert.deepEqual(rows(s.dir, "findings").map((f) => `${f.key} ${f.summary}`), ["K]0;TITLE[31mRED x2J"]);
   byHand(s.dir, "findings", 1, "K]0;TITLE[31mRED", (cells) => cells.with(1, key)); // a person's edit puts them back
@@ -2102,7 +2114,7 @@ test("F-R73-1: a logbook whose tasks, findings or ledger table is gone, or is a 
   store(a.home, "cc-"); // a brand-new logbook: each table with only its header line
   assert.equal(b.ok("merge-check", "--sha", SHA), "T1 may merge: 1 clean cycle on this SHA", "a new logbook is never refused");
   a.ok("task", "add", "--title", "a", "--size", "small");
-  a.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "m1");
+  finding(a, "T1", "--source", "qa", "--severity", "medium", "--summary", "m1");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) a.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   const why = /^sage: 2 tasks have verdicts on a1b2c3d, and each must pass; 1 fails\. \S+ T1 has open findings: F-T1-1\./;
   assert.match(a.no("merge-check", "--sha", SHA, "--cycles", "1"), why);
@@ -2136,7 +2148,7 @@ function openMedium() {
   const s = store();
   s.ok("task", "add", "--title", "t1", "--size", "small");
   s.ok("task", "add", "--title", "t2", "--size", "tiny");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "m1");
+  finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "m1");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.equal(s.no("merge-check", "--sha", SHA, "--cycles", "1"), "sage: T1 has open findings: F-T1-1. Triage and close them first.");
   return s;
@@ -2205,7 +2217,7 @@ test("F-R78-3: no hidden text reaches a brief: tag characters, bidi overrides an
   writeFileSync(join(s.dir, "standing.md"), `# Standing orders\n\n1. ${hidden}\n2. ${kept}\n`); // st-out.txt: a hand edit
   assert.equal(standing(), `# Standing orders\n\n1. ${shown}\n2. ${kept}\n`);
   s.ok("task", "add", "--title", hidden, "--size", "tiny");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", hidden);
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", hidden);
   assert.deepEqual([rows(s.dir, "tasks")[0].title, rows(s.dir, "findings")[0].summary], [shown, shown]);
   byHand(s.dir, "findings", 1, "F-T1-1", (cells) => cells.with(1, `K${tags("x")}‮`)); // a hand edit puts them in a key
   assert.equal(s.no("finding", "close", "T1", "F-T1-9"), "sage: no finding F-T1-9 on T1. The latest: K\\u{e0078}\\u{202e}.");
@@ -2379,20 +2391,41 @@ test("T346: finding add takes --run of a run of its task and --class from the st
   assert.match(s.no(...add("--escaped-from", "T2")), /^sage: finding add takes no --escaped-from\./);
   assert.equal(readFileSync(join(s.dir, "findings.tsv"), "utf8").split("\n").length, 2, "no refused finding was written");
   assert.equal(s.ok(...add("--run", "R1", "--class", "state-edge")), "F-T1-1 open · low · T1");
-  assert.equal(s.ok(...add()), "F-T1-2 open · low · T1", "both stay optional: a finding of a failed check has no run");
   // A known key opened again keeps its run and class, unless the command gives new ones.
   s.ok("finding", "add", "T1", "--key", "F-T1-1", "--source", "code-reviewer", "--severity", "medium");
-  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.run, f.class]), [["F-T1-1", "R1", "state-edge"], ["F-T1-2", "", ""]]);
+  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.run, f.class]), [["F-T1-1", "R1", "state-edge"]]);
   s.ok("run", "add", "T1", "--role", "code-reviewer"); // R3
   s.ok("finding", "add", "T1", "--key", "F-T1-1", "--source", "code-reviewer", "--severity", "medium", "--run", "R3", "--class", "copy");
-  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.run, f.class]), [["F-T1-1", "R3", "copy"], ["F-T1-2", "", ""]], "a re-opened finding takes the new run and class");
+  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.run, f.class]), [["F-T1-1", "R3", "copy"]], "a re-opened finding takes the new run and class");
+});
+
+test("T490: a review or QA finding needs --run and --class, and the refusal names the classes; a note of the sage or an implementer needs neither", () => {
+  const s = store();
+  s.ok("task", "add", "--title", "a", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "qa"); // R1
+  const need = (source, lacks) => `sage: ${source} is a review or QA role, so finding add needs --run with the run whose report holds the finding and --class with one of state-edge, speed, copy, layout, security, other; it lacks ${lacks}. Nothing changed.`;
+  for (const source of ["code-reviewer", "security-reviewer", "ux-reviewer", "qa", "evidence-review"]) {
+    const add = (...more) => s.no("finding", "add", "T1", "--source", source, "--severity", "medium", "--summary", "x", ...more);
+    assert.equal(add(), need(source, "--run and --class"));
+    assert.equal(add("--class", "copy"), need(source, "--run"));
+    assert.equal(add("--run", "R1"), need(source, "--class"));
+  }
+  assert.equal(readFileSync(join(s.dir, "findings.tsv"), "utf8").split("\n").length, 2, "no refused finding was written");
+  assert.equal(s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x", "--run", "R1", "--class", "speed"), "F-T1-1 open · medium · T1");
+  assert.equal(s.ok("finding", "add", "T1", "--source", "checks", "--severity", "medium", "--summary", "the CI build fails"), "F-T1-2 open · medium · T1");
+  assert.equal(s.ok("finding", "add", "T1", "--source", "implementer", "--severity", "low", "--summary", "a follow-up note"), "F-T1-3 open · low · T1");
+  // A known key keeps its source, run and class; a note opened again as a review's finding needs both.
+  assert.equal(s.ok("finding", "add", "T1", "--key", "F-T1-1", "--severity", "high"), "F-T1-1 open again · high · T1");
+  assert.equal(s.no("finding", "add", "T1", "--key", "F-T1-2", "--source", "qa", "--severity", "medium"), need("qa", "--run and --class"));
+  assert.deepEqual(rows(s.dir, "findings").map((f) => [f.key, f.source, f.severity, f.run, f.class]),
+    [["F-T1-1", "qa", "high", "R1", "speed"], ["F-T1-2", "checks", "medium", "", ""], ["F-T1-3", "implementer", "low", "", ""]]);
 });
 
 test("T346: a finding's run counts for the next run id, so after a lost run row the id is not given again", () => {
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
   s.ok("run", "add", "T1", "--role", "qa"); // R1
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x", "--run", "R1");
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x", "--run", "R1", "--class", "copy");
   byHand(s.dir, "runs", 0, "R1", () => null); // the run row is lost; only the finding still names R1
   assert.equal(s.ok("run", "add", "T1", "--role", "qa"), "R2 running · qa on T1 · model sonnet");
 });
@@ -2470,8 +2503,8 @@ test("T346: sage stats gives each task's review runs, tokens, tokens after round
   s.ok("run", "add", "T2", "--role", "qa"); // R7
   s.ok("run", "done", "R7", "--status", "blocked", "--tokens", "7000"); // only a done run's tokens count
   s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a", "--run", "R1", "--class", "state-edge");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "b", "--run", "R2");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "c"); // no run: no cycle
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "b", "--run", "R2", "--class", "copy");
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "c", "--run", "R6", "--class", "copy"); // R6 gave no verdict: no cycle
   // Sources that an object's own keys hold, and a | that a Markdown table reads as a new cell.
   for (const source of ["constructor", "__proto__", "a|b"]) s.ok("finding", "add", "T2", "--source", source, "--severity", "low", "--summary", source, "--run", "R4");
   s.ok("verdict", "T1", "--kind", "findings", "--sha", SHA, "--cycle", "1", "--run", "R1");
@@ -4317,7 +4350,7 @@ test("F-T273-18: a held task takes no run add, finding change or verdict from an
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
   s.ok("run", "add", "T1", "--role", "qa"); // R1
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x"); // F-T1-1
+  finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "x"); // F-T1-1
   s.ok("finding", "triage", "T1", "F-T1-1", "fix");
   const file = join(s.dir, "tasks.tsv");
   const [head, ...lines] = readFileSync(file, "utf8").trimEnd().split("\n");
@@ -4335,8 +4368,8 @@ test("F-T273-18: a held task takes no run add, finding change or verdict from an
 test("F-T284-3 and F-T284-1: a held task takes no pr= or branch=; the sage may still triage ask, or dismiss with a reason", () => {
   const s = store();
   s.ok("task", "add", "--title", "a", "--size", "small");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "x"); // F-T1-1
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "y"); // F-T1-2
+  finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "x"); // F-T1-1
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "y"); // F-T1-2
   const file = join(s.dir, "tasks.tsv");
   const [head, ...lines] = readFileSync(file, "utf8").trimEnd().split("\n");
   const col = head.split("\t").indexOf("state");
@@ -4357,7 +4390,7 @@ test("F-T284-14: a move out of held gives the task exactly one more repair round
   s.ok("task", "add", "--title", "a", "--size", "small");
   for (const state of ["briefed", "building", "reviewing"]) s.ok("task", "T1", "set", `state=${state}`);
   const fix = (summary) => {
-    const key = s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", summary).split(" ")[0];
+    const key = finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", summary).split(" ")[0];
     s.ok("finding", "triage", "T1", key, "fix");
   };
   fix("one");
@@ -4384,7 +4417,7 @@ function roundStore() {
   s.ok("task", "add", "--title", "a", "--size", "small");
   for (const state of ["briefed", "building"]) s.ok("task", "T1", "set", `state=${state}`);
   s.fix = (summary) => {
-    const key = s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", summary).split(" ")[0];
+    const key = finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", summary).split(" ")[0];
     s.ok("finding", "triage", "T1", key, "fix");
     return key;
   };
@@ -4444,14 +4477,14 @@ test("F-T284-19: leaving replan clears the old round's findings, so one that is 
   s.ok("config", "max_rounds=3");
   s.ok("task", "add", "--title", "a", "--size", "small");
   for (const state of ["briefed", "building", "reviewing"]) s.ok("task", "T1", "set", `state=${state}`);
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "one"); // F-T1-1
+  finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "one"); // F-T1-1
   s.ok("finding", "triage", "T1", "F-T1-1", "fix");
   assert.match(s.ok("round", "T1"), /^T1 repairing · round 1 of 3 /);
   s.ok("task", "T1", "set", "state=reviewing");
   assert.match(s.ok("round", "T1"), /^T1 replan: round 1 did not fix F-T1-1/);
   for (const state of ["briefed", "building", "reviewing"]) s.ok("task", "T1", "set", `state=${state}`); // the chief's new brief
   assert.equal(rows(s.dir, "tasks")[0].keys, "", "the old plan's round keys are gone");
-  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "two"); // F-T1-2, with F-T1-1 still open
+  finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "two"); // F-T1-2, with F-T1-1 still open
   s.ok("finding", "triage", "T1", "F-T1-2", "fix");
   assert.match(s.ok("round", "T1"), /^T1 repairing · round 2 of 3 · fix F-T1-1,F-T1-2 /);
 });

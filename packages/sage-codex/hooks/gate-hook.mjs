@@ -16,6 +16,8 @@
 //   - The logbook: only the chief records it. A child, in any mode, calls only the sage MCP tools that read, and runs
 //     only the read commands of the plugin's state tool from the shell (never its MCP server).
 //   - No role agent starts agents: a child under a sage_ name, in any mode, gets no spawn_agent.
+//   - No sage child, in any mode, sends a message to another thread (multi-agent v1's send_input, v2's send_message
+//     and followup_task): its message to the root thread would start a root turn as if the user typed it.
 //   - The sage folder: no thread, in any mode, runs a shell command that names the Codex sage folder (the logbook and the
 //     mode files) or the Codex sessions folder, or that resumes or forks a Codex session, so an agent cannot forge a
 //     mode file or a typed message.
@@ -67,12 +69,19 @@ const UNREAD_CODEX = "sage: the hook could not read this shell command, and it n
 const CHILD_CODEX = "sage: role agents never start Codex from the shell, because a new Codex session runs outside the hooks of this session. Put what you need in your report.";
 const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report.";
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report.";
+const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
 
 /** The sage MCP tools that only read the logbook: a child may call these, and pages without record. */
 export const CHILD_READS = new Set(["status", "standing", "merge_check"]);
 const SAGE_TOOL = /^mcp__sage__(.+)$/;
 /** Codex's hook name of the spawn tool: spawn_agent (the default and the multi_agent_v1 forms), or with its namespace before it (collaborationspawn_agent). */
 const SPAWN = /spawn_agent$/;
+/**
+ * Codex's hook names of the tools that send a message to another thread: multi-agent v1's send_input (with its
+ * namespace or not), and v2's send_message and followup_task in the default collaboration namespace (Codex 0.164.0
+ * spec_plan.rs:1489-1508; the hook name is the namespace, then the name, registry.rs:943-951).
+ */
+const SEND_INPUT = /^(?:(?:multi_agent_v1)?send_input|collaboration(?:send_message|followup_task))$/;
 const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages" && input.record === undefined);
 
 /** A path segment named .codex, in any letter case (the Mac file system ignores case). */
@@ -184,15 +193,34 @@ function childChange(t, sage) {
 }
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** Whether a shell command names the Codex sage folder (also from ~ or $HOME, $SAGE_HOME or $CODEX_HOME/sage) or the Codex sessions folder. */
-export function namesSageFolder(command, env = process.env) {
+/**
+ * The words of a shell command as the shell reads them, without their quotes (core's command reader): each program
+ * word, its arguments, the commands piped into it and each redirection target, with the folder it runs in. None when
+ * the reader cannot read the command.
+ */
+function wordsOf(command, cwd, env) {
+  try {
+    const runs = programsRun(command, cwd, env.PATH ?? "");
+    const targets = programsRun(command, cwd, env.PATH ?? "", { redirectEvidence: true, redirectParts: true });
+    return [...runs.flatMap((p) => [p.word, ...p.args, ...p.stdin].map((word) => ({ word, dir: p.dir ?? cwd }))), ...targets.map((r) => ({ word: r.target ?? r.redirect, dir: r.dir ?? cwd }))];
+  } catch { return []; }
+}
+
+/**
+ * Whether a shell command names the Codex sage folder (also from ~ or $HOME, $SAGE_HOME or $CODEX_HOME/sage) or the
+ * Codex sessions folder: in its text, or in a word as the shell reads it (without quotes, R1669-4), also as a path
+ * from the folder the word runs in.
+ */
+export function namesSageFolder(command, env = process.env, cwd = "/") {
   const dirs = [dirname(dirname(modeDirectory(env))), join(resolve(env.CODEX_HOME ?? join(homedir(), ".codex")), "sessions")];
   const forms = new Set(dirs);
   for (const dir of dirs) try { forms.add(realpathSync.native(dir)); } catch { /* not made yet */ }
   const home = env.HOME || homedir();
   for (const form of [...forms]) if (form.startsWith(`${home}/`)) for (const start of ["~", "$HOME", "${HOME}"]) forms.add(start + form.slice(home.length));
   const paths = [...forms].map((form) => `(?<![\\w.~/$-])${escape(form)}(?=$|[/\\s'"\`;|&)<>:])`);
-  return new RegExp([...paths, "\\$\\{?SAGE_HOME\\b", "\\$\\{?CODEX_HOME\\}?/(?:sage|sessions)(?![\\w.-])", "\\.hooks/codex"].join("|"), "i").test(command);
+  const named = new RegExp([...paths, "\\$\\{?SAGE_HOME\\b", "\\$\\{?CODEX_HOME\\}?/(?:sage|sessions)(?![\\w.-])", "\\.hooks/codex"].join("|"), "i");
+  const path = (word, dir) => resolve(dir, word.replace(/^~(?=\/|$)/, home));
+  return named.test(command) || wordsOf(command, cwd, env).some(({ word, dir }) => named.test(word) || named.test(path(word, dir)));
 }
 
 /** A program word or script that names Codex: codex, codex.exe, codex.js, or the npm package @openai/codex (with a version). */
@@ -258,8 +286,12 @@ const resumes = (args) => args.some((word) => /^(?:resume|fork)$/i.test(word));
 /** Whether a shell command runs Codex's apply_patch program, which writes files as the apply_patch tool does. */
 const runsPatch = (command, cwd, env) => { try { return programsRun(command, cwd, env.PATH ?? "").some((p) => PATCH_NAME.test(programName(p.word))); } catch { return true; } };
 
-/** The read commands of the state tool, which a child may run from the shell (pages only without record). */
-const STATE_READS = new Set(["status", "standing", "merge-check", "logbook"]);
+/**
+ * The read commands of the state tool, which a child may run from the shell: pages without record, logbook without
+ * repair and standing without add (the state tool writes the logbook for each of these words).
+ */
+const STATE_READS = new Map([["status", null], ["merge-check", null], ["logbook", "repair"], ["standing", "add"], ["pages", "record"]]);
+const readsOnly = ([command, ...rest]) => STATE_READS.has(command) && !rest.includes(STATE_READS.get(command));
 const STATE_SCRIPT = /(?:^|\/)(?:skills\/sage\/sage\.mjs|mcp\/state-server\.mjs)$/;
 /**
  * Whether a shell command runs the plugin's MCP server or a state tool command that writes the logbook: the plugin's
@@ -283,7 +315,7 @@ export function stateToolWrites(command, cwd = "/", env = process.env) {
     if (!own.has(file) && !STATE_SCRIPT.test(file) && !STATE_SCRIPT.test(script)) continue;
     if (/state-server\.mjs$/.test(file) || /state-server\.mjs$/.test(script)) return true;
     const words = args.filter((word) => !word.startsWith("-"));
-    if (!(STATE_READS.has(words[0]) || (words[0] === "pages" && !words.includes("record")))) return true;
+    if (!readsOnly(words)) return true;
   }
   return false;
 }
@@ -321,7 +353,7 @@ function fieldsOf(input) {
   const { session_id, cwd, tool_name, tool_input } = input;
   if (!text(session_id) || !text(cwd) || !isAbsolute(cwd) || typeof tool_name !== "string") return undefined;
   const shell = ["Bash", "apply_patch"].includes(tool_name);
-  if (!shell && !SPAWN.test(tool_name) && !SAGE_TOOL.test(tool_name)) return undefined;
+  if (!shell && !SPAWN.test(tool_name) && !SEND_INPUT.test(tool_name) && !SAGE_TOOL.test(tool_name)) return undefined;
   if (Object.hasOwn(input, "agent_id") && typeof input.agent_id !== "string") return undefined;
   if (!record(tool_input) || (shell && typeof tool_input.command !== "string")) return undefined;
   // An empty agent_id is still a child: only an event without one is the root thread.
@@ -340,9 +372,11 @@ const codexPath = (root, path) => {
   return CODEX_SEGMENT.test(inner.startsWith("..") || isAbsolute(inner) ? path : inner);
 };
 /** A shell write form that names a .codex folder. The plugin's own path and the project's path above it do not count. */
-const codexShellWrite = (command, cwd) => {
-  const named = [ROOT, projectRoot(cwd)].reduce((rest, dir) => rest.replace(new RegExp(`${escape(dir)}(?=$|[/\\s'"])`, "g"), " "), command);
-  return CODEX_SEGMENT.test(named) && commandWrites(command, cwd);
+const codexShellWrite = (command, cwd, env) => {
+  const outside = (text) => [ROOT, projectRoot(cwd)].reduce((rest, dir) => rest.replace(new RegExp(`${escape(dir)}(?=$|[/\\s'"])`, "g"), " "), text);
+  // The words as the shell reads them too, so a quote inside the name (".co""dex") does not hide it (R1669-6).
+  const words = wordsOf(command, cwd, env).map(({ word }) => outside(word));
+  return (CODEX_SEGMENT.test(outside(command)) || words.some((word) => CODEX_SEGMENT.test(` ${word}`))) && commandWrites(command, cwd);
 };
 
 /**
@@ -361,6 +395,12 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   }
   const sageTool = SAGE_TOOL.exec(f.tool);
   if (sageTool) return thread.child && !childMayCall(sageTool[1], f.input) ? refuse(thread, CHILD_LOGBOOK) : undefined;
+  // A sage child's message to another thread would start a turn there, as the user's on the root thread (F-T471-4),
+  // or wake an implementer for a read-only reviewer (R1712-1). The chief and a child that is not a sage child may send.
+  if (SEND_INPUT.test(f.tool)) {
+    const under = thread.child && underSage(thread);
+    return under === false ? undefined : refuse(thread, under ? CHILD_SEND : UNREAD_ROLE);
+  }
   if (SPAWN.test(f.tool)) {
     const under = thread.child && underSage(thread);
     return under === false ? undefined : refuse(thread, under ? CHILD_SPAWN : UNREAD_ROLE);
@@ -375,14 +415,14 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const why = childChange(thread, sage);
     return why ? refuse(thread, why) : undefined;
   }
-  if (namesSageFolder(f.command, env)) return deny(SAGE_FOLDER);
+  if (namesSageFolder(f.command, env, f.cwd)) return deny(SAGE_FOLDER);
   const runs = codexRuns(f.command, f.cwd, env);
   // A command that the reader cannot read and that names codex: refused when it may resume or fork a session, and for
   // a role agent in sage mode. Any other thread runs it, for example "$EDITOR codex/a.txt".
   if (runs === null && /codex/i.test(f.command)
     && (/\b(?:resume|fork)\b/i.test(f.command) || (thread.child && underSage(thread) !== false && mode(f, env).sage))) return deny(UNREAD_CODEX);
   if (runs?.some(resumes)) return deny(RESUME);
-  if (codexShellWrite(f.command, f.cwd)) return deny(CODEX_FOLDER);
+  if (codexShellWrite(f.command, f.cwd, env)) return deny(CODEX_FOLDER);
   if (thread.child) {
     if (stateToolWrites(f.command, f.cwd, env)) return refuse(thread, CHILD_LOGBOOK);
     if (runs?.some((args) => !printsOnly(args))) {
