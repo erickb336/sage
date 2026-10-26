@@ -89,7 +89,7 @@ Send each phrase alone, as the whole message.
 | Say | What happens |
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff. Send your request next. |
-| `show status` | Where each task is: running, waiting for you, verified. |
+| `show status` | Where each task is: running, waiting for you, verified. It names each open task with no priority. |
 | `show board` | The board in the chat, and the address of the board page. |
 | `autopilot on` / `autopilot off` | Verified pull requests merge by themselves, or wait for you again. Off by default. |
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
