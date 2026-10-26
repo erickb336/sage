@@ -2,7 +2,7 @@
 // The look is the T218 design (approved 2026-10-11) with the T305 picker, filter bar and step line (approved 2026-10-18).
 // The page needs no script for its cards, task pages, backlog fold and theme; the picker and the filters need the script.
 import { LINE, PRIORITIES, TASK_KINDS, proposalOf } from "./logbook-fields.mjs";
-import { lostClause, lostWhy, PROGRAM_ID } from "./program-rules.mjs";
+import { ENDED, lostClause, lostWhy, PROGRAM_ID } from "./program-rules.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
 // Every control (C0, C1 with U+0085) and line or paragraph separator is a space, and every format character (\p{Cf}:
@@ -81,7 +81,8 @@ const kindTag = task => task.kind ? `<span class="tag kind"><span aria-hidden="t
 const PRIORITY_WORD = { P0: "highest priority", P1: "second priority", P2: "third priority", P3: "lowest priority" };
 // A program's tag (T233): its name, and pilot on its pilot. A program that the logbook lost shows its id.
 const programTag = task => task.program ? `<span class="tag prog" title="Program ${esc(task.program.id)}${task.program.name ? `: ${esc(task.program.name)}` : ""}"><span class="pm" aria-hidden="true">◫</span><span class="vh">Program </span>${esc(task.program.name ?? task.program.id)}</span>${task.program.pilot ? `<span class="tag pilot">pilot</span>` : ""}` : "";
-const tags = task => `${task.priority ? `<span class="tag prio" title="${task.priority}, ${PRIORITY_WORD[task.priority]}">${task.priority}<span class="vh">, ${PRIORITY_WORD[task.priority]}</span></span>` : ""}${kindTag(task)}<span class="tag">${esc(task.size)}</span>${task.risk ? `<span class="tag risk">risk: ${esc(task.risk.replace(/,/g, ", "))}</span>` : ""}${programTag(task)}`;
+// An open task with no priority shows the gap (T500): every task needs one, and the chief sets it.
+const tags = task => `${task.priority ? `<span class="tag prio" title="${task.priority}, ${PRIORITY_WORD[task.priority]}">${task.priority}<span class="vh">, ${PRIORITY_WORD[task.priority]}</span></span>` : ENDED.includes(task.state) ? "" : `<span class="tag noprio" title="No priority: ask the chief to set P0 to P3">no priority</span>`}${kindTag(task)}<span class="tag">${esc(task.size)}</span>${task.risk ? `<span class="tag risk">risk: ${esc(task.risk.replace(/,/g, ", "))}</span>` : ""}${programTag(task)}`;
 /** The archived group: each archived project's name and task count, folded, with what needs you there. Its tasks are on no column. */
 const archivedCounts = book => `${book.tasks} task${book.tasks === 1 ? "" : "s"}${book.needsOwner ? ` · ${book.needsOwner} need${book.needsOwner === 1 ? "s" : ""} you` : ""}`;
 const archivedGroup = model => model.archived.length ? `<details class="archived" id="board-archived" data-key="archived"><summary id="sum-archived">Archived · ${model.archived.length} project${model.archived.length === 1 ? "" : "s"}</summary><ul>${model.archived.map(book => `<li>${esc(book.name)} · ${archivedCounts(book)}</li>`).join("")}</ul></details>` : "";
@@ -390,7 +391,7 @@ a.card:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}.card
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;transform:none!important}}
 .tags{display:flex;gap:4px;margin-top:6px;align-items:center;flex-wrap:wrap}
 .tag{display:inline-flex;gap:3px;align-items:center;font-size:10.5px;color:var(--muted);border:1px solid transparent;background:var(--panel2);border-radius:999px;padding:1px 7px}
-.tag.risk{color:var(--warn);background:var(--warn-soft)}.tag.prio{color:var(--text);font-weight:600}.tag.kind{color:var(--text)}
+.tag.risk{color:var(--warn);background:var(--warn-soft)}.tag.prio{color:var(--text);font-weight:600}.tag.noprio{color:var(--warn);border:1px dashed var(--warn)}.tag.kind{color:var(--text)}
 .archived{padding:0 20px 14px;color:var(--muted)}.archived summary{cursor:pointer}.archived ul{margin:6px 0 0;padding-left:18px}
 .more{margin-left:auto;font-size:11px;color:var(--muted)}.more::after{content:" →"}
 .faint{color:var(--faint);font-weight:400}.empty{color:var(--muted);font-size:12px;padding:6px}

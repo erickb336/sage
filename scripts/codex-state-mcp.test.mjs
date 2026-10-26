@@ -53,6 +53,9 @@ test("the state server lists one tool for each state-tool command, and marks onl
     "init", "log", "merge_check", "pages", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_set", "verdict"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
+  // T500: a task_add needs its priority, from the scale.
+  const add = tools.find((tool) => tool.name === "task_add").inputSchema;
+  assert.deepEqual([add.required.sort(), add.properties.priority.enum], [["priority", "project", "size", "title"], ["P0", "P1", "P2", "P3"]]);
 });
 
 test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each refusal as a tool error with its reason", async (t) => {
@@ -65,15 +68,24 @@ test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each re
   assert.match((await call("init", { project: "relative/path" })).error, /^Input validation error: .*project: an absolute path/);
 
   // A value that starts with -- stays a value: it is not read as an option of the command.
-  assert.equal(await call("task_add", { title: "--why=x first", size: "small" }), "T1 framed · small · route build,code-review,qa");
+  assert.equal(await call("task_add", { title: "--why=x first", size: "small", priority: "P2" }), "T1 framed · small · route build,code-review,qa · P2");
   assert.match(readFileSync(join(logbook, "tasks.tsv"), "utf8"), /\nT1\t--why=x first\t/);
-  assert.equal((await call("task_add", { title: "bad", size: "small", risk: "bogus" })).error,
+  assert.equal((await call("task_add", { title: "bad", size: "small", risk: "bogus", priority: "P2" })).error,
     "sage: unknown: bogus. Risks: auth, data, schema, money, secrets, input. Blocks: design, arena, pe, build, code-review, security-review, ux-review, qa, investigate, evidence-review");
-  assert.match((await call("task_add", { title: "bad", size: "huge" })).error, /^Input validation error: .*size/);
-  assert.match((await call("task_add", { title: "bad", size: "small", colour: "red" })).error, /^Input validation error: .*colour/);
+  assert.match((await call("task_add", { title: "bad", size: "huge", priority: "P2" })).error, /^Input validation error: .*size/);
+  assert.match((await call("task_add", { title: "bad", size: "small", colour: "red", priority: "P2" })).error, /^Input validation error: .*colour/);
+  // T500: the tool needs a priority from the scale, and its refusal says the scale in the state tool's words.
+  const scale = "A task needs a priority: P0 the owner's current focus and what blocks it; P1 next: function or safety bugs, work in flight, pre-pilot items; P2 later: polish, hardening lows, follow-ups; P3 parked but kept.";
+  for (const input of [{ title: "none", size: "small" }, { title: "bad", size: "small", priority: "P4" }]) {
+    const { error } = await call("task_add", input);
+    assert.match(error, /^Input validation error: .*priority/);
+    assert.ok(error.includes(scale), error);
+  }
+  assert.doesNotMatch(readFileSync(join(logbook, "tasks.tsv"), "utf8"), /\nT2\t/);
+  assert.equal(await call("task_set", { task: "T1", fields: { priority: "none" } }).then((r) => r.error), `sage: ${scale} T1 is framed, so its priority does not clear: set another one. Nothing changed.`);
 
   assert.equal((await call("task_set", { task: "T1", fields: { state: "merged" } })).error, "sage: T1 cannot go from framed to merged. Next: designing, briefed");
-  assert.equal(await call("task_set", { task: "T1", fields: { state: "briefed", branch: "codex/t1-a" } }), "T1 briefed · small · round 0 · route build,code-review,qa · codex/t1-a");
+  assert.equal(await call("task_set", { task: "T1", fields: { state: "briefed", branch: "codex/t1-a" } }), "T1 briefed · small · round 0 · route build,code-review,qa · codex/t1-a · P2");
 
   assert.match((await call("run_add", { task: "T1", role: "boss" })).error, /^sage: "boss" is not a role of a run\./);
   assert.equal(await call("run_add", { task: "T1", role: "lead", branch: "codex/t1-a" }), "R1 running · lead on T1 · codex/t1-a");
@@ -100,7 +112,7 @@ test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each re
   await call("finding_add", { task: "T1", source: "qa", severity: "high", summary: "b.js:2 crash", run: "R3", class: "state-edge" });
   assert.match((await call("finding_move", { task: "T1", key: "F-T1-2", to: "Follow up" })).error, /^sage: F-T1-2 is high, so it blocks T1 until it is fixed/);
   await call("finding_add", { task: "T1", source: "qa", severity: "low", summary: "c.js:3 slow", run: "R3", class: "speed" });
-  assert.equal(await call("finding_move", { task: "T1", key: "F-T1-3", to: "Follow up" }), "F-T1-3 moved to T2 as F-T2-1 · T2 framed · small · route build,code-review,qa");
+  assert.equal(await call("finding_move", { task: "T1", key: "F-T1-3", to: "Follow up" }), "F-T1-3 moved to T2 as F-T2-1 · T2 framed · small · route build,code-review,qa · P2");
 
   assert.match((await call("verdict", { task: "T1", kind: "checks-pass", sha: "abc" })).error, /^sage: "abc" is not a full commit SHA/);
   assert.equal(await call("verdict", { task: "T1", kind: "checks-pass", sha: SHA }), "T1 checks-pass · 1111111 · cycle 1");
@@ -159,7 +171,7 @@ test("brief checks a brief's fields, keeps it by task name in the logbook, and t
 test("merge_check passes for a head with its clean cycle", async (t) => {
   const { call } = await connect(t);
   await call("init");
-  await call("task_add", { title: "one", size: "tiny" });
+  await call("task_add", { title: "one", size: "tiny", priority: "P1" });
   await call("task_set", { task: "T1", fields: { state: "briefed", branch: "codex/t1-a" } });
   assert.equal((await call("merge_check", { sha: SHA })).error, `sage: no verdicts recorded for ${SHA}. Record the reviews and QA with sage verdict first.`);
   await call("verdict", { task: "T1", kind: "checks-pass", sha: SHA });

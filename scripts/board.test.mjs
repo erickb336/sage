@@ -757,7 +757,7 @@ function twoProjects() {
     const path = join(dir, name);
     execFileSync("git", ["init", "-q", path]);
     sage(path, "init");
-    sage(path, "task", "add", "--title", `${name} task`, "--size", "tiny");
+    sage(path, "task", "add", "--priority", "P2", "--title", `${name} task`, "--size", "tiny");
     sage(path, "gate", "add", "T1", "--question", `${name}: give the bot access?`, "--options", "yes|no access", "--recommend", "yes");
     return path;
   });
@@ -781,7 +781,7 @@ test("T72-S5-WRONGLOGBOOK: rich hook offers no bare project map for gate answers
   const out = execFileSync("node", [TOOL, "board", "beta", "--project", w.alpha, "--remember", "no"], { encoding: "utf8", env: w.env });
   assert.ok(out.includes("\n- beta **G1** · T1 · beta\\: give the bot access?\n  Recommended: yes. Default: none.\n  Answer it in a session of beta: this board does not know its folder.\n  1. yes\n  2. no access\n"), out);
   // A session of beta (task add) names its folder again.
-  w.sage(w.beta, "task", "add", "--title", "beta task 2", "--size", "tiny");
+  w.sage(w.beta, "task", "add", "--priority", "P2", "--title", "beta task 2", "--size", "tiny");
   assert.match(w.hook("show board for beta", w.alpha), /full source\/project\/gate key/);
   assert.doesNotMatch(w.hook("show board for beta", w.alpha), /^- beta: node /m);
 });
