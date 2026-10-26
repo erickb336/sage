@@ -296,7 +296,7 @@ test("R1708-1: merge runs the head branch rule too: a task that shares the branc
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
   w.pr("create", "T1");
   w.forge("T1", "state", "verified");
-  w.sage("task", "add", "--title", "second", "--size", "small"); // T2
+  w.sage("task", "add", "--priority", "P2", "--title", "second", "--size", "small"); // T2
   w.sage("task", "T2", "set", "branch=claude/t1"); // the sage shares T1's branch with T2, with no pr=
   refused(w.pr("merge", "T1"), /merge check: PR 1's head branch "claude\/t1" also belongs to \S+ T2 \(by its branch=\), which is not on PR 1/);
   assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0, "no gh pr merge ran");

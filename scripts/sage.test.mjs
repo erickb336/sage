@@ -4009,12 +4009,12 @@ test("T94: one branch pattern accepts today's task branches and refuses main, re
 
 test("T439: two tasks share one branch and PR; the merge check passes only when each passes, on the one head branch, with each task of that branch on the PR", () => {
   const s = store();
-  for (const title of ["first", "second", "third"]) s.ok("task", "add", "--title", title, "--size", "small");
+  for (const title of ["first", "second", "third"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
   const clean = (id, kinds = ["checks-pass", "review-clean", "qa-pass"], pr = "41") => { for (const k of kinds) s.ok("verdict", id, "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", pr); };
   const check = (head, pr = "41") => s.run("merge-check", "--sha", SHA, "--pr", pr, "--head", head);
   s.ok("task", "T1", "set", "branch=sage/t1-shared", "pr=41");
   assert.match(s.no("task", "T2", "set", "branch=feature/x"), /"feature\/x" is not a branch of T2: .*, or the branch of another task of this logbook, to share its pull request$/, "a branch of no task");
-  assert.match(s.ok("task", "T2", "set", "branch=sage/t1-shared", "pr=41"), /^T2 framed .* · sage\/t1-shared · PR 41$/, "T2 joins T1's branch");
+  assert.match(s.ok("task", "T2", "set", "branch=sage/t1-shared", "pr=41"), /^T2 framed .* · sage\/t1-shared · PR 41 · P2$/, "T2 joins T1's branch");
   clean("T1");
   clean("T2", ["checks-pass", "review-clean"]); // no QA yet: T2 is not clean
   const half = check("sage/t1-shared");
@@ -4037,7 +4037,7 @@ test("T439: two tasks share one branch and PR; the merge check passes only when 
 
 test("R1709-1: a task that ran work on the head branch owns it after it moves to another branch, so its absence from the PR refuses the merge", () => {
   const s = store();
-  for (const title of ["first", "second"]) s.ok("task", "add", "--title", title, "--size", "small");
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
   const check = () => s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t2");
   s.ok("task", "T2", "set", "branch=sage/t2", "pr=41");
   s.ok("task", "T1", "set", "branch=sage/t2"); // the sage shares T2's branch with T1, with no pr=
@@ -4059,7 +4059,7 @@ test("R1708-2: a run on its task's shared branch is a valid assignment for a pro
   const { createStateTool } = await import(new URL("../plugins/sage/core/state.mjs", import.meta.url));
   // The logbook folder must be its own real path, and macOS's default TMPDIR is under a link, /var to /private/var (R1740-2).
   const s = store(mkdtempSync(join(realpathSync(tmpdir()), "sage-home-")));
-  for (const title of ["first", "second"]) s.ok("task", "add", "--title", title, "--size", "small");
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
   s.ok("task", "T2", "set", "branch=sage/t2");
   s.ok("task", "T1", "set", "branch=sage/t2"); // the sage shares T2's branch with T1
   s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t2"); // R1
@@ -4073,7 +4073,7 @@ test("R1741-1: a refusal for a task of the head branch that is not on the PR say
   // T2 is on PR 41 with clean verdicts; share(s) makes T1 an owner of the head branch, with no pr=.
   const refusal = (head, share) => {
     const s = store();
-    for (const title of ["first", "second"]) s.ok("task", "add", "--title", title, "--size", "small");
+    for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
     share(s);
     for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T2", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
     const r = s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", head);
@@ -4095,7 +4095,7 @@ test("R1741-1: a refusal for a task of the head branch that is not on the PR say
 
 test("R1740-3: a run on the head branch in another letter case owns it, as a task's name does", () => {
   const s = store();
-  for (const title of ["first", "second"]) s.ok("task", "add", "--title", title, "--size", "small");
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
   s.ok("task", "T2", "set", "branch=sage/t2", "pr=41");
   s.ok("run", "add", "T1", "--role", "implementer", "--branch", "SAGE/T2"); // R1
   for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T2", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");

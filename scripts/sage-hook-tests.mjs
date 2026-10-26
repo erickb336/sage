@@ -5585,9 +5585,9 @@ test("T439: two tasks on one branch and PR merge under autopilot only when each 
   const s = autopilotSession(); // T1 has clean cycles on SHA under PR 41; the head branch is claude/t1
   const merge = () => denied(s.send(bash(MERGE)));
   const verdicts = (...kinds) => { for (const kind of kinds) s.sage("verdict", "T2", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41"); };
-  s.sage("task", "add", "--title", "second", "--size", "small"); // T2
+  s.sage("task", "add", "--priority", "P2", "--title", "second", "--size", "small"); // T2
   s.sage("task", "T1", "set", "branch=claude/t1", "pr=41");
-  assert.match(s.sage("task", "T2", "set", "branch=claude/t1", "pr=41"), /· claude\/t1 · PR 41$/, "T2 shares T1's branch");
+  assert.match(s.sage("task", "T2", "set", "branch=claude/t1", "pr=41"), /· claude\/t1 · PR 41 · P2$/, "T2 shares T1's branch");
   verdicts("checks-pass", "review-clean");
   assert.match(merge() ?? "", /^sage: the merge check refuses: 2 tasks have verdicts on .* T2: 0 of 1 clean cycles on this SHA; never recorded: qa-pass\./, "T2 is not clean");
   verdicts("qa-pass");
@@ -5596,7 +5596,7 @@ test("T439: two tasks on one branch and PR merge under autopilot only when each 
   assert.match(merge() ?? "", /^sage: the merge check refuses: PR 41's head branch "claude\/t1" is not a branch of \S+ T2/, "T2 names another branch for the same PR");
   // B1 of F-T273-8 with a shared branch: T1 on T2's branch, but T2 not on the PR, does not merge T2's work.
   const lend = autopilotSession({ FAKE_PR_HEAD: "claude/t2" });
-  lend.sage("task", "add", "--title", "other", "--size", "small"); // T2
+  lend.sage("task", "add", "--priority", "P2", "--title", "other", "--size", "small"); // T2
   lend.sage("task", "T2", "set", "branch=claude/t2");
   lend.sage("task", "T1", "set", "branch=claude/t2", "pr=41");
   assert.match(denied(lend.send(bash(MERGE))) ?? "", /^sage: the merge check refuses: PR 41's head branch "claude\/t2" also belongs to \S+ T2 \(by its name\), which is not on PR 41/);
