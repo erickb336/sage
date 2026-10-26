@@ -5,6 +5,7 @@
 //   changes/earlier.md (the heading, the intro and the entries from before T492, as they were)
 //   → CHANGELOG.md     (dates newest first; in a date, the files of changes/ by name, highest task first, then the
 //                       entries of changes/earlier.md for that date)
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -52,6 +53,20 @@ export function assemble(earlier, files) {
 }
 
 /**
+ * The steps that remove a line written by hand from CHANGELOG.md, one line for each kind of branch (R1973-1). A task
+ * branch keeps the text in its own fragment; a change-log branch changes only CHANGELOG.md, so the text goes into a task
+ * pull request. The undo names the real merge base when git has one, as the check does.
+ */
+function handFix(root) {
+  const base = spawnSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: root, encoding: "utf8" });
+  const at = base.status === 0 ? base.stdout.trim() : "$(git merge-base HEAD origin/main)";
+  return [
+    `On a task branch: put each line into ${CHANGES}/<task>.md with its date (or into ${CHANGES}/${EARLIER} if it is an older entry or the intro). Then run git checkout ${at} -- CHANGELOG.md to undo the edit.`,
+    `On a change-log branch: run git checkout origin/main -- CHANGELOG.md to undo the edit. Then run npm run changelog. Then put each line into ${CHANGES}/<task>.md in a task pull request.`,
+  ];
+}
+
+/**
  * CHANGELOG.md from the changes/ folder of a checkout. Nothing is dropped without a line that says so (R1771):
  * a file of changes/ that is not a .md file stops the build, and so does any line of text in the present CHANGELOG.md
  * that the build would not write, whatever its form (a list item, a paragraph, a wrapped line, an edit of the intro).
@@ -74,7 +89,7 @@ export function changelog(root) {
     const text = readFileSync(file, "utf8");
     const made = new Set([...lines, ...text.split("\n").flatMap((l) => (MARKER_READ.exec(l)?.[1] ?? "").split(" "))]);
     const byHand = textLines(text).filter((l) => !made.has(digest(l)));
-    if (byHand.length) throw new Error(byHand.map((l) => `CHANGELOG.md has a line that no file of ${CHANGES}/ makes, so the build would drop it: "${l.trim().length > 70 ? `${l.trim().slice(0, 70)}...` : l.trim()}". Move it into ${CHANGES}/<task>.md with its date (or into ${CHANGES}/${EARLIER} if it is an older entry or the intro), then run npm run changelog.`).join("\n"));
+    if (byHand.length) throw new Error([...byHand.map((l) => `CHANGELOG.md has a line that no file of ${CHANGES}/ makes, so the build would drop it: "${l.trim().length > 70 ? `${l.trim().slice(0, 70)}...` : l.trim()}".`), ...handFix(root)].join("\n"));
   }
   return `${built}${MARKER}${lines.join(" ")} -->\n`;
 }

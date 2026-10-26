@@ -73,23 +73,38 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
 ## The README and the docs
 
 - The README is a short front page. `npm run check` holds it to 150 lines, a first screen that answers what sage is and its status, a link to the changelog, and relative links that resolve. A longer text goes into a page under `docs/`, listed in the [docs index](docs/README.md).
-- Each change for users goes into [CHANGELOG.md](CHANGELOG.md), newest first. The README has no list of changes: it links to the changelog.
-- Do not edit `CHANGELOG.md` in a task pull request. It is built from the folder `changes/`, on main only, so that two pull requests never conflict in it. Each pull request adds one file, `changes/<task>.md` (for example `changes/T492.md`), and nothing else for the change log: `npm run build` does not write `CHANGELOG.md`. The file has the date of the first commit of the change, then one list item, with links written as from `CHANGELOG.md`:
+- Each change for users goes into its own file, `changes/<task>.md`. `npm run changelog` builds [CHANGELOG.md](CHANGELOG.md) from those files on main, newest first. The README has no list of changes: it links to the changelog.
+- **The change log, for an implementer.** Do not edit `CHANGELOG.md` in a task pull request. The change log is built from the folder `changes/`, on main only, so that two pull requests never conflict in it.
+  - Each task pull request adds one file, `changes/<task>.md` (for example `changes/T492.md`). It adds nothing else for the change log, and `npm run build` does not write `CHANGELOG.md`.
+  - The file has the date of the first commit of the change, then one list item. Write its links as from `CHANGELOG.md`:
 
-  ```markdown
-  ---
-  date: 2026-10-25
-  ---
-  - **A short title.** What changed for users, and what they do now.
-  ```
+    ```markdown
+    ---
+    date: 2026-10-25
+    ---
+    - **A short title.** What changed for users, and what they do now.
+    ```
 
-  `npm run changelog` puts the dates newest first. In one date, it puts the files by name, highest task first, then the older entries of `changes/earlier.md`. A test that reads a new entry reads its `changes/<task>.md`, because `CHANGELOG.md` gets the entry only later.
-- The chief rebuilds `CHANGELOG.md` after merges, as a tiny task with one implementer run. The implementer makes a branch from the latest main (for example `sage/changelog-2026-10-26`), runs `npm run changelog`, and opens a change-log pull request that changes only `CHANGELOG.md`. When a task merges meanwhile, it merges main in and runs `npm run changelog` again. No CI job or other automatic job writes to main. `npm run check` tells the two kinds of pull request apart by the diff of the tracked files from the merge base with `origin/main`, as CI sees it. A new file that is not staged does not count:
+  - `npm run changelog` puts the dates newest first. In one date, it puts the files by name, highest task first, then the older entries of `changes/earlier.md`.
+  - A test that reads a new entry reads its `changes/<task>.md`, because `CHANGELOG.md` gets the entry only later.
+  - If you edited `CHANGELOG.md` on a task branch, put the text in `changes/<task>.md`. Then run `git fetch origin main`. Then undo the edit with `git checkout $(git merge-base HEAD origin/main) -- CHANGELOG.md`. Do not run `npm run changelog` on a task branch.
+- **The change log, for the chief.** After task pull requests merge, the chief frames a tiny task with one implementer run that rebuilds `CHANGELOG.md`. No CI job or other automatic job writes to main.
+  - The implementer makes a branch from the latest main (for example `sage/changelog-2026-10-26`) and runs `npm run changelog`.
+  - It opens a change-log pull request that changes only `CHANGELOG.md`. A change-log pull request adds no file to `changes/`.
+  - If the change-log branch is stale (a task merged after the branch was made), merge main into it first. Then run `npm run changelog` again.
+  - If `npm run changelog` stops on a line written by hand in `CHANGELOG.md`, undo the edit with `git checkout origin/main -- CHANGELOG.md`. Then run `npm run changelog`. Put the text in `changes/<task>.md` in a task pull request, not in the change-log pull request.
+- **What the check does with the change log.** `npm run check` tells the two kinds of pull request apart by the diff of the tracked files from the merge base with `origin/main`, as CI sees it. A new file that is not staged does not count:
   - a diff that changes `CHANGELOG.md` and other files fails: undo the edit of `CHANGELOG.md`;
-  - a diff that changes only `CHANGELOG.md` is a change-log pull request, and it fails when `CHANGELOG.md` is not exactly what `npm run changelog` makes;
+  - a diff that changes only `CHANGELOG.md` is a change-log pull request. It fails when `CHANGELOG.md` is not exactly what `npm run changelog` makes;
   - any other diff passes when `CHANGELOG.md` lags behind `changes/`, with a warning. So main can lag between change-log pull requests, and a merge never makes main fail.
 
-  The check also reads each file of `changes/` for flagged words and for links, which resolve as from `CHANGELOG.md`. So the pull request that adds a fragment fails, not the next change-log pull request. The check needs `origin/main` (run `git fetch origin main`; CI checks out with `fetch-depth: 0`). `npm run changelog` and the check stop, and write nothing, in two cases: a file of `changes/` that is not a `.md` file (rename it to `changes/<task>.md`), and any line of text in `CHANGELOG.md` that no file of `changes/` makes, in any form: an entry written by hand, a paragraph, or an edit of the intro (move it into `changes/<task>.md` with its date, or into `changes/earlier.md` for the intro or an older entry). A dot file in `changes/`, such as `.DS_Store`, is ignored.
+  The check also reads each file of `changes/` for flagged words and for links, which resolve as from `CHANGELOG.md`. So the pull request that adds a fragment fails, not the next change-log pull request. The check needs `origin/main` (run `git fetch origin main`; CI checks out with `fetch-depth: 0`).
+
+  `npm run changelog` and the check stop, and write nothing, in two cases:
+  - a file of `changes/` that is not a `.md` file: rename it to `changes/<task>.md`;
+  - any line of text in `CHANGELOG.md` that no file of `changes/` makes, such as an entry written by hand, a paragraph or an edit of the intro. The message gives the steps for a task branch and for a change-log branch, as above. The text goes into `changes/<task>.md` with its date, or into `changes/earlier.md` for the intro or an older entry.
+
+  A dot file in `changes/`, such as `.DS_Store`, is ignored.
 - The word table of [Concepts](docs/guide/concepts.md) and the table of [Principles](docs/guide/principles.md) come from the build: edit `writing/dictionary.md` or the principles, then run `npm run build`.
 - Write at about 80% of Simplified Technical English ([writing/ste-80.md](writing/ste-80.md)), with sage's words from [writing/dictionary.md](writing/dictionary.md). `npm run check` fails on a flagged word.
 
