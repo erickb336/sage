@@ -2,7 +2,7 @@
 
 - **Edit the sources only:** `principles/`, `writing/`, `preferences/`, `packages/` (shared code and provider sources), and `changes/`.
   - Never edit build output: `plugins/sage/`, `plugins/sage-codex/`, `instructions/core.md`, or `CHANGELOG.md`.
-  - Write a pull request's change log entry in its own file, `changes/<task>.md` (see CONTRIBUTING.md), not in `CHANGELOG.md`.
+  - Write a pull request's change log entry in its own file, `changes/<task>.md` (see CONTRIBUTING.md), not in `CHANGELOG.md`. A task pull request never changes `CHANGELOG.md`: only `npm run changelog` writes it, on main, in a change-log pull request that changes nothing else. `npm run check` refuses any other diff that changes it.
   - Provider packages depend only on the public `sage-core` entry point. Core must not import a provider or name its models or settings.
   - A provider plugin bundles core and that provider only; `scripts/providers.test.mjs` checks isolated copies.
   - The board (`packages/sage-board`) is a cross-provider reader like core: each plugin bundles it, and it may name each provider's logbook settings (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `SAGE_HOME`). It imports only Node built-ins and core; `scripts/providers.test.mjs` checks the bundled copies.

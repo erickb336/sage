@@ -82,11 +82,11 @@ export function docFiles(root) {
 }
 
 /** Each relative link that does not resolve: a missing file, or an #anchor that the target page does not have. */
-export function linkProblems(root, files = docFiles(root)) {
+export function linkProblems(root, files = docFiles(root), read = (file) => readFileSync(join(root, file), "utf8")) {
   const problems = [], cache = new Map();
   const anchorsOf = (file) => cache.get(file) ?? cache.set(file, anchors(readFileSync(file, "utf8"))).get(file);
   for (const file of files) {
-    const text = readFileSync(join(root, file), "utf8");
+    const text = read(file);
     for (const link of links(text)) {
       const { line } = link, onMain = GITHUB.test(link.target);
       const target = onMain ? link.target.replace(GITHUB, "/") : link.target;
