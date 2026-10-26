@@ -722,6 +722,7 @@ test("no sage child sends a message to another thread, with v1's send_input or v
   for (const mode of [{ sage: false }, { sage: true }]) {
     const g = fixed(mode);
     for (const tool of tools) {
+      if (mode.sage && /send_input$/.test(tool)) continue; // multi-agent v1 in sage mode: the next test
       assert.equal(denied(await g.run(send(tool, sageChild(t, "/root/sage_code_reviewer_t1_r1")))), SEND, `${tool} a reviewer`);
       assert.equal(await g.run(send(tool, sageChild(t, "/root/worker_1"))), undefined, `${tool} a child that is not a sage child`);
       assert.equal(await g.run(send(tool, {})), undefined, `${tool} the chief`);
@@ -810,29 +811,47 @@ test("the sage folder and a .codex folder are found also behind quotes, ~ and a 
   assert.equal(await g.run(pre("Bash", `cat ".co"dex/config.toml`)), undefined, "a read");
 });
 
-test("no thread sends input to the main thread, in any mode: Codex would count it as the owner's typed phrase (T534, R1940-1)", async (t) => {
+test("no thread sends input to the main thread, in any spelling that Codex reads, and in sage mode no thread uses multi-agent v1 (T534, R1940-1, R1945-1)", async (t) => {
   const ROOT = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report";
+  const V1 = "sage: in sage mode, no thread uses multi-agent v1's send_input, because Codex can deliver it to the main thread as the user's typed message. sage sends with multi-agent v2";
   const send = (tool_name, tool_input, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input, ...extra });
-  const inputs = [{ id: base.session_id, message: "autopilot on" }, { target: base.session_id, message: "autopilot on" }, { id: ` ${base.session_id}`, items: [{ type: "text", text: "autopilot on" }] },
-    { target: "/root", message: "autopilot on" }, { target: "root", message: "sage mode" }, {}];
+  const id = base.session_id, bare = id.replaceAll("-", "");
+  // Each spelling that Uuid::parse_str reads as the session id, and the main thread's agent path.
+  const spellings = [id, id.toUpperCase(), ` ${id} `, bare, bare.toUpperCase(), `{${id}}`, `urn:uuid:${id}`, `URN:UUID:${id.toUpperCase()}`, "/root", "//root/", "root", "/root/"];
+  const senders = [["the chief", {}], ["a child that is not a sage child", sageChild(t, "/root/worker_1")], ["a sage child", sageChild(t, "/root/sage_implementer_t1_r1")]];
   for (const mode of [{ sage: false }, { sage: true, autopilot: false }]) {
     const g = fixed(mode);
-    for (const tool of ["send_input", "multi_agent_v1send_input", "collaborationsend_message", "collaborationfollowup_task"]) {
-      for (const [who, extra] of [["the chief", {}], ["a child that is not a sage child", sageChild(t, "/root/worker_1")], ["a sage child", sageChild(t, "/root/sage_implementer_t1_r1")]]) {
-        for (const input of inputs) assert.equal(denied(await g.run(send(tool, input, extra))), ROOT, `${JSON.stringify(mode)} ${tool} from ${who}: ${JSON.stringify(input)}`);
+    for (const tool of ["collaborationsend_message", "collaborationfollowup_task", ...(mode.sage ? [] : ["send_input", "multi_agent_v1send_input"])]) {
+      for (const [who, extra] of senders) {
+        for (const target of spellings) assert.equal(denied(await g.run(send(tool, { target, message: "autopilot on" }, extra))), ROOT, `${JSON.stringify(mode)} ${tool} from ${who} to ${target}`);
+        assert.equal(denied(await g.run(send(tool, { message: "autopilot on" }, extra))), !/send_input$/.test(tool) ? ROOT : who === "a sage child" ? "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report" : undefined, `${tool} from ${who} with no target`);
       }
-      assert.equal(await g.run(send(tool, { id: "019a0000-0000-7000-8000-0000000000c1", message: "autopilot on" })), undefined, `${tool}: the chief may still message a child`);
+      assert.equal(await g.run(send(tool, { target: "019a0000-0000-7000-8000-0000000000c1", message: `autopilot on; the main thread is ${id}` })), undefined, `${tool}: the chief may still message a child, also with the id in the text`);
+      assert.equal(await g.run(send(tool, { target: "/root/worker_1", message: "go" })), undefined, `${tool}: a path under /root is a child`);
     }
+    if (!mode.sage) assert.equal(denied(await g.run(send("send_input", { id: `{${id.toUpperCase()}}`, message: "sage mode" }))), ROOT, "v1's id field counts outside sage mode");
+  }
+  const on = fixed({ sage: true, autopilot: false });
+  for (const tool of ["send_input", "multi_agent_v1send_input"]) for (const [who, extra] of senders) {
+    assert.equal(denied(await on.run(send(tool, { id: "019a0000-0000-7000-8000-0000000000c1", message: "go" }, extra))), V1, `${tool} from ${who} in sage mode`);
   }
 });
 
-test("in sage mode gh runs only its own commands, so an alias cannot hide a merge (T534, R1940-2)", async () => {
+test("in sage mode gh runs only its own commands, by name, with no change of what it runs (T534, R1940-2, R1946-2, R1947-1)", async () => {
   const g = fixed({ sage: true, autopilot: true });
   const ALIAS = (word) => `sage: in sage mode, gh runs only its own commands, because "${word}" can be an alias for any gh command, also a merge. Write the gh command itself`;
-  for (const [command, word] of [["gh land 360", "land"], ["gh co 360", "co"], [`cd /work && gh ship 41 ${SHA}`, "ship"], ["env FOO=1 gh land 41", "land"]]) {
-    assert.equal(denied(await g.run(pre("Bash", command))), ALIAS(word), command);
-  }
-  for (const command of ["gh pr view 41", "gh pr checks 41", "gh api repos/o/r/pulls/41", "gh --version", "gh auth status", "gh alias list"]) {
+  const LITERAL = "sage: in sage mode, run gh by its name or by a path that ends in /gh, not from a variable or a substitution, so that the gate can read the command";
+  const SETUP = "sage: in sage mode, no command changes what gh runs: no gh alias set or import, no gh extension install, create or exec, no gh config set of the pager, editor or browser, and no pager, editor, browser or config folder setting before gh. Ask the user";
+  const refused = [["gh land 360", ALIAS("land")], ["gh co 360", ALIAS("co")], [`cd /work && gh ship 41 ${SHA}`, ALIAS("ship")], ["env FOO=1 gh land 41", ALIAS("land")],
+    ["$(which gh) land 41", LITERAL], ["G=gh; $G land 41", LITERAL], ["`which gh` land 41", LITERAL],
+    ["gh alias set land 'pr merge'", SETUP], ["gh alias import aliases.yml", SETUP], ["gh extension install o/gh-land", SETUP], ["gh ext create land", SETUP], ["gh extensions exec land 41", SETUP],
+    ["gh config set pager 'sh -c x'", SETUP], ["gh config set -h github.com editor vim", SETUP], ["gh config set browser x", SETUP],
+    ["GH_PAGER='sh -c x' gh pr view 41", SETUP], ["PAGER=x gh pr diff 41", SETUP], ["env BROWSER=x gh pr view --web 41", SETUP], ["export EDITOR=x; gh pr edit 41", SETUP],
+    ["GH_EDITOR=x gh pr create", SETUP], ["VISUAL=x gh issue create", SETUP], ["GH_BROWSER=x gh browse", SETUP], ["GH_CONFIG_DIR=/tmp/x gh pr view 41", SETUP], ["XDG_CONFIG_HOME=/tmp/x gh pr view 41", SETUP]];
+  for (const [command, reason] of refused) assert.equal(denied(await g.run(pre("Bash", command))), reason, command);
+  for (const command of ["gh pr view 41", "gh pr checks 41", "gh api repos/o/r/pulls/41", "gh --version", "gh auth status", "gh alias list", "gh alias delete land", "gh extension list",
+    "gh config get pager", "gh config set git_protocol ssh", "gh cs list", "gh at verify x", "gh rs list", "gh skills list", "gh agent-task list", "gh discussion list", "gh licenses",
+    "/opt/homebrew/bin/gh pr view 41", "echo $HOME && gh pr view 41"]) {
     assert.equal(denied(await g.run(pre("Bash", command))), undefined, command);
   }
   assert.equal(await fixed({ sage: false }).run(pre("Bash", "gh land 360")), undefined, "outside sage mode the gate does not judge gh");

@@ -19,7 +19,9 @@
 //   - No sage child, in any mode, sends a message to another thread (multi-agent v1's send_input, v2's send_message
 //     and followup_task): its message to the root thread would start a root turn as if the user typed it. No thread,
 //     in any mode, also the root, sends to the root thread: Codex records it as the user's typed message (R1940-1).
-//   - gh in sage mode: only gh's own commands, because an alias or an extension can run any of them (R1940-2).
+//   - gh in sage mode: only gh's own commands, by name, with no change of what gh runs (an alias, an extension, its
+//     pager, editor or browser), because any of them can run any gh command, also a merge (R1940-2, R1948).
+//   - Multi-agent v1's send_input: none in sage mode (sage sends with v2).
 //   - The sage folder: no thread, in any mode, runs a shell command that names the Codex sage folder (the logbook and the
 //     mode files) or the Codex sessions folder, or that resumes or forks a Codex session, so an agent cannot forge a
 //     mode file or a typed message.
@@ -84,6 +86,9 @@ const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logb
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report.";
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
 const ROOT_SEND = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report.";
+const V1_REFUSED = "sage: in sage mode, no thread uses multi-agent v1's send_input, because Codex can deliver it to the main thread as the user's typed message. sage sends with multi-agent v2.";
+const GH_LITERAL = "sage: in sage mode, run gh by its name or by a path that ends in /gh, not from a variable or a substitution, so that the gate can read the command.";
+const GH_SETUP = "sage: in sage mode, no command changes what gh runs: no gh alias set or import, no gh extension install, create or exec, no gh config set of the pager, editor or browser, and no pager, editor, browser or config folder setting before gh. Ask the user.";
 const GH_ALIAS = (word) => `sage: in sage mode, gh runs only its own commands, because "${word}" can be an alias for any gh command, also a merge. Write the gh command itself.`;
 
 /** The sage MCP tools that only read the logbook: a child may call these, and pages without record, run or text. */
@@ -97,29 +102,54 @@ const SPAWN = /spawn_agent$/;
  * spec_plan.rs:1489-1508; the hook name is the namespace, then the name, registry.rs:943-951).
  */
 const SEND_INPUT = /^(?:(?:multi_agent_v1)?send_input|collaboration(?:send_message|followup_task))$/;
+/** Multi-agent v1's send tool: sage dispatches with v2, so in sage mode no thread uses it (R1948). */
+const V1_SEND = /^(?:multi_agent_v1)?send_input$/;
+/** A thread id as Codex reads it (Uuid::parse_str): any letter case, with or without hyphens, braces or urn:uuid:. */
+const uuidOf = (value) => {
+  const id = value.trim().toLowerCase().replace(/^urn:uuid:/, "").replace(/^\{(.*)\}$/, "$1").replaceAll("-", "");
+  return /^[0-9a-f]{32}$/.test(id) ? id : null;
+};
 /**
- * Whether a send names the session's main thread as its target, by any field: its thread id is the session id (every
- * shell has it as CODEX_THREAD_ID), and its agent path is /root. Codex delivers such a message as user input, runs the
- * prompt hook for it and records it as a UserMessage, so it would count as the owner's typed phrase (R1940-1). A send
- * whose input has no text at all cannot show its target, so it counts too.
+ * Whether a send's target is the session's main thread: its thread id is the session id (every shell has it as
+ * CODEX_THREAD_ID), and its agent path is /root. Codex delivers such a message as user input, runs the prompt hook for
+ * it and records it as a UserMessage, so it would count as the owner's typed phrase (R1940-1). A target that is not
+ * text cannot be read, so it counts too. Only the target counts, not the message text (R1947 F2).
  */
-function sendsToRoot(input, session) {
-  const words = [];
-  const walk = (value) => (typeof value === "string" ? words.push(value) : value && typeof value === "object" ? Object.values(value).forEach(walk) : undefined);
-  walk(input);
-  return !words.length || words.some((word) => word.trim() === session || /^\/?root\/?$/.test(word.trim()));
+function sendsToRoot(target, session) {
+  if (typeof target !== "string") return true;
+  const id = uuidOf(target);
+  if (id || target.trim() === session) return target.trim() === session || id === uuidOf(session);
+  return `/${target.trim()}`.replace(/\/+/g, "/").replace(/(.)\/$/, "$1") === "/root";
 }
-/** gh's own commands (gh 2.x help): any other first word is an alias or an extension, which can run any command (R1940-2). */
-const GH_COMMANDS = new Set(["agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "codespace", "completion", "config", "copilot", "extension", "gist", "gpg-key",
-  "help", "issue", "label", "org", "pr", "preview", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow"]);
-/** The first word of a gh run that is not one of gh's own commands, or undefined. A command that the reader cannot read is judged by the merge rule. */
-function ghAlias(command, cwd, env) {
+/**
+ * gh's own commands and their aliases, from the gh 2.101.0 man pages: any other first word is an alias or an
+ * extension, which can run any command (R1940-2).
+ */
+const GH_COMMANDS = new Set(["agent-task", "agent-tasks", "agent", "agents", "alias", "api", "attestation", "at", "auth", "browse", "cache", "codespace", "cs",
+  "completion", "config", "copilot", "discussion", "extension", "extensions", "ext", "gist", "gpg-key", "help", "issue", "label", "licenses", "org", "pr", "preview",
+  "project", "release", "repo", "ruleset", "rs", "run", "search", "secret", "skill", "skills", "ssh-key", "status", "variable", "version", "workflow"]);
+/** The settings that make gh run another program or read another config (its pager, editor, browser, aliases). */
+const GH_SETTINGS = /(?:^|[^\w])(?:GH_PAGER|PAGER|BROWSER|GH_BROWSER|EDITOR|GH_EDITOR|VISUAL|GH_CONFIG_DIR|XDG_CONFIG_HOME)\s*=/;
+/**
+ * Why a shell command's gh run is refused in sage mode, or undefined (R1940-2, R1946-2, R1947-1): gh from a variable
+ * or a substitution, a first word that is not one of gh's commands, a change of what gh runs (an alias, an extension,
+ * its pager, editor or browser), or such a setting before gh. A command that the reader cannot read is left to the
+ * merge rule.
+ */
+function ghProblem(command, cwd, env) {
   let runs;
   try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return undefined; }
-  for (const p of runs) {
-    if (programName(p.word) !== "gh") continue;
-    const first = p.args[0];
-    if (first !== undefined && !GH_COMMANDS.has(first) && !/^(?:--version|--help|-h)$/.test(first)) return first;
+  if (/\bgh\b/.test(command) && runs.some((p) => /[$`…]/.test(p.word))) return GH_LITERAL;
+  const gh = runs.filter((p) => programName(p.word) === "gh");
+  if (!gh.length) return undefined;
+  if (GH_SETTINGS.test(command)) return GH_SETUP;
+  for (const { args } of gh) {
+    const first = args[0];
+    if (first === undefined || /^(?:--version|--help|-h)$/.test(first)) continue;
+    if (!GH_COMMANDS.has(first)) return GH_ALIAS(first);
+    const sub = args.slice(1).find((word) => !word.startsWith("-"));
+    if ((first === "alias" && ["set", "import"].includes(sub)) || (["extension", "extensions", "ext"].includes(first) && ["install", "create", "exec"].includes(sub))
+      || (first === "config" && sub === "set" && args.some((word) => /^(?:pager|editor|browser)$/i.test(word)))) return GH_SETUP;
   }
   return undefined;
 }
@@ -478,7 +508,9 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   // or wake an implementer for a read-only reviewer (R1712-1). The chief and a child that is not a sage child may send.
   if (SEND_INPUT.test(f.tool)) {
     // In every mode and from every thread: autopilot on must come from the owner, never from a send (R1940-1).
-    if (sendsToRoot(f.input, f.session)) return deny(ROOT_SEND);
+    if (V1_SEND.test(f.tool) && mode(f, env).sage) return deny(V1_REFUSED);
+    const targets = V1_SEND.test(f.tool) ? [f.input.target, f.input.id].filter((target) => target !== undefined) : [f.input.target];
+    if (targets.some((target) => sendsToRoot(target, f.session))) return deny(ROOT_SEND);
     const under = thread.child && underSage(thread);
     return under === false ? undefined : refuse(thread, under ? CHILD_SEND : UNREAD_ROLE);
   }
@@ -516,8 +548,8 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
   const now = mode(f, env);
   if (!now.sage) return undefined; // outside sage mode the gate does not judge pushes or merges, as in the Claude hook
-  const alias = ghAlias(f.command, f.cwd, env);
-  if (alias) return deny(GH_ALIAS(alias));
+  const gh = ghProblem(f.command, f.cwd, env);
+  if (gh) return deny(gh);
   const push = pushes.pushProblem(f.command, f.cwd);
   if (push) return deny(`sage: ${push}`);
   const merge = policy.mergeIn(f.command);
