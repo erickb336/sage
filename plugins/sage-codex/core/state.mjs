@@ -542,12 +542,12 @@ function checkUpdateFacts(facts) {
     || !updateKeys(r.config, ["cycles.small", "cycles.large", "cycles.risk"])
     || Object.entries(r.config).some(([key, value]) => !Number.isSafeInteger(value) || valid(key, value) !== value))) updateDeny();
 }
-function planNativeTaskUpdate(before, reference, at, facts, columns = TABLES) {
+function planNativeTaskUpdate(before, reference, at, facts, columns = TABLES, legacyRounds = false) {
   checkUpdateFacts(facts);
   const old = before.tasks.filter(row => row.id === reference.task);
   if (old.length !== 1 || taskVersion(old[0]) !== reference.version) updateDeny();
   const changes = Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`);
-  const planned = planTaskChanges(before, reference.task, changes, at, facts);
+  const planned = planTaskChanges(before, reference.task, changes, at, facts, legacyRounds);
   // A saved update keeps its writer's columns; a new update uses the current columns.
   for (const table of ["tasks", "runs", "decisions"]) planned[table] = planned[table].map(row =>
     Object.fromEntries(columns[table].map(key => [key, row[key] ?? ""])));
@@ -588,8 +588,14 @@ function validateTaskUpdateData(intent) {
     return [table, cols];
   }));
   if (Object.hasOwn(reference.changes, "approval") && !columns.tasks.includes("approvals")) updateDeny();
+  // Schema 6 predates approval grants. Its after-header distinguishes the old
+  // writer from the first approval-aware writer, which also used schema 6.
+  // Only saved records select old rules; admission always plans current rules.
+  const legacyRounds = intent.schema === 6 && !columns.tasks.includes("approvals");
+  if (intent.schema === 8 && !columns.tasks.includes("approvals")) updateDeny();
+  if (legacyRounds && Object.hasOwn(proposal.facts, "maxRounds")) updateDeny();
   const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, updateRows(table, intent.tables[table].before, columns[table])]));
-  const planned = planNativeTaskUpdate(before, reference, proposal.at, proposal.facts, columns);
+  const planned = planNativeTaskUpdate(before, reference, proposal.at, proposal.facts, columns, legacyRounds);
   if (JSON.stringify(proposal.task) !== JSON.stringify(planned.task) || proposal.version !== taskVersion(planned.task)
     || proposal.disruptive !== planned.disruptive) updateDeny();
   for (const table of ["tasks", "runs", "decisions"]) if (intent.tables[table].after !== tableText(table, planned[table], columns[table])) updateDeny();
@@ -597,7 +603,7 @@ function validateTaskUpdateData(intent) {
 function validateTaskUpdate(intent) {
   try { validateTaskUpdateData(intent); } catch { throw new TaskUpdateError("invalid-state"); }
 }
-const taskUpdates = coordinatedWrites({ schema: 6, tables: ["tasks", "runs", "decisions"], folder: "task-updates", validate: validateTaskUpdate });
+const taskUpdates = coordinatedWrites({ schema: 8, previousSchemas: [6], tables: ["tasks", "runs", "decisions"], folder: "task-updates", validate: validateTaskUpdate });
 
 /** Native task updates require a trusted durable admission decision, never a model-supplied proof. */
 function updateRequestedTask(input, env, coordination) {
@@ -1532,7 +1538,7 @@ function taskOf(dir, id) {
 }
 
 /** Calculate ordered task changes over one coherent snapshot. No files or clock are read. */
-function planTaskChanges(before, id, changes, at, facts) {
+function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
   const { tasks, runs, decisions } = structuredClone(before);
   const matches = tasks.filter(row => row.id === id);
   if (matches.length !== 1) refuse("The task is missing or ambiguous.");
@@ -1542,7 +1548,7 @@ function planTaskChanges(before, id, changes, at, facts) {
   const states = changes.filter(kv => kv.startsWith("state="));
   const resume = task.state === "held" && task.hold === "round" && states.some(kv => kv !== "state=abandoned");
   let allowance;
-  if (resume || approvals.length) {
+  if (!legacyRounds && (resume || approvals.length)) {
     if (approvals.length !== 1 || states.length !== 1 || !["state=building", "state=briefed"].includes(states[0])
       || task.state !== "held" || task.hold !== "round") refuse(`${task.id} needs one approval=<G> with a move from a round hold to building or briefed. Nothing changed.`);
     allowance = repairApproval(task, approvals[0].slice(9), facts);
@@ -1560,12 +1566,17 @@ function planTaskChanges(before, id, changes, at, facts) {
       if (["building", "merged", "concluded"].includes(v)) waitsMet(task, graph, `move to ${v}`);
       // A move to abandoned gives no round: the task ends (F-T286-3).
       if (was === "held" && task.hold === "round" && v !== "abandoned") {
+        if (legacyRounds) {
+          task.extra = String(extraOf(task) + 1);
+          decided.push({ at, task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
+        } else {
         task.extra = String(allowance);
         const approval = approvals[0].slice(9);
         task.approvals = [task.approvals, approval].filter(Boolean).join(",");
         const decision = `held → ${v}: one more repair round (${approval})`;
         // A CLI retry after the decision write but before the task write completes the same grant.
         if (!decisions.some(row => row.task === task.id && row.decision === decision)) decided.push({ at, task: task.id, decision, why: "owner approval" });
+        }
       }
       if (was === "held" || v === "held") task.hold = "";
       // A new premise starts its own count: the round keys of the old plan go when the task leaves replan (F-T284-19).

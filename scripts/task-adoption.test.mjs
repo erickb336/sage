@@ -13,8 +13,9 @@ const tool = createStateTool({ defaultRoot: env => env.SAGE_HOME });
 
 // These bytes came from the unmodified base implementation. The generator and its
 // exact source commit live beside the fixture; CI needs neither Git history nor a local checkout.
-const upgrade = JSON.parse(readFileSync(new URL('./fixtures/native-upgrade/base.json', import.meta.url), 'utf8'));
-for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrade: prior-version ${stage} recovers and permits current writes`, t => {
+for (const scenario of ['base', 'building', 'briefed']) {
+const upgrade = JSON.parse(readFileSync(new URL(`./fixtures/native-upgrade/${scenario}.json`, import.meta.url), 'utf8'));
+for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrade: ${scenario} prior-version ${stage} recovers and permits current writes`, t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-native-upgrade-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const project = join(root, 'project'); mkdirSync(project);
@@ -22,6 +23,18 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
   assert.equal(tool.command(['init', '--project', project], env).code, 0);
   const dir = tool.storeDir(project, env), intent = JSON.parse(upgrade.pending), receipt = JSON.parse(upgrade.receipt);
   for (const [file, bytes] of Object.entries(upgrade.tables)) writeFileSync(join(dir, file), bytes);
+  if (scenario !== 'base') {
+    const untouched = snapshot(dir), current = tool.readTaskSnapshot({ project, task: 'T1' }, env);
+    const forbidden = () => { throw Error('New request reached coordination'); };
+    const callbacks = { decide: forbidden, acknowledge: forbidden, release: forbidden, history: forbidden };
+    for (const state of ['building', 'briefed']) {
+      assert.throws(() => tool.updateRequestedTask({ project, ...upgrade.request,
+        version: current.version, changes: { state } }, env, callbacks), { code: 'invalid-change' });
+      assert.throws(() => tool.updateRequestedTask({ project, ...upgrade.request,
+        schema: 6, version: current.version, changes: { state } }, env, callbacks), { code: 'invalid-request' });
+    }
+    assert.deepEqual(snapshot(dir), untouched);
+  }
   if (stage === 'receipt') {
     for (const [table, pair] of Object.entries(intent.value.tables)) writeFileSync(join(dir, `${table}.tsv`), pair.after);
     mkdirSync(join(dir, 'task-updates')); writeFileSync(join(dir, 'task-updates', upgrade.name), upgrade.receipt);
@@ -40,11 +53,14 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
   const update = () => tool.updateRequestedTask({ project, ...upgrade.request }, env, coordination);
   const savedFile = stage === 'receipt' ? join(dir, 'task-updates', upgrade.name) : join(dir, 'review-pending.json');
   const savedBytes = readFileSync(savedFile, 'utf8');
-  for (const corruption of ['delta', 'schema', 'version']) {
+  for (const corruption of ['delta', 'schema', 'version', 'operation', 'record-schema', 'current-schema']) {
     const envelope = JSON.parse(savedBytes), savedIntent = envelope.value.intent ?? envelope.value;
-    if (corruption === 'delta') savedIntent.tables.tasks.after = savedIntent.tables.tasks.after.replace('Recovered sample', 'Unrequested title');
+    if (corruption === 'delta') savedIntent.tables.tasks.after = savedIntent.tables.tasks.after.replace(/Recovered sample|Upgrade sample/, 'Unrequested title');
     if (corruption === 'schema') savedIntent.tables.tasks.after = savedIntent.tables.tasks.after.replace('adoption', 'unknown');
     if (corruption === 'version') savedIntent.reference.version = '0'.repeat(64);
+    if (corruption === 'operation') savedIntent.reference.changes = { title: 'Different operation' };
+    if (corruption === 'record-schema') savedIntent.schema = 99;
+    if (corruption === 'current-schema') savedIntent.schema = 8;
     envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
     writeFileSync(savedFile, JSON.stringify(envelope) + '\n');
     const damaged = snapshot(dir);
@@ -53,15 +69,29 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
     writeFileSync(savedFile, savedBytes);
   }
   assert.equal(update().decision, stage === 'receipt' ? 'task-update-history' : 'task-updated');
+  for (const [table, pair] of Object.entries(intent.value.tables)) assert.equal(readFileSync(join(dir, `${table}.tsv`), 'utf8'), pair.after);
   assert.equal(decisions, stage === 'receipt' ? 0 : 1);
   assert.equal(readFileSync(join(dir, 'task-updates', upgrade.name), 'utf8'), upgrade.receipt);
   assert.equal(readdirSync(dir).includes('review-pending.json'), false);
   const recovered = snapshot(dir);
+  for (const field of ['digest', 'receiptHash']) {
+    assert.throws(() => tool.updateRequestedTask({ project, ...upgrade.request }, env, {
+      ...coordination, history(digest) { return { digest, accepted: true, reason: '', receiptHash: receipt.hash, [field]: '0'.repeat(64) }; },
+    }), { code: 'invalid-state' });
+    assert.deepEqual(snapshot(dir), recovered);
+  }
   assert.equal(update().decision, 'task-update-history');
   assert.deepEqual(snapshot(dir), recovered);
   assert.equal(decisions, stage === 'receipt' ? 0 : 1);
   const current = tool.readTaskSnapshot({ project, task: 'T1' }, env);
-  assert.equal(current.task.title, 'Recovered sample');
+  assert.equal(current.task.title, scenario === 'base' ? 'Recovered sample' : 'Upgrade sample');
+  if (scenario !== 'base') {
+    assert.equal(current.task.state, scenario);
+    assert.equal(current.task.extra, '3');
+    assert.equal(current.task.round, '5');
+    assert.equal(current.task.pr, '123');
+    assert.equal(current.task.branch, 'sample-branch');
+  }
   assert.equal(current.task.approvals, '');
   const result = tool.updateRequestedTask({ project, ...upgrade.request,
     request: 'b1111111-1111-4111-8111-111111111111', version: current.version, changes: { title: 'Current write' } }, env, {
@@ -76,6 +106,46 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
   assert.equal(update().decision, 'task-update-history');
   assert.deepEqual(snapshot(dir), later);
   assert.match(readFileSync(join(dir, 'tasks.tsv'), 'utf8').split('\n')[0], /\tapprovals$/);
+});
+}
+
+for (const state of ['building', 'briefed']) test(`T48 upgrade: new ${state} grant on legacy tables consumes one approval`, t => {
+  const upgrade = JSON.parse(readFileSync(new URL('./fixtures/native-upgrade/building.json', import.meta.url), 'utf8'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-native-approval-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const project = join(root, 'project'); mkdirSync(project);
+  const env = { ...process.env, SAGE_HOME: join(root, 'sage') };
+  const command = (...args) => tool.command([...args, '--project', project], env);
+  assert.equal(command('init').code, 0);
+  const dir = tool.storeDir(project, env);
+  for (const [file, bytes] of Object.entries(upgrade.tables)) writeFileSync(join(dir, file), bytes);
+  assert.equal(command('gate', 'add', 'T1', '--question', 'Approve one more repair round for T1 after 5 spent rounds and limit 5?',
+    '--options', 'approve|decline', '--recommend', 'approve').code, 0);
+  const coordination = {
+    decide(digest) { return { digest, accepted: true, reason: '' }; },
+    acknowledge(digest, receiptHash) { return { digest, receiptHash }; },
+    release(digest, receiptHash) { return { digest, receiptHash }; },
+    history() { throw Error('No earlier receipt'); },
+  };
+  const request = () => ({ project, ...upgrade.request, version: tool.readTaskSnapshot({ project, task: 'T1' }, env).version,
+    changes: { state, approval: 'G1' } });
+  const before = snapshot(dir);
+  assert.throws(() => tool.updateRequestedTask(request(), env, coordination), { code: 'invalid-change' });
+  assert.deepEqual(snapshot(dir), before);
+  assert.equal(command('gate', 'answer', 'G1', '--option', '1').code, 0);
+  const result = tool.updateRequestedTask(request(), env, coordination);
+  assert.equal(result.decision, 'task-updated');
+  assert.equal(result.task.state, state);
+  assert.equal(result.task.extra, '3');
+  assert.equal(result.task.round, '5');
+  assert.equal(result.task.approvals, 'G1');
+  assert.equal(result.task.pr, '123');
+  assert.match(command('config').text, /max_rounds=3/);
+  const saved = JSON.parse(readFileSync(join(dir, 'task-updates', upgrade.name), 'utf8'));
+  assert.equal(saved.value.intent.schema, 8);
+  const after = snapshot(dir);
+  assert.throws(() => tool.updateRequestedTask({ ...request(), request: 'c1111111-1111-4111-8111-111111111111' }, env, coordination), { code: 'invalid-change' });
+  assert.deepEqual(snapshot(dir), after);
 });
 
 const snapshot = dir => Object.fromEntries(readdirSync(dir, { withFileTypes: true }).map(entry => [entry.name,

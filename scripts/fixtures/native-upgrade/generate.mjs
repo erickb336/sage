@@ -18,14 +18,23 @@ try {
   }
   const { createStateTool } = await import(pathToFileURL(join(scratch, 'packages/sage-core/state.mjs')));
   const tool = createStateTool({ defaultRoot: env => env.SAGE_HOME });
-  const project = join(scratch, 'sample-project'); mkdirSync(project);
+  for (const scenario of ['title', 'building', 'briefed']) {
+  const project = join(scratch, `sample-${scenario}`); mkdirSync(project);
   const env = { ...process.env, SAGE_HOME: join(scratch, 'sage') };
   for (const args of [['init'], ['task', 'add', '--title', 'Upgrade sample', '--size', 'small', '--priority', 'P1']]) {
     const result = tool.command([...args, '--project', project], env); assert.equal(result.code, 0, result.text);
   }
   const dir = tool.storeDir(project, env);
+  if (scenario !== 'title') {
+    // Seed a spent task with a prior allowance. The unmodified base writes the operation itself.
+    const path = join(dir, 'tasks.tsv'), lines = readFileSync(path, 'utf8').trimEnd().split('\n');
+    const cols = lines[0].split('\t'), cells = lines[1].split('\t');
+    for (const [key, value] of Object.entries({ state: 'held', hold: 'round', extra: '2', round: '5', pr: '123', branch: 'sample-branch' })) cells[cols.indexOf(key)] = value;
+    writeFileSync(path, `${lines[0]}\n${cells.join('\t')}\n`);
+  }
   const request = { owner: 'sample-owner', request: 'a1111111-1111-4111-8111-111111111111', task: 'T1',
-    version: tool.readTaskSnapshot({ project, task: 'T1' }, env).version, changes: { title: 'Recovered sample' } };
+    version: tool.readTaskSnapshot({ project, task: 'T1' }, env).version,
+    changes: scenario === 'title' ? { title: 'Recovered sample' } : { state: scenario } };
   const tables = Object.fromEntries(readdirSync(dir).filter(name => name.endsWith('.tsv')).map(name => [name, readFileSync(join(dir, name), 'utf8')]));
   const coordination = {
     decide(digest) { return { digest, accepted: true, reason: '' }; },
@@ -40,6 +49,7 @@ try {
   tool.updateRequestedTask({ project, ...request }, env, coordination);
   const name = readdirSync(join(dir, 'task-updates'))[0];
   const receipt = readFileSync(join(dir, 'task-updates', name), 'utf8');
-  writeFileSync(join(here, 'base.json'), JSON.stringify({ base, request, tables, pending, receipt, name }, null, 2) + '\n');
-  console.log(`Generated original pending intent and completed receipt with ${base}`);
+  writeFileSync(join(here, scenario === 'title' ? 'base.json' : `${scenario}.json`), JSON.stringify({ base, request, tables, pending, receipt, name }, null, 2) + '\n');
+  console.log(`Generated ${scenario} pending intent and completed receipt with ${base}`);
+  }
 } finally { rmSync(scratch, { recursive: true, force: true }); }
