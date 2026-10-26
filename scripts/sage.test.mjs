@@ -2349,7 +2349,7 @@ test("T314: task add takes --priority and --kind, and task set takes priority= a
   assert.equal(s.ok("task", "T2", "set", "priority=P0", "kind=docs"), "T2 framed · tiny · round 0 · route build · P0 · kind docs");
   assert.equal(s.ok("task", "T1", "set", "kind=none"), "T1 framed · small · round 0 · route build,code-review,qa · P1");
   assert.deepEqual(rows(s.dir, "tasks").map((t) => [t.id, t.priority, t.kind]), [["T1", "P1", ""], ["T2", "P0", "docs"]]);
-  assert.match(s.no("task", "T2", "set", "colour=red"), /^sage: task set takes state=, branch=, pr=, title=, priority=, kind=, waits= or program=$/);
+  assert.match(s.no("task", "T2", "set", "colour=red"), /^sage: task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, program= or approval=$/);
 });
 
 // The scale line of T500, as the state tool and the Codex state MCP say it.
