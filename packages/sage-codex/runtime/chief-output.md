@@ -5,7 +5,10 @@ verified owner activation turn. The owner, project, native version, and turn
 still pass the existing mode checks. A child cannot activate the chief.
 
 Two requested parts preserve the complete instruction text within the hook
-output budget. A repeated activation event replays the same context. Ordinary
+output budget. Codex gives an `mcp_tool` hook no `additionalContextLimit`, so
+its default of 2500 tokens applies, counted at 4 bytes each: each part, with its
+header, is at most 10000 bytes. `npm run check` fails when the text does not
+fit. A repeated activation event replays the same context. Ordinary
 prompts return no new instructions. Off mode returns no instructions; a later
 activation starts a new delivery sequence.
 
