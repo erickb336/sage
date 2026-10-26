@@ -14,7 +14,7 @@ function fixture(t) {
   const root = join(dir, "logbooks"), config = join(dir, "settings/board.json");
   const tool = createStateTool({ defaultRoot: () => root });
   tool.sage(["init", "--project", dir], { ...process.env, SAGE_HOME: root });
-  tool.sage(["task", "add", "--title", "Sample CLI task", "--size", "small", "--project", dir], { ...process.env, SAGE_HOME: root });
+  tool.sage(["task", "add", "--priority", "P2", "--title", "Sample CLI task", "--size", "small", "--project", dir], { ...process.env, SAGE_HOME: root });
   const value = createBoardConfig(config, { sources: [{ id: "sample", path: root }], pagesDir: join(dir, "pages") });
   return { dir, root, config, value };
 }

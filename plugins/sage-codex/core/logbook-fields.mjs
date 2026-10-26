@@ -4,6 +4,8 @@
 
 /** The priorities of a task, most urgent first. An empty cell is no priority, and sorts last. */
 export const PRIORITIES = ["P0", "P1", "P2", "P3"];
+/** The priority scale in one line (T500): every task has a priority, so each refusal of a missing or bad one says it. */
+export const PRIORITY_SCALE = "A task needs a priority: P0 the owner's current focus and what blocks it; P1 next: function or safety bugs, work in flight, pre-pilot items; P2 later: polish, hardening lows, follow-ups; P3 parked but kept.";
 /** The kinds of a task: exactly one per task, from this fixed list (the T305 design). A new kind is a change of this list. */
 export const TASK_KINDS = ["design", "ui", "orchestration", "optimization", "bug-fix", "logbook", "docs", "security", "providers", "checks"];
 /** The problem classes of a finding, which its reviewer tags (finding add --class, T346): a starter list for every project. */

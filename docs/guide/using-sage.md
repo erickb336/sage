@@ -24,7 +24,7 @@ The board and status phrases work at the start of your message. [Ask for the boa
 | `show board for all` or `sage board for all projects` | The board of every project. |
 | `show board for <project>` or `sage board for <project>` | The board of one project. |
 | `show board <task id>`, `sage board <task id>` or `board <task id>` | One task in full, for example `show board T1`. |
-| `show status` or `sage status` | The task states, the agents and what needs you. |
+| `show status` or `sage status` | The task states, the agents and what needs you, and the open tasks with no priority. |
 
 These words work inside a request. They switch nothing:
 
