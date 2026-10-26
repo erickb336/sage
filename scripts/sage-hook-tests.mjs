@@ -367,6 +367,8 @@ test("T308: the hook marks an agent's slot with the run of its brief's first lin
   assert.deepEqual(runs("tuA"), ["run-R1116"], "a valid first line gives the run mark");
   assert.equal(s.send(spawnAgent("sage:qa", `Run R12 · task T3\n${BRIEF}`, "tuB")), undefined);
   assert.deepEqual(runs("tuB"), ["run-R12"], "the first line may end after the task");
+  assert.equal(s.send(spawnAgent("sage:qa", `Run R1898 · task T529 (PR 359, P0): review the head\n${BRIEF}`, "tuE")), undefined);
+  assert.deepEqual(runs("tuE"), ["run-R1898"], "text after a space follows the task (R1898-2)");
   const bad = ["Run R12x · task T3", "Run r12 · task T3", "Run R0 · task T3", "Run R12/../x · task T3", "Run R12 · task T3x", "run R12 · task T3", " Run R12 · task T3", "Task T3\nRun R12 · task T3"];
   bad.forEach((line, i) => {
     assert.equal(s.send(spawnAgent("sage:qa", `${line}\n${BRIEF}`, `tuC${i}`)), undefined, line);
@@ -3503,6 +3505,56 @@ test("T529: outside its own scratch subfolder, the reviewer's same writes stay r
   assert.match(denied(s.send(bash(fake(join(own, "y.sh")), FEATURE, { ...reviewer, session_id: "s2" }))) ?? "", LOGBOOK_SHELL, "another session");
   // The process rule still holds for a program that runs.
   assert.match(denied(s.send(bash(`kill -9 1 && echo done > ${own}/x`, FEATURE, reviewer))) ?? "", /standing order 14/);
+});
+
+test("T529 round 1: node's arguments, home variables, reads of the logbook and scripts that name the state tool, a merge or a push leave the scratch rule (R1898-1, R1896-1, R1897-1, R1898 F4)", () => {
+  const { s, own, reviewer } = scratchSession();
+  const root = s.vars.SAGE_HOME, table = join(root, "p", "tasks.tsv");
+  const shell = (command) => denied(s.send(bash(command, FEATURE, reviewer))) ?? "";
+  const refused = [
+    // R1898-1: the code writes to an argument, or a second -e runs more code
+    `node -e 'require("node:fs").writeFileSync(process.argv[1], "x")' ${table}`,
+    `node -e 'console.log(1)' -e 'require("node:fs").writeFileSync("${FEATURE}/x", "{}")'`,
+    `node ${own}/p.mjs ${table} > ${own}/x`,
+    // R1896-1 (C3): a home or config variable at the sage root
+    `SAGE_HOME=${root} node ${own}/p.mjs > ${own}/x`,
+    `CLAUDE_CONFIG_DIR=${root} node ${own}/p.mjs > ${own}/x`,
+    `CODEX_HOME=${root} HOME=${root} node ${own}/p.mjs > ${own}/x; echo "$*"`,
+    // R1898 F4: a read of the logbook into the folder
+    `cat ${table} > ${own}/copy`,
+    `head -5 ${join(root, "p", "ledger.tsv")} > ${own}/copy`,
+    `tail -n 2 $SAGE_HOME/p/tasks.tsv | grep T1 > ${own}/copy`,
+    // R1896-2: a reader's redirect to a file, and a pipe into a shell
+    `grep x ${own}/a > ${FEATURE}/out.txt; echo "$*" > ${own}/b`,
+    `echo 'rm -rf x' | sh; echo "$*" > ${own}/b`,
+  ];
+  for (const command of refused) assert.match(shell(command), LOGBOOK_SHELL, command);
+  assert.equal(shell(`node -e 'console.log(process.argv[1])' plain-word ${own}/a > ${own}/x`), "", "a plain word and a scratch path pass");
+  // R1897-1 (a): a script in the folder, or a text that the same command writes, that names the state tool, a merge or a push
+  mkdirSync(own, { recursive: true });
+  writeFileSync(join(own, "tool.mjs"), `spawnSync("node", ["skills/sage/sage-pr.mjs", "merge"]);\n`);
+  writeFileSync(join(own, "push.mjs"), `spawnSync("git", ["push", "origin", "main"]);\n`);
+  writeFileSync(join(own, "fine.mjs"), `console.log([1].push(2));\n`);
+  const SCRIPT = /never runs a script that names/;
+  assert.match(shell(`node ${own}/tool.mjs`), SCRIPT, "a scratch script that names the PR script");
+  assert.match(shell(`node ${own}/push.mjs > ${own}/out.txt`), SCRIPT, "a scratch script that pushes");
+  assert.match(shell(`cat > ${own}/w.mjs <<'EOF'\nspawnSync("node", ["skills/sage/sage.mjs", "verdict", "T1"]);\nEOF\nnode ${own}/w.mjs`), SCRIPT, "written and run in one command");
+  assert.match(shell(`printf '%s' 'gh pr merge 1' > ${own}/m.txt && node ${own}/fine.mjs`), SCRIPT, "a written merge with node");
+  assert.equal(shell(`node ${own}/fine.mjs > ${own}/out.txt`), "", "a script that names none of them passes");
+});
+
+test("T529 round 1: a run id that two slots hold names no folder, and each refusal names the run's folder or the first line it needs (R1897-1 b, R1898-2)", () => {
+  const { s, own, agent, reviewer } = scratchSession();
+  const fake = `cat > ${own}/x.sh <<'EOF'\necho "$*"\nEOF`;
+  const named = denied(s.send(bash(`echo "$*" > ${own}/x.sh; rm -rf ${FEATURE}/*`, FEATURE, reviewer))) ?? "";
+  assert.match(named, LOGBOOK_SHELL);
+  assert.ok(named.includes(`Your run's own scratch folder is ${own}.`), named);
+  assert.match(named, /\("rm" is not one of its programs\)/);
+  const plain = agent("rev2", "sage:qa");
+  assert.match(denied(s.send(bash(fake, FEATURE, plain))) ?? "", /the first line of the brief that started it must be "Run R<n> · task T<n>"/);
+  assert.equal(denied(s.send(bash(fake, FEATURE, reviewer))), undefined, "one slot with the run");
+  agent("rev3", "sage:code-reviewer", "Run R1873 · task T999"); // another project's run with the same id
+  assert.match(denied(s.send(bash(fake, FEATURE, reviewer))) ?? "", /Two agents of this session hold the run R1873/);
 });
 
 // T83 round 6. The hook only reads these commands; no test passes them to a shell.
