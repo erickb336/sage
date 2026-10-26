@@ -70,7 +70,7 @@ function store(home = mkdtempSync(join(tmpdir(), "sage-home-")), name = "sage-pr
         done({ status: err ? err.code : 0, stdout, stderr });
       }),
     );
-  // A review or QA verdict of a story gets its backing run first (T483); a test of the backing rule passes --run itself.
+  // A review or QA verdict of a story that ok() records gets its backing run first (T483); a test of the backing rule passes --run itself.
   const cli = (...args) => { const r = run(...args); if (r.status) throw Error(r.stderr); return r.stdout.trim(); };
   const back = (args) => backed(args, { cli, keep: (fields) => keepReport(project, fields, env()) });
   const ok = (...args) => {
@@ -78,8 +78,9 @@ function store(home = mkdtempSync(join(tmpdir(), "sage-home-")), name = "sage-pr
     assert.equal(r.status, 0, `sage ${args.join(" ")} failed: ${r.stderr}`);
     return r.stdout.trim();
   };
+  // A refusal adds no backing run, so a refused verdict's test still proves that runs.tsv did not change (R1907-1).
   const no = (...args) => {
-    const r = run(...back(args));
+    const r = run(...args);
     assert.equal(r.status, 1, `sage ${args.join(" ")} should be refused, printed: ${r.stdout}`);
     return r.stderr.trim();
   };
@@ -2543,6 +2544,9 @@ test("T346: sage stats gives each task's review runs, tokens, tokens after round
   s.ok("task", "add", "--priority", "P2", "--title", "c", "--size", "small");
   s.ok("run", "add", "T1", "--role", "code-reviewer"); // R1
   s.ok("run", "add", "T1", "--role", "qa"); // R2
+  // Their helpers keep their reports while the runs run (T483).
+  s.keep({ task: "T1", run: "R1", role: "code-reviewer", sha: SHA, text: reportFor("findings") });
+  s.keep({ task: "T1", run: "R2", role: "qa", sha: SHA, text: reportFor("qa-pass") });
   s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"); // R3: no review run
   s.ok("run", "add", "T2", "--role", "security-reviewer"); // R4
   s.ok("run", "add", "T2", "--role", "code-reviewer"); // R5
@@ -2562,8 +2566,6 @@ test("T346: sage stats gives each task's review runs, tokens, tokens after round
   s.ok("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "c", "--run", "R6", "--class", "copy"); // R6 gave no verdict: no cycle
   // Sources that an object's own keys hold, and a | that a Markdown table reads as a new cell.
   for (const source of ["constructor", "__proto__", "a|b"]) s.ok("finding", "add", "T2", "--source", source, "--severity", "low", "--summary", source, "--run", "R4");
-  s.keep({ task: "T1", run: "R1", role: "code-reviewer", sha: SHA, text: reportFor("findings") });
-  s.keep({ task: "T1", run: "R2", role: "qa", sha: SHA, text: reportFor("qa-pass") });
   s.ok("verdict", "T1", "--kind", "findings", "--sha", SHA, "--cycle", "1", "--run", "R1");
   s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--cycle", "2", "--run", "R2");
   // A T1 row that names T2's run: not R4's cycle for T2. The verdict command refuses it (T483), so an old or hand-edited row.

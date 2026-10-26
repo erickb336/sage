@@ -65,7 +65,7 @@ ACCEPTANCE  checkable lines: what the user will see when it works
 VERIFY      the exact commands, and how to run the app
 BUDGET      time and turns; on expiry, stop and report
 FORBIDDEN   no merge, no force-push, no push to main, no changes out of scope
-REPORT      the shared report fields supplied to each child, and what RESULT means for this step
+REPORT      the shared report fields supplied to each child, what RESULT means for this step, and BRANCH with the full 40-character head SHA
 STANDING    the output of `sage standing`, word for word
 ```
 

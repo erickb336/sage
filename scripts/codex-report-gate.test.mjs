@@ -12,6 +12,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GATE = join(ROOT, "plugins/sage-codex/hooks/report-gate.mjs");
 const ROLE = join(ROOT, "plugins/sage-codex/skills/sage/role.mjs");
 const TOOL = join(ROOT, "plugins/sage-codex/skills/sage/sage.mjs");
+const BRIEF_HOOK = join(ROOT, "plugins/sage-codex/hooks/brief-hook.mjs");
 const FULL = "STATUS done\nRESULT PASS\nEVIDENCE echo ok printed ok\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none";
 const UNREAD = { systemMessage: "sage: the report check could not read this agent's stop, so it did not check its report." };
 const BLOCK = { decision: "block", reason: 'sage: your report has no EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH. End with the sage report: STATUS, RESULT, EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.' };
@@ -56,27 +57,60 @@ test("a task name with a run, or a sage_ name in another letter case, gets the r
   }
 });
 
-test("T483: the stop of a review or QA child keeps its report, and only a kept report backs the run's verdict in the Codex state tool", () => {
+test("T483: the chief's review child keeps its report with the head that the gate saw, and only that report backs the run's verdict in the Codex state tool", () => {
+  // A project with T1 on its branch: the gate reads the branch's head at the stop, as the Claude hook does (R1908-1).
   const project = realpathSync(mkdtempSync(join(dir, "project-")));
+  const git = (...args) => spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).stdout.trim();
+  git("init", "-q", "-b", "codex/t1-a");
+  git("commit", "-q", "--allow-empty", "-m", "work");
+  const head = git("rev-parse", "HEAD");
   const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", project], { encoding: "utf8", env: ENV });
   const ok = (...args) => { const r = sage(...args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
   ok("init");
   ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
-  const sha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
-  const clean = `STATUS done\nRESULT CLEAN\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH sage/t1-a ${sha}`;
-  const reviewed = (name, message, more = {}) => {
-    const run = ok("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
-    assert.deepEqual(gate(stop({ agent_transcript_path: transcript(`/root/${name.replace("<R>", run.toLowerCase())}`), cwd: project, last_assistant_message: message, ...more })), message === clean ? {} : BLOCK);
-    ok("run", "done", run, "--status", "done", "--tokens", "1");
-    return run;
+  ok("task", "T1", "set", "branch=codex/t1-a");
+  const clean = "STATUS done\nRESULT CLEAN\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH codex/t1-a";
+  let threads = 0;
+  // A child's start (the brief hook binds the run to the chief's direct child) and its stop (the gate keeps its report).
+  const child = (path, thread = `01a1726e-0000-7000-8000-${String(++threads).padStart(12, "0")}`) => {
+    const file = join(dir, `child-${threads}-${path.replaceAll("/", "_")}.jsonl`);
+    writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: thread, agent_path: path } }) + "\n");
+    return file;
   };
-  const verdict = (run) => sage("verdict", "T1", "--kind", "review-clean", "--sha", sha, "--run", run);
-  const kept = reviewed("sage_code_reviewer_t1_<R>", clean);
-  assert.equal(verdict(kept).status, 0, "the kept CLEAN report backs review-clean");
-  for (const [why, name, message, more] of [["no run in the task name", "sage_code_reviewer_t1", clean], ["another role in the task name", "sage_implementer_t1_<R>", clean],
-    ["another task in the task name", "sage_code_reviewer_t2_<R>", clean], ["a first stop without the full report", "sage_code_reviewer_t1_<R>", "STATUS done\nRESULT CLEAN"]]) {
-    const run = reviewed(name, message, more);
-    assert.match(verdict(run).stderr, new RegExp(`^sage: ${run} has no kept report`), why);
+  const begin = (file) => assert.equal(spawnSync("node", [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "SubagentStart", session_id: "s", transcript_path: file, cwd: project }), encoding: "utf8", env: ENV }).status, 0);
+  const end = (file, message = clean) => gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: message }));
+  const verdict = (run) => sage("verdict", "T1", "--kind", "review-clean", "--sha", head, "--run", run);
+  const run = () => ok("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
+  // The bound child's report, with no SHA of its own, backs review-clean on the head that the gate saw.
+  const kept = run(), mine = child(`/root/sage_code_reviewer_t1_${kept.toLowerCase()}`);
+  begin(mine);
+  assert.deepEqual(end(mine), {});
+  ok("run", "done", kept, "--status", "done", "--tokens", "1");
+  assert.equal(verdict(kept).status, 0, "the kept CLEAN report backs review-clean on the head");
+  // A child of a child with the run's name binds nothing and keeps nothing; the real child's report stays its own (R1908-3).
+  const nested = run(), sub = child(`/root/sage_qa_t1_r1/sage_code_reviewer_t1_${nested.toLowerCase()}`), real = child(`/root/sage_code_reviewer_t1_${nested.toLowerCase()}`);
+  begin(sub);
+  begin(real);
+  assert.deepEqual(end(sub, clean.replace("CLEAN", "PASS")), {});
+  assert.deepEqual(end(real, "STATUS done\nRESULT FINDINGS\nEVIDENCE x\nFINDINGS\n- K1 high a.js:1 data loss\nQUESTIONS none\nNOT VERIFIED none\nBRANCH codex/t1-a"), {});
+  ok("run", "done", nested, "--status", "done", "--tokens", "1");
+  assert.match(verdict(nested).stderr, /report has 1 medium or high finding/, "the canned PASS of the sub-child was not kept");
+  // Another thread with the same task name: its report is not kept, and the gate says so to the chief.
+  const twice = run(), first = child(`/root/sage_code_reviewer_t1_${twice.toLowerCase()}`), second = child(`/root/sage_code_reviewer_t1_${twice.toLowerCase()}`);
+  begin(first);
+  begin(second);
+  assert.deepEqual(end(second), { systemMessage: `sage: ${twice}'s report is not kept: this agent is not the child that started for ${twice}, so it backs no verdict.` });
+  assert.deepEqual(end(first), {}, "the bound child's report is kept");
+  assert.match(end(first, clean.replace("npm test passed", "a second stop")).systemMessage ?? "", /^sage: R\d+'s report is not kept: (?!this agent)/, "a second report of the bound child is refused, and said");
+  // No start, no run in the task name, another role or task, or a first stop without the full report: nothing is kept.
+  for (const [why, name, message, start = true] of [["no start", "sage_code_reviewer_t1_<R>", clean, false], ["no run in the task name", "sage_code_reviewer_t1", clean],
+    ["another role in the task name", "sage_implementer_t1_<R>", clean], ["another task in the task name", "sage_code_reviewer_t2_<R>", clean],
+    ["a first stop without the full report", "sage_code_reviewer_t1_<R>", "STATUS done\nRESULT CLEAN"]]) {
+    const id = run(), file = child(`/root/${name.replace("<R>", id.toLowerCase())}`);
+    if (start) begin(file);
+    gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: message }));
+    ok("run", "done", id, "--status", "done", "--tokens", "1");
+    assert.match(verdict(id).stderr, new RegExp(`^sage: ${id} has no kept report`), why);
   }
 });
 

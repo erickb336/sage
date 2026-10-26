@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BRIEF_FIELDS, briefSections, missingBriefFields } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
-import { childTask, sageName, TASK_NAME } from "./report-gate.mjs";
+import { bindChild, childTask, sageName, TASK_NAME } from "./report-gate.mjs";
 import { TESTED_CODEX } from "./sage-codex-hook.mjs";
 
 /** The largest brief, as core's brief reader: 32 KiB. */
@@ -50,6 +50,7 @@ function startNote(input, env) {
   let task;
   try { task = childTask(input.transcript_path); } catch { return { systemMessage: UNREAD }; }
   if (!sageName(task)) return {};
+  bindChild(input.transcript_path, input.cwd, env); // a review or QA child of the chief: its run's report is its own (T483)
   const standing = tool.command(["standing", `--project=${input.cwd}`], env);
   const brief = readBrief(input.cwd, task, env);
   const parts = standing.code === 0 ? [`sage: the standing orders of this project, from its logbook. Follow each one.\n\n${standing.text}`] : [];

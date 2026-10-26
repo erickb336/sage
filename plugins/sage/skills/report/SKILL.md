@@ -15,7 +15,7 @@ EVIDENCE      each command you ran and its result; the paths of screenshots or o
 FINDINGS      none, or one line for each problem: - <key> <severity> <summary>, where the severity is high, medium or low and the summary gives the location and the steps that show it
 QUESTIONS     each product question, its options and your recommendation
 NOT VERIFIED  what you did not check, and why
-BRANCH        the branch, its head SHA and the pull request link
+BRANCH        the branch, its full 40-character head SHA (the commit you checked, after the word head) and the pull request link
 ```
 
 Give each field once, at the start of a line that is not in a list or a code block. Under FINDINGS, write `none` alone, or one line for each finding in that form: a dash, the key, the severity, then the summary, for example `- F1 medium src/app.js:12 an empty name saves a blank row`. The key has a digit (F1, K2). Put any detail of a finding, such as the attack or the steps, on indented lines under its line; a detail line does not start with a severity word. If a line names a severity above the finding's, write that problem as its own finding line. A role that finds no problems, such as an implementer, writes `none` and lists what it fixed in EVIDENCE.

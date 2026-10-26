@@ -9,7 +9,7 @@ EVIDENCE      each command you ran and its result; the paths of screenshots or o
 FINDINGS      {{REPORT_FINDINGS}}
 QUESTIONS     each product question, its options and your recommendation
 NOT VERIFIED  what you did not check, and why
-BRANCH        the branch, its head SHA and the pull request link
+BRANCH        the branch, its full 40-character head SHA (the commit you checked, after the word head) and the pull request link
 ```
 
 {{REPORT_FINDING_RULES}}

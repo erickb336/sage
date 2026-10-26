@@ -7290,6 +7290,24 @@ test("T482 R1835-1, T483: when node runs a state tool, only a command word that 
   }
 });
 
+test("T483 C-T483-1: a review that the sage starts itself keeps its report by the brief's run line, and backs the sage's verdict; with no run line, none is kept", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R1", "--status", "blocked"); // no running lead run: the sage runs the review itself
+  const review = (id, line) => {
+    const run = s.sage("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
+    assert.equal(denied(s.send(spawnAgent("sage:code-reviewer", line ? `${line(run)}\n${BRIEF}` : BRIEF, `tu-${id}`, { cwd: s.dir }))), undefined, "the spawn");
+    s.send(resultOf(`tu-${id}`, id, { cwd: s.dir }));
+    s.send(ended(id, "sage:code-reviewer", { cwd: s.dir, last_assistant_message: cleanOf("code-reviewer") }));
+    s.sage("run", "done", run, "--status", "done", "--tokens", "1");
+    return run;
+  };
+  const marked = review("rev-a", (run) => `Run ${run} · task T1`);
+  assert.equal(chiefVerdict(s, "review-clean", marked), undefined, "the hook's early rule passes");
+  assert.match(s.sage("verdict", "T1", "--kind", "review-clean", "--sha", s.head(), "--cycle", "1", "--pr", "5", "--run", marked), /^T1 review-clean · [0-9a-f]{7} · cycle 1/, "the state tool records it");
+  const plain = review("rev-b");
+  assert.match(chiefVerdict(s, "review-clean", plain) ?? "", new RegExp(`^sage: ${plain} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${plain} · task T1"`), "no run line, no kept report");
+});
+
 test("T483: the sage's verdict rule reads --project as the state tool does, and refuses a review or QA verdict on a logbook that it cannot read", () => {
   const s = leadSession();
   s.sage("run", "done", "R1", "--status", "blocked"); // no running lead run: only the state tool's rule

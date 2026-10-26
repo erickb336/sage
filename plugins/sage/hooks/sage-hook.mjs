@@ -279,7 +279,7 @@ export function handle(input, state, slots) {
       // not kept backs no verdict, so a failure here only refuses that verdict later.
       if (helper && typeof input.last_assistant_message === "string") {
         try { stateTool.keepReport(helper.folder, { task: helper.task, run: helper.run, role: helper.role, sha, text: input.last_assistant_message }); } catch {}
-      }
+      } else if (!helper) keepDirect(input, slots);
       return void slots.release(input.agent_id, helper && { ...core.readReport(input.last_assistant_message), sha });
     }
     // An implementer's report backs no verdict, and its RESULT is its own word: a normal stop, with that word and the
@@ -1021,6 +1021,21 @@ const helperOf = (lead, run) => `${leadKey(lead)}.${run}`;
 const ownRun = (ctx, id) => /^R[1-9]\d*$/.test(id) && ctx.slots.helper(helperOf(ctx.lead, id)).owned;
 /** The states in which a lead writes nothing and starts no child: held, replan and the end states (F-T273-12, F-T289-7, F-T289-16). */
 const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
+/**
+ * The stop of a review or QA agent that the main session started itself (C-T483-1): its report goes to the logbook of its
+ * folder for its run, which the hook marked on its slot from the brief's first line, "Run R<n> · task T<n>" (runOf). The
+ * run is a running run of that role in that logbook; the commit is the head of its task's branch at the stop. No run mark,
+ * a run that two slots hold, or any doubt keeps nothing, and the verdict of that run is refused.
+ */
+function keepDirect(input, slots) {
+  try {
+    const role = String(input.agent_type ?? "").replace(/^sage:/, ""), mark = slots.runOf(input.agent_id);
+    if (!OURS.test(input.agent_type ?? "") || !REVIEWERS.includes(role) || !mark || mark.shared || typeof input.last_assistant_message !== "string") return;
+    const folder = realpathSync.native(input.cwd), run = logbookOf(folder).row(mark.run);
+    if (run?.role !== role || run.status !== "running") return;
+    stateTool.keepReport(folder, { task: run.task, run: mark.run, role, sha: headOf(folder, run.task), text: input.last_assistant_message });
+  } catch {}
+}
 /** The commit at the head of a task's branch, in the repository of the lead's folder, or "" (fail closed) (F-T289-5). */
 function headOf(folder, task) {
   try {

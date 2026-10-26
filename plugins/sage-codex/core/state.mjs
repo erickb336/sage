@@ -905,11 +905,15 @@ function keepReport(project, { task, run, role, sha = "", text } = {}, env = pro
   }
   const row = read(dir, "runs").find((r) => r.id === run);
   if (row?.task !== task || row.role !== role) refuse(`${run} is not a ${role} run of ${task}, so no report is kept.`);
+  if (row.status !== "running") refuse(`${run} ended as ${row.status} before this stop, so no report is kept.`);
   const folder = join(dir, "kept"), file = keptFile(dir, run), temporary = join(folder, `.kept-${randomUUID()}`);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   // The whole file appears at once, by a link of a full temporary file, and never over a kept one.
   writeFileSync(temporary, JSON.stringify({ task, run, role, sha, text, at: now() }), { flag: "wx", mode: 0o600 });
-  try { linkSync(temporary, file); } catch (e) { if (e.code !== "EEXIST") throw e; } finally { unlinkSync(temporary); }
+  let kept = true;
+  try { linkSync(temporary, file); } catch (e) { if (e.code !== "EEXIST") throw e; kept = false; } finally { unlinkSync(temporary); }
+  // A report is kept once: the same text again is the same report, and another text is refused, so its hook can say so.
+  if (!kept && keptOf(dir, run)?.text !== text) refuse(`${run} already has a kept report, and a report is kept once: this other report of ${run} is not kept.`);
   return file;
 }
 
@@ -935,7 +939,7 @@ function backingProblem(dir, task, kind, opt) {
   const roles = Object.keys(BACKS).filter((role) => BACKS[role].includes(kind));
   if (!roles.length || !builds(task)) return undefined;
   const who = roles.length === 1 ? roles[0] : `${roles.slice(0, -1).join(", ")} or ${roles.at(-1)}`;
-  const again = `Run the review again under a new run (sage run add ${task.id} --role ${roles.length === 1 ? roles[0] : "<role>"}), whose helper has the run's id as its name, and record its verdict with --run after it ends.`;
+  const again = `Run the review again under a new run (sage run add ${task.id} --role ${roles.length === 1 ? roles[0] : "<role>"}), whose helper's brief starts with "Run <R> · task ${task.id}" (or whose task name carries the run), and record its verdict with --run after it ends.`;
   if (opt.run === undefined) return `${kind} is a review or QA verdict, so it names the run whose kept report backs it: add --run with the ${who} run of ${task.id} whose helper ended with its report.`;
   const run = read(dir, "runs").find((r) => r.id === opt.run);
   if (!run) return `${opt.run} is not a run in this logbook: name the ${who} run of ${task.id} whose report backs this verdict.`;
@@ -944,13 +948,21 @@ function backingProblem(dir, task, kind, opt) {
   if (run.status === "running") return `${run.id} still runs: end it after its helper's report (sage run done ${run.id} --status done --tokens <n>), then record its verdict.`;
   if (run.status !== "done") return `${run.id} ended as ${run.status}, so it backs no verdict. ${again}`;
   const kept = keptOf(dir, run.id);
-  if (!kept) return `${run.id} has no kept report: sage keeps a helper's report at its stop, and only for a helper whose name is its run's id. ${again}`;
+  if (!kept) return `${run.id} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${run.id} · task ${task.id}", or by its task name with the run (sage_<role>_t<n>_r<n>). ${again}`;
   if (kept.damaged || kept.task !== task.id || kept.role !== run.role) return `${run.id}'s kept report is damaged, so it backs no verdict. ${again}`;
   const report = readReport(kept.text);
   if (report.unreadable) return `${run.id}'s kept report cannot be read (${report.problem}), so it backs no verdict: read it yourself. ${again}`;
   // The commit that the hook saw the helper review, and each full SHA that the report's BRANCH names, is the verdict's commit.
   const branch = fieldsOf(kept.text, REPORT_FIELDS).filter((f) => f.name === "BRANCH").flatMap((f) => [f.rest, ...f.lines]).join("\n");
-  const sha = String(opt.sha ?? "").toLowerCase(), other = [kept.sha, ...(branch.match(/(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/gi) ?? [])].map((s) => s.toLowerCase()).find((s) => s && s !== sha);
+  // BRANCH names the head: its one full SHA, or the one after the word head when it names more (a base and a head), or
+  // the one that the hook saw. A report with no full SHA from either backs no verdict: it may be of an older head (R1908-1).
+  const full = /(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/gi, named = [...new Set((branch.match(full) ?? []).map((s) => s.toLowerCase()))];
+  const afterHead = /\bhead\b[^\n]{0,40}?(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])/i.exec(branch)?.[1]?.toLowerCase();
+  const head = named.length < 2 ? named[0] : afterHead ?? named.find((s) => s === kept.sha);
+  if (named.length > 1 && !head) return `${run.id}'s report names ${named.length} commits in BRANCH and none as its head (the word head before it), so it backs no verdict. ${again}`;
+  const sha = String(opt.sha ?? "").toLowerCase(), seen = kept.sha || head;
+  if (!seen) return `${run.id}'s report names no full 40-character head SHA in BRANCH, and the hook saw none, so it backs no verdict: it may be of an older head. ${again} Its brief asks for the full head SHA in BRANCH.`;
+  const other = [kept.sha, head].find((s) => s && s !== sha);
   if (other) return `${run.id}'s report is on ${other.slice(0, 7)}, not on ${sha.slice(0, 7)}: a verdict names the commit that its helper reviewed. Record it on ${other}, or review ${sha.slice(0, 7)} under a new run.`;
   const said = `RESULT ${report.result}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}`;
   const clean = cleanReport(report), [cleanKind, problemKind] = BACKS[run.role];
