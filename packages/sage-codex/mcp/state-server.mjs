@@ -48,10 +48,14 @@ export const TOOLS = {
     pos: ["task"], argv: (i) => ["run", "add", i.task],
   },
   run_done: {
-    describe: "Record the end of a run. A done review, QA or evidence-review run needs tokens.",
+    describe: "Record the end of a run. A done review, QA or evidence-review run needs tokens. A run added with usage-interface collaboration-tools has no token count: "
+      + "end it as done with usage unavailable, usage-source, usage-evidence and report, and no tokens, for example "
+      + '{"run": "R40", "status": "done", "usage": "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "wait_agent gives no token count", "report": "/absolute/path/R40-report.md"}.',
     input: { run: id("R", "the run id"), status: z.enum(["done", "blocked", "question", "failed"]), tokens: count("the run's tokens, a whole number"),
-      report: optional("the absolute path of the saved report"), usage: optional("unavailable, for the collaboration-tools interface only"),
-      "usage-source": optional("where the usage comes from"), "usage-evidence": optional("the evidence of the usage") },
+      report: optional("the absolute path of the saved report; needed with usage unavailable"),
+      usage: optional("unavailable, only for a run added with usage-interface collaboration-tools; it needs status done, usage-source, usage-evidence and report, and no tokens"),
+      "usage-source": optional("where the usage comes from, for example codex collaboration-tools; needed with usage unavailable"),
+      "usage-evidence": optional("the evidence of the usage, for example wait_agent gives no token count; needed with usage unavailable") },
     pos: ["run"], argv: (i) => ["run", "done", i.run],
   },
   finding_add: {

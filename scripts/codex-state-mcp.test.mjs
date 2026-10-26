@@ -175,3 +175,34 @@ test("the chief's setup text sends only read commands to the state CLI, and says
   assert.equal(Object.hasOwn(TOOLS, "program"), false);
   assert.match(setup, /`program` has no tool yet, so programs do not run in Codex/);
 });
+
+// R1765 F2: a chief that ended a Codex run with only status done and usage unavailable was refused, and learned the
+// fields only from the refusal; until then the open runs held the merge. The tool description and the chief's dispatch
+// text each give an example call. Each example, with the run id that run_add printed and a saved report, ends the run.
+test("T506: the run_done description and the chief's dispatch text each give a call that ends a Codex run on the first try", async (t) => {
+  const s = await connect(t);
+  const runDone = (await s.tools()).find((tool) => tool.name === "run_done");
+  for (const field of ["usage", "usage-source", "usage-evidence", "report"]) {
+    assert.match(runDone.inputSchema.properties[field].description, /needed with usage unavailable|it needs status done/, field);
+  }
+  const dispatch = readFileSync(join(ROOT, "plugins/sage-codex/runtime/chief-instructions.md"), "utf8").replace(/\s+/g, " ");
+  const examples = { description: runDone.description.match(/for example (\{.*\})\.$/)?.[1], dispatch: dispatch.match(/`run_done` and no `tokens`, for example `(\{.*?\})`/)?.[1] };
+  const usageInterface = JSON.parse(`{${dispatch.match(/`run_add` `("usage-interface": "[a-z-]+")`/)?.[1]}}`)["usage-interface"];
+  assert.equal(usageInterface, "collaboration-tools");
+  await s.call("init");
+  await s.call("task_add", { title: "one", size: "small" });
+  await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "codex/t1-a" } });
+  // The call of R1765, without source, evidence and report, is refused, and the run stays running.
+  assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R1 running · code-reviewer on T1");
+  assert.equal((await s.call("run_done", { run: "R1", status: "done", usage: "unavailable" })).error,
+    "sage: Unavailable usage needs a running run, its unsupported interface snapshot, a report, source and evidence, without tokens. Nothing changed.");
+  // Each example ends a run: the dispatch text's ends R1, the description's a new run R2. Then no run still runs.
+  for (const [where, example] of Object.entries(examples)) {
+    assert.ok(example, `${where} has an example call`);
+    const run = where === "dispatch" ? "R1" : "R2", report = join(s.dir, `${run}-report.md`);
+    writeFileSync(report, "STATUS done\n");
+    if (run === "R2") assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R2 running · code-reviewer on T1");
+    assert.equal(await s.call("run_done", { ...JSON.parse(example), run, report }), `${run} done`, where);
+  }
+  assert.match(await s.call("status"), /\nagents {2}2 runs · 0 running · about 0k tokens · partial measured total; 0 measured, 2 unavailable, 0 legacy-unrecorded\n/);
+});
