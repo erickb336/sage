@@ -16,7 +16,7 @@ export async function setupCompaction({root,codexHome,workspace,env,binary,deadl
  const tool=createStateTool({defaultRoot:()=>{throw Error('No ambient logbook');}});
  const stateEnv={...env,SAGE_HOME:join(root,'logbook')};
  const command=(...args)=>tool.sage([...args,'--project',workspace],stateEnv);
- command('init');command('task','add','--title','Native compaction fixture','--size','small');
+ command('init');command('task','add', '--priority', 'P2','--title','Native compaction fixture','--size','small');
  command('run','add','T1','--role','lead');
  const logbook=tool.storeDir(workspace,stateEnv);
  const readLogbook=()=>Object.fromEntries(['tasks','runs','ledger','findings','gates','decisions'].map(name=>[name,tool.read(logbook,name)]));

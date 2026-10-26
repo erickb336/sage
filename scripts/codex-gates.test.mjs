@@ -260,7 +260,7 @@ test("the hook process reads the mode file and the ledger: a verified merge pass
   assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", /^sage: the merge check refuses: /, "no verdicts yet");
   assert.equal(w.send(ask(MERGE)), undefined, "a failing check leaves the prompt to Codex");
   assert.equal(w.sage("init").status, 0);
-  assert.equal(w.sage("task", "add", "--title", "t", "--size", "small").status, 0);
+  assert.equal(w.sage("task", "add", "--priority", "P2", "--title", "t", "--size", "small").status, 0);
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) assert.equal(w.sage("verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41").status, 0);
   assert.equal(w.send(pre("Bash", MERGE)), undefined, "the verified merge runs");
   assert.deepEqual(w.send(ask(MERGE)), ALLOW, "and Codex shows no prompt for it");
@@ -293,7 +293,7 @@ test("a forged mode file alone unlocks no merge: autopilot also needs the user's
   const w = world(t);
   w.mode({ sage: true, autopilot: true });
   assert.equal(w.sage("init").status, 0);
-  assert.equal(w.sage("task", "add", "--title", "t", "--size", "small").status, 0);
+  assert.equal(w.sage("task", "add", "--priority", "P2", "--title", "t", "--size", "small").status, 0);
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) assert.equal(w.sage("verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41").status, 0);
   const cases = [["no transcript", null], ["no typed phrase", []], ["sage mode only", ["sage mode"]], ["autopilot before sage mode", ["autopilot on", "sage mode"]],
     ["autopilot off last", ["sage mode", "autopilot on", "autopilot off"]], ["sage mode off last", ["sage mode", "autopilot on", "sage mode off"]], ["a phrase inside a message", ["sage mode", "please autopilot on now"]], ["typed", ["sage mode", "autopilot on"]]];

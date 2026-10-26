@@ -28,7 +28,7 @@ In Codex, these phrases do not work by themselves yet. Use the board commands of
 
 The six columns are Backlog, Design, Building, In review, Ready to merge, and Done. Done includes merged and concluded tasks from the last seven days, when their completion date is recorded. Abandoned tasks remain available by exact lookup.
 
-Each card shows its task, project, the provider whose logbook holds it (Claude or Codex), PR, priority, kind, size, risk, and recorded agent roles and providers. Under the title, the step line shows only the steps of the task's route, each with a mark and a word, then a "Now" or "Needs you" line and a "Next" line.
+Each card shows its task, project, the provider whose logbook holds it (Claude or Codex), PR, priority, kind, size, risk, and recorded agent roles and providers. Every task has a priority (P0 to P3); the card of an older open task with none shows a "no priority" tag, so that you can ask the chief to set one. Under the title, the step line shows only the steps of the task's route, each with a mark and a word, then a "Now" or "Needs you" line and a "Next" line.
 
 - A backlog card has no "Now" and "Next" lines; it shows its "Needs you" line when it needs you.
 - A long project name ends in an ellipsis, and its tooltip gives the full name.
