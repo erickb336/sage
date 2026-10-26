@@ -2920,17 +2920,22 @@ test("R1128-3: a hand-edited waits cell is read with the ids parser: its other t
   assert.match(s.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts/);
 });
 
-test("R1130-1, R1140-2, R1140-3, R1157-2, R1157-3, T381: the rules page and the changelog give the update command and the restart first, and teach a pair on one PR that you merge; the README warns before waits", () => {
+test("R1130-1, R1140-2, R1140-3, R1157-2, R1157-3, T381, T439: the rules page and the changelog give the update command and the restart first, and teach a pair on one PR; the README warns before waits", () => {
   const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
   const warn = "Before you use waits, run `claude plugin update sage@sage` (see To update sage), then restart every session that was already open: an older session still merges a waiting task.";
-  const pair = "To merge two tasks on one pull request, build both under the first task. The waiting task takes the same `pr=` and records its own verdicts with `--pr`, and gets its wait after its build. It moves to merged after the first one. Autopilot does not merge such a pull request, because its head branch is not a branch of each task: you merge it.";
+  const pair = "To merge two tasks on one pull request, build both under the first task. The waiting task takes the same `pr=` and records its own verdicts with `--pr`, and gets its wait after its build. It moves to merged after the first one.";
+  // T439: the rules page teaches the shared branch that autopilot merges; the older changelog entry keeps its own text.
+  const shared = " The chief gives the waiting task the first task's `branch=` too, and autopilot merges the pull request when each task passes on its own verdicts.";
+  const before = " Autopilot does not merge such a pull request, because its head branch is not a branch of each task: you merge it.";
   const rule = read("docs/design/rules-in-code.md").split("\n").filter((l) => l.includes(warn));
   const change = read("CHANGELOG.md").split("\n").filter((l) => l.includes(warn));
   assert.equal(rule.length, 1, "once in the rules page's table");
   assert.equal(change.length, 1, "once in the changelog");
   assert.ok(rule[0].startsWith(`| ${warn} A task can wait`), "the warning starts the table's cell");
   assert.ok(change[0].startsWith(`- **A task can wait for other tasks.** ${warn} `), "the warning starts the changelog's text");
-  for (const row of [...rule, ...change]) assert.ok(row.includes(pair), "each place teaches the pair");
+  assert.ok(rule[0].includes(pair + shared), "the rules page teaches the pair on a shared branch");
+  assert.ok(change[0].includes(pair + before), "the older changelog entry keeps its text");
+  assert.match(read("CHANGELOG.md"), /\n- \*\*Two tasks can share one pull request under autopilot\.\*\* /, "the changelog says what changed");
   const readme = read("README.md");
   assert.ok(!readme.includes("no build of its own"), "no option to record states that did not happen");
   assert.ok(read("docs/guide/using-sage.md").includes("\n## To update sage\n"), "the section that the line names");
@@ -4000,6 +4005,103 @@ test("T94: one branch pattern accepts today's task branches and refuses main, re
   assert.deepEqual(sage(["run", "add", "T1", "--role", "implementer", "--branch=-x"]).status, 1, "run add refuses the same names");
   assert.match(sage(["run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"]).out, /^R1 running · implementer on T1 · claude\/t1/);
   assert.match(sage(["task", "T1", "set", "branch="]).out, /route build,code-review,qa · P2$/, "branch= clears it");
+});
+
+test("T439: two tasks share one branch and PR; the merge check passes only when each passes, on the one head branch, with each task of that branch on the PR", () => {
+  const s = store();
+  for (const title of ["first", "second", "third"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  const clean = (id, kinds = ["checks-pass", "review-clean", "qa-pass"], pr = "41") => { for (const k of kinds) s.ok("verdict", id, "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", pr); };
+  const check = (head, pr = "41") => s.run("merge-check", "--sha", SHA, "--pr", pr, "--head", head);
+  s.ok("task", "T1", "set", "branch=sage/t1-shared", "pr=41");
+  assert.match(s.no("task", "T2", "set", "branch=feature/x"), /"feature\/x" is not a branch of T2: .*, or the branch of another task of this logbook, to share its pull request$/, "a branch of no task");
+  assert.match(s.ok("task", "T2", "set", "branch=sage/t1-shared", "pr=41"), /^T2 framed .* · sage\/t1-shared · PR 41 · P2$/, "T2 joins T1's branch");
+  clean("T1");
+  clean("T2", ["checks-pass", "review-clean"]); // no QA yet: T2 is not clean
+  const half = check("sage/t1-shared");
+  assert.equal(half.status, 1, "T2 lacks its QA");
+  assert.match(half.stderr, /2 tasks have verdicts on a1b2c3d or belong to PR 41, and each must pass; 1 fails\. \S+ T2: 0 of 1 clean cycles on this SHA; never recorded: qa-pass\./);
+  clean("T2", ["qa-pass"]);
+  const both = check("sage/t1-shared");
+  assert.equal(both.status, 0, both.stderr);
+  assert.match(both.stdout.trim(), /^2 tasks have verdicts on a1b2c3d or belong to PR 41, and each must pass: \S+ T1 may merge: 1 clean cycle on this SHA; \S+ T2 may merge: 1 clean cycle on this SHA$/);
+  assert.match(check("sage/t2-other").stderr, /PR 41's head branch "sage\/t2-other" is not a branch of \S+ T1/, "a head that only T2's name owns");
+  s.ok("task", "T2", "set", "branch=sage/t2-other");
+  assert.match(check("sage/t1-shared").stderr, /PR 41's head branch "sage\/t1-shared" is not a branch of \S+ T2, so the merge check refuses/, "two branches for one PR");
+  // A task that joins T1's branch with its own clean verdicts cannot merge T1's work while T1 is not on its PR (F-T273-8).
+  s.ok("task", "T3", "set", "branch=sage/t1-shared", "pr=77");
+  clean("T3", undefined, "77");
+  const lend = check("sage/t1-shared", "77");
+  assert.equal(lend.status, 1);
+  assert.match(lend.stderr, /PR 77's head branch "sage\/t1-shared" also belongs to \S+ T1 \(by its name\), which is not on PR 77, so the merge check refuses/);
+});
+
+test("R1709-1: a task that ran work on the head branch owns it after it moves to another branch, so its absence from the PR refuses the merge", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  const check = () => s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t2");
+  s.ok("task", "T2", "set", "branch=sage/t2", "pr=41");
+  s.ok("task", "T1", "set", "branch=sage/t2"); // the sage shares T2's branch with T1, with no pr=
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t2"); // T1's implementer pushes to sage/t2
+  s.ok("task", "T1", "set", "branch=sage/t1"); // then T1 moves off the shared branch
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T2", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  const lend = check();
+  assert.equal(lend.status, 1, "T2's verdicts do not merge T1's work");
+  assert.match(lend.stderr, /PR 41's head branch "sage\/t2" also belongs to \S+ T1 \(by run R1 on it\), which is not on PR 41, so the merge check refuses/);
+  // On the PR with its own clean verdicts, T1 owns the head by its run, so it is no stray, and the PR merges.
+  s.ok("task", "T1", "set", "pr=41");
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  const both = check();
+  assert.equal(both.status, 0, both.stderr);
+  assert.match(both.stdout.trim(), /^2 tasks have verdicts on a1b2c3d or belong to PR 41, and each must pass: \S+ T2 may merge: 1 clean cycle on this SHA; \S+ T1 may merge: 1 clean cycle on this SHA$/);
+});
+
+test("R1708-2: a run on its task's shared branch is a valid assignment for a provider's spawn", async () => {
+  const { createStateTool } = await import(new URL("../plugins/sage/core/state.mjs", import.meta.url));
+  // The logbook folder must be its own real path, and macOS's default TMPDIR is under a link, /var to /private/var (R1740-2).
+  const s = store(mkdtempSync(join(realpathSync(tmpdir()), "sage-home-")));
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  s.ok("task", "T2", "set", "branch=sage/t2");
+  s.ok("task", "T1", "set", "branch=sage/t2"); // the sage shares T2's branch with T1
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t2"); // R1
+  const tool = createStateTool({ defaultRoot: () => s.home });
+  const capture = (task, run, role) => tool.captureRunAssignment({ project: s.project, task, run, role }, testEnv({ SAGE_HOME: s.home }));
+  assert.deepEqual(capture("T1", "R1", "implementer"), { task: "T1", run: "R1", role: "implementer", round: 0, taskBranch: "sage/t2", runBranch: "sage/t2", candidate: "" });
+  assert.throws(() => capture("T1", "R1", "qa"), /The assignment needs one active run on its current task, role, branch, and round\./, "another role refuses");
+});
+
+test("R1741-1: a refusal for a task of the head branch that is not on the PR says how it owns the branch, and says to move it only when that works", () => {
+  // T2 is on PR 41 with clean verdicts; share(s) makes T1 an owner of the head branch, with no pr=.
+  const refusal = (head, share) => {
+    const s = store();
+    for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+    share(s);
+    for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T2", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+    const r = s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", head);
+    assert.equal(r.status, 1, r.stdout);
+    return r.stderr.trim();
+  };
+  const rule = " which is not on PR 41, so the merge check refuses: each task of a shared branch must be on its pull request and pass on its own verdicts. Set its pr=41 and record its verdicts with --pr 41";
+  const line = (text) => text.replace(/^sage: | \S+ T1 /g, (m) => (m === "sage: " ? "" : " T1 "));
+  // By its branch= alone: a move to another branch works, so the line says it.
+  assert.equal(line(refusal("sage/t2", (s) => { s.ok("task", "T2", "set", "branch=sage/t2", "pr=41"); s.ok("task", "T1", "set", "branch=sage/t2"); })),
+    `PR 41's head branch "sage/t2" also belongs to T1 (by its branch=),${rule}, or move it to another branch.`);
+  // By its name: T1 owns sage/t1 with no branch=, so a move cannot help, and the line does not say it.
+  assert.equal(line(refusal("sage/t1", (s) => { s.ok("task", "T1", "set", "branch=sage/t1"); s.ok("task", "T2", "set", "branch=sage/t1", "pr=41"); s.ok("task", "T1", "set", "branch="); })),
+    `PR 41's head branch "sage/t1" also belongs to T1 (by its name),${rule}.`);
+  // By a run on it, with no branch=: a move cannot help either.
+  assert.equal(line(refusal("sage/t2", (s) => { s.ok("task", "T2", "set", "branch=sage/t2", "pr=41"); s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t2"); })),
+    `PR 41's head branch "sage/t2" also belongs to T1 (by run R1 on it),${rule}.`);
+});
+
+test("R1740-3: a run on the head branch in another letter case owns it, as a task's name does", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  s.ok("task", "T2", "set", "branch=sage/t2", "pr=41");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "SAGE/T2"); // R1
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T2", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  const r = s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t2");
+  assert.equal(r.status, 1, `T2's verdicts merge T1's run: ${r.stdout}`);
+  assert.match(r.stderr, /also belongs to \S+ T1 \(by run R1 on it\), which is not on PR 41/);
 });
 
 test("T94: every git call of the state tool carries the neutral options and environment", () => {

@@ -441,7 +441,7 @@ function remember({ project, t }, { out, number }, env) {
  * before, whose mirror refresh failed), there is nothing to merge: it only refreshes the mirror. A merge of another head
  * (a web merge, or a merge before a repair) refuses.
  */
-function merge({ dir, t, branch, head, url, repo }, temp, env) {
+function merge({ project, dir, t, branch, head, url, repo }, temp, env) {
   const pr = t.pr || no(`${t.id} has no PR number in the logbook: run sage-pr create ${t.id}, which records it`);
   if (!PR.test(pr)) no(`the PR of ${t.id} in the logbook is not a pull request number: sage task ${t.id} set pr=<n>`);
   const find = () => mine(repo, branch, temp, env).find((p) => String(p.number) === pr);
@@ -458,7 +458,8 @@ function merge({ dir, t, branch, head, url, repo }, temp, env) {
   if (!["verified", "pr-ready"].includes(t.state)) no(`${t.id} is ${t.state || "in no state"}, not verified or pr-ready: merge only a task whose route is done. When it is: sage task ${t.id} set state=verified`);
   if (p.headRefOid !== head) no(`pull request #${pr} is at ${short(p.headRefOid)}, not at the reviewed head ${short(head)}. If ${short(head)} is a repair, push it first: sage-pr create ${t.id}. Else the branch moved after review: review ${short(p.headRefOid)} and record its verdicts`);
   imported({ dir, t, head });
-  const r = mergeCheck(head, env, { pr });
+  // The pull request's head branch is the task's branch (find() reads only PRs of it), so the owner rule runs as in the hook (R1708-1).
+  const r = mergeCheck(head, env, { pr, head: branch, project });
   if (!r.ok) no(`merge check: ${r.reason}`);
   const moved = ". If GitHub says that the head changed, the branch moved after review: review the new head and record its verdicts";
   let out, failed;
