@@ -115,6 +115,8 @@ test("T483: each review or QA verdict that no kept report backs is refused, with
   assert.equal(s.ledger(), before);
   const qa = s.reviewed("T1", "qa", reportFor("qa-pass"));
   assert.equal(verdict("review-clean", qa), `sage: ${qa} is a qa run, so it backs no review-clean verdict: only a code-reviewer run does. Nothing changed.`);
+  const lead = s.reviewed("T1", "lead"); // a lead run reports to the sage, and no stop keeps its report as a review (R1965-1)
+  assert.equal(verdict("review-clean", lead), `sage: ${lead} is a lead run, so it backs no review-clean verdict: only a code-reviewer run does. Nothing changed.`);
   const running = s.ok("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
   assert.equal(verdict("review-clean", running), `sage: ${running} still runs: end it after its helper's report (sage run done ${running} --status done --tokens <n>), then record its verdict. Nothing changed.`);
   const other = s.reviewed("T2", "code-reviewer", reportFor("review-clean"));

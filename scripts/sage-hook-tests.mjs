@@ -7268,7 +7268,7 @@ test("T482 R1836-1: after a restart, the sage's run done of an old helper run fr
 test("T482 R1835-1, T483: when node runs a state tool, only a command word that the hook reads as a plain word that is not verdict passes", () => {
   const s = leadSession();
   const rest = `T1 --kind review-clean --sha ${s.head()} --cycle 1 --pr 5 --project ${realpathSync(s.dir)}`;
-  const line = /In this command, node runs a sage\.mjs \(or a path with a pattern or a variable\), and the hook cannot read its command word as a plain word that is not verdict, .* Run it as a command of its own, with the absolute path of the state tool that this hook loads/;
+  const line = /This command names a sage\.mjs \(or node runs a path with a pattern or a variable\) in a form that the hook cannot read as a plain command of the state tool, .* Run it as a command of its own, with the absolute path of the state tool that this hook loads/;
   for (const form of ["ver\\dict", "v'erdict'", 'ver"dict"', "verdic''t", '"v"erdict', "$'verdict'", "`echo verdict`", "$(echo verdict)", "${V:-verdict}", "ver*", "v[e]rdict"]) {
     for (const tool of [TOOL, `'${TOOL}'`, "~/x/skills/sage/sage.mjs", "sa'ge'.mjs", TOOL.replace(/sage\.mjs$/, "SAGE.MJS")]) {
       const command = `node ${tool} ${form} ${rest}`;
@@ -7284,8 +7284,27 @@ test("T482 R1835-1, T483: when node runs a state tool, only a command word that 
   // Only node's program word counts: a read of the file, a text that names it, or another program passes. The state tool
   // itself refuses any verdict that no kept report backs, so a form that the hook lets pass records nothing wrong (T483).
   for (const command of [`node ${TOOL} status`, `node ${TOOL} merge-check --sha ${s.head()} --pr 5`, `cd ${s.dir} && node ${TOOL} status`, `node ~/x/skills/sage/sage.mjs logbook`, `node ${TOOL} task add --priority P2 --title "two words" --size small`,
-    `cat ${TOOL}`, `git log -p -- packages/sage-claude/skills/sage/sage.mjs`, `git diff main -- plugins/sage/skills/sage/sage.mjs`, `grep -n verdict ${TOOL}`, 'echo "run node sage.mjs verdict T1 to record it" > /dev/null',
-    `git commit -m "sage.mjs verdict: the rule"`, `echo ${rest} | xargs node ${TOOL} verdict`, `node scripts/build.mjs`]) {
+    `cat ${TOOL}`, `git log -p -- packages/sage-claude/skills/sage/sage.mjs`, `git diff main -- plugins/sage/skills/sage/sage.mjs`, `grep -n verdict ${TOOL}`,
+    `git commit -m "sage.mjs verdict: the rule"`, `node scripts/build.mjs`]) {
+    assert.equal(denied(s.send(bash(command, s.dir))), undefined, command);
+  }
+});
+
+test("T483 R1956-1: a wrapped form of the sage's verdict command is refused, so the lead's gap rule holds for it too", () => {
+  const s = leadSession(); // R1 is the running lead run of T1
+  const findings = helpedRun(s, "code-reviewer", report("FINDINGS", "- K1 medium src/a.js:1 an empty name saves a row"));
+  const rest = `T1 --kind findings --sha ${s.head()} --cycle 1 --pr 5 --run ${findings} --project ${realpathSync(s.dir)}`;
+  const line = /^sage: the sage records a verdict as one plain command of the state tool, .*This command names a sage\.mjs/;
+  // The plain form is read, and the gap rule refuses it: the lead records its helper's finding first (R1816-2).
+  assert.match(denied(s.send(bash(`node ${TOOL} verdict ${rest}`, s.dir))) ?? "", /this lead's code-reviewer helpers reported medium or high findings on T1/, "the plain form");
+  // Each wrapped form would skip that rule, so the hook refuses it (the strings are test input; no shell runs them).
+  for (const command of [`env node ${TOOL} verdict ${rest}`, `bash -c 'node ${TOOL} verdict ${rest}'`, `sh -c "node '${TOOL}' verdict ${rest}"`, `nice node ${TOOL} verdict ${rest}`,
+    `env node ${TOOL} ver\\dict ${rest}`, `echo ${rest} | xargs node ${TOOL} verdict`, `echo verdict ${rest} | xargs node ${TOOL}`, `xargs bash -c 'node ${TOOL}' < args.txt`,
+    'echo "run node sage.mjs verdict T1 to record it" > /dev/null']) {
+    assert.match(denied(s.send(bash(command, s.dir))) ?? "", line, command);
+  }
+  // A wrapped read command of the state tool, and a read of the file, pass.
+  for (const command of [`env node ${TOOL} status`, `bash -c 'node ${TOOL} status'`, `cat ${TOOL}`, `grep -n verdict ${TOOL}`]) {
     assert.equal(denied(s.send(bash(command, s.dir))), undefined, command);
   }
 });
@@ -7326,6 +7345,8 @@ test("T483 R1932-1 R1933-1: the sage's own review keeps a report only for its ow
   const leads = leadAdd(s, "code-reviewer");
   stop(spawn("code-reviewer", `Run ${leads} · task T1`), "code-reviewer");
   assert.equal(kept(leads), false, "a run that the lead added");
+  done(leads);
+  assert.match(chiefVerdict(s, "review-clean", leads) ?? "", new RegExp(`^sage: ${leads} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${leads} · task T1"`), "so the sage's verdict on it is refused (R1965-1)");
   s.sage("run", "done", "R1", "--status", "blocked"); // the sage runs the reviews itself from here
   // A first line with a suffix still names the run.
   const suffix = add("code-reviewer");

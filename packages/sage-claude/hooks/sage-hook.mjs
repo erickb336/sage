@@ -1326,7 +1326,7 @@ function chiefStateWords(input) {
 function chiefVerdictProblem(input, slots) {
   if (input.tool_name !== "Bash") return undefined;
   const words = chiefStateWords(input);
-  if (!words) return unreadVerdict(String(input.tool_input?.command ?? "")) ? `the sage records a verdict as one plain command of the state tool, so that the hook can check it early (T482, T483). In this command, node runs a sage.mjs (or a path with a pattern or a variable), and the hook cannot read its command word as a plain word that is not verdict, or it is a verdict in a form that the hook cannot read. Run it as a command of its own, with the absolute path of the state tool that this hook loads, with no ~, no variable and nothing before it (no cd): ${stateCommand("verdict <T> --kind <kind> --sha <sha> --cycle <n> --pr <n> --run <R>")} (R1815-1).` : undefined;
+  if (!words) return unreadVerdict(String(input.tool_input?.command ?? "")) ? `the sage records a verdict as one plain command of the state tool, so that the hook can check it early (T482, T483). This command names a sage.mjs (or node runs a path with a pattern or a variable) in a form that the hook cannot read as a plain command of the state tool, with a plain command word that is not verdict (R1956-1). Run it as a command of its own, with the absolute path of the state tool that this hook loads, with no ~, no variable and nothing before it (no cd): ${stateCommand("verdict <T> --kind <kind> --sha <sha> --cycle <n> --pr <n> --run <R>")} (R1815-1).` : undefined;
   const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
   if (cmd !== "verdict" || !Array.isArray(VERDICT_ROLES[opt.kind])) return undefined;
   const project = resolve(input.cwd ?? process.cwd(), opt.project ?? process.env.SAGE_PROJECT ?? ".");
@@ -1344,15 +1344,22 @@ function chiefVerdictProblem(input, slots) {
 }
 /** Node's options that take the next word as their value, so that its program is a later word. */
 const NODE_VALUE = /^(?:-r|--require|--import|--loader|--experimental-loader|-C|--conditions|--input-type|--title)$/;
+/** The programs that only read the files they name, so that a sage.mjs as their last word runs nothing (R1956-1). */
+const FILE_READERS = /^(?:cat|head|tail|less|grep|rg|git|diff|wc|ls)$/;
 /**
- * Could a command that chiefStateWords cannot read run a state tool's verdict (R1835-1, T483)? Only when node runs it:
- * node's program word ends in sage.mjs, in any letter case, or has a pattern character (* ? [ {) or a variable, so that it
- * may be one; or node's inline code (-e, -p) names a sage.mjs. Then only a plain command word that is not verdict passes
- * (the state tool reads its first word as the command). A read that names the file (cat, git log, git diff) or a text in
- * quotes passes: the state tool's own check holds for every form. A line that the reader cannot read fails closed when it
- * names a sage.mjs.
+ * Could a command that chiefStateWords cannot read run a state tool's verdict (R1835-1, R1956-1, T483)? Yes when:
+ * - a word of the line names a sage.mjs, also through quotes or backslashes, and the word after it is verdict or is not a
+ *   plain word without its quotes and backslashes: a wrapper (env node, bash -c, xargs) may run the tool, ver\dict and
+ *   $'verdict' become verdict, and a $, a backtick or a glob may;
+ * - a simple command ends in a word that names a sage.mjs (xargs may give it its words) and is not a read (FILE_READERS);
+ * - node runs it: node's program word ends in sage.mjs, in any letter case, or has a pattern character (* ? [ {) or a
+ *   variable, so that it may be one; or node's inline code (-e, -p) names a sage.mjs. Then only a plain command word
+ *   that is not verdict passes (the state tool reads its first word as the command).
+ * A line that the reader cannot read fails closed when it names a sage.mjs.
  */
 function unreadVerdict(command) {
+  const raw = command.replace(/\\\r?\n/g, " ").split(/[\s;&|()<>]+/).filter(Boolean);
+  if (raw.some((word, k) => /sage\.mjs$/i.test(unquote(word)) && k + 1 < raw.length && !(PLAIN.test(unquote(raw[k + 1])) && unquote(raw[k + 1]) !== "verdict"))) return true;
   let commands;
   try {
     commands = core.shellCommands(command);
@@ -1361,6 +1368,7 @@ function unreadVerdict(command) {
   }
   return commands.some(({ words, syntax }) => {
     let k = words.findIndex((_, i) => !syntax?.[i]?.assignment);
+    if (k >= 0 && /sage\.mjs$/i.test(words.at(-1)) && !FILE_READERS.test(basename(words[k]))) return true;
     if (k < 0 || !/(?:^|\/)node$/i.test(words[k])) return false;
     for (k++; k < words.length && words[k].startsWith("-") && words[k] !== "--"; k++) {
       if (/^(?:-e|--eval|-p|--print)$/.test(words[k])) return /sage\.mjs/i.test(words[k + 1] ?? "");
@@ -2324,14 +2332,15 @@ const agentName = (raw) => String(raw ?? "").normalize("NFKC").replace(/\p{Cf}/g
 const decide = (event, decision, reason) => ({ hookSpecificOutput: { hookEventName: event, permissionDecision: decision, permissionDecisionReason: `sage: ${String(reason).replace(/\p{Cc}/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}` } });
 const deny = (event, reason) => decide(event, "deny", reason);
 
-/** The run id of a brief's first line, "Run R<n> · task T<n>" (T308), with any text after a space (R1898-2), or undefined: only R and digits pass. */
+/** A brief's first line, "Run R<n> · task T<n>" (T308), with any text after a space (R1898-2): only R and digits pass. */
+const BRIEF_LINE = /^Run (R[1-9]\d{0,8}) · task (T[1-9]\d*)(?:\s|$)/;
 /**
  * The run mark of the main session's spawn (R1933-1): the brief's run, unless the logbook of the spawn's folder has that
  * run on another task than the brief's "task T<n>" (then no mark). For a review or QA run of that role that runs, also the
  * tip of its task's branch at the start: the commit that the review sees, which its stop keeps when the branch did not move.
  */
 function briefMark(prompt, role, cwd) {
-  const [, run, task] = /^Run (R[1-9]\d{0,8}) · task (T[1-9]\d*)(?:\s|$)/.exec(String(prompt ?? "").split("\n", 1)[0]) ?? [];
+  const [, run, task] = BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0]) ?? [];
   if (!run) return { run: undefined };
   try {
     const folder = realpathSync.native(cwd), row = logbookOf(folder).row(run);
@@ -2342,7 +2351,8 @@ function briefMark(prompt, role, cwd) {
     return { run };
   }
 }
-const briefRun = (prompt) => /^Run (R[1-9]\d{0,8}) · task T[1-9]\d*(?:\s|$)/.exec(String(prompt ?? "").split("\n", 1)[0])?.[1];
+/** The run id of a brief's first line (BRIEF_LINE), or undefined. */
+const briefRun = (prompt) => BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0])?.[1];
 
 /**
  * All sessions share numbered capacity slots. One short filesystem transaction protects allocation and lifecycle
