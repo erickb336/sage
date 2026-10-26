@@ -1,11 +1,12 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { ROOT } from "./build.mjs";
 
 const SHA = "1".repeat(40);
@@ -21,7 +22,8 @@ async function connect(t) {
   const { SAGE_HOME, ...inherited } = process.env;
   const env = { ...inherited, HOME: join(dir, "home"), CODEX_HOME: join(dir, "codex-home"), SAGE_WORKTREES: join(dir, "worktrees") };
   const child = spawn(process.execPath, [join(dir, "plugin/mcp/state-server.mjs")], { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] });
-  let stderr = "", id = 0;
+  let stderr = "", id = 0, calls = 0;
+  const { gate: gateOf } = await import(pathToFileURL(join(dir, "plugin/hooks/gate-hook.mjs")).href);
   child.stderr.on("data", (data) => { stderr += data; });
   const closed = new Promise((resolve) => child.once("close", (code) => resolve(code)));
   const pending = new Map();
@@ -36,15 +38,35 @@ async function connect(t) {
   return {
     dir, project, env,
     tools: async () => (await rpc("tools/list", {})).result.tools,
-    /** A tool's text, or { error } with the text of a refusal. */
-    call: async (name, args = {}) => {
-      const reply = await rpc("tools/call", { name, arguments: { project, ...args } });
+    /**
+     * A tool's text, or { error } with the text of a refusal. As in Codex, the built gate first sees the call as
+     * PreToolUse with its id, then the server gets the same id and session in _meta (R1916-2); gate: false skips the gate.
+     */
+    call: async (name, args = {}, { gate = true, callId = `call_${++calls}` } = {}) => {
+      const sessionId = "019a0000-0000-7000-8000-0000000000aa";
+      if (gate) assert.equal(await gateOf({ hook_event_name: "PreToolUse", session_id: sessionId, turn_id: "t1", transcript_path: null, cwd: project, model: "m",
+        permission_mode: "default", tool_name: `mcp__sage__${name}`, tool_use_id: callId, tool_input: { project, ...args } }, { env }), undefined);
+      const reply = await rpc("tools/call", { name, arguments: { project, ...args }, _meta: { callId, sessionId, threadId: sessionId } });
       assert.equal(reply.error, undefined);
       const text = reply.result.content.map((part) => part.text).join("\n");
       return reply.result.isError ? { error: text } : text;
     },
   };
 }
+
+test("the state server serves only a call that sage's gate saw: with no hook running, sage records nothing and says why (R1916-2)", async (t) => {
+  const s = await connect(t);
+  const NO_GATE = "sage's gate is not running: trust sage's hooks with /hooks in the Codex CLI (or the app's hook review), then try again.";
+  assert.deepEqual(await s.call("init", {}, { gate: false }), { error: NO_GATE }, "no proof");
+  assert.deepEqual(await s.call("status", {}, { gate: false }), { error: NO_GATE }, "a read too");
+  assert.equal(existsSync(join(s.env.CODEX_HOME, "sage")), false, "nothing written");
+  assert.equal((await s.call("init", {}, { callId: "call_once" })).error, undefined, "the gate saw it");
+  assert.equal(existsSync(join(s.env.CODEX_HOME, "sage")), true, "the logbook is made");
+  assert.deepEqual(await s.call("init", {}, { gate: false, callId: "call_once" }), { error: NO_GATE }, "a proof serves one call");
+  const { writeProof } = await import(pathToFileURL(join(s.dir, "plugin/hooks/gate-hook.mjs")).href);
+  writeProof({ tool_use_id: "call_other", session_id: "019a0000-0000-7000-8000-0000000000aa", tool_name: "mcp__sage__status" }, s.env);
+  assert.deepEqual(await s.call("init", {}, { gate: false, callId: "call_other" }), { error: NO_GATE }, "a proof of another tool");
+});
 
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {
   const s = await connect(t);

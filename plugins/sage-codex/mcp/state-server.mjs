@@ -6,7 +6,7 @@ import { McpServer, serveStdio, z } from "../runtime/mcp-sdk.mjs";
 import { tool } from "../skills/sage/sage.mjs";
 import { BRIEF_FIELDS, PRIORITIES, PRIORITY_SCALE } from "../core/index.mjs";
 import { BRIEF_LIMIT, NAME_RULE, recordBrief } from "../hooks/brief-hook.mjs";
-import { CHILD_READS } from "../hooks/gate-hook.mjs";
+import { CHILD_READS, NO_GATE, takeProof } from "../hooks/gate-hook.mjs";
 import { TASK_NAME } from "../hooks/report-gate.mjs";
 
 // The state tool as MCP tools. Codex starts this server outside the shell sandbox, so it can write the logbook
@@ -127,9 +127,13 @@ export function argvFor(name, input) {
 
 export function createStateServer({ env = process.env } = {}) {
   const server = new McpServer({ name: "sage", version: "0.1.0" });
+  // Each tool runs only for a call that sage's gate saw (R1916-2): Codex runs no plugin hook that the user has not
+  // trusted, also after each sage update, and then no sage rule holds.
+  const registerTool = (name, spec, run) => server.registerTool(name, spec, async (input, extra) => (takeProof(extra?.mcpReq?._meta, name, env)
+    ? run(input) : { isError: true, content: [{ type: "text", text: NO_GATE }] }));
   const project = z.string().refine(isAbsolute, "an absolute path").describe("the absolute path of the project's checkout");
   for (const [name, spec] of Object.entries(TOOLS)) {
-    server.registerTool(name, {
+    registerTool(name, {
       description: spec.describe,
       inputSchema: z.object({ project, ...spec.input }).strict(),
       annotations: { readOnlyHint: CHILD_READS.has(name), destructiveHint: false },
@@ -139,7 +143,7 @@ export function createStateServer({ env = process.env } = {}) {
     });
   }
   // The brief check (T462): no state-tool command, because the hooks read the record by task name.
-  server.registerTool("brief", {
+  registerTool("brief", {
     description: `Check a role agent's brief before you spawn it: it names each missing field of ${BRIEF_FIELDS.join(", ")}, and keeps the brief for the agent's start note. Fix the brief and run it again until no field is missing, then spawn the agent with the same task name and brief.`,
     inputSchema: z.object({ project, task_name: z.string().regex(TASK_NAME, NAME_RULE).describe("the task_name of the spawn"),
       brief: z.string().max(BRIEF_LIMIT).describe("the whole brief, each field at the start of a line") }).strict(),
