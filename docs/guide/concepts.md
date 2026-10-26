@@ -19,7 +19,7 @@ This page gives sage's own words, one meaning each. In the table, "the owner" is
 | **Artifact** | A file or record that a run takes in or gives out and sage keeps: a brief, report, steer message, transcript, branch, commit or pull request. |
 | **Finding** | One problem that a review or QA reports, with a severity (high, medium or low), a triage and a status. |
 | **Verdict** | The result of one check (checks, a review, QA) on one head commit, kept in the ledger by SHA and cycle. |
-| **Cycle** | One full set of fresh reviews and QA on one head commit; a new commit starts again from cycle 1. |
+| **Cycle** | One full set of fresh reviews and QA on one head commit; a new commit starts again from cycle 1, but a clean merge of main keeps the cycles of the head it merges into. |
 | **Gate** | A question parked for the owner, with options, a recommendation and a default; the work behind it waits for the answer. The owner approves a program's breakdown through a gate. |
 | **Logbook** | sage's local record of one project: its tasks, runs, findings, verdicts, gates and decisions, kept on the owner's Mac. |
 | **Agent time** | The wall-clock hours of agent runs, given with their tokens. The default for every time figure: give it with its basis and a range. |

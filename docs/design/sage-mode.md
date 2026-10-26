@@ -69,7 +69,7 @@ The chief of staff never edits files. It writes briefs, records verdicts and ask
 | --- | --- | --- |
 | A chief that owns the program, never the code | pstack orchestrate, Cursor projects | While sage mode is on, the hook refuses the chief's file edits. After the off phrase, the session edits files as a normal session. |
 | "The brief is the product." A missing field stops the spawn | pstack orchestrate | A brief template with required fields. The hook refuses an agent spawn when a field is missing. |
-| Verdicts recorded by head SHA. A new commit voids them | pstack ledger, Orchestrator "merge the exact checked commit" | A ledger in the logbook. A merge is blocked unless the current SHA has the verdicts its route needs. |
+| Verdicts recorded by head SHA. A new commit voids them | pstack ledger, Orchestrator "merge the exact checked commit" | A ledger in the logbook. A merge is blocked unless the current SHA has the verdicts its route needs. A clean merge of main keeps them ([section 6](#carry-over)). |
 | A mode switched on by name, with playbooks copied into the to-do list | poteto mode | "sage mode" as the whole message. Each route's blocks go into the task list. |
 | Scale the ceremony to the unit | pstack, Anthropic research system | Routes come in sizes: tiny, small, large, program. |
 | A PE that separates "changes" from "questions for you" | Orchestrator, after the PE loop failed to converge | The same verdict shape. A later PE pass checks its earlier asks first. |
@@ -222,6 +222,19 @@ stateDiagram-v2
 ```
 
 A new commit after "verified" voids the verdicts, and the task goes back to reviewing. A `findings`, `qa-fail` or `checks-fail` verdict also returns a verified task to reviewing, with its reason in the decision trail.
+
+<a id="carry-over"></a>
+
+**A clean merge of main keeps the verdicts** (T493). When a new head H1 only merges main into a reviewed head H0, the merge check reads the review and QA verdicts of H0 for H1, so the task needs no fresh cycle. CI still runs: `checks-pass` must be on H1 itself. The merge check reads only git objects of the project, never the network, and each of these must hold:
+
+1. H1 is a merge commit with two parents: H0, and a commit of `origin/main` (or of `origin/HEAD`, the base branch).
+2. The pull request's diff, from that main commit to H1, is the diff of H0 from its merge base with main, outside built files. The check compares the raw diffs (the modes and blob ids of each path), so the two patches are byte-identical.
+3. H0 passes on its own verdicts: no open finding, and every clean cycle that the task's size and risk need.
+4. H1 has no review or QA verdict of its own. A fresh review on H1 starts its own cycles, and then H1 judges on its own verdicts only.
+
+A built file is a path that the top `.gitattributes` of the main commit marks `sage-built`, by an exact path or a `<folder>/**` pattern. In sage, `npm run build` writes `.gitattributes` from the files that it makes (`CHANGELOG.md`, `instructions/core.md` and the plugin folders), and `npm run check` fails when a built file is not what the build makes. So a merge whose only conflict is in a built file, fixed by `npm run build`, is a clean merge too. The check reads the list from main's side of the merge, so a pull request cannot add a file to it. A project marks a file `sage-built` only when its CI checks that the build makes that file.
+
+A chain is allowed: H2 merges main into H1, which merges main into H0. Each step must pass the rule. A missing object or any git error carries nothing, so the check fails closed. A refusal says why the verdicts did not carry over, and a passing merge check names each earlier head and writes each step in the decision trail (`verdicts <H0> → <H1>`), once.
 
 <a id="data"></a>
 
