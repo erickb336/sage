@@ -103,7 +103,7 @@ test("T308: Codex agents come from the logbook only: running, no activity, no he
   assert.deepEqual([byRun.R7.provider, byRun.R7.state, byRun.R7.why, byRun.R7.idle], ["codex", "unk", "Codex sends no activity notes yet", null]);
   assert.deepEqual(model.providers, [{ name: "Claude", count: 1 }, { name: "Codex", count: 2 }]);
   assert.deepEqual(model.projects.map(project => [project.name, project.cap]), [["sample", { label: "Claude", used: 1, cap: 3 }], ["solo", null]]);
-  assert.deepEqual(model.caps, [{ label: "Claude", total: { used: 1, cap: 12 }, projects: [{ name: "sample", used: 1, cap: 3 }] }]);
+  assert.deepEqual(model.caps, [{ label: "Claude", total: { used: 1, cap: 20 }, projects: [{ name: "sample", used: 1, cap: 3 }] }]);
 });
 
 test("T308: unreadable hook notes show every Claude run from the logbook, with activity not known and no caps", () => {
@@ -117,7 +117,7 @@ test("T308: unreadable hook notes show every Claude run from the logbook, with a
 });
 
 test("T308: the caps are the hook's: cap.<project>, else max_agents, and cap_total, read as the state tool reads a count", () => {
-  assert.deepEqual([agentCaps({}).cap("x"), agentCaps({}).total], [4, 12]);
+  assert.deepEqual([agentCaps({}).cap("x"), agentCaps({}).total], [10, 20]);
   const caps = agentCaps({ max_agents: "2.9", "cap.sage": 6, cap_total: "0", "cap.bad": "many" });
   assert.deepEqual([caps.cap("sage"), caps.cap("other"), caps.cap("bad"), caps.total], [6, 2, 2, 1]);
   assert.equal(agentCaps({ cap_total: 900 }).total, 50);

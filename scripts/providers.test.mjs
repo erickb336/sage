@@ -2362,7 +2362,7 @@ test("shared role instructions ship outside the checkout and generate existing s
     assert.match(qa, /You do not fix anything/);
     assert.match(qa, /PASS or FAIL/);
     const lead = f.api.renderRoleInstructions("lead", f.bindings.lead);
-    assert.match(lead, /at most three children/);
+    assert.match(lead, /at most nine children/);
     assert.match(lead, /code review for every change/);
     assert.match(lead, /fresh lead after/);
   }
