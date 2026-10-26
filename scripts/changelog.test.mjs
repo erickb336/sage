@@ -137,9 +137,18 @@ function checkout(t, changelogText) {
 const HAND = "- **By hand.** An entry that a pull request wrote in CHANGELOG.md before T492.";
 /** The fix after the lines written by hand: one line for each kind of branch, with the merge base that git gives. */
 const fix = (base) => [
-  `On a task branch: put each line into changes/<task>.md with its date (or into changes/earlier.md if it is an older entry or the intro). Then run git checkout ${base} -- CHANGELOG.md to undo the edit.`,
-  "On a change-log branch: run git checkout origin/main -- CHANGELOG.md to undo the edit. Then run npm run changelog. Then put each line into changes/<task>.md in a task pull request.",
+  `On a task branch: put each line into changes/<task>.md with its date (or into changes/earlier.md if it is an older entry or the intro). Then run git fetch origin main. Then run git checkout ${base} -- CHANGELOG.md to undo the edit.`,
+  "On a change-log branch: run git fetch origin main. Then run git checkout origin/main -- CHANGELOG.md to undo the edit. Then run npm run changelog. Then put each line into changes/<task>.md in a task pull request.",
 ];
+/** The commands of one fix line, in order, as a person types them. */
+const commands = (line) => [...line.matchAll(/run (.+?)(?: to undo the edit)?\.(?= |$)/g)].map((m) => m[1]);
+/** Type each command in a shell in dir, as a person does, and check that each one works. */
+const typeAll = (dir, line) => {
+  for (const command of commands(line)) {
+    const r = spawnSync("sh", ["-c", command], { cwd: dir, encoding: "utf8", env: { ...process.env, HOME: dir } });
+    assert.equal(r.status, 0, `${command}: ${r.stderr}`);
+  }
+};
 const NO_BASE = "$(git merge-base HEAD origin/main)"; // a checkout with no git: the command that gives the merge base
 const handLine = (text) => `CHANGELOG.md has a line that no file of changes/ makes, so the build would drop it: "${text}".`;
 const withHand = (item) => assemble(EARLIER, {}).replace("## 2026-10-25\n\n", `## 2026-10-25\n\n${item}\n`);
@@ -260,6 +269,38 @@ test("a hand-written line on a task branch gets the refusal from the check and f
   assert.equal(undone.status, 0, undone.stderr);
 });
 
+test("with no origin/main, the task-branch step of npm run changelog, typed as written, undoes the edit and the check passes", (t) => {
+  // F-T559-1: the step fetches origin/main first, so the merge base that it names exists when the next command runs.
+  const { dir, git, run, commit } = fixture(t);
+  const edited = readFileSync(join(dir, "CHANGELOG.md"), "utf8").replace("## 2026-10-25\n\n", `## 2026-10-25\n\n${HAND}\n`);
+  commit("a", "main", { "changes/T99991.md": T1, "CHANGELOG.md": edited });
+  assert.equal(git("update-ref", "-d", "refs/remotes/origin/main").status, 0);
+  assert.equal(git("remote", "add", "origin", dir).status, 0); // this repository is its own origin, so git fetch works offline
+  const built = run("changelog.mjs");
+  assert.equal(built.status, 1);
+  const line = built.stderr.split("\n").find((l) => l.startsWith("On a task branch"));
+  assert.equal(line, fix(NO_BASE)[0]);
+  assert.deepEqual(commands(line), ["git fetch origin main", `git checkout ${NO_BASE} -- CHANGELOG.md`]);
+  typeAll(dir, line);
+  const after = run("check.mjs");
+  assert.equal(after.status, 0, after.stderr);
+});
+
+test("a tree with no .git inside another repository names no merge base of that repository", (t) => {
+  // F-T559-1: git looks up the folders for a repository, so without a guard it named the outer repository's merge base.
+  const outer = mkdtempSync(join(realpathSync(tmpdir()), "sage-changelog-outer-"));
+  t.after(() => rmSync(outer, { recursive: true, force: true }));
+  const git = (...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "init.defaultBranch=main", ...args], { cwd: outer, encoding: "utf8", env: { ...process.env, HOME: outer } });
+  assert.equal(git("init", "-q").status, 0);
+  assert.equal(git("commit", "-qm", "outer", "--allow-empty").status, 0);
+  assert.equal(git("update-ref", "refs/remotes/origin/main", "main").status, 0);
+  const dir = join(outer, "tree");
+  mkdirSync(join(dir, "changes"), { recursive: true });
+  writeFileSync(join(dir, "changes/earlier.md"), EARLIER);
+  writeFileSync(join(dir, "CHANGELOG.md"), withHand(HAND));
+  assert.throws(() => changelog(dir), { message: [handLine(`${HAND.slice(0, 70)}...`), ...fix(NO_BASE)].join("\n") });
+});
+
 test("a hand-written line on a change-log branch gets a change-log-branch step, and that step makes the check pass", (t) => {
   // R1973-1: on a change-log branch, a fragment for the line makes the diff a task diff, which the check refuses (see the
   // test above with T99998.md). The step for this kind of branch undoes the edit and rebuilds CHANGELOG.md instead.
@@ -271,9 +312,10 @@ test("a hand-written line on a change-log branch gets a change-log-branch step, 
   const check = run("check.mjs");
   assert.equal(check.status, 1);
   assert.ok(check.stderr.split("\n").includes(fix(git("rev-parse", "main").stdout.trim())[1]), check.stderr);
-  // The steps of that line, as written: undo the edit, then run npm run changelog.
-  assert.equal(git("checkout", "-q", "origin/main", "--", "CHANGELOG.md").status, 0);
-  assert.equal(run("changelog.mjs").status, 0);
+  // The commands of that line, typed as written: fetch origin/main, undo the edit, then run npm run changelog.
+  assert.equal(git("remote", "add", "origin", dir).status, 0); // this repository is its own origin, so git fetch works offline
+  assert.deepEqual(commands(fix("")[1]), ["git fetch origin main", "git checkout origin/main -- CHANGELOG.md", "npm run changelog"]);
+  typeAll(dir, fix("")[1]);
   assert.deepEqual(git("diff", "--name-only", "main").stdout.split("\n").filter(Boolean), ["CHANGELOG.md"], "still a change-log diff");
   const after = run("check.mjs");
   assert.equal(after.status, 0, after.stderr);
