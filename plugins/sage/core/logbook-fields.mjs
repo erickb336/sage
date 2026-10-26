@@ -22,8 +22,11 @@ export function countOf(value, { floor = 1, limit = 50, up = false } = {}) {
   const n = typeof value === "number" || (typeof value === "string" && NUMERIC.test(value)) ? Number(value) : NaN;
   return Number.isFinite(n) ? Math.min(Math.max(up ? Math.ceil(n) : Math.floor(n), floor), limit) : undefined;
 }
-/** The agent caps without a config: max_agents for each project (unless cap.<project> is set), cap_total for all. */
-export const AGENT_CAPS = { max_agents: 4, cap_total: 12 };
+/**
+ * The agent caps without a config: max_agents for each project (unless cap.<project> is set), cap_total for all. One
+ * lead and its 9 helpers fit in a project, and two full lead teams in all (the owner's decision of 2026-10-25, T482).
+ */
+export const AGENT_CAPS = { max_agents: 10, cap_total: 20 };
 /** The agent caps of a sage root's parsed config.json, as the hook applies them: cap(<project name>) and the total. */
 export function agentCaps(config) {
   const c = config && typeof config === "object" && !Array.isArray(config) ? config : {};
