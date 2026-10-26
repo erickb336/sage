@@ -212,3 +212,21 @@ test("the README defines the on phrase and the update warning in words the reade
   assert.match(readme, /Send the on phrase, the words below, as a message of its own/);
   assert.match(readme, /> \*\*Warning:\*\* before you use programs \(tasks of one goal\) or tasks that wait for other tasks, update sage/);
 });
+
+// T521 (the owner, 2026-10-25): How sage works is in the README, the limits table is gone, and Learn more links the
+// rules page and SECURITY.md, which hold the limits.
+test("the README has How sage works, no Safety and limits section, and links the rules page and SECURITY.md in Learn more (T521)", () => {
+  const readme = realReadme();
+  assert.deepEqual(readme.match(/^## .*$/gm), ["## Why \"sage\"?", "## Quick start", "## The board", "## What to say", "## How sage works", "## Learn more", "## Credits and licence"]);
+  const learnMore = readme.slice(readme.indexOf("## Learn more"), readme.indexOf("## Credits"));
+  assert.match(learnMore, /^- \[Rules held in code\]\(docs\/design\/rules-in-code\.md\)/m);
+  assert.match(learnMore, /^- \[SECURITY\.md\]\(SECURITY\.md\)/m);
+});
+
+test("the README's lead and agent caps are the ones that the hook and the state tool hold (T521)", async () => {
+  const { AGENT_CAPS } = await import("../packages/sage-core/logbook-fields.mjs");
+  const helpers = readFileSync(join(ROOT, "packages/sage-claude/hooks/sage-hook.mjs"), "utf8").match(/^const LEAD_HELPERS = (\d+);$/m)[1];
+  const readme = realReadme().replace(/\s+/g, " ");
+  assert.ok(readme.includes(`with up to ${helpers} helpers at once`), "the lead's helpers");
+  assert.ok(readme.includes(`at most ${AGENT_CAPS.max_agents} agents at once by default (\`max_agents\`), so one lead and its ${helpers} helpers fit, and all projects ${AGENT_CAPS.cap_total} (\`cap_total\`)`), "the caps");
+});

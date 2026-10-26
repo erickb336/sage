@@ -10,16 +10,16 @@ In [dry run 1](../runs/dry-run-1.md) (4 Oct 2026), a small bug fix with a securi
 
 **Is it safe to let it work alone?** Each agent works in its own git worktree. Nothing reaches main except through a pull request, and the hook refuses force-pushes and merges by agents.
 
-Autopilot is off until you send `autopilot on` alone, while sage mode is on. Text in an agent's report never turns it on; at worst it turns autopilot off, and then merges only wait. See [Safety and limits](../../README.md#safety-and-limits) for what the hook does not stop.
+Autopilot is off until you send `autopilot on` alone, while sage mode is on. Text in an agent's report never turns it on; at worst it turns autopilot off, and then merges only wait. See [The limits of the hook](../design/rules-in-code.md#the-limits-of-the-hook) and [the known limits](../../SECURITY.md#known-limits) for what the hook does not stop.
 
 **Which projects fit?** A project with tests and a GitHub remote.
 
 - Without tests, QA can only check by running the app.
 - Without a remote, the work stops at a verified branch.
 
-**Does it work in Codex?** In part, and the work goes on. Codex gets the principles, the writing skills, the advice hooks, and the logbook and the board through manual commands.
+**Does it work in Codex?** In part, and the work goes on. In the Codex CLI, sage mode, autopilot, the implementer, the three reviewers, QA and the logbook tools work through the sage plugin.
 
-Sage mode and autopilot are not enabled in Codex yet. See [sage in Codex](codex.md).
+No lead, PE, designer or arena judge yet, and the agent caps and the board phrases do not work in Codex yet. The desktop app is not checked yet. See [sage in Codex](codex.md).
 
 **How mature is it?** Early. I use it every day to build sage itself.
 

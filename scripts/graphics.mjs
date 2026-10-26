@@ -495,16 +495,16 @@ function hero(t, id) {
     path(`M0 1060 L ${W} 1060`, { stroke: EMBER.deep, sw: 1.5, opacity: 0.7 }),
     // The words.
     `<text x="64" y="176" font-family="${SANS}" font-size="152" font-weight="900" letter-spacing="-6" fill="url(#${id}-word)" filter="url(#${id}-wordglow)">sage</text>`,
-    text(452, 90, ["Your chief of staff", "for Claude Code."], { size: 46, weight: 800, fill: EMBER.ink, lh: 1.12, ls: -0.5 }),
+    text(452, 90, ["Your chief of staff", "for Claude Code and Codex."], { size: 46, weight: 800, fill: EMBER.ink, lh: 1.12, ls: -0.5 }),
     `<text x="454" y="190" font-family="${SANS}" font-size="28" fill="${EMBER.muted}"><tspan>Send </tspan><tspan font-weight="800" fill="${EMBER.hot}">“sage mode”</tspan><tspan> as a message of its own.</tspan></text>`,
     ...meds.map(plaqueOf),
     `<rect x="${cx - 128}" y="990" width="256" height="48" rx="8" fill="url(#${id}-chief)" filter="url(#${id}-glow)"/>`,
     text(cx, 1023, "Chief of staff", { size: 28, weight: 800, fill: "#160902", anchor: "middle" }),
-    rect(40, 1068, 410, 44, { rx: 8, stroke: EMBER.orange, sw: 1.5 }),
-    text(245, 1099, "Claude Code plugin · MIT", { size: 28, weight: 700, fill: EMBER.hot, anchor: "middle" }),
+    rect(40, 1068, 440, 44, { rx: 8, stroke: EMBER.orange, sw: 1.5 }),
+    text(260, 1099, "Claude Code · Codex · MIT", { size: 28, weight: 700, fill: EMBER.hot, anchor: "middle" }),
     text(W - 40, 1099, "Built on pstack and poteto mode, by Lauren Tan", { size: 28, fill: EMBER.muted, anchor: "end" }),
   ].join("\n");
-  return worldSvg(W, H, id, worldDefs(id), body, "sage: your chief of staff for Claude Code. Send sage mode as a message of its own. A hooded toad sage, the chief of staff, meditates on a rock in a misty mountain world, with glowing gold toad eyes. Around it, its team on a loop: designer, PE, implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA. Claude Code plugin, MIT. Built on pstack and poteto mode, by Lauren Tan.", { border: t.dark ? "#3A2414" : undefined });
+  return worldSvg(W, H, id, worldDefs(id), body, "sage: your chief of staff for Claude Code and Codex. Send sage mode as a message of its own. A hooded toad sage, the chief of staff, meditates on a rock in a misty mountain world, with glowing gold toad eyes. Around it, its team on a loop: designer, PE, implementer, arena judge, code reviewer, security reviewer, UX reviewer and QA. A Claude Code and Codex plugin, MIT. Built on pstack and poteto mode, by Lauren Tan.", { border: t.dark ? "#3A2414" : undefined });
 }
 
 /** How it works: you, the chief of staff (the toad sage), the team's flow to a pull request, the logbook, and the outer
@@ -547,7 +547,10 @@ function loop(t, id) {
     line("M580 356 L 580 310", t.line, "muted"), label(594, 342, "report + evidence", { anchor: "start" }),
     // The team.
     rect(40, 362, panelR - 40, 386, { rx: 10, fill: t.panel, stroke: t.edge, sw: 1.5, opacity: 0.92 }),
-    label(64, 400, "THE TEAM · ONE WRITER AT A TIME", { anchor: "start", fill: t.edge, weight: 800, ls: 2 }),
+    label(64, 400, "THE TEAM", { anchor: "start", fill: t.edge, weight: 800, ls: 2 }),
+    // The chief runs the design and the PE check itself; one lead runs the build, the reviews, QA and the repairs.
+    label(qa.x + qa.w, 400, "ONE LEAD PER PULL REQUEST", { anchor: "end", fill: t.edge, weight: 800, ls: 2 }),
+    rect(build.x - 14, 414, qa.x + qa.w - build.x + 28, 322, { rx: 10, stroke: t.edge, sw: 1.5, dash: "8 6" }),
     line(`M${review.c} ${ty - mr - 4} C ${review.c} ${ty - mr - 44}, ${build.c} ${ty - mr - 44}, ${build.c} ${ty - mr - 6}`, t.bad, "bad"),
     label((review.c + build.c) / 2, ty - mr - 46, "findings", { fill: t.bad }),
     ...S.map((st, i) => tile(t, id, st.x, ty, st.w, th, st.title, st.sub, true, { titleY: 64 }) + (i < S.length - 1 ? line(`M${st.x + st.w + 5} ${ty + th / 2} L ${st.x + st.w + 28} ${ty + th / 2}`, t.edge, "hot") : "")),
@@ -561,7 +564,7 @@ function loop(t, id) {
     line(`M1064 160 L 1072 160 Q 1080 160 1080 170 L 1080 770 Q 1080 780 1070 780 L 340 780 Q 330 780 330 770 L 330 756`, t.loop, "loop", { dash: "8 8", sw: 2.5 }),
     label(W / 2, 828, "a mistake that comes back twice → seal the lesson", { fill: t.loop, weight: 700 }),
   ].join("\n");
-  return worldSvg(W, H, id, defs, body, "How sage works: you send a request to the chief of staff, the hooded toad sage, which briefs the team (design, build, review, QA) and keeps the logbook. Findings and QA failures go back to the build. A clean result becomes a pull request. In the outer loop, the chief seals the lesson: a mistake that comes back twice gets a lasting fix, a test or a check in code first, a principle or a standing order only when code cannot hold it.", { rx: 24, bg: t.bg, border: t.border });
+  return worldSvg(W, H, id, defs, body, "How sage works: you send a request to the chief of staff, the hooded toad sage, which briefs the team and keeps the logbook. The chief runs the design and the PE check. For each pull request, one lead runs the build, the reviews and QA, and findings and QA failures go back to the build. A clean result becomes a pull request. In the outer loop, the chief seals the lesson: a mistake that comes back twice gets a lasting fix, a test or a check in code first, a principle or a standing order only when code cannot hold it.", { rx: 24, bg: t.bg, border: t.border });
 }
 
 /** A world panel in the reader's theme, with the world's defs and arrowheads. */
@@ -608,7 +611,7 @@ function routes(t, id) {
 
 /** A task's life: the states, with the repair loop and the held state. */
 function lifecycle(t, id) {
-  const W = 1100, H = 564, size = SMALL, ph = 50, y = 104, by = 256;
+  const W = 1100, size = SMALL, ph = 50, y = 104, by = 256;
   const names = ["framed", "briefed", "building", "reviewing", "verifying", "verified", "merged"];
   const ws = names.map((n) => tw(n, size, true) + 16);
   const gap = (W - 72 - ws.reduce((a, b) => a + b)) / (names.length - 1);
@@ -618,7 +621,7 @@ function lifecycle(t, id) {
   const held = { w: tw("held", size, true) + 64 }, rep = { w: tw("repairing", size, true) + 64 };
   held.x = f1(bu.cx - held.w / 2);
   rep.x = f1((re.cx + ve.cx) / 2 - rep.w / 2);
-  const fy = 372, fh = 4 * size * 1.4 + 32;
+  const fy = 384, fh = 7 * size * 1.4 + 32, H = Math.round(fy + fh + 36);
   const body = [
     backdrop(t, id, W, H, { moon: [990, 250, 100], seeds: [17, 52, 4], far: [H - 60, 60, 180, 70, 140], near: [H + 60, 90, 220, 80, 170], mist: [140, 280, H - 130], mistK: 0.6 }),
     heading(t, 36, 62, "THE STATES OF A TASK"),
@@ -630,18 +633,22 @@ function lifecycle(t, id) {
     text(bu.cx - 28, 196, ["a product", "question"], { size, fill: t.muted, anchor: "end", lh: 1.25 }),
     text(bu.cx + 28, 196, ["your", "answer"], { size, fill: t.muted, lh: 1.25 }),
     pill(t, id, held.x, by, held.w, ph, "held", "wait", size),
-    // Findings or a QA failure start a repair round; the next round is reviewed again.
+    // Findings to fix (from reviewing) or a QA failure (from verifying) start a repair round (the state tool's round
+    // command starts from either); the next round is reviewed again.
+    flow(id, `M${re.cx + 24} ${y + ph + 4} L ${re.cx + 24} ${by - 6}`, t.bad, "bad", { sw: 2 }),
+    text(re.cx + 36, 196, ["findings", "to fix"], { size, fill: t.bad, lh: 1.25 }),
     flow(id, `M${ve.cx + 20} ${y + ph + 4} C ${ve.cx + 40} ${by - 30}, ${ve.cx + 40} ${by + ph / 2}, ${f1(rep.x + rep.w + 6)} ${by + ph / 2}`, t.bad, "bad", { sw: 2 }),
-    text(ve.cx + 52, 210, ["findings to fix,", "or QA fail"], { size, fill: t.bad, lh: 1.25 }),
+    text(ve.cx + 52, 210, "QA fail", { size, fill: t.bad, lh: 1.25 }),
     flow(id, `M${f1(rep.x - 4)} ${by + ph / 2} C ${re.cx - 40} ${by + ph / 2}, ${re.cx - 30} ${by - 40}, ${re.cx - 30} ${y + ph + 6}`, t.line, "muted", { sw: 2 }),
     pill(t, id, rep.x, by, rep.w, ph, "repairing", "bad", size),
-    text(f1(rep.x + rep.w / 2), by + ph + 34, "next round, at most 3", { size, fill: t.muted, anchor: "middle" }),
+    text(f1(rep.x + rep.w / 2), by + ph + 34, "3 rounds by default, then held", { size, fill: t.muted, anchor: "middle" }),
     // The rules of the states.
     rect(36, fy, W - 72, fh, { rx: 8, fill: t.tile, stroke: t.edge, sw: 1.5 }),
-    text(64, fy + 40, ["Verified needs 1 clean cycle. Autopilot merges after the task's clean cycles:", "1 for a small task, 2 for a large task or a task with a risk flag."], { size, weight: 700, fill: t.ink, lh: 1.4 }),
-    text(64, f1(fy + 40 + 2 * size * 1.4), ["A tiny task has no review and no QA: it is clean when its checks pass.", "The state tool checks each move. A new commit voids the verdicts."], { size, fill: t.muted, lh: 1.4 }),
+    text(64, fy + 40, ["Verified needs 1 clean cycle. Autopilot merges after the task's clean cycles:", "1 for a tiny or small task, 2 for a large task or a task with a risk flag."], { size, weight: 700, fill: t.ink, lh: 1.4 }),
+    text(64, f1(fy + 40 + 2 * size * 1.4), ["A tiny task has no review and no QA: it is clean when its checks pass.", "The state tool checks each move. A new commit voids the verdicts.",
+      "Other states: designing and awaiting you (a large task's design), pr-ready", "(it waits for your merge), replan (a new plan), concluded (an investigation),", "and abandoned (from any state)."], { size, fill: t.muted, lh: 1.4 }),
   ].join("\n");
-  return panel(t, id, W, H, body, "A task's life: framed, briefed, building, reviewing, verifying, verified, merged. A product question holds the task until your answer. Findings or a QA failure send it to repairing, then to review again, at most 3 rounds. Verified needs one clean cycle; autopilot merges after one for a small task, two for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass.");
+  return panel(t, id, W, H, body, "A task's life: framed, briefed, building, reviewing, verifying, verified, merged. A product question holds the task until your answer. Findings to fix in review, or a QA failure, send it to repairing, then to review again: 3 rounds by default, then the task is held. Verified needs one clean cycle; autopilot merges after one for a tiny or small task, two for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass. Other states: designing, awaiting you, pr-ready, replan, concluded and abandoned.");
 }
 
 /** The arena: one brief, N candidates on a mix of Claude models, a judge, one final version. */

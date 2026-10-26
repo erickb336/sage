@@ -11,7 +11,7 @@ Before you start, install sage with the README's [Quick start](../../README.md#q
 <a href="../assets/loop-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/loop-dark.svg">
-  <img alt="How sage works: you, the chief of staff, the team (design, build, review, QA), the pull request, the logbook, and the outer loop that seals each lesson." src="../assets/loop-light.svg" width="100%">
+  <img alt="How sage works: you send a request to the chief of staff, which briefs the team and keeps the logbook. The chief runs the design and the PE check. For each pull request, one lead runs the build, the reviews and QA; findings and QA failures go back to the build. A clean result becomes a pull request. The outer loop seals each lesson." src="../assets/loop-light.svg" width="100%">
 </picture>
 </a>
 

@@ -4,7 +4,7 @@ This is the index of sage's documentation, by reader. Start with the [README](..
 
 ## If you are new
 
-- [README](../README.md): what sage is, its status, the requirements and the quick start.
+- [README](../README.md): what sage is, its status, the quick start and how it works.
 - [Learn sage in 5 minutes](guide/learn-sage.md): one small task from your first message to a merged pull request.
 - [How sage works](guide/how-it-works.md): the loops, the team, the routes and a task's life.
 - [FAQ and credits](guide/faq.md): cost, safety, which projects fit, and the work that sage comes from.
