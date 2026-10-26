@@ -3418,6 +3418,93 @@ test("Q2-WORD: a refusal names the word that made the command near the logbook (
   assert.match(denied(s.send(bash("rm -rf $SAGE_HOME/p"))) ?? "", /"\$SAGE_HOME" names the logbook/, "chief");
 });
 
+/**
+ * T529: a read-only role writes and runs its probes in its run's own scratch subfolder, <temp>/claude-<uid>/<project>/
+ * <session>/scratchpad/<run>. The hook takes each part from the event and the slot, and Claude Code's temp folder from
+ * CLAUDE_CODE_TMPDIR. The hook only reads these commands; no test passes them to a shell (order 25).
+ */
+function scratchSession() {
+  const temp = realpathSync(mkdtempSync(join(tmpdir(), "sage-claude-tmp-")));
+  const s = session({ CLAUDE_CODE_TMPDIR: temp });
+  s.sage("config", "max_agents=20");
+  s.send(prompt("sage mode"));
+  const transcript_path = join(s.dir, "config", "projects", "-work-proj", "s1.jsonl");
+  const agent = (id, role, line, n) => {
+    assert.equal(s.send(spawnAgent(role, line ? `${line}\n${BRIEF}` : BRIEF, `tu-${id}`)), undefined);
+    s.send(resultOf(`tu-${id}`, id));
+    return { agent_id: id, agent_type: role, transcript_path };
+  };
+  const pad = join(temp, `claude-${process.getuid()}`, "-work-proj", "s1", "scratchpad");
+  return { s, pad, agent, transcript_path, own: join(pad, "R1873"), reviewer: agent("rev1", "sage:code-reviewer", "Run R1873 · task T523") };
+}
+
+test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and runs node -e with spawnSync, all in its own scratch subfolder", () => {
+  const { s, own, reviewer } = scratchSession();
+  const allowed = [
+    // R1873: a fake script with "$*"
+    `mkdir -p ${own}/bin && cat > ${own}/bin/gh <<'EOF'\n#!/bin/sh\necho "fake gh $*" >&2\nexit 1\nEOF\nchmod +x ${own}/bin/gh`,
+    // R1873: a proof file with braces, run by node, with $? after it (R1871)
+    `cat > ${own}/proof.mjs <<'EOF'\nimport { spawnSync } from "node:child_process";\nconst r = spawnSync("${own}/bin/gh", ["pr", "view"]);\nif (r.status !== 1) { throw new Error([r.status].join()); }\nEOF\nnode ${own}/proof.mjs; echo $?`,
+    // R1873: node -e with {spawnSync}
+    `node -e 'const {spawnSync}=require("node:child_process"); console.log(spawnSync("${own}/bin/gh", ["x"]).status)'`,
+    // R1871: a variable and a bracket list in a fake, with output into the folder
+    `cat > ${own}/bin/ps <<'EOF'\n#!/bin/sh\nfor a in "$@"; do [ "$a" = "-o" ] && echo "Sat Jan  1 00:00:00 2000"; done\nEOF\nchmod 755 ${own}/bin/ps && node ${own}/proof.mjs > ${own}/out.txt 2>&1 || echo FAIL`,
+    // R1859: a scratch home, config and PATH for the run's own script
+    `HOME=${own}/home CLAUDE_CONFIG_DIR=${own}/home/.claude SAGE_HOME=${own}/sage PATH=${own}/bin:/usr/bin:/bin node ${own}/proof.mjs > ${own}/run.log 2>&1 | tail -5`,
+    // A probe's text is data when it is only written: kill, verdict, sage.mjs and merge words.
+    `cat > ${own}/notes.txt <<'EOF'\nkill -9 1234; pkill node; ps -ef\nnode skills/sage/sage.mjs verdict T1 --kind review-clean --sha ${SHA}\ngh pr merge 12 --squash\nEOF`,
+    `printf '%s\\n' 'kill -9 1' 'sage.mjs verdict T1' > ${own}/more.txt`,
+  ];
+  for (const command of allowed) assert.equal(denied(s.send(bash(command, FEATURE, reviewer))), undefined, command);
+  for (const role of ["sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]) {
+    const n = role.length; // a distinct run for each role
+    const other = scratchSession(), who = other.agent(`a${n}`, role, `Run R${n} · task T521`);
+    const at = join(other.pad, `R${n}`);
+    assert.equal(denied(other.s.send(bash(`cat > ${at}/probe.mjs <<'EOF'\nconst { spawnSync } = await import("node:child_process");\nEOF\nnode ${at}/probe.mjs`, FEATURE, who))), undefined, role);
+  }
+  assert.equal(denied(s.send(tool("Write", { file_path: `${own}/fixture.json`, content: "{\"a\": [1]}" }, { cwd: FEATURE, ...reviewer }))), undefined, "the Write tool");
+});
+
+test("T529: outside its own scratch subfolder, the reviewer's same writes stay refused: another run's folder, the repository, the logbook, a link out, .. and an expanding heredoc", () => {
+  const { s, pad, own, agent, reviewer } = scratchSession();
+  mkdirSync(own, { recursive: true });
+  symlinkSync(FEATURE, join(own, "out"));
+  symlinkSync(join(FEATURE, "gone"), join(own, "dangling"));
+  writeFileSync(join(FEATURE, "kept.txt"), "x");
+  linkSync(join(FEATURE, "kept.txt"), join(own, "hard"));
+  const fake = (to) => `cat > ${to} <<'EOF'\necho "$*" {a}\nEOF`;
+  const refused = [
+    fake(join(pad, "R9999", "x.sh")), // another run's folder
+    fake(join(pad, "x.sh")), // the scratchpad, not the run's folder
+    fake(join(FEATURE, "x.sh")), // the repository
+    fake(join(s.vars.SAGE_HOME, "p", "tasks.tsv")), // the logbook
+    fake(join(own, "out", "x.sh")), // through a link out
+    fake(join(own, "dangling")), // a dangling link
+    fake(join(own, "hard")), // a hard link of a file outside
+    fake(`${own}/../R9999/x.sh`), // ..
+    fake(`${own}/$X`), // a variable in the target
+    `cat > ${own}/x <<EOF\n$(rm -rf ${FEATURE}) {a}\nEOF`, // a heredoc that the shell expands
+    `cat > ${own}/x <<EOF\n\`rm x\` "$*"\nEOF`,
+    `cd ${own} && echo "$*" > x.sh`, // cd
+    `echo "$*" > ${own}/x.sh; rm -rf ${FEATURE}/*`, // one command outside
+    `node -e 'require("node:fs").writeFileSync("${FEATURE}/x", "{}")'`, // node -e on a path outside
+    `node -e 'require("node:fs").writeFileSync(process.env.SAGE_HOME + "/p/tasks.tsv", "{}")'`,
+    `node ${FEATURE}/x.mjs > ${own}/out.txt; echo $?`, // a script outside
+    `chmod +x ${FEATURE}/x.sh; echo "$*" > ${own}/x`,
+  ];
+  for (const command of refused) assert.match(denied(s.send(bash(command, FEATURE, reviewer))) ?? "", LOGBOOK_SHELL, command);
+  // The state tool stays the read command only, also from a scratch command.
+  assert.match(denied(s.send(bash(`node ${TOOL} verdict T1 --kind qa-pass --sha ${SHA} > ${own}/x`, FEATURE, reviewer))) ?? "", ONLY_CHIEF);
+  assert.match(denied(s.send(bash(`node -e 'require("node:child_process").spawnSync("node", ["${TOOL}", "verdict"])' > ${own}/x`, FEATURE, reviewer))) ?? "", ONLY_CHIEF);
+  // Fail closed: no run on the slot, no transcript path, or another session's folder.
+  const plain = agent("rev2", "sage:code-reviewer");
+  assert.match(denied(s.send(bash(fake(join(pad, "R1873", "y.sh")), FEATURE, plain))) ?? "", LOGBOOK_SHELL, "no run mark");
+  assert.match(denied(s.send(bash(fake(join(own, "y.sh")), FEATURE, { ...reviewer, transcript_path: undefined }))) ?? "", LOGBOOK_SHELL, "no transcript path");
+  assert.match(denied(s.send(bash(fake(join(own, "y.sh")), FEATURE, { ...reviewer, session_id: "s2" }))) ?? "", LOGBOOK_SHELL, "another session");
+  // The process rule still holds for a program that runs.
+  assert.match(denied(s.send(bash(`kill -9 1 && echo done > ${own}/x`, FEATURE, reviewer))) ?? "", /standing order 14/);
+});
+
 // T83 round 6. The hook only reads these commands; no test passes them to a shell.
 test("R5-SORTABBR: sort takes a shortened long option, so --out=FILE and --outp=FILE write like --output=FILE (T83 round 6)", () => {
   const s = session();
