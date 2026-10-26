@@ -201,6 +201,13 @@ const PAGE_MAX = 16 * 1024 * 1024;
 const BRANCH = /^(?![-./])(?!(?:refs|heads|remotes|origin)\/)(?!(?:main|master|HEAD)$)(?!.*(?:\.\.|\/\/|\/\.|\.lock(?:\/|$)|[/.]$))[A-Za-z0-9._/-]+$/i;
 /** Does a branch belong to a task: a BRANCH of the form [<prefix>/]<task>[-<words>]? task set and the PR script check this one rule. */
 const ofTask = (task, name) => BRANCH.test(name) && new RegExp(`^(?:[A-Za-z0-9_-]+/)?${task}(?:-[A-Za-z0-9._-]+)?$`, "i").test(name);
+/**
+ * May a task name this branch: a branch of the task, or the branch that another task of its logbook names, so that two
+ * tasks share one pull request (T439). The merge check then wants each task of that branch on the pull request.
+ */
+/** Is it the same branch: letters in any case, as ofTask reads a task's name (R1740-3). */
+const sameBranch = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+const mayName = (tasks, task, name) => ofTask(task.id, name) || tasks.some((other) => other.id !== task.id && other.branch === name);
 const branchOf = (name) => (BRANCH.test(name) ? name : refuse(`${JSON.stringify(name)} is not a task branch: use letters, digits and . _ / - (for example sage/t12 or tool/t12-short-name), not main, master or HEAD in any case, not under refs/, heads/, remotes/ or origin/, and not a name that starts with - or holds .., @{ or a space.`));
 
 /** The project's name: its main checkout's folder name as a slug. The store's folder and the cap.<project> config key use it. */
@@ -1105,7 +1112,7 @@ function captureRunAssignment(input, env = process.env) {
   if (realpathSync(dir) !== resolve(dir)) deny();
   return withLock(dir, () => {
     ready(dir);
-    const tasks = read(dir, "tasks").filter(row => row.id === input.task);
+    const all = read(dir, "tasks"), tasks = all.filter(row => row.id === input.task);
     const runs = read(dir, "runs").filter(row => row.id === input.run);
     if (tasks.length !== 1 || runs.length !== 1) deny();
     const task = tasks[0], run = runs[0];
@@ -1114,7 +1121,7 @@ function captureRunAssignment(input, env = process.env) {
       || run.task !== task.id || run.role !== input.role || run.round !== task.round || run.status !== "running"
       || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
       || !Number.isSafeInteger(Number(task.round))
-      || (task.branch && !ofTask(task.id, branchOf(task.branch)))
+      || (task.branch && !mayName(all, task, branchOf(task.branch)))
       || (run.branch && run.branch !== task.branch) || (WRITERS.includes(run.role) && !run.branch)) deny();
     if (WRITERS.includes(run.role) && read(dir, "runs").some(row => row.id !== run.id
       && row.status === "running" && WRITERS.includes(row.role) && row.branch === run.branch)) deny();
@@ -1537,7 +1544,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       decided.push(...(notHeld(task, "pr="), setPr(task, v, "task set", at)));
       if (v) apartFromPilot(task, graph, [...decisions, ...decided], facts.ledger, "pr", had); // with the PR rows of earlier keys (R1285-1)
     }
-    else if (k === "branch") notHeld(task, "branch="), task.branch = v && (ofTask(task.id, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}`)); // branch= clears it
+    else if (k === "branch") notHeld(task, "branch="), task.branch = v && (mayName(tasks, task, branchOf(v)) ? v : refuse(`${JSON.stringify(v)} is not a branch of ${task.id}: use [<prefix>/]${task.id.toLowerCase()}[-<words>], for example sage task ${task.id} set branch=sage/${task.id.toLowerCase()}, or the branch of another task of this logbook, to share its pull request`)); // branch= clears it
     else if (k === "title") task.title = v;
     else if (k === "priority") task.priority = priorityOf(v, task);
     else if (k === "kind") task.kind = tag(k, v);
@@ -1775,8 +1782,9 @@ function rebuild(root) {
  * clean cycles of its size and risk (cyclesFor), or cycles when it is given and higher: cycles only raises. The hook calls this, so it
  * never throws: what it cannot read refuses the merge. With readOnly (the board), it takes no lock and writes nothing, so
  * it refuses when the known project list is missing instead of making it. With head (it needs pr), the name of the pull
- * request's head branch on GitHub: each task of that pull request, now or in its PR history, must own it, by its branch=
- * or as a branch of the task (ofTask), so a task cannot lend its verdicts to another task's pull request (F-T273-8).
+ * request's head branch on GitHub: each task of that pull request, now or in its PR history, must own it, by its
+ * branch=, as a branch of the task (ofTask) or by a run of it on that branch, so a task cannot lend its verdicts to another task's
+ * pull request (F-T273-8). Each task of the logbook that owns it must be on the pull request too (T439).
  * With project, the folder of the project being merged: only a task of its logbook counts as a task of the pull request
  * that may approve the merge. A task of another logbook with verdicts on the SHA must still pass (F-T273-9).
  */
@@ -1792,7 +1800,7 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
     const cfg = config(env); // once: the merge check may judge thousands of tasks
     const broken = Object.keys(cfg).find((k) => cfg[k] === "invalid"); // fail closed: a default would ask fewer cycles than the owner meant
     if (broken) return { ok: false, reason: `the merge check refuses every merge, because ${broken} in ${join(root, "config.json")} is not a number. Set it with sage config ${broken}=<n> (a whole number from ${floor(broken)} to 10), or remove the key.` };
-    const [listed, strangers] = [known(root, undefined, undefined, readOnly), []];
+    const [listed, strangers, absent] = [known(root, undefined, undefined, readOnly), [], []];
     if (!listed) return { ok: false, reason: `the known project list is missing. This read-only check does not make it: sage merge-check --sha <sha> makes ${join(root, "projects.tsv")} or says how to get it back.` };
     const each = folders(root).flatMap((dir) => {
       // A folder with tasks.tsv, also a link, is a logbook, and it must pass the integrity check. A folder without it is
@@ -1808,6 +1816,16 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
       const [byId, ownOf, findingsOf, runsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs)];
+      // A task owns the head branch by its branch=, by its name, or by a run of it on that branch: a task that ran work
+      // there and then moved to another branch still owns it (R1709-1).
+      const ranOn = new Map();
+      for (const r of runs) if (sameBranch(r.branch, head) && !ranOn.has(r.task)) ranOn.set(r.task, r.id);
+      // How a task owns the head: the refusal says what will work, for only a task that owns it by branch= alone can move off it (R1741-1).
+      const how = (id) => (ofTask(id, String(head)) ? "by its name" : ranOn.has(id) ? `by run ${ranOn.get(id)} on it` : byId.get(id)?.branch === head ? "by its branch=" : "");
+      const owns = (id) => how(id) !== "";
+      // A shared head branch (T439): each task that owns it must be a task of the PR too, so a task that joins another
+      // task's branch cannot merge that task's work on its own verdicts (F-T273-8).
+      if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && owns(t.id)).map((t) => ({ name: `${visible(dir)} ${t.id}`, how: how(t.id) })));
       const graph = waitGraph(tasks, book ? rowsOf(book.programs) : [], book ? rowsOf(book.gates) : [], decisions);
       const checked = [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
@@ -1818,7 +1836,7 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
         // would pass, so a refusal still names an open finding first.
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
-        return { dir, id, ofPr: ofPr.has(id), owns: task?.branch === head || ofTask(id, String(head)), own: own.length, ...verdict, ...busy, ...held };
+        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), own: own.length, ...verdict, ...busy, ...held };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
       // too, its own waits included: else two tasks of one PR could never merge. The same PR is the PR of --pr for both
@@ -1866,6 +1884,11 @@ function mergeCheck(sha, env = process.env, { cycles, pr, readOnly, head, projec
     // The head branch rule comes after each task's own judgment, so a refusal names a task's missing verdicts first.
     const strays = head === undefined ? [] : each.filter((r) => r.ofPr && !r.owns);
     if (strays.length && each.every((r) => r.ok)) return { ok: false, reason: `PR ${pr}'s head branch ${JSON.stringify(head)} is not a branch of ${strays.map((r) => `${visible(r.dir)} ${r.id}`).join(", ")}, so the merge check refuses: each task that is or was on a pull request must own its head branch, a branch named for the task. Rename the branch to a task name (for example sage/${strays[0].id.toLowerCase()}-<words>), or the user lands this pull request.` };
+    if (absent.length && each.every((r) => r.ok)) {
+      const movable = absent.filter((a) => a.how === "by its branch=").map((a) => a.name);
+      const move = !movable.length ? "" : movable.length === absent.length ? `, or move ${absent.length === 1 ? "it" : "them"} to another branch` : `, or move ${movable.join(", ")} to another branch`;
+      return { ok: false, reason: `PR ${pr}'s head branch ${JSON.stringify(head)} also belongs to ${absent.map((a) => `${a.name} (${a.how})`).join(", ")}, which ${absent.length === 1 ? "is" : "are"} not on PR ${pr}, so the merge check refuses: each task of a shared branch must be on its pull request and pass on its own verdicts. Set ${absent.length === 1 ? "its" : "the"} pr=${pr}${absent.length === 1 ? "" : " of each"} and record its verdicts with --pr ${pr}${move}.` };
+    }
     if (each.length === 1) return { ok: each[0].ok, reason: each[0].reason };
     const all = `${each.length} tasks have verdicts on ${sha.slice(0, 7)}${pr ? ` or belong to PR ${pr}` : ""}, and each must pass`;
     const bad = each.filter((r) => !r.ok);
@@ -2048,6 +2071,8 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     },
     endedLeadRuns: () => rows("runs").filter((r) => r.role === "lead" && r.status !== "running"),
     prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),
+    /** The tasks that use a branch: by their branch= or by a run on it, in any letter case (R1740-1). */
+    branchTasks: (name) => new Set([...rows("tasks").filter((t) => sameBranch(t.branch, name)).map((t) => t.id), ...rows("runs").filter((r) => sameBranch(r.branch, name)).map((r) => r.task)]),
   };
 }
 
