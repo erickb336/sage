@@ -14,12 +14,12 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, hostname, platform, tmpdir, uptime } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { boardView } from "./board-view.mjs";
 import { projectName as shownName } from "./board-model.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
 import { createBoard } from "./board.mjs";
-import { PR } from "./pull-request.mjs";
+import { PR, pullRequestHead } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
@@ -89,13 +89,14 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program"], findings: ["run", "class"] };
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe"];
+const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption"], findings: ["run", "class"] };
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss"],
   "projects rebuild": ["accept-listing"],
   "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
+  "task-adopt": ["source-logbook", "source-provider", "source-task", "pr", "branch"],
   "program propose": ["name", "goal", "pilot", "tasks"],
   "run add": ["role", "branch", "candidate", "usage-interface"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
@@ -207,7 +208,16 @@ const ofTask = (task, name) => BRANCH.test(name) && new RegExp(`^(?:[A-Za-z0-9_-
  */
 /** Is it the same branch: letters in any case, as ofTask reads a task's name (R1740-3). */
 const sameBranch = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
-const mayName = (tasks, task, name) => ofTask(task.id, name) || tasks.some((other) => other.id !== task.id && other.branch === name);
+const adoptionOf = task => {
+  if (!task.adoption) return null;
+  let a;
+  try { a = JSON.parse(task.adoption); } catch { /* Refuse below. */ }
+  if (!a || a.version !== 1 || !/^[a-z][a-z0-9-]*$/.test(a.provider ?? "") || !TASK_ID.test(a.task ?? "")
+    || !isAbsolute(a.logbook ?? "") || !isAbsolute(a.project ?? "") || !PR.test(a.pr ?? "") || !ofTask(a.task, a.branch)
+    || !Number.isSafeInteger(a.round) || a.round < 0 || !/^[a-f0-9]{64}$/.test(a.digest ?? "")) refuse(`${task.id} has a damaged adoption record.`);
+  return a;
+};
+const mayName = (tasks, task, name) => ofTask(task.id, name) || adoptionOf(task)?.branch === name || tasks.some((other) => other.id !== task.id && other.branch === name);
 const branchOf = (name) => (BRANCH.test(name) ? name : refuse(`${JSON.stringify(name)} is not a task branch: use letters, digits and . _ / - (for example sage/t12 or tool/t12-short-name), not main, master or HEAD in any case, not under refs/, heads/, remotes/ or origin/, and not a name that starts with - or holds .., @{ or a space.`));
 
 /** The project's name: its main checkout's folder name as a slug. The store's folder and the cap.<project> config key use it. */
@@ -1500,6 +1510,8 @@ function planTaskChanges(before, id, changes, at, facts) {
   const task = matches[0], decided = [], graph = waitGraph(tasks, facts.programs, facts.gates, decisions), had = prsOf(task, decisions, facts.ledger);
   for (const kv of changes) {
     const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
+    const adoption = adoptionOf(task);
+    if (adoption && ((k === "branch" && v !== adoption.branch) || (k === "pr" && v !== adoption.pr))) refuse(`${task.id}'s adoption keeps PR ${adoption.pr} and branch ${adoption.branch}. Nothing changed.`);
     if (k === "state") {
       if (v === "repairing") refuse("start a repair with: sage round <task>");
       // A move out of a hold that round set gives the task one more repair round, once per such hold (F-T284-14,
@@ -1612,6 +1624,8 @@ function move(task, to) {
  * then checks a new PR against the pilot (apartFromPilot).
  */
 function setPr(task, pr, why, at = now()) {
+  const adoption = adoptionOf(task);
+  if (adoption && pr !== adoption.pr) refuse(`${task.id}'s adoption keeps PR ${adoption.pr}. Nothing changed.`);
   if (pr && !builds(task)) refuse(`${task.id} is an investigation: it changes no code, so it has no pull request. A build is its own task: sage task add --size tiny, small or large, then give that task the PR.`);
   if (pr && !PR.test(pr)) refuse(`${JSON.stringify(pr)} is not a pull request number. Give only its digits, with no leading zero, for example pr=5 or --pr 5.`);
   const was = task.pr;
@@ -2215,6 +2229,56 @@ function sage(argv, env = process.env) {
 function act(cmd, pos, opt, dir, env, skip, project) {
   const [sub, id, ...more] = pos;
   switch (cmd) {
+    case "task-adopt": {
+      if (pos.length !== 1) refuse("task-adopt takes one destination task id.");
+      const { tasks, task } = taskOf(dir, need(sub, "the destination task id"));
+      const provider = need(opt["source-provider"], "--source-provider"), sourceTask = need(opt["source-task"], "--source-task");
+      const path = need(opt["source-logbook"], "--source-logbook"), pr = need(opt.pr, "--pr"), branch = branchOf(need(opt.branch, "--branch"));
+      if (!/^[a-z][a-z0-9-]*$/.test(provider) || !TASK_ID.test(sourceTask) || !isAbsolute(path) || !PR.test(pr)) refuse("adoption needs a provider name, source task id, absolute source logbook and PR number. Nothing changed.");
+      let source;
+      try { source = realpathSync(path); } catch { refuse("the source logbook does not exist. Nothing changed."); }
+      const identity = { provider, task: sourceTask, logbook: source, project: projectRoot(project), pr, branch };
+      if (source === realpathSync(dir) || basename(source) !== basename(dir)
+        || readRegular(join(source, "checkout.txt"))?.trim() !== identity.project) refuse("the source logbook must belong to this project under another provider root. Nothing changed.");
+      const prior = adoptionOf(task);
+      if (prior) {
+        if (Object.entries(identity).some(([key, value]) => prior[key] !== value)) refuse(`${task.id} already has a conflicting adoption. Nothing changed.`);
+        return `${task.id} adopted (already recorded) · ${provider} ${sourceTask} · PR ${pr} · ${branch} · round ${task.round}`;
+      }
+      // The source is read only. Refuse an active writer or a changed snapshot instead of taking its lock.
+      if (existsSync(join(source, ".lock"))) refuse("the source logbook is busy. Nothing changed.");
+      const book = check(source), sourceRows = rowsOf(book.tasks), matches = sourceRows.filter(t => t.id === sourceTask);
+      if (matches.length !== 1) refuse("the source task is missing or ambiguous. Nothing changed.");
+      const old = matches[0];
+      if (old.adoption || !ofTask(sourceTask, branch) || (old.branch && old.branch !== branch) || prNumber(old.pr) !== pr
+        || !builds(old) || ENDED.includes(old.state) || !/^\d+$/.test(old.round) || !Number.isSafeInteger(Number(old.round))) refuse("the source task, PR or branch does not match this adoption. Nothing changed.");
+      const decisions = read(dir, "decisions"), ledger = read(dir, "ledger"), runs = read(dir, "runs");
+      const claimed = tasks.find(t => t.id !== task.id && (prsOf(t, decisions, ledger).has(pr) || sameBranch(t.branch, branch)
+        || runs.some(r => r.task === t.id && sameBranch(r.branch, branch))));
+      if (claimed) refuse(`${claimed.id} already claimed this PR or branch. Nothing changed.`);
+      const sourceClaim = sourceRows.find(t => t.id !== sourceTask && (prsOf(t, rowsOf(book.decisions), rowsOf(book.ledger)).has(pr) || sameBranch(t.branch, branch)));
+      if (sourceClaim) refuse(`${sourceClaim.id} also claims the source PR or branch. Adopt shared work only after the owner resolves its task mapping. Nothing changed.`);
+      if (!["framed", "briefed"].includes(task.state) || !builds(task) || (task.branch && task.branch !== branch) || (task.pr && task.pr !== pr)
+        || [...prsOf(task, decisions, ledger)].some(n => n !== pr) || runs.some(r => r.task === task.id)
+        || ledger.some(r => r.task === task.id) || read(dir, "findings").some(f => f.task === task.id)) refuse("adoption needs an unstarted destination task with no runs, findings, verdicts or conflicting PR/branch history. Nothing changed.");
+      if (list(old.risk).some(r => !RISKS.includes(r)) || list(old.route).some(b => !BLOCKS.includes(b))) refuse("the source route or risk flags are unknown. Nothing changed.");
+      let head;
+      try { head = pullRequestHead(pr, project, env); } catch (error) { refuse(`adoption cannot check the PR: ${error.message}. Nothing changed.`); }
+      if (head !== branch) refuse("the PR head branch does not match this adoption. Nothing changed.");
+      const graph = graphOf(dir);
+      const adopted = { ...task, pr, branch, round: Math.max(Number(task.round), Number(old.round)),
+        risk: RISKS.filter(r => list(task.risk).includes(r) || list(old.risk).includes(r)).join(","),
+        route: BLOCKS.filter(b => list(task.route).includes(b) || list(old.route).includes(b)).join(","),
+        adoption: JSON.stringify({ version: 1, ...identity, round: Number(old.round), digest: createHash("sha256").update(JSON.stringify(old)).digest("hex"), at: now() }) };
+      // A large source retains its two-cycle floor even when the destination was framed as small.
+      if (old.size === "large") adopted.size = "large";
+      apartFromPilot(adopted, graph, decisions, ledger, "pr", prsOf(task, decisions, ledger));
+      if (existsSync(join(source, ".lock")) || JSON.stringify(check(source)) !== JSON.stringify(book)) refuse("the source changed during adoption. Nothing changed.");
+      // All adopted fields and provenance share one atomic task-table replacement. No source proof is copied.
+      Object.assign(task, adopted);
+      write(dir, "tasks", tasks);
+      return `${task.id} adopted · ${provider} ${sourceTask} · PR ${pr} · ${branch} · round ${task.round}; fresh destination reviews and QA required`;
+    }
     case "config":
       return logbookConfig(dir, pos);
     case "init":
@@ -2571,6 +2635,13 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       notHeld(task, "verdict");
       const kind = need(opt.kind, "--kind");
       if (!KINDS.includes(kind)) refuse(`kind is one of ${KINDS.join(", ")}`);
+      if (adoptionOf(task) && CLEAN.includes(kind)) {
+        const role = { "review-clean": "code-reviewer", "security-clean": "security-reviewer", "ux-clean": "ux-reviewer", "qa-pass": "qa", "evidence-clean": "evidence-review" }[kind];
+        const matches = read(dir, "runs").filter(r => r.id === opt.run);
+        const run = matches[0];
+        if (matches.length !== 1 || run.task !== task.id || run.role !== role || run.status !== "done" || !run.ended
+          || run.round !== task.round || (run.branch && run.branch !== task.branch)) refuse(`${task.id}'s adoption needs a fresh done ${role} run on its current branch and round for ${kind}. Nothing changed.`);
+      }
       // The clean rule: a cycle is clean when no medium or high finding is open. Low ones are fixed, moved or dismissed
       // before a merge, and an open one blocks it. So a problem verdict needs an open finding that is not low.
       const findings = read(dir, "findings").filter((f) => f.task === task.id && f.status === "open");

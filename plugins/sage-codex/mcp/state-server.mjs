@@ -40,6 +40,12 @@ export const TOOLS = {
     pos: ["task", "fields"],
     argv: (i) => ["task", i.task, "set", ...Object.entries(i.fields).map(([k, v]) => `${k}=${v}`)],
   },
+  task_adopt: {
+    describe: "Adopt another provider's task and PR into an unstarted task of this project. Preserve spent repairs and provenance; require fresh destination reviews and QA. Read the source logbook without changing it.",
+    input: { task, "source-logbook": z.string().refine(isAbsolute, "an absolute path"), "source-provider": z.string(), "source-task": task,
+      pr: z.string().regex(/^[1-9]\d*$/), branch: z.string() },
+    pos: ["task"], argv: i => ["task-adopt", i.task],
+  },
   run_add: {
     describe: "Record an agent run of a task before the agent starts. It prints the run id and the model to pass.",
     input: { task, role: z.string().describe("lead, implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate or evidence-review"),
