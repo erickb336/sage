@@ -753,7 +753,7 @@ test('chief context replays activation across connections without repeating on o
   const second = await client.call({ ...f.prompt('sage mode'), instruction_part: 1 });
   const strip = text => text.replace(/^Sage chief instructions: part [12] of [12]\n\n/, '');
   assert.equal(strip(first.hookSpecificOutput.additionalContext) + strip(second.hookSpecificOutput.additionalContext), expected);
-  for (const output of [first, second]) assert.ok(Buffer.byteLength(output.hookSpecificOutput.additionalContext, 'utf8') < 8_000);
+  for (const output of [first, second]) assert.ok(Buffer.byteLength(output.hookSpecificOutput.additionalContext, 'utf8') <= 10_000); // Codex's mcp_tool hook limit: 2500 tokens at 4 bytes each.
   assert.match(expected, /spawn_agent/); assert.match(expected, /Autopilot off:\*\* the user merges/);
   await client.close();
   const retry = await connect(t, f);
