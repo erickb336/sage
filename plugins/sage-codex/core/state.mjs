@@ -668,12 +668,26 @@ const taskWrites = recordedWrites({ schema: 2, tables: ["tasks", "decisions"], f
   name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json",
   validate: validateTaskWrite });
 
+/** A saved writer may add known optional columns, but cannot discard existing cells. */
+function savedWriteColumns(tables, deny) {
+  return Object.fromEntries(Object.entries(tables).map(([table, pair]) => {
+    const before = sheetText(pair.before).cols, after = sheetText(pair.after).cols;
+    for (const cols of [before, after]) {
+      if (!TABLES[table].every(key => cols.includes(key) || ADDED[table]?.includes(key))
+        || cols.some(key => !TABLES[table].includes(key)) || new Set(cols).size !== cols.length) deny();
+    }
+    if (before.some(key => !after.includes(key))) deny();
+    return [table, after];
+  }));
+}
+
 /** Validate saved task publication as one pure update before any recovery write. */
 function validateTaskWrite({ reference, result }, tables) {
   const deny = () => refuse("The saved task update is damaged. No task table changed.");
   if (!result || typeof result.id !== "string" || !/^T[1-9]\d*$/.test(result.id)
     || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, reference.title, reference.size, reference.risk, reference.add))) deny();
   if (!tables) return;
+  const columns = savedWriteColumns(tables, deny);
   const rows = (table, text) => {
     const { cols, lines } = sheetText(text);
     if (!TABLES[table].every(c => cols.includes(c) || ADDED[table]?.includes(c))
@@ -682,14 +696,14 @@ function validateTaskWrite({ reference, result }, tables) {
   };
   const tasks = rows("tasks", tables.tasks.before), decisions = rows("decisions", tables.decisions.before);
   if (tasks.some(task => task.id === result.id)
-    || tables.tasks.after !== tableText("tasks", [...tasks, result])) deny();
+    || tables.tasks.after !== tableText("tasks", [...tasks, result], columns.tasks)) deny();
   if (reference.add.length) {
     const after = rows("decisions", tables.decisions.after), at = after.at(-1)?.at;
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(at ?? "")
       || !Number.isFinite(Date.parse(at)) || new Date(at).toISOString().replace(".000Z", "Z") !== at) deny();
     decisions.push({ at, task: result.id, decision: `added ${reference.add.join(",")}`, why: reference.why });
   }
-  if (tables.decisions.after !== tableText("decisions", decisions)) deny();
+  if (tables.decisions.after !== tableText("decisions", decisions, columns.decisions)) deny();
 }
 
 /** Create one task for a durable caller request. The provider authenticates the opaque owner scope. */
@@ -867,7 +881,7 @@ function reviewResult(reference, claims, at) {
 }
 
 /** The same pure delta defines fresh publication and validates a saved recovery intent. */
-function reviewDelta({ reference, result }, claims, rows) {
+function reviewDelta({ reference, result }, claims, rows, columns = TABLES) {
   const deny = () => refuse("The saved review update is damaged. No review tables changed.");
   const { task: id, run, role, review } = reference;
   const { tasks, findings, ledger, decisions } = structuredClone(rows);
@@ -885,7 +899,7 @@ function reviewDelta({ reference, result }, claims, rows) {
     task.state = "reviewing";
     decisions.push({ at: result.at, task: id, decision: `${before} → reviewing`, why: `${claims.kind} verdict on ${review.sha}` });
   }
-  return Object.fromEntries(Object.entries({ tasks, findings, ledger, decisions }).map(([table, values]) => [table, tableText(table, values)]));
+  return Object.fromEntries(Object.entries({ tasks, findings, ledger, decisions }).map(([table, values]) => [table, tableText(table, values, columns[table])]));
 }
 
 /** Validate authenticated report bytes and every saved after-image before publication. No current Git reads. */
@@ -910,7 +924,7 @@ function validateReviewWrite({ reference, result }, tables) {
       || cols.some(c => !TABLES[table].includes(c)) || new Set(cols).size !== cols.length) deny();
     return [table, rowsOf({ cols, lines })];
   }));
-  const expected = reviewDelta({ reference, result }, claims, rows);
+  const expected = reviewDelta({ reference, result }, claims, rows, savedWriteColumns(tables, deny));
   if (Object.keys(expected).some(table => tables[table].after !== expected[table])) deny();
 }
 

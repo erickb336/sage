@@ -11,6 +11,61 @@ import { createStateTool } from '../packages/sage-core/state.mjs';
 const SHA = '1'.repeat(40), BRANCH = 'sage/t536-adopt';
 const tool = createStateTool({ defaultRoot: env => env.SAGE_HOME });
 
+for (const scenario of ['creation', 'review']) {
+for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrade: ${scenario} recorded ${stage} preserves original bytes`, t => {
+  const upgrade = JSON.parse(readFileSync(new URL(`./fixtures/native-upgrade/${scenario}.json`, import.meta.url), 'utf8'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'sage-recorded-upgrade-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const project = join(root, 'project'); mkdirSync(project);
+  const env = { ...process.env, SAGE_HOME: join(root, 'sage') };
+  assert.equal(tool.command(['init', '--project', project], env).code, 0);
+  const dir = tool.storeDir(project, env), intent = JSON.parse(upgrade.pending).value;
+  for (const [file, bytes] of Object.entries(upgrade.tables)) writeFileSync(join(dir, file), bytes);
+  if (stage === 'receipt') {
+    for (const [table, pair] of Object.entries(intent.tables)) writeFileSync(join(dir, `${table}.tsv`), pair.after);
+    mkdirSync(join(dir, upgrade.folder)); writeFileSync(join(dir, upgrade.folder, upgrade.name), upgrade.receipt);
+  } else {
+    writeFileSync(join(dir, 'review-pending.json'), upgrade.pending);
+    if (stage === 'partly-published') writeFileSync(join(dir, 'tasks.tsv'), intent.tables.tasks.after);
+    assert.throws(() => tool.assertTaskUpdateOpen({ project }, env));
+  }
+  const invoke = () => tool[scenario === 'creation' ? 'createRequestedTask' : 'acceptReportedReview']({ project, ...upgrade.request }, env);
+  if (stage !== 'receipt') {
+    for (const corruption of ['delta', 'unknown-column', 'duplicate-column', 'lost-column', 'receipt', 'schema', 'hash']) {
+      const envelope = JSON.parse(upgrade.pending), pair = envelope.value.tables.tasks;
+      if (corruption === 'delta') pair.after = pair.after.replace(/Created sample|Review sample/, 'Unrequested title');
+      if (corruption === 'unknown-column') pair.after = pair.after.replace('adoption', 'unknown');
+      if (corruption === 'duplicate-column') pair.after = pair.after.replace('adoption', 'extra');
+      if (corruption === 'lost-column') pair.after = pair.after.split('\n').map(line => line.split('\t').slice(0, -1).join('\t')).join('\n');
+      if (corruption === 'receipt') envelope.value.receipt.result.task = 'T999';
+      if (corruption === 'schema') envelope.value.schema = 99;
+      envelope.hash = corruption === 'hash' ? '0'.repeat(64) : createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
+      writeFileSync(join(dir, 'review-pending.json'), JSON.stringify(envelope) + '\n');
+      const damaged = snapshot(dir);
+      assert.throws(invoke);
+      assert.deepEqual(snapshot(dir), damaged);
+    }
+    writeFileSync(join(dir, 'review-pending.json'), upgrade.pending);
+  }
+  const first = invoke();
+  assert.equal(first.decision, scenario === 'creation' ? stage === 'receipt' ? 'already-created' : 'task-created' : stage === 'receipt' ? 'already-accepted' : 'review-accepted');
+  for (const [table, pair] of Object.entries(intent.tables)) assert.equal(readFileSync(join(dir, `${table}.tsv`), 'utf8'), pair.after);
+  assert.equal(readFileSync(join(dir, upgrade.folder, upgrade.name), 'utf8'), upgrade.receipt);
+  assert.equal(readdirSync(dir).includes('review-pending.json'), false);
+  const recovered = snapshot(dir);
+  invoke(); assert.deepEqual(snapshot(dir), recovered);
+  const current = tool.readTaskSnapshot({ project, task: 'T1' }, env);
+  assert.equal(current.task.approvals, '');
+  if (scenario === 'review') {
+    assert.equal(current.task.state, 'reviewing'); assert.equal(current.task.round, '2'); assert.equal(current.task.extra, '1');
+    assert.equal(tool.read(dir, 'findings').length, 1); assert.equal(tool.read(dir, 'ledger').length, 1);
+  }
+  tool.createRequestedTask({ project, owner: 'later-owner', request: 'f1111111-1111-4111-8111-111111111111', title: 'Later task', size: 'small', risk: [], add: [], why: '' }, env);
+  assert.match(readFileSync(join(dir, 'tasks.tsv'), 'utf8').split('\n')[0], /\tapprovals$/);
+  const later = snapshot(dir); invoke(); assert.deepEqual(snapshot(dir), later);
+});
+}
+
 // These bytes came from the unmodified base implementation. The generator and its
 // exact source commit live beside the fixture; CI needs neither Git history nor a local checkout.
 for (const scenario of ['base', 'building', 'briefed']) {
