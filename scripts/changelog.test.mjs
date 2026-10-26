@@ -118,7 +118,7 @@ test("a file in changes/ that is not a .md fragment stops the build with its nam
 });
 
 test("a list line written by hand in CHANGELOG.md stops the build with the line and the fix, also in a merge conflict, and the fragment keeps it", (t) => {
-  const line = `CHANGELOG.md has a list line that no file of changes/ makes, so the build would drop it: "${HAND.slice(0, 70)}...". Move it into changes/<task>.md with its date (or into changes/earlier.md if it is an older entry), then run npm run build.`;
+  const line = `CHANGELOG.md has a line that no file of changes/ makes, so the build would drop it: "${HAND.slice(0, 70)}...". Move it into changes/<task>.md with its date (or into changes/earlier.md if it is an older entry or the intro), then run npm run build.`;
   const dir = checkout(t, withHand(HAND));
   assert.throws(() => changelog(dir), { message: line });
   writeFileSync(join(dir, "CHANGELOG.md"), `<<<<<<< HEAD\n${assemble(EARLIER, {})}=======\n${withHand(HAND)}>>>>>>> origin/main\n`);
@@ -139,7 +139,42 @@ test("a fragment that you edit after a build is only out of date, but a built bu
   assert.match(rebuilt, /\n- \*\*New title\.\*\* New text\.\n/);
   assert.doesNotMatch(rebuilt, /Old title/);
   writeFileSync(join(dir, "CHANGELOG.md"), rebuilt.replace("New text.", "New text, edited by hand."));
-  assert.throws(() => changelog(dir), { message: /^CHANGELOG\.md has a list line that no file of changes\/ makes, so the build would drop it: "- \*\*New title\.\*\* New text, edited by hand\."\. Move it into changes\/<task>\.md/ });
+  assert.throws(() => changelog(dir), { message: /^CHANGELOG\.md has a line that no file of changes\/ makes, so the build would drop it: "- \*\*New title\.\*\* New text, edited by hand\."\. Move it into changes\/<task>\.md/ });
+});
+
+// R1787-1: any line of text that the last build did not make stops the build, whatever its form.
+const FORMS = [
+  ["a * bullet", (b) => b.replace("## 2026-10-25\n\n", "## 2026-10-25\n\n* **Star.** Hand text.\n"), "* **Star.** Hand text."],
+  ["a + bullet", (b) => b.replace("## 2026-10-25\n\n", "## 2026-10-25\n\n+ **Plus.** Hand text.\n"), "+ **Plus.** Hand text."],
+  ["a numbered item", (b) => b.replace("## 2026-10-25\n\n", "## 2026-10-25\n\n1. **One.** Hand text.\n"), "1. **One.** Hand text."],
+  ["an indented second paragraph under a built entry", (b) => b.replace("- **Old.** Text.\n", "- **Old.** Text.\n\n  A hand paragraph.\n"), "A hand paragraph."],
+  ["a wrapped continuation line", (b) => b.replace("- **Old.** Text.\n", "- **Old.** Text.\n  and a wrapped hand line\n"), "and a wrapped hand line"],
+  ["a paragraph under a date", (b) => b.replace("## 2026-10-24\n\n", "## 2026-10-24\n\nA hand paragraph under a date.\n\n"), "A hand paragraph under a date."],
+  ["an edit of the intro", (b) => b.replace("The intro.", "The intro, edited."), "The intro, edited."],
+  ["a changed word inside a built entry", (b) => b.replace("**Older.** Text.", "**Older.** Text, changed."), "- **Older.** Text, changed."],
+];
+
+test("a line of any form that the last build did not make stops the build with the line and the fix", (t) => {
+  const dir = checkout(t, "");
+  writeFileSync(join(dir, "changes/T503.md"), entry("2026-10-25", "- **Built.** Text."));
+  const base = changelog(dir);
+  writeFileSync(join(dir, "CHANGELOG.md"), base);
+  assert.equal(changelog(dir), base, "the file as built is not by hand");
+  for (const [name, edit, text] of FORMS) {
+    const edited = edit(base);
+    assert.notEqual(edited, base, name);
+    writeFileSync(join(dir, "CHANGELOG.md"), edited);
+    assert.throws(() => changelog(dir), { message: `CHANGELOG.md has a line that no file of changes/ makes, so the build would drop it: "${text}". Move it into changes/<task>.md with its date (or into changes/earlier.md if it is an older entry or the intro), then run npm run build.` }, name);
+  }
+});
+
+test("a dot file in changes/ is ignored, but any other file that is not .md still stops the build", (t) => {
+  const dir = checkout(t, assemble(EARLIER, {}));
+  writeFileSync(join(dir, "changes/.DS_Store"), "\u0000\u0001Bud1");
+  writeFileSync(join(dir, "changes/T900.md"), entry("2026-10-25", "- **Nine hundred.** Text."));
+  assert.match(changelog(dir), /\n- \*\*Nine hundred\.\*\* Text\.\n/);
+  writeFileSync(join(dir, "changes/T900.txt"), entry("2026-10-25", "- **Lost.** Text."));
+  assert.throws(() => changelog(dir), { message: "changes/T900.txt: the build reads only .md files, so it would drop this file; rename it to changes/<task>.md (for example changes/T500.md)" });
 });
 
 test("npm run build writes nothing, and npm run check fails, on a hand-written entry or a wrong file name; after the fix both pass", (t) => {
@@ -154,10 +189,10 @@ test("npm run build writes nothing, and npm run check fails, on a hand-written e
   writeFileSync(file, edited);
   const build = run("build.mjs"), check = run("check.mjs");
   assert.equal(build.status, 1);
-  assert.match(build.stderr, /^✗ CHANGELOG\.md has a list line that no file of changes\/ makes, so the build would drop it: "- \*\*By hand\.\*\* An entry that a pull request wrote in CHANGELOG\.md befo\.\.\."\. Move it into changes\/<task>\.md with its date .*, then run npm run build\.$/m);
+  assert.match(build.stderr, /^✗ CHANGELOG\.md has a line that no file of changes\/ makes, so the build would drop it: "- \*\*By hand\.\*\* An entry that a pull request wrote in CHANGELOG\.md befo\.\.\."\. Move it into changes\/<task>\.md with its date .*, then run npm run build\.$/m);
   assert.equal(readFileSync(file, "utf8"), edited, "the build leaves CHANGELOG.md as it was");
   assert.equal(check.status, 1);
-  assert.match(check.stderr, /^✗ CHANGELOG\.md has a list line that no file of changes\/ makes/m);
+  assert.match(check.stderr, /^✗ CHANGELOG\.md has a line that no file of changes\/ makes/m);
   writeFileSync(join(dir, "changes/T99998.md"), entry("2026-10-25", HAND));
   writeFileSync(join(dir, "changes/T99999.txt"), entry("2026-10-25", "- **Lost.** Text."));
   const named = run("build.mjs");
