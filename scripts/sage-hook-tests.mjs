@@ -3444,7 +3444,7 @@ test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and run
     // R1873: a fake script with "$*"
     `mkdir -p ${own}/bin && cat > ${own}/bin/gh <<'EOF'\n#!/bin/sh\necho "fake gh $*" >&2\nexit 1\nEOF\nchmod +x ${own}/bin/gh`,
     // R1873: a proof file with braces, run by node, with $? after it (R1871)
-    `cat > ${own}/proof.mjs <<'EOF'\nimport { spawnSync } from "node:child_process";\nconst r = spawnSync("${own}/bin/gh", ["pr", "view"]);\nif (r.status !== 1) { throw new Error([r.status].join()); }\nEOF\nnode ${own}/proof.mjs; echo $?`,
+    `cat > ${own}/proof.mjs <<'EOF'\nconst cp = await import("node:child_process");\nconst r = cp.spawnSync("${own}/bin/gh", ["pr", "view"]);\nif (r.status !== 1) { throw new Error([r.status].join()); }\nEOF\nnode ${own}/proof.mjs; echo $?`,
     // R1873: node -e with {spawnSync}
     `node -e 'const {spawnSync}=require("node:child_process"); console.log(spawnSync("${own}/bin/gh", ["x"]).status)'`,
     // R1871: a variable and a bracket list in a fake, with output into the folder
