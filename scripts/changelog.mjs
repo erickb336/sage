@@ -55,14 +55,16 @@ export function assemble(earlier, files) {
 /**
  * The steps that remove a line written by hand from CHANGELOG.md, one line for each kind of branch (R1973-1). A task
  * branch keeps the text in its own fragment; a change-log branch changes only CHANGELOG.md, so the text goes into a task
- * pull request. The undo names the real merge base when git has one, as the check does.
+ * pull request. The undo names the real merge base when the root is a git checkout, as the check does: git does not look
+ * above a root that has no .git, so a tree inside another repository never gets that repository's merge base (F-T559-1).
+ * Each line fetches origin/main first, so its steps work also when origin/main is stale or missing.
  */
 function handFix(root) {
-  const base = spawnSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: root, encoding: "utf8" });
-  const at = base.status === 0 ? base.stdout.trim() : "$(git merge-base HEAD origin/main)";
+  const base = existsSync(join(root, ".git")) ? spawnSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: root, encoding: "utf8" }) : null;
+  const at = base?.status === 0 ? base.stdout.trim() : "$(git merge-base HEAD origin/main)";
   return [
-    `On a task branch: put each line into ${CHANGES}/<task>.md with its date (or into ${CHANGES}/${EARLIER} if it is an older entry or the intro). Then run git checkout ${at} -- CHANGELOG.md to undo the edit.`,
-    `On a change-log branch: run git checkout origin/main -- CHANGELOG.md to undo the edit. Then run npm run changelog. Then put each line into ${CHANGES}/<task>.md in a task pull request.`,
+    `On a task branch: put each line into ${CHANGES}/<task>.md with its date (or into ${CHANGES}/${EARLIER} if it is an older entry or the intro). Then run git fetch origin main. Then run git checkout ${at} -- CHANGELOG.md to undo the edit.`,
+    `On a change-log branch: run git fetch origin main. Then run git checkout origin/main -- CHANGELOG.md to undo the edit. Then run npm run changelog. Then put each line into ${CHANGES}/<task>.md in a task pull request.`,
   ];
 }
 
