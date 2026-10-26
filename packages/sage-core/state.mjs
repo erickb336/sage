@@ -20,7 +20,8 @@ import { projectName as shownName } from "./board-model.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
 import { createBoard } from "./board.mjs";
 import { PR } from "./pull-request.mjs";
-import { parseReport } from "./report.mjs";
+import { REPORT_FIELDS, parseReport } from "./report.mjs";
+import { cleanReport, fieldsOf, readReport } from "./report-reader.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
@@ -881,6 +882,98 @@ function validateReviewWrite({ reference, result }, tables) {
   }));
   const expected = reviewDelta({ reference, result }, claims, rows);
   if (Object.keys(expected).some(table => tables[table].after !== expected[table])) deny();
+}
+
+/** The verdict kinds that a finished run of each review or QA role backs (T483): its clean kind, then its problem kind. */
+const BACKS = { "code-reviewer": ["review-clean", "findings"], "security-reviewer": ["security-clean", "findings"], "ux-reviewer": ["ux-clean", "findings"], qa: ["qa-pass", "qa-fail"] };
+/** The most bytes of a kept report's text. */
+const KEPT_MAX = 1 << 20;
+/** A run's kept report: one file for each run, in the logbook, that only a provider's stop hook writes (keepReport). */
+const keptFile = (dir, run) => join(dir, "kept", `${run}.json`);
+
+/**
+ * Keep a helper's report at its stop, for the verdict that it backs (T483). A provider's stop hook calls it with the
+ * report as the helper gave it, and the commit that the hook saw the helper review ("" when it saw none). No command of the
+ * state tool keeps a report, so a chief cannot make one. The first report of a run stays: a later one never replaces it.
+ * The path of the kept report, or a refusal.
+ */
+function keepReport(project, { task, run, role, sha = "", text } = {}, env = process.env) {
+  const dir = storeDir(project, env);
+  if (!existsSync(join(dir, "tasks.tsv"))) refuse(`no logbook for the project ${visible(project)}, so no report is kept.`);
+  if (!/^R[1-9]\d*$/.test(String(run)) || typeof text !== "string" || Buffer.byteLength(text) > KEPT_MAX || !/^(?:[0-9a-f]{40})?$/.test(String(sha))) {
+    refuse("a kept report needs its run id, its text (at most 1 MiB) and the full SHA of its commit or none. No report is kept.");
+  }
+  const row = read(dir, "runs").find((r) => r.id === run);
+  if (row?.task !== task || row.role !== role) refuse(`${run} is not a ${role} run of ${task}, so no report is kept.`);
+  const folder = join(dir, "kept"), file = keptFile(dir, run), temporary = join(folder, `.kept-${randomUUID()}`);
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  // The whole file appears at once, by a link of a full temporary file, and never over a kept one.
+  writeFileSync(temporary, JSON.stringify({ task, run, role, sha, text, at: now() }), { flag: "wx", mode: 0o600 });
+  try { linkSync(temporary, file); } catch (e) { if (e.code !== "EEXIST") throw e; } finally { unlinkSync(temporary); }
+  return file;
+}
+
+/** A run's kept report, or undefined when none is kept. A kept file that does not read as one is damaged. */
+function keptOf(dir, run) {
+  const text = readRegular(keptFile(dir, run), { link: false, max: 6 * KEPT_MAX + 4096 }); // JSON writes a control character as 6 bytes
+  if (text === undefined) return undefined;
+  try {
+    const kept = JSON.parse(text);
+    if (kept && typeof kept.text === "string" && kept.run === run && /^(?:[0-9a-f]{40})?$/.test(kept.sha)) return kept;
+  } catch {}
+  return { damaged: true };
+}
+
+/**
+ * Does a kept report back this review or QA verdict on a task with a build block (T483)? The run that --run names is a
+ * run of the task, of a role that gives the kind, that ended done, with a kept report that reads, on the commit of --sha
+ * when the report names one. A clean report backs only a clean kind. A report with a medium or high finding backs findings
+ * or qa-fail, and a clean kind after triage: each of its medium and high findings is recorded on the task for the run,
+ * and none of them is open. A check verdict and an investigation's evidence-clean need no run here. The reason, or undefined.
+ */
+function backingProblem(dir, task, kind, opt) {
+  const roles = Object.keys(BACKS).filter((role) => BACKS[role].includes(kind));
+  if (!roles.length || !builds(task)) return undefined;
+  const who = roles.length === 1 ? roles[0] : `${roles.slice(0, -1).join(", ")} or ${roles.at(-1)}`;
+  const again = `Run the review again under a new run (sage run add ${task.id} --role ${roles.length === 1 ? roles[0] : "<role>"}), whose helper has the run's id as its name, and record its verdict with --run after it ends.`;
+  if (opt.run === undefined) return `${kind} is a review or QA verdict, so it names the run whose kept report backs it: add --run with the ${who} run of ${task.id} whose helper ended with its report.`;
+  const run = read(dir, "runs").find((r) => r.id === opt.run);
+  if (!run) return `${opt.run} is not a run in this logbook: name the ${who} run of ${task.id} whose report backs this verdict.`;
+  if (run.task !== task.id) return `${run.id} is a run of ${run.task}, not of ${task.id}: name the ${who} run of ${task.id} whose report backs this verdict.`;
+  if (!roles.includes(run.role)) return `${run.id} is a ${run.role} run, so it backs no ${kind} verdict: only a ${who} run does.`;
+  if (run.status === "running") return `${run.id} still runs: end it after its helper's report (sage run done ${run.id} --status done --tokens <n>), then record its verdict.`;
+  if (run.status !== "done") return `${run.id} ended as ${run.status}, so it backs no verdict. ${again}`;
+  const kept = keptOf(dir, run.id);
+  if (!kept) return `${run.id} has no kept report: sage keeps a helper's report at its stop, and only for a helper whose name is its run's id. ${again}`;
+  if (kept.damaged || kept.task !== task.id || kept.role !== run.role) return `${run.id}'s kept report is damaged, so it backs no verdict. ${again}`;
+  const report = readReport(kept.text);
+  if (report.unreadable) return `${run.id}'s kept report cannot be read (${report.problem}), so it backs no verdict: read it yourself. ${again}`;
+  // The commit that the hook saw the helper review, and each full SHA that the report's BRANCH names, is the verdict's commit.
+  const branch = fieldsOf(kept.text, REPORT_FIELDS).filter((f) => f.name === "BRANCH").flatMap((f) => [f.rest, ...f.lines]).join("\n");
+  const sha = String(opt.sha ?? "").toLowerCase(), other = [kept.sha, ...(branch.match(/(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/gi) ?? [])].map((s) => s.toLowerCase()).find((s) => s && s !== sha);
+  if (other) return `${run.id}'s report is on ${other.slice(0, 7)}, not on ${sha.slice(0, 7)}: a verdict names the commit that its helper reviewed. Record it on ${other}, or review ${sha.slice(0, 7)} under a new run.`;
+  const said = `RESULT ${report.result}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}`;
+  const clean = cleanReport(report), [cleanKind, problemKind] = BACKS[run.role];
+  if (FOUND.includes(kind)) return clean ? `${run.id}'s report is clean (${said}), so it backs only ${cleanKind}.` : undefined;
+  if (clean) return undefined;
+  // A report with findings backs a clean verdict after the chief's triage: the cycles rule (T483 decision).
+  const ofRun = (f) => f.run === run.id || f.key.startsWith(`${run.id}-`);
+  const rows = read(dir, "findings").filter((f) => f.task === task.id && ofRun(f) && f.severity !== "low");
+  const open = rows.filter((f) => f.status === "open");
+  if (open.length) return `${run.id}'s report has findings (${said}), and ${open.map((f) => `${f.key} (${f.severity})`).join(", ")} ${open.length === 1 ? "is" : "are"} still open: so it backs ${problemKind}, or ${cleanKind} after each one is dismissed with a reason, moved or closed.`;
+  // A finding that moved to a follow-up task left its run behind: its move's decision names the run and the severity.
+  const moved = read(dir, "decisions").filter((d) => d.task === task.id && / moved to T[1-9]\d* as /.test(d.decision) && d.why.startsWith(`the follow-up task (from ${run.id}, medium): `));
+  const level = { medium: 2, high: 3 }, down = (a, b) => b - a;
+  const held = [...rows.map((f) => level[f.severity]), ...moved.map(() => level.medium)].sort(down);
+  const needed = report.severities.filter((s) => s !== "low").map((s) => level[s]).sort(down);
+  if (needed.some((n, k) => !(held[k] >= n))) return `${run.id}'s report has ${needed.length} medium or high finding${needed.length === 1 ? "" : "s"} (${said}), and ${task.id} holds ${held.length} of ${run.id} at that severity or above: so it backs ${problemKind}. For ${cleanKind}, record each one first (sage finding add ${task.id} --source ${run.role} --run ${run.id} --class <class> --severity <its severity> --summary "<the problem>"), then dismiss it with a reason, move it or close it.`;
+  return undefined;
+}
+
+/** The verdict command's backing rule, read only, for a hook's early refusal: the reason, or undefined (also with no such task). */
+function verdictBacking(project, id, kind, opt = {}, env = process.env) {
+  const dir = storeDir(project, env), task = read(dir, "tasks").find((t) => t.id === id);
+  return task && backingProblem(dir, task, kind, opt);
 }
 
 function acceptReportedReview(input, env = process.env) {
@@ -2548,10 +2641,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const size = opt.size ?? "small";
         if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");
         const to = frame(dir, title, size, [], [], { priority: "P2" }); // a follow-up is P2 on the scale; the chief may set another
-        const was = f.key;
+        const was = f.key, from = f.run || /^(R[1-9]\d*)-/.exec(was)?.[1];
         Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: 0, triage: "", run: "" }); // its run is a run of the old task
         write(dir, "findings", findings);
-        write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: id, decision: `${was} moved to ${to.id} as ${f.key}: ${f.summary}`, why: `the follow-up task: ${title}` }]);
+        // The decision keeps the run whose report held the finding, and its severity, for that run's clean verdict (T483).
+        write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: id, decision: `${was} moved to ${to.id} as ${f.key}: ${f.summary}`, why: `the follow-up task${from ? ` (from ${from}, ${f.severity})` : ""}: ${title}` }]);
         return `${was} moved to ${to.id} as ${f.key} · ${framed(to)}`;
       } else refuse("finding add, triage, close or move");
       write(dir, "findings", findings);
@@ -2585,6 +2679,10 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const had = prsOf(task, read(dir, "decisions"), read(dir, "ledger"));
       const decided = opt.pr ? setPr(task, opt.pr, "verdict --pr") : [];
       if (opt.pr) apartFromPilot(task, graphOf(dir), read(dir, "decisions"), read(dir, "ledger"), "pr", had);
+      // The boundary of a review or QA verdict (T483): only a report that a stop hook kept backs it, in any shell form.
+      // Nothing is written before it.
+      const unbacked = backingProblem(dir, task, kind, opt);
+      if (unbacked) refuse(`${unbacked} Nothing changed.`);
       const beforeReview = task.state;
       const backToReview = ["verified", "pr-ready"].includes(beforeReview) && NOT_CLEAN.includes(kind);
       if (backToReview) {
@@ -2898,5 +2996,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

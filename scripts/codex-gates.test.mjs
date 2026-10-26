@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { tool as codexTool } from "../plugins/sage-codex/skills/sage/sage.mjs";
+import { backed } from "./verdict-backing.mjs";
 
 // The Codex gates (T456), through Codex's PreToolUse and PermissionRequest input and output shapes. The pure tests give
 // the gate a fixed mode and merge check; the process tests run the built hook with a mode file, a logbook and a fake gh.
@@ -223,7 +225,10 @@ function world(t, { at = "project" } = {}) {
   chmodSync(join(bin, "gh"), 0o755);
   for (const name of ["ps", "pgrep", "kill"]) writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> "${dir}/fake-calls.log"\n`, { mode: 0o755 }); // order 14
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), CODEX_HOME: join(dir, "codex-home") };
-  const sage = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", project], { encoding: "utf8", env });
+  const raw = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", project], { encoding: "utf8", env });
+  const cli = (...args) => { const r = raw(...args); if (r.status) throw Error(r.stderr); return r.stdout.trim(); };
+  // A review or QA verdict gets its backing run first, with its report kept as Codex's stop hook keeps it (T483).
+  const sage = (...args) => raw(...backed(args, { cli, keep: (fields) => codexTool.keepReport(project, fields, env) }));
   // Codex's transcript of the root thread: the user's typed messages, as item_completed events with a UserMessage item.
   const transcript = join(dir, "rollout.jsonl");
   const typed = (...messages) => writeFileSync(transcript, [{ type: "session_meta", payload: { id: base.session_id } },

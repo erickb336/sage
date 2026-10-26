@@ -42,7 +42,7 @@ import { fileURLToPath } from "node:url";
 
 // The state tool. When it cannot load, the hook still runs: its merge check refuses every merge, and it starts no new agent.
 const stateTool = await import("../skills/sage/sage.mjs").catch((error) => ({ error }));
-const boardPolicy = await import("sage-core").catch((error) => ({ error }));
+const core = await import("sage-core").catch((error) => ({ error }));
 const modePolicy = await import("./mode-policy.mjs").catch((error) => ({ error }));
 const filePolicy = await import("./file-policy.mjs").catch((error) => ({ error }));
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -80,58 +80,9 @@ const reservedName = (name) => /^(?:main|lead-t\d+)$/i.test(String(name ?? "").t
 const agentEvent = (input) => "agent_id" in (input ?? {}) || (OURS.test(input?.agent_type ?? "") && !CHIEF.test(input.agent_type));
 export const BRIEF_FIELDS = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"];
 export const REPORT_FIELDS = ["STATUS", "RESULT", "EVIDENCE", "FINDINGS", "QUESTIONS", "NOT VERIFIED", "BRANCH"];
-/** A line end, kept by a split: LF, CRLF, and each other break that a reader sees as one: CR, VT, FF, NEL, U+2028 and U+2029 (F-T289-26). */
-const LINE_END = /(\r\n|[\n\r\v\f\u0085\u2028\u2029])/;
-/**
- * The one field rule of a brief and a report (F-T289-24). A field starts at a line that is not indented and whose text,
- * after Markdown marks (*, _, #, |, >, -) and spaces, starts with the field's name: "STATUS done", "**STATUS**: done",
- * "| STATUS | done |". The field's text is the rest of that line, without the colon, bold marks or table bars around it,
- * and the lines up to the next field. An indented line, a list item ("- RESULT of npm test", F-T289-38) and a line in a
- * code block ("STATUS 200" of a test's output) never start a field. The fields of the text, in order, each with its line.
- * No pattern of the rule can backtrack far, so a padded line costs time in proportion to its length (F-T289-34).
- */
-function fieldsOf(text, names) {
-  const out = [];
-  for (const { line, fenced } of linesOf(text)) {
-    const name = fenced || /^\s/.test(line) || LIST_ITEM.test(line) ? undefined : names.find((n) => new RegExp(`^(?:[*_#|>-]|${SP})*${n}\\b`).test(line));
-    if (name) out.push({ name, line: line.slice(0, 80), rest: trimEnd(line.slice(line.indexOf(name) + name.length).replace(/^[\s*_|:]+/, "")), lines: [] });
-    else out.at(-1)?.lines.push(line);
-  }
-  return out;
-}
-/**
- * The lines of a text, each with whether it is in a code block or is one of its fences. A fence counts as CommonMark
- * has it: three or more backticks or tildes, indented by at most three spaces; the block ends at a fence of the same
- * character, at least as long, with nothing after it. An indented fence line is text, so it cannot hide a field (F-T289-52).
- * A fence opens or closes only at a line that starts after LF, CR or CRLF, where Markdown starts a line too: after
- * U+2028 or another break that Markdown does not show, a fence would hide fields that its reader sees (F-T289-63).
- */
-function linesOf(text) {
-  let fence;
-  const parts = String(text ?? "").split(LINE_END);
-  return parts.filter((_, k) => k % 2 === 0).map((line, k) => {
-    const mark = (k === 0 || /^[\r\n]/.test(parts[2 * k - 1])) && /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    const opens = !fence && mark && !(mark[1][0] === "`" && mark[2].includes("`"));
-    const closes = fence && mark && mark[1][0] === fence[0] && mark[1].length >= fence.length && !mark[2].trim();
-    const fenced = Boolean(fence || opens);
-    if (opens) fence = mark[1];
-    else if (closes) fence = undefined;
-    return { line, fenced };
-  });
-}
-/** The most characters of a line that the report reader reads of RESULT; a longer line under FINDINGS makes the report unreadable (F-T289-48). */
-const LINE_MAX = 4096;
-/** A Markdown list item: a bullet (-, * or +) or a number (1. or 1)), then a space. Bold (**) is no bullet. */
-const LIST_ITEM = /^[-*+][ \t]|^\d+[.)][ \t]/;
-/** The text without spaces, bold marks and table bars at its end, by a loop: a pattern such as /[\s*_|]+$/ takes time that grows with the square of a padded line (F-T289-34). */
-function trimEnd(text) {
-  let end = text.length;
-  while (end > 0 && /[\s*_|]/.test(text[end - 1])) end--;
-  return text.slice(0, end);
-}
 /** The fields of a template that the text does not give, by the one field rule. */
 function missingFields(fields, text) {
-  const given = new Set(fieldsOf(text, fields).map((x) => x.name));
+  const given = new Set(core.fieldsOf(text, fields).map((x) => x.name));
   return fields.filter((f) => !given.has(f));
 }
 
@@ -275,7 +226,7 @@ export function handle(input, state, slots) {
   if (event === "UserPromptSubmit") {
     const prompt = promptOf(input);
     const notes = switchModes(prompt, state);
-    const asked = main && prompt.owner && !boardPolicy.error && boardPolicy.parseBoardIntent(prompt.text);
+    const asked = main && prompt.owner && !core.error && core.parseBoardIntent(prompt.text);
     if (asked) notes.push(boardText(asked, input.cwd));
     if (state.sage && !state.given) {
       state.given = true;
@@ -306,8 +257,8 @@ export function handle(input, state, slots) {
       // The stop gate and the lead rules read a review's or QA's report with one reader, so a report that passes here is
       // one they read (F-T289-24, F-T289-39). The lead rules read no other role's report, so its FINDINGS may list what it
       // fixed or needs (F-T289-40).
-      const { problem } = REVIEWERS.includes(input.agent_type.slice("sage:".length).toLowerCase()) ? reportOf(input.last_assistant_message) : {};
-      if (problem) return { decision: "block", reason: `sage: the hook cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. No line under FINDINGS has a severity word above the severity of the finding that it is under. RESULT FINDINGS or FAIL needs a finding.` };
+      const { problem } = REVIEWERS.includes(input.agent_type.slice("sage:".length).toLowerCase()) ? core.readReport(input.last_assistant_message) : {};
+      if (problem) return { decision: "block", reason: `sage: the hook cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${core.RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${core.FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. No line under FINDINGS has a severity word above the severity of the finding that it is under. RESULT FINDINGS or FAIL needs a finding.` };
     }
   }
   if (!main && ours && input.agent_id) slots.touch(input.agent_id, input.agent_type); // the agent's lease: a slot that no event touched for an hour expires
@@ -322,11 +273,16 @@ export function handle(input, state, slots) {
     if (!helper || REVIEWERS.includes(helper.role)) {
       // The reviewed commit only when the branch did not move during the run: the tip at its start (F-T289-14).
       const sha = helper && helper.tip && head === helper.tip ? helper.tip : "";
-      return void slots.release(input.agent_id, helper && { ...reportOf(input.last_assistant_message), sha });
+      // The report goes to the logbook too, where the state tool reads it for the run's verdict (T483). A report that is
+      // not kept backs no verdict, so a failure here only refuses that verdict later.
+      if (helper && typeof input.last_assistant_message === "string") {
+        try { stateTool.keepReport(helper.folder, { task: helper.task, run: helper.run, role: helper.role, sha, text: input.last_assistant_message }); } catch {}
+      }
+      return void slots.release(input.agent_id, helper && { ...core.readReport(input.last_assistant_message), sha });
     }
     // An implementer's report backs no verdict, and its RESULT is its own word: a normal stop, with that word and the
     // head that it left on the branch, so that its lead ends its run and starts the reviews there (R1817-1).
-    return void slots.release(input.agent_id, { result: reportOf(input.last_assistant_message).result, severities: [], sha: head || "" });
+    return void slots.release(input.agent_id, { result: core.readReport(input.last_assistant_message).result, severities: [], sha: head || "" });
   }
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
   if (event === "PostToolUse" && input.tool_name === "Bash" && input.agent_type === "sage:lead") return void leadWrote(input, slots);
@@ -635,7 +591,7 @@ const READS = { status: () => true, "merge-check": () => true, logbook: (pos) =>
 const READ_FORM = "node <path to skills/sage/sage.mjs> <status, merge-check, logbook, standing or config> [--project <path>], as one plain command: no quote, variable, ;, &&, ||, |, `, $(, >, < or newline, and config with no key=value";
 const PLAIN = /^[\w./=:@,+-]+(?:[ \t]+[\w./=:@,+-]+)*$/;
 /** The logbook's files by name (S2), from the core's one list, so a new table is guarded too (K2). Without the core it is undefined, and a check that uses it throws, so the hook refuses. */
-const TABLES = boardPolicy.LOGBOOK_FILES;
+const TABLES = core.LOGBOOK_FILES;
 /** All the text of a tool call's input, one string per field. */
 const fields = (v) => (typeof v === "string" ? [v] : v && typeof v === "object" ? Object.values(v).flatMap(fields) : []);
 /** Text as APFS compares names: it ignores case and Unicode form, and folds compatibility forms (ſ is s, ﬆ is st). */
@@ -887,7 +843,7 @@ function writesIn({ words, redirects }) {
 /** Does one field of a command's text have a write form? A text that the hook cannot read counts as one (fail closed). */
 function writes(text, cwd) {
   try {
-    return boardPolicy.commandWrites(text, cwd);
+    return core.commandWrites(text, cwd);
   } catch {
     return true;
   }
@@ -1040,6 +996,12 @@ const LEAD_PAIRS = {
       if (!head) return `the head of ${task.id}'s branch cannot be read, so ${task.id} stays at ${task.state}.`;
       if (view.cleanCycles(task.id, head) > 0) return `${task.id}'s head ${head.slice(0, 7)} has a full clean cycle, so ${task.id} stays at ${task.state}: a lead moves it back to reviewing only after the head moved (F-T301-49).`;
     }
+    // To verifying only with a full clean cycle on the head: every clean review and QA verdict of its route (R1836-3, R1846-1).
+    if (state === "verifying") {
+      const head = headOf(ctx.lead.folder, task.id);
+      if (!head) return `the head of ${task.id}'s branch cannot be read, so ${task.id} stays at ${task.state}.`;
+      if (!(view.cleanCycles(task.id, head) > 0)) return `${task.id}'s head ${head.slice(0, 7)} has no full clean cycle yet (a clean verdict of each review and QA of its route on it), so ${task.id} stays at ${task.state}: record them first (R1836-3, R1846-1).`;
+    }
     return !(task.state === "repairing" && roundFixOpen(task, view)) || `${task.id} has an open fix finding of its round: close each one after the repair's commit (finding close), then move it to reviewing.`;
   },
 };
@@ -1057,112 +1019,6 @@ const helperOf = (lead, run) => `${leadKey(lead)}.${run}`;
 const ownRun = (ctx, id) => /^R[1-9]\d*$/.test(id) && ctx.slots.helper(helperOf(ctx.lead, id)).owned;
 /** The states in which a lead writes nothing and starts no child: held, replan and the end states (F-T273-12, F-T289-7, F-T289-16). */
 const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
-/** The form of a finding in a report's FINDINGS that the report skill gives: the severity right after the key (F-T289-11). */
-export const FINDING_FORM = "- <key> <severity> <summary>";
-/** The words of RESULT that the lead rules read (F-T289-39). */
-const RESULT_WORDS = ["CLEAN", "PASS", "FINDINGS", "FAIL"];
-/** A word that is or starts with a severity word: "high", "Medium", "low-level", "HIGH:" (but not "lower" or "highest"). */
-const SEVERE = /^(?:high|medium|low)(?![a-z])/i;
-/** A severity word as a label, with a colon after it: "high:", "**HIGH**:", "(low):" (F-T289-54). */
-const LABEL = /\b(?:high|medium|low)[*_)\]]*:/i;
-/** A word without the marks around it: brackets, parentheses, bold, code and a colon or a trailing dash. A loop, so a word of many marks costs time in proportion to its length (F-T289-34). */
-function unmarked(word = "") {
-  let start = 0, end = word.length;
-  while (start < end && "([*_`".includes(word[start])) start++;
-  while (end > start && ")]*_`:,.-".includes(word[end - 1])) end--;
-  return word.slice(start, end);
-}
-/**
- * One line under FINDINGS, without its indent, read by the narrow form of the report skill (F-T289-47, F-T289-58):
- *   - finding: a list item (-, *, + or 1. or 1)) whose first word is a key (with a digit: K1, F-T1-3, R966-1) and whose
- *     next word is the severity, high, medium or low in any case, with only marks around it: "- K1 medium:",
- *     "* K1 (High)", "1. K1 - low -", "- `K1` **medium**". Its summary has no severity label ("also high:").
- *   - severe: any other line whose first or second word is or starts with a severity word ("- High: low-privilege",
- *     "- high K1", "- K1 low-level", "- Confirmed medium load", "Severity: high"), or that has a severity label: a line
- *     that may hold a finding that the reader cannot read, so it is never detail and never clean.
- *   - other: any other line.
- */
-function lineOf(text) {
-  const item = /^(?:[-*+]|\d+[.)])[ \t]+/.exec(text);
-  const [key, ...rest] = (item ? text.slice(item[0].length) : text).split(/[ \t]+/);
-  const at = rest.findIndex((w) => !/^[-–—:|]+$/.test(w)), word = unmarked(rest[at]);
-  if (item && /\d/.test(unmarked(key)) && !SEVERE.test(unmarked(key)) && /^(?:high|medium|low)$/i.test(word) && !LABEL.test(rest.slice(at + 1).join(" "))) return { severity: word.toLowerCase() };
-  return { severe: SEVERE.test(unmarked(key)) || SEVERE.test(word) || LABEL.test(text) };
-}
-/** The levels of the severities, and the words that the report reader looks for in all of FINDINGS: critical, severe and blocker are high. */
-const LEVELS = ["none", "low", "medium", "high"];
-const LEVEL = { low: 1, medium: 2, high: 3, critical: 3, severe: 3, blocker: 3 };
-const LEVEL_WORD = /(?<![\p{L}\p{N}])(?:low|medium|high|critical|severe|blocker)(?![\p{L}\p{N}])/gu;
-/** Cyrillic and Greek letters that look like the Latin letters of LEVEL's words, in lower case, as the Latin letter. */
-const LOOK_ALIKE = { а: "a", в: "b", с: "c", ԁ: "d", е: "e", ԍ: "g", һ: "h", н: "h", і: "i", ӏ: "l", к: "k", м: "m", о: "o", р: "p", ѕ: "s", т: "t", у: "y", ԝ: "w", х: "x", α: "a", β: "b", ε: "e", η: "h", ι: "i", κ: "k", μ: "m", ν: "v", ο: "o", ρ: "p", τ: "t", υ: "u", ω: "w", χ: "x" };
-/**
- * The level of the highest severity word in a line, as a whole word in any case, after NFKC, look-alike Cyrillic and
- * Greek letters as Latin ones, and no zero-width or other format character: "a Hіgh risk" with a Cyrillic і is high
- * (F-T289-60, F-T289-62, F-T289-63). 0 when it has none.
- */
-function levelIn(line) {
-  const text = line.normalize("NFKC").toLowerCase().replace(/[^\0-\x7f]/g, (c) => LOOK_ALIKE[c] ?? c).replace(/\p{Cf}/gu, "");
-  return Math.max(0, ...[...text.matchAll(LEVEL_WORD)].map(([word]) => LEVEL[word]));
-}
-/** None alone, in any case, also as a list item or with a period: the one clean form of FINDINGS (F-T289-48, F-T289-51). */
-const NONE_LINE = /^(?:[-*+][ \t]+)?none\.?$/i;
-/** A line that starts a FINDINGS field in any form, also indented or as a list item ("- FINDINGS", F-T289-52). */
-const FINDINGS_AT = new RegExp(`^(?:[*_#|>]|${SP})*FINDINGS\\b`);
-const findingsLine = (line) => FINDINGS_AT.test(line.trimStart().replace(/^(?:[-*+]|\d+[.)])[ \t]+/, ""));
-/**
- * The one reader of a report, for the stop gate and the lead rules, by the one field rule (fieldsOf). It never lowers a
- * severity and never reads a finding as none: a line that it cannot read makes the report unreadable, and the sage
- * reads it (F-T289-47).
- *   - result: the first word of RESULT, in upper case; when RESULT has no text on its line, the first word of the next
- *     line with text ("## RESULT", then "PASS") (F-T289-39);
- *   - severities: the severity of each finding line under FINDINGS (lineOf), each with any detail on indented lines
- *     under it (F-T289-29). FINDINGS is either none alone (NONE_LINE) or finding lines.
- * The report is unreadable (problem) when a field is given twice (F-T289-20), also FINDINGS as an indented line or a list
- * item outside a code block (F-T289-52); when RESULT or FINDINGS is missing; when RESULT does not start with one of
- * RESULT_WORDS; when FINDINGS is empty, has none and findings, or none with RESULT FINDINGS or FAIL (F-T289-48); or when
- * a line under FINDINGS is longer than LINE_MAX, or is not none, a finding or detail: an unindented line, an indented
- * one with no finding above it (F-T289-25), or an indented line that is severe (F-T289-46, F-T289-54).
- * The severity rule (F-T289-60, F-T289-62, F-T289-63, F-T298-1): it is unreadable too when a line of FINDINGS has a
- * severity word (levelIn) above the severity of its own finding: a finding line and the lines under it compare with
- * that finding. (A line above the first finding is none or makes the report unreadable before this rule.) So a raised
- * word under a low finding counts also when a high finding is in the report, and an honest detail line such as "a high
- * row count" under a low finding blocks once, and the helper writes it again. A lower word under a higher finding is
- * detail.
- */
-function reportOf(text) {
-  const fields = fieldsOf(text, REPORT_FIELDS), of = (name) => fields.filter((f) => f.name === name);
-  const [r] = of("RESULT"), [f] = of("FINDINGS");
-  const another = linesOf(text).filter(({ line, fenced }) => !fenced && findingsLine(line))[1]?.line;
-  const twice = REPORT_FIELDS.find((name) => of(name).length > 1) ?? (another === undefined ? undefined : "FINDINGS");
-  const said = r && [r.rest, ...r.lines].map((line) => line.trimStart().slice(0, LINE_MAX).trim()).find(Boolean);
-  const result = (/^[^A-Za-z]*([A-Za-z]+)/.exec(said ?? "")?.[1] ?? "").toUpperCase();
-  const severities = [], owned = []; // owned: each line under a finding, with the level of that finding
-  let none = false, long = false, odd;
-  for (const line of f ? [f.rest, ...f.lines] : []) {
-    if (line.length > LINE_MAX) { long = true; continue; }
-    const text = line.trim(), indented = /^\s/.test(line), { severity, severe } = lineOf(text);
-    if (!text) continue;
-    if (severity && !indented) severities.push(severity);
-    else if (NONE_LINE.test(text)) none = true;
-    else if (!(indented && severities.length && !severity && !severe)) odd ??= text;
-    if (severities.length) owned.push([text, LEVEL[severities.at(-1)]]);
-  }
-  const seen = owned.find(([text, own]) => levelIn(text) > own);
-  const problem = twice ? `${twice} is given twice, the second time in the line ${JSON.stringify((of(twice)[1]?.line ?? another).trim().slice(0, 80))}` : !r ? "it has no RESULT" : !f ? "it has no FINDINGS" :
-    !RESULT_WORDS.includes(result) ? `RESULT starts with ${JSON.stringify((said ?? "").slice(0, 80))}, not with one of ${RESULT_WORDS.join(", ")}` :
-    long ? `a line under FINDINGS is longer than ${LINE_MAX} characters` : odd !== undefined ? `a line under FINDINGS is not none alone and not a finding in the form ${FINDING_FORM}: ${JSON.stringify(odd.slice(0, 80))}` :
-    none && severities.length ? "FINDINGS has none and findings" : !none && !severities.length ? "FINDINGS is empty" :
-    none && ["FINDINGS", "FAIL"].includes(result) ? `RESULT is ${result}, but FINDINGS is none` :
-    seen ? `the line ${JSON.stringify(seen[0].slice(0, 80))} under FINDINGS has a severity word above the severity of its finding (${LEVELS[seen[1]]}): write that finding as its own line ${FINDING_FORM}` : undefined;
-  return { result, severities, unreadable: Boolean(problem), ...(problem && { problem }) };
-}
-/**
- * Is a helper's report clean? RESULT CLEAN or PASS with no medium or high finding, or FINDINGS or FAIL with only low
- * ones (the clean rule: a cycle is clean when no medium or high finding is open). Anything else is not clean, also an
- * unreadable report or a stop with no report.
- */
-const cleanReport = ({ result, severities, unreadable } = {}) => !unreadable && Array.isArray(severities) && severities.every((v) => v === "low") &&
-  (["CLEAN", "PASS"].includes(result) || (["FINDINGS", "FAIL"].includes(result) && severities.length > 0));
 /** The commit at the head of a task's branch, in the repository of the lead's folder, or "" (fail closed) (F-T289-5). */
 function headOf(folder, task) {
   try {
@@ -1253,7 +1109,7 @@ const LEAD_WRITES = {
       if (left > 0) return `${id}'s helper has not stopped, and its slot holds its lease for about ${Math.ceil(left / 60_000)} more minute(s): wait for its stop, or ask the sage to end ${id} (F-T289-31).`;
       return ["failed", "blocked"].includes(opt.status) || `${id}'s helper gave no report, so ${id} ends only as failed or blocked (F-T289-3, F-T289-20).`;
     }
-    if (run.role === "implementer" || cleanReport(stopped) || view.verdicts(own).some((v) => v.run === id && ["findings", "qa-fail"].includes(v.kind))) return true;
+    if (run.role === "implementer" || core.cleanReport(stopped) || view.verdicts(own).some((v) => v.run === id && ["findings", "qa-fail"].includes(v.kind))) return true;
     if (stopped.unreadable) return `${id}'s helper gave a report that the hook cannot read (${stopped.problem ?? "an old record"}): the sage ends this run (F-T289-15, F-T289-23).`;
     return gap(run.role, view, task, ctx) ?? true;
   },
@@ -1267,7 +1123,7 @@ const LEAD_WRITES = {
     // A round's finding closes only on a new commit: not on one where a review or QA helper of this lead found the
     // round's problems, in a run of an earlier round, so that a lead cannot close the round's keys unchanged and re-add
     // the problem under a new key (F-T289-6). A re-review of this round that finds a new problem does not count (F-T289-12).
-    const found = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => REVIEWERS.includes(r?.role) && !cleanReport(r) && Number(view.row(r.run)?.round) < Number(task.round)).map((r) => r.sha);
+    const found = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => REVIEWERS.includes(r?.role) && !core.cleanReport(r) && Number(view.row(r.run)?.round) < Number(task.round)).map((r) => r.sha);
     const head = found.length ? headOf(ctx.lead.folder, own) : undefined;
     return head === undefined || (head !== "" && !found.includes(head)) ||
       `${key} is a finding of the round, and the head of ${own}'s branch ${head ? `(${head.slice(0, 7)}) is a commit on which a helper found problems` : "cannot be read"}: commit the repair first (F-T289-6).`;
@@ -1286,7 +1142,7 @@ const LEAD_WRITES = {
   // A verdict names its task's own PR, so a lead's verdicts never count for another PR's merge check (F-T273-2, F-T273-6),
   // and the finished run of its task whose role gives that kind (F-T284-6). A checks verdict is the sage's (T482, T302).
   // The run backs one verdict: its own run, in the task's current round, and in no verdict yet (F-T284-9, F-T289-8), that
-  // backs the kind as the sage's verdicts are backed (backingProblem).
+  // backs the kind by its helper's kept report (backingProblem); the state tool checks it again (T483).
   verdict: ([t], opt, own, view, task, ctx) => {
     const roles = VERDICT_ROLES[opt.kind], run = opt.run === undefined ? undefined : view.row(opt.run);
     if (!(t === own && Boolean(task.pr) && opt.pr === task.pr)) return false;
@@ -1317,8 +1173,8 @@ const LEAD_WRITES = {
   },
 };
 /**
- * Does this run back a verdict of opt.kind on this task? The one rule of a lead's verdict and of the sage's while a lead
- * run runs (T482): a run of the task, of a role that gives the kind (F-T284-6), that ended done (F-T289-36), whose helper's
+ * Does this run back a verdict of opt.kind on this task? A lead's verdict, early, with the lead's ways out; the state tool
+ * holds the same rule for every verdict (T482, T483): a run of the task, of a role that gives the kind (F-T284-6), that ended done (F-T289-36), whose helper's
  * kept report the hook read, on the commit of --sha, clean or not clean as the kind is (F-T289-4, F-T289-5). A run with
  * no report, or one that the hook cannot read, backs none: the sage reads it (F-T289-20, F-T289-23). stillRuns gives a
  * lead's way out of a run that still runs; without it the reason is for the sage. The reason, or undefined.
@@ -1333,7 +1189,7 @@ function backingProblem(run, task, opt, report, stillRuns) {
   if (!report) return `${id}'s helper gave no report, so ${id} backs no verdict ${lead ? "of this lead: ask the sage" : "of the sage"} (F-T289-36).`;
   if (!Array.isArray(report.severities) || report.unreadable) return `${id}'s helper gave ${report.unreadable ? `a report that the hook cannot read (${report.problem ?? "an old record"})` : "no report"}, so ${id} backs no verdict ${lead ? "of this lead: the sage reads it" : "of the sage"} (F-T289-20, F-T289-23).`;
   if (!report.sha || String(opt.sha ?? "").toLowerCase() !== report.sha) return `${id}'s helper reviewed ${report.sha ? report.sha.slice(0, 7) : "no one commit (the branch moved during its run, or the hook could not read it)"}, not this --sha: a verdict names the commit that its helper saw (F-T289-5, F-T289-14).${report.sha ? "" : ` So ${id} backs no verdict: start a new ${run.role} run on the current head of the branch (git rev-parse <branch>), and record its verdict on that head (R1836-2).`}`;
-  const clean = cleanReport(report), wants = ["findings", "qa-fail"].includes(opt.kind) ? "not clean" : "clean";
+  const clean = core.cleanReport(report), wants = ["findings", "qa-fail"].includes(opt.kind) ? "not clean" : "clean";
   if (clean !== (wants === "clean")) return `${id}'s helper reported ${report.result || "no readable RESULT"}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}, so its verdict is ${clean ? "clean" : "findings or qa-fail"}, not ${opt.kind} (F-T289-4).`;
   return undefined;
 }
@@ -1432,38 +1288,60 @@ function chiefStateWords(input) {
   return words.length && PLAIN.test(words.join(" ")) ? words : undefined;
 }
 /**
- * The sage's review or QA verdict while its task has a running lead run (T482, F2): only a lead's helper's kept report
- * backs it, by the lead's own rule (backingProblem), so that a lead's relay never becomes a verdict (K4). The verdict
- * names that run (--run). A checks verdict, and a verdict on a task with no running lead run, pass as before. A command
- * that names a state tool in a form that chiefStateWords cannot read is refused unless its command word is plainly
- * not verdict (unreadVerdict): it fails closed. The reason, or undefined.
+ * The sage's review or QA verdict, early (T483). The state tool is the boundary: its verdict command refuses a review or
+ * QA verdict that no kept report backs, in any shell form. The hook runs the same rule first (verdictBacking), on the
+ * logbook that the state tool finds (--project or SAGE_PROJECT, from the command's folder), for a better message. A
+ * logbook that the hook cannot read refuses the verdict. While the task has a running lead run, the lead's gap rule
+ * holds too: no verdict of a role while that lead's helpers have findings that it did not record (R1816-2). A command
+ * that runs a state tool in a form that chiefStateWords cannot read is refused (unreadVerdict). The reason, or undefined.
  */
 function chiefVerdictProblem(input, slots) {
   if (input.tool_name !== "Bash") return undefined;
   const words = chiefStateWords(input);
-  if (!words) return unreadVerdict(String(input.tool_input?.command ?? "")) ? `the sage records a verdict as one plain command of the state tool, so that the hook can check it against a lead's kept report (T482). This command names a sage.mjs, and the hook cannot read its command word as a plain word that is not verdict (a quote, a backslash, a $, a backtick, a glob or nothing after the tool), or it is a verdict in a form that the hook cannot read (R1835-1). Run it as a command of its own, with the absolute path of the state tool that this hook loads, with no ~, no variable and nothing before it (no cd): ${stateCommand("verdict <T> --kind <kind> --sha <sha> --cycle <n> --pr <n> --run <R>")} (R1815-1).` : undefined;
+  if (!words) return unreadVerdict(String(input.tool_input?.command ?? "")) ? `the sage records a verdict as one plain command of the state tool, so that the hook can check it early (T482, T483). In this command, node runs a sage.mjs (or a path with a pattern or a variable), and the hook cannot read its command word as a plain word that is not verdict, or it is a verdict in a form that the hook cannot read. Run it as a command of its own, with the absolute path of the state tool that this hook loads, with no ~, no variable and nothing before it (no cd): ${stateCommand("verdict <T> --kind <kind> --sha <sha> --cycle <n> --pr <n> --run <R>")} (R1815-1).` : undefined;
   const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
   if (cmd !== "verdict" || !Array.isArray(VERDICT_ROLES[opt.kind])) return undefined;
-  let view;
+  const project = resolve(input.cwd ?? process.cwd(), opt.project ?? process.env.SAGE_PROJECT ?? ".");
+  let view, why;
   try {
-    view = logbookOf(opt.project ?? process.env.SAGE_PROJECT ?? input.cwd);
-  } catch {
-    return undefined; // the state tool cannot read that logbook either, and refuses the verdict itself
+    view = logbookOf(project);
+    why = stateTool.verdictBacking(realpathSync.native(project), pos[0], opt.kind, opt);
+  } catch (e) {
+    return `the hook cannot read the logbook of ${project} (${e?.message ?? e}), so it refuses this review or QA verdict: run it in the project's folder, or with a --project that has a logbook (T483).`;
   }
-  const lead = view.leadRun(pos[0]);
-  if (!lead) return undefined;
-  const why = opt.run === undefined ? `a review or QA verdict names the helper run (--run R<n>) whose report backs it.` : backingProblem(view.row(opt.run), pos[0], opt, slots.helper(helperOf({ logbook: digest(view.dir), run: lead.id }, opt.run)).stopped);
-  return why && `${pos[0]} has a running lead run, ${lead.id}, so the sage records a review or QA verdict on it only when a helper's report that the hook kept backs it; the lead records these verdicts itself (T482). ${why}`;
+  if (why) return `${why} The state tool refuses this verdict too (T483).`;
+  const lead = view.leadRun(pos[0]), run = view.row(opt.run), task = view.task(pos[0]);
+  const left = lead && run && task && gap(run.role, view, task, { lead: { logbook: digest(view.dir), run: lead.id }, slots });
+  return left ? `${pos[0]} has a running lead run, ${lead.id}, and its lead records the findings of its helpers first (R1816-2): ${left}` : undefined;
 }
+/** Node's options that take the next word as their value, so that its program is a later word. */
+const NODE_VALUE = /^(?:-r|--require|--import|--loader|--experimental-loader|-C|--conditions|--input-type|--title)$/;
 /**
- * Could a command that chiefStateWords cannot read run a state tool's verdict (R1835-1)? Each word that names a
- * sage.mjs, also through quotes or backslashes, is followed by the tool's command word (the state tool reads its first
- * word as the command). Only a plain word that is not verdict passes: a word with a quote, a backslash, a $, a backtick or
- * a glob may become verdict in the shell (ver\dict, v'erdict', $'verdict'), and no word means it comes from elsewhere.
+ * Could a command that chiefStateWords cannot read run a state tool's verdict (R1835-1, T483)? Only when node runs it:
+ * node's program word ends in sage.mjs, in any letter case, or has a pattern character (* ? [ {) or a variable, so that it
+ * may be one; or node's inline code (-e, -p) names a sage.mjs. Then only a plain command word that is not verdict passes
+ * (the state tool reads its first word as the command). A read that names the file (cat, git log, git diff) or a text in
+ * quotes passes: the state tool's own check holds for every form. A line that the reader cannot read fails closed when it
+ * names a sage.mjs.
  */
 function unreadVerdict(command) {
-  const words = command.replace(/\\\r?\n/g, " ").split(/[\s;&|()<>]+/).filter(Boolean);
-  return words.some((word, k) => unquote(word).endsWith("sage.mjs") && !(PLAIN.test(words[k + 1] ?? "") && words[k + 1] !== "verdict"));
+  let commands;
+  try {
+    commands = core.shellCommands(command);
+  } catch {
+    return /sage\.mjs/i.test(command);
+  }
+  return commands.some(({ words, syntax }) => {
+    let k = words.findIndex((_, i) => !syntax?.[i]?.assignment);
+    if (k < 0 || !/(?:^|\/)node$/i.test(words[k])) return false;
+    for (k++; k < words.length && words[k].startsWith("-") && words[k] !== "--"; k++) {
+      if (/^(?:-e|--eval|-p|--print)$/.test(words[k])) return /sage\.mjs/i.test(words[k + 1] ?? "");
+      if (NODE_VALUE.test(words[k])) k++;
+    }
+    if (words[k] === "--") k++;
+    const program = words[k] ?? "";
+    return /[*?[{$`]/.test(program) || (/sage\.mjs$/i.test(program) && !(PLAIN.test(words[k + 1] ?? "") && words[k + 1] !== "verdict"));
+  });
 }
 /**
  * After the sage's run done of a lead's helper run: the helper's slot frees at once, and the hook notes its stop, so that
@@ -1880,8 +1758,8 @@ function gitGate(event, command, state, cwd, main, tool) {
   // The pull request's head branch, from GitHub: each task of the pull request must own it (F-T273-8).
   let head;
   try {
-    if (boardPolicy.error) throw boardPolicy.error;
-    head = boardPolicy.pullRequestHead(merge.pr, cwd);
+    if (core.error) throw core.error;
+    head = core.pullRequestHead(merge.pr, cwd);
   } catch (e) {
     return deny(event, `the hook could not read the head branch of PR ${merge.pr} from GitHub (${e?.message ?? e}), so it refuses the merge. Try again, or tell the user.`);
   }

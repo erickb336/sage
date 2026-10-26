@@ -166,6 +166,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - The tools run the same checks as the commands. A refusal comes back as a tool error with the reason of the command.
 - Only the chief records the logbook. Codex blocks a role agent's call of a tool that writes (for example `verdict`, `gate_answer` or `brief`), and the agent gets one line that says to put it in its report. Codex's own review thread (`/review`, the app's review button) and its approval check count as role agents here.
 - A role agent may call `status`, `standing`, `merge_check`, and `pages` without `record`.
+- A review or QA `verdict` on a task with a build needs `run`: a done run of the task whose child had the run in its task name (`sage_qa_t12_r40`) and ended with its full report. At that stop, the report check keeps the report in the logbook, and `verdict` refuses a verdict that no kept report backs. A report that `pages` saved backs no verdict, because the chief gives its text.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it.
 - Under full access (`danger-full-access`), an agent's shell can write any file, also the logbook, the mode files and Codex's record of your messages. So sage mode gives no guarantee there.
 - The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.

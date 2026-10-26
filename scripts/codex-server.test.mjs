@@ -16,6 +16,7 @@ import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { ROOT } from "./build.mjs";
+import { backedSage } from "./verdict-backing.mjs";
 
 const session = "d72422c7-509c-43aa-8c42-827c556f8a57";
 const childActor = "f22422c7-509c-43aa-8c42-827c556f8a58";
@@ -2826,7 +2827,7 @@ async function runReportFixture(t) {
   const options = { ...f.options, projectDirectory, logbookRoot };
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
   const env = { ...process.env, SAGE_HOME: logbookRoot };
-  const cli = (...args) => tool.sage([...args, "--project", projectDirectory], env);
+  const cli = backedSage(tool, projectDirectory, env);
   cli("init"); cli("task", "add", "--priority", "P2", "--title", "Native report fixture", "--size", "small");
   cli("run", "add", "T1", "--role", "lead");
   appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
@@ -3002,7 +3003,7 @@ async function reviewPreparationFixture(t, role = "code-reviewer", size = "small
   git("init", "--quiet", "-b", "codex/t1-review");
   git("commit", "--quiet", "--allow-empty", "-m", "fixture");
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
-  const cli = (...args) => tool.sage([...args, "--project", projectDirectory], env);
+  const cli = backedSage(tool, projectDirectory, env);
   cli("init"); cli("task", "add", "--priority", "P2", "--title", "Pinned review", "--size", size);
   cli("task", "T1", "set", "branch=codex/t1-review");
   cli("run", "add", "T1", "--role", role);
@@ -3493,7 +3494,7 @@ async function taskCreationFixture(t) {
   const projectDirectory = join(f.dir, 'project'); mkdirSync(projectDirectory);
   const env = { ...process.env, SAGE_HOME: join(f.dir, 'logbook') };
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); } });
-  const cli = (...args) => tool.sage([...args, '--project', projectDirectory], env);
+  const cli = backedSage(tool, projectDirectory, env);
   cli('init'); mkdirSync(f.options.observationsRoot, { recursive: true });
   const options = { ...f.options, projectDirectory, logbookRoot: env.SAGE_HOME };
   const { createNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-create.mjs')));
@@ -3979,7 +3980,7 @@ test('T57: malformed saved run result or delta refuses before any recovery publi
 test('T57: core historical run receipts preserve the selected model after provider settings change', async t => {
   const f = await runCreationFixture(t);
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); }, models: ['inherit', 'first-model', 'second-model'] });
-  const cli = (...args) => tool.sage([...args, '--project', f.options.projectDirectory], f.env);
+  const cli = backedSage(tool, f.options.projectDirectory, f.env);
   cli('config', 'model.qa.small=first-model');
   const input = { ...f.input, role: 'qa', project: f.options.projectDirectory, owner: 'test-owner' };
   const first = tool.createRequestedRun(input, f.env); assert.equal(first.run.model, 'first-model');
@@ -3994,7 +3995,7 @@ test('T57: core historical run receipts preserve the selected model after provid
 test('T336: core native run creation refuses a lead run while a wait is unmet, as the CLI does, and creates a PE run', async t => {
   const f = await runCreationFixture(t);
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); } });
-  const cli = (...args) => tool.sage([...args, '--project', f.options.projectDirectory], f.env);
+  const cli = backedSage(tool, f.options.projectDirectory, f.env);
   cli('task', 'add', '--priority', 'P2', '--title', 'Upstream', '--size', 'small');
   cli('task', 'T1', 'set', 'waits=T2');
   const input = { ...f.input, project: f.options.projectDirectory, owner: 'test-owner' };
@@ -4007,7 +4008,7 @@ test('T336: core native run creation refuses a lead run while a wait is unmet, a
 test('T337: core native run creation refuses a lead run while the program breakdown is not approved, as the CLI does, and creates one after', async t => {
   const f = await runCreationFixture(t);
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); } });
-  const cli = (...args) => tool.sage([...args, '--project', f.options.projectDirectory], f.env);
+  const cli = backedSage(tool, f.options.projectDirectory, f.env);
   cli('program', 'propose', '--name', 'Codex support', '--goal', 'Codex runs sage too.', '--pilot', 'T1');
   const input = { ...f.input, project: f.options.projectDirectory, owner: 'test-owner' };
   const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
@@ -4267,11 +4268,14 @@ test('T59: checks evidence coexists with one review while a second review is ref
     assert.equal(f.accept().kind, 'review-clean');
     assert.deepEqual(f.tool.read(f.logbook, 'ledger').map(row => row.kind), [kind, 'review-clean']);
   }
+  // The chief's own review verdict needs a report that a stop hook kept (T483): the native review is accepted only by its
+  // own path, and after it the run backs no second verdict.
   const f = await reviewAcceptanceFixture(t);
-  f.cli('verdict','T1','--sha',f.preparation.review.sha,'--kind','review-clean','--run','R1');
   const before = readFileSync(join(f.logbook,'ledger.tsv'),'utf8');
-  assert.throws(() => f.accept());
+  assert.throws(() => f.cli('verdict','T1','--sha',f.preparation.review.sha,'--kind','review-clean','--run','R1'), /R1 has no kept report/);
   assert.equal(readFileSync(join(f.logbook,'ledger.tsv'),'utf8'), before);
+  assert.equal(f.accept().kind, 'review-clean');
+  assert.throws(() => f.cli('verdict','T1','--sha',f.preparation.review.sha,'--kind','review-clean','--cycle','2','--run','R1'), /R1 already backs the review-clean verdict of T1/);
   assert.equal(existsSync(join(f.logbook,'review-pending.json')), false);
 });
 
@@ -5973,7 +5977,7 @@ for (const cause of ['gate', 'reviewer', 'head', 'configuration', 'finding']) te
   writeFileSync(f.entry, `import {servePreparations} from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(f.options)});`);
   const client = await connect(t, f, '0.160.0', '', 'sage_update_task'), before = updateTableBytes(f);
   const response = await client.call(f.request);
-  assert.match(response.error, { finding: /readiness-findings.*F-T1-R1-1/, gate: /readiness-gates.*G1/, reviewer: /readiness-runs.*R2/, head: /\[readiness\].*current commit/, configuration: /readiness-config.*configuration/ }[cause]);
+  assert.match(response.error, { finding: /readiness-findings.*F-T1-R1-1/, gate: /readiness-gates.*G1/, reviewer: /readiness-runs.*R\d+\./, head: /\[readiness\].*current commit/, configuration: /readiness-config.*configuration/ }[cause]);
   assert.doesNotMatch(response.error, /hidden\/local|private bad value|Private question/);
   assert.deepEqual(updateTableBytes(f), before); await client.close();
 });

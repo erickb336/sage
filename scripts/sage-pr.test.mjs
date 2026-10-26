@@ -11,6 +11,8 @@ import { basename, delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
+import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
+import { backed } from "./verdict-backing.mjs";
 
 const TOOL = fileURLToPath(new URL("../plugins/sage/skills/sage/sage.mjs", import.meta.url));
 const PR = fileURLToPath(new URL("../plugins/sage/skills/sage/sage-pr.mjs", import.meta.url));
@@ -111,11 +113,13 @@ function world() {
   };
   const git = (...a) => execFileSync("git", a, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }).trim();
   const p = (...a) => git("-C", at("project"), ...a);
-  const sage = (...a) => {
+  const run = (...a) => {
     const r = spawnSync("node", [TOOL, ...a, "--project", at("project")], { encoding: "utf8", env, timeout });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
   };
+  // A review or QA verdict gets its backing run first, with its helper's report kept as the hook keeps it (T483).
+  const sage = (...a) => run(...backed(a, { cli: (...b) => run(...b).trim(), keep: (fields) => keepReport(at("project"), fields, env) }));
   const pr = (...a) => {
     writeFileSync(at("bin", "fake.json"), JSON.stringify(env));
     return spawnSync("node", [`--import=${SPY}`, PR, ...a], { encoding: "utf8", env, cwd: at("home"), timeout });

@@ -2,7 +2,7 @@
 // The input shape is a SubagentStop input that stock Codex 0.160.0 sent in run R1648 (paths replaced).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GATE = join(ROOT, "plugins/sage-codex/hooks/report-gate.mjs");
 const ROLE = join(ROOT, "plugins/sage-codex/skills/sage/role.mjs");
+const TOOL = join(ROOT, "plugins/sage-codex/skills/sage/sage.mjs");
 const FULL = "STATUS done\nRESULT PASS\nEVIDENCE echo ok printed ok\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none";
 const UNREAD = { systemMessage: "sage: the report check could not read this agent's stop, so it did not check its report." };
 const BLOCK = { decision: "block", reason: 'sage: your report has no EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH. End with the sage report: STATUS, RESULT, EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.' };
@@ -28,8 +29,10 @@ const stop = (fields) => ({ session_id: "01a1726e-6149-7c53-b2c2-24302efa1ced", 
   transcript_path: join(dir, "root.jsonl"), agent_transcript_path: transcript("/root/sage_implementer_t1"), cwd: dir,
   hook_event_name: "SubagentStop", model: "gpt-6.1-sol", permission_mode: "bypassPermissions", stop_hook_active: false,
   agent_id: "01a1726e-61b6-7a01-a9bb-7a01f6164881", agent_type: "default", last_assistant_message: "STATUS done\nRESULT PASS", ...fields });
+/** Codex's homes in the test folder, so that no gate run reads or writes the real ~/.codex (order 42). */
+const ENV = { ...process.env, HOME: join(dir, "home"), CODEX_HOME: join(dir, "codex-home") };
 function gate(input) {
-  const r = spawnSync("node", [GATE], { input: typeof input === "string" ? input : JSON.stringify(input), encoding: "utf8" });
+  const r = spawnSync("node", [GATE], { input: typeof input === "string" ? input : JSON.stringify(input), encoding: "utf8", env: ENV });
   assert.equal(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);
 }
@@ -50,6 +53,30 @@ test("a second miss stops the agent with one plain line", () => {
 test("a task name with a run, or a sage_ name in another letter case, gets the report check too (R1663-2, R1664-6)", () => {
   for (const path of ["/root/sage_code_reviewer_t12_r40", "/root/Sage_QA_T1", "/root/SAGE_implementer_t01"]) {
     assert.deepEqual(gate(stop({ agent_transcript_path: transcript(path) })), BLOCK, path);
+  }
+});
+
+test("T483: the stop of a review or QA child keeps its report, and only a kept report backs the run's verdict in the Codex state tool", () => {
+  const project = realpathSync(mkdtempSync(join(dir, "project-")));
+  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", project], { encoding: "utf8", env: ENV });
+  const ok = (...args) => { const r = sage(...args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  ok("init");
+  ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
+  const sha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+  const clean = `STATUS done\nRESULT CLEAN\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH sage/t1-a ${sha}`;
+  const reviewed = (name, message, more = {}) => {
+    const run = ok("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
+    assert.deepEqual(gate(stop({ agent_transcript_path: transcript(`/root/${name.replace("<R>", run.toLowerCase())}`), cwd: project, last_assistant_message: message, ...more })), message === clean ? {} : BLOCK);
+    ok("run", "done", run, "--status", "done", "--tokens", "1");
+    return run;
+  };
+  const verdict = (run) => sage("verdict", "T1", "--kind", "review-clean", "--sha", sha, "--run", run);
+  const kept = reviewed("sage_code_reviewer_t1_<R>", clean);
+  assert.equal(verdict(kept).status, 0, "the kept CLEAN report backs review-clean");
+  for (const [why, name, message, more] of [["no run in the task name", "sage_code_reviewer_t1", clean], ["another role in the task name", "sage_implementer_t1_<R>", clean],
+    ["another task in the task name", "sage_code_reviewer_t2_<R>", clean], ["a first stop without the full report", "sage_code_reviewer_t1_<R>", "STATUS done\nRESULT CLEAN"]]) {
+    const run = reviewed(name, message, more);
+    assert.match(verdict(run).stderr, new RegExp(`^sage: ${run} has no kept report`), why);
   }
 });
 

@@ -69,7 +69,7 @@ The hook lets you move the task only one step of the cycle at a time:
 | verifying | reviewing |
 | verified | reviewing |
 
-You move from repairing to reviewing only after you close each fix key of the round, also a low one. You move from verifying or verified to reviewing only when the head of the branch has no full clean cycle (one cycle with the clean verdict of each review and QA of the route): the head moved past the clean cycles. The move to verified needs a checks verdict on the head, so it is the sage's unless the ledger already has one there. You set `pr=` once, while the task has none. You never clear the branch. Everything else is the sage's: the checks verdicts, `finding move`, a dismissal of a medium or high finding, a dismissal of a fix key of the round or of an earlier one (a finding triaged fix from before the round), a triage `ask`, gates, the decision trail, the pages record, other states and the merge. A held, replan, merged, concluded or abandoned task takes no write from you and no helper. When your lead run ends (for example, the sage moved the task back to briefed), you write nothing more.
+You move from repairing to reviewing only after you close each fix key of the round, also a low one. You move from verifying or verified to reviewing only when the head of the branch has no full clean cycle (one cycle with the clean verdict of each review and QA of the route): the head moved past the clean cycles. You move from reviewing to verifying only when the head has a full clean cycle. The move to verified needs a checks verdict on the head, so it is the sage's unless the ledger already has one there. You set `pr=` once, while the task has none. You never clear the branch. Everything else is the sage's: the checks verdicts, `finding move`, a dismissal of a medium or high finding, a dismissal of a fix key of the round or of an earlier one (a finding triaged fix from before the round), a triage `ask`, gates, the decision trail, the pages record, other states and the merge. A held, replan, merged, concluded or abandoned task takes no write from you and no helper. When your lead run ends (for example, the sage moved the task back to briefed), you write nothing more.
 
 ## The wait
 
@@ -132,7 +132,7 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
    - A new finding from a re-check: record it as in step 4 of a helper's run, which also holds for a new low one. A new medium or high one: end blocked, with its key.
 6. **Clean cycles and the end.** A cycle is clean when it has no open medium or high finding. After a clean cycle, run the next one on the same SHA (`--cycle 2`) until the count in your brief. Then:
    - `gh pr checks <n>`. Give its result in EVIDENCE. When a check fails or still runs, or there are no checks, end blocked, with `Left: the checks`.
-   - `sage task <T> set state=verifying`. It needs no open finding.
+   - `sage task <T> set state=verifying`. It needs no open finding, and a full clean cycle on the head.
    - End with STATUS done and RESULT `ready`, only when no helper of yours runs and each run that you added is done or failed.
 7. **Held.** When `round` says held or replan, stop. Start no more helpers. Report STATUS blocked, RESULT held, and your view of the cause.
 

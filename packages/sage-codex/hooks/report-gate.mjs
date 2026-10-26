@@ -7,6 +7,7 @@
 import { closeSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { REPORT_FIELDS, missingReportFields } from "sage-core";
+import { tool } from "../skills/sage/sage.mjs";
 
 const UNREAD = "sage: the report check could not read this agent's stop, so it did not check its report.";
 
@@ -38,6 +39,19 @@ export const agentPath = (path) => agentPathOf(sessionMeta(path));
 /** The task name of a Codex child: the last part of its agent path. */
 export const childTask = (path) => agentPath(path).at(-1) ?? "";
 
+/** The roles whose report backs a verdict, by the role part of a task name. */
+const CHECKERS = { code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
+/**
+ * Keep the report of a review or QA child whose task name carries its run (sage_qa_t12_r40), where the state tool reads it
+ * for the run's verdict (T483). The hook saw no commit, so the report's own BRANCH names it. A report that is not kept
+ * backs no verdict, so any failure here keeps nothing and stops nothing.
+ */
+function keep(task, text, cwd) {
+  const [, role, number, run] = /^sage_([a-z_]+)_t([1-9]\d*)_(r[1-9]\d*)$/.exec(task) ?? [];
+  if (!CHECKERS[role] || typeof text !== "string" || typeof cwd !== "string") return;
+  try { tool.keepReport(cwd, { task: `T${number}`, run: run.toUpperCase(), role: CHECKERS[role], sha: "", text }); } catch {}
+}
+
 export function reportGate(input) {
   const message = input?.last_assistant_message;
   if (input?.hook_event_name !== "SubagentStop" || typeof input.stop_hook_active !== "boolean"
@@ -45,6 +59,8 @@ export function reportGate(input) {
   let task;
   try { task = childTask(input.agent_transcript_path); } catch { return { systemMessage: UNREAD }; }
   const missing = sageName(task) ? missingReportFields(message ?? "") : [];
+  // A stop that goes through keeps a review's or QA's report in the logbook, for its run's verdict (T483).
+  if (!missing.length || input.stop_hook_active) keep(task, message, input.cwd);
   if (!missing.length) return {};
   if (input.stop_hook_active) return { systemMessage: `sage: the agent ${task} ended without a full report (no ${missing.join(", ")}). The chief reads it as it is.` };
   return { decision: "block", reason: `sage: your report has no ${missing.join(", ")}. End with the sage report: ${REPORT_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.` };
