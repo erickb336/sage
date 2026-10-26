@@ -80,7 +80,7 @@ test("the state server lists one tool for each state-tool command, and marks onl
   assert.deepEqual([add.required.sort(), add.properties.priority.enum], [["priority", "project", "size", "title"], ["P0", "P1", "P2", "P3"]]);
 });
 
-test("task_adopt reaches the shared adoption rule through the trusted Codex MCP entry point", async t => {
+test("T48: task_adopt and approved repair reach the shared rule through Codex MCP", async t => {
   const bin = mkdtempSync(join(tmpdir(), 'sage-adoption-mcp-'));
   t.after(() => rmSync(bin, { recursive: true, force: true }));
   const fake = join(bin, 'gh');
@@ -105,6 +105,22 @@ test("task_adopt reaches the shared adoption rule through the trusted Codex MCP 
   assert.equal(readFileSync(tasks, 'utf8'), before);
   assert.match(await s.call('task_set', { task: 'T1', fields: { branch: 'sage/t536-adopt', state: 'briefed' } }), /T1 briefed.*round 4/);
   assert.match((await s.call('merge_check', { sha: SHA, pr: 362, head: 'sage/t536-adopt' })).error, /no verdicts/);
+  for (const state of ['building', 'reviewing']) await s.call('task_set', { task: 'T1', fields: { state } });
+  const run = (await s.call('run_add', { task: 'T1', role: 'qa' })).split(' ')[0];
+  await s.call('run_done', { run, status: 'done', tokens: 1 });
+  await s.call('finding_add', { task: 'T1', source: 'qa', severity: 'medium', summary: 'Repair needed', run, class: 'state-edge' });
+  assert.match(await s.call('finding_triage', { task: 'T1', key: 'F-T1-1', decision: 'fix' }), /open · fix/);
+  assert.match(await s.call('round', { task: 'T1' }), /held: 4 repair rounds/);
+  assert.match((await s.call('task_set', { task: 'T1', fields: { state: 'building' } })).error, /approval/);
+  await s.call('gate_add', { task: 'T1', question: 'Approve one more repair round for T1 after 4 spent rounds and limit 3?', options: 'approve|decline', recommend: 'approve' });
+  await s.call('gate_answer', { gate: 'G1', option: 1 });
+  assert.match(await s.call('task_set', { task: 'T1', fields: { state: 'building', approval: 'G1' } }), /T1 building.*round 4/);
+  assert.equal(tool.read(dest, 'tasks')[0].extra, '2');
+  await s.call('task_set', { task: 'T1', fields: { state: 'reviewing' } });
+  assert.match(await s.call('round', { task: 'T1' }), /round 5 of 5/);
+  await s.call('task_set', { task: 'T1', fields: { state: 'reviewing' } });
+  assert.match(await s.call('round', { task: 'T1' }), /held: 5 repair rounds/);
+  assert.match((await s.call('task_set', { task: 'T1', fields: { state: 'building', approval: 'G1' } })).error, /approval/);
 });
 
 test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each refusal as a tool error with its reason", async (t) => {

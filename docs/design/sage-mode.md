@@ -200,7 +200,7 @@ stateDiagram-v2
   framed --> briefed: no design needed
   briefed --> building
   building --> held: product question
-  held --> building: you answer, or the default applies, and after a hold that round set, one more round
+  held --> building: explicit repair approval after a round hold
   building --> reviewing: report + evidence
   reviewing --> repairing: findings to fix
   repairing --> reviewing: next round, at most max_rounds plus the extra rounds
@@ -306,7 +306,7 @@ About 2,000 tokens or fewer, with long material in files. The hook reads a revie
 | One writer per worktree or branch | **Code:** the state tool refuses a second open writer on a branch | Parallel writers conflict (Cognition) |
 | At most N agents at once (default 10 for each project: one lead and its 9 helpers; 20 in all) | **Code:** the hook counts running agents | Cost and focus. Orchestrator used 3 |
 | Every finding is triaged before QA | **Code:** the state tool refuses "verifying" with open findings | No dropped findings (ORC-028) |
-| At most 3 repair rounds (max_rounds), plus one more after each hold that round set. A round re-plans when the last round's fix findings are all still open, also when new ones joined them. Leaving replan clears the old round's keys, so its findings no longer re-plan the task; the round number goes on, so the total stays capped by max_rounds plus the extra rounds. A move from held or replan back to briefed ends the task's running lead run: a new lead starts with the new brief | **Code:** the state tool counts rounds, keys and the extra rounds | Loops must converge. attack-the-premise |
+| At most 3 repair rounds (max_rounds), plus one more only with an explicit task-specific repair approval after a round hold. The approved limit is one above the greater of spent rounds and the current limit; an approval is used once. A round re-plans when the last round's fix findings are all still open, also when new ones joined them. Leaving replan clears the old round's keys, so its findings no longer re-plan the task; the round number goes on, so the total stays capped by max_rounds plus the extra rounds. A move from held or replan back to briefed ends the task's running lead run: a new lead starts with the new brief | **Code:** the state tool counts rounds, keys and the extra rounds | Loops must converge. attack-the-premise |
 | A lead's review or QA verdict says what its child reported, on the commit that the child saw. Each medium or high finding of every child of a role, in any round, has its own finding that the lead run recorded itself before the lead adds a run of that role, records a verdict of it or moves the task. A finding that the sage added never counts; the sage's dismissal, close or move of the lead's finding does not undo it. A report that the hook cannot read, or no report, backs no lead verdict | **Code:** the hook reads each child's report at its stop, with the stop gate's reader | A lead must not re-roll a review until it is clean, or hide a finding |
 | A merge needs the route's verdicts on the current head SHA, and no review or QA run of the task still runs | **Code:** hook on `gh pr merge` | Merge only the checked commit (Orchestrator, pstack) |
 | An agent never merges. The merge rule and the push rule hold for every command tool: Bash, Monitor, PowerShell and the terminal tool | **Code:** the hook refuses a merge from any agent, whatever the tool | A second tool must not be a way around the rule |

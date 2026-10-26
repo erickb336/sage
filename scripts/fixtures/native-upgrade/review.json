@@ -1,0 +1,30 @@
+{
+  "base": "9bf43dea015c470e2688ff8a886f4315a5e19a71",
+  "request": {
+    "task": "T1",
+    "run": "R1",
+    "role": "code-reviewer",
+    "assignment": "e1111111-1111-4111-8111-111111111111",
+    "reportHash": "d6cd0911fd8d0fe6f2c51fde0bda2e4d09b2f3493c95fe2cd881abac17bf9cf4",
+    "text": "STATUS: done\nRESULT: FINDINGS\nEVIDENCE: {\"commit\":\"8e41bdf64ff625113ef865511a64967fc587c357\",\"round\":2,\"cycle\":1,\"summary\":\"Simulated fixture review\"}\nFINDINGS: [{\"severity\":\"medium\",\"summary\":\"Sample finding\"}]\nQUESTIONS: none\nNOT VERIFIED: Real review\nBRANCH: sample-review",
+    "review": {
+      "branch": "sample-review",
+      "sha": "8e41bdf64ff625113ef865511a64967fc587c357",
+      "round": 2,
+      "cycle": 1
+    }
+  },
+  "tables": {
+    "decisions.tsv": "at\ttask\tdecision\twhy\n",
+    "findings.tsv": "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\trun\tclass\n",
+    "gates.tsv": "id\ttask\tquestion\toptions\trecommendation\tdefault\tanswer\tat\n",
+    "ledger.tsv": "task\tpr\tsha\tkind\tcycle\trun\tat\n",
+    "programs.tsv": "id\tname\tgoal\tpilot\tgate\tat\n",
+    "runs.tsv": "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel\tusage_provider\tusage_interface\tusage_capability\tusage_binding\tusage_reason\tusage_basis\tusage_status\tusage_source\tusage_evidence\nR1\tT1\tcode-reviewer\t2\t\tsample-review\tdone\t\treports/R1-e1111111-1111-4111-8111-111111111111-d6cd0911fd8d0fe6f2c51fde0bda2e4d09b2f3493c95fe2cd881abac17bf9cf4.md\t2026-10-26T22:15:05Z\t2026-01-01T00:00:00Z\n",
+    "tasks.tsv": "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\tadoption\nT1\tReview sample\tsmall\t\tbuild,code-review,qa\tverified\tsample-review\t123\t2\t\t\t1\tP1\n"
+  },
+  "pending": "{\"value\":{\"schema\":4,\"receipt\":{\"reference\":{\"task\":\"T1\",\"run\":\"R1\",\"role\":\"code-reviewer\",\"assignment\":\"e1111111-1111-4111-8111-111111111111\",\"reportHash\":\"d6cd0911fd8d0fe6f2c51fde0bda2e4d09b2f3493c95fe2cd881abac17bf9cf4\",\"review\":{\"branch\":\"sample-review\",\"sha\":\"8e41bdf64ff625113ef865511a64967fc587c357\",\"round\":2,\"cycle\":1},\"text\":\"STATUS: done\\nRESULT: FINDINGS\\nEVIDENCE: {\\\"commit\\\":\\\"8e41bdf64ff625113ef865511a64967fc587c357\\\",\\\"round\\\":2,\\\"cycle\\\":1,\\\"summary\\\":\\\"Simulated fixture review\\\"}\\nFINDINGS: [{\\\"severity\\\":\\\"medium\\\",\\\"summary\\\":\\\"Sample finding\\\"}]\\nQUESTIONS: none\\nNOT VERIFIED: Real review\\nBRANCH: sample-review\"},\"result\":{\"task\":\"T1\",\"run\":\"R1\",\"sha\":\"8e41bdf64ff625113ef865511a64967fc587c357\",\"cycle\":1,\"kind\":\"findings\",\"findings\":[\"F-T1-R1-1\"],\"at\":\"2026-10-26T22:15:05Z\"}},\"tables\":{\"tasks\":{\"before\":\"id\\ttitle\\tsize\\trisk\\troute\\tstate\\tbranch\\tpr\\tround\\tkeys\\thold\\textra\\tpriority\\tkind\\twaits\\tprogram\\tadoption\\nT1\\tReview sample\\tsmall\\t\\tbuild,code-review,qa\\tverified\\tsample-review\\t123\\t2\\t\\t\\t1\\tP1\\n\",\"after\":\"id\\ttitle\\tsize\\trisk\\troute\\tstate\\tbranch\\tpr\\tround\\tkeys\\thold\\textra\\tpriority\\tkind\\twaits\\tprogram\\tadoption\\nT1\\tReview sample\\tsmall\\t\\tbuild,code-review,qa\\treviewing\\tsample-review\\t123\\t2\\t\\t\\t1\\tP1\\t\\t\\t\\t\\n\"},\"findings\":{\"before\":\"task\\tkey\\tround\\tsource\\tseverity\\tsummary\\ttriage\\treason\\tstatus\\trun\\tclass\\n\",\"after\":\"task\\tkey\\tround\\tsource\\tseverity\\tsummary\\ttriage\\treason\\tstatus\\trun\\tclass\\nT1\\tF-T1-R1-1\\t2\\tcode-reviewer\\tmedium\\tSample finding\\t\\t\\topen\\tR1\\t\\n\"},\"ledger\":{\"before\":\"task\\tpr\\tsha\\tkind\\tcycle\\trun\\tat\\n\",\"after\":\"task\\tpr\\tsha\\tkind\\tcycle\\trun\\tat\\nT1\\t123\\t8e41bdf64ff625113ef865511a64967fc587c357\\tfindings\\t1\\tR1\\t2026-10-26T22:15:05Z\\n\"},\"decisions\":{\"before\":\"at\\ttask\\tdecision\\twhy\\n\",\"after\":\"at\\ttask\\tdecision\\twhy\\n2026-10-26T22:15:05Z\\tT1\\tverified → reviewing\\tfindings verdict on 8e41bdf64ff625113ef865511a64967fc587c357\\n\"}}},\"hash\":\"46ee6afe5961f597fb047e5c3e522c0f7534d7b26da5c8f88d5d70536a8c7c38\"}\n",
+  "receipt": "{\"value\":{\"reference\":{\"task\":\"T1\",\"run\":\"R1\",\"role\":\"code-reviewer\",\"assignment\":\"e1111111-1111-4111-8111-111111111111\",\"reportHash\":\"d6cd0911fd8d0fe6f2c51fde0bda2e4d09b2f3493c95fe2cd881abac17bf9cf4\",\"review\":{\"branch\":\"sample-review\",\"sha\":\"8e41bdf64ff625113ef865511a64967fc587c357\",\"round\":2,\"cycle\":1},\"text\":\"STATUS: done\\nRESULT: FINDINGS\\nEVIDENCE: {\\\"commit\\\":\\\"8e41bdf64ff625113ef865511a64967fc587c357\\\",\\\"round\\\":2,\\\"cycle\\\":1,\\\"summary\\\":\\\"Simulated fixture review\\\"}\\nFINDINGS: [{\\\"severity\\\":\\\"medium\\\",\\\"summary\\\":\\\"Sample finding\\\"}]\\nQUESTIONS: none\\nNOT VERIFIED: Real review\\nBRANCH: sample-review\"},\"result\":{\"task\":\"T1\",\"run\":\"R1\",\"sha\":\"8e41bdf64ff625113ef865511a64967fc587c357\",\"cycle\":1,\"kind\":\"findings\",\"findings\":[\"F-T1-R1-1\"],\"at\":\"2026-10-26T22:15:05Z\"}},\"hash\":\"59ef1ffd9b527453abba6d12402d27c09de6904c971910c2012f38a46be4c110\"}\n",
+  "name": "e1111111-1111-4111-8111-111111111111-d6cd0911fd8d0fe6f2c51fde0bda2e4d09b2f3493c95fe2cd881abac17bf9cf4.json",
+  "folder": "reviews"
+}

@@ -141,7 +141,7 @@ return { readVersion, readReceipt, recover, commit };
 }
 
 /** A prepared intent precedes an external durable decision. Acknowledgement does not release its fence. */
-export function coordinatedWrites({ schema, tables: TABLES, folder: FOLDER, validate }) {
+export function coordinatedWrites({ schema, previousSchemas = [], tables: TABLES, folder: FOLDER, validate }) {
   const name = reference => hash(json([reference.owner, reference.request])) + '.json';
   const folder = dir => {
     canonical(dir);
@@ -150,7 +150,7 @@ export function coordinatedWrites({ schema, tables: TABLES, folder: FOLDER, vali
     return path;
   };
   const checkIntent = intent => {
-    if (!keys(intent, ['schema', 'reference', 'proposal', 'tables']) || intent.schema !== schema
+    if (!keys(intent, ['schema', 'reference', 'proposal', 'tables']) || (intent.schema !== schema && !previousSchemas.includes(intent.schema))
       || !keys(intent.tables, TABLES)) fail();
     for (const table of TABLES) if (!keys(intent.tables[table], ['before', 'after'])
       || typeof intent.tables[table].before !== 'string' || typeof intent.tables[table].after !== 'string') fail();

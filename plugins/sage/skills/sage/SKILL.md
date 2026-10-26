@@ -118,3 +118,20 @@ The tool keeps no hidden character in a cell, and removes them from the standing
 Other text stays: each script, and emoji. A zero-width joiner or non-joiner between two letters stays: Persian and Indic text needs it. A zero-width joiner between two emoji stays, so a joined emoji stays whole, and the emoji selector (U+FE0F) stays after an emoji or a keycap base (`1️⃣`). A subdivision flag (England, Scotland, Wales) shows as a black flag.
 
 The tool prints each hidden character in an id, a column or a path as `\xNN` or `\u{N}`. For a project path with a control character, it prints no command to paste.
+
+
+### An approved repair after a round hold
+
+A round hold needs an explicit answer from the owner. A default answer does not grant a repair.
+
+For a task with four spent rounds and a current limit of three, open a gate on that task:
+
+```text
+sage gate add T1 --question "Approve one more repair round for T1 after 4 spent rounds and limit 3?" --options "approve|decline" --recommend approve
+```
+
+After the owner chooses approve, record that answer with `gate_answer`, then call `task_set` with `task: T1` and `fields: {"state":"building","approval":"G1"}`. Use the actual gate ID. Use `briefed` instead of `building` when a new brief is needed. The CLI form is `task T1 set state=building approval=G1`.
+
+The limit is `max_rounds + extra`. One approval permits the next round above the greater of spent rounds and that limit. This example permits round five; round six holds again. The task keeps its cumulative rounds, PR, branch, earlier allowances and review minimum.
+
+Missing, declined, wrong-task, stale, malformed or used approvals refuse before any changes. A repeated CLI or `task_set` call after success refuses and adds nothing. An exact native task-update retry returns its saved result. After an uncertain result, read the task before a new request. The allowance and used gate IDs share one task-row write.
