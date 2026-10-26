@@ -26,8 +26,9 @@
 //     every program of its package: Codex puts its own rg first on PATH). codex --version and --help start no session.
 //   - A push (sage mode): only core's push form, as in the Claude hook.
 //   - Code mode: Codex runs no hook for its exec tool, but each tool call inside the code comes here with its own name,
-//     as a direct call does. The js tool of Codex's REPL servers runs its code in its own process, where no hook sees
-//     a shell command or a write: the gate cannot read that code, so in sage mode it refuses every js call (fail closed).
+//     as a direct call does (T541). The js tool of Codex's REPL servers (mcp__node_repl__js, mcp__cua_repl__js) runs
+//     its code in its own process, where no hook sees a shell command. The owner chose to allow it, so the manifest
+//     does not match it and the gate never sees it.
 //   - A merge (sage mode): only the one merge form of core, only on the root thread, only with autopilot on and a passing
 //     merge check for that head SHA. Autopilot counts only when the mode file and the user's own typed messages in
 //     Codex's transcript of the thread both give it, so a forged mode file alone unlocks nothing. PreToolUse denies every
@@ -73,7 +74,6 @@ const CHILD_CODEX = "sage: role agents never start Codex from the shell, because
 const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report.";
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report.";
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
-const REPL = 'sage: the hook cannot read the code of a js call, and that code can run shell commands and change files that no sage rule sees, so in sage mode it refuses every js call. Run a shell command with exec_command and an edit with apply_patch. The user ends sage mode with the message "sage mode off", alone.';
 
 /** The sage MCP tools that only read the logbook: a child may call these, and pages without record, run or text. */
 export const CHILD_READS = new Set(["status", "standing", "merge_check"]);
@@ -86,12 +86,6 @@ const SPAWN = /spawn_agent$/;
  * spec_plan.rs:1489-1508; the hook name is the namespace, then the name, registry.rs:943-951).
  */
 const SEND_INPUT = /^(?:(?:multi_agent_v1)?send_input|collaboration(?:send_message|followup_task))$/;
-/**
- * Codex's hook names of the js tool of its REPL-backed MCP servers, node_repl and cua_repl (Codex 0.164.0
- * protocol/src/mcp.rs:42-43 and the names in its test at mcp.rs:543-560). Its code runs in the server's own Node
- * process, so a shell command or a file write inside it reaches no hook; the gate cannot read the code.
- */
-const REPL_JS = /^mcp__(?:node_repl|cua_repl)__js$/;
 const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages" && ["record", "run", "text"].every((key) => input[key] === undefined));
 
 /** A path segment named .codex, in any letter case (the Mac file system ignores case). */
@@ -363,7 +357,7 @@ function fieldsOf(input) {
   const { session_id, cwd, tool_name, tool_input } = input;
   if (!text(session_id) || !text(cwd) || !isAbsolute(cwd) || typeof tool_name !== "string") return undefined;
   const shell = ["Bash", "apply_patch"].includes(tool_name);
-  if (!shell && ![SPAWN, SEND_INPUT, SAGE_TOOL, REPL_JS].some((name) => name.test(tool_name))) return undefined;
+  if (!shell && !SPAWN.test(tool_name) && !SEND_INPUT.test(tool_name) && !SAGE_TOOL.test(tool_name)) return undefined;
   if (Object.hasOwn(input, "agent_id") && typeof input.agent_id !== "string") return undefined;
   if (!record(tool_input) || (shell && typeof tool_input.command !== "string")) return undefined;
   // An empty agent_id is still a child: only an event without one is the root thread.
@@ -415,8 +409,6 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const under = thread.child && underSage(thread);
     return under === false ? undefined : refuse(thread, under ? CHILD_SPAWN : UNREAD_ROLE);
   }
-  // Fail closed: the gate cannot read the code, so in sage mode no thread runs it (T541).
-  if (REPL_JS.test(f.tool)) return mode(f, env).sage ? deny(REPL) : undefined;
   if (f.tool === "apply_patch") {
     const paths = patchPaths(f.command);
     if (!paths.length) return deny("sage: the hook could not read this patch, so it refuses it. Send one patch from *** Begin Patch to *** End Patch.");

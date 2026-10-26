@@ -716,19 +716,13 @@ test("a tool call inside a code-mode exec cell reaches the gate as a direct call
   assert.deepEqual(["Bash", "apply_patch", "mcp__sage__verdict", "spawn_agent", "collaborationspawn_agent"].filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each nested tool");
 });
 
-test("in sage mode the gate refuses every js call of Codex's REPL servers, because it cannot read the code; outside sage mode it runs (T541)", async () => {
-  const REPL = 'sage: the hook cannot read the code of a js call, and that code can run shell commands and change files that no sage rule sees, so in sage mode it refuses every js call. Run a shell command with exec_command and an edit with apply_patch. The user ends sage mode with the message "sage mode off", alone';
-  // The REPL servers' js tool takes { code } (Codex 0.164.0 guardian/tests.rs:208-216); its code runs in the server's own Node process.
-  const js = (tool_name, code, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { code }, ...extra });
-  const code = "require('child_process').execSync('git push github HEAD:main')";
-  for (const tool of ["mcp__node_repl__js", "mcp__cua_repl__js"]) {
-    assert.equal(denied(await fixed({ sage: true }).run(js(tool, code))), REPL, `${tool} the chief`);
-    assert.equal(denied(await fixed({ sage: true }).run(js(tool, "await browser.open('https://example.com')", CHILD))), REPL, `${tool} a child`);
-    assert.equal(await fixed({ sage: false }).run(js(tool, code)), undefined, `${tool} outside sage mode`);
-  }
+test("in sage mode a js call of Codex's REPL servers passes: the owner allows it, so Codex runs no sage gate for it (T541)", () => {
+  // Codex's PreToolUse names for the REPL js tool (Codex 0.164.0 protocol/src/mcp.rs:543-560). Codex runs a hook only
+  // for a tool name that its matcher matches (hooks/src/engine/matcher.rs:32-40), so a name the gate's matcher does not
+  // match runs with no gate, in every mode; the shell command with the same push still reaches the gate.
   const matcher = gateMatcher();
-  assert.deepEqual(["mcp__node_repl__js", "mcp__cua_repl__js"].filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each js tool");
-  assert.deepEqual(["mcp__node_repl__read_file", "mcp__other__js", "js", "exec"].filter((tool) => matcher.test(tool)), [], "and for no other tool");
+  assert.deepEqual(["mcp__node_repl__js", "mcp__cua_repl__js"].filter((tool) => matcher.test(tool)), [], "js passes");
+  assert.equal(matcher.test("Bash"), true, "a shell command reaches the gate");
 });
 
 test("the sage folder and a .codex folder are found also behind quotes, ~ and a variable, and from the folder a command runs in (R1669-4, R1669-6)", async (t) => {
