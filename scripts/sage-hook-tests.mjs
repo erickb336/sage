@@ -5663,6 +5663,18 @@ test("R1740-1: a lead never moves its task back onto a branch named for it that 
   assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1-z")), undefined, "between branches that no other task uses");
 });
 
+test("R1759-2: after the sage moves its task off a shared branch, a lead adds no run on it, and the refusal names the move", () => {
+  const s = sharedLeadSession();
+  assert.equal(denied(stateRun(s, "run add T1 --role implementer --branch claude/t1-x")), undefined, "on the shared branch that its task names");
+  s.sage("task", "T1", "set", "branch=claude/t1-y"); // the sage moves T1 off
+  assert.match(denied(stateRun(s, "run add T1 --role implementer --branch CLAUDE/T1-X")) ?? "",
+    /^sage: CLAUDE\/T1-X is shared with T2, and the sage moved T1 off it to claude\/t1-y: add the run on claude\/t1-y, or ask the sage to move T1 back\. A lead writes/, "a branch named for T1 that T2 uses");
+  assert.equal(denied(stateRun(s, "run add T1 --role implementer --branch claude/t1-y")), undefined, "on the branch that the sage moved it to");
+  assert.equal(denied(stateRun(s, "run add T1 --role implementer --branch claude/t1-z")), undefined, "on a branch named for T1 that no other task uses");
+  s.sage("task", "T1", "set", "branch="); // the sage takes T1 off every branch
+  assert.match(denied(stateRun(s, "run add T1 --role implementer --branch claude/t1-x")) ?? "", /^sage: claude\/t1-x is shared with T2, and the sage moved T1 off it and cleared its branch=: add the run on a branch named for T1 that no other task uses, or ask the sage to move T1 back\. A lead writes/);
+});
+
 test("F-T273-8: merge-check --head runs the same check by hand, and needs --pr", () => {
   const s = autopilotSession();
   const check = (...args) => spawnSync("node", [TOOL, "merge-check", "--sha", SHA, ...args, "--project", FEATURE], { encoding: "utf8", env: s.vars });

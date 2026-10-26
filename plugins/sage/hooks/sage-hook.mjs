@@ -1238,8 +1238,14 @@ function gap(role, view, task, ctx) {
 }
 const LEAD_WRITES = {
   // No new run of a role while the findings of its round's reports are not all recorded (F-T289-18).
-  // --branch: a branch named for its task, or its task's branch= that the sage shares with another task (T439).
-  "run add": ([, t], opt, own, view, task, ctx) => t === own && TEAM.includes(opt.role) && (opt.branch === undefined || Boolean(stateTool.ofTask(own, opt.branch)) || opt.branch === task.branch) && (gap(opt.role, view, task, ctx) ?? true),
+  // --branch: a branch named for its task, or its task's branch= that the sage shares with another task (T439). Not a
+  // branch that another task uses when its task's branch= names another: the sage moved its task off it (R1759-2).
+  "run add": ([, t], opt, own, view, task, ctx) => {
+    if (!(t === own && TEAM.includes(opt.role) && (opt.branch === undefined || Boolean(stateTool.ofTask(own, opt.branch)) || opt.branch === task.branch))) return false;
+    const others = opt.branch === undefined || opt.branch.toLowerCase() === String(task.branch).toLowerCase() ? [] : [...view.branchTasks(opt.branch)].filter((id) => id !== own);
+    if (others.length) return `${opt.branch} is shared with ${others.join(", ")}, and the sage moved ${own} off it ${task.branch ? `to ${task.branch}: add the run on ${task.branch}` : `and cleared its branch=: add the run on a branch named for ${own} that no other task uses`}, or ask the sage to move ${own} back.`;
+    return gap(opt.role, view, task, ctx) ?? true;
+  },
   // A run of the team ends only after its child, named by the run's id, stopped (F-T284-9). A run whose child gave no
   // report (it never started, it left with no stop, or the sage stopped it) ends as failed or blocked and backs no
   // verdict (F-T289-3, F-T289-13, F-T289-20). A review or QA run whose report was not clean ends only after the findings
