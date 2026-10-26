@@ -136,6 +136,13 @@ test("the base comes from GitHub: a planted origin/HEAD, a moved origin/main, no
   assert.match(w.no("merge-check", "--sha", stray), /do not carry over: the merge check has no base commit of the pull request from GitHub \(gh pr view, with --pr\)\.$/, "no --pr");
   w.base("fail");
   assert.match(w.refused(stray), /do not carry over: the merge check has no base commit of the pull request from GitHub/, "gh fails");
+  // GitHub's base is older than the main that the merge took: the refusal says to update the pull request.
+  w.base(main);
+  const newer = w.h.main({ "fresh.js": "f\n" });
+  w.h.git("reset", "-q", "--hard", h0);
+  const ahead = w.h.merge(newer);
+  w.verdicts(ahead, ["checks-pass"]);
+  assert.equal(w.refused(ahead), `${NOT_CARRIED}its other parent ${newer.slice(0, 7)} is newer than the pull request's base commit ${main.slice(0, 7)} that GitHub gives. Update the pull request on GitHub (push the branch again, or wait until GitHub shows the new base), run git fetch, then check again.`);
   w.base("0123456789abcdef0123456789abcdef01234567");
   assert.match(w.refused(stray), /do not carry over: the pull request's base commit 0123456 on GitHub is not in this clone: run git fetch, then check again\.$/);
 });

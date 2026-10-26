@@ -129,9 +129,8 @@ test("on resume with sage mode on, the status says that sage mode is on, not how
   assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 10 of 10 have a trust record (Codex checks each hash).\n${START}`));
 });
 
-test("the Codex guide and the README carry the owner's lines for install, trust, removal, the tools and the push limit (R1670, R1671-1, R1671-3, R1665-8)", () => {
+test("the Codex guide carries the owner's lines for install, trust, removal, the tools and the push limit (R1670, R1671-1, R1671-3, R1665-8)", () => {
   const guide = readFileSync(join(ROOT, "docs/guide/codex.md"), "utf8").replace(/\s+/g, " ");
-  const readme = readFileSync(join(ROOT, "README.md"), "utf8").replace(/\s+/g, " ");
   for (const line of [
     "To get it, run `npm install -g @openai/codex@0.164.0`.", // R1670-3
     "one tool for each command of the state tool that the chief uses.", // R1665-8, R1670-2
@@ -143,7 +142,8 @@ test("the Codex guide and the README carry the owner's lines for install, trust,
   ]) assert.ok(guide.includes(line), line);
   assert.match(readFileSync(join(ROOT, "CHANGELOG.md"), "utf8"), /- A limit: Codex 0\.164\.0 runs no hook for text that an agent types into a shell that still runs \(`write_stdin`\)/, "R1675-2");
   assert.doesNotMatch(guide, /the chief and the leads use/);
-  assert.ok(readme.includes("a role agent's logbook write, and a new agent or a new Codex session that a role agent starts"), "R1670-8");
+  // R1670-8: the README's limits table is gone (T521); the Codex guide's rules table keeps these stops.
+  for (const rule of ["| Only the chief records the logbook |", "| A role agent starts no agents |", "| A role agent starts no Codex from the shell |"]) assert.ok(guide.includes(rule), `R1670-8: ${rule}`);
 });
 
 test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy before the pilot", () => {
@@ -160,12 +160,12 @@ test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy
       "To stop merges at once, press Esc to stop Codex's turn, then send the off phrase for autopilot alone.", // F-T470-9
       "For a local clone, run `git pull` in the clone instead of the upgrade command.", // F-T470-12
       "The Codex logbook in `~/.codex/sage` stays; delete that folder yourself to remove it.", // F-T470-12
+      "- Under full access (`danger-full-access`), sage mode gives no guarantee", // F-T470-14: in the guide since the README's limits table went (T521)
     ],
     readme: [
       "**sage is a Claude Code and Codex plugin for developers who", // F-T470-11
       "and the lead and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md))", // F-T470-11
       "You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).", // F-T470-15, T467
-      "text that an agent types into a shell that still runs (`write_stdin`); anything under full access. |", // F-T470-14
     ],
     changelog: [
       "and a command such as `$EDITOR codex/a.txt` runs, except for a role agent while the mode is on.", // F-T470-3

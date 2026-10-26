@@ -1741,7 +1741,11 @@ function cleanMerges(repo, sha, parents, base, env) {
     const [why, steps] = [new Map(), []];
     for (const [from, main] of [parents, [...parents].reverse()]) {
       if (!holds("merge-base", "--is-ancestor", main, base)) {
-        why.set(from, `its other parent ${main.slice(0, 7)} is not a commit of the pull request's base branch, which is at ${b7} on GitHub`);
+        // GitHub gives the base as of the pull request's last update, so a merge of a newer main can be ahead of it.
+        const newer = holds("merge-base", "--is-ancestor", base, main);
+        why.set(from, newer
+          ? `its other parent ${main.slice(0, 7)} is newer than the pull request's base commit ${b7} that GitHub gives. Update the pull request on GitHub (push the branch again, or wait until GitHub shows the new base), run git fetch, then check again`
+          : `its other parent ${main.slice(0, 7)} is not a commit of the pull request's base branch, which is at ${b7} on GitHub`);
         continue;
       }
       const bases = run("merge-base", "--all", from, main).split("\n");

@@ -91,7 +91,10 @@ test("npm run check fails on a fragment that the build has not put in CHANGELOG.
   assert.equal(spawnSync("node", [join(dir, "scripts/build.mjs")], { encoding: "utf8" }).status, 0);
   const built = check();
   assert.equal(built.status, 0, built.stderr);
-  assert.match(readFileSync(join(dir, "CHANGELOG.md"), "utf8"), /\n## 2099-01-01\n\n- \*\*A later change\.\*\* Text\.\n\n## \d{4}-\d{2}-\d{2}\n/, "the later date comes first, before the newest date of the real entries");
+  // The later entry is the first date, before the newest real one, whatever date that is (T521: a fixed 2026-10-25
+  // here failed the first pull request with a later fragment).
+  const newest = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8").match(/^## (\d{4}-\d{2}-\d{2})$/m)[1];
+  assert.match(readFileSync(join(dir, "CHANGELOG.md"), "utf8"), new RegExp(`\\n## 2099-01-01\\n\\n- \\*\\*A later change\\.\\*\\* Text\\.\\n\\n## ${newest}\\n`));
 });
 
 // R1771: nothing drops without a line that says so. A small checkout with changes/ and CHANGELOG.md.
