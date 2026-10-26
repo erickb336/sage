@@ -55,10 +55,11 @@ export const TOOLS = {
     pos: ["run"], argv: (i) => ["run", "done", i.run],
   },
   finding_add: {
-    describe: "Record a finding of a review or QA. A known key opens it again.",
+    describe: "Record a finding of a review or QA. A known key opens it again. A review or QA finding needs run and class.",
     input: { task, source: z.string().describe("the role that found it, for example code-reviewer"), severity: z.enum(["high", "medium", "low"]),
       summary: optional("the location and the steps that show it"), key: optional("a known finding key, to open it again"),
-      run: optional("the run whose report holds the finding"), class: optional("state-edge, speed, copy, layout, security or other") },
+      run: optional("the run whose report holds the finding; needed for a review or QA source"),
+      class: optional("state-edge, speed, copy, layout, security or other; needed for a review or QA source") },
     pos: ["task"], argv: (i) => ["finding", "add", i.task],
   },
   finding_triage: {

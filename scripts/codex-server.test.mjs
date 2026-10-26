@@ -4290,7 +4290,8 @@ test('T59: checksum-valid malformed review records and deltas refuse before publ
     const f = await reviewAcceptanceFixture(t, {findings:[{severity:'high',summary:'Keep this finding'}]});
     fixtureTaskField(f,'state','verified');
     f.cli('task','add', '--priority', 'P2','--title','Keep prior task','--size','tiny');
-    f.cli('finding','add','T1','--source','code-reviewer','--severity','low','--summary','Keep prior finding');
+    const reviewRun = readFileSync(join(f.logbook,'runs.tsv'),'utf8').split('\n').map(line => line.split('\t')).find(([, task, role]) => task === 'T1' && role === 'code-reviewer')[0]; // a review finding names its run (T490)
+    f.cli('finding','add','T1','--source','code-reviewer','--severity','low','--summary','Keep prior finding','--run',reviewRun,'--class','other');
     f.cli('verdict','T1','--sha',f.preparation.review.sha,'--kind','checks-pass');
     f.cli('log','T1','Keep prior decision','--why','Existing evidence');
     const restore = await stopReviewWrite(t,f,'tasks');
