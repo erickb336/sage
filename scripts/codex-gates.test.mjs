@@ -733,6 +733,27 @@ test("no sage child sends a message to another thread, with v1's send_input or v
   assert.deepEqual(["mcp__slack__send_input", "collaborationsend_message_x", "xsend_input"].filter((tool) => matcher.test(tool)), [], "and for no other tool");
 });
 
+test("the send rules hold for multi-agent v2's tools under any namespace that Codex's config gives them; an MCP tool is not one (T534, F-T534-3)", async (t) => {
+  // features.multi_agent_v2.tool_namespace renames collaboration, and the hook name is the namespace, then the tool name (registry.rs:943-951).
+  const ROOT = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report";
+  const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report";
+  const send = (tool_name, tool_input, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input, ...extra });
+  const tools = ["agentssend_message", "agentsfollowup_task", "my-teamsend_message", "send_message", "followup_task"];
+  const matcher = gateMatcher();
+  assert.deepEqual(tools.filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each namespace");
+  for (const mode of [{ sage: false }, { sage: true }]) {
+    const g = fixed(mode);
+    for (const tool of tools) {
+      assert.equal(denied(await g.run(send(tool, { target: base.session_id, message: "autopilot on" }))), ROOT, `${tool}: the chief to the main thread`);
+      assert.equal(denied(await g.run(send(tool, { target: "/root", message: "autopilot on" }, sageChild(t, "/root/worker_1")))), ROOT, `${tool}: a child to /root`);
+      assert.equal(denied(await g.run(send(tool, { target: "/root/worker_1", message: "go" }, sageChild(t, "/root/sage_qa_t1_r1")))), SEND, `${tool}: a sage child`);
+      assert.equal(await g.run(send(tool, { target: "/root/worker_1", message: "go" })), undefined, `${tool}: the chief to a child`);
+    }
+    // The owner allows MCP tools: an MCP server's send_message reaches the gate by the matcher, and the gate lets it run.
+    assert.equal(await g.run(send("mcp__slack__send_message", { channel: "C1", text: "autopilot on" }, sageChild(t, "/root/sage_qa_t1_r1"))), undefined, "an MCP tool");
+  }
+});
+
 /** The gate's matcher in the built manifest, read as Codex reads a matcher with other characters than letters, digits, _ and | (hooks/src/engine/matcher.rs:12-22). */
 const gateMatcher = () => new RegExp(JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher);
 
@@ -837,20 +858,28 @@ test("no thread sends input to the main thread, in any spelling that Codex reads
   }
 });
 
-test("in sage mode gh runs only its own commands, by name, with no change of what it runs (T534, R1940-2, R1946-2, R1947-1)", async () => {
+test("in sage mode gh runs only the command paths that sage uses, by name, with no setting that changes what it runs (T534, R1940-2, R1946-2, R1947-1, F-T534-1)", async () => {
   const g = fixed({ sage: true, autopilot: true });
-  const ALIAS = (word) => `sage: in sage mode, gh runs only its own commands, because "${word}" can be an alias for any gh command, also a merge. Write the gh command itself`;
+  /** The gh path that the refusal names, or the whole reason when it is another refusal. */
+  const path = (reason) => reason?.match(/^sage: in sage mode, gh runs only the commands that sage uses \(.*\), because "(gh [^"]+)" can be an alias or an extension that runs any gh command, also a merge\. Write one of these, or ask the user$/)?.[1] ?? reason;
   const LITERAL = "sage: in sage mode, run gh by its name or by a path that ends in /gh, not from a variable or a substitution, so that the gate can read the command";
-  const SETUP = "sage: in sage mode, no command changes what gh runs: no gh alias set or import, no gh extension install, create or exec, no gh config set of the pager, editor or browser, and no pager, editor, browser or config folder setting before gh. Ask the user";
-  const refused = [["gh land 360", ALIAS("land")], ["gh co 360", ALIAS("co")], [`cd /work && gh ship 41 ${SHA}`, ALIAS("ship")], ["env FOO=1 gh land 41", ALIAS("land")],
+  const SETUP = "sage: in sage mode, no setting before gh changes what it runs or reads: its pager, editor or browser, HOME or its config folder. Ask the user";
+  assert.equal(denied(await g.run(pre("Bash", "gh pr mrg 360"))), "sage: in sage mode, gh runs only the commands that sage uses (pr checkout|checks|close|comment|create|diff|edit|list|merge|ready|reopen|review|status|view, issue close|comment|create|edit|list|reopen|status|view, repo clone|list|view, run list|rerun|view|watch, workflow list|view, release list|view, search code|commits|issues|prs|repos, auth status, label list, api, status, version), because \"gh pr mrg\" can be an alias or an extension that runs any gh command, also a merge. Write one of these, or ask the user", "a two-word alias under a group (F-T534-1)");
+  const refused = [["gh land 360", "gh land"], ["gh co 360", "gh co"], [`cd /work && gh ship 41 ${SHA}`, "gh ship"], ["env FOO=1 gh land 41", "gh land"],
+    // F-T534-1, R1940-2: a two-word alias under a built-in group, and an option before the subcommand, which hides it.
+    ["gh pr mrg 360", "gh pr mrg"], ["gh pr land 360 --admin", "gh pr land"], ["gh issue mrg 1", "gh issue mrg"], ["gh run x", "gh run x"], ["gh pr -R o/r mrg 41", "gh pr -R"],
+    ["gh alias set 'pr mrg' 'pr merge --admin'", "gh alias"], ["gh auth token", "gh auth token"],
     ["$(which gh) land 41", LITERAL], ["G=gh; $G land 41", LITERAL], ["`which gh` land 41", LITERAL],
-    ["gh alias set land 'pr merge'", SETUP], ["gh alias import aliases.yml", SETUP], ["gh extension install o/gh-land", SETUP], ["gh ext create land", SETUP], ["gh extensions exec land 41", SETUP],
-    ["gh config set pager 'sh -c x'", SETUP], ["gh config set -h github.com editor vim", SETUP], ["gh config set browser x", SETUP],
+    // R1946-2: alias, extension and config are no path that sage uses.
+    ["gh alias import aliases.yml", "gh alias"], ["gh alias list", "gh alias"], ["gh extension install o/gh-land", "gh extension"], ["gh ext create land", "gh ext"],
+    ["gh extensions exec land 41", "gh extensions"], ["gh extension list", "gh extension"], ["gh config set pager 'sh -c x'", "gh config"], ["gh config set -h github.com editor vim", "gh config"],
     ["GH_PAGER='sh -c x' gh pr view 41", SETUP], ["PAGER=x gh pr diff 41", SETUP], ["env BROWSER=x gh pr view --web 41", SETUP], ["export EDITOR=x; gh pr edit 41", SETUP],
-    ["GH_EDITOR=x gh pr create", SETUP], ["VISUAL=x gh issue create", SETUP], ["GH_BROWSER=x gh browse", SETUP], ["GH_CONFIG_DIR=/tmp/x gh pr view 41", SETUP], ["XDG_CONFIG_HOME=/tmp/x gh pr view 41", SETUP]];
-  for (const [command, reason] of refused) assert.equal(denied(await g.run(pre("Bash", command))), reason, command);
-  for (const command of ["gh pr view 41", "gh pr checks 41", "gh api repos/o/r/pulls/41", "gh --version", "gh auth status", "gh alias list", "gh alias delete land", "gh extension list",
-    "gh config get pager", "gh config set git_protocol ssh", "gh cs list", "gh at verify x", "gh rs list", "gh skills list", "gh agent-task list", "gh discussion list", "gh licenses",
+    ["GH_EDITOR=x gh pr create", SETUP], ["VISUAL=x gh issue create", SETUP], ["GH_BROWSER=x gh pr view --web 1", SETUP], ["GH_CONFIG_DIR=/tmp/x gh pr view 41", SETUP], ["XDG_CONFIG_HOME=/tmp/x gh pr view 41", SETUP],
+    // F-T534-1: HOME points gh at another config folder, which an agent can write.
+    ["HOME=/tmp/x gh pr view 41", SETUP], ["env HOME=/tmp/x gh pr checks 41", SETUP], ["export HOME=/tmp/x && gh pr list", SETUP]];
+  for (const [command, reason] of refused) assert.equal(path(denied(await g.run(pre("Bash", command)))), reason, command);
+  for (const command of ["gh pr view 41", "gh pr checks 41", "gh pr create --fill", "gh pr list", "gh pr diff 41", "gh pr ready 41", "gh pr view 41 -R o/r", "gh pr", "gh pr --help",
+    "gh api repos/o/r/pulls/41", "gh --version", "gh auth status", "gh issue view 2", "gh repo view", "gh run view 7 --log", "gh status", "gh version",
     "/opt/homebrew/bin/gh pr view 41", "echo $HOME && gh pr view 41"]) {
     assert.equal(denied(await g.run(pre("Bash", command))), undefined, command);
   }

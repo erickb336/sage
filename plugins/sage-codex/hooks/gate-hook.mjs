@@ -19,8 +19,9 @@
 //   - No sage child, in any mode, sends a message to another thread (multi-agent v1's send_input, v2's send_message
 //     and followup_task): its message to the root thread would start a root turn as if the user typed it. No thread,
 //     in any mode, also the root, sends to the root thread: Codex records it as the user's typed message (R1940-1).
-//   - gh in sage mode: only gh's own commands, by name, with no change of what gh runs (an alias, an extension, its
-//     pager, editor or browser), because any of them can run any gh command, also a merge (R1940-2, R1948).
+//   - gh in sage mode: only the gh command paths that sage uses (a group and its subcommand, such as pr view), by name,
+//     and no setting before gh that changes what it runs or reads (its pager, editor, browser, HOME or config folder),
+//     because an alias, an extension or such a program can run any gh command, also a merge (R1940-2, R1948, F-T534-1).
 //   - Multi-agent v1's send_input: none in sage mode (sage sends with v2).
 //   - The sage folder: no thread, in any mode, runs a shell command that names the Codex sage folder (the logbook and the
 //     mode files) or the Codex sessions folder, or that resumes or forks a Codex session, so an agent cannot forge a
@@ -88,8 +89,8 @@ const CHILD_SEND = "sage: agents send no input to another thread, because a mess
 const ROOT_SEND = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report.";
 const V1_REFUSED = "sage: in sage mode, no thread uses multi-agent v1's send_input, because Codex can deliver it to the main thread as the user's typed message. sage sends with multi-agent v2.";
 const GH_LITERAL = "sage: in sage mode, run gh by its name or by a path that ends in /gh, not from a variable or a substitution, so that the gate can read the command.";
-const GH_SETUP = "sage: in sage mode, no command changes what gh runs: no gh alias set or import, no gh extension install, create or exec, no gh config set of the pager, editor or browser, and no pager, editor, browser or config folder setting before gh. Ask the user.";
-const GH_ALIAS = (word) => `sage: in sage mode, gh runs only its own commands, because "${word}" can be an alias for any gh command, also a merge. Write the gh command itself.`;
+const GH_SETUP = "sage: in sage mode, no setting before gh changes what it runs or reads: its pager, editor or browser, HOME or its config folder. Ask the user.";
+const GH_PATH = (path) => `sage: in sage mode, gh runs only the commands that sage uses (${GH_LIST}), because "gh ${path}" can be an alias or an extension that runs any gh command, also a merge. Write one of these, or ask the user.`;
 
 /** The sage MCP tools that only read the logbook: a child may call these, and pages without record, run or text. */
 export const CHILD_READS = new Set(["status", "standing", "merge_check"]);
@@ -98,10 +99,11 @@ const SAGE_TOOL = /^mcp__sage__(.+)$/;
 const SPAWN = /spawn_agent$/;
 /**
  * Codex's hook names of the tools that send a message to another thread: multi-agent v1's send_input (with its
- * namespace or not), and v2's send_message and followup_task in the default collaboration namespace (Codex 0.164.0
- * spec_plan.rs:1489-1508; the hook name is the namespace, then the name, registry.rs:943-951).
+ * namespace or not), and v2's send_message and followup_task in any namespace (Codex 0.164.0 spec_plan.rs:1489-1508;
+ * the hook name is the namespace, then the name, registry.rs:943-951; features.multi_agent_v2.tool_namespace renames
+ * the default collaboration, F-T534-3). An MCP tool (mcp__<server>__<tool>) is not one of them.
  */
-const SEND_INPUT = /^(?:(?:multi_agent_v1)?send_input|collaboration(?:send_message|followup_task))$/;
+const SEND_INPUT = /^(?:(?:multi_agent_v1)?send_input|(?!mcp__).*(?:send_message|followup_task))$/;
 /** Multi-agent v1's send tool: sage dispatches with v2, so in sage mode no thread uses it (R1948). */
 const V1_SEND = /^(?:multi_agent_v1)?send_input$/;
 /** A thread id as Codex reads it (Uuid::parse_str): any letter case, with or without hyphens, braces or urn:uuid:. */
@@ -122,19 +124,25 @@ function sendsToRoot(target, session) {
   return `/${target.trim()}`.replace(/\/+/g, "/").replace(/(.)\/$/, "$1") === "/root";
 }
 /**
- * gh's own commands and their aliases, from the gh 2.101.0 man pages: any other first word is an alias or an
- * extension, which can run any command (R1940-2).
+ * The gh command paths that sage uses, from the gh 2.101.0 man pages: a group with its subcommands, or a command with
+ * none (null). Any other word path, at either level, can be an alias (also of two words, "pr mrg") or an extension,
+ * which can run any gh command (R1940-2, R1946-2, F-T534-1). So alias, extension and config are not in it.
  */
-const GH_COMMANDS = new Set(["agent-task", "agent-tasks", "agent", "agents", "alias", "api", "attestation", "at", "auth", "browse", "cache", "codespace", "cs",
-  "completion", "config", "copilot", "discussion", "extension", "extensions", "ext", "gist", "gpg-key", "help", "issue", "label", "licenses", "org", "pr", "preview",
-  "project", "release", "repo", "ruleset", "rs", "run", "search", "secret", "skill", "skills", "ssh-key", "status", "variable", "version", "workflow"]);
-/** The settings that make gh run another program or read another config (its pager, editor, browser, aliases). */
-const GH_SETTINGS = /(?:^|[^\w])(?:GH_PAGER|PAGER|BROWSER|GH_BROWSER|EDITOR|GH_EDITOR|VISUAL|GH_CONFIG_DIR|XDG_CONFIG_HOME)\s*=/;
+const GH_PATHS = {
+  pr: ["checkout", "checks", "close", "comment", "create", "diff", "edit", "list", "merge", "ready", "reopen", "review", "status", "view"],
+  issue: ["close", "comment", "create", "edit", "list", "reopen", "status", "view"],
+  repo: ["clone", "list", "view"], run: ["list", "rerun", "view", "watch"], workflow: ["list", "view"], release: ["list", "view"],
+  search: ["code", "commits", "issues", "prs", "repos"], auth: ["status"], label: ["list"], api: null, status: null, version: null,
+};
+const GH_LIST = Object.entries(GH_PATHS).map(([group, subs]) => (subs ? `${group} ${subs.join("|")}` : group)).join(", ");
+const GH_HELP = /^(?:--version|--help|-h)$/;
+/** The settings that make gh run another program or read another config (its pager, editor, browser, aliases, F-T534-1 HOME). */
+const GH_SETTINGS = /(?:^|[^\w])(?:GH_PAGER|PAGER|BROWSER|GH_BROWSER|EDITOR|GH_EDITOR|VISUAL|GH_CONFIG_DIR|XDG_CONFIG_HOME|HOME)\s*=/;
 /**
- * Why a shell command's gh run is refused in sage mode, or undefined (R1940-2, R1946-2, R1947-1): gh from a variable
- * or a substitution, a first word that is not one of gh's commands, a change of what gh runs (an alias, an extension,
- * its pager, editor or browser), or such a setting before gh. A command that the reader cannot read is left to the
- * merge rule.
+ * Why a shell command's gh run is refused in sage mode, or undefined (R1940-2, R1946-2, R1947-1, F-T534-1): gh from a
+ * variable or a substitution, a setting before gh that changes what it runs or reads, or a word path that is not in
+ * GH_PATHS. The path is gh's first two words, with no option before or between them. A command that the reader cannot
+ * read is left to the merge rule.
  */
 function ghProblem(command, cwd, env) {
   let runs;
@@ -143,13 +151,11 @@ function ghProblem(command, cwd, env) {
   const gh = runs.filter((p) => programName(p.word) === "gh");
   if (!gh.length) return undefined;
   if (GH_SETTINGS.test(command)) return GH_SETUP;
-  for (const { args } of gh) {
-    const first = args[0];
-    if (first === undefined || /^(?:--version|--help|-h)$/.test(first)) continue;
-    if (!GH_COMMANDS.has(first)) return GH_ALIAS(first);
-    const sub = args.slice(1).find((word) => !word.startsWith("-"));
-    if ((first === "alias" && ["set", "import"].includes(sub)) || (["extension", "extensions", "ext"].includes(first) && ["install", "create", "exec"].includes(sub))
-      || (first === "config" && sub === "set" && args.some((word) => /^(?:pager|editor|browser)$/i.test(word)))) return GH_SETUP;
+  for (const { args: [group, sub] } of gh) {
+    if (group === undefined || GH_HELP.test(group)) continue;
+    const subs = Object.hasOwn(GH_PATHS, group) ? GH_PATHS[group] : undefined;
+    if (subs === undefined) return GH_PATH(group);
+    if (subs !== null && sub !== undefined && !GH_HELP.test(sub) && !subs.includes(sub)) return GH_PATH(`${group} ${sub}`);
   }
   return undefined;
 }
@@ -489,6 +495,9 @@ const codexShellWrite = (command, cwd, env) => {
  * reader and the merge check, for tests.
  */
 export async function gate(input, { mode = readMode, check = checkMerge, env = process.env } = {}) {
+  // The manifest's send pattern has no lookahead (Codex reads it with Rust's regex), so it also matches an MCP tool such
+  // as mcp__slack__send_message. The owner allows MCP tools: the gate judges only sage's own (F-T534-3).
+  if (typeof input?.tool_name === "string" && /^mcp__/.test(input.tool_name) && !SAGE_TOOL.test(input.tool_name)) return undefined;
   const f = fieldsOf(input);
   if (!f) return input?.hook_event_name === "PermissionRequest" ? UNREAD_REQUEST : deny(UNREADABLE);
   const thread = threadOf(f);
