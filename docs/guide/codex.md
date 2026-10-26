@@ -21,7 +21,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
 | sage mode: agent caps in code | Yes | No |
-| Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt. Codex still asks you 4 times in each task, before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)) |
+| Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt. Codex still asks you 4 times in each task before the merge, or 3 times after you allow `gh pr create` for good ([The approval prompts of each task](#the-approval-prompts-of-each-task)) |
 | The merge rule, the no-edit rules and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)) |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | No: use the manual skill commands |
@@ -94,7 +94,7 @@ Send each phrase alone, as the whole message, in any letter case.
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff: the hook adds the chief's role to that turn. Send your request next. |
 | `sage mode off` | A normal session again. Autopilot goes off too. The hook adds the role no more, also after a compaction. |
-| `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. Each task still asks you 4 times before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)). |
+| `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. Each task still asks you 4 times before the merge, or 3 times after you allow `gh pr create` for good ([The approval prompts of each task](#the-approval-prompts-of-each-task)). |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
 - Send a phrase when Codex is idle. To stop merges at once, press Esc to stop Codex's turn, then send the off phrase for autopilot alone.
@@ -111,13 +111,13 @@ The hooks run only after you trust them (step 3). In `codex exec`, Codex skips h
 
 ### The approval prompts of each task
 
-With autopilot on, each task still asks you 4 times before its merge: Codex asks, not sage. In the default `workspace-write` sandbox, "`<writable_root>/.git` is protected as read-only", and network access is off ([Codex: Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)). So these commands must run outside the sandbox, and Codex asks you first.
+With autopilot on, each task still asks you 4 times before its merge, or 3 times after you allow `gh pr create` for good: Codex asks, not sage. In the default `workspace-write` sandbox, "`<writable_root>/.git` is protected as read-only", and network access is off ([Codex: Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)). So these commands must run outside the sandbox, and Codex asks you first.
 
 | Prompt | What it is for | Why Codex asks |
 | --- | --- | --- |
 | Create the task worktree (`git worktree add`) | The implementer's own folder and branch for the task | It writes to `.git` |
 | Commit on the task branch (`git -C <folder> add <files> && git -C <folder> commit …`, one prompt for both) | The change of the task | Both commands write to `.git` |
-| Send the task branch (`git push -u origin <branch>`) | The branch of the pull request on GitHub | It writes to `.git` and needs the network |
+| Send the task branch (`git -C <folder> push -u origin <branch>`) | The branch of the pull request on GitHub | It writes to `.git` and needs the network |
 | Open the pull request (`gh pr create`) | The pull request that the reviews and the merge check read | It needs the network |
 
 - With sage mode and autopilot on, the merge needs no prompt: the sage hook allows the verified merge command itself.
@@ -135,15 +135,17 @@ In the CLI, Codex 0.164.0 gives these choices for such a prompt ([the choice tex
 
 Codex 0.164.0 offers no choice for "this session" only for these prompts. To remove a rule, delete its line from `~/.codex/rules/default.rules`, then restart Codex: Codex reads its rules at startup ([Codex: Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)).
 
-> **Warning:** never choose "don't ask again" for a wide prefix such as `git push`, `git -C <folder>`, `gh` or `gh pr`. Codex can offer them, and the rule holds in every session, also outside sage mode, where no sage rule checks a command. A later force-push to main, or a merge, would then run with no prompt.
+> **Warning:** never choose "don't ask again" for a prefix such as `git worktree add`, `git push`, `git -C <folder>`, `gh` or `gh pr`. Codex can offer them, and the rule holds in every session, also outside sage mode, where no sage rule checks a command. A later force-push to main, or a merge, would then run with no prompt.
+
+`git worktree add` is on that list because any git command can run the project's git hooks, and an agent can write such a hook from inside the sandbox; an allowed command runs it outside the sandbox.
 
 At each prompt, choose this way:
 
 1. Read the prefix in the backticks of the second choice.
-2. If the prefix is exactly `git worktree add` or exactly `gh pr create`, you may choose **Yes, and don't ask again for commands that start with `<prefix>`**. Later tasks then do not ask for that command.
-3. For every other prefix, also for the commit and the push, choose **Yes, proceed**, every time.
+2. If the prefix is exactly `gh pr create`, you may choose **Yes, and don't ask again for commands that start with `gh pr create`**. Later tasks then do not ask to open the pull request, so each task asks 3 times.
+3. For every other prefix, also for the worktree, the commit and the push, choose **Yes, proceed**, every time.
 
-The model proposes the prefix: in the check with a test model, each prefix was the first command of the prompt, whole: for example `git -C <folder> add <files>` for the commit, and `gh pr create` with the task's branch, title and body. So no prefix was one of the two short ones, and each later task would ask 4 times again. A real model can propose a shorter prefix, but sage did not check this.
+The model proposes the prefix: in the check with a test model, each prefix was the first command of the prompt, whole: for example `git -C <folder> add <files>` for the commit, and `gh pr create` with the task's branch, title and body. So no prefix was `gh pr create` alone, and each later task would ask 4 times again. A real model can propose a shorter prefix, but sage did not check this.
 
 The owner's first try in the desktop app checks which prefix Codex offers with a real model.
 
