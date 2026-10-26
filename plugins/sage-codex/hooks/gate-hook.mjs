@@ -30,7 +30,8 @@
 //   - Codex's settings: no thread, in any mode, writes Codex's config file (the hook trust) or this plugin's folder
 //     from the shell.
 //   - Code mode: Codex runs no hook for its exec tool, but each tool call inside the code comes here with its own name,
-//     as a direct call does (T541). The js tool of Codex's REPL servers (mcp__node_repl__js, mcp__cua_repl__js) runs
+//     as a direct call does (T541). The js tool of Codex's REPL servers (mcp__node_repl__js, mcp__cua_repl__js, by the
+//     MCP hook name of Codex 0.164.0 handlers/mcp.rs:139-161) runs
 //     its code in its own process, where no hook sees a shell command. The owner chose to allow it, so the manifest
 //     does not match it and the gate never sees it.
 //   - A merge (sage mode): only the one merge form of core, only on the root thread, only with autopilot on and a passing
