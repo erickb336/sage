@@ -164,6 +164,8 @@ The task builds and merges only after each task that it waits for is merged or c
 
 A wait on an abandoned task is never met, so the chief asks you to remove or change it.
 
+**Two tasks can share one pull request**, for example a fix that closes both. The chief gives both tasks the same branch and pull request. Autopilot merges it only when each task passes its own reviews and QA on the head commit.
+
 ### Programs
 
 A program is one request that sage runs as several tasks for one goal, with one pilot task. You approve its breakdown before any task of it builds.
