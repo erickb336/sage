@@ -47,22 +47,23 @@ const CHECKERS = { code_reviewer: "code-reviewer", security_reviewer: "security-
  * The run of a review or QA child of the chief (T483): its task name carries the run (sage_qa_t12_r40), and its agent path
  * is the root thread and that name, so a child of a child never names a run. Its thread id is the session_meta id.
  */
-function reviewChild(meta) {
-  const path = agentPathOf(meta), [, role, number, run] = /^sage_([a-z_]+)_t([1-9]d*)_(r[1-9]d*)$/.exec(path.at(-1) ?? "") ?? [];
+export function reviewChild(meta) {
+  const path = agentPathOf(meta), [, role, number, run] = /^sage_([a-z_]+)_t([1-9]\d*)_(r[1-9]\d*)$/.exec(path.at(-1) ?? "") ?? [];
   if (!CHECKERS[role] || path.length !== 2 || path[0] !== "root" || typeof meta.id !== "string" || !meta.id) return undefined;
   return { role: CHECKERS[role], task: `T${number}`, run: run.toUpperCase(), thread: meta.id };
 }
 const bindingOf = (cwd, run, env) => join(tool.storeDir(cwd, env), "kept", `${run}.child`);
 /**
  * At a review or QA child's start (SubagentStart, from the brief hook): the first child of the chief that starts for a
- * running run binds the run to its thread, once (R1908-3). Only that child's report is kept for the run.
+ * running run binds the run to its thread, once (R1908-3), with the tip of its task's branch at the start: the commit that
+ * it reviews (R1933-1). Only that child's report is kept for the run.
  */
 export function bindChild(transcript, cwd, env = process.env) {
   try {
     const child = reviewChild(sessionMeta(transcript)), run = child && tool.logbookView(cwd, env).row(child.run);
     if (!run || run.task !== child.task || run.role !== child.role || run.status !== "running") return;
     mkdirSync(dirname(bindingOf(cwd, child.run, env)), { recursive: true, mode: 0o700 });
-    writeFileSync(bindingOf(cwd, child.run, env), child.thread, { flag: "wx", mode: 0o600 });
+    writeFileSync(bindingOf(cwd, child.run, env), JSON.stringify({ thread: child.thread, tip: branchHead(cwd, child.task, env) }), { flag: "wx", mode: 0o600 });
   } catch {}
 }
 /** The commit at the head of a task's branch in the project's repository, or "" (as the Claude hook reads it). */
@@ -75,16 +76,19 @@ function branchHead(cwd, task, env) {
   return r.status === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : "";
 }
 /**
- * Keep the report of the child that its run is bound to, with the head of its task's branch at this stop, where the state
- * tool reads it for the run's verdict (T483). A report that is not kept backs no verdict. The line for the chief when the
- * state tool refused to keep it (for one, a second report of the run), or undefined.
+ * Keep the report of the child that its run is bound to, where the state tool reads it for the run's verdict (T483), with
+ * the commit that it reviewed: the branch tip at its start, when the branch did not move until this stop; else none, so the
+ * report's own BRANCH must name the full head SHA (R1933-1). A report that is not kept backs no verdict. The line for the
+ * chief when the state tool refused to keep it (for one, a second report of the run), or undefined.
  */
 function keep(meta, text, cwd, env) {
   const child = reviewChild(meta);
   if (!child || typeof text !== "string" || typeof cwd !== "string") return undefined;
   try {
-    if (readFileSync(bindingOf(cwd, child.run, env), "utf8") !== child.thread) return `sage: ${child.run}'s report is not kept: this agent is not the child that started for ${child.run}, so it backs no verdict.`;
-    tool.keepReport(cwd, { ...child, thread: undefined, sha: branchHead(cwd, child.task, env), text }, env);
+    const bound = JSON.parse(readFileSync(bindingOf(cwd, child.run, env), "utf8"));
+    if (bound?.thread !== child.thread) return `sage: ${child.run}'s report is not kept: this agent is not the child that started for ${child.run}, so it backs no verdict.`;
+    const sha = bound.tip && bound.tip === branchHead(cwd, child.task, env) ? bound.tip : "";
+    tool.keepReport(cwd, { role: child.role, task: child.task, run: child.run, sha, text }, env);
   } catch (error) {
     return error?.code === "ENOENT" ? `sage: ${child.run}'s report is not kept: no child started for ${child.run} while it ran, so it backs no verdict.` : `sage: ${child.run}'s report is not kept: ${error?.message ?? error}`;
   }

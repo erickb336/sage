@@ -7308,6 +7308,60 @@ test("T483 C-T483-1: a review that the sage starts itself keeps its report by th
   assert.match(chiefVerdict(s, "review-clean", plain) ?? "", new RegExp(`^sage: ${plain} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${plain} · task T1"`), "no run line, no kept report");
 });
 
+test("T483 R1932-1 R1933-1: the sage's own review keeps a report only for its own running run of its role, with the commit at its start", () => {
+  const s = leadSession(); // R1 is the running lead run of T1; R2 and R4 are its own qa runs
+  let n = 0;
+  /** The sage's review: spawn with the brief's first line, then (more) between the spawn and the stop, then the stop. */
+  const spawn = (role, line) => {
+    const id = `own-${++n}`;
+    assert.equal(denied(s.send(spawnAgent(`sage:${role}`, `${line}\n${BRIEF}`, `tu-${id}`, { cwd: s.dir }))), undefined, `the spawn of ${line}`);
+    s.send(resultOf(`tu-${id}`, id, { cwd: s.dir }));
+    return id;
+  };
+  const stop = (id, role, message = cleanOf(role)) => s.send(ended(id, `sage:${role}`, { cwd: s.dir, last_assistant_message: message }));
+  const add = (role) => s.sage("run", "add", "T1", "--role", role).split(" ")[0];
+  const done = (run) => s.sage("run", "done", run, "--status", "done", "--tokens", "1");
+  const kept = (run) => existsSync(join(s.sage("logbook"), "kept", `${run}.json`));
+  // A run that the running lead added for its own helper is the lead's: the sage's agent keeps no report for it.
+  const leads = leadAdd(s, "code-reviewer");
+  stop(spawn("code-reviewer", `Run ${leads} · task T1`), "code-reviewer");
+  assert.equal(kept(leads), false, "a run that the lead added");
+  s.sage("run", "done", "R1", "--status", "blocked"); // the sage runs the reviews itself from here
+  // A first line with a suffix still names the run.
+  const suffix = add("code-reviewer");
+  stop(spawn("code-reviewer", `Run ${suffix} · task T1 (PR 5, P0): review the head`), "code-reviewer");
+  assert.equal(kept(suffix), true, "a suffix after the task");
+  // A brief whose task is not the run's marks no run.
+  const other = add("code-reviewer");
+  stop(spawn("code-reviewer", `Run ${other} · task T2`), "code-reviewer");
+  assert.equal(kept(other), false, "the brief names another task than the run's");
+  // One run in two slots: neither agent's run is sure.
+  const twice = add("code-reviewer"), a = spawn("code-reviewer", `Run ${twice} · task T1`);
+  spawn("code-reviewer", `Run ${twice} · task T1`); // the second agent of the run still runs at the first one's stop
+  stop(a, "code-reviewer");
+  assert.equal(kept(twice), false, "one run in two slots");
+  // A run of another role, and a run that is not running at the stop.
+  const qa = add("qa");
+  stop(spawn("code-reviewer", `Run ${qa} · task T1`), "code-reviewer");
+  assert.equal(kept(qa), false, "a code reviewer for a qa run");
+  const over = add("code-reviewer"), late = spawn("code-reviewer", `Run ${over} · task T1`);
+  done(over);
+  stop(late, "code-reviewer");
+  assert.equal(kept(over), false, "a run that ended before the stop");
+  // The branch moves during the review: the report keeps no commit, so with no full SHA in BRANCH it backs no verdict.
+  const moved = add("code-reviewer"), during = spawn("code-reviewer", `Run ${moved} · task T1`);
+  const head = s.commit();
+  stop(during, "code-reviewer");
+  done(moved);
+  assert.equal(kept(moved), true);
+  assert.match(chiefVerdict(s, "review-clean", moved) ?? "", new RegExp(`^sage: ${moved}'s report names no full 40-character head SHA in BRANCH, and the hook saw none`), `not on ${head.slice(0, 7)}, which moved during the review`);
+  // The branch stays: the commit at the start backs the verdict on it.
+  const still = add("code-reviewer");
+  stop(spawn("code-reviewer", `Run ${still} · task T1`), "code-reviewer");
+  done(still);
+  assert.equal(chiefVerdict(s, "review-clean", still), undefined, "the commit at the start, which is still the head");
+});
+
 test("T483: the sage's verdict rule reads --project as the state tool does, and refuses a review or QA verdict on a logbook that it cannot read", () => {
   const s = leadSession();
   s.sage("run", "done", "R1", "--status", "blocked"); // no running lead run: only the state tool's rule

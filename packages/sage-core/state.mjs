@@ -962,6 +962,7 @@ function backingProblem(dir, task, kind, opt) {
   if (named.length > 1 && !head) return `${run.id}'s report names ${named.length} commits in BRANCH and none as its head (the word head before it), so it backs no verdict. ${again}`;
   const sha = String(opt.sha ?? "").toLowerCase(), seen = kept.sha || head;
   if (!seen) return `${run.id}'s report names no full 40-character head SHA in BRANCH, and the hook saw none, so it backs no verdict: it may be of an older head. ${again} Its brief asks for the full head SHA in BRANCH.`;
+  if (kept.sha && head && kept.sha !== head) return `${run.id}'s report names ${head.slice(0, 7)} as its head, and the hook saw it review ${kept.sha.slice(0, 7)}: the report and the hook disagree, so it backs no verdict. ${again}`;
   const other = [kept.sha, head].find((s) => s && s !== sha);
   if (other) return `${run.id}'s report is on ${other.slice(0, 7)}, not on ${sha.slice(0, 7)}: a verdict names the commit that its helper reviewed. Record it on ${other}, or review ${sha.slice(0, 7)} under a new run.`;
   const said = `RESULT ${report.result}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}`;

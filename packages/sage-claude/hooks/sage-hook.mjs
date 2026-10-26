@@ -422,7 +422,7 @@ export function handle(input, state, slots) {
       return deny(event, `the state tool cannot load (${e?.message ?? e}), so sage starts no new agent: reinstall or update the sage plugin, and tell the user.`);
     }
     const cap = caps[`cap.${project}`] ?? caps.max_agents;
-    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti, lead: leadMark, helper: helperKey });
+    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti, lead: leadMark, helper: helperKey, brief: main && spawned !== "sage:lead" ? briefMark(ti.prompt, spawned, input.cwd) : undefined });
     if (r.refused) {
       slots.log(`${project} ${r.project}/${cap} total ${r.total}/${caps.cap_total}`);
       // Only a lead starts an agent outside the main session, and a lead may not change the config: it waits for a helper,
@@ -1024,16 +1024,21 @@ const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
 /**
  * The stop of a review or QA agent that the main session started itself (C-T483-1): its report goes to the logbook of its
  * folder for its run, which the hook marked on its slot from the brief's first line, "Run R<n> · task T<n>" (runOf). The
- * run is a running run of that role in that logbook; the commit is the head of its task's branch at the stop. No run mark,
- * a run that two slots hold, or any doubt keeps nothing, and the verdict of that run is refused.
+ * run is a running run of that role in that logbook, and not a run that a running lead added for its own helper. The
+ * commit is the branch tip at the spawn when the branch did not move until this stop, else none, so that the report's
+ * BRANCH must name it (R1933-1). No run mark, a run that two slots hold, or any doubt keeps nothing, and the verdict of
+ * that run is refused.
  */
 function keepDirect(input, slots) {
   try {
     const role = String(input.agent_type ?? "").replace(/^sage:/, ""), mark = slots.runOf(input.agent_id);
     if (!OURS.test(input.agent_type ?? "") || !REVIEWERS.includes(role) || !mark || mark.shared || typeof input.last_assistant_message !== "string") return;
-    const folder = realpathSync.native(input.cwd), run = logbookOf(folder).row(mark.run);
+    const folder = realpathSync.native(input.cwd), view = logbookOf(folder), run = view.row(mark.run);
     if (run?.role !== role || run.status !== "running") return;
-    stateTool.keepReport(folder, { task: run.task, run: mark.run, role, sha: headOf(folder, run.task), text: input.last_assistant_message });
+    const lead = view.leadRun(run.task);
+    if (lead && slots.helper(helperOf({ logbook: digest(view.dir), run: lead.id }, mark.run)).owned) return;
+    const sha = mark.tip && mark.tip === headOf(folder, run.task) ? mark.tip : "";
+    stateTool.keepReport(folder, { task: run.task, run: mark.run, role, sha, text: input.last_assistant_message });
   } catch {}
 }
 /** The commit at the head of a task's branch, in the repository of the lead's folder, or "" (fail closed) (F-T289-5). */
@@ -2320,6 +2325,23 @@ const decide = (event, decision, reason) => ({ hookSpecificOutput: { hookEventNa
 const deny = (event, reason) => decide(event, "deny", reason);
 
 /** The run id of a brief's first line, "Run R<n> · task T<n>" (T308), with any text after a space (R1898-2), or undefined: only R and digits pass. */
+/**
+ * The run mark of the main session's spawn (R1933-1): the brief's run, unless the logbook of the spawn's folder has that
+ * run on another task than the brief's "task T<n>" (then no mark). For a review or QA run of that role that runs, also the
+ * tip of its task's branch at the start: the commit that the review sees, which its stop keeps when the branch did not move.
+ */
+function briefMark(prompt, role, cwd) {
+  const [, run, task] = /^Run (R[1-9]\d{0,8}) · task (T[1-9]\d*)(?:\s|$)/.exec(String(prompt ?? "").split("\n", 1)[0]) ?? [];
+  if (!run) return { run: undefined };
+  try {
+    const folder = realpathSync.native(cwd), row = logbookOf(folder).row(run);
+    if (row && row.task !== task) return { run: undefined };
+    const reviews = row && row.role === role.replace(/^sage:/, "") && REVIEWERS.includes(row.role) && row.status === "running";
+    return { run, tip: reviews ? headOf(folder, row.task) : "" };
+  } catch {
+    return { run };
+  }
+}
 const briefRun = (prompt) => /^Run (R[1-9]\d{0,8}) · task T[1-9]\d*(?:\s|$)/.exec(String(prompt ?? "").split("\n", 1)[0])?.[1];
 
 /**
@@ -2474,7 +2496,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     renew(candidates);
   };
   return {
-    take: transaction((project, cap, capTotal, toolUseId, { role: raw, caller, input, lead, helper } = {}) => {
+    take: transaction((project, cap, capTotal, toolUseId, { role: raw, caller, input, lead, helper, brief } = {}) => {
       const role = raw === undefined ? undefined : String(raw).toLowerCase();
       mkdirSync(dir, { recursive: true });
       expire();
@@ -2515,14 +2537,15 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
         if (role === "sage:lead" && lead) initial.push(`task-${lead.task}`, `logbook-${lead.logbook}`); // the lead's own task and logbook (T273)
         if (role === "sage:lead" && lead?.named) initial.push("named"); // Claude Code knows the lead by its name lead-T<n> too (T434)
         // The slot's run, so that the board's Agents page joins it to its logbook row (T308): a lead's lead run (T273), a
-        // helper's run (its name), else the run of the brief's first line.
-        const run = role === "sage:lead" && lead ? lead.run : helper ? helper.run : briefRun(input?.prompt);
+        // helper's run (its name), else the run of the brief's first line, as the main session's spawn checked it (brief).
+        const run = role === "sage:lead" && lead ? lead.run : helper ? helper.run : brief === undefined ? briefRun(input?.prompt) : brief.run;
         if (run) initial.push(`run-${run}`);
         if (helper) initial.push(`helper-${helper.key}`); // the run that this child helps with (F-T284-9)
         if (exact) initial.push("exact");
         if (caller !== undefined) initial.push(`parent-${hash(caller)}`);
         for (const m of initial) add(mine, m);
         if (role === "sage:lead" && lead?.folder) writeFileSync(join(dir, mine, "folder"), lead.folder); // where the lead's logbook is (F-T284-11)
+        if (brief?.tip) writeFileSync(join(dir, mine, "tip"), brief.tip); // the commit that the review starts on (R1933-1)
         const others = list().filter(slot => slot !== mine);
         const projectSlots = others.filter(slot => (mark(slot, "project-") ?? project) === project);
         let refused;
@@ -2666,7 +2689,9 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       const slots = ofSession().filter((slot) => has(slot, "ok"));
       const slot = valid(agent) && !stopped(agent) && slots.find((slot) => ownsAgent(slot, agent));
       const run = slot && mark(slot, "run-");
-      return /^R[1-9]\d*$/.test(run ?? "") ? { run, shared: slots.some((other) => other !== slot && mark(other, "run-") === run) } : undefined;
+      let tip = "";
+      try { tip = readFileSync(join(dir, slot, "tip"), "utf8"); } catch {} // the commit at the review's start, when the spawn saved one (R1933-1)
+      return /^R[1-9]\d*$/.test(run ?? "") ? { run, tip: /^[0-9a-f]{40}$/.test(tip) ? tip : "", shared: slots.some((other) => other !== slot && mark(other, "run-") === run) } : undefined;
     },
     /** Does a slot of this session hold this agent: a running agent, not a shell task (F-T301-27)? Its id compares case-folded, as agentName gives it (F-T301-53). */
     holds: (agent) => {

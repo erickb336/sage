@@ -137,6 +137,9 @@ test("T483: each review or QA verdict that no kept report backs is refused, with
   assert.equal(verdict("review-clean", seen), `sage: ${seen}'s report is on 0123456, not on a1b2c3d: a verdict names the commit that its helper reviewed. Record it on ${OTHER}, or review a1b2c3d under a new run. Nothing changed.`);
   const named = s.reviewed("T1", "code-reviewer", reportFor("review-clean").replace("BRANCH none", `BRANCH sage/t1-a at ${OTHER.toUpperCase()}`), "");
   assert.match(verdict("review-clean", named), new RegExp(`^sage: ${named}'s report is on 0123456, not on a1b2c3d`));
+  // The hook saw one commit and BRANCH names another: neither is pointed to, the review runs again (R1932-1).
+  const split = s.reviewed("T1", "code-reviewer", reportFor("review-clean").replace("BRANCH none", `BRANCH sage/t1-a head ${OTHER}`), SHA);
+  assert.match(verdict("review-clean", split), new RegExp(`^sage: ${split}'s report names 0123456 as its head, and the hook saw it review a1b2c3d: the report and the hook disagree, so it backs no verdict\\. Run the review again under a new run`));
   // A clean report backs no problem verdict, and a report that the reader cannot read backs none.
   s.ok("finding", "add", "T1", "--source", "sage", "--severity", "medium", "--summary", "an open problem");
   assert.match(verdict("findings", qa), /only a code-reviewer, security-reviewer or ux-reviewer run does/);
