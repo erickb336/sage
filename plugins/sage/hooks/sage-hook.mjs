@@ -293,8 +293,11 @@ export function handle(input, state, slots) {
     // A lead does not end while a helper of its lead run runs (T482, K2): Claude Code holds a parent for its background
     // children only in the terminal, so the hook blocks each stop, also a second one, until the helper stops, the sage
     // ends its run, or its lease ends. The wait command lets the lead wait with Bash alone.
+    // A lead whose lead run the sage ended stops: its wait returns at once then, so a block would loop (R1834-1). A logbook
+    // that the hook cannot read keeps the block (fail closed).
     const lead = input.agent_type === "sage:lead" && slots.leadOf(input.agent_id);
-    const live = lead ? slots.running(leadKey(lead)) : [];
+    const ended = lead && (() => { try { return logbookOf(lead.folder).leadRun(lead.task)?.id !== lead.run; } catch { return false; } })();
+    const live = lead && !ended ? slots.running(leadKey(lead)) : [];
     if (live.length) return { decision: "block", reason: `sage: your helper${live.length === 1 ? "" : "s"} ${live.join(", ")} still run${live.length === 1 ? "s" : ""}, and a lead does not end while a helper runs. Run ${waitStep(lead.task)}: it waits up to 9 minutes and prints each helper that stopped, with its kept RESULT. Then go on with your steps.` };
     // A sage agent finishes only with the full report. The second stop goes through, so this cannot loop.
     if (ours && !input.stop_hook_active && typeof input.last_assistant_message === "string") {
@@ -1329,7 +1332,7 @@ function backingProblem(run, task, opt, report, stillRuns) {
   if (run.status !== "done") return `${id} ended as ${run.status}, so it backs no verdict: add a new ${run.role} run${lead ? ", or ask the sage" : ""} (F-T289-36).`;
   if (!report) return `${id}'s helper gave no report, so ${id} backs no verdict ${lead ? "of this lead: ask the sage" : "of the sage"} (F-T289-36).`;
   if (!Array.isArray(report.severities) || report.unreadable) return `${id}'s helper gave ${report.unreadable ? `a report that the hook cannot read (${report.problem ?? "an old record"})` : "no report"}, so ${id} backs no verdict ${lead ? "of this lead: the sage reads it" : "of the sage"} (F-T289-20, F-T289-23).`;
-  if (!report.sha || String(opt.sha ?? "").toLowerCase() !== report.sha) return `${id}'s helper reviewed ${report.sha ? report.sha.slice(0, 7) : "no one commit (the branch moved during its run, or the hook could not read it)"}, not this --sha: a verdict names the commit that its helper saw (F-T289-5, F-T289-14).`;
+  if (!report.sha || String(opt.sha ?? "").toLowerCase() !== report.sha) return `${id}'s helper reviewed ${report.sha ? report.sha.slice(0, 7) : "no one commit (the branch moved during its run, or the hook could not read it)"}, not this --sha: a verdict names the commit that its helper saw (F-T289-5, F-T289-14).${report.sha ? "" : ` So ${id} backs no verdict: start a new ${run.role} run on the current head of the branch (git rev-parse <branch>), and record its verdict on that head (R1836-2).`}`;
   const clean = cleanReport(report), wants = ["findings", "qa-fail"].includes(opt.kind) ? "not clean" : "clean";
   if (clean !== (wants === "clean")) return `${id}'s helper reported ${report.result || "no readable RESULT"}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}, so its verdict is ${clean ? "clean" : "findings or qa-fail"}, not ${opt.kind} (F-T289-4).`;
   return undefined;
@@ -1432,13 +1435,13 @@ function chiefStateWords(input) {
  * The sage's review or QA verdict while its task has a running lead run (T482, F2): only a lead's helper's kept report
  * backs it, by the lead's own rule (backingProblem), so that a lead's relay never becomes a verdict (K4). The verdict
  * names that run (--run). A checks verdict, and a verdict on a task with no running lead run, pass as before. A command
- * that names the state tool and then verdict, in a form that chiefStateWords cannot read, is refused: it fails closed.
- * The reason, or undefined.
+ * that names a state tool in a form that chiefStateWords cannot read is refused unless its command word is plainly
+ * not verdict (unreadVerdict): it fails closed. The reason, or undefined.
  */
 function chiefVerdictProblem(input, slots) {
   if (input.tool_name !== "Bash") return undefined;
   const words = chiefStateWords(input);
-  if (!words) return /sage\.mjs["']?[\s\\"']+verdict\b/.test(String(input.tool_input?.command ?? "")) ? `the sage records a verdict as one plain command of the state tool, so that the hook can check it against a lead's kept report (T482). Run it as a command of its own, with the absolute path of the state tool that this hook loads, with no ~, no variable and nothing before it (no cd): ${stateCommand("verdict <T> --kind <kind> --sha <sha> --cycle <n> --pr <n> --run <R>")} (R1815-1).` : undefined;
+  if (!words) return unreadVerdict(String(input.tool_input?.command ?? "")) ? `the sage records a verdict as one plain command of the state tool, so that the hook can check it against a lead's kept report (T482). This command names a sage.mjs, and the hook cannot read its command word as a plain word that is not verdict (a quote, a backslash, a $, a backtick, a glob or nothing after the tool), or it is a verdict in a form that the hook cannot read (R1835-1). Run it as a command of its own, with the absolute path of the state tool that this hook loads, with no ~, no variable and nothing before it (no cd): ${stateCommand("verdict <T> --kind <kind> --sha <sha> --cycle <n> --pr <n> --run <R>")} (R1815-1).` : undefined;
   const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
   if (cmd !== "verdict" || !Array.isArray(VERDICT_ROLES[opt.kind])) return undefined;
   let view;
@@ -1451,6 +1454,16 @@ function chiefVerdictProblem(input, slots) {
   if (!lead) return undefined;
   const why = opt.run === undefined ? `a review or QA verdict names the helper run (--run R<n>) whose report backs it.` : backingProblem(view.row(opt.run), pos[0], opt, slots.helper(helperOf({ logbook: digest(view.dir), run: lead.id }, opt.run)).stopped);
   return why && `${pos[0]} has a running lead run, ${lead.id}, so the sage records a review or QA verdict on it only when a helper's report that the hook kept backs it; the lead records these verdicts itself (T482). ${why}`;
+}
+/**
+ * Could a command that chiefStateWords cannot read run a state tool's verdict (R1835-1)? Each word that names a
+ * sage.mjs, also through quotes or backslashes, is followed by the tool's command word (the state tool reads its first
+ * word as the command). Only a plain word that is not verdict passes: a word with a quote, a backslash, a $, a backtick or
+ * a glob may become verdict in the shell (ver\dict, v'erdict', $'verdict'), and no word means it comes from elsewhere.
+ */
+function unreadVerdict(command) {
+  const words = command.replace(/\\\r?\n/g, " ").split(/[\s;&|()<>]+/).filter(Boolean);
+  return words.some((word, k) => unquote(word).endsWith("sage.mjs") && !(PLAIN.test(words[k + 1] ?? "") && words[k + 1] !== "verdict"));
 }
 /**
  * After the sage's run done of a lead's helper run: the helper's slot frees at once, and the hook notes its stop, so that
@@ -2539,11 +2552,15 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       const keys = names.filter((n) => n.startsWith(`started-${prefix}.`)).map((n) => n.slice("started-".length));
       return keys.filter((key) => !names.includes(`stopped-${key}`) && lease(key) > 0).map((key) => key.slice(prefix.length + 1)).sort((a, b) => a.slice(1) - b.slice(1));
     },
-    /** The sage ended these helpers' runs: each one's slot frees, in any session, and its stop is noted with no report (T482, T371). */
+    /**
+     * The sage ended these helpers' runs: each one's slot frees, in any session, and its stop is noted with no report
+     * (T482, T371). The slot is found by its own mark, so it frees also when a fresh lead's start pruned the run's notes
+     * (R1836-1).
+     */
     endHelpers: transaction((keys) => {
       for (const key of keys) {
-        if (helperNote(`started-${key}`) === undefined) continue;
-        if (helperNote(`stopped-${key}`) === undefined) note(`stopped-${key}`, JSON.stringify(parsed(helperNote(`started-${key}`))), helpers);
+        const started = helperNote(`started-${key}`);
+        if (started !== undefined && helperNote(`stopped-${key}`) === undefined) note(`stopped-${key}`, JSON.stringify(parsed(started)), helpers);
         for (const slot of list().filter((slot) => mark(slot, "helper-") === key)) free(slot);
       }
     }),

@@ -7016,3 +7016,74 @@ test("T482 R1815-1: the sage's verdict in a form that the rule cannot read is re
   }
   assert.equal(denied(s.send(bash(`node ${TOOL} ${tail}`, s.dir))), undefined, "the command that the line gives passes");
 });
+
+// T482 repair round 3 (R1838): the findings of R1834, R1835 and R1836.
+/** The main session's run done of a run, as the sage runs it, with the hook's PostToolUse after it. */
+function chiefRunDone(s, run, extra = {}) {
+  s.sage("run", "done", run, "--status", "failed");
+  s.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: `node ${TOOL} run done ${run} --status failed --project ${realpathSync(s.dir)}` }, tool_response: { stdout: "", stderr: "", interrupted: false }, cwd: s.dir, ...extra });
+}
+
+test("T482 R1836-1: after a restart, the sage's run done of an old helper run frees its slot, also after the fresh lead's start", () => {
+  for (const helpersFirst of [false, true]) { // variant A: the fresh lead first, as lead.md and the chief text say; variant B: the helper runs first
+    const s = leadSession();
+    s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+    // Two old helpers of lead-a, in the project's folder, that never stop: their session ended.
+    const old = [1, 2].map((k) => {
+      const run = leadAdd(s, "qa");
+      assert.equal(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: `old-${k}`, cwd: s.dir, ...LEAD }))), undefined);
+      s.send(resultOf(`old-${k}`, `old-child-${k}`, { cwd: s.dir, ...LEAD }));
+      return run;
+    });
+    const s2 = { session_id: "s2" }, fresh = { agent_id: "lead-b", agent_type: "sage:lead", ...s2 };
+    s.send({ ...prompt("sage mode"), ...s2 });
+    s.sage("config", "max_agents=3"); // the fresh lead and the two old helpers fill the project's cap
+    if (helpersFirst) for (const run of old) chiefRunDone(s, run, s2);
+    chiefRunDone(s, "R1", s2);
+    s.sage("run", "add", "T1", "--role", "lead");
+    assert.equal(denied(s.send(leadSpawn("fresh-lead", 1, { cwd: s.dir, ...s2 }))), undefined, "the fresh lead starts");
+    s.send(resultOf("fresh-lead", "lead-b", s2));
+    if (!helpersFirst) for (const run of old) chiefRunDone(s, run, s2);
+    assert.deepEqual(helperSlots(s), [], `variant ${helpersFirst ? "B" : "A"}: the old helpers' slots are free`);
+    const run = leadAdd(s, "qa", fresh);
+    assert.equal(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: "fresh-helper", cwd: s.dir, ...fresh }))), undefined, `variant ${helpersFirst ? "B" : "A"}: the fresh lead starts a helper at once`);
+  }
+});
+
+test("T482 R1835-1: a command that names the state tool runs only a command word that the hook reads as a plain word that is not verdict", () => {
+  const s = leadSession();
+  const rest = `T1 --kind review-clean --sha ${s.head()} --cycle 1 --pr 5 --project ${realpathSync(s.dir)}`;
+  const line = /This command names a sage\.mjs, and the hook cannot read its command word as a plain word that is not verdict .* Run it as a command of its own, with the absolute path of the state tool that this hook loads/;
+  for (const form of ["ver\\dict", "v'erdict'", 'ver"dict"', "verdic''t", '"v"erdict', "$'verdict'", "`echo verdict`", "$(echo verdict)", "${V:-verdict}", "ver*", "v[e]rdict"]) {
+    for (const tool of [TOOL, `'${TOOL}'`, "~/x/skills/sage/sage.mjs", "sa'ge'.mjs"]) {
+      const command = `node ${tool} ${form} ${rest}`;
+      assert.match(denied(s.send(bash(command, s.dir))) ?? "", line, command);
+    }
+  }
+  assert.match(denied(s.send(bash(`echo ${rest} | xargs node ${TOOL} verdict`, s.dir))) ?? "", line, "a verdict whose words come from elsewhere");
+  assert.match(denied(s.send(bash(`node ${TOOL} verdict ${rest}`, s.dir))) ?? "", /names the helper run \(--run R<n>\) whose report backs it/, "the plain form is read and checked");
+  for (const command of [`node ${TOOL} status`, `node ${TOOL} merge-check --sha ${s.head()} --pr 5`, `cd ${s.dir} && node ${TOOL} status`, `node ~/x/skills/sage/sage.mjs logbook`, `node ${TOOL} task add --priority P2 --title "two words" --size small`]) {
+    assert.equal(denied(s.send(bash(command, s.dir))), undefined, command);
+  }
+});
+
+test("T482 R1834-1: a lead whose lead run the sage ended stops, also while a helper of it runs", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const run = liveHelper(s, "qa");
+  assert.equal(leadStop(s)?.decision, "block", "while its lead run runs, the stop waits for the helper");
+  s.sage("run", "done", "R1", "--status", "failed");
+  assert.match(waitOut(s), /^T1 has no running lead run/, "the wait returns at once");
+  assert.equal(leadStop(s), undefined, `the lead stops; ${run}'s slot keeps its own rules`);
+  assert.equal(helperSlots(s).length, 1, "the helper's slot is not freed by the lead's stop");
+});
+
+test("T482 R1836-2: a review whose branch moved during its run backs no verdict, and the line says to start a new run on the current head", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const run = liveHelper(s, "qa");
+  const head = s.commit(); // another task's build moves the shared branch during the review
+  s.send(ended(`child-${run}`, "sage:qa", { last_assistant_message: cleanOf("qa") }));
+  s.sage("run", "done", run, "--status", "done", "--tokens", "1");
+  assert.match(leadVerdict(s, "qa-pass", run, head) ?? "", new RegExp(`^sage: ${run}'s helper reviewed no one commit .* So ${run} backs no verdict: start a new qa run on the current head of the branch \\(git rev-parse <branch>\\), and record its verdict on that head \\(R1836-2\\)\\.`));
+});
