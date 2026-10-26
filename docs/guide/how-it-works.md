@@ -5,13 +5,13 @@ This page shows the parts of sage and how a request becomes a verified pull requ
 <a href="../assets/loop-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/loop-dark.svg">
-  <img alt="How sage works: you, the chief of staff, the team (design, build, review, QA), the pull request, the logbook, and the outer loop that seals each lesson." src="../assets/loop-light.svg" width="100%">
+  <img alt="How sage works: you send a request to the chief of staff, which briefs the team and keeps the logbook. The chief runs the design and the PE check. For each pull request, one lead runs the build, the reviews and QA; findings and QA failures go back to the build. A clean result becomes a pull request. The outer loop seals each lesson." src="../assets/loop-light.svg" width="100%">
 </picture>
 </a>
 
 There are two loops:
 
-- **The inner loop** turns a request into verified work: the chief briefs the team, and the team designs, builds, reviews and tests. Findings go back to the build. A clean result becomes a pull request.
+- **The inner loop** turns a request into verified work: the chief runs the design and the PE check, and one lead for each pull request runs the build, the reviews and QA. Findings go back to the build. A clean result becomes a pull request.
 - **The outer loop** [seals the lesson](concepts.md): it gives a mistake that comes back twice a lasting fix, a test or a check in code first. Each sealed lesson makes [the dojo](concepts.md) stronger.
 
 <a href="../assets/tip-seal-light.svg">
@@ -40,7 +40,9 @@ The state lives in the logbook: plain files in `~/.claude/sage/<project>-<hash>/
 
 Three agents change files: the designer and the implementer, each in its own git worktree, and the arena judge, which writes the final version. The others change no files.
 
-Only one agent writes on a branch at a time. Reviewers start fresh, so they don't share the builder's blind spots. How the lead and the models work: see [Using sage](using-sage.md#the-lead-and-the-models).
+Only one agent writes on a branch at a time. Reviewers start fresh, so they don't share the builder's blind spots.
+
+A lead runs up to 9 helpers at once. In Claude Code, a project runs at most 10 agents at once by default (`max_agents`), so one lead and its 9 helpers fit, and all projects 20 (`cap_total`). How the lead, its wait and the models work: see [Using sage](using-sage.md#the-lead-and-the-models).
 
 ## Routes
 
@@ -58,13 +60,15 @@ Each task gets the least route for its size. The chief can add steps, never remo
 <a href="../assets/lifecycle-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/lifecycle-dark.svg">
-  <img alt="A task's states: framed, briefed, building, reviewing, verifying, verified, merged. A product question moves a building task to held until your answer. Findings to fix, or a QA fail, move it from verifying to repairing, and the next round goes back to reviewing, at most 3 rounds. Verified needs 1 clean cycle; autopilot merges after 1 for a small task, 2 for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass." src="../assets/lifecycle-light.svg" width="100%">
+  <img alt="A task's states: framed, briefed, building, reviewing, verifying, verified, merged. A product question moves a building task to held until your answer. Findings to fix, or a QA fail, move it to repairing, and the next round goes back to reviewing: 3 rounds by default, then the task is held. Verified needs 1 clean cycle; autopilot merges after 1 for a tiny or small task, 2 for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass. Other states: designing, awaiting you, pr-ready, replan, concluded and abandoned." src="../assets/lifecycle-light.svg" width="100%">
 </picture>
 </a>
 
 A **cycle** is one full set of fresh reviews and QA on one commit. A new commit starts again from cycle 1.
 
-A task is **verified** after 1 clean cycle. With autopilot on, it **merges** after its clean cycles on the same commit: 1 for a small task, 2 for a large task or any task with a risk flag.
+A task is **verified** after 1 clean cycle. With autopilot on, it **merges** after its clean cycles on the same commit: 1 for a tiny or small task, 2 for a large task or any task with a risk flag.
+
+Every task has a priority, from P0 (your current focus and what blocks it) to P3 (parked but kept). The chief sets it when it adds the task.
 
 A tiny task's route is only the build: it has no review and no QA, so it has no cycle. It is clean when its checks pass on its commit. A risk flag adds the security review, and then a tiny task needs 2 clean cycles too.
 
