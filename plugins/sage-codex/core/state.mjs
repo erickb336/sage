@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { USAGE_FIELDS, tokenCount, usageText, usageRegistry, usageSnapshot, validUsageSnapshot, usageSummary } from "./usage.mjs";
 import { parseRunTarget } from "./run-target.mjs";
-import { readLocalGit } from "./local-git.mjs";
+import { GitDiscoveryError, readLocalGit } from "./local-git.mjs";
 import { TaskUpdateError } from "./task-update-error.mjs";
 import { recordedWrites, coordinatedWrites, assertNoPendingWrite, RecordedWriteError } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
@@ -160,7 +160,8 @@ function projectRoot(path) {
     const main = realGit === realCommon && dirname(realCommon) === realTop;
     const linked = dirname(realGit) === join(realCommon, "worktrees") && realpathSync(resolve(realGit, readFileSync(join(realGit, "gitdir"), "utf8").trim())) === join(realTop, ".git");
     return main || linked ? dirname(common) : resolve(path);
-  } catch {
+  } catch (error) {
+    if (error instanceof GitDiscoveryError) throw error;
     return resolve(path);
   }
 }
@@ -3181,7 +3182,7 @@ function command(argv, env = process.env) {
   try {
     return { code: 0, text: (argv[0] === "standing" ? orders : shown)(sage(argv, env)) };
   } catch (err) {
-    return { code: err instanceof Refusal ? 1 : 2, text: `sage: ${shown(err instanceof Refusal ? err.message : err.stack)}` };
+    return { code: err instanceof Refusal ? 1 : 2, text: `sage: ${shown(err instanceof Refusal || err instanceof GitDiscoveryError ? err.message : err.stack)}` };
   }
 }
 

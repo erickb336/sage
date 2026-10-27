@@ -4145,6 +4145,85 @@ test("R1740-3: a run on the head branch in another letter case owns it, as a tas
   assert.match(r.stderr, /also belongs to \S+ T1 \(by run R1 on it\), which is not on PR 41/);
 });
 
+/** An initialized disposable repository and linked worktree, with missing system Git simulated only in child processes. */
+function identityFailureFixture(context, provider) {
+  const f = sandboxPrep();
+  context.after(() => rmSync(f.base, { recursive: true, force: true }));
+  const tool = fileURLToPath(new URL(`../plugins/${provider}/skills/sage/sage.mjs`, import.meta.url));
+  const linked = join(f.base, "linked"), subdir = join(f.project, "subdir"), plain = join(f.base, "plain");
+  mkdirSync(subdir); mkdirSync(plain);
+  execFileSync("git", ["-C", f.project, "worktree", "add", "-q", linked, "-b", "fixture-linked"]);
+  const preload = join(f.base, "missing-git.mjs");
+  writeFileSync(preload, `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const realpath = fs.realpathSync;
+    const candidates = new Set(['/Library/Developer/CommandLineTools/usr/bin/git', '/Applications/Xcode.app/Contents/Developer/usr/bin/git', '/usr/bin/git', '/bin/git']);
+    fs.realpathSync = (path, ...args) => {
+      if (candidates.has(path)) throw Error('simulated missing system Git');
+      return realpath(path, ...args);
+    };
+    syncBuiltinESMExports();
+  `);
+  const run = (args, at = f.project, missing = false) => spawnSync(process.execPath,
+    [...(missing ? ["--import", preload] : []), tool, ...args, "--project", at],
+    { env: f.env, encoding: "utf8", timeout });
+  const init = run(["init"]);
+  assert.equal(init.status, 0, init.stderr);
+  return { ...f, tool, preload, run, locations: { main: f.project, subdir, linked }, plain };
+}
+
+for (const provider of ["sage", "sage-codex"]) {
+  for (const location of ["main", "subdir", "linked"]) {
+    for (const args of [["logbook"], ["init"], ["task", "add", "--priority", "P2", "--title", "must not write", "--size", "small"]]) {
+      test(`T53: ${provider} ${args[0]} at ${location} aborts when trusted Git discovery fails`, context => {
+        const f = identityFailureFixture(context, provider);
+        const before = snapshot(f.env.SAGE_HOME);
+        const result = f.run(args, f.locations[location], true);
+        assert.deepEqual(snapshot(f.env.SAGE_HOME), before, "discovery failure must not change or initialize any logbook");
+        assert.notEqual(result.status, 0, result.stdout);
+        assert.match(result.stderr, /no trusted system Git executable is available/);
+        assert.doesNotMatch(result.stderr, /no logbook for the project/);
+        assert.equal(result.stdout, "");
+      });
+    }
+  }
+  test(`T53: ${provider} shared identity APIs propagate discovery failure`, context => {
+    const f = identityFailureFixture(context, provider);
+    const before = snapshot(f.env.SAGE_HOME);
+    const script = `
+      import assert from 'node:assert/strict';
+      import * as provider from ${JSON.stringify(new URL(`../plugins/${provider}/skills/sage/sage.mjs`, import.meta.url).href)};
+      const tool = provider.tool ?? provider;
+      for (const project of ${JSON.stringify(Object.values(f.locations))}) {
+        for (const call of [() => tool.projectRoot(project), () => tool.storeDir(project), () => tool.logbookView(project)]) {
+          assert.throws(call, /no trusted system Git executable is available/);
+        }
+      }
+    `;
+    const result = spawnSync(process.execPath, ["--import", f.preload, "--input-type=module", "-e", script], { env: f.env, encoding: "utf8", timeout });
+    assert.deepEqual(snapshot(f.env.SAGE_HOME), before);
+    assert.equal(result.status, 0, result.stderr);
+  });
+  test(`T53: ${provider} normal Git preserves shared identity and genuine nonrepo behavior`, context => {
+    const f = identityFailureFixture(context, provider), original = f.run(["logbook"]);
+    assert.equal(original.status, 0, original.stderr);
+    for (const project of Object.values(f.locations)) {
+      const result = f.run(["logbook"], project);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, original.stdout);
+    }
+    const init = f.run(["init"], f.plain);
+    assert.equal(init.status, 0, init.stderr);
+    const plain = f.run(["logbook"], f.plain);
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.notEqual(plain.stdout, original.stdout);
+    const added = f.run(["task", "add", "--priority", "P2", "--title", "plain directory", "--size", "small"], f.plain);
+    assert.equal(added.status, 0, added.stderr);
+    assert.match(added.stdout, /^T1 framed/);
+  });
+}
+
 test("T94: project identity ignores inherited Git selectors and keeps linked worktrees assigned", () => {
   const { base, repo, project, sage } = sandboxPrep();
   assert.equal(sage(["init"]).status, 0);
