@@ -768,9 +768,12 @@ test("T536: in sage mode no push reaches the default branch, whatever the remote
       /^sage: in sage mode no thread changes files under a \.git folder/, "apply_patch to .git/hooks");
   }
   // R1936 F8, F9: a move of the default branch and gh repo sync.
+  // The gh command allowlist refuses repo edit and sync before the push policy runs.
+  const GH_REPO_EDIT = /^sage: in sage mode, gh runs only the commands that sage uses \(.*\), because "gh repo edit" can be an alias or an extension/;
+  const GH_REPO_SYNC = /^sage: in sage mode, gh runs only the commands that sage uses \(.*\), because "gh repo sync" can be an alias or an extension/;
   check({ "gh api -X PATCH repos/acme/site -f default_branch=sage/t1": API_MAIN, "gh api -X PATCH repos/acme/site --input body.json": API_MAIN,
-    "gh repo edit acme/site --default-branch sage/t1": /^sage: gh repo edit --default-branch moves the default branch/,
-    "gh repo sync": /^sage: gh repo sync writes a branch on GitHub/, "gh repo sync acme/site --branch main": /^sage: gh repo sync/ },
+    "gh repo edit acme/site --default-branch sage/t1": GH_REPO_EDIT,
+    "gh repo sync": GH_REPO_SYNC, "gh repo sync acme/site --branch main": GH_REPO_SYNC },
     ["gh api -X PATCH repos/acme/site -f description=x", "gh repo view acme/site"], "default branch moves");
 });
 
