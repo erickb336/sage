@@ -81,7 +81,11 @@ export function verifyInstall(args, projectRoot) {
     seen.add(name);
     if (!outcome) {
       let expected;
-      try { expected = git(project, ["cat-file", "blob", oid]); } catch { outcome = "errors"; }
+      try {
+        // ls-tree reports the mode's type; typed cat-file can dereference a tag. Check the object itself first.
+        if (git(project, ["cat-file", "-t", oid]).toString().trim() !== "blob") throw Error("not a blob");
+        expected = git(project, ["cat-file", "blob", oid]);
+      } catch { outcome = "errors"; }
       if (!outcome) try { outcome = installedBytes(name).equals(expected) ? "matched" : "changed"; }
       catch (error) { outcome = error.code === "ENOENT" ? "missing" : "errors"; }
     }

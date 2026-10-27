@@ -1423,3 +1423,105 @@ test("T51 verify-install repair: malformed tree paths and duplicate entries cann
     assert.deepEqual(f.snapshot(), before);
   }
 });
+
+for (const objectKind of ["tag", "tree", "commit", "blob"]) {
+  test(`T51 verify-install round2: actual ${objectKind} type controls regular-file acceptance`, t => {
+    const f = installFixture(t), blob = f.git("rev-parse", "HEAD:plugins/sage-codex/nested/sample.txt");
+    f.git("-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "blob-tag", blob, "-m", "blob tag");
+    const oid = { tag: f.git("rev-parse", "blob-tag"), tree: f.git("rev-parse", "HEAD^{tree}"), commit: f.sha, blob }[objectKind];
+    const inputGit = (input, ...args) => {
+      const r = spawnSync("git", ["-C", f.project, ...args], { input, encoding: "utf8", env: f.env });
+      assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
+    };
+    assert.equal(f.git("cat-file", "-t", oid), objectKind);
+    if (objectKind === "tag") assert.equal(f.git("cat-file", "blob", oid), "sample expected bytes", "typed cat-file dereferences tags");
+    const raw = Buffer.concat([Buffer.from("100644 sample.txt\0"), Buffer.from(oid, "hex")]);
+    const nested = inputGit(raw, "hash-object", "-t", "tree", "--literally", "-w", "--stdin");
+    const pkg = inputGit(`040000 tree ${nested}\tnested\n`, "mktree");
+    const plugins = inputGit(`040000 tree ${pkg}\tsage-codex\n`, "mktree");
+    const root = inputGit(`040000 tree ${plugins}\tplugins\n`, "mktree");
+    const commit = f.git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", root, "-m", "object type fixture");
+    const before = f.snapshot(), r = f.run(["--commit", commit, "--project", f.project]);
+    assert.equal(r.status, objectKind === "blob" ? 0 : 1, r.stdout + r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert.equal(result.result, objectKind === "blob" ? "match" : "different");
+    assert.equal(result.counts.matched, objectKind === "blob" ? 1 : 0);
+    assert.deepEqual(result.errors, objectKind === "blob" ? [] : ["nested/sample.txt"]);
+    assert.deepEqual(f.snapshot(), before);
+  });
+}
+
+for (const pathKind of ["relative", "empty", "absolute", "symlink"]) {
+  for (const caller of ["CLI", "gate"]) {
+    test(`T51 verify-install round2: ${caller} ignores ${pathKind} project Git on PATH`, t => {
+      const f = installFixture(t), cwd = join(f.project, "tools"), marker = join(f.dir, "git-called");
+      mkdirSync(cwd);
+      const planted = join(cwd, "git"), target = join(f.project, "marker-git");
+      writeFileSync(pathKind === "symlink" ? target : planted,
+        `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called'); process.exit(1);\n`, { mode: 0o755 });
+      if (pathKind === "symlink") symlinkSync(target, planted);
+      const prefix = { relative: ".", empty: "", absolute: cwd, symlink: cwd }[pathKind];
+      const env = { ...f.env, PATH: `${prefix}:${f.env.PATH}` };
+      f.mode({ sage: true, autopilot: false });
+      const actor = f.child("/root/sage_qa_t1_r1");
+      const before = f.snapshot();
+      if (caller === "CLI") {
+        const r = f.run(undefined, { cwd, env });
+        assert.equal(existsSync(marker), false, "the project Git must never execute");
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(JSON.parse(r.stdout).result, "match");
+      } else {
+        const command = `'${process.execPath}' '${TOOL}' verify-install --commit ${f.sha} --project '${f.project}'`;
+        const input = pre("Bash", command, { ...actor, cwd: f.project, tool_input: { command, workdir: cwd } });
+        const r = spawnSync(process.execPath, [HOOK], { cwd, env, input: JSON.stringify(input), encoding: "utf8" });
+        assert.equal(existsSync(marker), false, "gate identity must never execute the project Git");
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(r.stdout, "", "the legitimate assigned project remains allowed");
+        input.tool_input.command = command.replace(`--project '${f.project}'`, `--project '${f.dir}'`);
+        const rejected = spawnSync(process.execPath, [HOOK], { cwd, env, input: JSON.stringify(input), encoding: "utf8" });
+        assert.equal(rejected.status, 0, rejected.stderr);
+        assert.match(denied(JSON.parse(rejected.stdout)), /assigned absolute project/);
+        assert.equal(existsSync(marker), false);
+      }
+      assert.deepEqual(f.snapshot(), before);
+    });
+  }
+}
+
+for (const scenario of ["missing", "project alias", "writable executable", "writable parent", "unowned parent", "non-executable", "trusted alias"]) {
+  test(`T51 verify-install round2: system Git discovery handles ${scenario}`, t => {
+    const f = installFixture(t), marker = join(f.dir, "git-called"), planted = join(f.dir, "bin/git");
+    writeFileSync(planted, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called');\n`, { mode: 0o755 });
+    const alias = join(f.dir, "git-alias");
+    const systemGit = process.platform === "darwin" ? "/Library/Developer/CommandLineTools/usr/bin/git" : "/usr/bin/git";
+    symlinkSync(scenario === "project alias" ? planted : systemGit, alias);
+    // Simulate system discovery without changing system files. Execute the real reader and real Git for the positive case.
+    const script = `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { readLocalGit } from ${JSON.stringify(new URL("../plugins/sage-codex/core/local-git.mjs", import.meta.url).href)};
+      const scenario = ${JSON.stringify(scenario)}, realpath = fs.realpathSync, lstat = fs.lstatSync;
+      const resolved = realpath(${JSON.stringify(alias)});
+      fs.realpathSync = () => { if (scenario === 'missing') throw Error('missing system Git'); return resolved; };
+      fs.lstatSync = path => {
+        const stat = lstat(path);
+        if (scenario === 'writable executable' && path === resolved) stat.mode |= 0o020;
+        if (scenario === 'writable parent' && path !== resolved) stat.mode |= 0o020;
+        if (scenario === 'unowned parent' && path !== resolved) stat.uid = 12345;
+        if (scenario === 'non-executable' && path === resolved) stat.mode &= ~0o111;
+        return stat;
+      };
+      syncBuiltinESMExports();
+      try { process.stdout.write(readLocalGit(${JSON.stringify(f.project)}, ['rev-parse', '--show-toplevel'])); }
+      catch (error) { process.stderr.write(error.message); process.exitCode = 1; }
+    `;
+    const before = f.snapshot(), r = spawnSync(process.execPath, ["--input-type=module", "-e", script], { env: f.env, encoding: "utf8" });
+    assert.equal(existsSync(marker), false, "no fallback to PATH or an unsafe resolved alias");
+    if (scenario === "trusted alias") {
+      assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, f.project + "\n");
+    } else {
+      assert.equal(r.status, 1, r.stdout); assert.equal(r.stderr, "no trusted system Git executable is available");
+    }
+    assert.deepEqual(f.snapshot(), before);
+  });
+}

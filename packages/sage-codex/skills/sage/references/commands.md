@@ -28,6 +28,10 @@ The chief or an assigned role can compare this CLI's installed package with a co
 
 Replace the example paths and full 40-character commit with inspected values. The command derives the installed folder from its own location. It accepts no `--root` or other installation path. A verified linked worktree counts as the assigned project.
 
+Project identity and verification use a trusted system Git, independently of `PATH` and the command's working directory. On macOS, they try `/Library/Developer/CommandLineTools/usr/bin/git`, then `/Applications/Xcode.app/Contents/Developer/usr/bin/git`. They do not use the environment-sensitive `/usr/bin/git` launcher. On Linux, they try `/usr/bin/git`, then `/bin/git`. After resolving links, the executable and every parent must belong to root and forbid group and other writes. The executable must be a regular executable file. Other platforms and custom Git locations are unsupported; verification fails if no trusted candidate exists. A caller cannot select another executable.
+
+Each regular-file tree entry must reference an actual blob object. A tag that points to matching bytes cannot count as a matching file.
+
 The JSON output gives the reference commit, tracked and matched counts, and relative missing, changed or error paths. It prints no file contents. Exit 0 means every tracked file matches; exit 1 means a difference, unsafe file or refused input. Links, special files and unreadable files cannot match. Extra installed files are outside the comparison. This verifies tracked package files, not runtime trust or release readiness. The command writes no logbook, registry, lock, selection or installation files.
 
 ## Logbook command reference
