@@ -995,7 +995,7 @@ function backingProblem(dir, task, kind, opt) {
   const kept = keptOf(dir, run.id);
   if (!kept) return `${run.id} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${run.id} · task ${task.id}", or by its task name with the run (sage_<role>_t<n>_r<n>). ${again}`;
   if (kept.damaged || kept.task !== task.id || kept.role !== run.role) return `${run.id}'s kept report is damaged, so it backs no verdict. ${again}`;
-  const report = readReport(kept.text);
+  const report = readReport(kept.text, { requireComplete: true });
   if (report.unreadable) return `${run.id}'s kept report cannot be read (${report.problem}), so it backs no verdict: read it yourself. ${again}`;
   // The commit that the hook saw the helper review, and each full SHA that the report's BRANCH names, is the verdict's commit.
   const branch = fieldsOf(kept.text, REPORT_FIELDS).filter((f) => f.name === "BRANCH").flatMap((f) => [f.rest, ...f.lines]).join("\n");

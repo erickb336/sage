@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { REPORT_FIELDS } from "../packages/sage-core/report.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GATE = join(ROOT, "plugins/sage-codex/hooks/report-gate.mjs");
@@ -91,6 +92,22 @@ test("T483: the chief's review child keeps its report with the head that the gat
   assert.deepEqual(end(mine), {});
   ok("run", "done", kept, "--status", "done", "--tokens", "1");
   assert.equal(verdict(kept).status, 0, "the kept CLEAN report backs review-clean on the head");
+  for (const field of REPORT_FIELDS) {
+    const id = run(), file = child(`/root/sage_code_reviewer_t12_${id.toLowerCase()}`);
+    const message = clean.split("\n").filter(line => !line.startsWith(`${field} `)).join("\n");
+    begin(file);
+    assert.equal(end(file, message).decision, "block", `${field}: the first stop asks for correction`);
+    const second = gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: message, stop_hook_active: true }));
+    assert.equal(second.decision, undefined, `${field}: the second stop still exits`);
+    const book = ok("logbook"), saved = JSON.parse(readFileSync(join(book, "kept", `${id}.json`), "utf8"));
+    assert.equal(saved.text, message, `${field}: the incomplete text stays available`);
+    assert.equal(saved.sha, head, "the unchanged branch supplies its SHA");
+    ok("run", "done", id, "--status", "done", "--tokens", "1");
+    const before = readFileSync(join(book, "ledger.tsv"), "utf8"), refused = verdict(id);
+    assert.equal(refused.status, 1, `${field}: the second stop cannot back a verdict`);
+    assert.match(refused.stderr, /kept report cannot be read/);
+    assert.equal(readFileSync(join(book, "ledger.tsv"), "utf8"), before);
+  }
   // The branch moves during the review: the tip at the start is not the head at the stop, so the gate keeps no commit,
   // and a report whose BRANCH names no full SHA backs no verdict on the new head (R1933-1).
   const moved = run(), during = child(`/root/sage_code_reviewer_t12_${moved.toLowerCase()}`);

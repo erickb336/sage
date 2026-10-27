@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { NEAR_NOTE, PHRASE_CASES, S, S_ON } from "./fixtures/mode-cases.mjs";
 import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
 import { backed } from "./verdict-backing.mjs";
+import { REPORT_FIELDS } from "../packages/sage-core/report.mjs";
 
 /**
  * Bounded waits (F-T273-15, F-T273-20, order 26). The file stalled twice under load with no failure, and node's per-test
@@ -7334,6 +7335,29 @@ test("T483 C-T483-1: a review that the sage starts itself keeps its report by th
   assert.match(s.sage("verdict", "T1", "--kind", "review-clean", "--sha", s.head(), "--cycle", "1", "--pr", "5", "--run", marked), /^T1 review-clean · [0-9a-f]{7} · cycle 1/, "the state tool records it");
   const plain = review("rev-b");
   assert.match(chiefVerdict(s, "review-clean", plain) ?? "", new RegExp(`^sage: ${plain} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${plain} · task T1"`), "no run line, no kept report");
+});
+
+test("T483 full report: Claude's second incomplete stop keeps the text but backs no verdict", () => {
+  const s = leadSession({ SAGE_TEST_PIDS: "{}" });
+  s.sage("run", "done", "R1", "--status", "blocked");
+  for (const field of REPORT_FIELDS) {
+    const run = s.sage("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
+    const id = `incomplete-${run}`, message = cleanOf("code-reviewer").split("\n").filter(line => !line.startsWith(`${field} `)).join("\n");
+    assert.equal(denied(s.send(spawnAgent("sage:code-reviewer", `Run ${run} · task T1\n${BRIEF}`, `tu-${id}`, { cwd: s.dir }))), undefined);
+    s.send(resultOf(`tu-${id}`, id, { cwd: s.dir }));
+    const stop = active => s.send(ended(id, "sage:code-reviewer", { cwd: s.dir, last_assistant_message: message, stop_hook_active: active }));
+    assert.equal(stop(false)?.decision, "block", `${field}: the first stop asks for correction`);
+    assert.equal(stop(true)?.decision, undefined, `${field}: the second stop still exits`);
+    const book = s.sage("logbook"), saved = JSON.parse(readFileSync(join(book, "kept", `${run}.json`), "utf8"));
+    assert.equal(saved.text, message, `${field}: the incomplete text stays available`);
+    assert.equal(saved.sha, s.head(), "the unchanged branch supplies its SHA");
+    s.sage("run", "done", run, "--status", "done", "--tokens", "1");
+    const before = readFileSync(join(book, "ledger.tsv"), "utf8");
+    const refused = spawnSync("node", [TOOL, "verdict", "T1", "--kind", "review-clean", "--sha", s.head(), "--run", run, "--project", realpathSync(s.dir)], { encoding: "utf8", env: s.vars });
+    assert.equal(refused.status, 1, `${field}: the second stop cannot back a verdict`);
+    assert.match(refused.stderr, /kept report cannot be read/);
+    assert.equal(readFileSync(join(book, "ledger.tsv"), "utf8"), before);
+  }
 });
 
 test("T483 R1932-1 R1933-1: the sage's own review keeps a report only for its own running run of its role, with the commit at its start", () => {

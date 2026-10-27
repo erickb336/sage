@@ -122,10 +122,12 @@ const findingsLine = (line) => FINDINGS_AT.test(line.trimStart().replace(/^(?:[-
  * that finding. (A line above the first finding is none or makes the report unreadable before this rule.) So a raised
  * word under a low finding counts also when a high finding is in the report, and an honest detail line such as "a high
  * row count" under a low finding blocks once, and the helper writes it again. A lower word under a higher finding is
- * detail.
+ * detail. At verdict acceptance, requireComplete also requires text in every REPORT_FIELDS field. Other callers can
+ * read a partial stop to give correction feedback; retaining that stop does not make it eligible to back a verdict.
  */
-export function readReport(text) {
+export function readReport(text, { requireComplete = false } = {}) {
   const fields = fieldsOf(text, REPORT_FIELDS), of = (name) => fields.filter((f) => f.name === name);
+  const incomplete = requireComplete && REPORT_FIELDS.find(name => !of(name).some(f => [f.rest, ...f.lines].some(line => line.trim())));
   const [r] = of("RESULT"), [f] = of("FINDINGS");
   const another = linesOf(text).filter(({ line, fenced }) => !fenced && findingsLine(line))[1]?.line;
   const twice = REPORT_FIELDS.find((name) => of(name).length > 1) ?? (another === undefined ? undefined : "FINDINGS");
@@ -143,7 +145,7 @@ export function readReport(text) {
     if (severities.length) owned.push([text, LEVEL[severities.at(-1)]]);
   }
   const seen = owned.find(([text, own]) => levelIn(text) > own);
-  const problem = twice ? `${twice} is given twice, the second time in the line ${JSON.stringify((of(twice)[1]?.line ?? another).trim().slice(0, 80))}` : !r ? "it has no RESULT" : !f ? "it has no FINDINGS" :
+  const problem = twice ? `${twice} is given twice, the second time in the line ${JSON.stringify((of(twice)[1]?.line ?? another).trim().slice(0, 80))}` : incomplete ? `${incomplete} is missing or empty` : !r ? "it has no RESULT" : !f ? "it has no FINDINGS" :
     !RESULT_WORDS.includes(result) ? `RESULT starts with ${JSON.stringify((said ?? "").slice(0, 80))}, not with one of ${RESULT_WORDS.join(", ")}` :
     long ? `a line under FINDINGS is longer than ${LINE_MAX} characters` : odd !== undefined ? `a line under FINDINGS is not none alone and not a finding in the form ${FINDING_FORM}: ${JSON.stringify(odd.slice(0, 80))}` :
     none && severities.length ? "FINDINGS has none and findings" : !none && !severities.length ? "FINDINGS is empty" :

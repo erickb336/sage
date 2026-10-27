@@ -10,6 +10,7 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
 import { reportFor } from "./verdict-backing.mjs";
+import { REPORT_FIELDS } from "../packages/sage-core/report.mjs";
 
 const TOOL = fileURLToPath(new URL("../plugins/sage/skills/sage/sage.mjs", import.meta.url));
 const PLUGIN = fileURLToPath(new URL("../plugins/sage", import.meta.url));
@@ -173,6 +174,38 @@ test("T483 R1909-1: a CLEAN report that lists a medium finding backs findings, n
   s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "an empty name saves a row", "--run", run, "--class", "state-edge");
   assert.match(s.ok("verdict", "T1", "--kind", "findings", "--sha", SHA, "--run", run), /^T1 findings · a1b2c3d · cycle 1/);
 });
+
+test("T483 full report: complete plain, Markdown and multiline fields still back clean verdicts", () => {
+  const s = logbook();
+  s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
+  const lines = reportFor("review-clean").split("\n");
+  const forms = [lines, lines.map(line => `| ${line} |`), lines.map(line => {
+    const field = REPORT_FIELDS.find(name => line.startsWith(`${name} `));
+    return `**${field}**: ${line.slice(field.length).trim()}`;
+  }), lines.map(line => {
+    const field = REPORT_FIELDS.find(name => line.startsWith(`${name} `));
+    return `## ${field}\n${line.slice(field.length).trim()}`;
+  })];
+  for (const [index, form] of forms.entries()) {
+    const run = s.reviewed("T1", "code-reviewer", form.join("\n"));
+    assert.equal(s.ok("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--run", run, "--cycle", String(index + 1)), `T1 review-clean · a1b2c3d · cycle ${index + 1}`);
+  }
+});
+
+for (const field of REPORT_FIELDS) for (const empty of [false, true]) {
+  test(`T483 full report: ${empty ? "empty" : "missing"} ${field} backs no verdict`, () => {
+    const s = logbook();
+    s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
+    const text = reportFor("review-clean").split("\n").flatMap(line => line.startsWith(`${field} `) ? (empty ? [field] : []) : [line]).join("\n");
+    const run = s.reviewed("T1", "code-reviewer", text);
+    s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a recorded problem", "--run", run, "--class", "other");
+    const before = s.ledger();
+    for (const kind of ["review-clean", "findings"]) {
+      assert.match(s.no("verdict", "T1", "--kind", kind, "--sha", SHA, "--run", run), /kept report cannot be read/);
+      assert.equal(s.ledger(), before, "an incomplete report adds no ledger row");
+    }
+  });
+}
 
 test("T483: a kept report stays as it was first kept, and only a run of its task and role keeps one", () => {
   const s = logbook();
