@@ -1,7 +1,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, lstatSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -1193,3 +1193,335 @@ test("in sage mode gh runs only the command paths that sage uses, by name, with 
   assert.equal(await fixed({ sage: false }).run(pre("Bash", "gh land 360")), undefined, "outside sage mode the gate does not judge gh");
   assert.equal(await g.run(pre("Bash", MERGE)), undefined, "the landing command itself still runs");
 });
+
+
+// T51 uses only disposable repositories and copied plugin files. Never inspect the installed plugin here.
+function installFixture(t) {
+  const w = world(t), installed = join(w.dir, "installed");
+  cpSync(fileURLToPath(new URL("../plugins/sage-codex", import.meta.url)), installed, { recursive: true });
+  const tracked = join(w.project, "plugins/sage-codex");
+  mkdirSync(tracked, { recursive: true });
+  mkdirSync(join(tracked, "nested"));
+  writeFileSync(join(tracked, "nested/sample.txt"), "sample expected bytes\n");
+  mkdirSync(join(installed, "nested"));
+  writeFileSync(join(installed, "nested/sample.txt"), "sample expected bytes\n");
+  const git = (...args) => {
+    const r = spawnSync("git", ["-C", w.project, ...args], { encoding: "utf8", env: w.env });
+    assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
+  };
+  git("add", "plugins"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "sample package");
+  const sha = git("rev-parse", "HEAD");
+  const run = (args = ["--commit", sha, "--project", w.project], options = {}) => spawnSync(process.execPath,
+    [join(installed, "skills/sage/sage.mjs"), "verify-install", ...args], { cwd: w.project, encoding: "utf8", env: w.env, ...options });
+  const snapshot = () => readdirSync(w.dir, { recursive: true }).sort().map(name => {
+    const path = join(w.dir, name), stat = lstatSync(path);
+    return [name, stat.ino, stat.mode, stat.mtimeMs, stat.isFile() ? readFileSync(path).toString("base64") : null];
+  });
+  return { ...w, installed, tracked, sha, git, run, snapshot };
+}
+
+test("T51 verify-install: matching tracked files pass without any filesystem mutation", t => {
+  const f = installFixture(t), before = f.snapshot(), r = f.run();
+  assert.equal(r.status, 0, r.stderr);
+  const result = JSON.parse(r.stdout);
+  assert.equal(result.result, "match");
+  assert.equal(result.commit, f.sha);
+  assert.equal(result.scope, "tracked plugins/sage-codex files");
+  assert.deepEqual(result.counts, { tracked: 1, matched: 1, missing: 0, changed: 0, errors: 0 });
+  assert.match(result.limit, /not runtime trust or release readiness/);
+  assert.deepEqual(f.snapshot(), before);
+  assert.equal(existsSync(f.env.SAGE_HOME), false);
+  console.log("T51 sample command: node <fixture>/installed/skills/sage/sage.mjs verify-install --commit " + f.sha + " --project <fixture>/project");
+  console.log("T51 sample output: " + r.stdout.trim());
+});
+
+for (const kind of ["changed", "missing", "unreadable", "symlink", "parent-link", "hardlink", "directory"]) {
+  test(`T51 verify-install: ${kind} cannot report a match or disclose contents`, t => {
+    const f = installFixture(t), target = join(f.installed, "nested/sample.txt");
+    if (kind === "changed") writeFileSync(target, "PRIVATE CONTENT MUST NOT APPEAR");
+    if (kind === "missing") rmSync(target);
+    if (kind === "unreadable") { chmodSync(target, 0); t.after(() => { if (existsSync(target)) chmodSync(target, 0o644); }); }
+    if (kind === "symlink") { rmSync(target); symlinkSync(join(f.tracked, "nested/sample.txt"), target); }
+    if (kind === "parent-link") { rmSync(join(f.installed, "nested"), { recursive: true }); symlinkSync(join(f.tracked, "nested"), join(f.installed, "nested")); }
+    if (kind === "hardlink") { rmSync(target); linkSync(join(f.tracked, "nested/sample.txt"), target); }
+    if (kind === "directory") { rmSync(target); mkdirSync(target); }
+    const r = f.run();
+    assert.equal(r.status, 1, r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert.equal(result.result, "different");
+    assert.equal(result.counts.matched, 0);
+    assert.deepEqual(result[kind === "changed" ? "changed" : kind === "missing" ? "missing" : "errors"], ["nested/sample.txt"]);
+    assert.doesNotMatch(r.stdout + r.stderr, /PRIVATE CONTENT|sample expected bytes/);
+  });
+}
+
+test("T51 verify-install: malformed inputs refuse before repository or installation access", t => {
+  const f = installFixture(t);
+  for (const args of [[], ["--commit"], ["--commit", "HEAD", "--project", f.project],
+    ["--commit", "--project", f.project], ["--commit", f.sha], ["--commit", f.sha, "--project", "relative"],
+    ["--commit", f.sha, "--project", f.project, "--root", f.installed],
+    ["--commit", f.sha, "--project", f.project, "--project", f.project],
+    ["--commit", f.sha, "--project", f.project, "extra"], ["--commit", f.sha + "^{commit}", "--project", f.project]]) {
+    const r = f.run(args); assert.equal(r.status, 1); assert.match(r.stderr, /usage: sage.mjs verify-install/); assert.equal(r.stdout, "");
+  }
+  for (const commit of ["0".repeat(40), f.git("rev-parse", "HEAD^{tree}"), f.git("rev-parse", "HEAD:plugins/sage-codex/nested/sample.txt")]) {
+    const r = f.run(["--commit", commit, "--project", f.project]);
+    assert.equal(r.status, 1); assert.match(r.stderr, /reference must name an existing commit/); assert.equal(r.stdout, "");
+  }
+  const other = join(f.dir, "other"); mkdirSync(other);
+  assert.match(f.run(["--commit", f.sha, "--project", other]).stderr, /assigned project/);
+  const linked = join(f.dir, "linked"); f.git("worktree", "add", "-qb", "linked", linked);
+  assert.equal(f.run(["--commit", f.sha, "--project", linked]).status, 0);
+});
+
+test("T51 verify-install: tracked symlinks and empty package references refuse", t => {
+  const f = installFixture(t);
+  const empty = f.git("rev-parse", "HEAD^");
+  assert.match(f.run(["--commit", empty, "--project", f.project]).stderr, /no tracked package files/);
+  symlinkSync("/outside", join(f.tracked, "unsafe")); f.git("add", "plugins");
+  f.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "unsafe link");
+  const r = f.run(["--commit", f.git("rev-parse", "HEAD"), "--project", f.project]);
+  assert.equal(r.status, 1); assert.deepEqual(JSON.parse(r.stdout).errors, ["unsafe"]);
+});
+
+test("T51 verify-install: chief and assigned roles use only the trusted literal command", t => {
+  const w = world(t), child = w.child("/root/sage_qa_t1_r1");
+  const cli = `'${process.execPath}' '${TOOL}'`, args = `verify-install --commit ${SHA} --project '${w.project}'`;
+  const linked = join(w.dir, "linked");
+  assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-qb", "linked", linked]).status, 0);
+  for (const sage of [false, true]) {
+    w.mode({ sage, autopilot: false });
+    for (const actor of [undefined, child]) {
+      assert.equal(w.send(pre("Bash", `${cli} ${args}`, actor)), undefined);
+      assert.equal(w.send(pre("Bash", `${cli} verify-install --commit ${SHA} --project '${linked}'`, actor)), undefined);
+      for (const command of [`${cli} ${args} --root /tmp`, `${cli} ${args} --commit ${SHA}`, `${cli} verify-install --commit HEAD --project '${w.project}'`,
+        `${cli} verify-install --commit ${SHA} --project /other`, `node '${TOOL}' ${args}`, `${cli} ${args} > out`,
+        `${cli} ${args}; echo ok`, `env ${cli} ${args}`, `${cli} verify-install --commit ${SHA}`, `${cli} ${args} --unknown x`,
+        `'${process.execPath}' '${TOOL.replace("sage.mjs", "sa'\"\"'ge.mjs")}' ${args} --root /tmp`,
+        `${cli} verify-install --commit ${SHA} --project "$(echo '${w.project}')"`,
+        `${cli} "$(echo verify-install)" --commit ${SHA} --project '${w.project}'`,
+        `SAGE_CLI='${TOOL}'; '${process.execPath}' "$SAGE_CLI" ${args}`,
+        `${cli} ${args.replace("verify-install", "v\"\"erify-install")} --root /tmp`]) {
+        assert.ok(denied(w.send(pre("Bash", command, actor))), command);
+      }
+      assert.ok(denied(w.send(pre("Bash", `python3 -c 'open("${TOOL}", "w").write("x")'`, actor))));
+    }
+  }
+});
+
+test("T51 verify-install: binary bytes and literal path names compare without text conversion", t => {
+  const f = installFixture(t), name = "nested/space 'quote'.bin", bytes = Buffer.from([0, 255, 13, 10, 128]);
+  writeFileSync(join(f.tracked, name), bytes); writeFileSync(join(f.installed, name), bytes);
+  f.git("add", "plugins"); f.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "binary");
+  const sha = f.git("rev-parse", "HEAD"), before = f.snapshot();
+  const r = f.run(["--project", f.project, "--commit", sha]);
+  assert.equal(r.status, 0, r.stderr); assert.equal(JSON.parse(r.stdout).counts.matched, 2);
+  assert.deepEqual(f.snapshot(), before);
+});
+
+test("T51 verify-install: invalid arguments invoke no Git and annotated tags are not commits", t => {
+  const f = installFixture(t);
+  f.git("-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "sample", "-m", "sample");
+  const tag = f.git("rev-parse", "sample");
+  assert.match(f.run(["--commit", tag, "--project", f.project]).stderr, /reference must name an existing commit/);
+  const marker = join(f.dir, "git-called");
+  writeFileSync(join(f.dir, "bin/git"), `#!${process.execPath}\nimport { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'called');\n`, { mode: 0o755 });
+  const before = f.snapshot(), r = f.run(["--commit", "HEAD", "--project", "/unrelated"]);
+  assert.match(r.stderr, /usage: sage.mjs verify-install/);
+  assert.equal(existsSync(marker), false); assert.deepEqual(f.snapshot(), before);
+});
+
+for (const selected of ["assigned", "unrelated"]) {
+  test(`T51 verify-install repair: CLI rejects unrelated projects with ${selected} Git selectors`, t => {
+    const a = installFixture(t), b = installFixture(t), selectedProject = selected === "assigned" ? a.project : b.project;
+    const args = ["--commit", b.sha, "--project", b.project];
+    assert.match(a.run(args).stderr, /assigned project/, "negative control without selectors");
+    const env = { ...a.env, GIT_DIR: join(selectedProject, ".git"), GIT_WORK_TREE: selectedProject,
+      GIT_COMMON_DIR: join(selectedProject, ".git"), GIT_OBJECT_DIRECTORY: join(selectedProject, ".git/objects") };
+    const before = a.snapshot(), otherBefore = b.snapshot();
+    const result = a.run(args, { env });
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /assigned project/);
+    assert.equal(a.run(undefined, { env }).status, 0, "the assigned project still matches");
+    assert.deepEqual(a.snapshot(), before); assert.deepEqual(b.snapshot(), otherBefore);
+  });
+
+  test(`T51 verify-install repair: hook rejects unrelated projects with ${selected} Git selectors`, t => {
+    const a = world(t), b = world(t), selectedProject = selected === "assigned" ? a.project : b.project;
+    a.mode({ sage: true, autopilot: false });
+    const actor = a.child("/root/sage_qa_t1_r1");
+    const command = project => `'${process.execPath}' '${TOOL}' verify-install --commit ${SHA} --project '${project}'`;
+    assert.ok(denied(a.send(pre("Bash", command(b.project), actor))), "negative control without selectors");
+    Object.assign(a.env, { GIT_DIR: join(selectedProject, ".git"), GIT_WORK_TREE: selectedProject,
+      GIT_COMMON_DIR: join(selectedProject, ".git") });
+    for (const who of [undefined, actor]) {
+      assert.ok(denied(a.send(pre("Bash", command(b.project), who))), "an unrelated project must be refused");
+      assert.equal(a.send(pre("Bash", command(a.project), who)), undefined, "the assigned project remains accepted");
+    }
+  });
+}
+
+test("T51 verify-install repair: inherited config and discovery settings cannot change CLI identity", t => {
+  const a = installFixture(t), b = installFixture(t), linked = join(a.dir, "linked");
+  a.git("worktree", "add", "-qb", "linked", linked);
+  const env = { ...a.env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.worktree", GIT_CONFIG_VALUE_0: b.project,
+    GIT_CEILING_DIRECTORIES: a.dir, GIT_DISCOVERY_ACROSS_FILESYSTEM: "0", GIT_CONFIG_PARAMETERS: "'core.bare=true'" };
+  assert.match(a.run(["--commit", b.sha, "--project", b.project], { env }).stderr, /assigned project/);
+  assert.equal(a.run(["--commit", a.sha, "--project", linked], { env }).status, 0, "a real linked worktree remains assigned");
+});
+
+for (const objectKind of ["blob", "tree", "commit"]) {
+  test(`T51 verify-install repair: missing promisor ${objectKind} fails locally without helper execution or mutation`, t => {
+    const f = installFixture(t), marker = join(f.dir, "helper-called"), helper = join(f.dir, "upload-pack");
+    writeFileSync(helper, `#!/bin/sh\nprintf called > '${marker}'\nexit 1\n`, { mode: 0o755 });
+    f.git("config", "remote.origin.url", f.project); // local fixture only; no network endpoint
+    f.git("config", "remote.origin.promisor", "true");
+    f.git("config", "remote.origin.partialclonefilter", "blob:none");
+    f.git("config", "remote.origin.uploadpack", helper);
+    const env = { ...f.env, GIT_NO_LAZY_FETCH: "0", GIT_ALLOW_PROTOCOL: "file",
+      GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "protocol.allow", GIT_CONFIG_VALUE_0: "always" };
+    assert.equal(f.run(undefined, { env }).status, 0, "complete local objects need no helper");
+    const oid = objectKind === "blob" ? f.git("rev-parse", "HEAD:plugins/sage-codex/nested/sample.txt")
+      : objectKind === "tree" ? f.git("rev-parse", "HEAD:plugins/sage-codex") : f.sha;
+    rmSync(join(f.project, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    const before = f.snapshot(), result = f.run(undefined, { env });
+    assert.equal(result.status, 1, result.stdout);
+    assert.equal(existsSync(marker), false, "Git must not execute the repository's upload-pack helper");
+    assert.deepEqual(f.snapshot(), before, "no object, config, ref, or other fixture file changes");
+    if (objectKind === "blob") assert.deepEqual(JSON.parse(result.stdout).errors, ["nested/sample.txt"]);
+    else assert.equal(result.stdout, "");
+  });
+}
+
+test("T51 verify-install repair: replacement objects cannot change the explicit commit's bytes", t => {
+  const f = installFixture(t), original = f.git("rev-parse", "HEAD:plugins/sage-codex/nested/sample.txt");
+  writeFileSync(join(f.tracked, "nested/sample.txt"), "replacement bytes\n");
+  const replacement = f.git("hash-object", "-w", "plugins/sage-codex/nested/sample.txt");
+  f.git("replace", original, replacement);
+  assert.equal(f.git("cat-file", "blob", original), "replacement bytes", "negative control proves replacement is active");
+  const before = f.snapshot(), result = f.run(undefined, { env: { ...f.env, GIT_NO_REPLACE_OBJECTS: "0" } });
+  assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).counts.matched, 1);
+  assert.deepEqual(f.snapshot(), before);
+});
+
+test("T51 verify-install repair: malformed tree paths and duplicate entries cannot report a match", t => {
+  const f = installFixture(t), blob = f.git("rev-parse", "HEAD:plugins/sage-codex/nested/sample.txt");
+  const inputGit = (input, ...args) => {
+    const r = spawnSync("git", ["-C", f.project, ...args], { input, encoding: "utf8", env: f.env });
+    assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
+  };
+  for (const names of [["../outside"], ["sample.txt", "sample.txt"]]) {
+    const bytes = Buffer.concat(names.map(name => Buffer.concat([Buffer.from(`100644 ${name}\0`), Buffer.from(blob, "hex")])));
+    const malformed = inputGit(bytes, "hash-object", "-t", "tree", "--literally", "-w", "--stdin");
+    const plugins = inputGit(`040000 tree ${malformed}\tsage-codex\n`, "mktree");
+    const root = inputGit(`040000 tree ${plugins}\tplugins\n`, "mktree");
+    const commit = f.git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", root, "-m", "malformed");
+    const before = f.snapshot(), result = f.run(["--commit", commit, "--project", f.project]);
+    assert.equal(result.status, 1, result.stdout);
+    assert.equal(JSON.parse(result.stdout).result, "different");
+    assert.deepEqual(JSON.parse(result.stdout).errors, [names[0]]);
+    assert.deepEqual(f.snapshot(), before);
+  }
+});
+
+for (const objectKind of ["tag", "tree", "commit", "blob"]) {
+  test(`T51 verify-install round2: actual ${objectKind} type controls regular-file acceptance`, t => {
+    const f = installFixture(t), blob = f.git("rev-parse", "HEAD:plugins/sage-codex/nested/sample.txt");
+    f.git("-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "blob-tag", blob, "-m", "blob tag");
+    const oid = { tag: f.git("rev-parse", "blob-tag"), tree: f.git("rev-parse", "HEAD^{tree}"), commit: f.sha, blob }[objectKind];
+    const inputGit = (input, ...args) => {
+      const r = spawnSync("git", ["-C", f.project, ...args], { input, encoding: "utf8", env: f.env });
+      assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
+    };
+    assert.equal(f.git("cat-file", "-t", oid), objectKind);
+    if (objectKind === "tag") assert.equal(f.git("cat-file", "blob", oid), "sample expected bytes", "typed cat-file dereferences tags");
+    const raw = Buffer.concat([Buffer.from("100644 sample.txt\0"), Buffer.from(oid, "hex")]);
+    const nested = inputGit(raw, "hash-object", "-t", "tree", "--literally", "-w", "--stdin");
+    const pkg = inputGit(`040000 tree ${nested}\tnested\n`, "mktree");
+    const plugins = inputGit(`040000 tree ${pkg}\tsage-codex\n`, "mktree");
+    const root = inputGit(`040000 tree ${plugins}\tplugins\n`, "mktree");
+    const commit = f.git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", root, "-m", "object type fixture");
+    const before = f.snapshot(), r = f.run(["--commit", commit, "--project", f.project]);
+    assert.equal(r.status, objectKind === "blob" ? 0 : 1, r.stdout + r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert.equal(result.result, objectKind === "blob" ? "match" : "different");
+    assert.equal(result.counts.matched, objectKind === "blob" ? 1 : 0);
+    assert.deepEqual(result.errors, objectKind === "blob" ? [] : ["nested/sample.txt"]);
+    assert.deepEqual(f.snapshot(), before);
+  });
+}
+
+for (const pathKind of ["relative", "empty", "absolute", "symlink"]) {
+  for (const caller of ["CLI", "gate"]) {
+    test(`T51 verify-install round2: ${caller} ignores ${pathKind} project Git on PATH`, t => {
+      const f = installFixture(t), cwd = join(f.project, "tools"), marker = join(f.dir, "git-called");
+      mkdirSync(cwd);
+      const planted = join(cwd, "git"), target = join(f.project, "marker-git");
+      writeFileSync(pathKind === "symlink" ? target : planted,
+        `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called'); process.exit(1);\n`, { mode: 0o755 });
+      if (pathKind === "symlink") symlinkSync(target, planted);
+      const prefix = { relative: ".", empty: "", absolute: cwd, symlink: cwd }[pathKind];
+      const env = { ...f.env, PATH: `${prefix}:${f.env.PATH}` };
+      f.mode({ sage: true, autopilot: false });
+      const actor = f.child("/root/sage_qa_t1_r1");
+      const before = f.snapshot();
+      if (caller === "CLI") {
+        const r = f.run(undefined, { cwd, env });
+        assert.equal(existsSync(marker), false, "the project Git must never execute");
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(JSON.parse(r.stdout).result, "match");
+      } else {
+        const command = `'${process.execPath}' '${TOOL}' verify-install --commit ${f.sha} --project '${f.project}'`;
+        const input = pre("Bash", command, { ...actor, cwd: f.project, tool_input: { command, workdir: cwd } });
+        const r = spawnSync(process.execPath, [HOOK], { cwd, env, input: JSON.stringify(input), encoding: "utf8" });
+        assert.equal(existsSync(marker), false, "gate identity must never execute the project Git");
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(r.stdout, "", "the legitimate assigned project remains allowed");
+        input.tool_input.command = command.replace(`--project '${f.project}'`, `--project '${f.dir}'`);
+        const rejected = spawnSync(process.execPath, [HOOK], { cwd, env, input: JSON.stringify(input), encoding: "utf8" });
+        assert.equal(rejected.status, 0, rejected.stderr);
+        assert.match(denied(JSON.parse(rejected.stdout)), /assigned absolute project/);
+        assert.equal(existsSync(marker), false);
+      }
+      assert.deepEqual(f.snapshot(), before);
+    });
+  }
+}
+
+for (const scenario of ["missing", "project alias", "writable executable", "writable parent", "unowned parent", "non-executable", "trusted alias"]) {
+  test(`T51 verify-install round2: system Git discovery handles ${scenario}`, t => {
+    const f = installFixture(t), marker = join(f.dir, "git-called"), planted = join(f.dir, "bin/git");
+    writeFileSync(planted, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called');\n`, { mode: 0o755 });
+    const alias = join(f.dir, "git-alias");
+    const systemGit = process.platform === "darwin" ? "/Library/Developer/CommandLineTools/usr/bin/git" : "/usr/bin/git";
+    symlinkSync(scenario === "project alias" ? planted : systemGit, alias);
+    // Simulate system discovery without changing system files. Execute the real reader and real Git for the positive case.
+    const script = `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { readLocalGit } from ${JSON.stringify(new URL("../plugins/sage-codex/core/local-git.mjs", import.meta.url).href)};
+      const scenario = ${JSON.stringify(scenario)}, realpath = fs.realpathSync, lstat = fs.lstatSync;
+      const resolved = realpath(${JSON.stringify(alias)});
+      fs.realpathSync = () => { if (scenario === 'missing') throw Error('missing system Git'); return resolved; };
+      fs.lstatSync = path => {
+        const stat = lstat(path);
+        if (scenario === 'writable executable' && path === resolved) stat.mode |= 0o020;
+        if (scenario === 'writable parent' && path !== resolved) stat.mode |= 0o020;
+        if (scenario === 'unowned parent' && path !== resolved) stat.uid = 12345;
+        if (scenario === 'non-executable' && path === resolved) stat.mode &= ~0o111;
+        return stat;
+      };
+      syncBuiltinESMExports();
+      try { process.stdout.write(readLocalGit(${JSON.stringify(f.project)}, ['rev-parse', '--show-toplevel'])); }
+      catch (error) { process.stderr.write(error.message); process.exitCode = 1; }
+    `;
+    const before = f.snapshot(), r = spawnSync(process.execPath, ["--input-type=module", "-e", script], { env: f.env, encoding: "utf8" });
+    assert.equal(existsSync(marker), false, "no fallback to PATH or an unsafe resolved alias");
+    if (scenario === "trusted alias") {
+      assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, f.project + "\n");
+    } else {
+      assert.equal(r.status, 1, r.stdout); assert.equal(r.stderr, "no trusted system Git executable is available");
+    }
+    assert.deepEqual(f.snapshot(), before);
+  });
+}

@@ -56,6 +56,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { fileURLToPath } from "node:url";
 import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, shellCommands, switchModes } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
+import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
 import { modeDirectory } from "./sage-codex-hook.mjs";
@@ -391,11 +392,18 @@ const STATE_SCRIPT = /(?:^|\/)(?:skills\/sage\/sage\.mjs|mcp\/state-server\.mjs)
 // This grammar admits no shell operation or expansion. The existing reader then removes the quotes.
 const LITERAL_WORD = /(?:[A-Za-z0-9_./,:=+-]|'[^'\r\n]*'|"[^"$`\\\r\n]*")+/;
 const LITERAL_COMMAND = new RegExp(`^[ \\t]*${LITERAL_WORD.source}(?:[ \\t]+${LITERAL_WORD.source})*[ \\t]*$`);
+function namesVerification(command, cwd, env) {
+  try {
+    return programsRun(command, cwd, env.PATH ?? "").some(run => (run.args.includes("verify-install") || run.args.includes("--commit"))
+      && ([run.word, ...run.args].some(word => STATE_SCRIPT.test(word) || real(resolve(run.dir ?? cwd, word)) === real(TOOL))
+        || /sage\.mjs/.test(command)));
+  } catch { return /sage\.mjs/.test(command) && /(?:^|\s)['"]?verify-install(?:['"]?(?:\s|$))/.test(command); }
+}
 /**
  * The new reads use one literal invocation of this provider's CLI. Codex's hook cwd supplies project authority;
  * neither the shell's cd/workdir nor --project grants it. Core verifies linked worktrees against their main checkout.
  */
-function scopedStateRead(command, cwd, env) {
+function scopedStateRead(command, cwd, env, verification = false) {
   if (!LITERAL_COMMAND.test(command)) return false;
   try {
     const commands = shellCommands(command);
@@ -403,12 +411,12 @@ function scopedStateRead(command, cwd, env) {
     const [{ words, bodies, grouped }] = commands;
     if (bodies.length || grouped || !/^(?:node|nodejs)$/.test(programName(words[0] ?? ""))) return false;
     const [, script, ...args] = words;
+    const project = verification ? verificationOptions(args)?.project : tool.roleReadProject(args);
+    if (!project || (args[0] === "board" && env.SAGE_BOARD_ROOTS)) return false;
     if (!isAbsolute(words[0]) || !isAbsolute(script ?? "") || real(script) !== real(TOOL)) return false;
     const evidence = programsRun(command, cwd, env.PATH ?? "", { contextEvidence: true });
     if (evidence.redirects.length || evidence.programs.length !== 1 || evidence.programs[0].wrapper) return false;
     if (real(evidence.programs[0].run.file) !== real(process.execPath)) return false;
-    const project = tool.roleReadProject(args);
-    if (!project || (args[0] === "board" && env.SAGE_BOARD_ROOTS)) return false;
     const assigned = real(tool.projectRoot(cwd)), requested = real(tool.projectRoot(project));
     return assigned !== undefined && requested === assigned;
   } catch { return false; }
@@ -580,6 +588,11 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     && (/\b(?:resume|fork|queue)\b/i.test(f.command) || (thread.child && underSage(thread) !== false && mode(f, env).sage))) return deny(UNREAD_CODEX);
   if (runs?.some((args) => !printsOnly(args))) return deny(CODEX_RUN);
   if (codexShellWrite(f.command, f.cwd, env)) return deny(CODEX_FOLDER);
+  // The dedicated package read grants no general shell or protected-write exception, in any mode or role.
+  if (namesVerification(f.command, f.cwd, env)) {
+    if ((!thread.child || thread.codex || thread.parts?.length) && scopedStateRead(f.command, f.cwd, env, true)) return undefined;
+    return refuse(thread, "sage: verify-install requires one trusted literal CLI command, a full commit SHA and the assigned absolute project");
+  }
   if (thread.child) {
     const knownThread = thread.codex || thread.parts?.length;
     if (stateToolWrites(f.command, f.cwd, env) && !(knownThread && scopedStateRead(f.command, f.cwd, env))) return refuse(thread, CHILD_LOGBOOK);

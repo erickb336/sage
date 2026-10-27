@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createStateTool } from "sage-core";
+import { verifyInstall } from "./verify-install.mjs";
 
 // Codex inherits the selected model. Its logbook is separate unless SAGE_HOME is explicit.
 export const tool = createStateTool({ usageInterfaces: [
@@ -16,4 +17,12 @@ try {
 } catch {
   // Imports from stdin or virtual entry points have no filesystem entry path.
 }
-if (entryPath === fileURLToPath(import.meta.url)) tool.runCli();
+if (entryPath === fileURLToPath(import.meta.url)) {
+  if (process.argv[2] === "verify-install") {
+    try {
+      const result = verifyInstall(process.argv.slice(2), tool.projectRoot);
+      console.log(JSON.stringify(result, null, 2));
+      process.exitCode = result.result === "match" ? 0 : 1;
+    } catch (error) { console.error(`sage: ${error.message}`); process.exitCode = 1; }
+  } else tool.runCli();
+}

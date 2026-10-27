@@ -18,6 +18,24 @@ Write the logbook only through the plugin's `sage` MCP tools. Codex starts that 
 
 A role agent may also run `task T7`, `config`, and `board T7 --view task` with an explicit absolute `--project` path. The project must match Codex's hook context; a verified linked worktree counts as that project. Use one literal `<absolute Node path> <absolute plugin CLI path> ...` command. Both paths must resolve to the hook's Node executable and this provider's CLI. Do not use a wrapper, expansion, redirection or chained command. These reads create no logbook files, take no lock and save no board selection. A task board reads only that project's logbook from this provider. Its project check does not replace the chief's global merge check. A role's task board remains refused when `SAGE_BOARD_ROOTS` selects configured board sources. State writes remain chief-only.
 
+## Verify installed package files
+
+The chief or an assigned role can compare this CLI's installed package with a commit in the assigned project. Use the same literal executable and project rules above:
+
+```sh
+/absolute/node /absolute/installed-plugin/skills/sage/sage.mjs verify-install --commit 5bd365d8aced377c3caf1a17e2e822e806bb6bfc --project /absolute/assigned-project
+```
+
+Replace the example paths and full 40-character commit with inspected values. The command derives the installed folder from its own location. It accepts no `--root` or other installation path. A verified linked worktree counts as the assigned project.
+
+Project identity and verification use a trusted system Git, independently of `PATH` and the command's working directory. On macOS, they try `/Library/Developer/CommandLineTools/usr/bin/git`, then `/Applications/Xcode.app/Contents/Developer/usr/bin/git`. They do not use the environment-sensitive `/usr/bin/git` launcher. On Linux, they try `/usr/bin/git`, then `/bin/git`. After resolving links, the executable and every parent must belong to root and forbid group and other writes. The executable must be a regular executable file. Other platforms and custom Git locations are unsupported; verification fails if no trusted candidate exists. A caller cannot select another executable.
+
+Each regular-file tree entry must reference an actual blob object. A tag that points to matching bytes cannot count as a matching file.
+
+The JSON output gives the reference commit, tracked and matched counts, and relative missing, changed or error paths. It prints no file contents. Exit 0 means every tracked file matches; exit 1 means a difference, unsafe file or refused input. Links, special files and unreadable files cannot match. Extra installed files are outside the comparison. This verifies tracked package files, not runtime trust or release readiness. The command writes no logbook, registry, lock, selection or installation files.
+
+## Logbook command reference
+
 | Tool | Command | Fields besides `project` |
 | --- | --- | --- |
 | `init`, `status` | `init`, `status` | none |
