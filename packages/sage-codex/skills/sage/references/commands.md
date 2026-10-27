@@ -18,6 +18,20 @@ Write the logbook only through the plugin's `sage` MCP tools. Codex starts that 
 
 A role agent may also run `task T7`, `config`, and `board T7 --view task` with an explicit absolute `--project` path. The project must match Codex's hook context; a verified linked worktree counts as that project. Use one literal `<absolute Node path> <absolute plugin CLI path> ...` command. Both paths must resolve to the hook's Node executable and this provider's CLI. Do not use a wrapper, expansion, redirection or chained command. These reads create no logbook files, take no lock and save no board selection. A task board reads only that project's logbook from this provider. Its project check does not replace the chief's global merge check. A role's task board remains refused when `SAGE_BOARD_ROOTS` selects configured board sources. State writes remain chief-only.
 
+## Verify installed package files
+
+The chief or an assigned role can compare this CLI's installed package with a commit in the assigned project. Use the same literal executable and project rules above:
+
+```sh
+/absolute/node /absolute/installed-plugin/skills/sage/sage.mjs verify-install --commit 5bd365d8aced377c3caf1a17e2e822e806bb6bfc --project /absolute/assigned-project
+```
+
+Replace the example paths and full 40-character commit with inspected values. The command derives the installed folder from its own location. It accepts no `--root` or other installation path. A verified linked worktree counts as the assigned project.
+
+The JSON output gives the reference commit, tracked and matched counts, and relative missing, changed or error paths. It prints no file contents. Exit 0 means every tracked file matches; exit 1 means a difference, unsafe file or refused input. Links, special files and unreadable files cannot match. Extra installed files are outside the comparison. This verifies tracked package files, not runtime trust or release readiness. The command writes no logbook, registry, lock, selection or installation files.
+
+## Logbook command reference
+
 | Tool | Command | Fields besides `project` |
 | --- | --- | --- |
 | `init`, `status` | `init`, `status` | none |
