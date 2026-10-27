@@ -80,7 +80,7 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     return undefined;
   }
 
-  const CANNOT = `the hook cannot prove that this command is only the merge command, so it refuses it. Merge only with ${MERGE_FORM}, as a command of its own: not through the GitHub API, a variable, a script or another program. Merge text may stand only in the text of echo, printf, cat, grep, git commit, gh pr create, comment, view or edit, or the state tool, and not piped on or written to a file that a later command could run.`;
+  const CANNOT = `the hook cannot prove that this command is only the merge command, so it refuses it. Merge only with ${MERGE_FORM}, as a command of its own: not through the GitHub API, a variable, a script or another program. Merge text may stand only in the text of echo, printf, cat, grep, rg, git grep, git [-C <dir>] commit, gh pr create, comment, view or edit, or the state tool, and not piped on or written to a file that a later command could run.`;
 
   /**
    * The merge in a Bash command, by an allow-list. Undefined when the command names no merge outside harmless text.
@@ -125,9 +125,14 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     return { pr, sha: shas[0] };
   }
 
+  /** The number of leading words that run, when the rest of a command's words are only text, else 0. A search runs
+   * nothing that it names: not rg without --pre, and not git grep without -O (its pager). */
   function harmless([a, b, c, ...rest]) {
-    if (a === "echo" || a === "cat" || a === "grep" || (a === "printf" && ![b, c, ...rest].some((w) => w?.startsWith("-v")))) return 1;
-    if ((a === "git" && b === "commit") || (a === "node" && stateToolPath !== undefined && b === stateToolPath)) return 2;
+    const words = [b, c, ...rest];
+    if (a === "echo" || a === "cat" || a === "grep" || (a === "printf" && !words.some((w) => w?.startsWith("-v")))) return 1;
+    if (a === "rg" && !words.some((w) => /^--pre\b/.test(w ?? ""))) return 1;
+    if (a === "git" && b === "-C" && rest[0] === "commit") return 4;
+    if ((a === "git" && b === "grep" && !words.some((w) => /^(?:-O|--open-files-in-pager\b)/.test(w ?? ""))) || (a === "git" && b === "commit") || (a === "node" && stateToolPath !== undefined && b === stateToolPath)) return 2;
     return a === "gh" && b === "pr" && /^(?:create|comment|view|edit)$/.test(c ?? "") ? 3 : 0;
   }
   /** The commands that may end a pipe after a harmless command: they only cut, count or sort its text. */
