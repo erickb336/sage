@@ -7,6 +7,9 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStateTool } from "../packages/sage-core/index.mjs";
+import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
+import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
+import { landingRule } from "../packages/sage-core/board-view.mjs";
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-view-")), root = join(dir, "logbooks");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -136,3 +139,29 @@ test("T49 repair: damaged unrelated state cannot influence task landing; global 
   assert.equal(global.ok, false);
   assert.ok(global.reason.includes(otherBook), global.reason);
 });
+
+for (const autopilot of [false, true]) for (const globalState of ["unavailable", "refused"]) {
+  test(`T49 round 2: passing project check is not merge approval; autopilot ${autopilot}, global ${globalState}`, t => {
+    const { root, run, tool, env, sha, book, otherBook } = scopedFixture(t);
+    const ledger = join(root, book, "ledger.tsv");
+    writeFileSync(ledger, readFileSync(ledger, "utf8") + ["review-clean", "qa-pass"].map(kind => `T1\t41\t${sha}\t${kind}\t1\t\t2026-10-26T00:00:00Z\n`).join(""));
+    assert.equal(tool.boardLandingCheck(sha, env, book, "41").ok, true, "the real project check passes");
+    if (globalState === "refused") {
+      writeFileSync(join(root, otherBook, "tasks.tsv"), "damaged unrelated state\n");
+      assert.equal(tool.mergeCheck(sha, env, { pr: "41", readOnly: true }).ok, false);
+    }
+    const sources = [{ id: "current", path: root }], logbookKey = `current/${book}`;
+    const snapshots = readBoardSources(sources, { logbookKey });
+    snapshots[0].projects[0].observations.records.push({ id: "O1", task: "T1", kind: "mode", basis: "observed", source: "sample", observedAt: "2026-10-26T00:00:00Z", recordedAt: "2026-10-26T00:00:00Z", data: { autopilot } });
+    const before = snapshot(root);
+    // Only the project callback is available to this model. It must not infer a global result.
+    const card = buildBoardModel(snapshots, { now: "2026-10-26T00:01:00Z", landing: landingRule(sources, logbookKey) }).tasks[0];
+    assert.equal(card.column, "review");
+    assert.equal(card.projectCheck.ok, true);
+    assert.equal(card.mergeCheck.ok, false);
+    assert.match(card.loop.now.text, /project check passes.*global merge check is not checked/i);
+    assert.doesNotMatch(JSON.stringify(card.loop), /Autopilot merges|review and merge/);
+    assert.match(run("board", "T1", "--view", "task"), /project check passes/i);
+    assert.deepEqual(snapshot(root), before);
+  });
+}

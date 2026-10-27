@@ -660,6 +660,47 @@ for (const args of ["task T1", "board T1 --view task", "config"]) {
   });
 }
 
+for (const position of ["interpreter", "script", "project"]) {
+  test(`T49 round 2: ${position} shell expansions cannot replace checked paths`, t => {
+    const w = world(t), child = w.child("/root/sage_implementer_t1_r1");
+    const targets = { interpreter: process.execPath, script: TOOL, project: w.project };
+    const paths = { interpreter: "node", script: "skills/sage/sage.mjs", project: "project" };
+    for (const syntax of ["[x]", "*", "?", "{x,y}", "$NAME", "${NAME}", "$(printf x)", "`printf x`", "$((1+1))", "<(printf x)", "~user", "!(y)"]) {
+      const folder = join(w.dir, `alias-${syntax}`), path = join(folder, paths[position]);
+      mkdirSync(join(path, ".."), { recursive: true });
+      symlinkSync(targets[position], path);
+      if (syntax === "[x]") {
+        const expanded = join(w.dir, "alias-x", paths[position]);
+        mkdirSync(join(expanded, ".."), { recursive: true });
+        if (position === "project") mkdirSync(expanded);
+        else writeFileSync(expanded, "sample substituted file\n");
+        const result = spawnSync("/bin/sh", ["-c", `printf '%s\\n' ${path}`], { encoding: "utf8", env: w.env });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout.trim(), expanded, "the shell selects a different fixture path");
+      }
+      const words = [`'${process.execPath}'`, `'${TOOL}'`, "task", "T1", "--project", `'${w.project}'`];
+      words[{ interpreter: 0, script: 1, project: 5 }[position]] = path;
+      for (const sage of [false, true]) {
+        w.mode({ sage, autopilot: false });
+        assert.ok(denied(w.send(pre("Bash", words.join(" "), child))), `${position}: ${syntax}`);
+      }
+    }
+  });
+}
+
+test("T49 round 2: quoted literal path characters retain trusted identity", t => {
+  const w = world(t), child = w.child("/root/sage_implementer_t1_r1");
+  assert.equal(w.send(pre("Bash", `${process.execPath} ${TOOL} task T1 --project ${w.project}`, child)), undefined, "plain literal paths work without quotes");
+  const folder = join(w.dir, "literal [x] {a,b} space"); mkdirSync(folder);
+  const node = join(folder, "node"), script = join(folder, "skills/sage/sage.mjs"), project = join(folder, "project");
+  mkdirSync(join(folder, "skills/sage"), { recursive: true });
+  symlinkSync(process.execPath, node); symlinkSync(TOOL, script); symlinkSync(w.project, project);
+  for (const quote of ["'", '"']) {
+    const q = word => `${quote}${word}${quote}`;
+    assert.equal(w.send(pre("Bash", `${q(node)} ${q(script)} task T1 --project=${q(project)}`, child)), undefined);
+  }
+});
+
 for (const executable of ["script", "interpreter"]) {
   test(`T49 repair: a relative ${executable} cannot substitute another executable through workdir`, t => {
     const w = world(t), child = w.child("/root/sage_implementer_t1_r1");

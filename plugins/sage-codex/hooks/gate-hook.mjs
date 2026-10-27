@@ -387,12 +387,16 @@ const runsPatch = (command, cwd, env) => { try { return programsRun(command, cwd
 const STATE_READS = new Map([["status", null], ["merge-check", null], ["logbook", "repair"], ["standing", "add"], ["pages", "record"]]);
 const readsOnly = ([command, ...rest]) => STATE_READS.has(command) && !rest.includes(STATE_READS.get(command));
 const STATE_SCRIPT = /(?:^|\/)(?:skills\/sage\/sage\.mjs|mcp\/state-server\.mjs)$/;
+// A command word is made only from plain path/option characters or fully literal quoted parts.
+// This grammar admits no shell operation or expansion. The existing reader then removes the quotes.
+const LITERAL_WORD = /(?:[A-Za-z0-9_./,:=+-]|'[^'\r\n]*'|"[^"$`\\\r\n]*")+/;
+const LITERAL_COMMAND = new RegExp(`^[ \\t]*${LITERAL_WORD.source}(?:[ \\t]+${LITERAL_WORD.source})*[ \\t]*$`);
 /**
  * The new reads use one literal invocation of this provider's CLI. Codex's hook cwd supplies project authority;
  * neither the shell's cd/workdir nor --project grants it. Core verifies linked worktrees against their main checkout.
  */
 function scopedStateRead(command, cwd, env) {
-  if (/[$`\\\n\r;&|<>(){}*?~]/.test(command)) return false;
+  if (!LITERAL_COMMAND.test(command)) return false;
   try {
     const commands = shellCommands(command);
     if (commands.length !== 1) return false;
