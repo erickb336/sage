@@ -654,8 +654,28 @@ for (const args of ["task T1", "board T1 --view task", "config"]) {
     const child = w.child("/root/sage_implementer_t1_r1");
     for (const sage of [false, true]) {
       w.mode({ sage, autopilot: false });
-      assert.equal(w.send(pre("Bash", `node '${TOOL}' ${args} --project '${w.project}'`, child)), undefined);
-      assert.equal(denied(w.send(pre("Bash", `node '${TOOL}' task T1 set state=verified --project '${w.project}'`, child))), LOGBOOK);
+      assert.equal(w.send(pre("Bash", `'${process.execPath}' '${TOOL}' ${args} --project '${w.project}'`, child)), undefined);
+      assert.equal(denied(w.send(pre("Bash", `'${process.execPath}' '${TOOL}' task T1 set state=verified --project '${w.project}'`, child))), LOGBOOK);
+    }
+  });
+}
+
+for (const executable of ["script", "interpreter"]) {
+  test(`T49 repair: a relative ${executable} cannot substitute another executable through workdir`, t => {
+    const w = world(t), child = w.child("/root/sage_implementer_t1_r1");
+    const other = join(w.dir, "other"); mkdirSync(other);
+    symlinkSync(TOOL, join(w.project, "cli"));
+    symlinkSync(TOOL.replace("sage-codex/", "sage/"), join(other, "cli"));
+    symlinkSync(process.execPath, join(w.project, "node"));
+    writeFileSync(join(other, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const command = executable === "script" ? `'${process.execPath}' cli task T1 --project '${w.project}'`
+      : `./node '${TOOL}' task T1 --project '${w.project}'`;
+    for (const sage of [false, true]) {
+      w.mode({ sage, autopilot: false });
+      const input = pre("Bash", command, child); input.tool_input.workdir = other;
+      assert.equal(denied(w.send(input)), LOGBOOK);
+      input.tool_input.command = `'${process.execPath}' '${TOOL}' task T1 --project '${w.project}'`;
+      assert.equal(w.send(input), undefined, "absolute trusted executables retain assigned project authority");
     }
   });
 }
@@ -688,7 +708,7 @@ test("T49: scoped reads reject writes, other projects and providers, and ambiguo
   const w = world(t), child = w.child("/root/sage_implementer_t1_r1");
   const other = join(w.dir, "other");
   mkdirSync(other);
-  const cli = `node '${TOOL}'`, project = `--project '${w.project}'`;
+  const cli = `'${process.execPath}' '${TOOL}'`, project = `--project '${w.project}'`;
   const read = `${cli} task T1 ${project}`;
   const commands = [
     `${cli} task T1 set state=verified ${project}`, `${cli} task add --title x --size small ${project}`,
@@ -726,12 +746,12 @@ test("T49: verified linked worktrees and symlinks keep the assigned project auth
   assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-q", "-b", "feature", linked]).status, 0);
   symlinkSync(w.project, alias);
   for (const project of [linked, alias, `${w.project}/../project`]) {
-    assert.equal(w.send(pre("Bash", `node '${TOOL}' task T1 --project '${project}'`, child)), undefined, project);
+    assert.equal(w.send(pre("Bash", `'${process.execPath}' '${TOOL}' task T1 --project '${project}'`, child)), undefined, project);
   }
   const forged = join(w.dir, "forged");
   mkdirSync(forged);
   writeFileSync(join(forged, ".git"), `gitdir: ${w.project}/.git/worktrees/linked\n`);
-  assert.equal(denied(w.send(pre("Bash", `node '${TOOL}' task T1 --project '${forged}'`, child))), LOGBOOK);
+  assert.equal(denied(w.send(pre("Bash", `'${process.execPath}' '${TOOL}' task T1 --project '${forged}'`, child))), LOGBOOK);
 });
 
 test("T49: a task board selects its exact logbook, including through a worktree", (t) => {

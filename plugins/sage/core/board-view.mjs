@@ -9,12 +9,14 @@ import { createStateTool } from "./state.mjs";
  * the state tool's own merge check, read-only, on that source's root, so the board never has a second copy of the rule.
  * The root's path leaves the reason: a remote board page shows it.
  */
-export function landingRule(sources) {
-  const { mergeCheck } = createStateTool({ defaultRoot: () => { throw new Error("the board names each root"); } });
+export function landingRule(sources, logbookKey = null) {
+  const { mergeCheck, boardLandingCheck } = createStateTool({ defaultRoot: () => { throw new Error("the board names each root"); } });
   const roots = new Map(sources.map(source => [source.id, source.path]));
   return (id, sha, pr) => {
-    const root = roots.get(id), result = mergeCheck(sha, { SAGE_HOME: root }, { pr, readOnly: true });
-    return { ok: result.ok, reason: result.reason.split(`${root}${sep}`).join("") };
+    const root = roots.get(id), result = logbookKey === null
+      ? mergeCheck(sha, { SAGE_HOME: root }, { pr, readOnly: true })
+      : boardLandingCheck(sha, { SAGE_HOME: root }, logbookKey.slice(id.length + 1), pr);
+    return { ok: result.ok, scope: logbookKey === null ? "all" : "project", reason: result.reason.split(`${root}${sep}`).join("") };
   };
 }
 
@@ -22,7 +24,7 @@ const fold = value => String(value).normalize("NFC").toLowerCase();
 export function boardView({ sources, scope = "all", project = null, logbookKey = null, taskId = null, format = "chat", now = new Date().toISOString() }) {
   if (!["chat", "task", "status", "html"].includes(format)) throw new TypeError("unknown board format");
   if (taskId !== null && !/^T[1-9]\d*$/.test(taskId)) throw new TypeError("task id must be T followed by a positive number");
-  const snapshots = readBoardSources(sources, { now: Date.parse(now) });
+  const snapshots = readBoardSources(sources, { now: Date.parse(now), logbookKey });
   const projects = snapshots.flatMap(source => source.projects);
   let keys = new Set(projects.map(book => book.key));
   // An exact logbook key (source/folder) chooses that one logbook. Any other scope chooses projects as the board shows them:
@@ -46,7 +48,7 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
     if (!selected.length || scope !== "this" && selected.length !== 1) throw new RangeError(selected.length ? `The project is ambiguous. Choose: ${selected.flatMap(group => group.books).join(", ")}` : "No recorded project matches this board scope.");
     keys = new Set(selected.flatMap(group => group.books));
   }
-  const model = buildBoardModel(snapshots.map(source => ({ ...source, projects: source.projects.filter(book => keys.has(book.key)) })), { now, landing: landingRule(sources) });
+  const model = buildBoardModel(snapshots.map(source => ({ ...source, projects: source.projects.filter(book => keys.has(book.key)) })), { now, landing: landingRule(sources, logbookKey) });
   if (taskId) {
     const tasks = model.tasks.filter(task => task.id === taskId);
     if (tasks.length !== 1) {

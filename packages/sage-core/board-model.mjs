@@ -325,10 +325,11 @@ function card(source, project, group, task, now, graph, landing) {
   // PR's head branch on GitHub, so that part of the rule stays unchecked also when the check passes.
   const verified = ["verified", "pr-ready"].includes(task.state) && build;
   const checked = verified && head && landing ? landing(source.id, head, task.pr) : null;
+  const checkName = checked?.scope === "project" ? "The project check" : "The merge check";
   const merge = !verified ? null : !head ? { ok: false, text: `The merge check is not checked, because the board does not know ${task.pr ? `the last commit of PR ${task.pr}` : "the task's PR"}.` }
     : !checked ? { ok: false, text: `The merge check is not checked on ${head.slice(0, 7)}, because this board cannot run it.` }
-    : checked.ok ? { ok: true, text: `The merge check passes on ${head.slice(0, 7)}. The board does not check the PR's head branch.` }
-    : { ok: false, text: `The merge check refuses ${head.slice(0, 7)}. ${cap(checked.reason.split(/\.(?:\s|$)/)[0])}.` };
+    : checked.ok ? { ok: true, text: `${checkName} passes on ${head.slice(0, 7)}. ${checked.scope === "project" ? "The global merge check is not checked. " : ""}The board does not check the PR's head branch.` }
+    : { ok: false, text: `${checkName} refuses ${head.slice(0, 7)}. ${cap(checked.reason.split(/\.(?:\s|$)/)[0])}.` };
   if (merge && !merge.ok) reasons.push({ kind: "merge-check", text: merge.text });
   else if (merge && mode?.data.autopilot !== true) {
     const what = task.pr ? `review and merge PR ${task.pr}` : "review and merge it";

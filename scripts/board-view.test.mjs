@@ -2,7 +2,8 @@ import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import fs, { writeFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStateTool } from "../packages/sage-core/index.mjs";
@@ -94,4 +95,44 @@ test("task transitions record their actual time for board detail without a board
   const shown = run("board", "T1", "--view", "task");
   assert.ok(shown.includes("state abandoned"));
   assert.deepEqual(snapshot(root), before);
+});
+
+function scopedFixture(t) {
+  const f = fixture(t), tool = createStateTool({ defaultRoot: () => f.root });
+  const book = readdirSync(f.root).find(name => /-[0-9a-f]{6}$/.test(name));
+  const taskFile = join(f.root, book, "tasks.tsv");
+  const [header, line] = readFileSync(taskFile, "utf8").split("\n");
+  const columns = header.split("\t"), task = line.split("\t");
+  task[columns.indexOf("state")] = "verified"; task[columns.indexOf("pr")] = "41";
+  writeFileSync(taskFile, header + "\n" + task.join("\t") + "\n");
+  const sha = "a".repeat(40), ledger = join(f.root, book, "ledger.tsv");
+  writeFileSync(ledger, readFileSync(ledger, "utf8") + `T1\t41\t${sha}\tchecks-pass\t\t\t2026-10-26T00:00:00Z\n`);
+  const other = join(f.dir, "unrelated"); mkdirSync(other);
+  const env = { ...process.env, SAGE_HOME: f.root };
+  tool.sage(["init", "--project", other], env);
+  const otherBook = readdirSync(f.root).find(name => name.startsWith("unrelated-"));
+  return { ...f, tool, env, sha, book, otherBook };
+}
+
+test("T49 repair: a scoped task board opens only its assigned logbook", t => {
+  const { root, run, book, otherBook } = scopedFixture(t), opened = [];
+  const open = fs.openSync;
+  t.mock.method(fs, "openSync", (...args) => { opened.push(String(args[0])); return open(...args); });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const shown = run("board", "T1", "--view", "task");
+  assert.match(shown, /Sample task/);
+  assert.ok(opened.some(file => file === join(root, book, "tasks.tsv")), "the real assigned task was read");
+  assert.deepEqual(opened.filter(file => file.startsWith(join(root, otherBook) + "/")), [], "no unrelated logbook file was opened");
+});
+
+test("T49 repair: damaged unrelated state cannot influence task landing; global merge still refuses it", t => {
+  const { root, run, tool, env, sha, otherBook } = scopedFixture(t);
+  const before = run("board", "T1", "--view", "task");
+  assert.match(before, /project check refuses/i);
+  writeFileSync(join(root, otherBook, "tasks.tsv"), "damaged unrelated state\n");
+  assert.equal(run("board", "T1", "--view", "task"), before);
+  const global = tool.mergeCheck(sha, env, { pr: "41", readOnly: true });
+  assert.equal(global.ok, false);
+  assert.ok(global.reason.includes(otherBook), global.reason);
 });

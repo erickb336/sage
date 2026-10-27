@@ -399,7 +399,7 @@ function scopedStateRead(command, cwd, env) {
     const [{ words, bodies, grouped }] = commands;
     if (bodies.length || grouped || !/^(?:node|nodejs)$/.test(programName(words[0] ?? ""))) return false;
     const [, script, ...args] = words;
-    if (!script || real(resolve(cwd, script)) !== real(TOOL)) return false;
+    if (!isAbsolute(words[0]) || !isAbsolute(script ?? "") || real(script) !== real(TOOL)) return false;
     const evidence = programsRun(command, cwd, env.PATH ?? "", { contextEvidence: true });
     if (evidence.redirects.length || evidence.programs.length !== 1 || evidence.programs[0].wrapper) return false;
     if (real(evidence.programs[0].run.file) !== real(process.execPath)) return false;
