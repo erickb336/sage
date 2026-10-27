@@ -1443,6 +1443,22 @@ function parse(cmd, args) {
   return { pos, opt };
 }
 
+/** These exact CLI forms read without a lock, migration or saved board selection. */
+function scopedRead(cmd, pos, opt) {
+  if (Object.keys(opt).some(key => !["project", ...(cmd === "board" ? ["view"] : [])].includes(key))) return false;
+  if (cmd === "config") return pos.length === 0;
+  if (pos.length !== 1 || !TASK_ID.test(pos[0])) return false;
+  return cmd === "task" || (cmd === "board" && opt.view === "task");
+}
+
+/** Parse the role's read with the CLI grammar. The caller supplies project authority separately. */
+function roleReadProject([cmd, ...args]) {
+  try {
+    const { pos, opt } = parse(cmd, args);
+    return scopedRead(cmd, pos, opt) && typeof opt.project === "string" && isAbsolute(opt.project) ? opt.project : undefined;
+  } catch { return undefined; }
+}
+
 const need = (value, what) => value || refuse(`missing ${what}`);
 /** A word as a shell reads it: in single quotes when it holds anything but letters, digits and ._/-, so a pasted command does only what it says. */
 const shell = (word) => (/^[\w./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
@@ -2318,6 +2334,7 @@ function sage(argv, env = process.env) {
   const [cmd, ...rest] = argv;
   if (!COMMANDS.includes(cmd)) refuse(`unknown command "${cmd ?? ""}". Commands: ${COMMANDS.join(", ")}`);
   const { pos, opt } = parse(cmd, rest);
+  const readOnly = scopedRead(cmd, pos, opt);
   const root = sageRoot(env);
   if (cmd === "board" && opt.view !== undefined) {
     if (pos.length > 1 || opt.remember !== undefined) refuse("rich board takes one scope or task id and never remembers state");
@@ -2326,10 +2343,12 @@ function sage(argv, env = process.env) {
     try {
       if (env.SAGE_BOARD_ROOTS && Buffer.byteLength(env.SAGE_BOARD_ROOTS) > 65536) throw new Error("root configuration is too large");
       sources = env.SAGE_BOARD_ROOTS ? JSON.parse(env.SAGE_BOARD_ROOTS) : [{ id: "current", label: "Current provider", path: root }];
-      return boardView({ sources, scope, project: opt.project ?? env.PWD, taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view });
+      const project = opt.project ?? env.PWD;
+      const logbookKey = readOnly && !env.SAGE_BOARD_ROOTS && project ? `current/${basename(storeDir(project, env))}` : null;
+      return boardView({ sources, scope, project, logbookKey, taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view });
     } catch (error) { refuse(error.message); }
   }
-  if (statSync(root, { throwIfNoEntry: false })?.isDirectory() && ["projects.tsv", "projects.made"].every((f) => !lstatSync(join(root, f), { throwIfNoEntry: false }))) known(root); // the first command of this version lists today's logbooks
+  if (!readOnly && statSync(root, { throwIfNoEntry: false })?.isDirectory() && ["projects.tsv", "projects.made"].every((f) => !lstatSync(join(root, f), { throwIfNoEntry: false }))) known(root); // the first writing command of this version lists today's logbooks
   if (cmd === "projects") return pos.join(" ") === "rebuild" && opt["accept-listing"] === "yes" ? rebuild(root) : refuse(`projects takes only: ${REBUILD.slice(5)}. It lists each logbook folder that is in ${root} now as a known project, so that its verdicts count in the merge check. Run it only when the user asks for it, and show the user the folders that it prints.`);
   if (cmd === "merge-check") {
     const cycles = opt.cycles === undefined ? undefined : (typed("cycles.small", opt.cycles) ?? refuse("--cycles is a whole number from 1 to 10")); // the chief's explicit count: it only raises a task's own count
@@ -2380,7 +2399,7 @@ function sage(argv, env = process.env) {
     refuse(`no logbook for the project ${printed}. ${printed === project ? `Run: sage init --project ${shell(project)}` : "Its path has control characters, so no command is printed to paste. Rename the folder, or run sage init from inside it."}`);
   }
   // A read takes no lock: every file is replaced whole, so it sees the store before or after a change, never half of one.
-  if ((cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
+  if (readOnly || (cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
   const run = () =>
     withLock(dir, () => {
       if (cmd === "run" && pos[0] === "usage") {
@@ -3165,5 +3184,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

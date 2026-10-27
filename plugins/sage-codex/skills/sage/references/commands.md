@@ -16,6 +16,8 @@ Use a structured stdin API or safely written input file for arbitrary owner text
 
 Write the logbook only through the plugin's `sage` MCP tools. Codex starts that server outside the shell sandbox; under `workspace-write`, a write command of the CLI fails in a shell, because the logbook is not a writable folder there. The CLI still reads the logbook (`status`, `task T7`, `board`, `merge-check`).
 
+A role agent may also run `task T7`, `config`, and `board T7 --view task` with an explicit absolute `--project` path. The project must match Codex's hook context; a verified linked worktree counts as that project. Use one literal `node <plugin CLI path> ...` command, with the hook's Node executable and no wrapper, expansion, redirection or chained command. These reads create no logbook files, take no lock and save no board selection. A task board selects only that project's logbook from this provider. A role's task board remains refused when `SAGE_BOARD_ROOTS` selects configured board sources. State writes remain chief-only.
+
 | Tool | Command | Fields besides `project` |
 | --- | --- | --- |
 | `init`, `status` | `init`, `status` | none |

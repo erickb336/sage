@@ -1,7 +1,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -646,6 +646,110 @@ test("a child runs only the read commands of the state tool from the shell, and 
     }
     assert.equal(denied(w.send(pre("Bash", writes[0]))), undefined, "the chief may run the state tool");
   }
+});
+
+for (const args of ["task T1", "board T1 --view task", "config"]) {
+  test(`T49: a role reads ${args} for the hook's project`, (t) => {
+    const w = world(t);
+    const child = w.child("/root/sage_implementer_t1_r1");
+    for (const sage of [false, true]) {
+      w.mode({ sage, autopilot: false });
+      assert.equal(w.send(pre("Bash", `node '${TOOL}' ${args} --project '${w.project}'`, child)), undefined);
+      assert.equal(denied(w.send(pre("Bash", `node '${TOOL}' task T1 set state=verified --project '${w.project}'`, child))), LOGBOOK);
+    }
+  });
+}
+
+test("T49: task, config and board reads leave the fixture logbook unchanged", (t) => {
+  const w = world(t);
+  w.env.SAGE_TEST_PIDS = "{}";
+  assert.equal(w.sage("init").status, 0);
+  assert.equal(w.sage("task", "add", "--priority", "P2", "--title", "Scoped read sample", "--size", "small").status, 0);
+  // An older store has no registry. A read must not create it, rewrite status or take a lock.
+  for (const name of ["projects.tsv", "projects.made"]) rmSync(join(w.env.SAGE_HOME, name), { force: true });
+  const snapshot = () => readdirSync(w.env.SAGE_HOME, { recursive: true }).sort().map(name => {
+    const file = join(w.env.SAGE_HOME, name), stat = statSync(file);
+    return [name, stat.ino, stat.mtimeMs, stat.isFile() ? readFileSync(file, "utf8") : null];
+  });
+  const before = snapshot();
+  for (const [args, expected] of [
+    [["task", "T1"], /T1 framed · small · round 0/],
+    [["config"], /arena_models=inherit,inherit,inherit/],
+    [["board", "T1", "--view", "task"], /Scoped read sample/],
+  ]) {
+    const result = w.sage(...args);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, expected);
+    assert.deepEqual(snapshot(), before, args.join(" "));
+  }
+});
+
+test("T49: scoped reads reject writes, other projects and providers, and ambiguous shell forms", (t) => {
+  const w = world(t), child = w.child("/root/sage_implementer_t1_r1");
+  const other = join(w.dir, "other");
+  mkdirSync(other);
+  const cli = `node '${TOOL}'`, project = `--project '${w.project}'`;
+  const read = `${cli} task T1 ${project}`;
+  const commands = [
+    `${cli} task T1 set state=verified ${project}`, `${cli} task add --title x --size small ${project}`,
+    `${cli} config max_agents=20 ${project}`, `${cli} config name=x ${project}`,
+    `${cli} board T1 --remember yes ${project}`, `${cli} board all --view task ${project}`,
+    `${cli} board T1 --view html ${project}`, `${cli} board T1 --view task --name-hex 616c6c ${project}`,
+    `${cli} task T1 --project '${other}'`, `${cli} config --project '${other}'`, `${cli} board T1 --view task --project '${other}'`,
+    `${cli} task T1`, `${cli} task T0 ${project}`, `${cli} task T1 extra ${project}`, `${cli} task T1 --unknown x ${project}`,
+    `${cli} task T1 ${project} --project '${other}'`, `${cli} task T1 --project`, `${cli} config --project=`,
+    `${cli} unknown ${project}`, `${cli} task T1 ${project} --`, `${read} && echo ok`, `${read};`, `${read} | cat`,
+    `${read} > out.txt`, `${read} 2>&1`, `env ${read}`, `sudo ${read}`, `command ${read}`, `bash -c "${read}"`,
+    `SAGE_BOARD_ROOTS='[]' ${read}`, `cd '${other}' && ${read}`, `node --import ./write.mjs '${TOOL}' task T1 ${project}`,
+    `node '${TOOL.replace('sage-codex/', 'sage/')}' task T1 ${project}`, `${read} '`,
+  ];
+  for (const sage of [false, true]) {
+    w.mode({ sage, autopilot: false });
+    for (const command of commands) assert.equal(denied(w.send(pre("Bash", command, child))), sage && command.endsWith(" '") ? UNREAD_CODEX : LOGBOOK, command);
+  }
+  const input = pre("Bash", `${cli} task T1 --project '${other}'`, child);
+  input.tool_input.workdir = other;
+  assert.equal(denied(w.send(input)), LOGBOOK, "caller-controlled workdir grants no authority");
+  assert.equal(w.send(pre("Bash", `${cli} --project='${w.project}' task T1`, child))?.hookSpecificOutput?.permissionDecision, "deny");
+  assert.equal(w.send(pre("Bash", `${cli} task --project='${w.project}' T1`, child)), undefined, "CLI option order and equals form");
+  assert.equal(denied(w.send(pre("Bash", read, { ...CHILD, transcript_path: join(w.dir, "missing.jsonl") }))), LOGBOOK, "unread role identity");
+  const fakeNode = join(w.dir, "node");
+  writeFileSync(fakeNode, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  assert.equal(denied(w.send(pre("Bash", `'${fakeNode}' '${TOOL}' task T1 ${project}`, child))), LOGBOOK, "a different interpreter");
+  w.env.SAGE_BOARD_ROOTS = JSON.stringify([{ id: "other", path: other }]);
+  assert.equal(denied(w.send(pre("Bash", `${cli} board T1 --view task ${project}`, child))), LOGBOOK, "a configured cross-provider board");
+});
+
+test("T49: verified linked worktrees and symlinks keep the assigned project authority", (t) => {
+  const w = world(t), child = w.child("/root/sage_qa_t1_r1");
+  const linked = join(w.dir, "linked"), alias = join(w.dir, "alias");
+  assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-q", "-b", "feature", linked]).status, 0);
+  symlinkSync(w.project, alias);
+  for (const project of [linked, alias, `${w.project}/../project`]) {
+    assert.equal(w.send(pre("Bash", `node '${TOOL}' task T1 --project '${project}'`, child)), undefined, project);
+  }
+  const forged = join(w.dir, "forged");
+  mkdirSync(forged);
+  writeFileSync(join(forged, ".git"), `gitdir: ${w.project}/.git/worktrees/linked\n`);
+  assert.equal(denied(w.send(pre("Bash", `node '${TOOL}' task T1 --project '${forged}'`, child))), LOGBOOK);
+});
+
+test("T49: a task board selects its exact logbook, including through a worktree", (t) => {
+  const w = world(t);
+  w.env.SAGE_TEST_PIDS = "{}";
+  assert.equal(w.sage("init").status, 0);
+  assert.equal(w.sage("task", "add", "--priority", "P2", "--title", "Only this project", "--size", "small").status, 0);
+  const linked = join(w.dir, "linked"), missing = join(w.dir, "other", "project");
+  assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-q", "-b", "feature", linked]).status, 0);
+  mkdirSync(missing, { recursive: true });
+  const run = project => spawnSync(process.execPath, [TOOL, "board", "T1", "--view", "task", "--project", project], { encoding: "utf8", env: w.env });
+  const found = run(linked);
+  assert.equal(found.status, 0, found.stderr);
+  assert.match(found.stdout, /Only this project/);
+  const absent = run(missing);
+  assert.equal(absent.status, 1);
+  assert.match(absent.stderr, /No recorded logbook matches this project/);
+  assert.doesNotMatch(absent.stdout, /Only this project/);
 });
 
 test("in sage mode a push takes core's push form, as in the Claude hook; outside sage mode the gate does not judge it (R1664-5)", (t) => {
