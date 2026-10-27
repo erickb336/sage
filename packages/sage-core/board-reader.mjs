@@ -153,14 +153,16 @@ export function readHookNotes(root) {
 }
 
 /** Missing or damaged input is a diagnostic, never a silently empty board. */
-export function readBoardSources(sources, { now = Date.now() } = {}) {
+export function readBoardSources(sources, { now = Date.now(), logbookKey = null } = {}) {
   if (!Array.isArray(sources) || sources.length > 32) throw new TypeError("board sources must be an array of at most 32 roots");
+  if (logbookKey !== null && !/^[a-zA-Z0-9_-]{1,80}\/[a-z0-9-]+-[0-9a-f]{6}$/.test(logbookKey)) throw new TypeError("invalid logbook key");
   const budget = { remaining: MAX_READ };
   const ids = new Set(), identities = new Set();
   return sources.map(source => {
     if (!source || !/^[a-zA-Z0-9_-]{1,80}$/.test(source.id ?? "") || ids.has(source.id) || !isAbsolute(source.path ?? "")) throw new TypeError("each board source needs a unique id and an absolute path");
     ids.add(source.id);
     const result = { id: source.id, label: source.label ?? source.id, provider: source.provider ?? null, config: {}, projects: [], diagnostics: [], hooks: { present: false, slots: [], helpers: [], problem: null } };
+    if (logbookKey !== null && !logbookKey.startsWith(`${source.id}/`)) return result;
     try {
       const root = lstatSync(source.path);
       if (!root.isDirectory() || root.isSymbolicLink()) throw new Error("source is not a directory");
@@ -172,7 +174,7 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
         if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("config is not an object");
         result.config = config;
       } catch (error) { if (error.code !== "ENOENT") result.diagnostics.push(`config: ${error.code ?? error.message}`); }
-      const entries = readdirSync(source.path, { withFileTypes: true }).filter(entry => /^[a-z0-9-]+-[0-9a-f]{6}$/.test(entry.name)).sort((a,b) => a.name.localeCompare(b.name));
+      const entries = readdirSync(source.path, { withFileTypes: true }).filter(entry => /^[a-z0-9-]+-[0-9a-f]{6}$/.test(entry.name) && (logbookKey === null || `${source.id}/${entry.name}` === logbookKey)).sort((a,b) => a.name.localeCompare(b.name));
       if (entries.length > 4096) throw new Error("board project count exceeds 4096");
       for (const entry of entries) {
         // logbook: the hook's name of this logbook (the sha256 of its folder), which its lead slots and helper notes carry (T308).
@@ -217,7 +219,7 @@ export function readBoardSources(sources, { now = Date.now() } = {}) {
           project.tables = {}; project.contents = {}; project.observations = { version: 1, records: [] }; project.diagnostics.push("project changed during the read");
         }
       }
-      result.hooks = readHookNotes(source.path);
+      if (logbookKey === null) result.hooks = readHookNotes(source.path);
       const after = lstatSync(source.path);
       if (after.dev !== root.dev || after.ino !== root.ino || !after.isDirectory()) throw new Error("source changed during the read");
     } catch (error) { result.diagnostics.push(error.code ?? error.message); result.projects = []; }

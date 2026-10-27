@@ -54,7 +54,8 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, real
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, switchModes } from "../core/index.mjs";
+import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, shellCommands, switchModes } from "../core/index.mjs";
+import { tool } from "../skills/sage/sage.mjs";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
 import { modeDirectory } from "./sage-codex-hook.mjs";
@@ -386,6 +387,32 @@ const runsPatch = (command, cwd, env) => { try { return programsRun(command, cwd
 const STATE_READS = new Map([["status", null], ["merge-check", null], ["logbook", "repair"], ["standing", "add"], ["pages", "record"]]);
 const readsOnly = ([command, ...rest]) => STATE_READS.has(command) && !rest.includes(STATE_READS.get(command));
 const STATE_SCRIPT = /(?:^|\/)(?:skills\/sage\/sage\.mjs|mcp\/state-server\.mjs)$/;
+// A command word is made only from plain path/option characters or fully literal quoted parts.
+// This grammar admits no shell operation or expansion. The existing reader then removes the quotes.
+const LITERAL_WORD = /(?:[A-Za-z0-9_./,:=+-]|'[^'\r\n]*'|"[^"$`\\\r\n]*")+/;
+const LITERAL_COMMAND = new RegExp(`^[ \\t]*${LITERAL_WORD.source}(?:[ \\t]+${LITERAL_WORD.source})*[ \\t]*$`);
+/**
+ * The new reads use one literal invocation of this provider's CLI. Codex's hook cwd supplies project authority;
+ * neither the shell's cd/workdir nor --project grants it. Core verifies linked worktrees against their main checkout.
+ */
+function scopedStateRead(command, cwd, env) {
+  if (!LITERAL_COMMAND.test(command)) return false;
+  try {
+    const commands = shellCommands(command);
+    if (commands.length !== 1) return false;
+    const [{ words, bodies, grouped }] = commands;
+    if (bodies.length || grouped || !/^(?:node|nodejs)$/.test(programName(words[0] ?? ""))) return false;
+    const [, script, ...args] = words;
+    if (!isAbsolute(words[0]) || !isAbsolute(script ?? "") || real(script) !== real(TOOL)) return false;
+    const evidence = programsRun(command, cwd, env.PATH ?? "", { contextEvidence: true });
+    if (evidence.redirects.length || evidence.programs.length !== 1 || evidence.programs[0].wrapper) return false;
+    if (real(evidence.programs[0].run.file) !== real(process.execPath)) return false;
+    const project = tool.roleReadProject(args);
+    if (!project || (args[0] === "board" && env.SAGE_BOARD_ROOTS)) return false;
+    const assigned = real(tool.projectRoot(cwd)), requested = real(tool.projectRoot(project));
+    return assigned !== undefined && requested === assigned;
+  } catch { return false; }
+}
 /**
  * Whether a shell command runs the plugin's MCP server or a state tool command that writes the logbook: the plugin's
  * own copies by their real files, or any skills/sage/sage.mjs and mcp/state-server.mjs by name, directly or as node's
@@ -398,6 +425,8 @@ export function stateToolWrites(command, cwd = "/", env = process.env) {
   for (const p of runs) {
     let script = p.file ?? p.word, args = p.args;
     if (/^(?:node|nodejs)$/i.test(programName(p.word))) {
+      // A preload or eval option can execute before the CLI. Do not mistake its value for the CLI script.
+      if (p.args[0]?.startsWith("-") && p.args.some(word => STATE_SCRIPT.test(word))) return true;
       const at = p.args.findIndex((word) => !word.startsWith("-"));
       if (at < 0) continue;
       script = p.args[at], args = p.args.slice(at + 1);
@@ -552,7 +581,8 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (runs?.some((args) => !printsOnly(args))) return deny(CODEX_RUN);
   if (codexShellWrite(f.command, f.cwd, env)) return deny(CODEX_FOLDER);
   if (thread.child) {
-    if (stateToolWrites(f.command, f.cwd, env)) return refuse(thread, CHILD_LOGBOOK);
+    const knownThread = thread.codex || thread.parts?.length;
+    if (stateToolWrites(f.command, f.cwd, env) && !(knownThread && scopedStateRead(f.command, f.cwd, env))) return refuse(thread, CHILD_LOGBOOK);
     const why = commandWrites(f.command, f.cwd) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage) : undefined;
     if (why) return refuse(thread, why);
   }

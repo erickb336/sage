@@ -2,10 +2,14 @@ import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import fs, { writeFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStateTool } from "../packages/sage-core/index.mjs";
+import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
+import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
+import { landingRule } from "../packages/sage-core/board-view.mjs";
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-view-")), root = join(dir, "logbooks");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -95,3 +99,69 @@ test("task transitions record their actual time for board detail without a board
   assert.ok(shown.includes("state abandoned"));
   assert.deepEqual(snapshot(root), before);
 });
+
+function scopedFixture(t) {
+  const f = fixture(t), tool = createStateTool({ defaultRoot: () => f.root });
+  const book = readdirSync(f.root).find(name => /-[0-9a-f]{6}$/.test(name));
+  const taskFile = join(f.root, book, "tasks.tsv");
+  const [header, line] = readFileSync(taskFile, "utf8").split("\n");
+  const columns = header.split("\t"), task = line.split("\t");
+  task[columns.indexOf("state")] = "verified"; task[columns.indexOf("pr")] = "41";
+  writeFileSync(taskFile, header + "\n" + task.join("\t") + "\n");
+  const sha = "a".repeat(40), ledger = join(f.root, book, "ledger.tsv");
+  writeFileSync(ledger, readFileSync(ledger, "utf8") + `T1\t41\t${sha}\tchecks-pass\t\t\t2026-10-26T00:00:00Z\n`);
+  const other = join(f.dir, "unrelated"); mkdirSync(other);
+  const env = { ...process.env, SAGE_HOME: f.root };
+  tool.sage(["init", "--project", other], env);
+  const otherBook = readdirSync(f.root).find(name => name.startsWith("unrelated-"));
+  return { ...f, tool, env, sha, book, otherBook };
+}
+
+test("T49 repair: a scoped task board opens only its assigned logbook", t => {
+  const { root, run, book, otherBook } = scopedFixture(t), opened = [];
+  const open = fs.openSync;
+  t.mock.method(fs, "openSync", (...args) => { opened.push(String(args[0])); return open(...args); });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const shown = run("board", "T1", "--view", "task");
+  assert.match(shown, /Sample task/);
+  assert.ok(opened.some(file => file === join(root, book, "tasks.tsv")), "the real assigned task was read");
+  assert.deepEqual(opened.filter(file => file.startsWith(join(root, otherBook) + "/")), [], "no unrelated logbook file was opened");
+});
+
+test("T49 repair: damaged unrelated state cannot influence task landing; global merge still refuses it", t => {
+  const { root, run, tool, env, sha, otherBook } = scopedFixture(t);
+  const before = run("board", "T1", "--view", "task");
+  assert.match(before, /project check refuses/i);
+  writeFileSync(join(root, otherBook, "tasks.tsv"), "damaged unrelated state\n");
+  assert.equal(run("board", "T1", "--view", "task"), before);
+  const global = tool.mergeCheck(sha, env, { pr: "41", readOnly: true });
+  assert.equal(global.ok, false);
+  assert.ok(global.reason.includes(otherBook), global.reason);
+});
+
+for (const autopilot of [false, true]) for (const globalState of ["unavailable", "refused"]) {
+  test(`T49 round 2: passing project check is not merge approval; autopilot ${autopilot}, global ${globalState}`, t => {
+    const { root, run, tool, env, sha, book, otherBook } = scopedFixture(t);
+    const ledger = join(root, book, "ledger.tsv");
+    writeFileSync(ledger, readFileSync(ledger, "utf8") + ["review-clean", "qa-pass"].map(kind => `T1\t41\t${sha}\t${kind}\t1\t\t2026-10-26T00:00:00Z\n`).join(""));
+    assert.equal(tool.boardLandingCheck(sha, env, book, "41").ok, true, "the real project check passes");
+    if (globalState === "refused") {
+      writeFileSync(join(root, otherBook, "tasks.tsv"), "damaged unrelated state\n");
+      assert.equal(tool.mergeCheck(sha, env, { pr: "41", readOnly: true }).ok, false);
+    }
+    const sources = [{ id: "current", path: root }], logbookKey = `current/${book}`;
+    const snapshots = readBoardSources(sources, { logbookKey });
+    snapshots[0].projects[0].observations.records.push({ id: "O1", task: "T1", kind: "mode", basis: "observed", source: "sample", observedAt: "2026-10-26T00:00:00Z", recordedAt: "2026-10-26T00:00:00Z", data: { autopilot } });
+    const before = snapshot(root);
+    // Only the project callback is available to this model. It must not infer a global result.
+    const card = buildBoardModel(snapshots, { now: "2026-10-26T00:01:00Z", landing: landingRule(sources, logbookKey) }).tasks[0];
+    assert.equal(card.column, "review");
+    assert.equal(card.projectCheck.ok, true);
+    assert.equal(card.mergeCheck.ok, false);
+    assert.match(card.loop.now.text, /project check passes.*global merge check is not checked/i);
+    assert.doesNotMatch(JSON.stringify(card.loop), /Autopilot merges|review and merge/);
+    assert.match(run("board", "T1", "--view", "task"), /project check passes/i);
+    assert.deepEqual(snapshot(root), before);
+  });
+}
