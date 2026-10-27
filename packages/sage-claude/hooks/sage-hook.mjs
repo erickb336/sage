@@ -56,7 +56,7 @@ const TO_MAIN = `work reaches main only through a pull request. Push the task's 
 const commandPolicy = await import("./command-policy.mjs")
   .then((module) => ({ ...module,
     commands: module.createCommandPolicy({ stateToolPath: TOOL, prPattern: stateTool.PR ?? null }),
-    pushes: module.createPushPolicy({ stateToolPath: TOOL, readBranch: branchAt, mainReason: TO_MAIN }),
+    pushes: module.createPushPolicy({ stateToolPath: TOOL, readGit, readGh, mainReason: TO_MAIN }),
   }))
   .catch((error) => ({ error }));
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
@@ -386,7 +386,7 @@ export function handle(input, state, slots) {
     const commands = commandFields(ti);
     // Keep expansion, push and merge refusals ahead of the narrower gh exceptions.
     if (state.sage) for (const command of commands) {
-      const result = gitGate(event, command, state, cwd, false, input.tool_name);
+      const result = gitGate(event, command, state, cwd, false, input.tool_name, describedOnly(ti, command));
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
     }
     // Keep alias payloads intact and also read PowerShell's backslash-separated paths.
@@ -497,7 +497,7 @@ export function handle(input, state, slots) {
     }
     let answer;
     for (const command of commands) {
-      const result = gitGate(event, command, state, cwd, main, tool);
+      const result = gitGate(event, command, state, cwd, main, tool, describedOnly(ti, command));
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
       answer ??= result;
     }
@@ -507,10 +507,12 @@ export function handle(input, state, slots) {
 }
 
 /** Shared push classification. Branch reads and the first-upload exception stay in the provider. */
-function pushProblem(command, cwd, options) {
+function pushProblem(command, cwd, options, extra) {
   if (commandPolicy.error) return "the command policy cannot load, so this push is refused.";
-  return commandPolicy.pushes.pushProblem(command, cwd, options);
+  return commandPolicy.pushes.pushProblem(command, cwd, options, extra);
 }
+/** Is this field only the description: the description's text, and no field that runs has the same text (R1949-1)? */
+const describedOnly = (ti, text) => text === ti.description && !runFields(ti).includes(text);
 const subcommand = (words, k) => commandPolicy.gitSubcommand(words, k);
 const programName = word => commandPolicy.programName(word);
 /** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
@@ -519,10 +521,18 @@ const pushText = (text) => gitThen(text, "push");
 /** A command line without quotes, backslashes and line joins: the text that the rules test when the reader cannot read the line (fail closed). */
 const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
 
-/** The branch that the checkout at dir is on, or undefined when git cannot read it. */
-function branchAt(dir) {
+/** gh's output for args (a GET of GitHub's API), or undefined when gh fails. GH_HOST and GH_REPO never change its target. */
+function readGh(args) {
   try {
-    return execFileSync("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } }).trim();
+    return execFileSync("gh", args, { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GH_HOST: undefined, GH_REPO: undefined } });
+  } catch {
+    return undefined;
+  }
+}
+/** git's output for args in the checkout at dir, or undefined when git fails. */
+function readGit(dir, args) {
+  try {
+    return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
   } catch {
     return undefined;
   }
@@ -1538,7 +1548,9 @@ function agentCheck(input, file, slots) {
   const roots = rootsOf(true); // fail closed: an agent does nothing while the sage root cannot be resolved
   if (file) {
     const at = underRoot(input);
-    return at ? `an agent never writes under ${at}.` : undefined;
+    if (at) return `an agent never writes under ${at}.`;
+    // git's own files: a git hook or a setting there can push outside the push rule (T536).
+    return commandPolicy.gitInternalPath(ti.file_path ?? ti.notebook_path) ? "an agent never writes under a .git folder, where git keeps its hooks and settings. Ask the user." : undefined;
   }
   if (ti.dangerouslyDisableSandbox) return "an agent never runs a command outside the sandbox (dangerouslyDisableSandbox).";
   const command = typeof ti.command === "string" ? ti.command : "";
@@ -2022,7 +2034,7 @@ function powerShellProblem(command) {
     : undefined;
 }
 
-function gitGate(event, command, state, cwd, main, tool) {
+function gitGate(event, command, state, cwd, main, tool, described = false) {
   const powerShell = tool === "PowerShell" && powerShellProblem(command);
   if (powerShell) return deny(event, powerShell);
   const options = { powerShell: tool === "PowerShell" };
@@ -2033,7 +2045,7 @@ function gitGate(event, command, state, cwd, main, tool) {
     const { decision, reason } = firstCreation(first);
     return decide(event, decision, reason);
   }
-  const push = pushProblem(command, cwd, options);
+  const push = pushProblem(command, cwd, options, { described });
   if (push) return deny(event, push);
   const merge = mergeIn(command);
   if (!merge) return undefined;

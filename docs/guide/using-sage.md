@@ -282,7 +282,7 @@ The uninstall keeps your logbooks, the task pages in each project's pages folder
 | The chief says that your message was near a phrase | The hook found a phrase with other words, a question mark or a quote mark. Send the exact phrase alone. |
 | A phrase did nothing while Claude worked | A message sent while Claude works can switch only autopilot off. Send the phrase again when Claude is idle. |
 | A new version of sage has no effect | Start a new session (see [To update sage](#to-update-sage)). |
-| A push or a merge is refused | The hook refuses it: an agent pushes only `git push origin <branch>` on its own branch, and never merges. The refusal names the form that passes. Ask the chief what it needs. |
+| A push or a merge is refused | The hook refuses it: an agent pushes only `git push <remote> <branch>` on its own branch, never to the default branch, and never merges. The refusal names the form that passes; a push also needs a remote URL on `github.com` (not an ssh host alias) and `gh` logged in, because the hook asks GitHub for the default branch. Ask the chief what it needs. |
 | No pull request opens | Check that `gh` is installed and logged in (`gh auth status`), and that the project has a GitHub remote. Without a remote, the work stops at a verified branch. |
 | A task waits and nothing moves | Send `show board`. An open question under "Needs you" holds the task until you answer. A task of a program waits for your approval of the breakdown, then for its pilot. |
 | A pull request does not merge | A merge needs its clean cycles on the exact head commit. A new commit starts again from cycle 1. |

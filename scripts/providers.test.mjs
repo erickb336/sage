@@ -15,6 +15,17 @@ const context = (output) => output?.hookSpecificOutput?.additionalContext ?? "";
 const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
+/**
+ * A fake readGit for the push policy (T536): the checkout's branch (a name, or a function of the folder), git's settings
+ * with one remote named origin, and origin's default branch (main unless given; undefined when git cannot read it).
+ */
+const fakeGit = (branch, { head = "main", settings = "remote.origin.url\nhttps://github.com/acme/project.git\0" } = {}) => (dir, args) =>
+  args[1] === "--symbolic-full-name" ? `refs/heads/${args[2].replace(/^(?:refs\/)?(?:heads\/)?/, "")}\n`
+    : args[0] === "rev-parse" ? (typeof branch === "function" ? branch(dir) : branch)
+      : args[0] === "config" ? settings
+        : head === undefined ? undefined : `refs/remotes/origin/${head}\n`;
+/** A fake readGh (T536): GitHub names main as the default branch of every repository. */
+const fakeGh = (args) => (args.at(-1) === ".default_branch" ? "main\n" : undefined);
 
 test("T51: external command operands retain executable identity and expansion refusals", async t => {
   for (const provider of ["claude", "codex"]) {
@@ -44,7 +55,7 @@ test("T51: external command operands keep protected API refusals without judging
     const request = "/usr/local/bin/gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111";
     const sample = `A=1 env B=2 command ${request}`;
     assert.deepEqual(api.programsRun(sample, f.dir, "").map(run => run.word), ["command"]);
-    const policy = api.createPushPolicy({ readBranch: () => "topic" });
+    const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic") });
     for (const command of [sample, `env command -p command -- ${request}`])
       assert.match(policy.pushProblem(command, f.dir), /work reaches main only through a pull request/, command);
     for (const command of [sample.replace("heads/main", "heads/topic"), sample.replace("-X POST", "-X GET"),
@@ -131,7 +142,7 @@ test("T51: PowerShell launcher evidence preserves literal arguments and reaches 
       `Start-Process git 'push', 'origin', 'main'`,
       `Start-Process -ArgumentList 'push','--force','origin','topic' -FilePath git`,
     ];
-    const policy = api.createPushPolicy({ readBranch: () => "topic" });
+    const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic") });
     for (const command of forms) {
       const runs = api.programsRun(command, f.dir, "", options);
       assert.equal(runs.length, 1, command);
@@ -151,6 +162,10 @@ test("T51: PowerShell launcher evidence preserves literal arguments and reaches 
     assert.deepEqual(comma[0].args, ["literal,comma", "two words"]);
     assert.deepEqual(api.programsRun(`Start-Process start -ArgumentList 'literal'`, f.dir, "", options).map(({ word, args }) => ({ word, args })), [{ word: "start", args: ["literal"] }], "a native child is not interpreted again as a PowerShell alias");
     assert.equal(api.programsRun(`start git -ArgumentList 'stash'`, f.dir, "")[0].word, "start", "Bash start remains an ordinary executable");
+    // R1935-1 item 2: a push found only through a launcher gets the same check of the commands beside it.
+    assert.equal(policy.pushProblem("Start-Process git -ArgumentList 'push','origin','topic'", f.dir, options), undefined, "the launched push form passes");
+    assert.match(policy.pushProblem("git config remote.origin.push refs/heads/topic:refs/heads/main; Start-Process git -ArgumentList 'push','origin','topic'", f.dir, options) ?? "",
+      /"git config remote\.origin\.push refs\/heads\/topic:refs\/heads\/main" runs in the same command line as the push/);
     const nested = `pwsh -Command "Start-Process git -ArgumentList 'stash'"`;
     const nestedPush = `PowerShell.exe -Command "start -ArgumentList 'push','origin','main' -FilePath git"`;
     assert.ok(policy.pushProblem(nestedPush, f.dir), "nested launcher push reaches the policy");
@@ -744,7 +759,7 @@ test("shared merge and push extraction applies push rules and injected branch ev
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const tool = join(f.plugin, "skills/sage/sage.mjs");
-    const policy = api.createPushPolicy({ stateToolPath: tool, readBranch: dir => dir === join(f.dir, "project/nested") ? "main" : "topic" });
+    const policy = api.createPushPolicy({ stateToolPath: tool, readGh: fakeGh, readGit: fakeGit(dir => dir === join(f.dir, "project/nested") ? "main" : "topic") });
     for (const text of ["git push origin topic", "git push -u --follow-tags origin topic", "git push --delete origin topic",
       "echo 'git push origin main'", "git status", `node '${tool}' log --why 'git push origin main'`]) {
       assert.equal(policy.pushProblem(text, f.dir), undefined, text);
@@ -759,11 +774,11 @@ test("shared merge and push extraction applies push rules and injected branch ev
     }
     assert.match(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), /checkout is on main/);
     assert.equal(policy.pushProblem("cd project; git -C nested push --delete origin topic", f.dir), undefined);
-    assert.match(api.createPushPolicy({ readBranch: () => "topic", mainReason: "Use a reviewed pull request." }).pushProblem("git push origin main", f.dir), /^Use a reviewed pull request\./);
-    assert.equal(api.createPushPolicy({ readBranch: () => undefined }).pushProblem("git push origin topic", f.dir), undefined);
+    assert.match(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic"), mainReason: "Use a reviewed pull request." }).pushProblem("git push origin main", f.dir), /^Use a reviewed pull request\./);
+    assert.equal(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(undefined) }).pushProblem("git push origin topic", f.dir), undefined);
     if (provider === "claude") {
       const adapter = await import(pathToFileURL(join(f.plugin, "hooks/command-policy.mjs")));
-      assert.match(adapter.createPushPolicy({ readBranch: () => "main" }).pushProblem("git push origin topic", f.dir), /checkout is on main/);
+      assert.match(adapter.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("main") }).pushProblem("git push origin topic", f.dir), /checkout is on main/);
     }
   }
 });
@@ -772,7 +787,7 @@ test("T42: shared push policy recognizes executable spelling in both bundles", a
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const policy = api.createPushPolicy({ readBranch: () => "Topic" });
+    const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("Topic") });
     for (const executable of ["GIT", "Git", "git.exe", "GIT.EXE", "/usr/bin/Git", "'C:\\Tools\\Git.EXE'"]) {
       assert.match(policy.pushProblem(`${executable} push origin main`, f.dir), /work reaches main only through a pull request/, executable);
       assert.match(policy.pushProblem(`${executable} push --force origin Topic`, f.dir), /never force-pushes/, executable);
@@ -780,7 +795,7 @@ test("T42: shared push policy recognizes executable spelling in both bundles", a
       assert.equal(policy.pushProblem(`${executable} status`, f.dir), undefined, executable);
     }
     assert.equal(policy.pushProblem("echo 'GIT push origin main'", f.dir), undefined);
-    assert.match(api.createPushPolicy({ readBranch: () => "main" }).pushProblem("GIT -C nested push origin Topic", f.dir), /checkout is on main/);
+    assert.match(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("main") }).pushProblem("GIT -C nested push origin Topic", f.dir), /checkout is on main/);
     for (const executable of ["GH", "Gh.exe", "/usr/bin/GH", "'C:\\Tools\\GH.EXE'"]) {
       assert.match(policy.pushProblem(`${executable} api repos/o/r/git/refs/heads/main -X PATCH -f sha=abc`, f.dir), /work reaches main only through a pull request/);
       assert.equal(policy.pushProblem(`${executable} api repos/o/r/git/refs/heads/main`, f.dir), undefined);
@@ -820,7 +835,7 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const policy = api.createPushPolicy({ readBranch: () => "topic" });
+    const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic") });
     for (const command of [
       "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
       "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc\nprintf 'unfinished",
@@ -885,7 +900,7 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
       "gh api 'repos/{owner}/{repo}/git/refs/heads/topic' -X PATCH -f sha=abc",
       "gh api 'repos/:owner/:repo/git/refs/heads/topic' -X PATCH -f sha=abc",
       "gh api 'repos/o/r/{branch}' -X GET",
-      `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: ":branch"}}) { clientMutationId } }'`,
+      `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {repositoryNameWithOwner: "o/r", branchName: ":branch"}}) { clientMutationId } }'`,
       "gh api repos/o/r/git/refs/heads/main",
       "gh api repos/o/r/contents/file -X GET -f ref=main",
       "gh api --method=GET repos/o/r/contents/file -f ref=master",
@@ -920,6 +935,52 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
           if (!actor.agent_id) assert.match(result.hookSpecificOutput.permissionDecisionReason, /work reaches main only through a pull request/);
         }
       }
+    }
+  }
+});
+
+test("T536 R2003-1, R2002-1: the push rule follows only a plain cd, binds createCommitOnBranch to its repository, reads routes with extra slashes, and reads commit and search text as text", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    // The checkout "bad" sends topic to main by its settings; f.dir is a clean checkout. other/repo's default branch is trunk.
+    const bad = join(f.dir, "bad");
+    const clean = fakeGit("topic");
+    const readGit = (dir, args) => args[0] === "config" && dir === bad ? `${clean(dir, args)}remote.origin.push\nrefs/heads/topic:refs/heads/main\0` : clean(dir, args);
+    const readGh = (args) => (args.at(-1) === ".default_branch" ? (args[3] === "repos/other/repo" ? "trunk\n" : "main\n") : undefined);
+    const policy = api.createPushPolicy({ readGh, readGit });
+    const says = (command, cwd = f.dir) => policy.pushProblem(command, cwd) ?? "allowed";
+    // 1a: a cd that the hook cannot follow beside a push, in the checkout where the push really runs.
+    for (const [command, cwd] of [[`cd -P ${bad} && git push origin topic`], [`cd -L ${bad} && git push origin topic`], [`cd -- ${bad} && git push origin topic`],
+      ["cd && git push origin topic"], [`(cd ${f.dir}) && git push origin topic`, bad], [`true || cd ${f.dir}; git push origin topic`, bad],
+      [`cd ${f.dir} & git push origin topic`, bad]]) {
+      // Refused for the cd beside the push, or for the settings of the checkout where the push really runs.
+      assert.match(says(command, cwd), /runs in the same command line as the push|git's setting remote\.origin\.push/, `${provider}: ${command}`);
+    }
+    assert.match(says(`cd ${bad} && git push origin topic`), /git's setting remote\.origin\.push can send the branch/, "a plain cd moves the read");
+    assert.equal(says(`cd ${f.dir} && git push origin topic`, bad), "allowed", "a plain cd to a clean checkout passes");
+    // 1b: createCommitOnBranch is checked against the default branch of the repository it names, not the checkout's.
+    const commit = (repo, branch) => `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {repositoryNameWithOwner: "${repo}", branchName: "${branch}"}, expectedHeadOid: "abc", message: {headline: "x"}}) { clientMutationId } }'`;
+    for (const command of [commit("other/repo", "trunk"), commit("other/repo", "main"), commit("../x", "topic"),
+      `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: "topic"}}) { clientMutationId } }'`]) {
+      assert.match(says(command), /work reaches main only through a pull request/, `${provider}: ${command}`);
+    }
+    assert.equal(says(commit("other/repo", "topic")), "allowed");
+    // 1c: a doubled or trailing slash does not skip the route checks.
+    for (const command of ["gh api -X PUT repos/o/r//contents/file -f content=abc", "gh api -X PATCH repos/o/r/ -f default_branch=topic",
+      "gh api -X PATCH repos/o/r//git/refs/heads/main -f sha=abc", "gh api -X PATCH https://api.github.com/repos/o/r//git//refs/heads/main -f sha=abc",
+      `gh api graphql/ -f 'query=mutation { updateRef(input: {refId: "id", oid: "abc"}) { clientMutationId } }'`]) {
+      assert.match(says(command), /work reaches main only through a pull request/, `${provider}: ${command}`);
+    }
+    assert.equal(says("gh api repos/o/r//issues -f title=x"), "allowed");
+    // 2: a commit message or a search pattern is text, also after git -C; a setting that runs still refuses.
+    for (const command of [`git -C ${f.dir} commit -m "refuse git config core.hooksPath /tmp/h"`, `git grep -n "git config core.hooksPath /tmp/h"`,
+      `rg "git config core.fsmonitor /tmp/h" docs`, `git -C ${f.dir} commit -m "explain the git push rule"`]) {
+      assert.equal(says(command), "allowed", `${provider}: ${command}`);
+    }
+    for (const command of [`git -C ${f.dir} -c core.hooksPath=/tmp/h commit -m x`, `git grep -O"sh -c 'git config core.hooksPath /tmp/h'" x`,
+      `rg --pre "sh -c 'git config core.hooksPath /tmp/h'" x`, `sh -c "git config core.hooksPath /tmp/h"`]) {
+      assert.match(says(command), /sets core\.hooksPath or core\.fsmonitor/, `${provider}: ${command}`);
     }
   }
 });
@@ -2687,7 +2748,7 @@ test("shared push policy applies the same branch and force rules in both isolate
     const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "runtime/command-policy.mjs")));
     const calls = [];
     let branch = "topic";
-    const policy = adapter.createPushPolicy({ readBranch: dir => { calls.push(dir); return branch; } });
+    const policy = adapter.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(dir => { calls.push(dir); return branch; }) });
     for (const text of ["git push origin topic", "git push -u --follow-tags origin topic", "git push --delete origin topic",
       "echo 'git push origin main'", "git status"]) assert.equal(policy.pushProblem(text, f.dir), undefined, text);
     for (const text of ["git push origin main", "git push origin refs/heads/master", "git push origin topic:main",
@@ -2713,7 +2774,7 @@ test("shared push policy derives checkout paths and scopes the state-tool text e
   assert.equal(typeof api.createPushPolicy, "function");
   const tool = join(f.dir, "sage.mjs");
   const calls = [];
-  const policy = api.createPushPolicy({ stateToolPath: tool, readBranch: dir => { calls.push(dir); return "topic"; } });
+  const policy = api.createPushPolicy({ stateToolPath: tool, readGh: fakeGh, readGit: fakeGit(dir => { calls.push(dir); return "topic"; }) });
   assert.equal(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), undefined);
   assert.deepEqual(calls, [join(f.dir, "project/nested")]);
   assert.equal(policy.pushProblem(`node '${tool}' log --why 'git push origin main'`, f.dir), undefined);
@@ -2725,27 +2786,41 @@ test("shared push policy validates and snapshots trusted branch readers and mess
   const f = isolated(t, "codex");
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   assert.equal(typeof api.createPushPolicy, "function");
-  assert.throws(() => api.createPushPolicy(), /readBranch/);
-  for (const mainReason of [null, "", " ", "bad\nmessage", "x".repeat(2049)]) {
-    assert.throws(() => api.createPushPolicy({ readBranch: () => "topic", mainReason }), /mainReason/);
+  assert.throws(() => api.createPushPolicy(), /readGit/);
+  assert.throws(() => api.createPushPolicy({ readGit: fakeGit("topic") }), /readGh/);
+  for (const value of [null, 7, Promise.resolve("main")]) {
+    assert.throws(() => api.createPushPolicy({ readGit: fakeGit("topic"), readGh: () => value }).pushProblem("git push origin topic", f.dir), /readGh/);
   }
-  const options = { readBranch: () => "main", mainReason: "Use a reviewed pull request." };
+  // The repository of a remote URL, in the forms git writes, and nothing for another host.
+  assert.deepEqual(["https://github.com/acme/site.git", "git@github.com:acme/site", "ssh://git@github.com/acme/site.git", "https://gitlab.com/acme/site", "https://github.com/acme/../x", "../site.git",
+    // R1949-2: a user in the URL, a capital host and ssh.github.com:443 name the same repository; an ssh host alias does not.
+    "https://someone@GitHub.com/acme/site", "ssh://git@ssh.github.com:443/acme/site.git", "git@GITHUB.COM:acme/site.git", "github-work:acme/site", "https://github.com.evil.test/acme/site"].map(api.gitHubRepository),
+    ["acme/site", "acme/site", "acme/site", undefined, undefined, undefined, "acme/site", "acme/site", "acme/site", undefined, undefined]);
+  // R1971-2: a ?, # or % in the user part makes the part before it the host, so the URL is not GitHub's.
+  assert.deepEqual(["https://evil.example?@github.com/acme/site", "https://evil.example#@github.com/acme/site", "https://evil%2eexample@github.com/acme/site",
+    "ssh://evil.example?@github.com/acme/site", "evil?x@github.com:acme/site"].map(api.gitHubRepository), [undefined, undefined, undefined, undefined, undefined]);
+  for (const mainReason of [null, "", " ", "bad\nmessage", "x".repeat(2049)]) {
+    assert.throws(() => api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic"), mainReason }), /mainReason/);
+  }
+  const options = { readGh: fakeGh, readGit: fakeGit("main"), mainReason: "Use a reviewed pull request." };
   const policy = api.createPushPolicy(options);
-  options.readBranch = () => "topic"; options.mainReason = "changed";
+  options.readGit = fakeGit("topic"); options.mainReason = "changed";
   assert.match(policy.pushProblem("git push origin topic", f.dir), /checkout is on main/);
   assert.match(policy.pushProblem("git push origin main", f.dir), /Use a reviewed pull request/);
-  for (const value of [null, "", " ", "main\n", "master\r\n", "topic\tname", "topic\0name", true, Promise.resolve("topic")]) {
-    assert.throws(() => api.createPushPolicy({ readBranch: () => value }).pushProblem("git push origin topic", f.dir), /readBranch/);
+  for (const value of [null, "", " ", "topic\tname", "topic\0name", true, Promise.resolve("topic")]) {
+    assert.throws(() => api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(value) }).pushProblem("git push origin topic", f.dir), /readGit/);
   }
+  // git ends its output with a line break; the policy reads the name without it.
+  for (const value of ["main\n", "master\r\n"]) assert.match(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(value) }).pushProblem("git push origin topic", f.dir), /checkout is on ma/);
   // Git permits Unicode spaces inside branch names. These strings reach the parser, never a shell.
   for (const value of ["topic\u00a0name", "topic\u2003name"]) {
     assert.equal(execFileSync("git", ["check-ref-format", "--branch", value], { encoding: "utf8" }).trimEnd(), value);
-    assert.equal(api.createPushPolicy({ readBranch: () => value }).pushProblem(`git push origin '${value}'`, f.dir), undefined);
+    assert.equal(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(value) }).pushProblem(`git push origin '${value}'`, f.dir), undefined);
   }
-  const broken = api.createPushPolicy({ readBranch: () => { throw new Error("fixture read failure"); } });
+  const broken = api.createPushPolicy({ readGh: fakeGh, readGit: () => { throw new Error("fixture read failure"); } });
   assert.throws(() => broken.pushProblem("git push origin topic", f.dir), /fixture read failure/);
   // Preserve the existing Claude rule; Codex can require its reader to throw on missing evidence.
-  assert.equal(api.createPushPolicy({ readBranch: () => undefined }).pushProblem("git push origin topic", f.dir), undefined);
+  assert.equal(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(undefined) }).pushProblem("git push origin topic", f.dir), undefined);
 });
 
 test("shared push policy loading failures deny Claude command tools", async t => {

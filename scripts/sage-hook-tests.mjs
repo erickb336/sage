@@ -142,6 +142,9 @@ const checkout = (branch) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-checkout-")));
   spawnSync("git", ["init", "-q", "-b", branch, dir]);
   spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"]);
+  // A remote with a known default branch, as after a clone: the push rule reads both (T536).
+  spawnSync("git", ["-C", dir, "remote", "add", "origin", "https://github.com/acme/project.git"]);
+  spawnSync("git", ["-C", dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
   return dir;
 };
 const FEATURE = checkout("claude/t1");
@@ -550,7 +553,7 @@ test("each project has its own cap, the total across all projects wins, and each
 // The push rule is an allow-list (F-R89-1, F-R89-3, F-R90-2). Each refusal names the one push form.
 const FORCE = /^sage: sage mode never force-pushes\. .*Push only with git \[-C <dir>\] push/;
 const TO_MAIN = /^sage: work reaches main only through a pull request\. .*Push only with git \[-C <dir>\] push/;
-const NOT_FORM = /^sage: .*Push only with git \[-C <dir>\] push \[-u\] \[--follow-tags\] \[-o <option>\] origin <branch>/;
+const NOT_FORM = /^sage: .*Push only with git \[-C <dir>\] push \[-u\] \[--follow-tags\] \[-o <option>\] <remote> <branch>/;
 /** The refusals that differ from the expected one, as "command: reason" lines. */
 const wrongRefusals = (s, cases, expected, cwd) => cases.flatMap((command) => {
   const reason = denied(s.send(bash(command, cwd))) ?? "allowed";
@@ -748,7 +751,6 @@ test("a plain push of a feature branch passes: -u, a quoted name, -C, -o, --foll
     "git push origin --delete feat/old",
     `git -C ${FEATURE} push -u origin claude/t1`,
     "git push origin feat/x 2>&1 | tail -5",
-    "git push origin feat/x 2>&1 | tee /tmp/log",
     "git commit -m 'never git push origin main' && git push -u origin feat",
     "git log origin/main..HEAD && git push origin feat",
     `cd ${FEATURE} && git push -u origin feat/x && gh pr create --title t --body 'never push to main'`,
@@ -771,6 +773,71 @@ test("a push from a checkout of main or master is refused; a push with -C or aft
   assert.equal(s.send(bash("git push --delete origin claude/t1", MAIN_CHECKOUT)), undefined, "deleting a feature branch is not a push of the checkout");
 });
 
+test("T536: no push reaches the default branch through a remote with another name, a setting or a line beside it; the task's branch goes to any remote", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  // The incident's project: its one remote is github, not origin.
+  const dir = checkout("claude/t1");
+  const git = (...args) => assert.equal(spawnSync("git", ["-C", dir, ...args]).status, 0, args.join(" "));
+  git("remote", "rename", "origin", "github");
+  git("symbolic-ref", "refs/remotes/github/HEAD", "refs/remotes/github/main");
+  const refused = (command, why) => assert.match(denied(s.send(bash(command, dir))) ?? "allowed", why, command);
+  const passes = (command) => assert.equal(denied(s.send(bash(command, dir))), undefined, command);
+  for (const command of ["git push github HEAD:main", "git push github :main", "git push github HEAD:refs/heads/main", "git push --all github"]) refused(command, TO_MAIN);
+  refused("git push https://github.com/acme/project.git claude/t1", /^sage: push to a remote of this checkout/);
+  refused("git config push.default upstream && git push github claude/t1", /^sage: "git config push\.default upstream" runs in the same command line as the push/);
+  git("branch", "topic");
+  git("branch", "trunk");
+  passes("git push -u github claude/t1");
+  passes("git push github topic");
+  git("config", "remote.github.push", "refs/heads/claude/t1:refs/heads/main");
+  refused("git push github claude/t1", /^sage: git's setting remote\.github\.push can send the branch to another name/);
+  git("config", "--unset", "remote.github.push");
+  // R1950-1: no push while push.default is upstream, and no upstream set beside a push.
+  git("config", "push.default", "upstream");
+  refused("git push github claude/t1", /^sage: git's setting push\.default is upstream, so git can send the branch to its upstream/);
+  git("config", "--unset", "push.default");
+  refused("git fetch --set-upstream github main && git push github claude/t1", /^sage: "git fetch --set-upstream github main" runs in the same command line as the push/);
+  // R1936 F6: a branch name that is a symbolic ref to main; F2: an alias; F4: a git hook; F9: gh repo sync.
+  git("branch", "main");
+  git("symbolic-ref", "refs/heads/claude/t5-sym", "refs/heads/main");
+  refused("git push github claude/t5-sym", /^sage: claude\/t5-sym is not a plain branch of this checkout/);
+  git("config", "alias.ship", "push github HEAD:main");
+  refused("git ship", /^sage: "git ship" is not a git command that the hook knows/);
+  refused("printf x > .git/hooks/pre-push", /^sage: this command writes a file under a \.git folder/);
+  refused("git config core.hooksPath /tmp/h", /^sage: a command that sets core\.hooksPath/);
+  // R1949-1: reads and searches pass, and a description runs nothing.
+  for (const command of ["grep -rn hooksPath packages/", "git log --grep fsmonitor", "git config --get core.hooksPath", "git commit -m 'refuse core.hooksPath'"]) passes(command);
+  assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git config core.hooksPath /tmp/h" }, { cwd: dir }))), undefined, "a description runs nothing");
+  // R2002-1: a description that starts with git and a word is not an unknown git command; commit and search text is text.
+  assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git checks the branch" }, { cwd: dir }))), undefined, "a description names no git command");
+  refused("git checks the branch", /^sage: "git checks" is not a git command that the hook knows/);
+  for (const command of [`git -C ${dir} commit -m "refuse git config core.hooksPath /tmp/h"`, `git grep -n "git config core.hooksPath /tmp/h"`, `rg "git config core.fsmonitor /tmp/h" docs`]) passes(command);
+  // R1971-1: get or list as the value is a write; R1972-1: a quoted GIT_CONFIG_PARAMETERS refuses, a message passes.
+  for (const command of ["git config core.hooksPath get", "git config set core.fsmonitor list", "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='list'\" git commit -m x"]) {
+    refused(command, /^sage: a command that sets core\.hooksPath/);
+  }
+  for (const command of ["git config get core.hooksPath", "git config --list", "git commit -m 'set core.hooksPath=/tmp/h'", "grep -rn 'core.fsmonitor=' packages/"]) passes(command);
+  // R1971-2: git's own output option under .git.
+  refused("git checkout-index --prefix=.git/hooks/ -a", /^sage: this command writes a file under a \.git folder/);
+  refused("gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
+  // R1936 F7: GitHub names the default branch, trunk here; a planted local ref that disagrees refuses, and so does a failed read.
+  const trunk = session({ FAKE_DEFAULT_BRANCH: "trunk" });
+  trunk.send(prompt("sage mode"));
+  const trunkSays = (command) => denied(trunk.send(bash(command, dir))) ?? "allowed";
+  assert.match(trunkSays("git push github topic"), /^sage: refs\/remotes\/github\/HEAD names main, but GitHub names trunk/);
+  git("symbolic-ref", "--delete", "refs/remotes/github/HEAD");
+  assert.match(trunkSays("git push github trunk"), /^sage: trunk is the default branch of github: work reaches main only through a pull request/);
+  assert.equal(trunkSays("git push github claude/t1"), "allowed");
+  const unread = session({ FAKE_DEFAULT_BRANCH: "fail" });
+  unread.send(prompt("sage mode"));
+  assert.match(denied(unread.send(bash("git push github claude/t1", dir))) ?? "allowed", /^sage: the hook cannot read the default branch of acme\/project from GitHub/);
+  // A file tool of an agent never writes under .git (R1936 F4).
+  for (const file_path of [join(dir, ".git/hooks/pre-push"), join(dir, ".git/config")]) {
+    assert.match(denied(s.send({ ...tool("Write", { file_path, content: "x" }, { cwd: dir }), ...AGENT })) ?? "allowed", /an agent never writes under a \.git folder/, file_path);
+  }
+});
+
 /**
  * A fake gh on PATH for the first creation of main (T24): it answers the hook's GETs from a JSON file, so no test calls
  * GitHub. github(answers) writes that file: { "<endpoint>": { status, body } | { sleep: true } | { stubborn: true } (it ignores SIGTERM) | { fail: true } }. A fake that
@@ -791,6 +858,13 @@ if (args[0] === "pr" && args[1] === "view") {
   if (head === "fail") process.exit(1);
   if (head === "slow") setTimeout(() => {}, 30000);
   else process.stdout.write(JSON.stringify({ headRefName: head, isCrossRepository: process.env.FAKE_PR_FORK === "1" }));
+  return;
+}
+// gh api ... --jq .default_branch (T536): GitHub's default branch is FAKE_DEFAULT_BRANCH (default main); "fail" exits 1.
+if (args[0] === "api" && args.at(-1) === ".default_branch") {
+  const name = process.env.FAKE_DEFAULT_BRANCH ?? "main";
+  if (name === "fail" || process.env.GH_HOST || process.env.GH_REPO) process.exit(1);
+  process.stdout.write(name + "\\n");
   return;
 }
 const answers = JSON.parse(fs.readFileSync(process.env.FAKE_GH_ANSWERS, "utf8"));
@@ -2492,7 +2566,12 @@ test("R466-CASESUB: the arms of a case inside a subshell or a group are commands
 test("R466-PROCSUB: a process substitution is read as commands of its own, not as a redirection", async () => {
   const s = session(SYSTEM_PATH);
   s.send(prompt("sage mode"));
-  assert.equal(s.send(bash("comm <(git branch) <(git branch -r); git push origin t100-x")), undefined);
+  // The push rule asks GitHub (the fake gh) for the default branch (T536), so this line runs in a session with the fake.
+  const withGh = session();
+  withGh.send(prompt("sage mode"));
+  assert.equal(withGh.send(bash("cat <(git log) <(git status); git push origin t100-x")), undefined);
+  // A command beside a push that can change git's settings refuses the push (T536); the hook reads it inside <(…).
+  assert.match(denied(withGh.send(bash("comm <(git branch) <(git branch -r); git push origin t100-x"))) ?? "", /"git branch" runs in the same command line as the push/);
   assert.match(denied(s.send(bash("diff <(git push origin main) x"))) ?? "", TO_MAIN);
   assert.equal(await refusal("diff <(sort a) <(sort b) | grep kill"), undefined);
   for (const command of ["diff <(ps) x", "tee >(kill 1) < f", "cat <(echo $(ps))"]) assert.match((await refusal(command)) ?? "", /standing order 14/, command);
@@ -3800,7 +3879,8 @@ test("T197: plain agent PR operations and GET requests pass, while API writes do
     "gh api repos/o/r --method GET", "gh api -XGET search/issues -f q=hello", "gh api --method=GET search/issues --raw-field q=hello",
   ]) assert.equal(f.send(command), undefined, command);
   for (const command of ["gh api repos/o/r -X POST", "gh api repos/o/r --method=PATCH", "gh api repos/o/r -f name=changed", "gh api repos/o/r --input data.json", "gh api repos/o/r -X GET --method DELETE", "gh issue create --title x"]) {
-    assert.match(denied(f.send(command)) ?? "", /plain gh pr create/, command);
+    // An opaque write to the repository's settings can move its default branch, so the push rule may refuse it first (T536).
+    assert.match(denied(f.send(command)) ?? "", /plain gh pr create|work reaches main only through a pull request/, command);
   }
 });
 
@@ -3824,9 +3904,9 @@ test("T197: agents refuse gh aliases written through file tools and shell redire
     { file_path: join(f.dir, "guide.md"), content: "# Alias examples\n\n```gitconfig\n" + example + "```\n" },
     { file_path: join(f.dir, "regression.test.mjs"), content: "const example = `" + example + "`;" },
   ]) assert.equal(f.s.send(tool("Write", input, { cwd: FEATURE, ...AGENT })), undefined);
-  assert.equal(f.s.send(tool("Edit", { file_path: join(f.dir, ".git/config"), old_string: example, new_string: "" }, { cwd: FEATURE, ...AGENT })), undefined);
+  // T536: an agent's file tool never writes under .git, also to remove an alias.
+  assert.match(denied(f.s.send(tool("Edit", { file_path: join(f.dir, ".git/config"), old_string: example, new_string: "" }, { cwd: FEATURE, ...AGENT }))) ?? "", /never writes under a \.git folder/);
   for (const input of [
-    { file_path: join(f.dir, ".git/config"), content: "[alias]\n m = !gh pr merge 41\n" },
     { file_path: join(f.dir, "alias-config"), content: "[alias]\n m = !gh pr merge 41\n" },
     { file_path: join(f.dir, "gh/aliases.yml"), content: "m: pr merge 41\n" },
   ]) {
@@ -4105,7 +4185,9 @@ test("T197: all agent rules inspect env split-string semantic leaves", () => {
   assert.deepEqual(refused.map(text => [text, Boolean(denied(f.send(wrapped(text))))]), refused.map(text => [text, true]));
   assert.ok(denied(f.send(wrapped("'"))), "unreadable split-string still refuses");
   assert.ok(denied(f.send(wrapped("sh -c 'echo \"'"))), "an unreadable shell produced by split-string still refuses");
-  for (const text of ["cp /tmp/source /tmp/destination", "git config alias.st status", "git -c alias.st=status st",
+  // T536: an alias in use is refused (it can hide a push); setting one is not.
+  assert.ok(denied(f.send(wrapped("git -c alias.st=status st"))), "an alias in use");
+  for (const text of ["cp /tmp/source /tmp/destination", "git config alias.st status",
     "git status", `echo ${f.hard}`, "echo /bin/ps", `${FAKES}/ps -ax`]) {
     assert.equal(f.send(wrapped(text)), undefined, text);
   }
