@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { tool as codexTool } from "../plugins/sage-codex/skills/sage/sage.mjs";
+import { backed } from "./verdict-backing.mjs";
 
 // The gate saves a proof of each sage tool call in the Codex sage folder (R1916-2), so every test here gets a scratch
 // home, and the Codex home and the sage folder under it: no test writes the real ~/.codex.
@@ -232,7 +234,10 @@ function world(t, { at = "project" } = {}) {
   chmodSync(join(bin, "gh"), 0o755);
   for (const name of ["ps", "pgrep", "kill"]) writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> "${dir}/fake-calls.log"\n`, { mode: 0o755 }); // order 14
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), CODEX_HOME: join(dir, "codex-home") };
-  const sage = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", project], { encoding: "utf8", env });
+  const raw = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", project], { encoding: "utf8", env });
+  const cli = (...args) => { const r = raw(...args); if (r.status) throw Error(r.stderr); return r.stdout.trim(); };
+  // A review or QA verdict gets its backing run first, with its report kept as Codex's stop hook keeps it (T483).
+  const sage = (...args) => raw(...backed(args, { cli, keep: (fields) => codexTool.keepReport(project, fields, env) }));
   // Codex's transcript of the root thread: the user's typed messages, as item_completed events with a UserMessage item.
   const transcript = join(dir, "rollout.jsonl");
   const typed = (...messages) => writeFileSync(transcript, [{ type: "session_meta", payload: { id: base.session_id } },
@@ -337,9 +342,18 @@ test("a mode file, a record and a ledger that an agent writes under /tmp turn on
     ({ type: "event_msg", payload: { type: "item_completed", thread_id: base.session_id, item: { type: "UserMessage", content: [{ type: "text", text }] } } }))]
     .map((line) => JSON.stringify(line)).join("\n") + "\n");
   const tool = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", w.project], { encoding: "utf8", env: forgedEnv });
+  const cli = (...args) => {
+    const result = tool(...args);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
   assert.equal(tool("init").status, 0);
   assert.equal(tool("task", "add", "--priority", "P2", "--title", "t", "--size", "small").status, 0);
-  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) assert.equal(tool("verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41").status, 0);
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) {
+    const args = ["verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41"];
+    const result = tool(...backed(args, { cli, keep: fields => codexTool.keepReport(w.project, fields, forgedEnv) }));
+    assert.equal(result.status, 0, result.stderr);
+  }
   // The gate reads its own settings, the session that Codex gives it and Codex's record of that session, never the command's.
   const off = /^sage: (?:autopilot is off|the hook cannot prove that this command is only the merge command)/;
   assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", /^sage: autopilot is off/, "the plain landing command");

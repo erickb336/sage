@@ -9,6 +9,8 @@ import { hostname, tmpdir, uptime } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
+import { backed, reportFor } from "./verdict-backing.mjs";
 import { TABLES } from "../packages/sage-core/logbook-fields.mjs";
 
 const LIB = new URL("../plugins/sage/skills/sage/sage.mjs", import.meta.url).href;
@@ -70,17 +72,21 @@ function store(home = mkdtempSync(join(tmpdir(), "sage-home-")), name = "sage-pr
         done({ status: err ? err.code : 0, stdout, stderr });
       }),
     );
+  // A review or QA verdict of a story that ok() records gets its backing run first (T483); a test of the backing rule passes --run itself.
+  const cli = (...args) => { const r = run(...args); if (r.status) throw Error(r.stderr); return r.stdout.trim(); };
+  const back = (args) => backed(args, { cli, keep: (fields) => keepReport(project, fields, env()) });
   const ok = (...args) => {
-    const r = run(...args);
+    const r = run(...back(args));
     assert.equal(r.status, 0, `sage ${args.join(" ")} failed: ${r.stderr}`);
     return r.stdout.trim();
   };
+  // A refusal adds no backing run, so a refused verdict's test still proves that runs.tsv did not change (R1907-1).
   const no = (...args) => {
     const r = run(...args);
     assert.equal(r.status, 1, `sage ${args.join(" ")} should be refused, printed: ${r.stdout}`);
     return r.stderr.trim();
   };
-  return { home, project, pids, run, go, ok, no, dir: ok("init").replace(/^\S+ /, "") }; // init prints "logbook <folder>"
+  return { home, project, pids, run, go, ok, no, keep: (fields) => keepReport(project, fields, env()), dir: ok("init").replace(/^\S+ /, "") }; // init prints "logbook <folder>"
 }
 
 /** Adds a folder of the root to the known project list by hand, as init does, so that its verdicts count. */
@@ -555,7 +561,7 @@ test("finding move: a medium or low finding goes to a follow-up task, which hold
   assert.match(s.no("finding", "move", "T1", "F-T1-1"), /missing --to/);
   assert.equal(s.ok("finding", "move", "T1", "F-T1-1", "--to", "Export every row"), "F-T1-1 moved to T2 as F-T2-1 · T2 framed · small · route build,code-review,qa · P2");
   assert.deepEqual(rows(s.dir, "findings").map((f) => `${f.task} ${f.key} ${f.severity} ${f.status} ${f.triage}|${f.summary}`), ["T2 F-T2-1 medium open |the export skips the last row", "T1 F-T1-2 high open |the save crashes"]);
-  assert.match(readFileSync(join(s.dir, "decisions.tsv"), "utf8"), /\tT1\tF-T1-1 moved to T2 as F-T2-1: the export skips the last row\tthe follow-up task: Export every row\n$/);
+  assert.match(readFileSync(join(s.dir, "decisions.tsv"), "utf8"), /\tT1\tF-T1-1 moved to T2 as F-T2-1: the export skips the last row\tthe follow-up task \(from R1, medium\): Export every row\n$/);
   assert.match(s.no("finding", "move", "T1", "F-T1-1", "--to", "x"), /no finding F-T1-1 on T1/);
   s.ok("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "a test token");
   assert.equal(s.ok("merge-check", "--sha", SHA), "T1 may merge: 1 clean cycle on this SHA", "the moved finding no longer blocks T1");
@@ -2540,6 +2546,9 @@ test("T346: sage stats gives each task's review runs, tokens, tokens after round
   s.ok("task", "add", "--priority", "P2", "--title", "c", "--size", "small");
   s.ok("run", "add", "T1", "--role", "code-reviewer"); // R1
   s.ok("run", "add", "T1", "--role", "qa"); // R2
+  // Their helpers keep their reports while the runs run (T483).
+  s.keep({ task: "T1", run: "R1", role: "code-reviewer", sha: SHA, text: reportFor("findings") });
+  s.keep({ task: "T1", run: "R2", role: "qa", sha: SHA, text: reportFor("qa-pass") });
   s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"); // R3: no review run
   s.ok("run", "add", "T2", "--role", "security-reviewer"); // R4
   s.ok("run", "add", "T2", "--role", "code-reviewer"); // R5
@@ -2561,7 +2570,8 @@ test("T346: sage stats gives each task's review runs, tokens, tokens after round
   for (const source of ["constructor", "__proto__", "a|b"]) s.ok("finding", "add", "T2", "--source", source, "--severity", "low", "--summary", source, "--run", "R4");
   s.ok("verdict", "T1", "--kind", "findings", "--sha", SHA, "--cycle", "1", "--run", "R1");
   s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--cycle", "2", "--run", "R2");
-  s.ok("verdict", "T1", "--kind", "findings", "--sha", SHA, "--cycle", "3", "--run", "R4"); // a T1 row that names T2's run: not R4's cycle for T2
+  // A T1 row that names T2's run: not R4's cycle for T2. The verdict command refuses it (T483), so an old or hand-edited row.
+  appendFileSync(join(s.dir, "ledger.tsv"), `T1\t\t${SHA}\tfindings\t3\tR4\t2026-10-01T00:00:00Z\n`);
   const files = () => readdirSync(s.dir).filter((f) => f.endsWith(".tsv") || f.endsWith(".md")).map((f) => [f, readFileSync(join(s.dir, f), "utf8")]);
   const before = files();
   // Largest review tokens first (T3 before T2 in the logbook, after it here), in thousands.
@@ -3354,7 +3364,7 @@ test("T337: each task of a program waits for the breakdown's approval, and then 
   assert.equal(s.no("merge-check", "--sha", SHA), `sage: T1 waits for ${OPEN}: it merges after the owner approves the breakdown of PG1.${APPROVE}`);
   // The owner approves: the pilot builds; the other tasks wait for the pilot.
   s.ok("gate", "answer", "G1", "--option", "1");
-  assert.match(s.ok("run", "add", "T1", "--role", "lead"), /^R3 running · lead on T1$/);
+  assert.match(s.ok("run", "add", "T1", "--role", "lead"), /^R\d+ running · lead on T1$/);
   assert.equal(s.no("run", "add", "T2", "--role", "lead"), "sage: T2 waits for T1 (briefed, the pilot of PG1), so it takes no lead run: it starts after each of them is merged or concluded. Its design and PE may run.");
   assert.equal(s.ok("task", "T2"), "T2 framed · small · round 0 · route build,code-review,qa · P2 · program PG1 · waits T1 (briefed, the pilot of PG1) · unmet T1");
   assert.equal(s.ok("merge-check", "--sha", SHA), "T1 may merge: 1 clean cycle on this SHA", "the pilot of an approved program merges");
@@ -3364,7 +3374,7 @@ test("T337: each task of a program waits for the breakdown's approval, and then 
   assert.equal(s.no("run", "add", "T2", "--role", "lead"), "sage: T2 waits for T1 (abandoned, the pilot of PG1, never met), so it takes no lead run: it starts after each of them is merged or concluded. Its design and PE may run. T1, the pilot of PG1, is abandoned or not in the logbook, so no other task of PG1 builds: propose a new pilot (sage program propose PG1 --pilot <T>), or take T2 out of it (sage task T2 set program=none), or ask the owner.");
   assert.equal(programsLine(s), "program PG1 · 0 of 2 merged · T1 abandoned · pilot T1 abandoned: choose a new pilot, or drop the program · name: Codex support", "status says the program is stuck");
   stateIs(s, "T1", "merged");
-  assert.match(s.ok("run", "add", "T2", "--role", "lead"), /^R4 running · lead on T2/);
+  assert.match(s.ok("run", "add", "T2", "--role", "lead"), /^R\d+ running · lead on T2/);
   assert.match(s.ok("merge-check", "--sha", SHA), /^2 tasks have verdicts on a1b2c3d, and each must pass: /);
 });
 
@@ -4687,13 +4697,15 @@ test("F-T289-2: a run backs one review or QA verdict of its task; a check verdic
   s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
   s.ok("run", "add", "T1", "--role", "qa"); // R1
   const SHA = "c".repeat(40);
+  s.keep({ task: "T1", run: "R1", role: "qa", sha: SHA, text: reportFor("qa-pass") });
+  s.ok("run", "done", "R1", "--status", "done", "--tokens", "1");
   s.ok("verdict", "T1", "--kind", "checks-pass", "--sha", SHA, "--run", "R1");
   s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--run", "R1");
   assert.match(s.no("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--cycle", "2", "--run", "R1"), /R1 already backs the qa-pass verdict of T1 on ccccccc: one run backs one review or QA verdict/);
   assert.match(s.no("verdict", "T1", "--kind", "review-clean", "--sha", "d".repeat(40), "--run", "R1"), /R1 already backs/, "also on another SHA and kind");
   s.ok("verdict", "T1", "--kind", "checks-pass", "--sha", SHA, "--cycle", "2", "--run", "R1"); // a check needs no run of its own
   s.ok("task", "add", "--priority", "P2", "--title", "b", "--size", "small");
-  s.ok("verdict", "T2", "--kind", "qa-pass", "--sha", SHA, "--run", "R1"); // another task's ledger does not count
+  assert.match(s.no("verdict", "T2", "--kind", "qa-pass", "--sha", SHA, "--run", "R1"), /R1 is a run of T1, not of T2/, "a run backs only its own task's verdict (T483)");
 });
 
 test("F-T289-9: a re-plan back to briefed ends the task's running lead run, with a decision", () => {

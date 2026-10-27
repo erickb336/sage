@@ -5,10 +5,13 @@ import { execFileSync as rawExecFileSync, spawn, spawnSync as rawSpawnSync } fro
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test as nodeTest } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { NEAR_NOTE, PHRASE_CASES, S, S_ON } from "./fixtures/mode-cases.mjs";
+import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
+import { backed } from "./verdict-backing.mjs";
+import { REPORT_FIELDS } from "../packages/sage-core/report.mjs";
 
 /**
  * Bounded waits (F-T273-15, F-T273-20, order 26). The file stalled twice under load with no failure, and node's per-test
@@ -125,8 +128,17 @@ function session(env = {}) {
       p.stdin.end(JSON.stringify({ session_id: "s1", ...event }));
     }));
   // The logbook is FEATURE's, where bash() runs commands: a merge counts only the tasks of its own project's logbook (F-T273-9).
-  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", FEATURE], { encoding: "utf8", env: vars, timeout: CALL_MS, killSignal: "SIGKILL" }).stdout.trim();
+  const sage = backedCli((...args) => spawnSync("node", [TOOL, ...args, "--project", FEATURE], { encoding: "utf8", env: vars, timeout: CALL_MS, killSignal: "SIGKILL" }), FEATURE, vars);
   return { dir, send, sendRaw, sendAsync, sage, vars };
+}
+
+/**
+ * The state tool as the sage runs it in a test's story (run returns spawnSync's result): its output. A review or QA verdict
+ * without --run gets its backing run first, with its report kept as the hook keeps it (T483).
+ */
+function backedCli(run, project, env) {
+  const cli = (...args) => { const r = run(...args); if (r.status) throw Error(r.stderr); return r.stdout.trim(); };
+  return (...args) => String(run(...backed(args, { cli, keep: (fields) => keepReport(project, fields, env) })).stdout ?? "").trim();
 }
 
 const prompt = (text) => ({ hook_event_name: "UserPromptSubmit", prompt: text });
@@ -1772,7 +1784,9 @@ for (const command of FORGERIES) {
       const s = session();
       if (on) s.send(prompt("sage mode"));
       assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", ONLY_CHIEF, `agent, sage mode ${on}`);
-      assert.equal(denied(s.send(bash(command))), undefined, `chief, sage mode ${on}`);
+      // The chief's review or QA verdict meets the verdict rule in sage mode: no logbook at /p, so it is refused (T483).
+      if (on && / verdict T2 --kind (?!checks-)/.test(command)) assert.match(denied(s.send(bash(command))) ?? "", /^sage: the hook cannot read the logbook of \/p \(.*\), so it refuses this review or QA verdict: .* \(T483\)\.$/, `chief, sage mode ${on}`);
+      else assert.equal(denied(s.send(bash(command))), undefined, `chief, sage mode ${on}`);
     }
   });
 }
@@ -2093,7 +2107,7 @@ test("S-OWNCOPY: an agent runs only the copy of the state tool that the hook loa
 
 test("S-EMPTYID: an event with an empty agent_id, or a sage role's agent_type, is an agent's; the chief-of-staff session is the chief (T83)", () => {
   const s = session();
-  const forged = `node ${TOOL} verdict T2 --kind qa-pass --sha ${SHA} --project /p`;
+  const forged = `node ${TOOL} verdict T2 --kind checks-pass --sha ${SHA} --project /p`; // a checks verdict: the chief's needs no kept report (T483)
   for (const who of [{ agent_id: "" }, { agent_id: null }, { agent_type: "sage:qa" }, { agent_id: "", agent_type: "sage:implementer" }]) {
     assert.match(denied(s.send(bash(forged, FEATURE, who))) ?? "", ONLY_CHIEF, JSON.stringify(who));
   }
@@ -5443,12 +5457,12 @@ test("F-T255-13: a child whose type comes in another letter case keeps its slot 
  * logbook is the one of the folder's physical path, as the state tool finds it from process.cwd(); the lead's commands
  * run in s.dir, which on macOS goes through the /var link.
  */
-function leadSession(env = {}) {
+function leadSession(env = {}, size = "small") {
   const s = linkedSession(env);
   s.sage("config", "max_agents=20", "cap_total=30");
   s.send(prompt("sage mode"));
   s.sage("init");
-  for (const title of ["mine", "theirs"]) s.sage("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  for (const title of ["mine", "theirs"]) s.sage("task", "add", "--priority", "P2", "--title", title, "--size", size);
   s.sage("run", "add", "T1", "--role", "lead"); // R1, the lead's own run
   // The sage's fixture findings name the lead run, the only run of T1 yet, as a review or QA finding needs a run (T490).
   s.sage("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a", "--run", "R1", "--class", "other"); // F-T1-1
@@ -5475,7 +5489,7 @@ function leadSession(env = {}) {
 }
 function linkedSession(env) {
   const s = session(env);
-  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", realpathSync(s.dir)], { encoding: "utf8", env: s.vars }).stdout.trim();
+  const sage = backedCli((...args) => spawnSync("node", [TOOL, ...args, "--project", realpathSync(s.dir)], { encoding: "utf8", env: s.vars }), realpathSync(s.dir), s.vars);
   return { ...s, sage };
 }
 const stateRun = (s, args, actor = LEAD, extra = {}) => s.send(tool("Bash", { command: `node ${TOOL} ${args}` }, { cwd: s.dir, ...actor, ...extra }));
@@ -5737,7 +5751,9 @@ test("F-T273-2: a lead sets pr= only while its task has none, to a PR of no othe
 
 test("F-T273-7: a lead makes only the cycle's next state move, and never moves a held task", () => {
   const s = leadSession();
-  const moves = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] }; // verifying to reviewing: the head has no clean verdict (F-T301-49)
+  // verifying to reviewing: the head has no clean verdict (F-T301-49). Reviewing to verifying needs a full clean cycle on the
+  // head (R1836-3), so it is refused here, and passes below once the head has one.
+  const moves = { briefed: ["building"], building: ["reviewing"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
   const states = ["framed", "designing", "awaiting-you", "briefed", "building", "held", "reviewing", "repairing", "replan", "verifying", "verified", "pr-ready", "merged", "concluded", "abandoned"];
   for (const from of states) {
     setState(s, "T1", from);
@@ -5747,12 +5763,25 @@ test("F-T273-7: a lead makes only the cycle's next state move, and never moves a
       else assert.ok(why, `${from} -> ${to} is refused`);
     }
   }
+  setState(s, "T1", "reviewing");
+  assert.match(denied(stateRun(s, "task T1 set state=verifying")) ?? "", /^sage: T1's head [0-9a-f]{7} has no full clean cycle yet .*\(R1836-3, R1846-1\)\./, "no clean cycle on the head");
+  for (const kind of ["review-clean", "qa-pass"]) s.sage("verdict", "T1", "--kind", kind, "--sha", s.head(), "--cycle", "1", "--pr", "5");
+  assert.equal(denied(stateRun(s, "task T1 set state=verifying")), undefined, "a full clean cycle on the head");
   setState(s, "T1", "held");
   for (const args of ["task T1 set state=building", "task T1 set branch=claude/t1", "task T1 set state=reviewing state=verifying"]) {
     assert.match(denied(stateRun(s, args)) ?? "", /T1 is held, and only the sage moves a held task/, args);
   }
   setState(s, "T1", "building");
   assert.match(denied(stateRun(s, "task T1 set state=reviewing state=verifying")) ?? "", NOT_OWN, "one state= per command");
+});
+
+test("R1991-1: a lead moves a tiny task without a risk flag to verifying with no cycle; a small task still needs one", () => {
+  const tiny = leadSession({}, "tiny"); // route ["build"]: no review and no QA, so the merge check needs no cycle
+  setState(tiny, "T1", "reviewing");
+  assert.equal(denied(stateRun(tiny, "task T1 set state=verifying")), undefined, "a tiny task has no cycle to wait for");
+  const small = leadSession();
+  setState(small, "T1", "reviewing");
+  assert.match(denied(stateRun(small, "task T1 set state=verifying")) ?? "", /^sage: T1's head [0-9a-f]{7} has no full clean cycle yet .*\(R1836-3, R1846-1\)\./, "a small task with no clean cycle");
 });
 
 test("F-T273-3: a lead's run add --branch must be a branch of its own task", () => {
@@ -6413,8 +6442,8 @@ test("F-T289-18: while a run's high is not recorded, the lead adds no run of tha
   s.sage("finding", "close", "T1", "F-T1-1"); // the fixture's own findings, so that only the running runs hold the merge
   s.sage("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "fixture");
   s.sage("verdict", "T1", "--kind", "checks-pass", "--sha", s.head(), "--pr", "5");
-  s.sage("verdict", "T1", "--kind", "review-clean", "--sha", s.head(), "--pr", "5"); // what a lead past the hook would record
-  s.sage("verdict", "T1", "--kind", "qa-pass", "--sha", s.head(), "--pr", "5");
+  // What a lead past the hook once recorded: the state tool now refuses these with no kept report (T483), so they are old rows.
+  appendRows(s.sage("logbook"), "ledger", ["review-clean", "qa-pass"].map((kind) => ({ task: "T1", pr: "5", sha: s.head(), kind, cycle: "1", run: "", at: "2026-10-01T00:00:00Z" })));
   const check = () => spawnSync("node", [TOOL, "merge-check", "--sha", s.head(), "--pr", "5", "--project", realpathSync(s.dir)], { encoding: "utf8", env: s.vars }).stderr;
   assert.match(check(), /T1 has a review or QA run that still runs: R2 \(qa\), R5 \(code-reviewer\)\. End it with its report's findings recorded, then check again\./);
   leadFind(s, "code-reviewer", "high");
@@ -6709,6 +6738,7 @@ test("F-T289-37: after the sage dismisses or moves the lead's recorded medium, t
     if (how === "dismiss") s.sage("finding", "triage", "T1", "F-T1-3", "dismiss", "--reason", "not a bug");
     else s.sage("finding", "move", "T1", "F-T1-3", "--to", "follow-up");
     assert.equal(denied(stateRun(s, "run add T1 --role code-reviewer")), undefined, `${how}: a new run of the role`);
+    for (const kind of ["review-clean", "qa-pass"]) s.sage("verdict", "T1", "--kind", kind, "--sha", s.head(), "--cycle", "1", "--pr", "5"); // the move to verifying needs a clean cycle (R1836-3)
     assert.equal(denied(stateRun(s, "task T1 set state=verifying")), undefined, `${how}: a state move`);
   }
   const s = leadSession(); // F-T1-2, a qa medium, is the sage's: it does not stand for a qa helper's medium
@@ -7142,21 +7172,23 @@ test("T482 F2: a lead records no checks verdict, with a run or without", () => {
   assert.match(leadVerdict(s, "checks-fail", "R4") ?? "", /a checks verdict \(checks-pass or checks-fail\) is the sage's/, "with a run");
 });
 
-test("T482 F2: while a task's lead run runs, the sage's review or QA verdict needs a helper's kept report that backs it", () => {
+test("T482 F2, T483: the sage's review or QA verdict needs a helper's kept report that backs it, with a running lead run or without", () => {
   const s = leadSession();
   const chief = (kind, run) => denied(s.send(bash(`node ${TOOL} verdict T1 --kind ${kind} --sha ${s.head()} --cycle 1 --pr 5${run ? ` --run ${run}` : ""} --project ${realpathSync(s.dir)}`, s.dir)));
   const findings = helpedRun(s, "code-reviewer", report("FINDINGS", "- K1 medium src/a.js:1 an empty name saves a row"));
-  assert.match(chief("review-clean", findings) ?? "", new RegExp(`^sage: T1 has a running lead run, R1, .* ${findings}'s helper reported FINDINGS with medium findings, so its verdict is findings or qa-fail, not review-clean`), "a relay of CLEAN is refused");
-  assert.match(chief("review-clean") ?? "", /names the helper run \(--run R<n>\)/, "a verdict with no run");
-  assert.match(chief("qa-pass", "R9") ?? "", /R9 is not a run of T1, so it backs no verdict on T1/, "a run that is not in the logbook");
+  const early = / The state tool refuses this verdict too \(T483\)\.$/;
+  assert.match(chief("review-clean", findings) ?? "", new RegExp(`^sage: ${findings}'s report has 1 medium or high finding \\(RESULT FINDINGS with medium findings\\), and T1 holds 0 of ${findings} at that severity or above: so it backs findings\\.`), "a relay of CLEAN is refused");
+  assert.match(chief("review-clean") ?? "", /^sage: review-clean is a review or QA verdict, so it names the run whose kept report backs it/, "a verdict with no run");
+  assert.match(chief("qa-pass", "R9") ?? "", /^sage: R9 is not a run in this logbook/, "a run that is not in the logbook");
   const silent = leadAdd(s, "qa");
   s.sage("run", "done", silent, "--status", "done", "--tokens", "1");
-  assert.match(chief("qa-pass", silent) ?? "", new RegExp(`${silent}'s helper gave no report, so ${silent} backs no verdict of the sage`), "a run with no kept report");
-  assert.equal(chief("findings", findings), undefined, "the kept report backs findings");
+  assert.match(chief("qa-pass", silent) ?? "", new RegExp(`^sage: ${silent} has no kept report: .*${early.source}`), "a run with no kept report");
+  assert.match(chief("findings", findings) ?? "", /this lead's code-reviewer helpers reported medium or high findings on T1/, "the kept report backs findings, and the lead records its findings first (R1816-2)");
   assert.equal(chief("qa-pass", "R4"), undefined, "R4's kept PASS backs qa-pass");
   assert.equal(chief("checks-pass"), undefined, "the checks verdict stays the sage's");
   s.sage("run", "done", "R1", "--status", "blocked");
-  assert.equal(chief("review-clean", findings), undefined, "with no running lead run, the sage decides from the reports");
+  assert.equal(chief("findings", findings), undefined, "with no running lead run, the kept report backs findings");
+  assert.match(chief("review-clean", findings) ?? "", /so it backs findings\. For review-clean, record each one first/, "with no running lead run too, the report decides (R1795-3)");
 });
 
 // T482 repair round 1 (R1774): the findings of R1762, R1763 and R1764.
@@ -7166,18 +7198,13 @@ const chiefVerdict = (s, kind, run) => denied(s.send(bash(`node ${TOOL} verdict 
 test("T482 R1764-1: while a lead run runs, the sage's verdict needs a finished run of the task whose role gives the kind", () => {
   const s = leadSession(); // R2: a qa run that still runs, its helper stopped with PASS; R3: T2's qa run; R4: a done qa run with PASS
   const cr = helpedRun(s, "code-reviewer", cleanOf("code-reviewer")); // a done code-reviewer run with CLEAN
-  const lead = /^sage: T1 has a running lead run, R1, so the sage records a review or QA verdict on it only when a helper's report that the hook kept backs it; the lead records these verdicts itself \(T482\)\. /;
-  const refused = (kind, run, why) => {
-    const reason = chiefVerdict(s, kind, run) ?? "";
-    assert.match(reason, lead, `${kind} ${run}`);
-    assert.ok(reason.includes(why), `${kind} ${run}: ${reason}`);
-  };
-  refused("qa-pass", cr, `${cr} is a code-reviewer run, so it backs no qa-pass verdict: only a qa run does (F-T284-6).`);
-  refused("security-clean", "R4", "R4 is a qa run, so it backs no security-clean verdict: only a security-reviewer run does (F-T284-6).");
-  refused("security-clean", cr, `${cr} is a code-reviewer run, so it backs no security-clean verdict: only a security-reviewer run does (F-T284-6).`);
-  refused("review-clean", "R4", "R4 is a qa run, so it backs no review-clean verdict: only a code-reviewer run does (F-T284-6).");
-  refused("qa-pass", "R2", "R2 still runs, so it backs no verdict yet: its lead ends it and records its verdict, or the sage does after the lead run ends.");
-  refused("qa-pass", "R3", "R3 is not a run of T1, so it backs no verdict on T1: name the qa run of T1 whose report backs it.");
+  const refused = (kind, run, why) => assert.equal(chiefVerdict(s, kind, run), `sage: ${why} The state tool refuses this verdict too (T483).`, `${kind} ${run}`);
+  refused("qa-pass", cr, `${cr} is a code-reviewer run, so it backs no qa-pass verdict: only a qa run does.`);
+  refused("security-clean", "R4", "R4 is a qa run, so it backs no security-clean verdict: only a security-reviewer run does.");
+  refused("security-clean", cr, `${cr} is a code-reviewer run, so it backs no security-clean verdict: only a security-reviewer run does.`);
+  refused("review-clean", "R4", "R4 is a qa run, so it backs no review-clean verdict: only a code-reviewer run does.");
+  refused("qa-pass", "R2", "R2 still runs: end it after its helper's report (sage run done R2 --status done --tokens <n>), then record its verdict.");
+  refused("qa-pass", "R3", "R3 is a run of T2, not of T1: name the qa run of T1 whose report backs this verdict.");
   assert.equal(chiefVerdict(s, "qa-pass", "R4"), undefined, "the right role passes: R4's qa PASS backs qa-pass");
   assert.equal(chiefVerdict(s, "review-clean", cr), undefined, `the right role passes: ${cr}'s CLEAN backs review-clean`);
 });
@@ -7218,7 +7245,7 @@ test("T482 R1763-2: the sage's verdict rule reads the tool path in single quotes
   const s = leadSession();
   const tail = `verdict T1 --kind review-clean --sha ${s.head()} --cycle 1 --pr 5 --project ${realpathSync(s.dir)}`;
   for (const command of [`node ${TOOL} ${tail}`, `node '${TOOL}' ${tail}`, `node "${TOOL}" ${tail}`, `node ${TOOL} \\\n${tail}`, `node '${TOOL}' \\\n  ${tail}`]) {
-    assert.match(denied(s.send(bash(command, s.dir))) ?? "", /names the helper run \(--run R<n>\) whose report backs it/, JSON.stringify(command));
+    assert.match(denied(s.send(bash(command, s.dir))) ?? "", /^sage: review-clean is a review or QA verdict, so it names the run whose kept report backs it: .* The state tool refuses this verdict too \(T483\)\.$/, JSON.stringify(command));
   }
   assert.equal(denied(s.send(bash(`node '${TOOL}' \\\n  verdict T1 --kind qa-pass --sha ${s.head()} --cycle 1 --pr 5 --run R4 --project ${realpathSync(s.dir)}`, s.dir))), undefined, "a backed verdict passes in that form too");
 });
@@ -7330,20 +7357,160 @@ test("T482 R1836-1: after a restart, the sage's run done of an old helper run fr
   }
 });
 
-test("T482 R1835-1: a command that names the state tool runs only a command word that the hook reads as a plain word that is not verdict", () => {
+test("T482 R1835-1, T483: when node runs a state tool, only a command word that the hook reads as a plain word that is not verdict passes", () => {
   const s = leadSession();
   const rest = `T1 --kind review-clean --sha ${s.head()} --cycle 1 --pr 5 --project ${realpathSync(s.dir)}`;
-  const line = /This command names a sage\.mjs, and the hook cannot read its command word as a plain word that is not verdict .* Run it as a command of its own, with the absolute path of the state tool that this hook loads/;
+  const line = /This command names a sage\.mjs \(or node runs a path with a pattern or a variable\) in a form that the hook cannot read as a plain command of the state tool, .* Run it as a command of its own, with the absolute path of the state tool that this hook loads/;
   for (const form of ["ver\\dict", "v'erdict'", 'ver"dict"', "verdic''t", '"v"erdict', "$'verdict'", "`echo verdict`", "$(echo verdict)", "${V:-verdict}", "ver*", "v[e]rdict"]) {
-    for (const tool of [TOOL, `'${TOOL}'`, "~/x/skills/sage/sage.mjs", "sa'ge'.mjs"]) {
+    for (const tool of [TOOL, `'${TOOL}'`, "~/x/skills/sage/sage.mjs", "sa'ge'.mjs", TOOL.replace(/sage\.mjs$/, "SAGE.MJS")]) {
       const command = `node ${tool} ${form} ${rest}`;
       assert.match(denied(s.send(bash(command, s.dir))) ?? "", line, command);
     }
   }
-  assert.match(denied(s.send(bash(`echo ${rest} | xargs node ${TOOL} verdict`, s.dir))) ?? "", line, "a verdict whose words come from elsewhere");
-  assert.match(denied(s.send(bash(`node ${TOOL} verdict ${rest}`, s.dir))) ?? "", /names the helper run \(--run R<n>\) whose report backs it/, "the plain form is read and checked");
-  for (const command of [`node ${TOOL} status`, `node ${TOOL} merge-check --sha ${s.head()} --pr 5`, `cd ${s.dir} && node ${TOOL} status`, `node ~/x/skills/sage/sage.mjs logbook`, `node ${TOOL} task add --priority P2 --title "two words" --size small`]) {
+  // A pattern or a variable in node's program word may name a state tool (R1848-2, R1845-1); so may node's inline code.
+  for (const command of [`node ${dirname(TOOL)}/*.mjs status`, `node ${dirname(TOOL)}/sage.mj? status`, `node ${dirname(TOOL)}/s[a]ge.mjs status`, `node ${dirname(TOOL)}/{sage,x}.mjs status`,
+    "node $T verdict " + rest, "node ${T} verdict " + rest, `FOO=1 node -r x $T verdict ${rest}`, `node -e "import('${TOOL}')"`, `cd ${s.dir} && NODE ${TOOL} verdict ${rest} --run R4 --cycle 2`]) {
+    assert.match(denied(s.send(bash(command, s.dir))) ?? "", line, command);
+  }
+  assert.match(denied(s.send(bash(`node ${TOOL} verdict ${rest}`, s.dir))) ?? "", /^sage: review-clean is a review or QA verdict, so it names the run whose kept report backs it/, "the plain form is read and checked");
+  // Only node's program word counts: a read of the file, a text that names it, or another program passes. The state tool
+  // itself refuses any verdict that no kept report backs, so a form that the hook lets pass records nothing wrong (T483).
+  for (const command of [`node ${TOOL} status`, `node ${TOOL} merge-check --sha ${s.head()} --pr 5`, `cd ${s.dir} && node ${TOOL} status`, `node ~/x/skills/sage/sage.mjs logbook`, `node ${TOOL} task add --priority P2 --title "two words" --size small`,
+    `cat ${TOOL}`, `git log -p -- packages/sage-claude/skills/sage/sage.mjs`, `git diff main -- plugins/sage/skills/sage/sage.mjs`, `grep -n verdict ${TOOL}`,
+    `git commit -m "sage.mjs verdict: the rule"`, `node scripts/build.mjs`]) {
     assert.equal(denied(s.send(bash(command, s.dir))), undefined, command);
+  }
+});
+
+test("T483 R1956-1: a wrapped form of the sage's verdict command is refused, so the lead's gap rule holds for it too", () => {
+  const s = leadSession(); // R1 is the running lead run of T1
+  const findings = helpedRun(s, "code-reviewer", report("FINDINGS", "- K1 medium src/a.js:1 an empty name saves a row"));
+  const rest = `T1 --kind findings --sha ${s.head()} --cycle 1 --pr 5 --run ${findings} --project ${realpathSync(s.dir)}`;
+  const line = /^sage: the sage records a verdict as one plain command of the state tool, .*This command names a sage\.mjs/;
+  // The plain form is read, and the gap rule refuses it: the lead records its helper's finding first (R1816-2).
+  assert.match(denied(s.send(bash(`node ${TOOL} verdict ${rest}`, s.dir))) ?? "", /this lead's code-reviewer helpers reported medium or high findings on T1/, "the plain form");
+  // Each wrapped form would skip that rule, so the hook refuses it (the strings are test input; no shell runs them).
+  for (const command of [`env node ${TOOL} verdict ${rest}`, `bash -c 'node ${TOOL} verdict ${rest}'`, `sh -c "node '${TOOL}' verdict ${rest}"`, `nice node ${TOOL} verdict ${rest}`,
+    `env node ${TOOL} ver\\dict ${rest}`, `echo ${rest} | xargs node ${TOOL} verdict`, `echo verdict ${rest} | xargs node ${TOOL}`, `xargs bash -c 'node ${TOOL}' < args.txt`,
+    'echo "run node sage.mjs verdict T1 to record it" > /dev/null']) {
+    assert.match(denied(s.send(bash(command, s.dir))) ?? "", line, command);
+  }
+  // A wrapped read command of the state tool, and a read of the file, pass.
+  for (const command of [`env node ${TOOL} status`, `bash -c 'node ${TOOL} status'`, `cat ${TOOL}`, `grep -n verdict ${TOOL}`]) {
+    assert.equal(denied(s.send(bash(command, s.dir))), undefined, command);
+  }
+});
+
+test("T483 C-T483-1: a review that the sage starts itself keeps its report by the brief's run line, and backs the sage's verdict; with no run line, none is kept", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R1", "--status", "blocked"); // no running lead run: the sage runs the review itself
+  const review = (id, line) => {
+    const run = s.sage("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
+    assert.equal(denied(s.send(spawnAgent("sage:code-reviewer", line ? `${line(run)}\n${BRIEF}` : BRIEF, `tu-${id}`, { cwd: s.dir }))), undefined, "the spawn");
+    s.send(resultOf(`tu-${id}`, id, { cwd: s.dir }));
+    s.send(ended(id, "sage:code-reviewer", { cwd: s.dir, last_assistant_message: cleanOf("code-reviewer") }));
+    s.sage("run", "done", run, "--status", "done", "--tokens", "1");
+    return run;
+  };
+  const marked = review("rev-a", (run) => `Run ${run} · task T1`);
+  assert.equal(chiefVerdict(s, "review-clean", marked), undefined, "the hook's early rule passes");
+  assert.match(s.sage("verdict", "T1", "--kind", "review-clean", "--sha", s.head(), "--cycle", "1", "--pr", "5", "--run", marked), /^T1 review-clean · [0-9a-f]{7} · cycle 1/, "the state tool records it");
+  const plain = review("rev-b");
+  assert.match(chiefVerdict(s, "review-clean", plain) ?? "", new RegExp(`^sage: ${plain} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${plain} · task T1"`), "no run line, no kept report");
+});
+
+test("T483 full report: Claude's second incomplete stop keeps the text but backs no verdict", () => {
+  const s = leadSession({ SAGE_TEST_PIDS: "{}" });
+  s.sage("run", "done", "R1", "--status", "blocked");
+  for (const field of REPORT_FIELDS) {
+    const run = s.sage("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
+    const id = `incomplete-${run}`, message = cleanOf("code-reviewer").split("\n").filter(line => !line.startsWith(`${field} `)).join("\n");
+    assert.equal(denied(s.send(spawnAgent("sage:code-reviewer", `Run ${run} · task T1\n${BRIEF}`, `tu-${id}`, { cwd: s.dir }))), undefined);
+    s.send(resultOf(`tu-${id}`, id, { cwd: s.dir }));
+    const stop = active => s.send(ended(id, "sage:code-reviewer", { cwd: s.dir, last_assistant_message: message, stop_hook_active: active }));
+    assert.equal(stop(false)?.decision, "block", `${field}: the first stop asks for correction`);
+    assert.equal(stop(true)?.decision, undefined, `${field}: the second stop still exits`);
+    const book = s.sage("logbook"), saved = JSON.parse(readFileSync(join(book, "kept", `${run}.json`), "utf8"));
+    assert.equal(saved.text, message, `${field}: the incomplete text stays available`);
+    assert.equal(saved.sha, s.head(), "the unchanged branch supplies its SHA");
+    s.sage("run", "done", run, "--status", "done", "--tokens", "1");
+    const before = readFileSync(join(book, "ledger.tsv"), "utf8");
+    const refused = spawnSync("node", [TOOL, "verdict", "T1", "--kind", "review-clean", "--sha", s.head(), "--run", run, "--project", realpathSync(s.dir)], { encoding: "utf8", env: s.vars });
+    assert.equal(refused.status, 1, `${field}: the second stop cannot back a verdict`);
+    assert.match(refused.stderr, /kept report cannot be read/);
+    assert.equal(readFileSync(join(book, "ledger.tsv"), "utf8"), before);
+  }
+});
+
+test("T483 R1932-1 R1933-1: the sage's own review keeps a report only for its own running run of its role, with the commit at its start", () => {
+  const s = leadSession(); // R1 is the running lead run of T1; R2 and R4 are its own qa runs
+  let n = 0;
+  /** The sage's review: spawn with the brief's first line, then (more) between the spawn and the stop, then the stop. */
+  const spawn = (role, line) => {
+    const id = `own-${++n}`;
+    assert.equal(denied(s.send(spawnAgent(`sage:${role}`, `${line}\n${BRIEF}`, `tu-${id}`, { cwd: s.dir }))), undefined, `the spawn of ${line}`);
+    s.send(resultOf(`tu-${id}`, id, { cwd: s.dir }));
+    return id;
+  };
+  const stop = (id, role, message = cleanOf(role)) => s.send(ended(id, `sage:${role}`, { cwd: s.dir, last_assistant_message: message }));
+  const add = (role) => s.sage("run", "add", "T1", "--role", role).split(" ")[0];
+  const done = (run) => s.sage("run", "done", run, "--status", "done", "--tokens", "1");
+  const kept = (run) => existsSync(join(s.sage("logbook"), "kept", `${run}.json`));
+  // A run that the running lead added for its own helper is the lead's: the sage's agent keeps no report for it.
+  const leads = leadAdd(s, "code-reviewer");
+  stop(spawn("code-reviewer", `Run ${leads} · task T1`), "code-reviewer");
+  assert.equal(kept(leads), false, "a run that the lead added");
+  done(leads);
+  assert.match(chiefVerdict(s, "review-clean", leads) ?? "", new RegExp(`^sage: ${leads} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${leads} · task T1"`), "so the sage's verdict on it is refused (R1965-1)");
+  s.sage("run", "done", "R1", "--status", "blocked"); // the sage runs the reviews itself from here
+  // A first line with a suffix still names the run.
+  const suffix = add("code-reviewer");
+  stop(spawn("code-reviewer", `Run ${suffix} · task T1 (PR 5, P0): review the head`), "code-reviewer");
+  assert.equal(kept(suffix), true, "a suffix after the task");
+  // A brief whose task is not the run's marks no run.
+  const other = add("code-reviewer");
+  stop(spawn("code-reviewer", `Run ${other} · task T2`), "code-reviewer");
+  assert.equal(kept(other), false, "the brief names another task than the run's");
+  // One run in two slots: neither agent's run is sure.
+  const twice = add("code-reviewer"), a = spawn("code-reviewer", `Run ${twice} · task T1`);
+  spawn("code-reviewer", `Run ${twice} · task T1`); // the second agent of the run still runs at the first one's stop
+  stop(a, "code-reviewer");
+  assert.equal(kept(twice), false, "one run in two slots");
+  // A run of another role, and a run that is not running at the stop.
+  const qa = add("qa");
+  stop(spawn("code-reviewer", `Run ${qa} · task T1`), "code-reviewer");
+  assert.equal(kept(qa), false, "a code reviewer for a qa run");
+  const over = add("code-reviewer"), late = spawn("code-reviewer", `Run ${over} · task T1`);
+  done(over);
+  stop(late, "code-reviewer");
+  assert.equal(kept(over), false, "a run that ended before the stop");
+  // The branch moves during the review: the report keeps no commit, so with no full SHA in BRANCH it backs no verdict.
+  const moved = add("code-reviewer"), during = spawn("code-reviewer", `Run ${moved} · task T1`);
+  const head = s.commit();
+  stop(during, "code-reviewer");
+  done(moved);
+  assert.equal(kept(moved), true);
+  assert.match(chiefVerdict(s, "review-clean", moved) ?? "", new RegExp(`^sage: ${moved}'s report names no full 40-character head SHA in BRANCH, and the hook saw none`), `not on ${head.slice(0, 7)}, which moved during the review`);
+  // The branch stays: the commit at the start backs the verdict on it.
+  const still = add("code-reviewer");
+  stop(spawn("code-reviewer", `Run ${still} · task T1`), "code-reviewer");
+  done(still);
+  assert.equal(chiefVerdict(s, "review-clean", still), undefined, "the commit at the start, which is still the head");
+});
+
+test("T483: the sage's verdict rule reads --project as the state tool does, and refuses a review or QA verdict on a logbook that it cannot read", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R1", "--status", "blocked"); // no running lead run: only the state tool's rule
+  const dir = realpathSync(s.dir), up = dirname(dir);
+  const tail = (kind, run, project) => `verdict T1 --kind ${kind} --sha ${s.head()} --cycle 1 --pr 5 --run ${run} ${project}`;
+  const ask = (command, cwd) => denied(s.send(bash(`node ${TOOL} ${command}`, cwd)));
+  for (const [project, cwd] of [[`--project=${dir}`, up], ["--project .", dir], [`--project ${basename(dir)}`, up], [`--project=./${basename(dir)}`, up], ["", dir]]) {
+    assert.match(ask(tail("review-clean", "R4", project), cwd) ?? "", /^sage: R4 is a qa run, so it backs no review-clean verdict/, `${project} from ${cwd}`);
+    assert.equal(ask(tail("qa-pass", "R4", project), cwd), undefined, `${project} from ${cwd}: R4's kept PASS backs qa-pass`);
+  }
+  for (const [project, cwd] of [["--project=/nowhere/at/all", dir], [`--project ${basename(dir)}`, dir]]) {
+    assert.match(ask(tail("qa-pass", "R4", project), cwd) ?? "", /^sage: the hook cannot read the logbook of .*, so it refuses this review or QA verdict: run it in the project's folder, or with a --project that has a logbook \(T483\)\.$/, project);
+    assert.equal(ask(tail("checks-pass", "R4", project), cwd), undefined, `${project}: a checks verdict needs no kept report`);
   }
 });
 

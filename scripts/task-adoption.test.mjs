@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { test } from 'node:test';
 import { createStateTool } from '../packages/sage-core/state.mjs';
+import { reportFor } from './verdict-backing.mjs';
 
 const SHA = '1'.repeat(40), BRANCH = 'sage/t536-adopt';
 const tool = createStateTool({ defaultRoot: env => env.SAGE_HOME });
@@ -261,6 +262,7 @@ test('adoption preserves source identity, PR and spent rounds without copying so
   for (const cycle of ['1', '2']) {
     for (const [role, kind] of [['code-reviewer', 'review-clean'], ['security-reviewer', 'security-clean'], ['qa', 'qa-pass']]) {
       const id = s.ok('run', 'add', 'T1', '--role', role, '--branch', BRANCH).split(' ')[0];
+      tool.keepReport(s.project, { task: 'T1', run: id, role, sha: SHA, text: reportFor(kind) }, s.env);
       s.ok('run', 'done', id, '--status', 'done', '--tokens', '1');
       if (role === 'qa') assert.match(s.no('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', 'review-clean', '--cycle', cycle, '--run', id), /code-reviewer|qa/);
       s.ok('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', kind, '--cycle', cycle, '--run', id);
@@ -420,6 +422,7 @@ test('adoption preserves the source configured cycle minimum and stronger destin
   const cycle = number => {
     for (const [role, kind] of [['code-reviewer', 'review-clean'], ['security-reviewer', 'security-clean'], ['qa', 'qa-pass']]) {
       const id = s.ok('run', 'add', 'T1', '--role', role, '--branch', BRANCH).split(' ')[0];
+      tool.keepReport(s.project, { task: 'T1', run: id, role, sha: SHA, text: reportFor(kind) }, s.env);
       s.ok('run', 'done', id, '--status', 'done', '--tokens', '1');
       s.ok('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', kind, '--cycle', String(number), '--run', id);
     }

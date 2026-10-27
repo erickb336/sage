@@ -11,6 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
+import { backed } from "./verdict-backing.mjs";
 
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));
 const LAUNCHER = [at("../plugins/sage/hooks/launcher.mjs"), "sage-hook.mjs"];
@@ -120,11 +122,13 @@ function project({ size = "small", config = [] } = {}) {
   // A command as the lead runs it: from the project's folder, without --project or SAGE_PROJECT. git, gh and cat run for real.
   const scripts = { sage: TOOL, wait: WAIT }; // the file's sage and wait stand for node and a script of the plugin
   const run = (program, args) => spawnSync(scripts[program] ? "node" : program, scripts[program] ? [scripts[program], ...args] : args, { cwd: folder, env });
-  const chief = (...args) => {
+  const tool = (...args) => {
     const r = spawnSync("node", [TOOL, ...args, "--project", folder], { env });
     assert.equal(r.status, 0, `the sage's sage ${args.join(" ")}: ${r.stderr}`);
     return r.stdout.trim();
   };
+  // The sage's own review or QA verdict without --run gets its backing run first, with a kept report (T483).
+  const chief = (...args) => tool(...backed(args, { cli: tool, keep: (fields) => keepReport(folder, fields, env) }));
   const p = { folder, send, run, chief, lead: undefined, leads: 0 };
   /** The states of the next calls of gh pr checks, one per call; after them, the check passes. */
   p.checks = (...states) => writeFileSync(join(bin, "checks"), states.join("\n"));
@@ -545,16 +549,21 @@ test("T301: the lead file's state table is the hook's: each move in it passes, a
   const STATES = ["framed", "designing", "awaiting-you", "briefed", "building", "reviewing", "repairing", "verifying", "verified", "pr-ready", "held", "replan", "merged", "concluded", "abandoned"];
   p.chief("task", "T1", "set", "branch=sage/t1-example"); // a head with no verdict: the move from verifying to reviewing needs one (F-T301-49)
   p.commit();
-  const wrong = [];
+  const wrong = [], clean = "reviewing>verifying"; // it needs a full clean cycle on the head (R1836-3): played after the others
   for (const from of STATES) {
     p.setState(from);
     for (const to of STATES) {
-      if (to === from) continue;
+      if (to === from || `${from}>${to}` === clean) continue;
       const passes = p.ask(`node ${TOOL} task T1 set state=${to}`) === undefined;
       if (passes !== moves.includes(`${from}>${to}`)) wrong.push(`${from} to ${to}: the hook ${passes ? "lets it pass" : "refuses it"}`);
     }
   }
   assert.deepEqual(wrong, [], "the file's state table and the hook differ");
+  assert.ok(moves.includes(clean), "the file has the move to verifying");
+  p.setState("reviewing");
+  assert.match(p.ask(`node ${TOOL} task T1 set state=verifying`) ?? "", /^sage: T1's head [0-9a-f]{7} has no full clean cycle yet .* so T1 stays at reviewing: record them first \(R1836-3, R1846-1\)\. /, "no clean cycle on the head");
+  for (const kind of ["review-clean", "qa-pass"]) p.chief("verdict", "T1", "--sha", p.head(), "--kind", kind, "--cycle", "1");
+  assert.equal(p.ask(`node ${TOOL} task T1 set state=verifying`), undefined, "a full clean cycle on the head");
 });
 
 test("T301: the lead file's verdict table is the hook's: each report gives only the kind that the table names", () => {

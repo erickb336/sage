@@ -147,6 +147,8 @@ The chief may also move a low or new finding to a follow-up task. Then it starts
 
 The chief keeps what only it does: your questions, the checks verdict after `gh pr checks`, the move to verified, the follow-up tasks, and the merge.
 
+Every review or QA verdict, of the lead or of the chief, comes from the report that the hook kept when the helper stopped. The state tool refuses a verdict that no kept report backs, in any form of the command. A report with a medium or high finding gives a clean verdict only after the chief recorded each of those findings and dismissed, moved or closed it.
+
 sage uses balanced model defaults:
 
 - Sonnet does the UX review, the implementation of a tiny task, and the QA of a small task.
