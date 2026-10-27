@@ -1330,3 +1330,96 @@ test("T51 verify-install: invalid arguments invoke no Git and annotated tags are
   assert.match(r.stderr, /usage: sage.mjs verify-install/);
   assert.equal(existsSync(marker), false); assert.deepEqual(f.snapshot(), before);
 });
+
+for (const selected of ["assigned", "unrelated"]) {
+  test(`T51 verify-install repair: CLI rejects unrelated projects with ${selected} Git selectors`, t => {
+    const a = installFixture(t), b = installFixture(t), selectedProject = selected === "assigned" ? a.project : b.project;
+    const args = ["--commit", b.sha, "--project", b.project];
+    assert.match(a.run(args).stderr, /assigned project/, "negative control without selectors");
+    const env = { ...a.env, GIT_DIR: join(selectedProject, ".git"), GIT_WORK_TREE: selectedProject,
+      GIT_COMMON_DIR: join(selectedProject, ".git"), GIT_OBJECT_DIRECTORY: join(selectedProject, ".git/objects") };
+    const before = a.snapshot(), otherBefore = b.snapshot();
+    const result = a.run(args, { env });
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /assigned project/);
+    assert.equal(a.run(undefined, { env }).status, 0, "the assigned project still matches");
+    assert.deepEqual(a.snapshot(), before); assert.deepEqual(b.snapshot(), otherBefore);
+  });
+
+  test(`T51 verify-install repair: hook rejects unrelated projects with ${selected} Git selectors`, t => {
+    const a = world(t), b = world(t), selectedProject = selected === "assigned" ? a.project : b.project;
+    a.mode({ sage: true, autopilot: false });
+    const actor = a.child("/root/sage_qa_t1_r1");
+    const command = project => `'${process.execPath}' '${TOOL}' verify-install --commit ${SHA} --project '${project}'`;
+    assert.ok(denied(a.send(pre("Bash", command(b.project), actor))), "negative control without selectors");
+    Object.assign(a.env, { GIT_DIR: join(selectedProject, ".git"), GIT_WORK_TREE: selectedProject,
+      GIT_COMMON_DIR: join(selectedProject, ".git") });
+    for (const who of [undefined, actor]) {
+      assert.ok(denied(a.send(pre("Bash", command(b.project), who))), "an unrelated project must be refused");
+      assert.equal(a.send(pre("Bash", command(a.project), who)), undefined, "the assigned project remains accepted");
+    }
+  });
+}
+
+test("T51 verify-install repair: inherited config and discovery settings cannot change CLI identity", t => {
+  const a = installFixture(t), b = installFixture(t), linked = join(a.dir, "linked");
+  a.git("worktree", "add", "-qb", "linked", linked);
+  const env = { ...a.env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.worktree", GIT_CONFIG_VALUE_0: b.project,
+    GIT_CEILING_DIRECTORIES: a.dir, GIT_DISCOVERY_ACROSS_FILESYSTEM: "0", GIT_CONFIG_PARAMETERS: "'core.bare=true'" };
+  assert.match(a.run(["--commit", b.sha, "--project", b.project], { env }).stderr, /assigned project/);
+  assert.equal(a.run(["--commit", a.sha, "--project", linked], { env }).status, 0, "a real linked worktree remains assigned");
+});
+
+for (const objectKind of ["blob", "tree", "commit"]) {
+  test(`T51 verify-install repair: missing promisor ${objectKind} fails locally without helper execution or mutation`, t => {
+    const f = installFixture(t), marker = join(f.dir, "helper-called"), helper = join(f.dir, "upload-pack");
+    writeFileSync(helper, `#!/bin/sh\nprintf called > '${marker}'\nexit 1\n`, { mode: 0o755 });
+    f.git("config", "remote.origin.url", f.project); // local fixture only; no network endpoint
+    f.git("config", "remote.origin.promisor", "true");
+    f.git("config", "remote.origin.partialclonefilter", "blob:none");
+    f.git("config", "remote.origin.uploadpack", helper);
+    const env = { ...f.env, GIT_NO_LAZY_FETCH: "0", GIT_ALLOW_PROTOCOL: "file",
+      GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "protocol.allow", GIT_CONFIG_VALUE_0: "always" };
+    assert.equal(f.run(undefined, { env }).status, 0, "complete local objects need no helper");
+    const oid = objectKind === "blob" ? f.git("rev-parse", "HEAD:plugins/sage-codex/nested/sample.txt")
+      : objectKind === "tree" ? f.git("rev-parse", "HEAD:plugins/sage-codex") : f.sha;
+    rmSync(join(f.project, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+    const before = f.snapshot(), result = f.run(undefined, { env });
+    assert.equal(result.status, 1, result.stdout);
+    assert.equal(existsSync(marker), false, "Git must not execute the repository's upload-pack helper");
+    assert.deepEqual(f.snapshot(), before, "no object, config, ref, or other fixture file changes");
+    if (objectKind === "blob") assert.deepEqual(JSON.parse(result.stdout).errors, ["nested/sample.txt"]);
+    else assert.equal(result.stdout, "");
+  });
+}
+
+test("T51 verify-install repair: replacement objects cannot change the explicit commit's bytes", t => {
+  const f = installFixture(t), original = f.git("rev-parse", "HEAD:plugins/sage-codex/nested/sample.txt");
+  writeFileSync(join(f.tracked, "nested/sample.txt"), "replacement bytes\n");
+  const replacement = f.git("hash-object", "-w", "plugins/sage-codex/nested/sample.txt");
+  f.git("replace", original, replacement);
+  assert.equal(f.git("cat-file", "blob", original), "replacement bytes", "negative control proves replacement is active");
+  const before = f.snapshot(), result = f.run(undefined, { env: { ...f.env, GIT_NO_REPLACE_OBJECTS: "0" } });
+  assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).counts.matched, 1);
+  assert.deepEqual(f.snapshot(), before);
+});
+
+test("T51 verify-install repair: malformed tree paths and duplicate entries cannot report a match", t => {
+  const f = installFixture(t), blob = f.git("rev-parse", "HEAD:plugins/sage-codex/nested/sample.txt");
+  const inputGit = (input, ...args) => {
+    const r = spawnSync("git", ["-C", f.project, ...args], { input, encoding: "utf8", env: f.env });
+    assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
+  };
+  for (const names of [["../outside"], ["sample.txt", "sample.txt"]]) {
+    const bytes = Buffer.concat(names.map(name => Buffer.concat([Buffer.from(`100644 ${name}\0`), Buffer.from(blob, "hex")])));
+    const malformed = inputGit(bytes, "hash-object", "-t", "tree", "--literally", "-w", "--stdin");
+    const plugins = inputGit(`040000 tree ${malformed}\tsage-codex\n`, "mktree");
+    const root = inputGit(`040000 tree ${plugins}\tplugins\n`, "mktree");
+    const commit = f.git("-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", root, "-m", "malformed");
+    const before = f.snapshot(), result = f.run(["--commit", commit, "--project", f.project]);
+    assert.equal(result.status, 1, result.stdout);
+    assert.equal(JSON.parse(result.stdout).result, "different");
+    assert.deepEqual(JSON.parse(result.stdout).errors, [names[0]]);
+    assert.deepEqual(f.snapshot(), before);
+  }
+});

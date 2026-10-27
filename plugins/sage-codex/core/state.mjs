@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { USAGE_FIELDS, tokenCount, usageText, usageRegistry, usageSnapshot, validUsageSnapshot, usageSummary } from "./usage.mjs";
 import { parseRunTarget } from "./run-target.mjs";
+import { readLocalGit } from "./local-git.mjs";
 import { TaskUpdateError } from "./task-update-error.mjs";
 import { recordedWrites, coordinatedWrites, assertNoPendingWrite, RecordedWriteError } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
@@ -154,7 +155,7 @@ function git(args, env = process.env) {
  */
 function projectRoot(path) {
   try {
-    const [common, gitDir, top] = git(["-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir", "--show-toplevel"]).trim().split("\n");
+    const [common, gitDir, top] = readLocalGit(path, ["rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir", "--show-toplevel"]).toString().trim().split("\n");
     const [realCommon, realGit, realTop] = [common, gitDir, top].map((p) => realpathSync(p));
     const main = realGit === realCommon && dirname(realCommon) === realTop;
     const linked = dirname(realGit) === join(realCommon, "worktrees") && realpathSync(resolve(realGit, readFileSync(join(realGit, "gitdir"), "utf8").trim())) === join(realTop, ".git");

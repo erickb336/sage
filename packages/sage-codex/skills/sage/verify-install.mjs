@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { readLocalGit as git } from "sage-core";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,14 +19,6 @@ export function verificationOptions(args) {
   const commit = options["--commit"], project = options["--project"];
   if (!/^[0-9a-fA-F]{40}$/.test(commit ?? "") || !isAbsolute(project ?? "") || /[\x00-\x1f\x7f]/.test(project)) return undefined;
   return { commit: commit.toLowerCase(), project };
-}
-
-/** Git reads objects only. Ignore ambient repository selectors, replacement objects and optional locks. */
-function git(project, args) {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
-  Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" });
-  return execFileSync("git", ["--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", project, ...args],
-    { env, timeout: 5000, maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
 }
 
 const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.nlink === b.nlink && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;

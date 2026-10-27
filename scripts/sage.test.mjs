@@ -4145,19 +4145,16 @@ test("R1740-3: a run on the head branch in another letter case owns it, as a tas
   assert.match(r.stderr, /also belongs to \S+ T1 \(by run R1 on it\), which is not on PR 41/);
 });
 
-test("T94: every git call of the state tool carries the neutral options and environment", () => {
-  const { base, env, project, sage } = sandboxPrep();
-  // A fake git first on PATH records its arguments and the neutral environment, then runs the real git.
-  const bin = join(base, "bin");
-  const log = join(base, "git.log");
-  const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-  mkdirSync(bin);
-  writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$*" "$GIT_CONFIG_NOSYSTEM" "$GIT_ALLOW_PROTOCOL" "$GIT_TERMINAL_PROMPT" >> '${log}'\nexec '${real}' "$@"\n`);
-  chmodSync(join(bin, "git"), 0o755);
-  assert.equal(sage(["init"], project, { PATH: `${bin}:${env.PATH}` }).status, 0);
-  const calls = readFileSync(log, "utf8").trim().split("\n");
-  assert.ok(calls.length > 0, "the tool ran git");
-  for (const call of calls) assert.match(call, /^-c core\.fsmonitor=false -c core\.hooksPath=\/dev\/null -C \S+ rev-parse .*\|1\|file:https:ssh\|0$/);
+test("T94: project identity ignores inherited Git selectors and keeps linked worktrees assigned", () => {
+  const { base, repo, project, sage } = sandboxPrep();
+  assert.equal(sage(["init"]).status, 0);
+  const logbook = sage(["logbook"]).out, other = repo("other"), linked = join(base, "linked");
+  execFileSync("git", ["-C", project, "worktree", "add", "-q", linked, "-b", "claude/t1"]);
+  const env = { GIT_DIR: join(other, ".git"), GIT_WORK_TREE: other, GIT_COMMON_DIR: join(other, ".git"),
+    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.worktree", GIT_CONFIG_VALUE_0: other };
+  assert.equal(sage(["logbook"], project, env).out, logbook);
+  assert.equal(sage(["logbook"], linked, env).out, logbook);
+  assert.match(sage(["logbook"], other, env).out, /no logbook for the project/);
 });
 
 test("T94: a planted .git/commondir does not lend a folder another project's logbook; a linked worktree keeps its project's", () => {

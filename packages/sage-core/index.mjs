@@ -1,5 +1,6 @@
 // Public API. Providers import this entry point only.
 export { createStateTool } from "./state.mjs";
+export { readLocalGit } from "./local-git.mjs";
 export { applyPrinciples, MOMENTS, fingerprint } from "./principles.mjs";
 export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
 export { createCommandPolicy, mentionsMerge, gitSubcommand, programName } from "./command-policy.mjs";
