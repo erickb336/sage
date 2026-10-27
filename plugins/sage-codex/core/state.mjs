@@ -14,12 +14,12 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, hostname, platform, tmpdir, uptime } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { boardView } from "./board-view.mjs";
 import { projectName as shownName } from "./board-model.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
 import { createBoard } from "./board.mjs";
-import { PR } from "./pull-request.mjs";
+import { PR, pullRequestHead } from "./pull-request.mjs";
 import { parseReport } from "./report.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
@@ -89,13 +89,14 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program"], findings: ["run", "class"] };
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe"];
+const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption", "approvals"], findings: ["run", "class"] };
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss"],
   "projects rebuild": ["accept-listing"],
   "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
+  "task-adopt": ["source-logbook", "source-provider", "source-task", "pr", "branch"],
   "program propose": ["name", "goal", "pilot", "tasks"],
   "run add": ["role", "branch", "candidate", "usage-interface"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
@@ -207,7 +208,17 @@ const ofTask = (task, name) => BRANCH.test(name) && new RegExp(`^(?:[A-Za-z0-9_-
  */
 /** Is it the same branch: letters in any case, as ofTask reads a task's name (R1740-3). */
 const sameBranch = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
-const mayName = (tasks, task, name) => ofTask(task.id, name) || tasks.some((other) => other.id !== task.id && other.branch === name);
+const adoptionOf = task => {
+  if (!task.adoption) return null;
+  let a;
+  try { a = JSON.parse(task.adoption); } catch { /* Refuse below. */ }
+  if (!a || a.version !== 1 || !/^[a-z][a-z0-9-]*$/.test(a.provider ?? "") || !TASK_ID.test(a.task ?? "")
+    || !isAbsolute(a.logbook ?? "") || !isAbsolute(a.project ?? "") || !PR.test(a.pr ?? "") || !ofTask(a.task, a.branch)
+    || !Number.isSafeInteger(a.round) || a.round < 0 || (a.cycles !== undefined && (!Number.isInteger(a.cycles) || a.cycles < 1))
+    || !/^[a-f0-9]{64}$/.test(a.digest ?? "")) refuse(`${task.id} has a damaged adoption record.`);
+  return a;
+};
+const mayName = (tasks, task, name) => ofTask(task.id, name) || adoptionOf(task)?.branch === name || tasks.some((other) => other.id !== task.id && other.branch === name);
 const branchOf = (name) => (BRANCH.test(name) ? name : refuse(`${JSON.stringify(name)} is not a task branch: use letters, digits and . _ / - (for example sage/t12 or tool/t12-short-name), not main, master or HEAD in any case, not under refs/, heads/, remotes/ or origin/, and not a name that starts with - or holds .., @{ or a space.`));
 
 /** The project's name: its main checkout's folder name as a slug. The store's folder and the cap.<project> config key use it. */
@@ -305,9 +316,9 @@ function config(env = process.env) {
   return c;
 }
 
-/** The clean cycles that a task needs before its merge: cycles.small for every task, cycles.large for a large one, and cycles.risk for any task with a risk flag (the largest count wins). */
+/** The clean cycles that a task needs: its current configuration and any saved source minimum from adoption (the largest count wins). */
 function cyclesFor(task, c) {
-  return Math.max(...cycleKeys(task).map((k) => c[k]));
+  return Math.max(adoptionOf(task)?.cycles ?? 0, ...cycleKeys(task).map((k) => c[k]));
 }
 
 /** The cycles keys that apply to a task: cycles.small, and cycles.large or cycles.risk when it is large or has a risk flag. */
@@ -496,26 +507,30 @@ function updateReference(input) {
     || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
     || typeof input.version !== "string" || !/^[0-9a-f]{64}$/.test(input.version)
     || !input.changes || typeof input.changes !== "object" || Array.isArray(input.changes)) updateDeny();
-  const keys = ["title", "branch", "pr", "state"].filter(key => Object.hasOwn(input.changes, key));
+  const keys = ["title", "branch", "pr", "state", "approval"].filter(key => Object.hasOwn(input.changes, key));
   if (!keys.length || !updateKeys(input.changes, keys) || keys.some(key => typeof input.changes[key] !== "string"
     || input.changes[key].length > 4096 || cell(input.changes[key]) !== input.changes[key])
     || (Object.hasOwn(input.changes, "state") && (!STATES.includes(input.changes.state) || ["merged", "repairing"].includes(input.changes.state)))) updateDeny();
   return { owner: input.owner, request: input.request, task: input.task, version: input.version,
     changes: Object.fromEntries(keys.map(key => [key, input.changes[key]])) };
 }
-function updateRows(table, text) {
+function updateRows(table, text, cols = TABLES[table]) {
   const sheet = sheetText(text);
-  if (!TABLES[table].every(key => sheet.cols.includes(key) || ADDED[table]?.includes(key))
-    || sheet.cols.some(key => !TABLES[table].includes(key)) || new Set(sheet.cols).size !== sheet.cols.length) updateDeny();
-  return rowsIn(table, sheet);
+  if (!cols.every(key => sheet.cols.includes(key) || ADDED[table]?.includes(key))
+    || sheet.cols.some(key => !cols.includes(key)) || new Set(sheet.cols).size !== sheet.cols.length) updateDeny();
+  return rowsOf(sheet).map(row => ({ ...row, ...Object.fromEntries((ADDED[table] ?? [])
+    .filter(key => cols.includes(key) && !Object.hasOwn(row, key)).map(key => [key, ""])) }));
 }
-function updateFacts(rows, readiness) {
-  return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, programs: rows.programs, readiness };
+function updateFacts(rows, readiness, maxRounds) {
+  return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, programs: rows.programs, readiness,
+    ...(maxRounds === undefined ? {} : { maxRounds }) };
 }
 function checkUpdateFacts(facts) {
   // The facts of a sage before programs (T337) have no programs: that sage refused a logbook with them, so it read none.
   const tables = ["findings", "ledger", "gates", ...(facts && Object.hasOwn(facts, "programs") ? ["programs"] : [])];
-  if (!updateKeys(facts, [...tables, "readiness"])) updateDeny();
+  const counts = Object.hasOwn(facts ?? {}, "maxRounds") ? ["maxRounds"] : [];
+  if (!updateKeys(facts, [...tables, "readiness", ...counts])
+    || (counts.length && (!Number.isSafeInteger(facts.maxRounds) || valid("max_rounds", facts.maxRounds) !== facts.maxRounds))) updateDeny();
   for (const table of tables) {
     if (!Array.isArray(facts[table]) || facts[table].some(row => !updateKeys(row, TABLES[table])
       || Object.values(row).some(value => typeof value !== "string" || cell(value) !== value))) updateDeny();
@@ -527,15 +542,15 @@ function checkUpdateFacts(facts) {
     || !updateKeys(r.config, ["cycles.small", "cycles.large", "cycles.risk"])
     || Object.entries(r.config).some(([key, value]) => !Number.isSafeInteger(value) || valid(key, value) !== value))) updateDeny();
 }
-function planNativeTaskUpdate(before, reference, at, facts) {
+function planNativeTaskUpdate(before, reference, at, facts, columns = TABLES, legacyRounds = false) {
   checkUpdateFacts(facts);
   const old = before.tasks.filter(row => row.id === reference.task);
   if (old.length !== 1 || taskVersion(old[0]) !== reference.version) updateDeny();
   const changes = Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`);
-  const planned = planTaskChanges(before, reference.task, changes, at, facts);
-  // Validate the caller's original row version, then publish complete current columns.
+  const planned = planTaskChanges(before, reference.task, changes, at, facts, legacyRounds);
+  // A saved update keeps its writer's columns; a new update uses the current columns.
   for (const table of ["tasks", "runs", "decisions"]) planned[table] = planned[table].map(row =>
-    Object.fromEntries(TABLES[table].map(key => [key, row[key] ?? ""])));
+    Object.fromEntries(columns[table].map(key => [key, row[key] ?? ""])));
   planned.task = planned.tasks.find(row => row.id === reference.task);
   const task = planned.task, needsReady = ["verified", "pr-ready"].includes(task.state);
   if (needsReady) {
@@ -564,16 +579,31 @@ function validateTaskUpdateData(intent) {
     || !updateKeys(proposal, ["at", "facts", "task", "version", "disruptive"])
     || typeof proposal.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(proposal.at)
     || !Number.isFinite(Date.parse(proposal.at)) || new Date(proposal.at).toISOString().replace(".000Z", "Z") !== proposal.at) updateDeny();
-  const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, updateRows(table, intent.tables[table].before)]));
-  const planned = planNativeTaskUpdate(before, reference, proposal.at, proposal.facts);
+  // The after-header records the schema used by the original writer, including
+  // columns it added to a legacy before-table. Do not migrate historical hashes.
+  const columns = Object.fromEntries(["tasks", "runs", "decisions"].map(table => {
+    const cols = sheetText(intent.tables[table].after).cols;
+    if (JSON.stringify(cols) !== JSON.stringify(TABLES[table].filter(key => cols.includes(key)))
+      || TABLES[table].some(key => !cols.includes(key) && !ADDED[table]?.includes(key))) updateDeny();
+    return [table, cols];
+  }));
+  if (Object.hasOwn(reference.changes, "approval") && !columns.tasks.includes("approvals")) updateDeny();
+  // Schema 6 predates approval grants. Its after-header distinguishes the old
+  // writer from the first approval-aware writer, which also used schema 6.
+  // Only saved records select old rules; admission always plans current rules.
+  const legacyRounds = intent.schema === 6 && !columns.tasks.includes("approvals");
+  if (intent.schema === 8 && !columns.tasks.includes("approvals")) updateDeny();
+  if (legacyRounds && Object.hasOwn(proposal.facts, "maxRounds")) updateDeny();
+  const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, updateRows(table, intent.tables[table].before, columns[table])]));
+  const planned = planNativeTaskUpdate(before, reference, proposal.at, proposal.facts, columns, legacyRounds);
   if (JSON.stringify(proposal.task) !== JSON.stringify(planned.task) || proposal.version !== taskVersion(planned.task)
     || proposal.disruptive !== planned.disruptive) updateDeny();
-  for (const table of ["tasks", "runs", "decisions"]) if (intent.tables[table].after !== tableText(table, planned[table])) updateDeny();
+  for (const table of ["tasks", "runs", "decisions"]) if (intent.tables[table].after !== tableText(table, planned[table], columns[table])) updateDeny();
 }
 function validateTaskUpdate(intent) {
   try { validateTaskUpdateData(intent); } catch { throw new TaskUpdateError("invalid-state"); }
 }
-const taskUpdates = coordinatedWrites({ schema: 6, tables: ["tasks", "runs", "decisions"], folder: "task-updates", validate: validateTaskUpdate });
+const taskUpdates = coordinatedWrites({ schema: 8, previousSchemas: [6], tables: ["tasks", "runs", "decisions"], folder: "task-updates", validate: validateTaskUpdate });
 
 /** Native task updates require a trusted durable admission decision, never a model-supplied proof. */
 function updateRequestedTask(input, env, coordination) {
@@ -593,7 +623,8 @@ function updateRequestedTask(input, env, coordination) {
       const current = before.tasks.filter(row => row.id === reference.task);
       if (current.length !== 1) throw new TaskUpdateError("invalid-state");
       if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
-      const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null);
+      const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null,
+        Object.hasOwn(reference.changes, "approval") ? config(env).max_rounds : undefined);
       const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
       phase = needsReady ? "readiness" : "plan";
       const openFindings = facts.findings.filter(row => row.task === reference.task && row.status === "open");
@@ -637,12 +668,26 @@ const taskWrites = recordedWrites({ schema: 2, tables: ["tasks", "decisions"], f
   name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json",
   validate: validateTaskWrite });
 
+/** A saved writer may add known optional columns, but cannot discard existing cells. */
+function savedWriteColumns(tables, deny) {
+  return Object.fromEntries(Object.entries(tables).map(([table, pair]) => {
+    const before = sheetText(pair.before).cols, after = sheetText(pair.after).cols;
+    for (const cols of [before, after]) {
+      if (!TABLES[table].every(key => cols.includes(key) || ADDED[table]?.includes(key))
+        || cols.some(key => !TABLES[table].includes(key)) || new Set(cols).size !== cols.length) deny();
+    }
+    if (before.some(key => !after.includes(key))) deny();
+    return [table, after];
+  }));
+}
+
 /** Validate saved task publication as one pure update before any recovery write. */
 function validateTaskWrite({ reference, result }, tables) {
   const deny = () => refuse("The saved task update is damaged. No task table changed.");
   if (!result || typeof result.id !== "string" || !/^T[1-9]\d*$/.test(result.id)
     || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, reference.title, reference.size, reference.risk, reference.add))) deny();
   if (!tables) return;
+  const columns = savedWriteColumns(tables, deny);
   const rows = (table, text) => {
     const { cols, lines } = sheetText(text);
     if (!TABLES[table].every(c => cols.includes(c) || ADDED[table]?.includes(c))
@@ -651,14 +696,14 @@ function validateTaskWrite({ reference, result }, tables) {
   };
   const tasks = rows("tasks", tables.tasks.before), decisions = rows("decisions", tables.decisions.before);
   if (tasks.some(task => task.id === result.id)
-    || tables.tasks.after !== tableText("tasks", [...tasks, result])) deny();
+    || tables.tasks.after !== tableText("tasks", [...tasks, result], columns.tasks)) deny();
   if (reference.add.length) {
     const after = rows("decisions", tables.decisions.after), at = after.at(-1)?.at;
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(at ?? "")
       || !Number.isFinite(Date.parse(at)) || new Date(at).toISOString().replace(".000Z", "Z") !== at) deny();
     decisions.push({ at, task: result.id, decision: `added ${reference.add.join(",")}`, why: reference.why });
   }
-  if (tables.decisions.after !== tableText("decisions", decisions)) deny();
+  if (tables.decisions.after !== tableText("decisions", decisions, columns.decisions)) deny();
 }
 
 /** Create one task for a durable caller request. The provider authenticates the opaque owner scope. */
@@ -836,7 +881,7 @@ function reviewResult(reference, claims, at) {
 }
 
 /** The same pure delta defines fresh publication and validates a saved recovery intent. */
-function reviewDelta({ reference, result }, claims, rows) {
+function reviewDelta({ reference, result }, claims, rows, columns = TABLES) {
   const deny = () => refuse("The saved review update is damaged. No review tables changed.");
   const { task: id, run, role, review } = reference;
   const { tasks, findings, ledger, decisions } = structuredClone(rows);
@@ -854,7 +899,7 @@ function reviewDelta({ reference, result }, claims, rows) {
     task.state = "reviewing";
     decisions.push({ at: result.at, task: id, decision: `${before} → reviewing`, why: `${claims.kind} verdict on ${review.sha}` });
   }
-  return Object.fromEntries(Object.entries({ tasks, findings, ledger, decisions }).map(([table, values]) => [table, tableText(table, values)]));
+  return Object.fromEntries(Object.entries({ tasks, findings, ledger, decisions }).map(([table, values]) => [table, tableText(table, values, columns[table])]));
 }
 
 /** Validate authenticated report bytes and every saved after-image before publication. No current Git reads. */
@@ -879,7 +924,7 @@ function validateReviewWrite({ reference, result }, tables) {
       || cols.some(c => !TABLES[table].includes(c)) || new Set(cols).size !== cols.length) deny();
     return [table, rowsOf({ cols, lines })];
   }));
-  const expected = reviewDelta({ reference, result }, claims, rows);
+  const expected = reviewDelta({ reference, result }, claims, rows, savedWriteColumns(tables, deny));
   if (Object.keys(expected).some(table => tables[table].after !== expected[table])) deny();
 }
 
@@ -1225,8 +1270,7 @@ function captureReviewTarget(input, env = process.env) {
   });
 }
 
-function tableText(table, rows) {
-  const cols = TABLES[table];
+function tableText(table, rows, cols = TABLES[table]) {
   return [cols.join("\t"), ...rows.map((r) => cols.map((c) => cell(r[c])).join("\t"))].join("\n") + "\n";
 }
 function write(dir, table, rows) {
@@ -1477,7 +1521,23 @@ const programDecision = (task, was, at, why, { programs }) => {
 };
 
 /** The extra rounds of a task's holds by round: a whole number, and 0 for any other cell, so a hand-written cell never gives NaN (F-T286-2). */
-const extraOf = (task) => (/^\d{1,3}$/.test(task.extra ?? "") ? Number(task.extra) : 0);
+const extraOf = (task) => (/^\d+$/.test(task.extra ?? "") && Number.isSafeInteger(Number(task.extra)) ? Number(task.extra) : 0);
+
+/** Bind a new allowance to the owner's explicit answer, the task, spent rounds and current limit. */
+function repairApproval(task, approval, facts) {
+  const max = facts.maxRounds, spent = Number(task.round), limit = max + extraOf(task);
+  const question = `Approve one more repair round for ${task.id} after ${spent} spent rounds and limit ${limit}?`;
+  const gates = facts.gates.filter(g => g.id === approval);
+  if (!/^G[1-9]\d*$/.test(approval ?? "") || gates.length !== 1
+    || gates[0].task !== task.id || gates[0].question !== question
+    || gates[0].options !== "approve|decline" || gates[0].answer !== "approve"
+    || (task.approvals ?? "").split(",").includes(approval)
+    || !Number.isSafeInteger(max) || max < 1 || max > 10
+    || !Number.isSafeInteger(spent) || spent < 0 || !Number.isSafeInteger(Math.max(spent, limit) + 1)) {
+    refuse(`${task.id} needs a new task-specific repair approval. Ask a gate with question "${question}" and options "approve|decline". After the owner chooses approve, resume with state=building or state=briefed and approval=<G>. Nothing changed.`);
+  }
+  return Math.max(spent, limit) + 1 - max;
+}
 
 /** Refuses an id that the logbook does not have, and names the latest ids that it has, to pick from. */
 const missing = (what, ids) => refuse(`no ${what}. ${ids.length ? `The latest: ${ids.slice(-10).join(", ")}.` : "There is none yet."}`);
@@ -1492,25 +1552,45 @@ function taskOf(dir, id) {
 }
 
 /** Calculate ordered task changes over one coherent snapshot. No files or clock are read. */
-function planTaskChanges(before, id, changes, at, facts) {
+function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
   const { tasks, runs, decisions } = structuredClone(before);
   const matches = tasks.filter(row => row.id === id);
   if (matches.length !== 1) refuse("The task is missing or ambiguous.");
   let note = "";
   const task = matches[0], decided = [], graph = waitGraph(tasks, facts.programs, facts.gates, decisions), had = prsOf(task, decisions, facts.ledger);
+  const approvals = changes.filter(kv => kv.startsWith("approval="));
+  const states = changes.filter(kv => kv.startsWith("state="));
+  const resume = task.state === "held" && task.hold === "round" && states.some(kv => kv !== "state=abandoned");
+  let allowance;
+  if (!legacyRounds && (resume || approvals.length)) {
+    if (approvals.length !== 1 || states.length !== 1 || !["state=building", "state=briefed"].includes(states[0])
+      || task.state !== "held" || task.hold !== "round") refuse(`${task.id} needs one approval=<G> with a move from a round hold to building or briefed. Nothing changed.`);
+    allowance = repairApproval(task, approvals[0].slice(9), facts);
+  }
   for (const kv of changes) {
     const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
+    if (k === "approval") continue; // validated with the whole request before any state transition
+    const adoption = adoptionOf(task);
+    if (adoption && ((k === "branch" && v !== adoption.branch) || (k === "pr" && v !== adoption.pr))) refuse(`${task.id}'s adoption keeps PR ${adoption.pr} and branch ${adoption.branch}. Nothing changed.`);
     if (k === "state") {
       if (v === "repairing") refuse("start a repair with: sage round <task>");
-      // A move out of a hold that round set gives the task one more repair round, once per such hold (F-T284-14,
-      // F-T284-15). Only the state tool writes hold and extra (F-T284-16); a hold by task set gives none.
+      // Only an explicit, unused approval grants a round. Ordinary holds grant none.
       const was = task.state;
       move(task, v); // the design's states first; the table is written only if every check below passes
       if (["building", "merged", "concluded"].includes(v)) waitsMet(task, graph, `move to ${v}`);
       // A move to abandoned gives no round: the task ends (F-T286-3).
       if (was === "held" && task.hold === "round" && v !== "abandoned") {
-        task.extra = String(extraOf(task) + 1);
-        decided.push({ at: at, task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
+        if (legacyRounds) {
+          task.extra = String(extraOf(task) + 1);
+          decided.push({ at, task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
+        } else {
+        task.extra = String(allowance);
+        const approval = approvals[0].slice(9);
+        task.approvals = [task.approvals, approval].filter(Boolean).join(",");
+        const decision = `held → ${v}: one more repair round (${approval})`;
+        // A CLI retry after the decision write but before the task write completes the same grant.
+        if (!decisions.some(row => row.task === task.id && row.decision === decision)) decided.push({ at, task: task.id, decision, why: "owner approval" });
+        }
       }
       if (was === "held" || v === "held") task.hold = "";
       // A new premise starts its own count: the round keys of the old plan go when the task leaves replan (F-T284-19).
@@ -1564,7 +1644,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       const { rows, note: joined } = programDecision(task, was, at, "task set", graph);
       decided.push(...rows);
       note += joined;
-    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits= or program=`);
+    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, program= or approval=`);
   }
   return { task, tasks, runs, decisions: [...decisions, ...decided], note };
 }
@@ -1612,6 +1692,8 @@ function move(task, to) {
  * then checks a new PR against the pilot (apartFromPilot).
  */
 function setPr(task, pr, why, at = now()) {
+  const adoption = adoptionOf(task);
+  if (adoption && pr !== adoption.pr) refuse(`${task.id}'s adoption keeps PR ${adoption.pr}. Nothing changed.`);
   if (pr && !builds(task)) refuse(`${task.id} is an investigation: it changes no code, so it has no pull request. A build is its own task: sage task add --size tiny, small or large, then give that task the PR.`);
   if (pr && !PR.test(pr)) refuse(`${JSON.stringify(pr)} is not a pull request number. Give only its digits, with no leading zero, for example pr=5 or --pr 5.`);
   const was = task.pr;
@@ -2215,6 +2297,61 @@ function sage(argv, env = process.env) {
 function act(cmd, pos, opt, dir, env, skip, project) {
   const [sub, id, ...more] = pos;
   switch (cmd) {
+    case "task-adopt": {
+      if (pos.length !== 1) refuse("task-adopt takes one destination task id.");
+      const { tasks, task } = taskOf(dir, need(sub, "the destination task id"));
+      const provider = need(opt["source-provider"], "--source-provider"), sourceTask = need(opt["source-task"], "--source-task");
+      const path = need(opt["source-logbook"], "--source-logbook"), pr = need(opt.pr, "--pr"), branch = branchOf(need(opt.branch, "--branch"));
+      if (!/^[a-z][a-z0-9-]*$/.test(provider) || !TASK_ID.test(sourceTask) || !isAbsolute(path) || !PR.test(pr)) refuse("adoption needs a provider name, source task id, absolute source logbook and PR number. Nothing changed.");
+      let source;
+      try { source = realpathSync(path); } catch { refuse("the source logbook does not exist. Nothing changed."); }
+      const identity = { provider, task: sourceTask, logbook: source, project: projectRoot(project), pr, branch };
+      if (source === realpathSync(dir) || basename(source) !== basename(dir)
+        || readRegular(join(source, "checkout.txt"))?.trim() !== identity.project) refuse("the source logbook must belong to this project under another provider root. Nothing changed.");
+      const prior = adoptionOf(task);
+      if (prior) {
+        if (Object.entries(identity).some(([key, value]) => prior[key] !== value)) refuse(`${task.id} already has a conflicting adoption. Nothing changed.`);
+        return `${task.id} adopted (already recorded) · ${provider} ${sourceTask} · PR ${pr} · ${branch} · round ${task.round}`;
+      }
+      // The source is read only. Refuse an active writer or a changed snapshot instead of taking its lock.
+      if (existsSync(join(source, ".lock"))) refuse("the source logbook is busy. Nothing changed.");
+      const book = check(source), sourceRows = rowsOf(book.tasks), matches = sourceRows.filter(t => t.id === sourceTask);
+      if (matches.length !== 1) refuse("the source task is missing or ambiguous. Nothing changed.");
+      const old = matches[0];
+      if (old.adoption || !ofTask(sourceTask, branch) || (old.branch && old.branch !== branch) || prNumber(old.pr) !== pr
+        || !builds(old) || ENDED.includes(old.state) || !/^\d+$/.test(old.round) || !Number.isSafeInteger(Number(old.round))) refuse("the source task, PR or branch does not match this adoption. Nothing changed.");
+      const sourceEnv = { ...env, SAGE_HOME: dirname(source) }, sourceConfig = config(sourceEnv);
+      const broken = Object.keys(sourceConfig).find(k => sourceConfig[k] === "invalid");
+      if (broken) refuse(`the source ${broken} is not a number. Nothing changed.`);
+      const decisions = read(dir, "decisions"), ledger = read(dir, "ledger"), runs = read(dir, "runs");
+      const claims = (t, decisions, ledger, runs) => prsOf(t, decisions, ledger).has(pr) || ofTask(t.id, branch) || sameBranch(t.branch, branch)
+        || runs.some(r => r.task === t.id && sameBranch(r.branch, branch));
+      const claimed = tasks.find(t => t.id !== task.id && claims(t, decisions, ledger, runs));
+      if (claimed) refuse(`${claimed.id} already claimed this PR or branch. Nothing changed.`);
+      const sourceClaim = sourceRows.find(t => t.id !== sourceTask && claims(t, rowsOf(book.decisions), rowsOf(book.ledger), rowsOf(book.runs)));
+      if (sourceClaim) refuse(`${sourceClaim.id} also claims the source PR or branch. Adopt shared work only after the owner resolves its task mapping. Nothing changed.`);
+      if (!["framed", "briefed"].includes(task.state) || !builds(task) || (task.branch && task.branch !== branch) || (task.pr && task.pr !== pr)
+        || [...prsOf(task, decisions, ledger)].some(n => n !== pr) || runs.some(r => r.task === task.id && (!r.ended || !["blocked", "failed"].includes(r.status)))
+        || ledger.some(r => r.task === task.id) || read(dir, "findings").some(f => f.task === task.id)) refuse("adoption needs a framed or briefed destination with only ended blocked or failed runs, no findings or verdicts, and no conflicting PR/branch history. Nothing changed.");
+      if (list(old.risk).some(r => !RISKS.includes(r)) || list(old.route).some(b => !BLOCKS.includes(b))) refuse("the source route or risk flags are unknown. Nothing changed.");
+      let head;
+      try { head = pullRequestHead(pr, project, env); } catch (error) { refuse(`adoption cannot check the PR: ${error.message}. Nothing changed.`); }
+      if (head !== branch) refuse("the PR head branch does not match this adoption. Nothing changed.");
+      const graph = graphOf(dir);
+      const adopted = { ...task, pr, branch, round: Math.max(Number(task.round), Number(old.round)),
+        risk: RISKS.filter(r => list(task.risk).includes(r) || list(old.risk).includes(r)).join(","),
+        route: BLOCKS.filter(b => list(task.route).includes(b) || list(old.route).includes(b)).join(","),
+        adoption: JSON.stringify({ version: 1, ...identity, round: Number(old.round), cycles: cyclesFor(old, sourceConfig), digest: createHash("sha256").update(JSON.stringify(old)).digest("hex"), at: now() }) };
+      // A large source retains its two-cycle floor even when the destination was framed as small.
+      if (old.size === "large") adopted.size = "large";
+      apartFromPilot(adopted, graph, decisions, ledger, "pr", prsOf(task, decisions, ledger));
+      if (existsSync(join(source, ".lock")) || JSON.stringify(check(source)) !== JSON.stringify(book)
+        || JSON.stringify(config(sourceEnv)) !== JSON.stringify(sourceConfig)) refuse("the source changed during adoption. Nothing changed.");
+      // All adopted fields and provenance share one atomic task-table replacement. No source proof is copied.
+      Object.assign(task, adopted);
+      write(dir, "tasks", tasks);
+      return `${task.id} adopted · ${provider} ${sourceTask} · PR ${pr} · ${branch} · round ${task.round}; fresh destination reviews and QA required`;
+    }
     case "config":
       return logbookConfig(dir, pos);
     case "init":
@@ -2313,7 +2450,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       let note = "";
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
-        const planned = planTaskChanges(before, task.id, more, now(), Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])));
+        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env).max_rounds });
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);
         if (JSON.stringify(planned.runs) !== JSON.stringify(before.runs)) write(dir, "runs", planned.runs);
         write(dir, "tasks", planned.tasks);
@@ -2571,6 +2708,13 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       notHeld(task, "verdict");
       const kind = need(opt.kind, "--kind");
       if (!KINDS.includes(kind)) refuse(`kind is one of ${KINDS.join(", ")}`);
+      if (adoptionOf(task) && CLEAN.includes(kind)) {
+        const role = { "review-clean": "code-reviewer", "security-clean": "security-reviewer", "ux-clean": "ux-reviewer", "qa-pass": "qa", "evidence-clean": "evidence-review" }[kind];
+        const matches = read(dir, "runs").filter(r => r.id === opt.run);
+        const run = matches[0];
+        if (matches.length !== 1 || run.task !== task.id || run.role !== role || run.status !== "done" || !run.ended
+          || run.round !== task.round || (run.branch && run.branch !== task.branch)) refuse(`${task.id}'s adoption needs a fresh done ${role} run on its current branch and round for ${kind}. Nothing changed.`);
+      }
       // The clean rule: a cycle is clean when no medium or high finding is open. Low ones are fixed, moved or dismissed
       // before a merge, and an open one blocks it. So a problem verdict needs an open finding that is not low.
       const findings = read(dir, "findings").filter((f) => f.task === task.id && f.status === "open");

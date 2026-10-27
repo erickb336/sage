@@ -35,10 +35,16 @@ export const TOOLS = {
     argv: () => ["task", "add"],
   },
   task_set: {
-    describe: "Change a task: its state, branch, pr, priority, kind, waits or program. The tool refuses a move that the route does not allow.",
+    describe: "Change a task: its state, branch, pr, priority, kind, waits or program. Resuming a round hold needs approval=<G>, an unused owner-approved repair gate for this task and round limit. The tool refuses a move that the route does not allow.",
     input: { task, fields: z.record(z.string().regex(/^[a-z]+$/), z.string()).describe('the keys and values to set, for example {"state": "building", "branch": "codex/t7-name"}') },
     pos: ["task", "fields"],
     argv: (i) => ["task", i.task, "set", ...Object.entries(i.fields).map(([k, v]) => `${k}=${v}`)],
+  },
+  task_adopt: {
+    describe: "Adopt another provider's task and PR into an unstarted task of this project. Preserve spent repairs and provenance; require fresh destination reviews and QA. Read the source logbook without changing it.",
+    input: { task, "source-logbook": z.string().refine(isAbsolute, "an absolute path"), "source-provider": z.string(), "source-task": task,
+      pr: z.string().regex(/^[1-9]\d*$/), branch: z.string() },
+    pos: ["task"], argv: i => ["task-adopt", i.task],
   },
   run_add: {
     describe: "Record an agent run of a task before the agent starts. It prints the run id and the model to pass.",

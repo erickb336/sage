@@ -18,6 +18,7 @@ import { files as graphics } from "./graphics.mjs";
 import { packageBoundaryProblems } from "./package-boundaries.mjs";
 import { docFiles, linkProblems, paragraphProblems, readmeProblems } from "./readme-checks.mjs";
 import { SHOTS, SHOTS_RECORD, sampleHash } from "./board-shots.mjs";
+import { unrunTestFiles } from "./test-commands.mjs";
 
 const problems = [];
 try { problems.push(...packageBoundaryProblems(ROOT)); }
@@ -196,7 +197,7 @@ try {
   if (base?.status) problems.push("CHANGELOG.md: no merge base with origin/main, so the check cannot see what this branch changes; run git fetch origin main (in CI, check out with fetch-depth: 0)");
   // The tracked files only, committed, staged or changed, as CI sees them: a stray new file does not change the kind.
   const touched = base?.status === 0 ? git("diff", "--name-only", base.stdout.trim()).stdout.split("\n").filter(Boolean) : [];
-  if (touched.includes("CHANGELOG.md") && touched.length > 1) problems.push(`CHANGELOG.md: a task pull request carries only its changes/<task>.md and leaves CHANGELOG.md as main has it; undo the edit of CHANGELOG.md (git checkout ${base.stdout.trim()} -- CHANGELOG.md; run git fetch origin main first if main moved). The chief rebuilds it on main with npm run changelog, in a change-log pull request that changes only CHANGELOG.md`);
+  if (touched.includes("CHANGELOG.md") && touched.length > 1) problems.push(`CHANGELOG.md: a task pull request carries only its changes/<task>.md and leaves CHANGELOG.md as main has it; put your text in changes/<task>.md and undo the edit of CHANGELOG.md (git fetch origin main, then git checkout ${base.stdout.trim()} -- CHANGELOG.md). The chief rebuilds it on main with npm run changelog, in a change-log pull request that changes only CHANGELOG.md`);
   else {
     const built = changelog(ROOT), current = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
     if (touched.includes("CHANGELOG.md") && current !== built) problems.push("CHANGELOG.md: a change-log pull request holds exactly the build of changes/; run npm run changelog");
@@ -262,12 +263,8 @@ for (const f of [...new Set([...testFiles, ...imported])].filter((f) => existsSy
   });
 }
 
-// Each test file in scripts/ runs in CI: npm test or npm run test:browser names it (R1534-3).
-{
-  const { scripts } = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  const named = new Set(`${scripts.test} ${scripts["test:browser"]}`.split(/\s+/));
-  for (const f of readdirSync(join(ROOT, "scripts"))) if (f.endsWith(".test.mjs") && !named.has(`scripts/${f}`)) problems.push(`scripts/${f}: no test command runs it; add it to "test" or "test:browser" in package.json`);
-}
+// Each test file of the repository runs in CI: npm test or npm run test:browser names it (R1534-3, T350).
+for (const f of unrunTestFiles(ROOT)) problems.push(`${f}: no test command runs it; add it to "test" or "test:browser" in package.json`);
 
 // Provider build outputs must be exact, including the absence of obsolete or foreign files.
 for (const dir of ["plugins/sage", "plugins/sage-codex"]) {

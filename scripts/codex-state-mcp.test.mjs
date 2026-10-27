@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -12,7 +12,7 @@ import { ROOT } from "./build.mjs";
 const SHA = "1".repeat(40);
 
 /** The built plugin's state server in a scratch folder, with a scratch CODEX_HOME and no SAGE_HOME. */
-async function connect(t) {
+async function connect(t, overrides = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(join(ROOT, "plugins/sage-codex"), join(dir, "plugin"), { recursive: true });
@@ -20,7 +20,7 @@ async function connect(t) {
   mkdirSync(project);
   execFileSync("git", ["init", "-q", project]);
   const { SAGE_HOME, ...inherited } = process.env;
-  const env = { ...inherited, HOME: join(dir, "home"), CODEX_HOME: join(dir, "codex-home"), SAGE_WORKTREES: join(dir, "worktrees") };
+  const env = { ...inherited, HOME: join(dir, "home"), CODEX_HOME: join(dir, "codex-home"), SAGE_WORKTREES: join(dir, "worktrees"), ...overrides };
   const child = spawn(process.execPath, [join(dir, "plugin/mcp/state-server.mjs")], { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "", id = 0, calls = 0;
   const { gate: gateOf } = await import(pathToFileURL(join(dir, "plugin/hooks/gate-hook.mjs")).href);
@@ -72,12 +72,55 @@ test("the state server lists one tool for each state-tool command, and marks onl
   const s = await connect(t);
   const tools = await s.tools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["brief", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer",
-    "init", "log", "merge_check", "pages", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_set", "verdict"]);
+    "init", "log", "merge_check", "pages", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
   // T500: a task_add needs its priority, from the scale.
   const add = tools.find((tool) => tool.name === "task_add").inputSchema;
   assert.deepEqual([add.required.sort(), add.properties.priority.enum], [["priority", "project", "size", "title"], ["P0", "P1", "P2", "P3"]]);
+});
+
+test("T48: task_adopt and approved repair reach the shared rule through Codex MCP", async t => {
+  const bin = mkdtempSync(join(tmpdir(), 'sage-adoption-mcp-'));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const fake = join(bin, 'gh');
+  writeFileSync(fake, `#!${process.execPath}\nif (process.argv[2] === '--fake-proof') console.log('FAKE_mcp_adoption'); else if (process.argv.slice(2).join(' ') === 'pr view 362 --json headRefName,isCrossRepository') console.log(JSON.stringify({ headRefName: 'sage/t536-adopt', isCrossRepository: false })); else process.exit(1);\n`);
+  chmodSync(fake, 0o755);
+  assert.equal(spawnSync(fake, ['--fake-proof'], { encoding: 'utf8' }).stdout.trim(), 'FAKE_mcp_adoption');
+  const s = await connect(t, { PATH: `${bin}:${process.env.PATH}` });
+  const { tool } = await import(pathToFileURL(join(s.dir, 'plugin/skills/sage/sage.mjs')).href);
+  const sourceEnv = { ...s.env, SAGE_HOME: join(s.dir, 'claude', 'sage') };
+  const source = tool.command(['init', '--project', s.project], sourceEnv).text.slice(8);
+  assert.equal(tool.command(['task', 'add', '--title', 'Source', '--size', 'small', '--risk', 'auth', '--priority', 'P0', '--project', s.project], sourceEnv).code, 0);
+  const tasks = join(source, 'tasks.tsv'), rows = readFileSync(tasks, 'utf8').trimEnd().split('\n');
+  const cols = rows[0].split('\t'), values = rows[1].split('\t');
+  for (const [key, value] of Object.entries({ id: 'T536', pr: '362', round: '4', state: 'reviewing' })) values[cols.indexOf(key)] = value;
+  writeFileSync(tasks, `${rows[0]}\n${values.join('\t')}\n`);
+  const before = readFileSync(tasks, 'utf8');
+  const dest = (await s.call('init')).slice(8);
+  await s.call('task_add', { title: 'Destination', size: 'small', priority: 'P0', risk: 'auth' });
+  const args = { task: 'T1', 'source-logbook': source, 'source-provider': 'claude', 'source-task': 'T536', pr: '362', branch: 'sage/t536-adopt' };
+  assert.equal(await s.call('task_adopt', args), 'T1 adopted · claude T536 · PR 362 · sage/t536-adopt · round 4; fresh destination reviews and QA required');
+  assert.equal(tool.read(dest, 'tasks')[0].round, '4');
+  assert.equal(readFileSync(tasks, 'utf8'), before);
+  assert.match(await s.call('task_set', { task: 'T1', fields: { branch: 'sage/t536-adopt', state: 'briefed' } }), /T1 briefed.*round 4/);
+  assert.match((await s.call('merge_check', { sha: SHA, pr: 362, head: 'sage/t536-adopt' })).error, /no verdicts/);
+  for (const state of ['building', 'reviewing']) await s.call('task_set', { task: 'T1', fields: { state } });
+  const run = (await s.call('run_add', { task: 'T1', role: 'qa' })).split(' ')[0];
+  await s.call('run_done', { run, status: 'done', tokens: 1 });
+  await s.call('finding_add', { task: 'T1', source: 'qa', severity: 'medium', summary: 'Repair needed', run, class: 'state-edge' });
+  assert.match(await s.call('finding_triage', { task: 'T1', key: 'F-T1-1', decision: 'fix' }), /open · fix/);
+  assert.match(await s.call('round', { task: 'T1' }), /held: 4 repair rounds/);
+  assert.match((await s.call('task_set', { task: 'T1', fields: { state: 'building' } })).error, /approval/);
+  await s.call('gate_add', { task: 'T1', question: 'Approve one more repair round for T1 after 4 spent rounds and limit 3?', options: 'approve|decline', recommend: 'approve' });
+  await s.call('gate_answer', { gate: 'G1', option: 1 });
+  assert.match(await s.call('task_set', { task: 'T1', fields: { state: 'building', approval: 'G1' } }), /T1 building.*round 4/);
+  assert.equal(tool.read(dest, 'tasks')[0].extra, '2');
+  await s.call('task_set', { task: 'T1', fields: { state: 'reviewing' } });
+  assert.match(await s.call('round', { task: 'T1' }), /round 5 of 5/);
+  await s.call('task_set', { task: 'T1', fields: { state: 'reviewing' } });
+  assert.match(await s.call('round', { task: 'T1' }), /held: 5 repair rounds/);
+  assert.match((await s.call('task_set', { task: 'T1', fields: { state: 'building', approval: 'G1' } })).error, /approval/);
 });
 
 test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each refusal as a tool error with its reason", async (t) => {
