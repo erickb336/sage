@@ -806,7 +806,7 @@ test("R1324-5: the programs list, a program page and the not-found page have the
 });
 
 // Simulate the rendered page with an in-memory browser store. The options and rows come from the page HTML.
-function programsSelection(html, saved) {
+function programsSelection(html, saved, hash = "") {
   const body = html.slice(0, html.lastIndexOf("<script>"));
   const options = [...body.matchAll(/<li role="option"[^>]*data-key="([^"]*)" data-name="([^"]*)"[^>]*>/g)].map(([, key, name]) => ({
     dataset: { key, name }, setAttribute() {}, closest() { return null; },
@@ -825,7 +825,7 @@ function programsSelection(html, saved) {
     querySelectorAll(selector) { return selector === "#pick-list [role=option]" ? options : selector === "[data-plist]" ? lists : []; },
     addEventListener(type, handler) { handlers[type] = handler; },
   };
-  const store = new Map([["board-project", saved]]), location = { hash: "", pathname: "/programs", search: "" };
+  const store = new Map([["board-project", saved]]), location = { hash, pathname: "/programs", search: "" };
   const localStorage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) };
   const history = { replaceState() {} }, window = { addEventListener() {} };
   new Function("document", "window", "localStorage", "location", "history", BOARD_ENHANCEMENT)(document, window, localStorage, location, history);
@@ -849,7 +849,7 @@ test("T72: an unavailable saved project shows the global programs and a warning"
   assert.ok(page.gone, "the Programs page has an accessible warning");
   assert.equal(page.gone.hidden, false);
   assert.doesNotMatch(page.gone.text, /no logbook/i, "the missing picker option does not prove the logbook is absent");
-  assert.equal(page.gone.text, "Your saved project selection is no longer available. The programs list shows all projects. ");
+  assert.equal(page.gone.text, "The project selection is no longer available. The programs list shows all projects. ");
   page.click("[data-dismiss]");
   assert.equal(page.gone.hidden, true, "Dismiss clears the warning");
 });
@@ -859,7 +859,16 @@ test("T72: the Board gives the same reason for an unavailable saved project", ()
   const page = programsSelection(renderBoardHtml(missing, { snapshot: false }), "other-abc123");
   assert.equal(page.gone?.hidden, false);
   assert.doesNotMatch(page.gone.text, /no logbook/i, "the missing picker option does not prove the logbook is absent");
-  assert.equal(page.gone.text, "Your saved project selection is no longer available. The board shows all projects. ");
+  assert.equal(page.gone.text, "The project selection is no longer available. The board shows all projects. ");
+});
+
+test("T72: an unavailable project in the address gets the same warning", () => {
+  const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
+  const page = programsSelection(renderProgramsHtml(missing), "", "#p=other-abc123");
+  assert.equal(page.name.textContent, "All projects");
+  assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+  assert.equal(page.gone?.hidden, false);
+  assert.equal(page.gone.text, "The project selection is no longer available. The programs list shows all projects. ");
 });
 
 test("T72: valid saved choices and All projects keep their normal program rows", () => {
@@ -883,7 +892,7 @@ test("T72: an empty list and a program page explain an unavailable saved choice"
   assert.equal(empty.gone?.hidden, false);
   const detail = programsSelection(renderProgramsHtml(twoPrograms(), { programKey: "claude/sage-ff5ee2/PG1" }), "gone-abcdef");
   assert.equal(detail.gone?.hidden, false);
-  assert.equal(detail.gone?.text, "Your saved project selection is no longer available. The project picker shows All projects. ");
+  assert.equal(detail.gone?.text, "The project selection is no longer available. The project picker shows All projects. ");
 });
 
 test("T72: without JavaScript the warning stays hidden and all program rows remain in the page", () => {

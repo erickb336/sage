@@ -135,7 +135,7 @@ test("T72: Programs warns when a saved project disappears, then a new choice cle
   assert.deepEqual(await rows(), ["other-abc123", "sage-ff5ee2"]);
   assert.equal(await warning.isVisible(), true);
   assert.equal(await warning.evaluate(element => element.closest('[role="status"]') !== null), true);
-  assert.equal(await warning.textContent(), "Your saved project selection is no longer available. The programs list shows all projects. Dismiss");
+  assert.equal(await warning.textContent(), "The project selection is no longer available. The programs list shows all projects. Dismiss");
   await page.click("#pick-trig");
   await page.click('#pick-list [role=option][data-key="sage-ff5ee2"]');
   assert.equal(await warning.isVisible(), false);
