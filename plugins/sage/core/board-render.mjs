@@ -270,7 +270,7 @@ function banners(model) {
   return `${note}${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
 }
 
-const goneBanner = (view, id = "gone") => `<div role="status"><div class="banner info" id="${id}" data-gone hidden><div>The project selection is no longer available. ${view} <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
+const goneBanner = view => `<div role="status"><div class="banner info" id="gone" data-gone hidden><div>The project selection is no longer available. ${view} <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
 const GONE_PROGRAMS = "The list shows programs from projects that are not archived.";
 
 // Theme (bug bash R1023-4, T349): the page is dark until you choose light; a choice is kept in the browser and the head
@@ -358,6 +358,7 @@ select{font:inherit;color:var(--text);background:var(--panel);border:1px solid v
 .summary{display:flex;gap:18px;padding:10px 20px;color:var(--muted);font-size:12px;flex-wrap:wrap}
 .summary b{color:var(--text);font-variant-numeric:tabular-nums}.summary b.needn{color:var(--need)}
 .banner{display:flex;gap:8px;align-items:flex-start;margin:0 20px 10px;padding:8px 10px;border-radius:10px;font-size:12px}
+.snapshot-warning{position:sticky;top:0;z-index:9;background:var(--shell)}
 .banner.warn{background:var(--warn-soft);color:var(--warn)}.banner.info{background:var(--accent-soft);color:var(--accent)}.banner svg{flex:none;margin-top:1px}.diag{margin:4px 0 0;padding-left:16px;overflow-wrap:anywhere}
 .board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(170px,1fr);gap:12px;padding:6px 20px 24px;overflow-x:auto;align-items:start}
 .col{background:var(--panel2);border-radius:18px;padding:5px;min-height:120px;min-width:0}
@@ -795,10 +796,11 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
     const nomatch = `<div class="emptyboard" id="nomatch" hidden><b>No task matches.</b> No visible task fits this filter. <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprog = `<div class="emptyboard" id="noprog" hidden><b>No task of <span id="noprog-name"></span> shows on the board.</b> <span id="noprog-why"></span> <a id="noprog-link" href="">Open the program</a> · <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprov = `<div class="emptyboard" id="noprov" hidden><b>No <span id="noprov-who"></span> logbook in this project.</b> <span id="noprov-name"></span> has tasks only in <span id="noprov-has"></span>. <button class="linkbtn" type="button" data-showall>Show all providers</button></div>`;
-    const gone = goneBanner("The project picker shows All projects.");
-    body = `<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.programs?.length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
+    const gone = goneBanner(`The project picker shows All projects.${snapshot ? " The Programs list shows programs from projects that are not archived." : ""}`);
+    // A snapshot can clear the saved choice on any route, including a detail. Keep its warning outside the routed sections.
+    body = `${snapshot ? `<div class="snapshot-warning">${gone}</div>` : ""}<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.programs?.length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${snapshot ? "" : gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
       // Offline, the task pages, the programs list and each program's page are sections of the one file (C9).
-      + (snapshot ? `<form id="themes" hidden></form><div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.programs?.length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-programs", true)}</div>${goneBanner(GONE_PROGRAMS, "gone-programs")}${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
+      + (snapshot ? `<form id="themes" hidden></form><div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.programs?.length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-programs", true)}</div>${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${task ? `${esc(task.id)} · ` : ""}Sage task board</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(taskKey ? `/?events=1&task=${b64(taskKey)}` : "/?events=1") : ""}</script></body></html>`;
 }

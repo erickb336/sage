@@ -815,8 +815,17 @@ function programsSelection(html, saved, hash = "") {
     const rows = [...content.matchAll(/<li data-project="([^"]*)">/g)].map(([, project]) => ({ dataset: { project }, hidden: false }));
     return { rows, closest() { return null; }, previousElementSibling: null, querySelectorAll() { return rows; } };
   });
+  // Model the snapshot CSS ancestors, not only each warning's own hidden flag.
+  const ancestors = new Map(), pages = new Set(), stack = [];
+  for (const [, close, tag, attrs] of body.slice(body.indexOf("<body>")).matchAll(/<(\/?)(div|main|section)\b([^>]*)>/g)) {
+    if (close) { stack.pop(); continue; }
+    const id = attrs.match(/\bid="([^"]*)"/)?.[1], classes = (attrs.match(/\bclass="([^"]*)"/)?.[1] || "").split(" ");
+    if (classes.includes("page")) pages.add(id);
+    if (/\bdata-gone\b/.test(attrs)) ancestors.set(id, [...stack]);
+    stack.push({ tag, id, classes, hidden: /\bhidden\b/.test(attrs) });
+  }
   const banners = [...body.matchAll(/<div role="status"><div class="banner info" id="(gone(?:-programs)?)"(?: data-gone)? hidden><div>(.*?)<button/g)]
-    .map(([, id, text]) => ({ id, hidden: true, text }));
+    .map(([, id, text]) => ({ id, hidden: true, text, ancestors: ancestors.get(id) || [] }));
   const gone = banners.find(banner => banner.id === "gone") || null;
   const name = { textContent: "All projects" }, handlers = {};
   const elements = { "pick-list": {}, "pick-name": name, gone };
@@ -833,7 +842,10 @@ function programsSelection(html, saved, hash = "") {
   new Function("document", "window", "localStorage", "location", "history", BOARD_ENHANCEMENT)(document, window, localStorage, location, history);
   const click = (selector, target = {}) => handlers.click({ target: { closest: s => s === selector ? target : null } });
   const changeHash = hash => { location.hash = hash; windowHandlers.hashchange(); };
-  return { gone, banners, name, store, location, rows: lists.flatMap(list => list.rows), click, changeHash };
+  const visibleBanners = () => banners.filter(banner => !banner.hidden && banner.ancestors.every(parent =>
+    !parent.hidden && !(parent.classes.includes("boardview") && pages.has(location.hash.slice(1)))
+    && !(parent.classes.includes("page") && !parent.classes.includes("open") && parent.id !== location.hash.slice(1))));
+  return { gone, banners, name, store, location, rows: lists.flatMap(list => list.rows), click, changeHash, visibleBanners };
 }
 
 function twoPrograms() {
@@ -904,31 +916,54 @@ test("T72: without JavaScript the warning stays hidden and all program rows rema
   assert.ok(html.includes('<li data-project="other-abc123">') && html.includes('<li data-project="sage-ff5ee2">'));
 });
 
-test("T72 R738-1 R739-2 R740-1: snapshot Programs contains an active warning for a missing saved project", () => {
+test("T72 R739-2: a snapshot warns visibly before detail entry consumes the saved choice", () => {
   const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
-  const html = renderBoardHtml(missing), page = programsSelection(html, "other-abc123", "#programs");
-  const section = html.match(/<section class="page" id="programs"[\s\S]*?<\/section>/)?.[0] || "";
-  const warning = page.banners.find(banner => banner.id === "gone-programs");
-  assert.match(section, /id="gone-programs"/, "the warning belongs to the visible Programs section");
-  assert.equal(warning?.hidden, false);
-  assert.equal(page.store.get("board-project"), "");
-  assert.equal(page.location.hash, "#programs");
-  assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
-  page.click("[data-dismiss]");
-  assert.ok(page.banners.every(banner => banner.hidden));
-  const reset = programsSelection(html, "other-abc123", "#programs");
-  reset.click("[data-reset]");
-  assert.ok(reset.banners.every(banner => banner.hidden));
-  assert.equal(reset.store.get("board-project"), "");
-  const valid = programsSelection(html, "sage-ff5ee2", "#programs");
-  assert.ok(valid.banners.every(banner => banner.hidden));
-  assert.deepEqual([...new Set(valid.rows.filter(row => !row.hidden).map(row => row.dataset.project))], ["sage-ff5ee2"]);
-  valid.click("[data-reset]");
-  assert.equal(valid.store.get("board-project"), "");
-  assert.deepEqual([...new Set(valid.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
-  assert.ok(valid.banners.every(banner => banner.hidden));
-  assert.match(section, /id="gone-programs" data-gone hidden>/, "the script-free warning stays hidden");
+  const html = renderBoardHtml(missing), detailHash = `#program-${B64(KEY("PG1"))}`;
+  assert.ok(html.includes('.page{display:none;') && html.includes('.page:target,.page.open{display:block}'));
+  assert.ok(html.includes('body:has(.page:target) .boardview{display:none}'));
+  assert.ok(html.includes('.snapshot-warning{position:sticky;top:0;'), "anchor scrolling keeps the shared warning in view");
+  const detail = programsSelection(html, "other-abc123", detailHash);
+  assert.equal(detail.store.get("board-project"), "");
+  assert.equal(detail.location.hash, detailHash);
+  assert.equal(detail.visibleBanners().length, 1, "clearing the choice must warn outside the hidden Board and Programs ancestors");
+  detail.changeHash("#programs");
+  assert.equal(detail.visibleBanners().length, 1, "the same warning remains visible on Programs");
+  detail.changeHash(detailHash);
+  const reloaded = programsSelection(html, detail.store.get("board-project"), detail.location.hash);
+  reloaded.changeHash("#programs");
+  assert.equal(reloaded.name.textContent, "All projects");
+  assert.equal(reloaded.visibleBanners().length, 0, "a reload keeps the already explained All-project choice");
+  assert.deepEqual([...new Set(reloaded.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
 });
+
+for (const hash of ["", "#programs", `#program-${B64(KEY("PG1"))}`, `#task-${B64(KEY("T13"))}`]) {
+  test(`T72 R738-1 R739-2 R740-1: snapshot ${hash || "Board"} shares a visible warning and keeps valid choices and dismissal`, () => {
+    const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
+    const html = renderBoardHtml(missing), page = programsSelection(html, "other-abc123", hash);
+    assert.equal(page.visibleBanners().length, 1, "the fallback warning has visible ancestors on this route");
+    assert.equal(page.banners.length, 1, "all snapshot routes use one warning region");
+    const warning = page.visibleBanners()[0];
+    assert.ok(warning.ancestors.every(parent => !parent.classes.includes("boardview") && !parent.classes.includes("page")));
+    assert.equal(warning.text, "The project selection is no longer available. The project picker shows All projects. The Programs list shows programs from projects that are not archived. ");
+    assert.equal(page.store.get("board-project"), "");
+    assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+    page.click("[data-dismiss]");
+    page.changeHash(hash === "#programs" ? "" : "#programs");
+    assert.equal(page.visibleBanners().length, 0, "dismissal holds when the snapshot route changes");
+    const reset = programsSelection(html, "other-abc123", hash);
+    reset.click("[data-reset]");
+    assert.ok(reset.banners.every(banner => banner.hidden));
+    assert.equal(reset.store.get("board-project"), "");
+    for (const saved of ["sage-ff5ee2", ""]) {
+      const valid = programsSelection(html, saved, hash);
+      assert.ok(valid.banners.every(banner => banner.hidden));
+      assert.equal(valid.store.get("board-project"), saved);
+      assert.deepEqual([...new Set(valid.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), saved ? [saved] : ["other-abc123", "sage-ff5ee2"]);
+    }
+    assert.match(html, /id="gone" data-gone hidden>/, "the script-free warning stays hidden");
+    assert.match(html, /<section class="page" id="programs"/, "script-free Programs content remains available");
+  });
+}
 
 test("T72 R739-1: a valid address change clears a stale warning and persists the choice", () => {
   const page = programsSelection(renderProgramsHtml(twoPrograms()), "gone-abcdef");
