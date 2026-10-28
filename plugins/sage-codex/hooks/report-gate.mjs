@@ -5,11 +5,13 @@
 // goes through with one plain line, as the Claude stop gate. Other agents pass. An input that the gate
 // cannot read stops nothing: it gives one plain line, and the gate never reads it as a checked report.
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { REPORT_FIELDS, missingReportFields } from "../core/index.mjs";
-import { tool } from "../skills/sage/sage.mjs";
+import { tool, diagnostics } from "../skills/sage/sage.mjs";
+
+import { compare } from "./capture-diagnostics.mjs";
 
 const UNREAD = "sage: the report check could not read this agent's stop, so it did not check its report. Missing child metadata is tracked in https://github.com/erickb336/sage/issues/376.";
 
@@ -74,18 +76,46 @@ const bindingOf = (cwd, run, env) => join(tool.storeDir(cwd, env), "kept", `${ru
  * Only that child's report is kept for the run.
  */
 export function bindChild(transcript, cwd, env = process.env, input = {}) {
+  diagnostics.prune(env);
+  let observation;
   try {
     const meta = sessionMeta(transcript), child = reviewChild(meta);
+    observation = diagnostics.begin(cwd, child, input, "start", env);
+    const record = observation?.record;
+    if (record) {
+      record.child = compare(meta.id, input.agent_id);
+      record.parent = compare(meta.parent_thread_id ?? meta.session_id, input.session_id);
+      record.project = typeof meta.cwd === "string" ? compare(tool.projectRoot(meta.cwd), tool.projectRoot(cwd)) : "unknown";
+      record.reason = "IDENTITY_MISMATCH";
+    }
     if (!child || contradicts(meta, input)) return;
     const dir = tool.storeDir(cwd, env);
+    if (record) record.reason = "LOCK_FAILURE";
     tool.withLock(dir, () => {
       const run = tool.logbookView(cwd, env).row(child.run);
+      if (record) {
+        record.run_state = !run ? "missing" : run.status === "running" ? "running" : "not_running";
+        record.reason = !run ? "RUN_MISSING" : run.task !== child.task || run.role !== child.role ? "TASK_ROLE_MISMATCH" : "RUN_NOT_RUNNING";
+      }
       if (!run || run.task !== child.task || run.role !== child.role || run.status !== "running") return;
+      if (record) record.reason = "WRITE_FAILURE";
       mkdirSync(dirname(bindingOf(cwd, child.run, env)), { recursive: true, mode: 0o700 });
-      writeFileSync(bindingOf(cwd, child.run, env), JSON.stringify({ thread: child.thread, tip: branchHead(cwd, child.task, env),
-        ...(typeof input.agent_id === "string" && typeof input.session_id === "string" ? { session: input.session_id, eventBound: true } : {}) }), { flag: "wx", mode: 0o600 });
+      try {
+        writeFileSync(bindingOf(cwd, child.run, env), JSON.stringify({ thread: child.thread, tip: branchHead(cwd, child.task, env),
+          ...(typeof input.agent_id === "string" && typeof input.session_id === "string" ? { session: input.session_id, eventBound: true } : {}) }), { flag: "wx", mode: 0o600 });
+        if (record) { record.reason = "BOUND"; record.binding = "created"; }
+      } catch (error) {
+        if (record && error.code === "EEXIST") {
+          try {
+            const bound = JSON.parse(readFileSync(bindingOf(cwd, child.run, env), "utf8"));
+            record.binding = bound.thread === child.thread ? "same" : "different";
+            record.reason = record.binding === "same" ? "EXISTING_BINDING" : "CONFLICTING_BINDING";
+          } catch { record.reason = "READ_FAILURE"; }
+        }
+        throw error;
+      }
     });
-  } catch {}
+  } catch {} finally { observation?.finish(); }
 }
 /** The commit at the head of a task's branch in the project's repository, or "" (as the Claude hook reads it). */
 function branchHead(cwd, task, env) {
@@ -102,36 +132,64 @@ function branchHead(cwd, task, env) {
  * report's own BRANCH must name the full head SHA (R1933-1). A report that is not kept backs no verdict. The line for the
  * chief when the state tool refused to keep it (for one, a second report of the run), or undefined.
  */
-function keep(meta, text, input, env) {
+function keep(meta, text, input, env, record) {
   const cwd = input.cwd;
   const child = reviewChild(meta);
-  if (!child || typeof text !== "string" || typeof cwd !== "string") return undefined;
+  if (!child || typeof text !== "string" || typeof cwd !== "string") { if (record) record.reason = "MISSING_REPORT_TEXT"; return undefined; }
   try {
+    if (record) record.reason = "LOCK_FAILURE";
     return tool.withLock(tool.storeDir(cwd, env), () => {
+      if (record) record.reason = "READ_FAILURE";
       const bound = JSON.parse(readFileSync(bindingOf(cwd, child.run, env), "utf8"));
-      if (bound?.thread !== child.thread || (bound.eventBound && (input.agent_id !== child.thread || input.session_id !== bound.session || contradicts(meta, input)))) return `sage: ${child.run}'s report is not kept: this agent is not the child that started for ${child.run}, so it backs no verdict.`;
+      const mismatch = bound?.thread !== child.thread || (bound.eventBound && (input.agent_id !== child.thread || input.session_id !== bound.session || contradicts(meta, input)));
+      if (record) { record.binding = mismatch ? "different" : "same"; record.reason = "BINDING_MISMATCH"; record.retention = "refused"; }
+      if (mismatch) return `sage: ${child.run}'s report is not kept: this agent is not the child that started for ${child.run}, so it backs no verdict.`;
       const sha = bound.tip && bound.tip === branchHead(cwd, child.task, env) ? bound.tip : "";
+      const existed = record && existsSync(join(tool.storeDir(cwd, env), "kept", `${child.run}.json`));
+      if (record) record.reason = "RETENTION_REFUSED";
       tool.keepReport(cwd, { role: child.role, task: child.task, run: child.run, sha, text }, env);
+      if (record) { record.reason = existed ? "DUPLICATE_REPORT" : "RETAINED"; record.retention = "kept"; record.run_state = "running"; }
       return undefined;
     });
   } catch (error) {
+    if (record) {
+      record.retention = "refused";
+      if (error?.code === "ENOENT") { record.reason = "MISSING_BINDING"; record.binding = "missing"; }
+      else if (record.reason === "RETENTION_REFUSED") {
+        const message = String(error?.message ?? ""); // Compare known refusal shapes; never retain exception text.
+        record.reason = /already has a kept report/.test(message) ? "CONFLICTING_REPORT" : /ended as/.test(message) ? "RUN_NOT_RUNNING" : /is not a .* run of/.test(message) ? "TASK_ROLE_MISMATCH" : error?.code ? "WRITE_FAILURE" : "RETENTION_REFUSED";
+        if (record.reason === "RUN_NOT_RUNNING") record.run_state = "not_running";
+      }
+    }
     return error?.code === "ENOENT" ? `sage: ${child.run}'s report is not kept: no child started for ${child.run} while it ran, so it backs no verdict.` : `sage: ${child.run}'s report is not kept: ${error?.message ?? error}`;
   }
   return undefined;
 }
 
 export function reportGate(input, env = process.env) {
+  diagnostics.prune(env);
   const message = input?.last_assistant_message;
   if (input?.hook_event_name !== "SubagentStop" || typeof input.stop_hook_active !== "boolean"
     || !(message === null || typeof message === "string") || typeof input.agent_transcript_path !== "string") return { systemMessage: UNREAD };
   let task, meta;
   try { meta = sessionMeta(input.agent_transcript_path); task = agentPathOf(meta).at(-1) ?? ""; } catch { return { systemMessage: UNREAD }; }
+  const child = reviewChild(meta);
+  const observation = typeof input.cwd === "string" ? diagnostics.begin(input.cwd, child, input, "stop", env) : undefined;
+  const record = observation?.record;
+  if (record) {
+    record.child = compare(meta.id, input.agent_id);
+    record.parent = compare(meta.parent_thread_id ?? meta.session_id, input.session_id);
+    record.project = typeof meta.cwd === "string" ? compare(tool.projectRoot(meta.cwd), tool.projectRoot(input.cwd)) : "unknown";
+  }
+  try {
   const missing = sageName(task) ? missingReportFields(message ?? "") : [];
   // A stop that goes through keeps a review's or QA's report in the logbook, for its run's verdict (T483).
-  const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input, env) : undefined;
+  if (record) record.reason = "INCOMPLETE_REPORT";
+  const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input, env, record) : undefined;
   if (!missing.length) return unkept ? { systemMessage: unkept } : {};
   if (input.stop_hook_active) return { systemMessage: [`sage: the agent ${task} ended without a full report (no ${missing.join(", ")}). The chief reads it as it is.`, unkept].filter(Boolean).join(" ") };
   return { decision: "block", reason: `sage: your report has no ${missing.join(", ")}. End with the sage report: ${REPORT_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.` };
+  } finally { observation?.finish(); }
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {

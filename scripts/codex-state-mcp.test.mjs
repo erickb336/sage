@@ -299,7 +299,7 @@ test("the state server serves only a call that sage's gate saw: with no hook run
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {
   const s = await connect(t);
   const tools = await s.tools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["brief", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer",
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["brief", "capture_diagnostics", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer",
     "init", "log", "merge_check", "pages", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
@@ -551,4 +551,22 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
   }
   assert.deepEqual(readdirSync(folder).sort(), ["R1-report.md", "R3-report.md"]);
   assert.match(await s.call("status"), /\nagents {2}3 runs · 1 running · about 0k tokens · partial measured total; 0 measured, 2 unavailable, 0 legacy-unrecorded\n/);
+});
+
+
+test("T54: chief MCP diagnostics control is gated, scoped, and removed on run completion", async t => {
+  const f = await captureFixture(t);
+  assert.ok((await f.call("capture_diagnostics", { task: "T1", run: "R1", action: "start" }, { gate: false })).error);
+  assert.equal(JSON.parse(await f.call("capture_diagnostics", { task: "T1", run: "R1", action: "start" })).observation, "no_observation");
+  const { gate: diagnosticGate } = await import(pathToFileURL(join(f.dir, "plugin/hooks/gate-hook.mjs")).href);
+  const denied = await diagnosticGate({ hook_event_name: "PreToolUse", session_id: f.root, agent_id: f.child, transcript_path: f.transcript,
+    cwd: f.project, tool_name: "mcp__sage__capture_diagnostics", tool_use_id: "sample-child-control", tool_input: { project: f.project, task: "T1", run: "R1", action: "end" } }, { env: f.env });
+  assert.ok(denied, "a role agent cannot control diagnostic collection");
+  f.start(); assert.deepEqual(f.stop(), {});
+  const { tool, diagnostics } = await import(pathToFileURL(join(f.dir, "plugin/skills/sage/sage.mjs")).href);
+  assert.equal(diagnostics.read(f.project, "T1", f.env).records.at(-1).reason, "RETAINED");
+  const scoped = tool.command(["board", "T1", "--view", "task", "--project", f.project], f.env);
+  assert.match(scoped.text, /capture diagnostics/);
+  assert.equal(typeof await f.finish(), "string");
+  assert.equal(diagnostics.read(f.project, "T1", f.env).status, "disabled");
 });
