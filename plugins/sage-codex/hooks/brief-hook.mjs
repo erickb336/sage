@@ -13,7 +13,7 @@ import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } fro
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BRIEF_FIELDS, briefSections, missingBriefFields } from "../core/index.mjs";
-import { tool, diagnostics } from "../skills/sage/sage.mjs";
+import { tool } from "../skills/sage/sage.mjs";
 import { bindChild, childTask, sageName, TASK_NAME } from "./report-gate.mjs";
 import { TESTED_CODEX } from "./sage-codex-hook.mjs";
 
@@ -71,7 +71,6 @@ function spawnWarning(input, env) {
 
 /** The hook's answer to one SubagentStart or PostToolUse event. env names the logbook (CODEX_HOME or SAGE_HOME), for tests. */
 export function briefHook(input, env = process.env) {
-  diagnostics.prune(env);
   if (input?.hook_event_name === "SubagentStart") return startNote(input, env);
   if (input?.hook_event_name === "PostToolUse") return spawnWarning(input, env);
   return { systemMessage: UNREAD };

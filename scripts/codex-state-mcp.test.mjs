@@ -168,6 +168,28 @@ for (const event of ["Start", "Stop"]) for (const [label, mutate] of captureRefu
   assert.match((await f.finish()).error, /^sage: R1 has no kept report:/, label);
 });
 
+test("T54 withdrawal: a leftover diagnostic lock cannot delay Start past its hook timeout", async t => {
+  const f = await captureFixture(t);
+  // Sample leftovers only. Withdrawal must ignore them, without deleting any data.
+  const folder = join(f.env.CODEX_HOME, "sage", "capture-diagnostics");
+  mkdirSync(join(folder, ".lock"), { recursive: true, mode: 0o700 });
+  const windowFile = join(folder, "window.json"), ownerFile = join(folder, ".lock", "unknown-owner");
+  const expired = JSON.stringify({ version: 1, scope: basename(f.logbook), task: "T1", run: "R1", expires: 1, saturated: false, records: [] });
+  writeFileSync(windowFile, expired, { mode: 0o600 });
+  writeFileSync(ownerFile, "sample abandoned diagnostic owner", { mode: 0o600 });
+  const result = spawnSync(process.execPath, [join(f.dir, "plugin/hooks/brief-hook.mjs")], {
+    input: JSON.stringify({ hook_event_name: "SubagentStart", cwd: f.project, session_id: f.root,
+      agent_id: f.child, transcript_path: f.transcript }), env: f.env, encoding: "utf8", timeout: 10_000,
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(JSON.parse(result.stdout).hookSpecificOutput.additionalContext.endsWith(f.brief));
+  assert.deepEqual(f.stop(), {});
+  assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
+  assert.equal(readFileSync(windowFile, "utf8"), expired);
+  assert.equal(readFileSync(ownerFile, "utf8"), "sample abandoned diagnostic owner");
+});
+
 test("T54: no metadata at either event remains unavailable and names issue 376", async t => {
   const f = await captureFixture(t);
   f.start({ transcript_path: null });
@@ -214,6 +236,19 @@ test("T54: a competing child cannot replace the first Start binding", async t =>
   assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
 });
 
+test("T54: a legacy Start with a non-string event child still binds only its first metadata child", async t => {
+  const f = await captureFixture(t);
+  f.start({ agent_id: 42 });
+  f.meta.id = f.other;
+  f.writeMeta(f.meta);
+  f.start({ agent_id: f.other });
+  assert.match(f.stop({ agent_id: f.other }).systemMessage, /not the child that started/);
+  f.meta.id = f.child;
+  f.writeMeta(f.meta);
+  assert.deepEqual(f.stop(), {});
+  assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
+});
+
 test("T54: an incomplete report is blocked and a complete report can follow", async t => {
   const f = await captureFixture(t);
   f.start();
@@ -227,6 +262,7 @@ test("T54: a conflicting report cannot replace the first report", async t => {
   const f = await captureFixture(t);
   f.start();
   assert.deepEqual(f.stop(), {});
+  assert.deepEqual(f.stop(), {}, "an identical report can be retried");
   assert.match(f.stop({ last_assistant_message: f.text.replace("sample check passed", "different check") }).systemMessage, /already has a kept report/);
   assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
 });
@@ -299,7 +335,7 @@ test("the state server serves only a call that sage's gate saw: with no hook run
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {
   const s = await connect(t);
   const tools = await s.tools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["brief", "capture_diagnostics", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer",
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["brief", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer",
     "init", "log", "merge_check", "pages", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
@@ -553,52 +589,6 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
   assert.match(await s.call("status"), /\nagents {2}3 runs · 1 running · about 0k tokens · partial measured total; 0 measured, 2 unavailable, 0 legacy-unrecorded\n/);
 });
 
-
-test("T54: chief MCP diagnostics control is gated, scoped, and removed on run completion", async t => {
-  const f = await captureFixture(t);
-  assert.ok((await f.call("capture_diagnostics", { task: "T1", run: "R1", action: "start" }, { gate: false })).error);
-  assert.equal(JSON.parse(await f.call("capture_diagnostics", { task: "T1", run: "R1", action: "start" })).observation, "no_observation");
-  const { gate: diagnosticGate } = await import(pathToFileURL(join(f.dir, "plugin/hooks/gate-hook.mjs")).href);
-  const denied = await diagnosticGate({ hook_event_name: "PreToolUse", session_id: f.root, agent_id: f.child, transcript_path: f.transcript,
-    cwd: f.project, tool_name: "mcp__sage__capture_diagnostics", tool_use_id: "sample-child-control", tool_input: { project: f.project, task: "T1", run: "R1", action: "end" } }, { env: f.env });
-  assert.ok(denied, "a role agent cannot control diagnostic collection");
-  f.start(); assert.deepEqual(f.stop(), {});
-  const { tool, diagnostics } = await import(pathToFileURL(join(f.dir, "plugin/skills/sage/sage.mjs")).href);
-  assert.equal(diagnostics.read(f.project, "T1", f.env).records.at(-1).reason, "RETAINED");
-  const scoped = tool.command(["board", "T1", "--view", "task", "--project", f.project], f.env);
-  assert.match(scoped.text, /capture diagnostics/);
-  const windowFile = join(f.env.CODEX_HOME, 'sage', 'capture-diagnostics', 'window.json');
-  const unrelated = join(f.env.CODEX_HOME, 'sage', 'capture-diagnostics', 'keep-me');
-  writeFileSync(unrelated, 'sample unrelated data');
-  const other = join(f.dir, 'other-project'); mkdirSync(other);
-  for (const project of [f.project, other]) {
-    if (project === other) await f.call('init', { project });
-    await f.call('task_add', { project, title: 'Other sample', size: 'small', priority: 'P2' });
-    await f.call('run_add', { project, task: project === other ? 'T1' : 'T2', role: 'code-reviewer' });
-  }
-  const otherBook = (await f.call('init', { project: other })).slice(8);
-  const otherBefore = readFileSync(join(otherBook, 'runs.tsv'), 'utf8');
-  const before = readFileSync(windowFile, 'utf8');
-  for (const action of ['start', 'end']) for (const scope of [
-    { project: other, task: 'T1', run: 'R1' }, { task: 'T2', run: 'R1' },
-    { task: 'T1', run: 'R2' }, { task: 'T2', run: 'R2' },
-  ]) {
-    assert.ok((await f.call('capture_diagnostics', { action, ...scope })).error, JSON.stringify({ action, ...scope }));
-    assert.equal(readFileSync(windowFile, 'utf8'), before, 'a mismatched control preserves the legitimate window');
-    assert.equal(readFileSync(join(otherBook, 'runs.tsv'), 'utf8'), otherBefore);
-  }
-  const cli = args => execFileSync(process.execPath, [join(f.dir, 'plugin/skills/sage/sage.mjs'), ...args, '--project', f.project], { env: f.env, encoding: 'utf8' });
-  for (const args of [['task', 'T1'], ['board', 'T1', '--view', 'task']]) assert.match(cli(args), /"reason":"RETAINED"/);
-  assert.equal(JSON.parse(await f.call('capture_diagnostics', { task: 'T1', run: 'R1', action: 'end' })).status, 'disabled');
-  assert.equal(existsSync(windowFile), false);
-  assert.match(cli(['task', 'T1']), /"status":"disabled"/);
-  assert.equal(readFileSync(unrelated, 'utf8'), 'sample unrelated data');
-  assert.equal(readFileSync(join(otherBook, 'runs.tsv'), 'utf8'), otherBefore);
-  assert.equal(JSON.parse(await f.call('capture_diagnostics', { task: 'T1', run: 'R1', action: 'start' })).status, 'active');
-
-  assert.equal(typeof await f.finish(), "string");
-  assert.equal(diagnostics.read(f.project, "T1", f.env).status, "disabled");
-});
 
 test("T83 sample investigation and independent evidence check retain real outputs and conclude without SHA", async t => {
   const s = await connect(t);

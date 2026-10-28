@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer, serveStdio, z } from "../runtime/mcp-sdk.mjs";
-import { tool, diagnostics } from "../skills/sage/sage.mjs";
+import { tool } from "../skills/sage/sage.mjs";
 import { BRIEF_FIELDS, PRIORITIES, PRIORITY_SCALE } from "sage-core";
 import { BRIEF_LIMIT, NAME_RULE, recordBrief } from "../hooks/brief-hook.mjs";
 import { CHILD_READS, NO_GATE, takeProof } from "../hooks/gate-hook.mjs";
@@ -136,7 +136,7 @@ export function createStateServer({ env = process.env } = {}) {
   // Each tool runs only for a call that sage's gate saw (R1916-2): Codex runs no plugin hook that the user has not
   // trusted, also after each sage update, and then no sage rule holds.
   const registerTool = (name, spec, run) => server.registerTool(name, spec, async (input, extra) => (takeProof(extra?.mcpReq?._meta, name, env)
-    ? (diagnostics.prune(env), run(input)) : { isError: true, content: [{ type: "text", text: NO_GATE }] }));
+    ? run(input) : { isError: true, content: [{ type: "text", text: NO_GATE }] }));
   const project = z.string().refine(isAbsolute, "an absolute path").describe("the absolute path of the project's checkout");
   for (const [name, spec] of Object.entries(TOOLS)) {
     registerTool(name, {
@@ -148,14 +148,6 @@ export function createStateServer({ env = process.env } = {}) {
       return { ...(code ? { isError: true } : {}), content: [{ type: "text", text }] };
     });
   }
-  registerTool("capture_diagnostics", {
-    description: "Start or end the owner-approved temporary capture observations for one project and running run. Read sanitized results with the existing scoped task or board command. Records expire after 24 hours and are removed on the next Sage use, explicit end, or run completion. No background deletion occurs.",
-    inputSchema: z.object({ project, task, run: id("R", "the run id"), action: z.enum(["start", "end"]) }).strict(),
-    annotations: { readOnlyHint: false, destructiveHint: false },
-  }, async ({ project, task, run, action }) => {
-    try { return { content: [{ type: "text", text: JSON.stringify(diagnostics.control(project, task, run, action, env)) }] }; }
-    catch { return { isError: true, content: [{ type: "text", text: "sage: diagnostic control refused; check the selected running run and existing window." }] }; }
-  });
   // The brief check (T462): no state-tool command, because the hooks read the record by task name.
   registerTool("brief", {
     description: `Check a role agent's brief before you spawn it: it names each missing field of ${BRIEF_FIELDS.join(", ")}, and keeps the brief for the agent's start note. Fix the brief and run it again until no field is missing, then spawn the agent with the same task name and brief.`,
