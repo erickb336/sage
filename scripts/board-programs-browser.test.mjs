@@ -135,7 +135,7 @@ test("T72: Programs warns when a saved project disappears, then a new choice cle
   assert.deepEqual(await rows(), ["other-abc123", "sage-ff5ee2"]);
   assert.equal(await warning.isVisible(), true);
   assert.equal(await warning.evaluate(element => element.closest('[role="status"]') !== null), true);
-  assert.equal(await warning.textContent(), "The project selection is no longer available. The programs list shows all projects. Dismiss");
+  assert.equal(await warning.textContent(), "The project selection is no longer available. The list shows programs from projects that are not archived. Dismiss");
   await page.click("#pick-trig");
   await page.click('#pick-list [role=option][data-key="sage-ff5ee2"]');
   assert.equal(await warning.isVisible(), false);
@@ -150,6 +150,50 @@ test("T72: Programs warns when a saved project disappears, then a new choice cle
   assert.equal(await valid.locator("#pick-name").textContent(), "other (sample)");
   assert.equal(await valid.locator("#gone").isVisible(), false);
   assert.deepEqual(await valid.locator("[data-plist] li[data-project]:not([hidden])").evaluateAll(items => [...new Set(items.map(item => item.dataset.project))]), ["other-abc123"]);
+});
+
+test("T72: an offline Programs view shows and dismisses a missing-selection warning", async t => {
+  const missing = { ...two, projects: two.projects.filter(project => project.key !== "other-abc123") };
+  const page = await open(t, "/snapshot", { pages: { "/snapshot": () => renderBoardHtml(missing) }, hash: "#programs", project: "other-abc123" });
+  const warning = page.locator("#gone-programs");
+  assert.equal(await warning.isVisible(), true);
+  assert.equal(await page.locator("#gone").isVisible(), false);
+  assert.equal(await warning.textContent(), "The project selection is no longer available. The list shows programs from projects that are not archived. Dismiss");
+  assert.deepEqual(await page.locator("[data-plist] li[data-project]:not([hidden])").evaluateAll(items => [...new Set(items.map(item => item.dataset.project))].sort()), ["other-abc123", "sage-ff5ee2"]);
+  await warning.locator("[data-dismiss]").click();
+  assert.equal(await warning.isVisible(), false);
+  await page.evaluate(() => { location.hash = ""; });
+  assert.equal(await page.locator("#gone").isVisible(), false);
+});
+
+test("T72: address changes and a choice after earlier parameters persist without a stale warning", async t => {
+  const missing = { ...two, projects: two.projects.filter(project => project.key !== "other-abc123") };
+  const pages = { ...TWO, "/programs": () => renderProgramsHtml(missing) };
+  const page = await open(t, "/programs", { pages, hash: "#extra=1&p=other-abc123" });
+  assert.equal(await page.locator("#gone").isVisible(), true);
+  await page.evaluate(() => { location.hash = "#p=sage-ff5ee2"; });
+  await page.waitForFunction(() => document.getElementById("pick-name").textContent === "sage (sample)");
+  assert.equal(await page.locator("#gone").isVisible(), false);
+  assert.equal(await page.evaluate(() => localStorage.getItem("board-project")), "sage-ff5ee2");
+  await page.evaluate(() => { location.hash = "#extra=1&p=other-abc123"; });
+  await page.waitForFunction(() => !document.getElementById("gone").hidden);
+  await page.click("#pick-trig");
+  await page.click('#pick-list [role=option][data-key="sage-ff5ee2"]');
+  assert.equal(await page.evaluate(() => new URLSearchParams(location.hash.slice(1)).get("extra")), "1");
+  assert.equal(await page.evaluate(() => new URLSearchParams(location.hash.slice(1)).get("p")), "sage-ff5ee2");
+  await page.reload();
+  assert.equal(await page.locator("#pick-name").textContent(), "sage (sample)");
+  assert.equal(await page.locator("#gone").isVisible(), false);
+  assert.deepEqual(await page.locator("[data-plist] li[data-project]:not([hidden])").evaluateAll(items => [...new Set(items.map(item => item.dataset.project))]), ["sage-ff5ee2"]);
+});
+
+test("T72: a Programs warning states the non-archived scope", async t => {
+  const archived = programsSource("codex");
+  Object.assign(archived.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", archived: true });
+  const mixed = buildBoardModel([programsSource(), archived], { now: NOW });
+  const page = await open(t, "/programs", { pages: { "/programs": () => renderProgramsHtml(mixed) }, project: "gone-abcdef" });
+  assert.equal(await page.locator("#gone").textContent(), "The project selection is no longer available. The list shows programs from projects that are not archived. Dismiss");
+  assert.deepEqual(await page.locator("[data-plist] li[data-project]:not([hidden])").evaluateAll(items => [...new Set(items.map(item => item.dataset.project))]), ["sage-ff5ee2"]);
 });
 
 test("T72: the empty and script-free Programs views remain usable", async t => {
