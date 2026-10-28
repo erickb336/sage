@@ -1525,3 +1525,25 @@ for (const scenario of ["missing", "project alias", "writable executable", "writ
     assert.deepEqual(f.snapshot(), before);
   });
 }
+
+for (const role of ["investigate", "evidence-review"]) {
+  test(`T83 ${role}: assigned reads pass; source, config, logbook, spawn, send and foreign-project calls refuse`, t => {
+    const w = world(t), child = w.child(`/root/sage_${role.replaceAll("-", "_")}_t1_r1`);
+    const other = join(w.dir, "foreign");
+    mkdirSync(other);
+    w.mode({ sage: true, autopilot: false });
+    const cli = `'${process.execPath}' '${TOOL}'`, project = `--project '${w.project}'`;
+    for (const command of ["cat README.md", `${cli} task T1 ${project}`, `${cli} config ${project}`, `${cli} board T1 --view task ${project}`]) {
+      assert.equal(w.send(pre("Bash", command, child)), undefined, command);
+    }
+    assert.equal(denied(w.send(pre("apply_patch", patch("*** Add File: source.js", "+bad"), child))), RO(role));
+    assert.equal(denied(w.send(pre("Bash", "echo bad > source.js", child))), RO(role));
+    assert.match(denied(w.send(pre("Bash", "echo bad > .codex/config.toml", child))), /no agent changes files under a \.codex folder/);
+    for (const command of [`${cli} config max_agents=20 ${project}`, `${cli} task T1 set state=concluded ${project}`,
+      `${cli} pages T1 record --run R1 --text bad ${project}`, `${cli} task T1 --project '${other}'`, `${cli} config --project '${other}'`,
+      `${cli} board T1 --view task --project '${other}'`]) assert.equal(denied(w.send(pre("Bash", command, child))), LOGBOOK, command);
+    assert.equal(denied(w.send(mcp("verdict", { task: "T1", kind: "evidence-clean" }, child))), LOGBOOK);
+    assert.equal(denied(w.send({ ...pre("spawn_agent", "", child), tool_input: { task_name: "worker", message: "go" } })), SPAWN);
+    assert.match(denied(w.send({ ...pre("collaborationsend_message", "", child), tool_input: { target: "/root/worker", message: "go" } })), /agents send no input/);
+  });
+}

@@ -4,9 +4,18 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { renderReportInstructions, renderRoleInstructions } from "../../core/index.mjs";
 
+// These two roles belong to the Codex skill-led path, not protected native admission.
+const localRoles = new Map([
+  ["investigate", "references/investigate.md"],
+  ["evidence-review", "references/evidence-review.md"],
+]);
+
 export function roleMessage(role) {
   const bindings = JSON.parse(readFileSync(new URL("../../role-bindings.json", import.meta.url), "utf8"));
-  return `${renderRoleInstructions(role, { ...bindings.common, ...bindings[role] })}\n\n${renderReportInstructions(bindings.report)}\n`;
+  const local = localRoles.get(role);
+  const instructions = local ? readFileSync(new URL(local, import.meta.url), "utf8").trim()
+    : renderRoleInstructions(role, { ...bindings.common, ...bindings[role] });
+  return `${instructions}\n\n${renderReportInstructions(bindings.report)}\n`;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
