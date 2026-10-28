@@ -4176,6 +4176,16 @@ function identityFailureFixture(context, provider) {
 for (const provider of ["sage", "sage-codex"]) {
   for (const location of ["main", "subdir", "linked"]) {
     for (const args of [["logbook"], ["init"], ["task", "add", "--priority", "P2", "--title", "must not write", "--size", "small"]]) {
+      test(`T53 legacy: ${provider} ${args[0]} at ${location} leaves the registry absent when Git discovery fails`, context => {
+        const f = identityFailureFixture(context, provider);
+        unlisted(f.env.SAGE_HOME);
+        const before = snapshot(f.env.SAGE_HOME);
+        const result = f.run(args, f.locations[location], true);
+        assert.deepEqual(snapshot(f.env.SAGE_HOME), before, "discovery failure must precede legacy registry migration");
+        assert.notEqual(result.status, 0, result.stdout);
+        assert.match(result.stderr, /no trusted system Git executable is available/);
+        assert.equal(result.stdout, "");
+      });
       test(`T53: ${provider} ${args[0]} at ${location} aborts when trusted Git discovery fails`, context => {
         const f = identityFailureFixture(context, provider);
         const before = snapshot(f.env.SAGE_HOME);
@@ -4188,6 +4198,48 @@ for (const provider of ["sage", "sage-codex"]) {
       });
     }
   }
+  for (const args of [["board", "this"], ["merge-check", "--sha", SHA], ["config", "name=Example"]]) {
+    test(`T53 legacy: ${provider} ${args[0]} resolves identity before registry migration`, context => {
+      const f = identityFailureFixture(context, provider);
+      unlisted(f.env.SAGE_HOME);
+      const before = snapshot(f.env.SAGE_HOME);
+      const result = f.run(args, f.locations.linked, true);
+      assert.deepEqual(snapshot(f.env.SAGE_HOME), before);
+      assert.notEqual(result.status, 0, result.stdout);
+      assert.match(result.stderr, /no trusted system Git executable is available/);
+      assert.equal(result.stdout, "");
+    });
+  }
+  test(`T53 legacy: ${provider} valid project commands still migrate once and retain shared identity`, context => {
+    const f = identityFailureFixture(context, provider);
+    const original = f.run(["logbook"]).stdout;
+    for (const args of [["logbook"], ["init"], ["task", "add", "--priority", "P2", "--title", "legacy migration", "--size", "small"]]) {
+      for (const project of Object.values(f.locations)) {
+        unlisted(f.env.SAGE_HOME);
+        const result = f.run(args, project);
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(known(f.env.SAGE_HOME), [`${basename(original.trim())} migration`]);
+        assert.ok(existsSync(join(f.env.SAGE_HOME, "projects.made")));
+        const once = snapshot(f.env.SAGE_HOME);
+        assert.equal(f.run(["logbook"], project).stdout, original);
+        assert.deepEqual(snapshot(f.env.SAGE_HOME), once);
+      }
+    }
+  });
+  test(`T53 legacy: ${provider} global reads need no Git or migration and explicit rebuild still works`, context => {
+    const f = identityFailureFixture(context, provider);
+    unlisted(f.env.SAGE_HOME);
+    const before = snapshot(f.env.SAGE_HOME);
+    for (const args of [["config"], ["board", "all", "--view", "status"]]) {
+      const result = f.run(args, f.locations.linked, true);
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(result.stdout.trim());
+      assert.deepEqual(snapshot(f.env.SAGE_HOME), before);
+    }
+    const result = f.run(["projects", "rebuild", "--accept-listing", "yes"], f.locations.linked, true);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(known(f.env.SAGE_HOME).map(line => line.split(" ").at(-1)), ["rebuild"]);
+  });
   test(`T53: ${provider} shared identity APIs propagate discovery failure`, context => {
     const f = identityFailureFixture(context, provider);
     const before = snapshot(f.env.SAGE_HOME);

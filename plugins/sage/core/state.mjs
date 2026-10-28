@@ -2360,15 +2360,19 @@ function sage(argv, env = process.env) {
       return boardView({ sources, scope, project, logbookKey, taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view });
     } catch (error) { refuse(error.message); }
   }
+  const globalConfig = cmd === "config" && !pos.some(ownKey);
+  const project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
+  // Project commands resolve identity before the first migration can write. Global commands need no Git identity.
+  const dir = cmd === "projects" || globalConfig ? undefined : storeDir(project, env);
   if (!readOnly && statSync(root, { throwIfNoEntry: false })?.isDirectory() && ["projects.tsv", "projects.made"].every((f) => !lstatSync(join(root, f), { throwIfNoEntry: false }))) known(root); // the first writing command of this version lists today's logbooks
   if (cmd === "projects") return pos.join(" ") === "rebuild" && opt["accept-listing"] === "yes" ? rebuild(root) : refuse(`projects takes only: ${REBUILD.slice(5)}. It lists each logbook folder that is in ${root} now as a known project, so that its verdicts count in the merge check. Run it only when the user asks for it, and show the user the folders that it prints.`);
   if (cmd === "merge-check") {
     const cycles = opt.cycles === undefined ? undefined : (typed("cycles.small", opt.cycles) ?? refuse("--cycles is a whole number from 1 to 10")); // the chief's explicit count: it only raises a task's own count
     if (opt.pr !== undefined && !PR.test(opt.pr)) refuse("--pr is the pull request's number, with no leading zero, for example --pr 5");
-    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project: resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd()) });
+    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project });
     return r.ok ? r.reason : refuse(r.reason);
   }
-  if (cmd === "config" && !pos.some(ownKey)) {
+  if (globalConfig) {
     const set = {};
     for (const kv of pos) {
       const [k, v = "", ...more] = kv.split("=");
@@ -2392,7 +2396,6 @@ function sage(argv, env = process.env) {
     const models = Object.keys(c).filter((k) => MODEL.test(k));
     return [...Object.keys(c).filter((k) => !models.includes(k)), ...models].map((k) => `${k}=${c[k]}`).join(" "); // the numbers, then the models
   }
-  const project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
   // The board reads every logbook and takes no lock. --remember no leaves board.json as it is. --name-hex gives the scope
   // as the hex of its UTF-8 bytes, so that the hook's command line holds no text that the owner typed.
   if (cmd === "board") {
@@ -2401,7 +2404,6 @@ function sage(argv, env = process.env) {
       refuse("board takes one scope (this, all or a project's name, or --name-hex with the name's UTF-8 bytes in hex) and --remember yes or no");
     return board({ scope: hex === undefined ? pos[0] : unhex(hex), project, env, save: opt.remember !== "no" });
   }
-  const dir = storeDir(project, env);
   const repair = cmd === "logbook" && pos[0] === "repair";
   const skip = repair ? [...new Set(list(opt["accept-loss"]))] : [];
   const odd = skip.filter((t) => !Object.hasOwn(TABLES, t));
