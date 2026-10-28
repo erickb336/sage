@@ -50,7 +50,7 @@ function startNote(input, env) {
   let task;
   try { task = childTask(input.transcript_path); } catch { return { systemMessage: UNREAD }; }
   if (!sageName(task)) return {};
-  bindChild(input.transcript_path, input.cwd, env); // a report child of the chief: only its own report is retained
+  bindChild(input.transcript_path, input.cwd, env, input); // a report child of the chief: only its own report is retained
   const standing = tool.command(["standing", `--project=${input.cwd}`], env);
   const brief = readBrief(input.cwd, task, env);
   const parts = standing.code === 0 ? [`sage: the standing orders of this project, from its logbook. Follow each one.\n\n${standing.text}`] : [];

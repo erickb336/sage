@@ -11,6 +11,270 @@ import { ROOT } from "./build.mjs";
 
 const SHA = "1".repeat(40);
 
+// T54: saving a page and ending a run are separate from the provider's capture
+// of the child's report. Exercise the whole MCP flow, without native Codex.
+for (const capture of ["none", "start-only", "start-stop", "documented-child", "documented-parent", "documented-null", "delayed-metadata", "field-first"]) test(`T54: pages and run_done with ${capture} report capture`, async t => {
+  const s = await connect(t);
+  const git = (...args) => execFileSync("git", ["-C", s.project, "-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8" }).trim();
+  git("checkout", "-qb", "codex/t1-report");
+  git("commit", "--allow-empty", "-qm", "sample review head");
+  const head = git("rev-parse", "HEAD");
+  const logbook = (await s.call("init")).replace(/^logbook /, "");
+  await s.call("task_add", { title: "Sample review", size: "small", priority: "P2" });
+  await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "codex/t1-report" } });
+  const run = (await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": "collaboration-tools" })).split(" ")[0];
+  const brief = (capture === "field-first" ? "" : "Run R1 · task T1\n") + ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"]
+    .map(field => `${field}: Sample ${field.toLowerCase()}.`).join("\n");
+  assert.equal(await s.call("brief", { task_name: "sage_code_reviewer_t1_r1", brief }),
+    "brief sage_code_reviewer_t1_r1 checked: all 10 fields. Spawn the agent with this task name and this brief.");
+  const text = `STATUS done\nRESULT CLEAN\nEVIDENCE sample check passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED installed behavior\nBRANCH codex/t1-report; head ${head}`;
+  // Sample hook inputs only: never a kept-report file or native receipt.
+  // The release contract does not promise the transcript's internal format:
+  // https://learn.chatgpt.com/docs/hooks (read 2026-10-28). Test both possible
+  // start transcript owners and its documented null value. These are fixture
+  // cases, not observations of which transcript the installed host supplies.
+  const documented = capture.startsWith("documented-") || capture === "delayed-metadata";
+  const bound = ["start-only", "start-stop", "documented-child", "field-first"].includes(capture);
+  const stopped = capture === "start-stop" || capture === "field-first" || documented;
+  const transcript = join(s.dir, "sample-child.jsonl");
+  const parentTranscript = join(s.dir, "sample-parent.jsonl");
+  const parent = "019a0000-0000-7000-8000-0000000000aa";
+  const child = "019a0000-0000-7000-8000-0000000000bb";
+  writeFileSync(parentTranscript, `${JSON.stringify({ type: "session_meta", payload: { id: parent } })}\n`);
+  const role = execFileSync(process.execPath, [join(s.dir, "plugin/skills/sage/role.mjs"), "code-reviewer"], { env: s.env, encoding: "utf8" });
+  writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: {
+    id: child, agent_path: "/root/sage_code_reviewer_t1_r1",
+    ...(capture === "delayed-metadata" ? { session_id: parent, parent_thread_id: parent, cwd: s.project,
+      source: { subagent: { thread_spawn: { depth: 1, parent_thread_id: parent, agent_path: "/root/sage_code_reviewer_t1_r1", agent_role: null } } } } : {}),
+  } })}\n${documented ? "" : `${JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: `${role}\n\n${brief}` }] } })}\n`}`);
+  const common = { session_id: parent, turn_id: "sample-turn", transcript_path: parentTranscript,
+    model: "gpt-6.1-sol", permission_mode: "default", agent_id: child, agent_type: "default" };
+  const hook = (file, input) => {
+    const result = spawnSync(process.execPath, [join(s.dir, "plugin/hooks", file)], {
+      input: JSON.stringify({ cwd: s.project, ...common, ...input }), env: s.env, encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  if (capture !== "none") {
+    const start = hook("brief-hook.mjs", { hook_event_name: "SubagentStart",
+      transcript_path: ["documented-null", "delayed-metadata"].includes(capture) ? null : capture === "documented-parent" ? parentTranscript : transcript });
+    if (bound) {
+      assert.equal(start.hookSpecificOutput.hookEventName, "SubagentStart");
+      assert.ok(start.hookSpecificOutput.additionalContext.endsWith(brief));
+    } else if (capture === "documented-parent") assert.deepEqual(start, {});
+    else assert.match(start.systemMessage, /could not read what Codex sent it/);
+  }
+  assert.equal(existsSync(join(logbook, "kept", "R1.child")), bound);
+  if (stopped) assert.deepEqual(hook("report-gate.mjs", {
+    hook_event_name: "SubagentStop", agent_transcript_path: transcript, stop_hook_active: false, last_assistant_message: text,
+  }), bound ? {} : { systemMessage: "sage: R1's report is not kept: no child started for R1 while it ran, so it backs no verdict." });
+  const saved = await s.call("pages", { task: "T1", run, text });
+  const report = saved.match(/^page (\/.+) · sha256 [0-9a-f]{64}$/)?.[1];
+  assert.ok(report, saved);
+  assert.equal(await s.call("run_done", { run, status: "done", usage: "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "wait_agent gives no token count", report }), `${run} done`);
+  const before = readFileSync(join(logbook, "ledger.tsv"), "utf8");
+  const verdict = await s.call("verdict", { task: "T1", run, kind: "review-clean", sha: head, cycle: 1 });
+  // Characterize the unsupported cases; this is not a production repair.
+  // Start must currently expose the child's session_meta.agent_path. The
+  // documented event fields alone provide no task/run correlation.
+  if (stopped && bound) {
+    assert.equal(verdict, `T1 review-clean · ${head.slice(0, 7)} · cycle 1`);
+    assert.match(readFileSync(join(logbook, "ledger.tsv"), "utf8"), new RegExp(`\\nT1\\t\\t${head}\\treview-clean\\t1\\tR1\\t`));
+  } else {
+    assert.match(verdict.error, /^sage: R1 has no kept report:/);
+    assert.equal(readFileSync(join(logbook, "ledger.tsv"), "utf8"), before);
+    assert.deepEqual(hook("report-gate.mjs", {
+      hook_event_name: "SubagentStop", agent_transcript_path: transcript, stop_hook_active: false, last_assistant_message: text,
+    }), { systemMessage: !bound
+      ? "sage: R1's report is not kept: no child started for R1 while it ran, so it backs no verdict."
+      : "sage: R1's report is not kept: R1 ended as done before this stop, so no report is kept." });
+    assert.equal(existsSync(join(logbook, "kept", "R1.json")), false);
+  }
+});
+
+// T54: disposable hook and MCP fixtures. No installed session or logbook is read.
+async function captureFixture(t) {
+  const s = await connect(t);
+  const git = (...args) => execFileSync("git", ["-C", s.project, "-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8" }).trim();
+  git("checkout", "-qb", "codex/t1-review");
+  git("commit", "--allow-empty", "-qm", "review head");
+  const head = git("rev-parse", "HEAD"), root = "019a0000-0000-7000-8000-0000000000aa", child = "019a0000-0000-7000-8000-0000000000bb";
+  const other = "019a0000-0000-7000-8000-0000000000cc", name = "sage_code_reviewer_t1_r1";
+  const logbook = (await s.call("init")).slice(8);
+  await s.call("task_add", { title: "Sample review", size: "small", priority: "P2" });
+  await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "codex/t1-review" } });
+  await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": "collaboration-tools" });
+  const brief = "Run R1 · task T1\n" + ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"]
+    .map(field => `${field}: Sample ${field.toLowerCase()}.`).join("\n");
+  assert.match(await s.call("brief", { task_name: name, brief }), /checked: all 10 fields/);
+  const path = `/root/${name}`;
+  const meta = { id: child, session_id: root, parent_thread_id: root, cwd: s.project, agent_path: path,
+    source: { subagent: { thread_spawn: { depth: 1, parent_thread_id: root, agent_path: path, agent_role: null } } } };
+  const transcript = join(s.dir, "sample.jsonl");
+  const text = `STATUS done\nRESULT CLEAN\nEVIDENCE sample check passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED installed behavior\nBRANCH codex/t1-review; head ${head}`;
+  const writeMeta = value => writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: value })}\n`);
+  const hook = (file, input) => {
+    const result = spawnSync(process.execPath, [join(s.dir, "plugin/hooks", file)], { encoding: "utf8", env: s.env,
+      input: JSON.stringify({ cwd: s.project, session_id: root, agent_id: child, turn_id: "sample-turn", ...input }) });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const start = fields => hook("brief-hook.mjs", { hook_event_name: "SubagentStart", transcript_path: transcript, ...fields });
+  const stop = fields => hook("report-gate.mjs", { hook_event_name: "SubagentStop", agent_transcript_path: transcript,
+    stop_hook_active: false, last_assistant_message: text, ...fields });
+  const finish = async (reportText = text, sha = head) => {
+    const page = await s.call("pages", { task: "T1", run: "R1", text: reportText });
+    const report = page.match(/^page (\/.+) · sha256 [0-9a-f]{64}$/)?.[1];
+    assert.ok(report, page);
+    assert.equal(await s.call("run_done", { run: "R1", status: "done", usage: "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "sample", report }), "R1 done");
+    return s.call("verdict", { task: "T1", run: "R1", kind: "review-clean", sha, cycle: 1 });
+  };
+  writeMeta(meta);
+  return { ...s, git, head, root, child, other, name, logbook, brief, meta, transcript, text, writeMeta, start, stop, finish };
+}
+
+const captureRefusals = [
+  ["different metadata child", f => { f.meta.id = f.other; }],
+  ["different event child", f => ({ agent_id: f.other })],
+  ["different metadata root", f => { f.meta.session_id = f.other; }],
+  ["different event root", f => ({ session_id: f.other })],
+  ["different immediate parent", f => { f.meta.parent_thread_id = f.other; }],
+  ["different source parent", f => { f.meta.source.subagent.thread_spawn.parent_thread_id = f.other; }],
+  ["different project in metadata", f => { f.meta.cwd = f.dir; }],
+  ["different project in event", f => ({ cwd: f.dir })],
+  ["nested path", f => { f.meta.agent_path = `/root/lead/${f.name}`; }],
+  ["inconsistent source path", f => { f.meta.source.subagent.thread_spawn.agent_path = "/root/other"; }],
+  ["wrong source depth", f => { f.meta.source.subagent.thread_spawn.depth = 2; }],
+  ["wrong source", f => { f.meta.source = { subagent: "review" }; }],
+  ["wrong task", f => { f.meta.agent_path = "/root/sage_code_reviewer_t2_r1"; f.meta.source.subagent.thread_spawn.agent_path = f.meta.agent_path; }],
+  ["wrong run", f => { f.meta.agent_path = "/root/sage_code_reviewer_t1_r2"; f.meta.source.subagent.thread_spawn.agent_path = f.meta.agent_path; }],
+  ["wrong role", f => { f.meta.agent_path = "/root/sage_security_reviewer_t1_r1"; f.meta.source.subagent.thread_spawn.agent_path = f.meta.agent_path; }],
+  ["null metadata", f => { f.meta = null; }],
+  ["malformed metadata", f => { f.meta = []; }],
+];
+
+for (const event of ["Start", "Stop"]) for (const [label, mutate] of captureRefusals) test(`T54: strict capture refuses ${label} at ${event}`, async t => {
+  const f = await captureFixture(t), original = structuredClone(f.meta);
+  if (event === "Stop") f.start();
+  const fields = mutate(f) ?? {};
+  f.writeMeta(f.meta);
+  if (event === "Start") {
+    f.start(fields);
+    f.writeMeta(original);
+  }
+  f.stop(event === "Stop" ? fields : {});
+  assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false, label);
+  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/, label);
+});
+
+test("T54 withdrawal: a leftover diagnostic lock cannot delay Start past its hook timeout", async t => {
+  const f = await captureFixture(t);
+  // Sample leftovers only. Withdrawal must ignore them, without deleting any data.
+  const folder = join(f.env.CODEX_HOME, "sage", "capture-diagnostics");
+  mkdirSync(join(folder, ".lock"), { recursive: true, mode: 0o700 });
+  const windowFile = join(folder, "window.json"), ownerFile = join(folder, ".lock", "unknown-owner");
+  const expired = JSON.stringify({ version: 1, scope: basename(f.logbook), task: "T1", run: "R1", expires: 1, saturated: false, records: [] });
+  writeFileSync(windowFile, expired, { mode: 0o600 });
+  writeFileSync(ownerFile, "sample abandoned diagnostic owner", { mode: 0o600 });
+  const result = spawnSync(process.execPath, [join(f.dir, "plugin/hooks/brief-hook.mjs")], {
+    input: JSON.stringify({ hook_event_name: "SubagentStart", cwd: f.project, session_id: f.root,
+      agent_id: f.child, transcript_path: f.transcript }), env: f.env, encoding: "utf8", timeout: 10_000,
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(JSON.parse(result.stdout).hookSpecificOutput.additionalContext.endsWith(f.brief));
+  assert.deepEqual(f.stop(), {});
+  assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
+  assert.equal(readFileSync(windowFile, "utf8"), expired);
+  assert.equal(readFileSync(ownerFile, "utf8"), "sample abandoned diagnostic owner");
+});
+
+test("T54: no metadata at either event remains unavailable and names issue 376", async t => {
+  const f = await captureFixture(t);
+  f.start({ transcript_path: null });
+  assert.match(f.stop({ agent_transcript_path: null }).systemMessage, /issues\/376/);
+  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
+});
+
+test("T54: readable Start binds its current head, so an older report cannot back its verdict", async t => {
+  const f = await captureFixture(t);
+  f.git("commit", "--allow-empty", "-qm", "changed before start");
+  f.start();
+  assert.deepEqual(f.stop(), {});
+  assert.match((await f.finish()).error, /the report and the hook disagree/);
+});
+
+test("T54: a head changed after readable Start cannot back a new head", async t => {
+  const f = await captureFixture(t);
+  f.start();
+  f.git("commit", "--allow-empty", "-qm", "changed after start");
+  const newer = f.git("rev-parse", "HEAD");
+  assert.deepEqual(f.stop(), {});
+  assert.match((await f.finish(f.text, newer)).error, /a verdict names the commit that its helper reviewed/);
+  assert.equal(await f.call("verdict", { task: "T1", run: "R1", kind: "review-clean", sha: f.head, cycle: 1 }), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
+});
+
+test("T54: a live report cannot be captured after the run ends", async t => {
+  const f = await captureFixture(t);
+  f.start();
+  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
+  assert.match(f.stop().systemMessage, /ended as done before this stop/);
+  assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false);
+});
+
+test("T54: a competing child cannot replace the first Start binding", async t => {
+  const f = await captureFixture(t);
+  f.start();
+  f.meta.id = f.other;
+  f.writeMeta(f.meta);
+  f.start({ agent_id: f.other });
+  assert.match(f.stop({ agent_id: f.other }).systemMessage, /not the child that started/);
+  f.meta.id = f.child;
+  f.writeMeta(f.meta);
+  assert.deepEqual(f.stop(), {});
+  assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
+});
+
+test("T54: a legacy Start with a non-string event child still binds only its first metadata child", async t => {
+  const f = await captureFixture(t);
+  f.start({ agent_id: 42 });
+  f.meta.id = f.other;
+  f.writeMeta(f.meta);
+  f.start({ agent_id: f.other });
+  assert.match(f.stop({ agent_id: f.other }).systemMessage, /not the child that started/);
+  f.meta.id = f.child;
+  f.writeMeta(f.meta);
+  assert.deepEqual(f.stop(), {});
+  assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
+});
+
+test("T54: an incomplete report is blocked and a complete report can follow", async t => {
+  const f = await captureFixture(t);
+  f.start();
+  assert.equal(f.stop({ last_assistant_message: "STATUS done\nRESULT CLEAN" }).decision, "block");
+  assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false);
+  assert.deepEqual(f.stop(), {});
+  assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
+});
+
+test("T54: a conflicting report cannot replace the first report", async t => {
+  const f = await captureFixture(t);
+  f.start();
+  assert.deepEqual(f.stop(), {});
+  assert.deepEqual(f.stop(), {}, "an identical report can be retried");
+  assert.match(f.stop({ last_assistant_message: f.text.replace("sample check passed", "different check") }).systemMessage, /already has a kept report/);
+  assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
+});
+
+test("T54: a report with a finding cannot back a clean verdict", async t => {
+  const f = await captureFixture(t);
+  const text = f.text.replace("FINDINGS none", "FINDINGS\n- T1-1 medium sample problem");
+  f.start();
+  assert.deepEqual(f.stop({ last_assistant_message: text }), {});
+  assert.match((await f.finish(text)).error, /report has 1 medium or high finding/);
+});
+
 /** The built plugin's state server in a scratch folder, with a scratch CODEX_HOME and no SAGE_HOME. */
 async function connect(t, overrides = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-")));

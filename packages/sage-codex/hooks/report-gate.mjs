@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { REPORT_FIELDS, missingReportFields } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
 
-const UNREAD = "sage: the report check could not read this agent's stop, so it did not check its report.";
+const UNREAD = "sage: the report check could not read this agent's stop, so it did not check its report. Missing child metadata is tracked in https://github.com/erickb336/sage/issues/376.";
 
 /** A sage task name: sage_, the role with _ for -, the task and an optional run, for example sage_code_reviewer_t12_r40. */
 export const TASK_NAME = /^sage_([a-z]+(?:_[a-z]+)*)_t[1-9]\d*(?:_r[1-9]\d*)?$/;
@@ -43,27 +43,48 @@ export const childTask = (path) => agentPath(path).at(-1) ?? "";
 
 /** Roles whose reports the hook retains. Investigation retention does not back or grant a verdict. */
 const REPORT_ROLES = { investigate: "investigate", evidence_review: "evidence-review", code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
+/** Reject identity fields that contradict the lifecycle event. */
+function contradicts(meta, input) {
+  if (typeof input.agent_id === "string" && meta.id !== input.agent_id) return true;
+  if (Object.hasOwn(meta, "session_id") && meta.session_id !== input.session_id) return true;
+  if (Object.hasOwn(meta, "parent_thread_id") && meta.parent_thread_id !== input.session_id) return true;
+  if (Object.hasOwn(meta, "cwd") && (typeof meta.cwd !== "string" || tool.projectRoot(meta.cwd) !== tool.projectRoot(input.cwd))) return true;
+  if (Object.hasOwn(meta, "source")) {
+    const spawn = meta.source?.subagent?.thread_spawn;
+    if (!spawn || typeof spawn !== "object" || Array.isArray(spawn) || (Object.hasOwn(spawn, "depth") && spawn.depth !== 1)
+      || (Object.hasOwn(spawn, "agent_path") && spawn.agent_path !== meta.agent_path)
+      || (Object.hasOwn(spawn, "parent_thread_id") && spawn.parent_thread_id !== input.session_id)) return true;
+  }
+  return false;
+}
+
 /**
  * The run of a review, QA or investigation child of the chief (T483): its task name carries the run (sage_qa_t12_r40), and its agent path
  * is the root thread and that name, so a child of a child never names a run. Its thread id is the session_meta id.
  */
 export function reviewChild(meta) {
   const path = agentPathOf(meta), [, role, number, run] = /^sage_([a-z_]+)_t([1-9]\d*)_(r[1-9]\d*)$/.exec(path.at(-1) ?? "") ?? [];
-  if (!REPORT_ROLES[role] || path.length !== 2 || path[0] !== "root" || typeof meta.id !== "string" || !meta.id) return undefined;
+  if (!REPORT_ROLES[role] || path.length !== 2 || path[0] !== "root" || meta.agent_path !== `/root/${path[1]}` || typeof meta.id !== "string" || !meta.id) return undefined;
   return { role: REPORT_ROLES[role], task: `T${number}`, run: run.toUpperCase(), thread: meta.id };
 }
 const bindingOf = (cwd, run, env) => join(tool.storeDir(cwd, env), "kept", `${run}.child`);
 /**
  * At a review, QA or investigation child's start (SubagentStart, from the brief hook): the first child of the chief that starts for a
- * running run binds the run to its thread, once (R1908-3), with the tip of its task's branch at the start: the commit that
- * it reviews (R1933-1), or no SHA for a task without a branch. Only that child's report is kept for the run.
+ * running run binds the run to its thread once (R1908-3), with the branch tip at Start (R1933-1).
+ * Only that child's report is kept for the run.
  */
-export function bindChild(transcript, cwd, env = process.env) {
+export function bindChild(transcript, cwd, env = process.env, input = {}) {
   try {
-    const child = reviewChild(sessionMeta(transcript)), run = child && tool.logbookView(cwd, env).row(child.run);
-    if (!run || run.task !== child.task || run.role !== child.role || run.status !== "running") return;
-    mkdirSync(dirname(bindingOf(cwd, child.run, env)), { recursive: true, mode: 0o700 });
-    writeFileSync(bindingOf(cwd, child.run, env), JSON.stringify({ thread: child.thread, tip: branchHead(cwd, child.task, env) }), { flag: "wx", mode: 0o600 });
+    const meta = sessionMeta(transcript), child = reviewChild(meta);
+    if (!child || contradicts(meta, input)) return;
+    const dir = tool.storeDir(cwd, env);
+    tool.withLock(dir, () => {
+      const run = tool.logbookView(cwd, env).row(child.run);
+      if (!run || run.task !== child.task || run.role !== child.role || run.status !== "running") return;
+      mkdirSync(dirname(bindingOf(cwd, child.run, env)), { recursive: true, mode: 0o700 });
+      writeFileSync(bindingOf(cwd, child.run, env), JSON.stringify({ thread: child.thread, tip: branchHead(cwd, child.task, env),
+        ...(typeof input.agent_id === "string" && typeof input.session_id === "string" ? { session: input.session_id, eventBound: true } : {}) }), { flag: "wx", mode: 0o600 });
+    });
   } catch {}
 }
 /** The commit at the head of a task's branch in the project's repository, or "" (as the Claude hook reads it). */
@@ -82,18 +103,22 @@ function branchHead(cwd, task, env) {
  * chief when the state tool refused to keep it (for one, a second report of the run), or undefined.
  * Investigation reports may have no SHA; their retention never grants task-scoped evidence-clean.
  */
-function keep(meta, text, cwd, env) {
+function keep(meta, text, input, env) {
+  const cwd = input.cwd;
   const child = reviewChild(meta);
   if (!child || typeof text !== "string" || typeof cwd !== "string") return undefined;
   try {
-    const bound = JSON.parse(readFileSync(bindingOf(cwd, child.run, env), "utf8"));
-    if (bound?.thread !== child.thread) return `sage: ${child.run}'s report is not kept: this agent is not the child that started for ${child.run}, so it backs no verdict.`;
-    const sha = bound.tip && bound.tip === branchHead(cwd, child.task, env) ? bound.tip : "";
-    tool.keepReport(cwd, { role: child.role, task: child.task, run: child.run, sha, text }, env);
+    return tool.withLock(tool.storeDir(cwd, env), () => {
+      const bound = JSON.parse(readFileSync(bindingOf(cwd, child.run, env), "utf8"));
+      const mismatch = bound?.thread !== child.thread || (bound.eventBound && (input.agent_id !== child.thread || input.session_id !== bound.session || contradicts(meta, input)));
+      if (mismatch) return `sage: ${child.run}'s report is not kept: this agent is not the child that started for ${child.run}, so it backs no verdict.`;
+      const sha = bound.tip && bound.tip === branchHead(cwd, child.task, env) ? bound.tip : "";
+      tool.keepReport(cwd, { role: child.role, task: child.task, run: child.run, sha, text }, env);
+      return undefined;
+    });
   } catch (error) {
     return error?.code === "ENOENT" ? `sage: ${child.run}'s report is not kept: no child started for ${child.run} while it ran, so it backs no verdict.` : `sage: ${child.run}'s report is not kept: ${error?.message ?? error}`;
   }
-  return undefined;
 }
 
 export function reportGate(input, env = process.env) {
@@ -104,7 +129,7 @@ export function reportGate(input, env = process.env) {
   try { meta = sessionMeta(input.agent_transcript_path); task = agentPathOf(meta).at(-1) ?? ""; } catch { return { systemMessage: UNREAD }; }
   const missing = sageName(task) ? missingReportFields(message ?? "") : [];
   // A stop that goes through retains the bound child's exact report; the chief decides the outcome separately.
-  const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input.cwd, env) : undefined;
+  const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input, env) : undefined;
   if (!missing.length) return unkept ? { systemMessage: unkept } : {};
   if (input.stop_hook_active) return { systemMessage: [`sage: the agent ${task} ended without a full report (no ${missing.join(", ")}). The chief reads it as it is.`, unkept].filter(Boolean).join(" ") };
   return { decision: "block", reason: `sage: your report has no ${missing.join(", ")}. End with the sage report: ${REPORT_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.` };
