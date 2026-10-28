@@ -123,6 +123,53 @@ test("R1324-5: the programs list's picker keeps one project's programs with thei
   assert.ok((await shownIds(page)).length > 0 && (await page.locator(".card[data-key]:not([hidden])").evaluateAll(cards => cards.every(card => card.dataset.needs === "true"))));
 });
 
+test("T72: Programs warns when a saved project disappears, then a new choice clears it", async t => {
+  // The rows stay in the global view; only the selected project's option disappears.
+  const missing = { ...two, projects: two.projects.filter(project => project.key !== "other-abc123") };
+  const pages = { ...TWO, "/programs": () => renderProgramsHtml(missing) };
+  const page = await open(t, "/programs", { pages, project: "other-abc123" });
+  const rows = () => page.locator("[data-plist] li[data-project]:not([hidden])").evaluateAll(items => [...new Set(items.map(item => item.dataset.project))].sort());
+  const warning = page.locator("#gone");
+  assert.equal(await page.locator("#pick-name").textContent(), "All projects");
+  assert.equal(await page.evaluate(() => localStorage.getItem("board-project")), "");
+  assert.deepEqual(await rows(), ["other-abc123", "sage-ff5ee2"]);
+  assert.equal(await warning.isVisible(), true);
+  assert.equal(await warning.evaluate(element => element.closest('[role="status"]') !== null), true);
+  assert.equal(await warning.textContent(), "The project that you chose before has no logbook now. The programs list shows all projects. Dismiss");
+  await page.click("#pick-trig");
+  await page.click('#pick-list [role=option][data-key="sage-ff5ee2"]');
+  assert.equal(await warning.isVisible(), false);
+  assert.equal(await page.locator("#pick-name").textContent(), "sage (sample)");
+  assert.deepEqual(await rows(), ["sage-ff5ee2"]);
+  await page.click("#pick-trig");
+  await page.click('#pick-list [role=option][data-key=""]');
+  assert.equal(await page.locator("#pick-name").textContent(), "All projects");
+  assert.deepEqual(await rows(), ["other-abc123", "sage-ff5ee2"]);
+
+  const valid = await open(t, "/programs", { pages: TWO, project: "other-abc123" });
+  assert.equal(await valid.locator("#pick-name").textContent(), "other (sample)");
+  assert.equal(await valid.locator("#gone").isVisible(), false);
+  assert.deepEqual(await valid.locator("[data-plist] li[data-project]:not([hidden])").evaluateAll(items => [...new Set(items.map(item => item.dataset.project))]), ["other-abc123"]);
+});
+
+test("T72: the empty and script-free Programs views remain usable", async t => {
+  const empty = buildBoardModel([], { now: NOW });
+  const page = await open(t, "/programs", { pages: { "/programs": () => renderProgramsHtml(empty) }, project: "gone-abcdef" });
+  assert.equal(await page.locator("#gone").isVisible(), true);
+  assert.match(await page.locator(".emptyboard").textContent(), /No programs yet/);
+  await page.locator("#gone [data-dismiss]").click();
+  assert.equal(await page.locator("#gone").isVisible(), false);
+
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  t.after(() => context.close());
+  await context.route("**/*", route => route.abort());
+  await context.route("http://board.test/programs", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: renderProgramsHtml(two) }));
+  const offline = await context.newPage();
+  await offline.goto("http://board.test/programs");
+  assert.equal(await offline.locator("#gone").isVisible(), false);
+  assert.deepEqual(await offline.locator("[data-plist] li[data-project]").evaluateAll(items => [...new Set(items.map(item => item.dataset.project))].sort()), ["other-abc123", "sage-ff5ee2"]);
+});
+
 for (const [width, height] of [[375, 812], [1280, 900]]) for (const theme of ["light", "dark"]) {
   test(`T368, T349, R1347-1: no sideways scroll at ${width} px, ${theme}: the board, the programs list, a program page, a task page and the snapshot's pages; the page shell is edge to edge below 700 px`, async t => {
     for (const [path, hash] of [...Object.keys(PAGES).map(path => [path, ""]), ...SNAPSHOT_PAGES.map(hash => ["/snapshot", hash])]) {

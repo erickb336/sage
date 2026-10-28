@@ -270,6 +270,8 @@ function banners(model) {
   return `${note}${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
 }
 
+const goneBanner = view => `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. ${view} <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
+
 // Theme (bug bash R1023-4, T349): the page is dark until you choose light; a choice is kept in the browser and the head
 // script applies it before the first paint. The switch is a checkbox, so it works with scripts off: it shows the
 // other theme. Its label names the theme that it switches to. With scripts, a change keeps the shown theme as the choice.
@@ -792,7 +794,7 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
     const nomatch = `<div class="emptyboard" id="nomatch" hidden><b>No task matches.</b> No visible task fits this filter. <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprog = `<div class="emptyboard" id="noprog" hidden><b>No task of <span id="noprog-name"></span> shows on the board.</b> <span id="noprog-why"></span> <a id="noprog-link" href="">Open the program</a> · <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprov = `<div class="emptyboard" id="noprov" hidden><b>No <span id="noprov-who"></span> logbook in this project.</b> <span id="noprov-name"></span> has tasks only in <span id="noprov-has"></span>. <button class="linkbtn" type="button" data-showall>Show all providers</button></div>`;
-    const gone = `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. The board shows all projects. <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
+    const gone = goneBanner("The board shows all projects.");
     body = `<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.programs?.length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
       // Offline, the task pages, the programs list and each program's page are sections of the one file (C9).
       + (snapshot ? `<form id="themes" hidden></form><div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.programs?.length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-programs", true)}</div>${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
@@ -1039,7 +1041,7 @@ export function renderProgramsHtml(model, { programKey = null, live = false, pat
   // A program that is not on the board has no stream: the server answers its stream with 404 (R1322-3).
   live = live && (!programKey || !!program);
   const body = `<div class="boardview"><header><h1>Sage board</h1>${pagesNav("programs", model)}${livePill(`Board · ${at}`)}<span class="spacer"></span>${THEME_SWITCH}${picker(ctx, model, paths, false)}</header>`
-    + `<div id="board-content" data-at="${esc(at)}">${banners(model)}<main class="page open" aria-label="${program ? esc(program.id) : programKey ? "Program not found" : "Programs"}">${main}</main></div></div>`;
+    + `<div id="board-content" data-at="${esc(at)}">${banners(model)}${goneBanner(programKey ? "The project picker shows All projects." : "The programs list shows all projects.")}<main class="page open" aria-label="${program ? esc(program.id) : programKey ? "Program not found" : "Programs"}">${main}</main></div></div>`;
   const stream = programKey ? `/program/${b64(programKey)}?events=1` : "/programs?events=1";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${program ? `${esc(program.id)} · ` : programKey ? "Program not found · " : ""}Sage programs</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(stream, ["board-content", "board-pages", "pick-list", "needs-count"]) : ""}</script></body></html>`;
 }

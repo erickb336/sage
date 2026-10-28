@@ -805,6 +805,84 @@ test("R1324-5: the programs list, a program page and the not-found page have the
   assert.ok(BOARD_ENHANCEMENT.includes("if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs')") && BOARD_ENHANCEMENT.includes("if(list&&$('board-summary'))"));
 });
 
+// Simulate the rendered page with an in-memory browser store. The options and rows come from the page HTML.
+function programsSelection(html, saved) {
+  const body = html.slice(0, html.lastIndexOf("<script>"));
+  const options = [...body.matchAll(/<li role="option"[^>]*data-key="([^"]*)" data-name="([^"]*)"[^>]*>/g)].map(([, key, name]) => ({
+    dataset: { key, name }, setAttribute() {}, closest() { return null; },
+  }));
+  const lists = [...body.matchAll(/<ul class="plist" data-plist>([\s\S]*?)<\/ul>/g)].map(([, content]) => {
+    const rows = [...content.matchAll(/<li data-project="([^"]*)">/g)].map(([, project]) => ({ dataset: { project }, hidden: false }));
+    return { rows, closest() { return null; }, previousElementSibling: null, querySelectorAll() { return rows; } };
+  });
+  const banner = body.match(/<div role="status"><div class="banner info" id="gone" hidden><div>(.*?)<button/);
+  const gone = banner ? { hidden: true, text: banner[1] } : null;
+  const name = { textContent: "All projects" }, handlers = {};
+  const elements = { "pick-list": {}, "pick-name": name, gone };
+  const document = {
+    documentElement: { classList: { add() {} } },
+    getElementById(id) { return elements[id] || null; },
+    querySelectorAll(selector) { return selector === "#pick-list [role=option]" ? options : selector === "[data-plist]" ? lists : []; },
+    addEventListener(type, handler) { handlers[type] = handler; },
+  };
+  const store = new Map([["board-project", saved]]), location = { hash: "", pathname: "/programs", search: "" };
+  const localStorage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) };
+  const history = { replaceState() {} }, window = { addEventListener() {} };
+  new Function("document", "window", "localStorage", "location", "history", BOARD_ENHANCEMENT)(document, window, localStorage, location, history);
+  const click = (selector, target = {}) => handlers.click({ target: { closest: s => s === selector ? target : null } });
+  return { gone, name, store, rows: lists.flatMap(list => list.rows), click };
+}
+
+function twoPrograms() {
+  const other = programsSource("codex");
+  Object.assign(other.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
+  return buildBoardModel([programsSource(), other], { now: PROGRAMS_NOW });
+}
+
+test("T72: an unavailable saved project shows the global programs and a warning", t => {
+  const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
+  const page = programsSelection(renderProgramsHtml(missing), "other-abc123");
+  assert.equal(page.store.get("board-project"), "");
+  assert.equal(page.name.textContent, "All projects");
+  assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+  t.diagnostic("A missing saved choice was cleared, and rows from both sample projects were shown.");
+  assert.ok(page.gone, "the Programs page has an accessible warning");
+  assert.equal(page.gone.hidden, false);
+  assert.equal(page.gone.text, "The project that you chose before has no logbook now. The programs list shows all projects. ");
+  page.click("[data-dismiss]");
+  assert.equal(page.gone.hidden, true, "Dismiss clears the warning");
+});
+
+test("T72: valid saved choices and All projects keep their normal program rows", () => {
+  const html = renderProgramsHtml(twoPrograms());
+  const chosen = programsSelection(html, "other-abc123");
+  assert.equal(chosen.name.textContent, "other (sample)");
+  assert.deepEqual([...new Set(chosen.rows.filter(row => !row.hidden).map(row => row.dataset.project))], ["other-abc123"]);
+  assert.equal(chosen.gone?.hidden, true);
+  const all = programsSelection(html, "");
+  assert.equal(all.name.textContent, "All projects");
+  assert.deepEqual([...new Set(all.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+  assert.equal(all.gone?.hidden, true);
+  chosen.click("#pick-list [role=option]", { dataset: { key: "" } });
+  assert.equal(chosen.name.textContent, "All projects");
+  assert.equal(chosen.rows.filter(row => !row.hidden).length, all.rows.length);
+});
+
+test("T72: an empty list and a program page explain an unavailable saved choice", () => {
+  const empty = programsSelection(renderProgramsHtml(buildBoardModel([], { now: PROGRAMS_NOW })), "gone-abcdef");
+  assert.equal(empty.name.textContent, "All projects");
+  assert.equal(empty.gone?.hidden, false);
+  const detail = programsSelection(renderProgramsHtml(twoPrograms(), { programKey: "claude/sage-ff5ee2/PG1" }), "gone-abcdef");
+  assert.equal(detail.gone?.hidden, false);
+  assert.equal(detail.gone?.text, "The project that you chose before has no logbook now. The project picker shows All projects. ");
+});
+
+test("T72: without JavaScript the warning stays hidden and all program rows remain in the page", () => {
+  const html = renderProgramsHtml(twoPrograms()).split("<script>").slice(0, -1).join("<script>");
+  assert.match(html, /role="status"><div class="banner info" id="gone" hidden>/);
+  assert.ok(html.includes('<li data-project="other-abc123">') && html.includes('<li data-project="sage-ff5ee2">'));
+});
+
 test("R1322-2: the Program filter keeps a dropped program while a card of it shows in Done", () => {
   const tables = programsTables(), t60 = tables.tasks.find(task => task.id === "T60");
   t60.state = "merged";
