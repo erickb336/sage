@@ -13,7 +13,7 @@ The parent is the chief and the sole logbook writer. The chief frames work, asks
 9. Run every required clean cycle on the final commit. A new commit restarts cycles. Use configured counts: default one for tiny/small, two for large or risk-flagged tasks, or more when required.
 10. QA checks acceptance against the final head. Show the user the artifact, evidence, limitations and any needed decision. Stop at verified unless separately authorized publication is available.
 
-Tiny work still needs an independent code review under this workflow; add that block with a reason if the framed route lacks it. Run security review for applicable risks and UX review when the experience changes. Large design/PE and investigation work stay with the parent until their specific dispatch path is verified. Do not silently skip required review or rename a missing role. Stop the dependent phase and explain the gap.
+Tiny work still needs an independent code review under this workflow; add that block with a reason if the framed route lacks it. Run security review for applicable risks and UX review when the experience changes. Large design/PE work stays with the parent until its specific dispatch path is verified. Do not silently skip required review or rename a missing role. Stop the dependent phase and explain the gap.
 
 ## Capacity, failures and recovery
 
@@ -40,3 +40,13 @@ For the declared unsupported interface, end the run with `--usage unavailable`, 
 If a measurement arrives later, use `run usage <R> --tokens <n> --usage-source <source> --usage-evidence <reference>`. This command records an audited enrichment. It preserves the terminal status, timestamp and report. An exact retry adds nothing. A conflicting count or source refuses. Previously blocked runs remain blocked.
 
 Status and stats show measured, unavailable and legacy-unrecorded completed runs. A partial total does not establish that one task costs less than another.
+
+## Investigate and review evidence
+
+For an existing investigation route, the chief records an `investigate` run and dispatches its named role through the public helper. Save the complete returned report with `pages record`, then end that actual run with `run_done`. These manual records are chief-supplied evidence, not proof of native authorship.
+
+Start a different agent with the `evidence-review` role and its own recorded run. Give it the investigation report and evidence locations. Retain its complete report and record its actual outcome. A `blocked` or `question` report stays that outcome; resolve it before acceptance. Record findings before a verdict.
+
+When that independent review supports acceptance, the chief records `evidence-clean` for the task without a SHA, with the real review run reference. Follow the existing state transitions to `concluded`. Retention alone grants no verdict. Core neither requires a run/report for this task-scoped verdict nor authenticates a supplied run reference. A deliberate false reference is a known trust limit, never an allowed practice.
+
+Manual pages and run records, actual hook-retained reports, and evidence-clean acceptance are three different facts. Local generated-package fixtures can check their behavior. They do not verify installed hooks, live dispatch or protected native integration; those checks remain pending.

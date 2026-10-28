@@ -43,8 +43,8 @@ export const agentPath = (path) => agentPathOf(sessionMeta(path));
 /** The task name of a Codex child: the last part of its agent path. */
 export const childTask = (path) => agentPath(path).at(-1) ?? "";
 
-/** The roles whose report backs a verdict, by the role part of a task name. */
-const CHECKERS = { code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
+/** Roles whose reports the hook retains. Investigation retention does not back or grant a verdict. */
+const REPORT_ROLES = { investigate: "investigate", evidence_review: "evidence-review", code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
 /** Reject identity fields that contradict the lifecycle event. */
 function contradicts(meta, input) {
   if (typeof input.agent_id === "string" && meta.id !== input.agent_id) return true;
@@ -61,17 +61,17 @@ function contradicts(meta, input) {
 }
 
 /**
- * The run of a review or QA child of the chief (T483): its task name carries the run (sage_qa_t12_r40), and its agent path
+ * The run of a review, QA or investigation child of the chief (T483): its task name carries the run (sage_qa_t12_r40), and its agent path
  * is the root thread and that name, so a child of a child never names a run. Its thread id is the session_meta id.
  */
 export function reviewChild(meta) {
   const path = agentPathOf(meta), [, role, number, run] = /^sage_([a-z_]+)_t([1-9]\d*)_(r[1-9]\d*)$/.exec(path.at(-1) ?? "") ?? [];
-  if (!CHECKERS[role] || path.length !== 2 || path[0] !== "root" || meta.agent_path !== `/root/${path[1]}` || typeof meta.id !== "string" || !meta.id) return undefined;
-  return { role: CHECKERS[role], task: `T${number}`, run: run.toUpperCase(), thread: meta.id };
+  if (!REPORT_ROLES[role] || path.length !== 2 || path[0] !== "root" || meta.agent_path !== `/root/${path[1]}` || typeof meta.id !== "string" || !meta.id) return undefined;
+  return { role: REPORT_ROLES[role], task: `T${number}`, run: run.toUpperCase(), thread: meta.id };
 }
 const bindingOf = (cwd, run, env) => join(tool.storeDir(cwd, env), "kept", `${run}.child`);
 /**
- * At a review or QA child's start (SubagentStart, from the brief hook): the first child of the chief that starts for a
+ * At a review, QA or investigation child's start (SubagentStart, from the brief hook): the first child of the chief that starts for a
  * running run binds the run to its thread once (R1908-3), with the branch tip at Start (R1933-1).
  * Only that child's report is kept for the run.
  */
@@ -131,6 +131,7 @@ function branchHead(cwd, task, env) {
  * the commit that it reviewed: the branch tip at its start, when the branch did not move until this stop; else none, so the
  * report's own BRANCH must name the full head SHA (R1933-1). A report that is not kept backs no verdict. The line for the
  * chief when the state tool refused to keep it (for one, a second report of the run), or undefined.
+ * Investigation reports may have no SHA; their retention never grants task-scoped evidence-clean.
  */
 function keep(meta, text, input, env, record) {
   const cwd = input.cwd;
@@ -183,7 +184,7 @@ export function reportGate(input, env = process.env) {
   }
   try {
   const missing = sageName(task) ? missingReportFields(message ?? "") : [];
-  // A stop that goes through keeps a review's or QA's report in the logbook, for its run's verdict (T483).
+  // A stop that goes through retains the bound child's exact report; the chief decides the outcome separately.
   if (record) record.reason = "INCOMPLETE_REPORT";
   const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input, env, record) : undefined;
   if (!missing.length) return unkept ? { systemMessage: unkept } : {};

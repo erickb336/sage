@@ -2,7 +2,7 @@
 // The input shape is a SubagentStop input that stock Codex 0.160.0 sent in run R1648 (paths replaced).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -197,3 +197,91 @@ test("role.mjs prints the role text and the sage report, and refuses an unknown 
   assert.equal(bad.stdout, "");
   assert.equal(bad.stderr, "sage: Unknown child role. Give one role from references/roles.md.\n");
 });
+
+// T83: run the public renderer from the generated package, as the chief does.
+for (const [role, heading] of [["investigate", "# Investigate"], ["evidence-review", "# Evidence review"]]) {
+  test(`T83 public role renderer supplies ${role} and the report contract`, () => {
+    const result = spawnSync(process.execPath, [ROLE, role], { encoding: "utf8", env: ENV });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.startsWith(`${heading}\n`), result.stdout);
+    assert.match(result.stdout, /read-only/);
+    assert.match(result.stdout, /# The sage report/);
+    for (const field of REPORT_FIELDS) assert.match(result.stdout, new RegExp(`^${field} +`, "m"));
+  });
+}
+
+test("T83 public role allowlist rejects aliases and file paths without reading them", () => {
+  for (const role of ["investigator", "evidence_reviewer", "evidence_review", "Investigate", "../references/investigate", "toString", "__proto__"]) {
+    const result = spawnSync(process.execPath, [ROLE, role], { encoding: "utf8", env: ENV });
+    assert.equal(result.status, 1, role);
+    assert.equal(result.stdout, "", role);
+    assert.match(result.stderr, /Unknown child role/, role);
+  }
+});
+
+for (const role of ["investigate", "evidence-review"]) {
+  test(`T83 ${role}: exact hook retention without SHA, identity refusals and honest outcomes`, t => {
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "sage-investigation-")));
+    t.after(() => rmSync(project, { recursive: true, force: true }));
+    const fixtureEnv = { ...ENV, SAGE_HOME: join(project, "sample-logbook") };
+    assert.equal(spawnSync("git", ["init", "-q", project]).status, 0);
+    const sage = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", project], { encoding: "utf8", env: fixtureEnv });
+    const ok = (...args) => { const r = sage(...args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+    ok("init");
+    ok("task", "add", "--priority", "P2", "--title", "Sample investigation", "--size", "investigate");
+    const book = ok("logbook"), ledger = () => readFileSync(join(book, "ledger.tsv"), "utf8"), before = ledger();
+    let threads = 0;
+    const run = () => ok("run", "add", "T1", "--role", role).split(" ")[0];
+    // Synthetic hook metadata in a disposable fixture, never native execution receipts.
+    const child = (id, { path = `/root/sage_${role.replaceAll("-", "_")}_t1_${id.toLowerCase()}`, thread = `sample-${++threads}` } = {}) => {
+      const file = join(project, `sample-${++threads}.jsonl`);
+      writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: thread, agent_path: path } }) + "\n");
+      return file;
+    };
+    const begin = file => {
+      const r = spawnSync(process.execPath, [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "SubagentStart", session_id: "sample-root", transcript_path: file, cwd: project }), encoding: "utf8", env: fixtureEnv });
+      assert.equal(r.status, 0, r.stderr);
+    };
+    const end = (file, text, again = false) => {
+      const r = spawnSync(process.execPath, [GATE], { input: JSON.stringify({ hook_event_name: "SubagentStop", agent_transcript_path: file, cwd: project, last_assistant_message: text, stop_hook_active: again }), encoding: "utf8", env: fixtureEnv });
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const saved = id => join(book, "kept", `${id}.json`);
+    for (const status of ["done", "blocked", "question"]) {
+      const id = run(), file = child(id);
+      const text = `STATUS ${status}\nRESULT ${status === "done" ? "CLEAN" : status}\nEVIDENCE Sample T1 ${id} ${role}: no build or SHA\nFINDINGS none\nQUESTIONS ${status === "question" ? "Sample product decision remains open" : "none"}\nNOT VERIFIED installed execution\nBRANCH none\n`;
+      begin(file);
+      assert.deepEqual(end(file, text), {});
+      const kept = JSON.parse(readFileSync(saved(id), "utf8"));
+      assert.deepEqual([kept.task, kept.run, kept.role, kept.sha, kept.text], ["T1", id, role, "", text]);
+      assert.match(end(file, text + "Different report").systemMessage, /already has a kept report/);
+      assert.equal(readFileSync(saved(id), "utf8"), JSON.stringify(kept));
+      // One token is a sample fixture value, not measured agent usage.
+      ok("run", "done", id, "--status", status, "--tokens", "1");
+      assert.equal(ledger(), before, `${status}: retention and run_done grant no verdict`);
+    }
+    for (const issue of ["no start", "no run", "no thread", "wrong task", "wrong role", "nested", "ended"]) {
+      const id = run(), name = `sage_${role.replaceAll("-", "_")}_t1_${id.toLowerCase()}`;
+      const path = issue === "no run" ? `/root/sage_${role.replaceAll("-", "_")}_t1`
+        : issue === "wrong task" ? `/root/${name.replace("_t1_", "_t2_")}`
+        : issue === "wrong role" ? `/root/sage_qa_t1_${id.toLowerCase()}`
+        : issue === "nested" ? `/root/worker/${name}` : `/root/${name}`;
+      const file = child(id, { path, ...(issue === "no thread" ? { thread: "" } : {}) });
+      if (issue === "ended") ok("run", "done", id, "--status", "blocked");
+      if (issue !== "no start") begin(file);
+      end(file, FULL);
+      assert.equal(existsSync(saved(id)), false, issue);
+    }
+    const id = run(), first = child(id), conflicting = child(id);
+    begin(first); begin(conflicting);
+    assert.match(end(conflicting, FULL).systemMessage, /not the child that started/);
+    assert.equal(existsSync(saved(id)), false);
+    const incomplete = "STATUS blocked\nRESULT missing evidence";
+    assert.equal(end(first, incomplete).decision, "block");
+    assert.equal(existsSync(saved(id)), false);
+    assert.match(end(first, incomplete, true).systemMessage, /ended without a full report/);
+    assert.equal(JSON.parse(readFileSync(saved(id), "utf8")).text, incomplete);
+    assert.equal(ledger(), before, "identity failures and incomplete reports grant no verdict");
+  });
+}

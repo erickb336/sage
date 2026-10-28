@@ -20,11 +20,9 @@ export const tool = { ...base, command(argv, env = process.env) {
   if (!result.code && project && /^T[1-9]\d*$/.test(argv[1] ?? "") && ["task", "board"].includes(argv[0]) && !env.SAGE_BOARD_ROOTS) {
     result.text += `\ncapture diagnostics ${JSON.stringify(diagnostics.read(project, argv[1], env, pruned))}`;
   }
-  if (!result.code && argv[0] === "run" && argv[1] === "done") {
-    const option = argv.find(a => a.startsWith("--project="));
-    const selected = option?.slice(10) ?? argv[argv.indexOf("--project") + 1];
-    if (selected) diagnostics.complete(selected, argv[2], env);
-  }
+  // Core resolves explicit project, SAGE_PROJECT and cwd. Recheck the selected
+  // window's run after completion instead of parsing that selection a second time.
+  if (!result.code && argv[0] === "run" && argv[1] === "done") diagnostics.prune(env);
   return result;
 }, runCli(argv = process.argv.slice(2)) {
   const result = tool.command(argv);

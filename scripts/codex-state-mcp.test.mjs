@@ -567,6 +567,80 @@ test("T54: chief MCP diagnostics control is gated, scoped, and removed on run co
   assert.equal(diagnostics.read(f.project, "T1", f.env).records.at(-1).reason, "RETAINED");
   const scoped = tool.command(["board", "T1", "--view", "task", "--project", f.project], f.env);
   assert.match(scoped.text, /capture diagnostics/);
+  const windowFile = join(f.env.CODEX_HOME, 'sage', 'capture-diagnostics', 'window.json');
+  const unrelated = join(f.env.CODEX_HOME, 'sage', 'capture-diagnostics', 'keep-me');
+  writeFileSync(unrelated, 'sample unrelated data');
+  const other = join(f.dir, 'other-project'); mkdirSync(other);
+  for (const project of [f.project, other]) {
+    if (project === other) await f.call('init', { project });
+    await f.call('task_add', { project, title: 'Other sample', size: 'small', priority: 'P2' });
+    await f.call('run_add', { project, task: project === other ? 'T1' : 'T2', role: 'code-reviewer' });
+  }
+  const otherBook = (await f.call('init', { project: other })).slice(8);
+  const otherBefore = readFileSync(join(otherBook, 'runs.tsv'), 'utf8');
+  const before = readFileSync(windowFile, 'utf8');
+  for (const action of ['start', 'end']) for (const scope of [
+    { project: other, task: 'T1', run: 'R1' }, { task: 'T2', run: 'R1' },
+    { task: 'T1', run: 'R2' }, { task: 'T2', run: 'R2' },
+  ]) {
+    assert.ok((await f.call('capture_diagnostics', { action, ...scope })).error, JSON.stringify({ action, ...scope }));
+    assert.equal(readFileSync(windowFile, 'utf8'), before, 'a mismatched control preserves the legitimate window');
+    assert.equal(readFileSync(join(otherBook, 'runs.tsv'), 'utf8'), otherBefore);
+  }
+  const cli = args => execFileSync(process.execPath, [join(f.dir, 'plugin/skills/sage/sage.mjs'), ...args, '--project', f.project], { env: f.env, encoding: 'utf8' });
+  for (const args of [['task', 'T1'], ['board', 'T1', '--view', 'task']]) assert.match(cli(args), /"reason":"RETAINED"/);
+  assert.equal(JSON.parse(await f.call('capture_diagnostics', { task: 'T1', run: 'R1', action: 'end' })).status, 'disabled');
+  assert.equal(existsSync(windowFile), false);
+  assert.match(cli(['task', 'T1']), /"status":"disabled"/);
+  assert.equal(readFileSync(unrelated, 'utf8'), 'sample unrelated data');
+  assert.equal(readFileSync(join(otherBook, 'runs.tsv'), 'utf8'), otherBefore);
+  assert.equal(JSON.parse(await f.call('capture_diagnostics', { task: 'T1', run: 'R1', action: 'start' })).status, 'active');
+
   assert.equal(typeof await f.finish(), "string");
   assert.equal(diagnostics.read(f.project, "T1", f.env).status, "disabled");
+});
+
+test("T83 sample investigation and independent evidence check retain real outputs and conclude without SHA", async t => {
+  const s = await connect(t);
+  const book = (await s.call("init")).slice(8);
+  assert.match(await s.call("task_add", { title: "SAMPLE: inspect answer", size: "investigate", priority: "P2" }), /route investigate,evidence-review/);
+  for (const state of ["briefed", "building"]) assert.match(await s.call("task_set", { task: "T1", fields: { state } }), new RegExp(`T1 ${state}`));
+  const sample = join(s.project, "sample.txt");
+  writeFileSync(sample, "answer=42\n");
+  const { briefHook } = await import(pathToFileURL(join(s.dir, "plugin/hooks/brief-hook.mjs")));
+  const { reportGate } = await import(pathToFileURL(join(s.dir, "plugin/hooks/report-gate.mjs")));
+  const ledger = () => readFileSync(join(book, "ledger.tsv"), "utf8");
+  const before = ledger();
+  let reviewRun;
+  for (const role of ["investigate", "evidence-review"]) {
+    if (role === "evidence-review") assert.match(await s.call("task_set", { task: "T1", fields: { state: "reviewing" } }), /T1 reviewing/);
+    const run = (await s.call("run_add", { task: "T1", role })).split(" ")[0];
+    const file = join(s.dir, `${run}-sample-transcript.jsonl`);
+    writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `sample-${run}`, agent_path: `/root/sage_${role.replaceAll("-", "_")}_t1_${run.toLowerCase()}` } }) + "\n");
+    briefHook({ hook_event_name: "SubagentStart", session_id: "sample-root", transcript_path: file, cwd: s.project }, s.env);
+    // Two separate read-only processes: observation, then an independent assertion of the sample's value.
+    const code = role === "investigate"
+      ? 'process.stdout.write(require("node:fs").readFileSync(process.argv[1], "utf8"))'
+      : 'require("node:assert/strict").equal(require("node:fs").readFileSync(process.argv[1], "utf8"), "answer=42\\n"); console.log("PASS answer=42")';
+    const check = spawnSync(process.execPath, ["-e", code, sample], { encoding: "utf8", env: s.env });
+    assert.equal(check.status, 0, check.stderr);
+    const report = `STATUS done\nRESULT ${role === "investigate" ? "answer=42" : "CLEAN"}\nEVIDENCE SAMPLE T1 ${run} ${role}: node -e ${JSON.stringify(code)} ${sample} printed ${JSON.stringify(check.stdout)}\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED installed or native dispatch; synthetic hook events\nBRANCH none\n`;
+    assert.deepEqual(reportGate({ hook_event_name: "SubagentStop", stop_hook_active: false, agent_transcript_path: file, cwd: s.project, last_assistant_message: report }, s.env), {});
+    assert.equal(JSON.parse(readFileSync(join(book, "kept", `${run}.json`), "utf8")).text, report);
+    const page = await s.call("pages", { task: "T1", run, text: report });
+    assert.equal(typeof page, "string", JSON.stringify(page));
+    const path = join(s.env.SAGE_WORKTREES, basename(book), "pages", "T1", `${run}-report.md`);
+    assert.equal(readFileSync(path, "utf8"), report);
+    // One token is a sample fixture value, not measured agent usage.
+    assert.equal(await s.call("run_done", { run, status: "done", report: path, tokens: 1 }), `${run} done`);
+    assert.equal(ledger(), before, "retention and manual records create no verdict");
+    reviewRun = run;
+  }
+  assert.match((await s.call("verdict", { task: "T1", kind: "evidence-clean", run: reviewRun, sha: SHA })).error, /leave out --sha/);
+  assert.equal(await s.call("verdict", { task: "T1", kind: "evidence-clean", run: reviewRun }), "T1 evidence-clean · cycle 1");
+  for (const state of ["verifying", "concluded"]) assert.match(await s.call("task_set", { task: "T1", fields: { state } }), new RegExp(`T1 ${state}`));
+  const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")));
+  assert.deepEqual(tool.read(book, "ledger").map(row => [row.task, row.kind, row.run, row.sha]), [["T1", "evidence-clean", reviewRun, ""]]);
+  assert.match((await s.call("merge_check", { sha: SHA, pr: 1, head: "codex/sample" })).error, /no verdicts/);
+  console.log("T83 SAMPLE: investigate R1 answer=42; independent evidence-review R2 PASS; exact reports retained; chief evidence-clean without SHA; T1 concluded; merge refused");
 });

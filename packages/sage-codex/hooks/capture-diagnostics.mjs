@@ -1,6 +1,6 @@
 // Temporary, opt-in observations. The routing key is control data, never an observation.
 // The existing Sage logbook key fixes routing without retaining a path or native ID.
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 export const RECORD_LIMIT = 64, BYTE_LIMIT = 65536, WINDOW_MS = 24 * 60 * 60 * 1000;
 const TYPES = new Set(['absent', 'null', 'valid_type', 'wrong_type']);
@@ -46,8 +46,8 @@ export function createCaptureDiagnostics(tool) {
   }
   function locked(env, fn) {
     safeFolder(env);
-    const lock = join(folder(env), 'lock'); mkdirSync(lock, { mode: 0o700 });
-    try { return fn(); } finally { rmdirSync(lock); }
+    // Core owns the transient lock metadata and clears only a proven dead owner.
+    return tool.withLock(folder(env), fn);
   }
   function remove(env) {
     const current = load(env);
@@ -69,19 +69,24 @@ export function createCaptureDiagnostics(tool) {
     finally { if (fd !== undefined) { closeSync(fd); try { unlinkSync(temporary); } catch {} } }
     return true;
   }
+  function ended(data, env) {
+    if (data.expires <= Date.now()) return 'expired';
+    // Reuse the selected logbook key. Do not retain a path, fingerprint, or pending observation.
+    // The run table is the durable completion signal, including when cleanup lost a lock race.
+    const run = tool.read(join(tool.sageRoot(env), data.scope), 'runs').find(row => row.id === data.run);
+    return !run || run.task !== data.task || run.status !== 'running' ? 'disabled' : undefined;
+  }
   function prune(env = process.env) {
     try {
-      try {
-        const temporary = load(env, 'next');
-        if (temporary && temporary.expires <= Date.now()) locked(env, () => {
-          const current = load(env, 'next');
-          if (current && current.expires <= Date.now()) unlinkSync(join(folder(env), 'next'));
-        });
-      } catch { /* Preserve unrelated files. */ }
-      const data = load(env);
-      if (data && data.expires <= Date.now()) return locked(env, () => {
-        const current = load(env);
-        if (current && current.expires <= Date.now()) { remove(env); return { status: 'expired', scope: current.scope, task: current.task }; }
+      const data = load(env), temporary = (() => { try { return load(env, 'next'); } catch { return undefined; } })();
+      if ((data && ended(data, env)) || (temporary && ended(temporary, env))) return locked(env, () => {
+        const current = load(env), status = current && ended(current, env);
+        if (status) { remove(env); return { status, scope: current.scope, task: current.task }; }
+        // A crashed writer can leave only its temporary copy. Preserve unrelated files.
+        try {
+          const next = load(env, 'next');
+          if (next && ended(next, env)) unlinkSync(join(folder(env), 'next'));
+        } catch { /* Preserve unrelated or unreadable files. */ }
       });
     } catch { return { status: 'unreadable' }; }
   }
@@ -95,13 +100,15 @@ export function createCaptureDiagnostics(tool) {
       mkdirSync(folder(env), { recursive: true, mode: 0o700 });
     }
     if (action === 'end' && !load(env)) return failure('disabled');
-    return locked(env, () => {
+    const result = locked(env, () => {
       const current = load(env);
       if (current && (current.scope !== wanted || current.task !== task || current.run !== run)) throw Error('another diagnostic window is active');
       if (action === 'end') { if (current) remove(env); return failure('disabled'); }
-      if (!current) save(env, { version: 1, scope: wanted, task, run, expires: Date.now() + WINDOW_MS, saturated: false, records: [] });
-      return read(project, task, env);
+      const next = current ?? { version: 1, scope: wanted, task, run, expires: Date.now() + WINDOW_MS, saturated: false, records: [] };
+      if (ended(next, env)) throw Error('diagnostics need a running run');
+      if (!current) save(env, next);
     });
+    return result ?? read(project, task, env);
   }
   function read(project, task, env = process.env, prior) {
     const pruned = prior ?? prune(env);
@@ -116,12 +123,12 @@ export function createCaptureDiagnostics(tool) {
     prune(env);
     try {
       const data = load(env);
-      if (!data || !child || data.scope !== scope(project, env) || data.task !== child.task || data.run !== child.run) return undefined;
+      if (!data || ended(data, env) || !child || data.scope !== scope(project, env) || data.task !== child.task || data.run !== child.run) return undefined;
       const record = { event, fields: fieldStates(input), reason: 'RETENTION_REFUSED' };
       return { record, finish() {
         try { locked(env, () => {
           const current = load(env);
-          if (!current || current.expires <= Date.now() || current.scope !== data.scope || current.task !== data.task || current.run !== data.run || current.expires !== data.expires || current.saturated) return;
+          if (!current || ended(current, env) || current.scope !== data.scope || current.task !== data.task || current.run !== data.run || current.expires !== data.expires || current.saturated) return;
           const next = sanitized(record, current.records.length + 1);
           const updated = { ...current, records: [...current.records, next] };
           updated.saturated = updated.records.length >= RECORD_LIMIT;
@@ -133,8 +140,5 @@ export function createCaptureDiagnostics(tool) {
       } };
     } catch { return undefined; }
   }
-  function complete(project, run, env = process.env) {
-    try { locked(env, () => { const data = load(env); if (data && data.scope === scope(project, env) && data.run === run) remove(env); }); } catch {}
-  }
-  return { control, read, begin, prune, complete };
+  return { control, read, begin, prune };
 }
