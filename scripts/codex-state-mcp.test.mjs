@@ -11,6 +11,66 @@ import { ROOT } from "./build.mjs";
 
 const SHA = "1".repeat(40);
 
+// T54: saving a page and ending a run are separate from the provider's capture
+// of the child's report. Exercise the whole MCP flow, without native Codex.
+for (const capture of ["none", "start-only", "start-stop"]) test(`T54: pages and run_done with ${capture} report capture`, async t => {
+  const s = await connect(t);
+  const git = (...args) => execFileSync("git", ["-C", s.project, "-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8" }).trim();
+  git("checkout", "-qb", "codex/t1-report");
+  git("commit", "--allow-empty", "-qm", "sample review head");
+  const head = git("rev-parse", "HEAD");
+  const logbook = (await s.call("init")).replace(/^logbook /, "");
+  await s.call("task_add", { title: "Sample review", size: "small", priority: "P2" });
+  await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "codex/t1-report" } });
+  const run = (await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": "collaboration-tools" })).split(" ")[0];
+  const brief = "Run R1 · task T1\n" + ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"]
+    .map(field => `${field}: Sample ${field.toLowerCase()}.`).join("\n");
+  assert.equal(await s.call("brief", { task_name: "sage_code_reviewer_t1_r1", brief }),
+    "brief sage_code_reviewer_t1_r1 checked: all 10 fields. Spawn the agent with this task name and this brief.");
+  const text = `STATUS done\nRESULT CLEAN\nEVIDENCE sample check passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED installed behavior\nBRANCH codex/t1-report; head ${head}`;
+  // Use the same documented event shape as codex-report-gate.test.mjs. The
+  // fixture supplies hook inputs, never a kept-report file or native receipt.
+  const transcript = join(s.dir, "sample-child.jsonl");
+  const role = execFileSync(process.execPath, [join(s.dir, "plugin/skills/sage/role.mjs"), "code-reviewer"], { env: s.env, encoding: "utf8" });
+  writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: {
+    id: "019a0000-0000-7000-8000-0000000000bb", agent_path: "/root/sage_code_reviewer_t1_r1",
+  } })}\n${JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: `${role}\n\n${brief}` }] } })}\n`);
+  const hook = (file, input) => {
+    const result = spawnSync(process.execPath, [join(s.dir, "plugin/hooks", file)], {
+      input: JSON.stringify({ cwd: s.project, ...input }), env: s.env, encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  if (capture !== "none") {
+    const start = hook("brief-hook.mjs", { hook_event_name: "SubagentStart", transcript_path: transcript });
+    assert.equal(start.hookSpecificOutput.hookEventName, "SubagentStart");
+    assert.ok(start.hookSpecificOutput.additionalContext.endsWith(brief));
+  }
+  if (capture === "start-stop") assert.deepEqual(hook("report-gate.mjs", {
+    hook_event_name: "SubagentStop", agent_transcript_path: transcript, stop_hook_active: false, last_assistant_message: text,
+  }), {});
+  const saved = await s.call("pages", { task: "T1", run, text });
+  const report = saved.match(/^page (\/.+) · sha256 [0-9a-f]{64}$/)?.[1];
+  assert.ok(report, saved);
+  assert.equal(await s.call("run_done", { run, status: "done", usage: "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "wait_agent gives no token count", report }), `${run} done`);
+  const before = readFileSync(join(logbook, "ledger.tsv"), "utf8");
+  const verdict = await s.call("verdict", { task: "T1", run, kind: "review-clean", sha: head, cycle: 1 });
+  if (capture === "start-stop") {
+    assert.equal(verdict, `T1 review-clean · ${head.slice(0, 7)} · cycle 1`);
+    assert.match(readFileSync(join(logbook, "ledger.tsv"), "utf8"), new RegExp(`\\nT1\\t\\t${head}\\treview-clean\\t1\\tR1\\t`));
+  } else {
+    assert.match(verdict.error, /^sage: R1 has no kept report:/);
+    assert.equal(readFileSync(join(logbook, "ledger.tsv"), "utf8"), before);
+    assert.deepEqual(hook("report-gate.mjs", {
+      hook_event_name: "SubagentStop", agent_transcript_path: transcript, stop_hook_active: false, last_assistant_message: text,
+    }), { systemMessage: capture === "none"
+      ? "sage: R1's report is not kept: no child started for R1 while it ran, so it backs no verdict."
+      : "sage: R1's report is not kept: R1 ended as done before this stop, so no report is kept." });
+    assert.equal(existsSync(join(logbook, "kept", "R1.json")), false);
+  }
+});
+
 /** The built plugin's state server in a scratch folder, with a scratch CODEX_HOME and no SAGE_HOME. */
 async function connect(t, overrides = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-")));
