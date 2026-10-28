@@ -270,6 +270,7 @@ function childChange(t, sage) {
   if (!t.parts) return UNREAD_ROLE;
   for (const name of t.parts.filter(sageName)) {
     const role = taskRole(name);
+    if (role === "investigate" || role === "evidence-review") return READ_ONLY(role);
     let denied;
     try { denied = role !== null && roleEditDenied({ sage, role }); } catch { denied = undefined; } // core throws for a role that it does not know
     if (denied === undefined || role === null) return BAD_NAME(name);

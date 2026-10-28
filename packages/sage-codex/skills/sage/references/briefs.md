@@ -28,3 +28,5 @@ BRANCH        branch, exact final SHA and PR link when one exists
 ```
 
 Use `none` for an empty field. End with this report, with nothing after it. Keep it near 2,000 tokens or fewer; put long evidence in named files. Distinguish simulated data, reported success and independently verified results. Do not invent token usage. The chief records actual results and proposed transitions through the CLI.
+
+For `investigate` and `evidence-review`, identify the actual task, run, role and assigned project in the brief and report. A task without a build needs no SHA; use `BRANCH none` when no branch was checked. Preserve `blocked` and `question` outcomes. The chief saves complete reports and records actual outcomes; a saved report alone does not grant `evidence-clean`.
