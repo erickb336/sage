@@ -379,11 +379,9 @@ const unique = list => list.filter((item, i) => item && list.indexOf(item) === i
 
 /**
  * One repository is one project (T305 notes, section 3). The logbooks of all sources with the same key and the same
- * checkout.txt are one project. A logbook without checkout.txt joins them, with a note: the key holds a hash of the path.
- * Two checkouts of one key stay two projects, with a note: the board never merges on doubt. Two clones at two paths have
- * two keys, so they stay two projects. The display name: the first source that has one wins, with a note when another
- * differs. A project is archived only when all its logbooks are. A joined logbook without checkout.txt never gives the
- * name or the archive (R1070-1), unless no logbook of the project has checkout.txt.
+ * verified checkout are one project. A key alone cannot assign a logbook to a checkout. Unknown checkouts stay apart.
+ * Two checkouts of one key stay two projects. Two clones at two paths have two keys, so they stay two projects.
+ * The first display name wins, with a note when another differs. A project is archived only when all its logbooks are.
  */
 function projectGroups(sources) {
   const byName = new Map(), groups = [], notes = [];
@@ -391,14 +389,15 @@ function projectGroups(sources) {
   const keys = books => books.map(book => book.project.key).join(" and ");
   const note = (books, message) => notes.push({ source: books.map(book => book.source.id).join(" + "), project: books[0].project.name, message });
   for (const books of byName.values()) {
-    if (unique(books.map(book => book.project.checkout)).length > 1) {
-      note(books, `Two projects: ${keys(books)} have one logbook key but name different checkouts, so the board keeps them apart.`);
-      for (const book of books) groups.push({ key: book.project.key, books: [book] });
-      continue;
+    const partitions = new Map();
+    for (const book of books) {
+      const project = book.project;
+      const identity = Object.hasOwn(project, "checkoutIdentity") ? project.checkoutIdentity : project.checkout;
+      const key = identity ? `checkout:${identity}` : `unknown:${project.key}`;
+      partitions.set(key, [...(partitions.get(key) ?? []), book]);
     }
-    const unknown = books.filter(book => !book.project.checkout);
-    if (books.length > 1 && unknown.length) note(books, `One project: the checkout of ${keys(unknown)} is not known, and the logbook key is the same.`);
-    groups.push({ key: books[0].project.name, books });
+    if (partitions.size > 1) note(books, `Separate logbooks: ${keys(books)} share a key, but their checkouts do not establish one project.`);
+    for (const members of partitions.values()) groups.push({ key: partitions.size === 1 ? books[0].project.name : members[0].project.key, books: members });
   }
   for (const group of groups) {
     const known = group.books.filter(book => book.project.checkout), trusted = known.length ? known : group.books;

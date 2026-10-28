@@ -2354,9 +2354,9 @@ function sage(argv, env = process.env) {
     try {
       if (env.SAGE_BOARD_ROOTS && Buffer.byteLength(env.SAGE_BOARD_ROOTS) > 65536) throw new Error("root configuration is too large");
       sources = env.SAGE_BOARD_ROOTS ? JSON.parse(env.SAGE_BOARD_ROOTS) : [{ id: "current", label: "Current provider", path: root }];
-      const project = opt.project ?? env.PWD;
-      const logbookKey = readOnly && !env.SAGE_BOARD_ROOTS && project ? `current/${basename(storeDir(project, env))}` : null;
-      return boardView({ sources, scope, project, logbookKey, taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view });
+      const projectPath = opt.project ?? env.PWD;
+      const logbookKey = readOnly && !env.SAGE_BOARD_ROOTS && projectPath ? `current/${basename(storeDir(projectPath, env))}` : null;
+      return boardView({ sources, scope, project: projectPath, logbookKey, taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view });
     } catch (error) { refuse(error.message); }
   }
   if (!readOnly && statSync(root, { throwIfNoEntry: false })?.isDirectory() && ["projects.tsv", "projects.made"].every((f) => !lstatSync(join(root, f), { throwIfNoEntry: false }))) known(root); // the first writing command of this version lists today's logbooks

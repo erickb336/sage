@@ -504,11 +504,11 @@ test("T305: one repository is one project: the logbooks of one key and one check
   assert.deepEqual(model.tasks.map(card => [card.key, card.group, card.providerStandIn]), [["claude/sage-43265b/T9", "sage-43265b", "Claude"], ["codex/sage-43265b/T9", "sage-43265b", "Codex"]]);
   assert.deepEqual(model.notes, []);
   const missing = twoSources([book([task("T1", "framed")])], [book([task("T2", "framed")], { checkout: undefined })]);
-  assert.equal(missing.projects.length, 1);
-  assert.deepEqual(missing.notes.map(note => note.message), ["One project: the checkout of codex/sage-43265b is not known, and the logbook key is the same."]);
+  assert.deepEqual(missing.projects.map(project => project.key).sort(), ["claude/sage-43265b", "codex/sage-43265b"]);
+  assert.deepEqual(missing.notes.map(note => note.message), ["Separate logbooks: claude/sage-43265b and codex/sage-43265b share a key, but their checkouts do not establish one project."]);
   const apart = twoSources([book([task("T1", "framed")])], [book([task("T2", "framed")], { checkout: "/sample/other/sage" })]);
   assert.deepEqual(apart.projects.map(project => project.key).sort(), ["claude/sage-43265b", "codex/sage-43265b"], "never merge on doubt");
-  assert.deepEqual(apart.notes.map(note => note.message), ["Two projects: claude/sage-43265b and codex/sage-43265b have one logbook key but name different checkouts, so the board keeps them apart."]);
+  assert.deepEqual(apart.notes.map(note => note.message), ["Separate logbooks: claude/sage-43265b and codex/sage-43265b share a key, but their checkouts do not establish one project."]);
   const clones = twoSources([book([task("T1", "framed")]), book([task("T1", "framed")], { name: "sage-9a9a9a", checkout: "/sample/clone/sage" })], []);
   assert.deepEqual(clones.projects.map(project => [project.key, project.name]).sort(), [["sage-43265b", "sage"], ["sage-9a9a9a", "sage"]], "two clones at two paths stay two projects");
   assert.deepEqual(clones.projects.map(project => [project.key, project.pathSub]).sort(), [["sage-43265b", "…/work/sage · sample-owner/sage"], ["sage-9a9a9a", "…/clone/sage · sample-owner/sage"]], "F-T305-11, R1076-4: on the Mac's page, two clones in folders of one name show the end of their paths first, as far as they differ");
@@ -527,11 +527,11 @@ test("T305: one repository is one project: the logbooks of one key and one check
   assert.deepEqual(names.notes.map(note => note.message), ['Two display names: the board shows "Sage (sample)" (the first source), not "Other name".', "Archived in codex/sage-43265b only: the board does not archive the project."]);
   const both = twoSources([book([task("T1", "framed")], { archived: true })], [book([task("T2", "framed")], { archived: true })]);
   assert.equal(both.projects[0].archived, true);
-  // R1070-1: a joined logbook without checkout.txt never gives the name or the archive.
+  // An unassigned logbook keeps its own name and archive state.
   const stray = twoSources([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([task("T2", "framed")], { checkout: undefined, displayName: "Sample other name", archived: true })]);
-  assert.deepEqual([stray.projects[0].name, stray.projects[0].archived], ["Sage (sample)", false]);
+  assert.deepEqual(stray.projects.map(project => [project.name, project.archived]).sort(), [["Sage (sample)", false], ["Sample other name", true]]);
   const first = twoSources([book([task("T1", "framed")], { checkout: undefined, displayName: "Sample other name", archived: true })], [book([task("T2", "framed")])]);
-  assert.deepEqual([first.projects[0].name, first.projects[0].archived], ["sage", false], "also when it comes first");
+  assert.deepEqual(first.projects.map(project => [project.name, project.archived]).sort(), [["Sample other name", true], ["sage", false]], "also when it comes first");
   // R1075-6: an error code reads as a plain reason.
   const denied = twoSources([book([task("T1", "framed")])], [book([], { diagnostics: ["tasks: EACCES"] })]);
   assert.equal(denied.projects[0].problem, "its tasks file has no read permission");

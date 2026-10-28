@@ -33,6 +33,7 @@ function world() {
   const env = { SAGE_HOME: home };
   const book = basename(storeDir(sage, env));
   renameSync(join(home, "sage-aaaaaa"), join(home, book));
+  writeFileSync(join(home, book, "checkout.txt"), `${sage}\n`);
   writeFileSync(join(home, "projects.tsv"), `logbook\tat\thow\n${book}\t2026-10-05T00:00:00Z\tinit\n`);
   // The verified tasks T2 to T4 have a branch with a head commit, and the clean cycles of their size and risk on it.
   const heads = {};
@@ -56,7 +57,7 @@ function commit(dir, branch) {
   return sha;
 }
 
-test("show board: the session's project, and one line per other project with something waiting", () => {
+test("show board: the session's verified project", () => {
   const { show } = world();
   assert.equal(
     show("this"),
@@ -87,9 +88,6 @@ test("show board: the session's project, and one line per other project with som
       "- T3 Sample\\: a docs fix · verified · [#8](https://github.com/acme/sage/pull/8) · round 1",
       "- T4 Sample\\: the large rebuild · pr-ready · [#9](https://github.com/acme/sage/pull/9)",
       "- framed backlog: 4 · next up (framed, in id order): T7 Sample\\: next task one; T8 Sample\\: next task two; T9 Sample\\: next task three",
-      "",
-      "**Other projects**",
-      "- sage-bot: 1 gate waiting",
     ].join("\n"),
   );
 });
@@ -111,21 +109,24 @@ test("show board for all: needs-you of every project at the top, then one sectio
 });
 
 test("show board for <project>: one project, its name in any case; another project's PR has no link without its checkout", () => {
-  const out = world().show("Sage-Bot");
+  const w = world();
+  const bot = join(w.dir, "somewhere", "sage-bot"); mkdirSync(bot, { recursive: true });
+  writeFileSync(join(w.home, "sage-bot-bbbbbb", "checkout.txt"), `${bot}\n`);
+  const out = w.show("Sage-Bot");
   assert.match(out, /^\*\*sage board · sage-bot\*\*/);
   assert.match(out, /\*\*Needs you \(1\)\*\*\n- sage-bot \*\*G1\*\* · T2 /);
   assert.doesNotMatch(out, /\*\*sage\*\*|order-chaser|Other projects/);
 });
 
 test("show board for an unknown name lists the known projects", () => {
-  assert.equal(world().show("chaser"), 'No project named "chaser". Known projects: order-chaser, sage, sage-bot.');
+  assert.equal(world().show("chaser"), 'No project named "chaser". Known projects: sage.');
 });
 
-test("a session outside every project shows all projects", () => {
+test("a session without a verified logbook points to the global board", () => {
   const w = world();
   const out = w.show("this", w.outside);
-  assert.match(out, /^\*\*sage board · all projects \(this folder has no logbook\)\*\*/);
-  assert.deepEqual(out.match(/^\*\*[a-z-]+\*\*/gm), ["**order-chaser**", "**sage**", "**sage-bot**"]);
+  assert.equal(out, "No verified logbook for this project. Show the board for all projects to see the other logbooks.");
+  assert.match(w.show("all", w.outside), /Sample\\: bot follow-up/);
 });
 
 test("needs you: a verified PR that is not merged is always listed, with the reason, by day and at night", () => {
@@ -360,17 +361,14 @@ test("the default board shows at most 8 active tasks with the phrase for the res
   assert.doesNotMatch(named, /and \d+ more/);
 });
 
-test("a folder that only shares a logbook's name shows that board, but never PR links from its own remote", () => {
+test("a folder that only shares a logbook's name does not show that board", () => {
   const w = world();
   const twin = join(w.dir, "other", "sage");
   mkdirSync(twin, { recursive: true });
   execFileSync("git", ["init", "-q", twin]);
   execFileSync("git", ["-C", twin, "remote", "add", "origin", "git@github.com:mallory/sage.git"]);
   const out = w.show("this", twin);
-  assert.match(out, /^\*\*sage board · sage\*\*/);
-  assert.match(out, /\n- T2 PR #7 cannot merge yet \(head unknown\\: the board does not know the project's folder\)/);
-  assert.match(out, /^\*\*sage\*\*$/m);
-  assert.doesNotMatch(out, /mallory|\]\(/);
+  assert.equal(out, "No verified logbook for this project. Show the board for all projects to see the other logbooks.");
   assert.match(w.show("this"), /T2 \[#7\]\(https:\/\/github\.com\/acme\/sage\/pull\/7\)/); // the logbook's own folder keeps its links
 });
 
@@ -426,6 +424,12 @@ function bookFor(w, path) {
   return book;
 }
 
+function verifyFixture(w, folder, name) {
+  const path = join(w.dir, "known", name);
+  mkdirSync(path, { recursive: true });
+  writeFileSync(join(w.home, folder, "checkout.txt"), `${path}\n`);
+}
+
 test("F-T72-10, G63: two names with no ASCII letters get distinct keys, two sections, and show board for each key picks one", () => {
   const w = world();
   const ja = bookFor(w, join(w.dir, "日本語"));
@@ -437,10 +441,12 @@ test("F-T72-10, G63: two names with no ASCII letters get distinct keys, two sect
   assert.deepEqual(heads.sort(), [`**${ja}**`, `**${zh}**`].sort());
   assert.match(all, new RegExp(`- ${ja} \\*\\*G1\\*\\*`));
   assert.match(all, new RegExp(`- ${zh} \\*\\*G1\\*\\*`));
-  for (const key of [ja, zh]) {
+  for (const [key, name] of [[ja, "日本語"], [zh, "中文"]]) {
+    assert.match(w.show(key), /^No project named/);
+    writeFileSync(join(w.home, key, "checkout.txt"), `${join(w.dir, name)}\n`);
     const one = w.show(key);
-    assert.match(one, new RegExp(`^\\*\\*sage board · ${key}\\*\\*`));
-    assert.deepEqual(one.match(/^\*\*project[^*]*\*\*$/gm), [`**${key}**`]);
+    assert.match(one, new RegExp(`^\\*\\*sage board · ${key} \\(${name}\\)\\*\\*`));
+    assert.deepEqual(one.match(/^\*\*project[^*]*\*\*$/gm), [`**${key} (${name})**`]);
   }
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(w.home, "board.json"), "utf8"))).sort(), [ja, w.book, "order-chaser-cccccc", "sage-bot-bbbbbb", zh].sort());
   assert.match(w.show("this", join(w.dir, "中文")), new RegExp(`^\\*\\*sage board · ${zh} \\(中文\\)\\*\\*`)); // the session's own logbook, with its real name (F-T72-18)
@@ -451,11 +457,12 @@ test("F-T72-11, F-T72-9: a scope is made a slug like projectName: Café Ünïcod
   const w = world();
   const cafe = bookFor(w, join(w.dir, "Café Ünïcode"));
   assert.match(cafe, /^caf-n-code-[0-9a-f]{6}$/);
-  // G68: the slug drops letters of the typed name, so the slug alone picks nothing; the real name does (checkout.txt).
-  assert.match(w.show("Café Ünïcode"), /^Not sure which project "Café Ünïcode" is\. Candidates: caf-n-code\. Type the key or the real name\.$/);
-  assert.match(w.show("caf-n-code"), /^\*\*sage board · caf-n-code\*\*/);
+  // A name or slug alone does not select an unassigned logbook.
+  assert.match(w.show("Café Ünïcode"), /^No project named/);
+  assert.match(w.show("caf-n-code"), /^No project named/);
   writeFileSync(join(w.home, cafe, "checkout.txt"), join(w.dir, "Café Ünïcode"));
   assert.match(w.show("café ünïcode"), /^\*\*sage board · caf-n-code \(Café Ünïcode\)\*\*/);
+  verifyFixture(w, "sage-bot-bbbbbb", "sage-bot");
   for (const scope of ["sage_bot", "Sage.Bot", "sage bot"]) assert.match(w.show(scope), /^\*\*sage board · sage-bot\*\*/, scope);
   assert.ok(note("show board for Café Ünïcode").includes(cmd("Café Ünïcode")));
   assert.ok(note("show board for sage_bot").includes(cmd("sage_bot")));
@@ -539,6 +546,7 @@ test("T85: board.json is keyed by logbook folder, so two logbooks with one name 
 
 test("F-T72-8: each project keeps its own since-time", () => {
   const w = world();
+  verifyFixture(w, "sage-bot-bbbbbb", "sage-bot");
   w.show("sage");
   w.show("sage-bot", w.sage, new Date("2026-10-05T20:00:00Z"));
   const tasks = join(w.home, w.book, "tasks.tsv");
@@ -581,7 +589,7 @@ test("F-T72-16, G68: two non-Latin projects each open by their real name, and ea
   const known = w.show("chaser");
   assert.ok(known.startsWith('No project named "chaser". Known projects: '), known);
   assert.ok(known.includes(`${ja} (日本語)`) && known.includes(`${zh} (中文)`), known);
-  assert.match(w.show("this"), new RegExp(`^- ${ja} \\(日本語\\): 1 gate waiting$`, "m")); // other projects
+  assert.doesNotMatch(w.show("this"), new RegExp(`^- ${ja} \\(日本語\\): 1 gate waiting$`, "m"));
 });
 
 test("F-T72-16, G68: with one non-Latin project, another non-Latin name refuses and lists the candidates", () => {
@@ -591,10 +599,10 @@ test("F-T72-16, G68: with one non-Latin project, another non-Latin name refuses 
   assert.match(w.show("日本語"), /^\*\*sage board · project \(日本語\)\*\*/);
   // Without checkout.txt the real names are unknown: the fallback slug "project" picks neither of two, nor one alone.
   const v = world();
-  const a = bookFor(v, join(v.dir, "日本語"));
-  assert.equal(v.show("中文"), 'Not sure which project "中文" is. Candidates: project. Type the key or the real name.');
-  const b = bookFor(v, join(v.dir, "中文"));
-  assert.equal(v.show("日本語"), `Not sure which project "日本語" is. Candidates: ${[a, b].sort().join(", ")}. Type the key or the real name.`);
+  bookFor(v, join(v.dir, "日本語"));
+  assert.match(v.show("中文"), /^No project named "中文"/);
+  bookFor(v, join(v.dir, "中文"));
+  assert.match(v.show("日本語"), /^No project named "日本語"/);
 });
 
 test("G68: a slug that matches more than one project refuses and lists the candidates with their real names", () => {
@@ -704,7 +712,10 @@ test("R452: a session folder with a line break gets no --project and no line of 
 test("R452: 10 boards at once lose no board.json entry", async () => {
   const w = world();
   const names = Array.from({ length: 10 }, (_, i) => `p${i}`);
-  for (const name of names) bookFor(w, join(w.dir, "many", name));
+  for (const name of names) {
+    const path = join(w.dir, "many", name), book = bookFor(w, path);
+    writeFileSync(join(w.home, book, "checkout.txt"), `${path}\n`);
+  }
   const bin = join(w.dir, "bin"); // the lock may ask ps about a slow holder: a fake one answers
   mkdirSync(bin);
   writeFileSync(join(bin, "ps"), '#!/bin/sh\necho "Sat Jan  1 00:00:00 2000"\n');
@@ -741,9 +752,10 @@ test("R452: two logbooks with the session folder's name and no checkout.txt give
   cpSync(join(w.home, "sage-bot-bbbbbb"), join(w.home, "sage-bot-dddddd"), { recursive: true });
   const session = join(w.dir, "y", "sage-bot");
   mkdirSync(session, { recursive: true });
-  assert.equal(w.show("this", session), "Not sure which project this folder is. Candidates: sage-bot-bbbbbb, sage-bot-dddddd. Type the key or the real name.");
+  assert.equal(w.show("this", session), "No verified logbook for this project. Show the board for all projects to see the other logbooks.");
   rmSync(join(w.home, "sage-bot-dddddd"), { recursive: true });
-  assert.match(w.show("this", session), /^\*\*sage board · sage-bot\*\*/); // one match still picks it
+  assert.equal(w.show("this", session), "No verified logbook for this project. Show the board for all projects to see the other logbooks.");
+  assert.match(w.show("all", session), /Sample\\: bot follow-up/);
 });
 
 // The repair on cycle 5 (T72-S5-WRONGLOGBOOK, T72-S5-OPTIONS, T72-C5-STATECMD, T72-C5-EMPTYTASK).
@@ -778,7 +790,7 @@ test("T72-S5-WRONGLOGBOOK: rich hook offers no bare project map for gate answers
   assert.match(blind, /full source\/project\/gate key/);
   assert.match(blind, /Do not route or record an answer/);
   assert.doesNotMatch(blind, /^- beta: node /m);
-  const out = execFileSync("node", [TOOL, "board", "beta", "--project", w.alpha, "--remember", "no"], { encoding: "utf8", env: w.env });
+  const out = execFileSync("node", [TOOL, "board", "all", "--project", w.alpha, "--remember", "no"], { encoding: "utf8", env: w.env });
   assert.ok(out.includes("\n- beta **G1** · T1 · beta\\: give the bot access?\n  Recommended: yes. Default: none.\n  Answer it in a session of beta: this board does not know its folder.\n  1. yes\n  2. no access\n"), out);
   // A session of beta (task add) names its folder again.
   w.sage(w.beta, "task", "add", "--priority", "P2", "--title", "beta task 2", "--size", "tiny");
@@ -921,11 +933,12 @@ test("T135: --name-hex refuses upper-case hex and bytes that are not UTF-8, and 
     assert.match(r.stderr, /--name-hex/, bad);
     assert.equal(r.stdout, "", bad);
   }
-  assert.equal(hex("6f6b").stdout, 'No project named "ok". Known projects: order-chaser, sage, sage-bot.\n'); // the same bytes in lower case: "ok"
+  assert.equal(hex("6f6b").stdout, 'No project named "ok". Known projects: sage.\n'); // the same bytes in lower case: "ok"
 });
 
 test("T314 R1040-1: the chat board names a project by its shown name, and shows an archived project only as a count, with what needs you there", () => {
-  const { home, show } = world();
+  const w = world(), { home, show } = w;
+  verifyFixture(w, "order-chaser-cccccc", "order-chaser");
   writeFileSync(join(home, "sage-bot-bbbbbb", "config.json"), JSON.stringify({ name: "Sage Bot", archived: true }));
   writeFileSync(join(home, "order-chaser-cccccc", "config.json"), JSON.stringify({ name: "Order Chaser" }));
   const out = show("all");
