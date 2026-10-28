@@ -13,7 +13,7 @@ const SHA = "1".repeat(40);
 
 // T54: saving a page and ending a run are separate from the provider's capture
 // of the child's report. Exercise the whole MCP flow, without native Codex.
-for (const capture of ["none", "start-only", "start-stop", "documented-child", "documented-parent", "documented-null", "delayed-metadata"]) test(`T54: pages and run_done with ${capture} report capture`, async t => {
+for (const capture of ["none", "start-only", "start-stop", "documented-child", "documented-parent", "documented-null", "delayed-metadata", "field-first"]) test(`T54: pages and run_done with ${capture} report capture`, async t => {
   const s = await connect(t);
   const git = (...args) => execFileSync("git", ["-C", s.project, "-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8" }).trim();
   git("checkout", "-qb", "codex/t1-report");
@@ -23,7 +23,7 @@ for (const capture of ["none", "start-only", "start-stop", "documented-child", "
   await s.call("task_add", { title: "Sample review", size: "small", priority: "P2" });
   await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "codex/t1-report" } });
   const run = (await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": "collaboration-tools" })).split(" ")[0];
-  const brief = "Run R1 · task T1\n" + ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"]
+  const brief = (capture === "field-first" ? "" : "Run R1 · task T1\n") + ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"]
     .map(field => `${field}: Sample ${field.toLowerCase()}.`).join("\n");
   assert.equal(await s.call("brief", { task_name: "sage_code_reviewer_t1_r1", brief }),
     "brief sage_code_reviewer_t1_r1 checked: all 10 fields. Spawn the agent with this task name and this brief.");
@@ -34,8 +34,8 @@ for (const capture of ["none", "start-only", "start-stop", "documented-child", "
   // start transcript owners and its documented null value. These are fixture
   // cases, not observations of which transcript the installed host supplies.
   const documented = capture.startsWith("documented-") || capture === "delayed-metadata";
-  const bound = ["start-only", "start-stop", "documented-child"].includes(capture);
-  const stopped = capture === "start-stop" || documented;
+  const bound = ["start-only", "start-stop", "documented-child", "field-first"].includes(capture);
+  const stopped = capture === "start-stop" || capture === "field-first" || documented;
   const transcript = join(s.dir, "sample-child.jsonl");
   const parentTranscript = join(s.dir, "sample-parent.jsonl");
   const parent = "019a0000-0000-7000-8000-0000000000aa";
@@ -68,7 +68,7 @@ for (const capture of ["none", "start-only", "start-stop", "documented-child", "
   assert.equal(existsSync(join(logbook, "kept", "R1.child")), bound);
   if (stopped) assert.deepEqual(hook("report-gate.mjs", {
     hook_event_name: "SubagentStop", agent_transcript_path: transcript, stop_hook_active: false, last_assistant_message: text,
-  }), bound || capture === "delayed-metadata" ? {} : { systemMessage: "sage: R1's report is not kept: no child started for R1 while it ran, so it backs no verdict." });
+  }), bound ? {} : { systemMessage: "sage: R1's report is not kept: no child started for R1 while it ran, so it backs no verdict." });
   const saved = await s.call("pages", { task: "T1", run, text });
   const report = saved.match(/^page (\/.+) · sha256 [0-9a-f]{64}$/)?.[1];
   assert.ok(report, saved);
@@ -78,7 +78,7 @@ for (const capture of ["none", "start-only", "start-stop", "documented-child", "
   // Characterize the unsupported cases; this is not a production repair.
   // Start must currently expose the child's session_meta.agent_path. The
   // documented event fields alone provide no task/run correlation.
-  if (stopped && (bound || capture === "delayed-metadata")) {
+  if (stopped && bound) {
     assert.equal(verdict, `T1 review-clean · ${head.slice(0, 7)} · cycle 1`);
     assert.match(readFileSync(join(logbook, "ledger.tsv"), "utf8"), new RegExp(`\\nT1\\t\\t${head}\\treview-clean\\t1\\tR1\\t`));
   } else {
@@ -94,7 +94,7 @@ for (const capture of ["none", "start-only", "start-stop", "documented-child", "
 });
 
 // T54: disposable hook and MCP fixtures. No installed session or logbook is read.
-async function delayedFixture(t) {
+async function captureFixture(t) {
   const s = await connect(t);
   const git = (...args) => execFileSync("git", ["-C", s.project, "-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8" }).trim();
   git("checkout", "-qb", "codex/t1-review");
@@ -111,7 +111,7 @@ async function delayedFixture(t) {
   const path = `/root/${name}`;
   const meta = { id: child, session_id: root, parent_thread_id: root, cwd: s.project, agent_path: path,
     source: { subagent: { thread_spawn: { depth: 1, parent_thread_id: root, agent_path: path, agent_role: null } } } };
-  const transcript = join(s.dir, "sample.jsonl"), reservation = join(logbook, "briefs", `${name}.reservation.json`);
+  const transcript = join(s.dir, "sample.jsonl");
   const text = `STATUS done\nRESULT CLEAN\nEVIDENCE sample check passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED installed behavior\nBRANCH codex/t1-review; head ${head}`;
   const writeMeta = value => writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: value })}\n`);
   const hook = (file, input) => {
@@ -120,21 +120,21 @@ async function delayedFixture(t) {
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
-  const start = fields => hook("brief-hook.mjs", { hook_event_name: "SubagentStart", transcript_path: null, ...fields });
+  const start = fields => hook("brief-hook.mjs", { hook_event_name: "SubagentStart", transcript_path: transcript, ...fields });
   const stop = fields => hook("report-gate.mjs", { hook_event_name: "SubagentStop", agent_transcript_path: transcript,
     stop_hook_active: false, last_assistant_message: text, ...fields });
-  const finish = async (reportText = text) => {
+  const finish = async (reportText = text, sha = head) => {
     const page = await s.call("pages", { task: "T1", run: "R1", text: reportText });
     const report = page.match(/^page (\/.+) · sha256 [0-9a-f]{64}$/)?.[1];
     assert.ok(report, page);
     assert.equal(await s.call("run_done", { run: "R1", status: "done", usage: "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "sample", report }), "R1 done");
-    return s.call("verdict", { task: "T1", run: "R1", kind: "review-clean", sha: head, cycle: 1 });
+    return s.call("verdict", { task: "T1", run: "R1", kind: "review-clean", sha, cycle: 1 });
   };
   writeMeta(meta);
-  return { ...s, git, head, root, child, other, name, logbook, brief, meta, transcript, reservation, text, writeMeta, start, stop, finish };
+  return { ...s, git, head, root, child, other, name, logbook, brief, meta, transcript, text, writeMeta, start, stop, finish };
 }
 
-const delayedRefusals = [
+const captureRefusals = [
   ["different metadata child", f => { f.meta.id = f.other; }],
   ["different event child", f => ({ agent_id: f.other })],
   ["different metadata root", f => { f.meta.session_id = f.other; }],
@@ -150,129 +150,72 @@ const delayedRefusals = [
   ["wrong task", f => { f.meta.agent_path = "/root/sage_code_reviewer_t2_r1"; f.meta.source.subagent.thread_spawn.agent_path = f.meta.agent_path; }],
   ["wrong run", f => { f.meta.agent_path = "/root/sage_code_reviewer_t1_r2"; f.meta.source.subagent.thread_spawn.agent_path = f.meta.agent_path; }],
   ["wrong role", f => { f.meta.agent_path = "/root/sage_security_reviewer_t1_r1"; f.meta.source.subagent.thread_spawn.agent_path = f.meta.agent_path; }],
-  ["missing reservation", f => { rmSync(f.reservation); }],
-  ["replaced reservation", f => { const prior = JSON.parse(readFileSync(f.reservation, "utf8")); prior.id = f.other; writeFileSync(f.reservation, JSON.stringify(prior)); }],
-  ["replaced brief", f => { writeFileSync(join(f.logbook, "briefs", `${f.name}.json`), JSON.stringify({ task: f.name, text: "other" })); }],
-  ["changed head", f => { f.git("commit", "--allow-empty", "-qm", "changed head"); }],
   ["null metadata", f => { f.meta = null; }],
   ["malformed metadata", f => { f.meta = []; }],
 ];
 
-for (const [label, mutate] of delayedRefusals) test(`T54: delayed binding refuses ${label}`, async t => {
-  const f = await delayedFixture(t);
-  f.start();
+for (const event of ["Start", "Stop"]) for (const [label, mutate] of captureRefusals) test(`T54: strict capture refuses ${label} at ${event}`, async t => {
+  const f = await captureFixture(t), original = structuredClone(f.meta);
+  if (event === "Stop") f.start();
   const fields = mutate(f) ?? {};
   f.writeMeta(f.meta);
-  f.stop(fields);
+  if (event === "Start") {
+    f.start(fields);
+    f.writeMeta(original);
+  }
+  f.stop(event === "Stop" ? fields : {});
   assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false, label);
   assert.match((await f.finish()).error, /^sage: R1 has no kept report:/, label);
 });
 
-for (const [label, mutate] of [
-  ["child", (meta, f) => { meta.id = f.other; }],
-  ["root", (meta, f) => { meta.session_id = f.other; }],
-  ["parent", (meta, f) => { meta.parent_thread_id = f.other; }],
-  ["source path", meta => { meta.source.subagent.thread_spawn.agent_path = "/root/other"; }],
-]) test(`T54: contradictory Start ${label} cannot be repaired at Stop`, async t => {
-  const f = await delayedFixture(t), startMeta = structuredClone(f.meta);
-  mutate(startMeta, f);
-  f.writeMeta(startMeta);
-  f.start({ transcript_path: f.transcript });
-  f.writeMeta(f.meta);
-  f.stop();
-  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
-});
-
 test("T54: no metadata at either event remains unavailable and names issue 376", async t => {
-  const f = await delayedFixture(t);
-  f.start();
+  const f = await captureFixture(t);
+  f.start({ transcript_path: null });
   assert.match(f.stop({ agent_transcript_path: null }).systemMessage, /issues\/376/);
   assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
 });
 
-test("T54: a reservation made after Start cannot authorize that child", async t => {
-  const f = await delayedFixture(t);
-  const saved = readFileSync(f.reservation, "utf8");
-  rmSync(f.reservation);
-  f.start();
-  writeFileSync(f.reservation, saved);
-  f.stop();
-  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
-});
-
-test("T54: a checked review brief cannot be replaced under its reservation", async t => {
-  const f = await delayedFixture(t);
-  assert.match((await f.call("brief", { task_name: f.name, brief: f.brief.replace("Sample goal", "Changed goal") })).error, /already has a different review reservation/);
-  assert.match((await f.call("brief", { task_name: f.name, brief: "incomplete" })).error, /already has a different review reservation/);
-  f.start();
-  assert.deepEqual(f.stop(), {});
-  assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
-});
-
-test("T54: a head changed before Start cannot use the earlier reservation", async t => {
-  const f = await delayedFixture(t);
+test("T54: readable Start binds its current head, so an older report cannot back its verdict", async t => {
+  const f = await captureFixture(t);
   f.git("commit", "--allow-empty", "-qm", "changed before start");
   f.start();
-  f.stop();
-  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
-});
-
-test("T54: readable Start metadata cannot replace the reserved head", async t => {
-  const f = await delayedFixture(t);
-  f.git("commit", "--allow-empty", "-qm", "changed before readable start");
-  f.start({ transcript_path: f.transcript });
-  f.stop();
-  assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false);
-  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
+  assert.deepEqual(f.stop(), {});
+  assert.match((await f.finish()).error, /the report and the hook disagree/);
 });
 
 test("T54: a head changed after readable Start cannot back a new head", async t => {
-  const f = await delayedFixture(t);
-  f.start({ transcript_path: f.transcript });
-  f.git("commit", "--allow-empty", "-qm", "changed after readable start");
-  assert.match(f.stop().systemMessage, /the reviewed head changed/);
-  assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false);
-  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
-});
-
-test("T54: a deleted reservation cannot fall back to a readable Start", async t => {
-  const f = await delayedFixture(t);
-  rmSync(f.reservation);
-  f.start({ transcript_path: f.transcript });
-  f.stop();
-  assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false);
-  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
-});
-
-test("T54: a live delayed report cannot be captured after the run ends", async t => {
-  const f = await delayedFixture(t);
+  const f = await captureFixture(t);
   f.start();
-  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
-  assert.match(f.stop().systemMessage, /no child started/);
-  assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false);
-});
-
-test("T54: a competing child cannot replace the first delayed report", async t => {
-  const f = await delayedFixture(t);
-  f.start();
-  f.start({ agent_id: f.other });
+  f.git("commit", "--allow-empty", "-qm", "changed after start");
+  const newer = f.git("rev-parse", "HEAD");
   assert.deepEqual(f.stop(), {});
+  assert.match((await f.finish(f.text, newer)).error, /a verdict names the commit that its helper reviewed/);
+  assert.equal(await f.call("verdict", { task: "T1", run: "R1", kind: "review-clean", sha: f.head, cycle: 1 }), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
+});
+
+test("T54: a live report cannot be captured after the run ends", async t => {
+  const f = await captureFixture(t);
+  f.start();
+  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
+  assert.match(f.stop().systemMessage, /ended as done before this stop/);
+  assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false);
+});
+
+test("T54: a competing child cannot replace the first Start binding", async t => {
+  const f = await captureFixture(t);
+  f.start();
   f.meta.id = f.other;
   f.writeMeta(f.meta);
+  f.start({ agent_id: f.other });
   assert.match(f.stop({ agent_id: f.other }).systemMessage, /not the child that started/);
+  f.meta.id = f.child;
+  f.writeMeta(f.meta);
+  assert.deepEqual(f.stop(), {});
   assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
 });
 
-test("T54: a reused child identity cannot change its Start observation", async t => {
-  const f = await delayedFixture(t);
-  f.start();
-  f.start({ turn_id: "another-turn" });
-  f.stop();
-  assert.match((await f.finish()).error, /^sage: R1 has no kept report:/);
-});
-
-test("T54: an incomplete delayed report is blocked and a complete report can follow", async t => {
-  const f = await delayedFixture(t);
+test("T54: an incomplete report is blocked and a complete report can follow", async t => {
+  const f = await captureFixture(t);
   f.start();
   assert.equal(f.stop({ last_assistant_message: "STATUS done\nRESULT CLEAN" }).decision, "block");
   assert.equal(existsSync(join(f.logbook, "kept", "R1.json")), false);
@@ -280,16 +223,16 @@ test("T54: an incomplete delayed report is blocked and a complete report can fol
   assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
 });
 
-test("T54: a conflicting delayed report cannot replace the first report", async t => {
-  const f = await delayedFixture(t);
+test("T54: a conflicting report cannot replace the first report", async t => {
+  const f = await captureFixture(t);
   f.start();
   assert.deepEqual(f.stop(), {});
   assert.match(f.stop({ last_assistant_message: f.text.replace("sample check passed", "different check") }).systemMessage, /already has a kept report/);
   assert.equal(await f.finish(), `T1 review-clean · ${f.head.slice(0, 7)} · cycle 1`);
 });
 
-test("T54: a delayed report with a finding cannot back a clean verdict", async t => {
-  const f = await delayedFixture(t);
+test("T54: a report with a finding cannot back a clean verdict", async t => {
+  const f = await captureFixture(t);
   const text = f.text.replace("FINDINGS none", "FINDINGS\n- T1-1 medium sample problem");
   f.start();
   assert.deepEqual(f.stop({ last_assistant_message: text }), {});
