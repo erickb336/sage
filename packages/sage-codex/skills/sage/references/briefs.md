@@ -30,3 +30,7 @@ BRANCH        branch, exact final SHA and PR link when one exists
 Use `none` for an empty field. End with this report, with nothing after it. Keep it near 2,000 tokens or fewer; put long evidence in named files. Distinguish simulated data, reported success and independently verified results. Do not invent token usage. The chief records actual results and proposed transitions through the CLI.
 
 For `investigate` and `evidence-review`, identify the actual task, run, role and assigned project in the brief and report. A task without a build needs no SHA; use `BRANCH none` when no branch was checked. Preserve `blocked` and `question` outcomes. The chief saves complete reports and records actual outcomes; a saved report alone does not grant `evidence-clean`.
+
+For `designer`, name its exclusive branch, worktree and artifact paths, including the task’s `pages` folder when the chief will record the files. Require a clickable prototype, labelled sample data and screenshots of the main screens. The designer creates files; only the chief records them and saves the complete report.
+
+For `pe`, supply those actual artifacts and the complete designer report. PE changes nothing. Preserve its `OK`, `CHANGE` and `QUESTION` results, and any `blocked` or `question` status. A retained report is not a verdict or owner approval. The chief obtains the owner’s design approval before dependent implementation. Name installed acceptance separately from generated-package checks; synthetic examples are not actual role runs.

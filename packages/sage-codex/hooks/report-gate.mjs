@@ -41,10 +41,10 @@ export const agentPath = (path) => agentPathOf(sessionMeta(path));
 /** The task name of a Codex child: the last part of its agent path. */
 export const childTask = (path) => agentPath(path).at(-1) ?? "";
 
-/** Roles whose reports the hook retains. Investigation retention does not back or grant a verdict. */
-const REPORT_ROLES = { investigate: "investigate", evidence_review: "evidence-review", code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
+/** Roles whose reports the hook retains. Design and investigation retention does not back or grant a verdict. */
+const REPORT_ROLES = { pe: "pe", designer: "designer", investigate: "investigate", evidence_review: "evidence-review", code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
 /**
- * The run of a review, QA or investigation child of the chief (T483): its task name carries the run (sage_qa_t12_r40), and its agent path
+ * The run of a design, review, QA or investigation child of the chief (T483): its task name carries the run (sage_qa_t12_r40), and its agent path
  * is the root thread and that name, so a child of a child never names a run. Its thread id is the session_meta id.
  */
 export function reviewChild(meta) {
@@ -54,7 +54,7 @@ export function reviewChild(meta) {
 }
 const bindingOf = (cwd, run, env) => join(tool.storeDir(cwd, env), "kept", `${run}.child`);
 /**
- * At a review, QA or investigation child's start (SubagentStart, from the brief hook): the first child of the chief that starts for a
+ * At a design, review, QA or investigation child's start (SubagentStart, from the brief hook): the first child of the chief that starts for a
  * running run binds the run to its thread, once (R1908-3), with the tip of its task's branch at the start: the commit that
  * it reviews (R1933-1), or no SHA for a task without a branch. Only that child's report is kept for the run.
  */
@@ -80,7 +80,7 @@ function branchHead(cwd, task, env) {
  * the commit that it reviewed: the branch tip at its start, when the branch did not move until this stop; else none, so the
  * report's own BRANCH must name the full head SHA (R1933-1). A report that is not kept backs no verdict. The line for the
  * chief when the state tool refused to keep it (for one, a second report of the run), or undefined.
- * Investigation reports may have no SHA; their retention never grants task-scoped evidence-clean.
+ * Design and investigation reports may have no SHA; their retention never grants a verdict or design approval.
  */
 function keep(meta, text, cwd, env) {
   const child = reviewChild(meta);

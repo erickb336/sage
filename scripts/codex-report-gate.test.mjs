@@ -219,8 +219,9 @@ test("T83 public role allowlist rejects aliases and file paths without reading t
   }
 });
 
-for (const role of ["investigate", "evidence-review"]) {
-  test(`T83 ${role}: exact hook retention without SHA, identity refusals and honest outcomes`, t => {
+for (const role of ["investigate", "evidence-review", "pe", "designer"]) {
+  const taskNumber = ["pe", "designer"].includes(role) ? "T85" : "T83";
+  test(`${taskNumber} ${role}: exact hook retention without SHA, identity refusals and honest outcomes`, t => {
     const project = realpathSync(mkdtempSync(join(tmpdir(), "sage-investigation-")));
     t.after(() => rmSync(project, { recursive: true, force: true }));
     const fixtureEnv = { ...ENV, SAGE_HOME: join(project, "sample-logbook") };
@@ -228,10 +229,11 @@ for (const role of ["investigate", "evidence-review"]) {
     const sage = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", project], { encoding: "utf8", env: fixtureEnv });
     const ok = (...args) => { const r = sage(...args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
     ok("init");
-    ok("task", "add", "--priority", "P2", "--title", "Sample investigation", "--size", "investigate");
+    ok("task", "add", "--priority", "P2", "--title", "SAMPLE: role report", "--size", taskNumber === "T85" ? "small" : "investigate");
     const book = ok("logbook"), ledger = () => readFileSync(join(book, "ledger.tsv"), "utf8"), before = ledger();
     let threads = 0;
-    const run = () => ok("run", "add", "T1", "--role", role).split(" ")[0];
+    let writers = 0;
+    const run = () => ok("run", "add", "T1", "--role", role, ...(role === "designer" ? ["--branch", `codex/t1-sample-${++writers}`] : [])).split(" ")[0];
     // Synthetic hook metadata in a disposable fixture, never native execution receipts.
     const child = (id, { path = `/root/sage_${role.replaceAll("-", "_")}_t1_${id.toLowerCase()}`, thread = `sample-${++threads}` } = {}) => {
       const file = join(project, `sample-${++threads}.jsonl`);
@@ -255,13 +257,19 @@ for (const role of ["investigate", "evidence-review"]) {
       assert.deepEqual(end(file, text), {});
       const kept = JSON.parse(readFileSync(saved(id), "utf8"));
       assert.deepEqual([kept.task, kept.run, kept.role, kept.sha, kept.text], ["T1", id, role, "", text]);
+      assert.deepEqual(end(file, text), {}, "an exact retry keeps the first report");
       assert.match(end(file, text + "Different report").systemMessage, /already has a kept report/);
       assert.equal(readFileSync(saved(id), "utf8"), JSON.stringify(kept));
       // One token is a sample fixture value, not measured agent usage.
       ok("run", "done", id, "--status", status, "--tokens", "1");
+      if (taskNumber === "T85") {
+        const refused = sage("verdict", "T1", "--kind", "review-clean", "--sha", "1".repeat(40), "--run", id);
+        assert.equal(refused.status, 1);
+        assert.match(refused.stderr, /backs no review-clean verdict/);
+      }
       assert.equal(ledger(), before, `${status}: retention and run_done grant no verdict`);
     }
-    for (const issue of ["no start", "no run", "no thread", "wrong task", "wrong role", "nested", "ended"]) {
+    for (const issue of ["no start", "no run", "no thread", "wrong task", "wrong role", "nested", "ended", "ended after start"]) {
       const id = run(), name = `sage_${role.replaceAll("-", "_")}_t1_${id.toLowerCase()}`;
       const path = issue === "no run" ? `/root/sage_${role.replaceAll("-", "_")}_t1`
         : issue === "wrong task" ? `/root/${name.replace("_t1_", "_t2_")}`
@@ -270,6 +278,7 @@ for (const role of ["investigate", "evidence-review"]) {
       const file = child(id, { path, ...(issue === "no thread" ? { thread: "" } : {}) });
       if (issue === "ended") ok("run", "done", id, "--status", "blocked");
       if (issue !== "no start") begin(file);
+      if (issue === "ended after start") ok("run", "done", id, "--status", "blocked");
       end(file, FULL);
       assert.equal(existsSync(saved(id)), false, issue);
     }
