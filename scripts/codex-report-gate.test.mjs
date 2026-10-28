@@ -15,7 +15,7 @@ const ROLE = join(ROOT, "plugins/sage-codex/skills/sage/role.mjs");
 const TOOL = join(ROOT, "plugins/sage-codex/skills/sage/sage.mjs");
 const BRIEF_HOOK = join(ROOT, "plugins/sage-codex/hooks/brief-hook.mjs");
 const FULL = "STATUS done\nRESULT PASS\nEVIDENCE echo ok printed ok\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none";
-const UNREAD = { systemMessage: "sage: the report check could not read this agent's stop, so it did not check its report." };
+const UNREAD = { systemMessage: "sage: the report check could not read this agent's stop, so it did not check its report. Missing child metadata is tracked in https://github.com/erickb336/sage/issues/376." };
 const BLOCK = { decision: "block", reason: 'sage: your report has no EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH. End with the sage report: STATUS, RESULT, EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.' };
 
 const dir = mkdtempSync(join(tmpdir(), "sage-report-gate-"));

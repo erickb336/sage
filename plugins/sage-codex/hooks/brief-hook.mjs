@@ -9,12 +9,13 @@
 //   - PostToolUse of spawn_agent: when no checked brief is on record for the task name, a warning to the chief that
 //     names the missing fields and says to run the brief check.
 // The project is the folder that Codex gives the hook (cwd), as for the state tool's --project.
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BRIEF_FIELDS, briefSections, missingBriefFields } from "../core/index.mjs";
 import { tool } from "../skills/sage/sage.mjs";
-import { bindChild, childTask, sageName, TASK_NAME } from "./report-gate.mjs";
+import { bindChild, childTask, noteStart, reserveReview, sageName, TASK_NAME } from "./report-gate.mjs";
 import { TESTED_CODEX } from "./sage-codex-hook.mjs";
 
 /** The largest brief, as core's brief reader: 32 KiB. */
@@ -25,14 +26,27 @@ export const NAME_RULE = "sage_, the role with _ for -, the task, and the run, f
 const briefFile = (project, task, env) => join(tool.storeDir(project, env), "briefs", `${task}.json`);
 
 /** Check a brief and keep it by task name. It returns the missing fields, and throws without the project's logbook. */
-export function recordBrief(project, task, text, env = process.env) {
+export function recordBrief(project, task, text, env = process.env, session) {
   if (!TASK_NAME.test(task)) throw Error(`"${task}" is not a sage task name: ${NAME_RULE}`);
   if (Buffer.byteLength(text, "utf8") > BRIEF_LIMIT) throw Error("the brief is over 32 KiB");
   const file = briefFile(project, task, env);
   if (!existsSync(dirname(file))) throw Error(`no logbook for the project ${project}. Run init first.`);
-  writeFileSync(`${file}.${process.pid}.tmp`, `${JSON.stringify({ task, text })}\n`, { mode: 0o600 });
-  renameSync(`${file}.${process.pid}.tmp`, file);
-  return missingBriefFields(text);
+  const missing = missingBriefFields(text);
+  return tool.withLock(tool.storeDir(project, env), () => {
+    const reservation = `${file.slice(0, -5)}.reservation.json`;
+    let prior;
+    if (existsSync(reservation)) {
+      prior = JSON.parse(readFileSync(reservation, "utf8"));
+      if (missing.length || prior.session !== session || prior.brief !== createHash("sha256").update(text).digest("hex")) {
+        throw Error(`${task} already has a different review reservation`);
+      }
+    }
+    const reservationId = !missing.length ? reserveReview(project, task, text, session, env) : undefined;
+    if (prior && reservationId !== prior.id) throw Error(`${task} no longer has an eligible review reservation`);
+    writeFileSync(`${file}.${process.pid}.tmp`, `${JSON.stringify({ task, text, ...(reservationId ? { reservation: reservationId } : {}) })}\n`, { mode: 0o600 });
+    renameSync(`${file}.${process.pid}.tmp`, file);
+    return missing;
+  });
 }
 
 /** The brief on record for a task name, with its missing fields, or null for none or a record that it cannot read. */
@@ -50,7 +64,7 @@ function startNote(input, env) {
   let task;
   try { task = childTask(input.transcript_path); } catch { return { systemMessage: UNREAD }; }
   if (!sageName(task)) return {};
-  bindChild(input.transcript_path, input.cwd, env); // a review or QA child of the chief: its run's report is its own (T483)
+  bindChild(input.transcript_path, input.cwd, env, input); // a review or QA child of the chief: its run's report is its own (T483)
   const standing = tool.command(["standing", `--project=${input.cwd}`], env);
   const brief = readBrief(input.cwd, task, env);
   const parts = standing.code === 0 ? [`sage: the standing orders of this project, from its logbook. Follow each one.\n\n${standing.text}`] : [];
@@ -71,7 +85,7 @@ function spawnWarning(input, env) {
 
 /** The hook's answer to one SubagentStart or PostToolUse event. env names the logbook (CODEX_HOME or SAGE_HOME), for tests. */
 export function briefHook(input, env = process.env) {
-  if (input?.hook_event_name === "SubagentStart") return startNote(input, env);
+  if (input?.hook_event_name === "SubagentStart") { noteStart(input, env); return startNote(input, env); }
   if (input?.hook_event_name === "PostToolUse") return spawnWarning(input, env);
   return { systemMessage: UNREAD };
 }
