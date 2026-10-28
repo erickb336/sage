@@ -270,7 +270,7 @@ function banners(model) {
   return `${note}${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
 }
 
-const goneBanner = view => `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. ${view} <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
+const goneBanner = view => `<div role="status"><div class="banner info" id="gone" hidden><div>Your saved project selection is no longer available. ${view} <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
 
 // Theme (bug bash R1023-4, T349): the page is dark until you choose light; a choice is kept in the browser and the head
 // script applies it before the first paint. The switch is a checkbox, so it works with scripts off: it shows the

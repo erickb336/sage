@@ -848,9 +848,18 @@ test("T72: an unavailable saved project shows the global programs and a warning"
   t.diagnostic("A missing saved choice was cleared, and rows from both sample projects were shown.");
   assert.ok(page.gone, "the Programs page has an accessible warning");
   assert.equal(page.gone.hidden, false);
-  assert.equal(page.gone.text, "The project that you chose before has no logbook now. The programs list shows all projects. ");
+  assert.doesNotMatch(page.gone.text, /no logbook/i, "the missing picker option does not prove the logbook is absent");
+  assert.equal(page.gone.text, "Your saved project selection is no longer available. The programs list shows all projects. ");
   page.click("[data-dismiss]");
   assert.equal(page.gone.hidden, true, "Dismiss clears the warning");
+});
+
+test("T72: the Board gives the same reason for an unavailable saved project", () => {
+  const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
+  const page = programsSelection(renderBoardHtml(missing, { snapshot: false }), "other-abc123");
+  assert.equal(page.gone?.hidden, false);
+  assert.doesNotMatch(page.gone.text, /no logbook/i, "the missing picker option does not prove the logbook is absent");
+  assert.equal(page.gone.text, "Your saved project selection is no longer available. The board shows all projects. ");
 });
 
 test("T72: valid saved choices and All projects keep their normal program rows", () => {
@@ -874,7 +883,7 @@ test("T72: an empty list and a program page explain an unavailable saved choice"
   assert.equal(empty.gone?.hidden, false);
   const detail = programsSelection(renderProgramsHtml(twoPrograms(), { programKey: "claude/sage-ff5ee2/PG1" }), "gone-abcdef");
   assert.equal(detail.gone?.hidden, false);
-  assert.equal(detail.gone?.text, "The project that you chose before has no logbook now. The project picker shows All projects. ");
+  assert.equal(detail.gone?.text, "Your saved project selection is no longer available. The project picker shows All projects. ");
 });
 
 test("T72: without JavaScript the warning stays hidden and all program rows remain in the page", () => {
