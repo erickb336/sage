@@ -53,7 +53,10 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
       keys = new Set(selected.flatMap(group => group.books));
     }
   }
-  const model = buildBoardModel(snapshots.map(source => ({ ...source, projects: source.projects.filter(book => keys.has(book.key)) })), { now, landing: landingRule(sources, logbookKey) });
+  const model = buildBoardModel(snapshots.map(source => ({ ...source,
+    diagnostics: scope !== "all" && source.projects.some(book => !keys.has(book.key) && book.diagnostics.some(message => message.startsWith("checkout: ")))
+      ? [...source.diagnostics, "Some checkout files cannot be read. Project counts may be incomplete."] : source.diagnostics,
+    projects: source.projects.filter(book => keys.has(book.key)) })), { now, landing: landingRule(sources, logbookKey) });
   if (taskId) {
     const tasks = model.tasks.filter(task => task.id === taskId);
     if (tasks.length !== 1) {

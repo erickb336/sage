@@ -3,12 +3,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
+import { renderBoardHtml } from "../packages/sage-core/board-render.mjs";
 import { createBoardConfig } from "../packages/sage-board/cli.mjs";
 import { createStateTool } from "../packages/sage-core/index.mjs";
 
@@ -226,3 +227,180 @@ for (const invalid of ["relative", "missing", "file"]) {
     assert.deepEqual(snapshot(f.root), before);
   });
 }
+
+test("T63 R727: a checkout path keeps trailing spaces in both boards", t => {
+  const f = fixture(t), key = f.key(f.project), env = { ...process.env, SAGE_HOME: f.root };
+  const show = (project, ...args) => f.tool.sage(["board", ...args, "--project", project], env);
+  for (const suffix of [" ", "\t", "\r", "\n"]) {
+    const other = f.project + suffix;
+    mkdirSync(other); store(f.root, key, "Sample space path task", other);
+    const before = snapshot(f.root);
+    assert.match(show(f.project, "all", "--view", "chat"), /Sample space path task/);
+    assert.doesNotMatch(show(f.project, "this", "--view", "chat"), /Sample space path task/);
+    assert.doesNotMatch(show(f.project, "this", "--remember", "no"), /Sample space path task/);
+    assert.match(show(other, "this", "--view", "chat"), /Sample space path task/);
+    assert.match(show(other, "this", "--remember", "no"), /Sample space path task/);
+    assert.deepEqual(snapshot(f.root), before);
+  }
+});
+
+test("T63 R727: invalid UTF-8 never names a checkout in either board", t => {
+  const f = fixture(t), project = join(f.project, "..", "bad-\ufffd"), key = "bad-aaaaaa";
+  mkdirSync(project); store(f.root, key, "Sample bad bytes task", null);
+  const bytes = Buffer.concat([Buffer.from(project.replace(/\ufffd$/, "")), Buffer.from([0xff, 0x0a])]);
+  writeFileSync(join(f.root, key, "checkout.txt"), bytes);
+  const before = snapshot(f.root), env = { ...process.env, SAGE_HOME: f.root };
+  const show = (...args) => f.tool.sage(["board", ...args, "--project", project], env);
+  assert.match(show("all", "--view", "chat"), /Sample bad bytes task/);
+  assert.match(show("all", "--remember", "no"), /Sample bad bytes task/);
+  assert.doesNotMatch(show("this", "--view", "chat"), /Sample bad bytes task/);
+  assert.doesNotMatch(show("this", "--remember", "no"), /Sample bad bytes task/);
+  assert.deepEqual(snapshot(f.root), before);
+});
+
+test("T63 R727: a leading UTF-8 byte order mark cannot become a valid path", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample byte order mark task", null);
+  writeFileSync(join(f.root, key, "checkout.txt"), `\ufeff${f.project}\n`);
+  const before = snapshot(f.root), env = { ...process.env, SAGE_HOME: f.root };
+  const show = (...args) => f.tool.sage(["board", ...args, "--project", f.project], env);
+  assert.match(show("all", "--view", "chat"), /Sample byte order mark task/);
+  assert.doesNotMatch(show("this", "--view", "chat"), /Sample byte order mark task/);
+  assert.doesNotMatch(show("this", "--remember", "no"), /Sample byte order mark task/);
+  assert.deepEqual(snapshot(f.root), before);
+});
+
+test("T63 R727: the global picker filters unknown records without assigning them to a checkout", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample verified task", f.project); store(f.second, key, "Sample unknown task", null);
+  writeFileSync(join(f.second, key, "config.json"), '{"archived":true}\n');
+  const sources = [{ id: "first", path: f.root }, { id: "second", path: f.second }];
+  const before = [snapshot(f.root), snapshot(f.second)], model = buildBoardModel(readBoardSources(sources));
+  const unknown = model.tasks.find(task => task.title === "Sample unknown task"), html = renderBoardHtml(model);
+  assert.equal(unknown.archived, true);
+  assert.match(html, /Sample unknown task/);
+  assert.match(html, new RegExp(`role="option"[^>]*data-key="${unknown.group}"`));
+  assert.notEqual(unknown.group, model.tasks.find(task => task.title === "Sample verified task").group);
+  assert.deepEqual([snapshot(f.root), snapshot(f.second)], before);
+});
+
+test("T63 R727: verified group key is stable when a partition appears", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample current task", f.project); store(f.second, key, "Sample foreign task", f.foreign);
+  const first = { id: "first", path: f.root }, second = { id: "second", path: f.second };
+  const alone = buildBoardModel(readBoardSources([first]));
+  const apart = buildBoardModel(readBoardSources([first, second]));
+  const group = alone.tasks[0].group;
+  assert.equal(group, apart.tasks.find(task => task.title === "Sample current task").group);
+  for (const model of [alone, apart]) assert.ok(renderBoardHtml(model).includes(`role="option" id="pick-o-${Buffer.from(group).toString("base64url")}"`));
+  assert.notEqual(apart.tasks[0].group, apart.tasks[1].group);
+});
+
+test("T63 R727: path aliases and different folder labels group by verified checkout", t => {
+  const f = fixture(t), alias = join(f.project, "..", "alias");
+  symlinkSync(f.project, alias); store(f.root, f.key(f.project), "Sample first task", f.project);
+  store(f.second, "different-aaaaaa", "Sample alias task", alias);
+  const sources = [{ id: "first", path: f.root }, { id: "second", path: f.second }], before = sources.map(s => snapshot(s.path));
+  const model = buildBoardModel(readBoardSources(sources));
+  assert.equal(model.projects.length, 1); assert.equal(model.tasks[0].group, model.tasks[1].group);
+  const env = { ...process.env, SAGE_HOME: f.root, SAGE_BOARD_ROOTS: JSON.stringify(sources) };
+  const named = f.tool.sage(["board", "different", "--view", "chat", "--project", f.project], env);
+  assert.match(named, /Sample first task/); assert.match(named, /Sample alias task/);
+  assert.deepEqual(sources.map(s => snapshot(s.path)), before);
+});
+
+test("T63 R727: different verified checkouts stay apart for named selections", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample current task", f.project); store(f.second, key, "Sample foreign task", f.foreign);
+  const sources = [{ id: "first", path: f.root }, { id: "second", path: f.second }], before = sources.map(s => snapshot(s.path));
+  const env = { ...process.env, SAGE_HOME: f.root, SAGE_BOARD_ROOTS: JSON.stringify(sources) };
+  const show = scope => f.tool.sage(["board", scope, "--view", "chat", "--project", f.project], env);
+  assert.throws(() => show("same"), /project is ambiguous/i);
+  assert.match(show(`second/${key}`), /Sample foreign task/);
+  assert.doesNotMatch(show(`second/${key}`), /Sample current task/);
+  assert.match(show("this"), /Sample current task/);
+  assert.doesNotMatch(show("this"), /Sample foreign task/);
+  assert.deepEqual(sources.map(s => snapshot(s.path)), before);
+});
+
+test("T63 R727: a claimed foreign checkout does not enter the authoritative current project", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample foreign claim task", f.foreign);
+  const before = snapshot(f.root), env = { ...process.env, SAGE_HOME: f.root };
+  const show = (project, ...args) => f.tool.sage(["board", ...args, "--project", project], env);
+  assert.match(show(f.project, "all", "--view", "chat"), /Sample foreign claim task/);
+  assert.doesNotMatch(show(f.project, "this", "--view", "chat"), /Sample foreign claim task/);
+  assert.doesNotMatch(show(f.project, "this", "--remember", "no"), /Sample foreign claim task/);
+  assert.match(show(f.foreign, "this", "--view", "chat"), /Sample foreign claim task/);
+  assert.deepEqual(snapshot(f.root), before);
+});
+
+test("T63 R727: an old folder label does not override its verified checkout", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample current task", f.project);
+  store(f.root, "old-name-aaaaaa", "Sample old label task", f.project);
+  const before = snapshot(f.root), env = { ...process.env, SAGE_HOME: f.root };
+  const global = f.tool.sage(["board", "all", "--view", "chat", "--project", f.project], env);
+  const named = f.tool.sage(["board", "old-name", "--view", "chat", "--project", f.project], env);
+  assert.match(global, /Sample old label task/); assert.match(named, /Sample old label task/);
+  assert.match(named, /Sample current task/);
+  assert.deepEqual(snapshot(f.root), before);
+});
+
+test("T63 R727: old model inputs do not group missing checkout paths", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample first task", f.project); store(f.second, key, "Sample second task", f.project);
+  const snapshots = readBoardSources([{ id: "first", path: f.root }, { id: "second", path: f.second }]);
+  for (const source of snapshots) delete source.projects[0].checkoutIdentity;
+  assert.equal(buildBoardModel(snapshots).projects.length, 1);
+  for (const source of snapshots) source.projects[0].checkout = join(f.project, "does-not-exist");
+  assert.equal(buildBoardModel(snapshots).projects.length, 2);
+});
+
+test("T63 R727: model callers cannot replace the checkout with a conflicting identity", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample first task", f.project); store(f.second, key, "Sample second task", f.foreign);
+  const snapshots = readBoardSources([{ id: "first", path: f.root }, { id: "second", path: f.second }]);
+  snapshots[1].projects[0].checkoutIdentity = snapshots[0].projects[0].checkoutIdentity;
+  assert.equal(buildBoardModel(snapshots).projects.length, 2);
+});
+
+test("T63 R727: an unmatched slot uses its source and logbook mark", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample verified task", f.project); store(f.second, key, "Sample unknown task", null);
+  const sources = [{ id: "first", path: f.root }, { id: "second", path: f.second }], snapshots = readBoardSources(sources);
+  const mark = snapshots[1].projects[0].logbook;
+  snapshots[1].hooks = { present: true, problem: null, helpers: [], slots: [{ name: "slot-1", at: Date.now(), marks: ["ok", "project-same", `logbook-${mark}`] }] };
+  const model = buildBoardModel(snapshots), group = model.tasks.find(task => task.title === "Sample unknown task").group;
+  assert.equal(model.agents.projects[0].key, group);
+});
+
+test("T63 R727: ambiguous and foreign slot marks never pick the first same-named project", t => {
+  const f = fixture(t), key = f.key(f.project), other = "same-aaaaaa";
+  store(f.root, key, "Sample current task", f.project);
+  store(f.root, other, "Sample foreign task", f.foreign);
+  const snapshots = readBoardSources([{ id: "first", path: f.root }]);
+  const foreignBook = snapshots[0].projects.find(book => book.name === other);
+  const slot = marks => ({ name: "slot-1", at: Date.now(), marks: ["ok", "project-same", ...marks] });
+  snapshots[0].hooks = { present: true, problem: null, helpers: [], slots: [slot([`logbook-${foreignBook.logbook}`])] };
+  let model = buildBoardModel(snapshots);
+  assert.equal(model.agents.projects[0].key, model.tasks.find(task => task.title === "Sample foreign task").group);
+  for (const marks of [[], [`logbook-${"f".repeat(64)}`]]) {
+    snapshots[0].hooks.slots = [slot(marks)]; model = buildBoardModel(snapshots);
+    assert.ok(model.agents.projects[0].key.startsWith("slot:first:same:"));
+    assert.ok(model.tasks.every(task => task.group !== model.agents.projects[0].key));
+  }
+});
+
+test("T63 R727: a checkout read error stays visible without assigning its task", t => {
+  const f = fixture(t), key = f.key(f.project);
+  store(f.root, key, "Sample unreadable task", null); mkdirSync(join(f.root, key, "checkout.txt"));
+  const before = snapshot(f.root), env = { ...process.env, SAGE_HOME: f.root };
+  const output = f.tool.sage(["board", "this", "--view", "status", "--project", f.project], env);
+  assert.match(output, /diagnostics; counts may be incomplete/);
+  assert.doesNotMatch(output, /Sample unreadable task/);
+  const ordinary = f.tool.sage(["board", "this", "--remember", "no", "--project", f.project], env);
+  assert.match(ordinary, /checkout files cannot be read/i);
+  assert.doesNotMatch(ordinary, /Sample unreadable task/);
+  assert.deepEqual(snapshot(f.root), before);
+});

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
+import { checkoutIdentity } from "./board-identity.mjs";
 import { githubRepository } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
 import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, namedText, progressOf, progressText, shownGraph, shownWaits, waitGraph, waitsOf } from "./program-rules.mjs";
@@ -378,27 +379,25 @@ const repoPath = url => githubRepository(url)?.slice("https://github.com/".lengt
 const unique = list => list.filter((item, i) => item && list.indexOf(item) === i);
 
 /**
- * One repository is one project (T305 notes, section 3). The logbooks of all sources with the same key and the same
- * verified checkout are one project. A key alone cannot assign a logbook to a checkout. Unknown checkouts stay apart.
- * Two checkouts of one key stay two projects. Two clones at two paths have two keys, so they stay two projects.
+ * One verified checkout is one project, across all sources and folder names. Unknown checkouts stay apart. The group's
+ * key derives from the checkout, so a later logbook cannot change an existing selection.
  * The first display name wins, with a note when another differs. A project is archived only when all its logbooks are.
  */
 function projectGroups(sources) {
-  const byName = new Map(), groups = [], notes = [];
-  for (const source of sources) for (const project of source.projects) byName.set(project.name, [...(byName.get(project.name) ?? []), { source, project }]);
+  const byName = new Map(), byIdentity = new Map(), notes = [];
+  for (const source of sources) for (const project of source.projects) {
+    const book = { source, project }, identity = project.checkoutIdentity;
+    const key = identity ? `checkout-${sha256(identity)}` : project.key;
+    (byIdentity.get(key) ?? byIdentity.set(key, []).get(key)).push(book);
+    (byName.get(project.name) ?? byName.set(project.name, []).get(project.name)).push(book);
+  }
   const keys = books => books.map(book => book.project.key).join(" and ");
   const note = (books, message) => notes.push({ source: books.map(book => book.source.id).join(" + "), project: books[0].project.name, message });
   for (const books of byName.values()) {
-    const partitions = new Map();
-    for (const book of books) {
-      const project = book.project;
-      const identity = Object.hasOwn(project, "checkoutIdentity") ? project.checkoutIdentity : project.checkout;
-      const key = identity ? `checkout:${identity}` : `unknown:${project.key}`;
-      partitions.set(key, [...(partitions.get(key) ?? []), book]);
-    }
-    if (partitions.size > 1) note(books, `Separate logbooks: ${keys(books)} share a key, but their checkouts do not establish one project.`);
-    for (const members of partitions.values()) groups.push({ key: partitions.size === 1 ? books[0].project.name : members[0].project.key, books: members });
+    const identities = new Set(books.map(book => book.project.checkoutIdentity ?? book.project.key));
+    if (identities.size > 1) note(books, `Separate logbooks: ${keys(books)} share a key, but their checkouts do not establish one project.`);
   }
+  const groups = [...byIdentity].map(([key, books]) => ({ key, books }));
   for (const group of groups) {
     const known = group.books.filter(book => book.project.checkout), trusted = known.length ? known : group.books;
     const projects = trusted.map(book => book.project), first = field => projects.map(project => project[field]).find(Boolean) ?? null;
@@ -424,7 +423,7 @@ function projectGroups(sources) {
       sub: unique(sub).join(" · "),
       // Search matches every name a person may know: the display names, the repositories, the folder and the logbook keys.
       // The checkout paths are apart: only the Mac's own page carries them (R1069-2).
-      terms: unique([...names, repoPath(merged.upstream), ...all.map(project => repoPath(project.repository)), folder, merged.name, ...all.map(project => project.key)]),
+      terms: unique([...names, repoPath(merged.upstream), ...all.map(project => repoPath(project.repository)), folder, ...all.map(project => project.name), ...all.map(project => project.key)]),
       paths: unique(all.map(project => project.checkout)),
     });
   }
@@ -488,7 +487,6 @@ function slotOf(slot) {
 function agentsOf(sources, groups, groupOf, cards, at) {
   const rows = [], problems = [], caps = [];
   const bare = name => name.replace(/-[0-9a-f]{6}$/, "");
-  const groupNamed = name => groups.find(group => group.books.some(book => bare(book.project.name) === name));
   for (const source of sources) {
     const hooks = source.hooks ?? { present: false, slots: [], helpers: [], problem: null };
     const provider = String(source.provider ?? standIn(source)).toLowerCase();
@@ -505,10 +503,12 @@ function agentsOf(sources, groups, groupOf, cards, at) {
     const taken = new Set();
     const row = (item, extra) => {
       const record = item && runRecords(item.book.observations?.records ?? NONE).get(item.run.id);
-      const group = item ? groupOf.get(item.book.key) : groupNamed(extra.slot?.project);
+      const candidates = item ? [] : source.projects.filter(book => bare(book.name) === extra.slot?.project && (!extra.slot.logbook || book.logbook === extra.slot.logbook));
+      const matches = [...new Set(candidates.map(book => groupOf.get(book.key)))];
+      const group = item ? groupOf.get(item.book.key) : matches.length === 1 ? matches[0] : null;
       const card = item ? cards.get(`${item.book.key}/${item.run.task}`) : null;
       rows.push({ key: `${source.id}/${item ? `${item.book.name}/${item.run.id}` : extra.slot.name}`, source: source.id, runId: item?.run.id ?? extra.slot?.run ?? null, run: item?.run ?? null,
-        group: group?.key ?? `slot:${extra.slot?.project ?? "other"}`, groupName: group?.name ?? extra.slot?.project ?? "other",
+        group: group?.key ?? `slot:${source.id}:${extra.slot?.project ?? "other"}:${extra.slot?.logbook ?? "unknown"}`, groupName: group?.name ?? extra.slot?.project ?? "other",
         provider: String(record?.data.provider ?? source.provider ?? standIn(source)), role: item?.run.role ?? extra.slot?.role ?? "agent", model: item?.run.model || null,
         task: card ? { key: card.key, id: card.id, title: card.title, kind: card.kind, priority: card.priority } : item ? { key: null, id: item.run.task, title: "", kind: "", priority: "" } : null,
         lead: null, children: [], ...extra });
@@ -577,7 +577,7 @@ function agentsOf(sources, groups, groupOf, cards, at) {
     const name = list[0].groupName, group = groups.find(item => item.key === key);
     // The cap of the hook that knows this project's agents: a provider with no slot notes has none (T308 decision 5).
     const hooked = caps.find(entry => list.some(agent => agent.source === entry.source && agent.how !== "logbook"));
-    const cap = hooked ? { label: hooked.label, ...hooked.of(group ? bare(group.books[0].project.name) : key.slice(5)) } : null;
+    const cap = hooked ? { label: hooked.label, ...hooked.of(list[0].slot?.project ?? (group ? bare(group.books[0].project.name) : "other")) } : null;
     return { key, name, sub: group?.sub ?? "", pathSub: group?.pathSub ?? null, agents: sort(list.filter(agent => !agent.lead)), count: list.length, look: list.filter(agent => LOOK.includes(agent.state)).length, worst: Math.min(...list.map(order)), cap };
   }).sort((a, b) => a.worst - b.worst || b.count - a.count || a.name.localeCompare(b.name));
   const providers = [...new Set(rows.map(agent => title(agent.provider.toLowerCase())))].map(name => ({ name, count: rows.filter(agent => title(agent.provider.toLowerCase()) === name).length }));
@@ -715,7 +715,7 @@ export function buildBoardModel(input, { now = new Date().toISOString(), landing
   const at = time(now);
   if (at === null) throw new TypeError("board time must be an ISO date");
   build++;
-  const sources = input.map(source => ({ ...source, projects: source.projects.map(withoutPrograms) }));
+  const sources = input.map(source => ({ ...source, projects: source.projects.map(project => withoutPrograms({ ...project, checkoutIdentity: checkoutIdentity(project.checkout) })) }));
   const { groups, notes } = projectGroups(sources);
   const groupOf = new Map(groups.flatMap(group => group.books.map(book => [book.project.key, group])));
   const graphs = new Map(sources.flatMap(source => source.projects.map(project => [project.key, graphOf(project)])));

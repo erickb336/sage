@@ -34,6 +34,7 @@ const SNAPSHOT_PAGES = [`#task-${key("T13")}`, "#programs", `#program-${key("PG1
 const other = programsSource("codex");
 Object.assign(other.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
 const two = buildBoardModel([programsSource(), other], { now: NOW });
+const otherGroup = two.projects.find(project => project.books.includes("codex/other-abc123")).key;
 const TWO = {
   "/": () => renderBoardHtml(two, { snapshot: false }),
   "/programs": () => renderProgramsHtml(two),
@@ -97,7 +98,7 @@ test("T368: a program page's link to its tasks opens the board with the Program 
 });
 
 test("R1322-1: the link to a program's tasks names its project, so a project chosen before does not hide its cards", async t => {
-  const page = await open(t, `/program/${key("PG1")}`, { pages: TWO, project: "other-abc123" });
+  const page = await open(t, `/program/${key("PG1")}`, { pages: TWO, project: otherGroup });
   await page.click("text=Its tasks on the board");
   await page.waitForURL(/pg=/);
   assert.equal(await page.locator("#pick-name").textContent(), "sage (sample)");
@@ -110,9 +111,9 @@ test("R1324-5: the programs list's picker keeps one project's programs with thei
   const rows = () => page.locator("li[data-project]:visible").evaluateAll(list => list.map(li => li.dataset.project));
   assert.equal((await rows()).length, 16, "both projects' programs (the dropped one is folded)");
   await page.click("#pick-trig");
-  await page.click('#pick-list [role=option][data-key="other-abc123"]');
+  await page.click(`#pick-list [role=option][data-key="${otherGroup}"]`);
   assert.equal(await page.locator("#pick-name").textContent(), "other (sample)");
-  assert.deepEqual([...new Set(await rows())], ["other-abc123"]);
+  assert.deepEqual([...new Set(await rows())], [otherGroup]);
   assert.deepEqual(await page.locator("h2.grp").allTextContents(), ["Needs you 3", "Active 4", "Done 1"]);
   assert.equal(await page.locator("#sum-dropped").textContent(), "Dropped (1)");
   assert.equal(await page.locator("#needs-count").textContent(), "8", "the count is the server's: a programs page has no cards to count");

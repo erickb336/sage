@@ -11,7 +11,7 @@ import { closeSync, constants, existsSync, fstatSync, openSync, readSync, readdi
 import { createHash, randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import { projectName as shownName } from "./board-model.mjs";
-import { checkoutIdentity, sameCheckout } from "./board-identity.mjs";
+import { checkoutIdentity, decodeCheckout, sameCheckout } from "./board-identity.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { checkPrograms, gateLines } from "./program-rules.mjs";
 export function createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock }) {
@@ -98,15 +98,17 @@ function repoOf(path, remote = "origin") {
  * The text of a small regular file, or null: for a missing file, a link, a FIFO, a device, a folder or a file over max
  * bytes. It never blocks (the open does not wait for a FIFO's writer) and reads at most max + 1 bytes.
  */
-function small(path, max) {
+function small(path, max, decode = bytes => bytes.toString("utf8"), unreadable = () => {}) {
   let fd;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
-    if (!fstatSync(fd).isFile()) return null;
+    if (!fstatSync(fd).isFile()) { unreadable(); return null; }
     const buf = Buffer.alloc(max + 1);
     const len = readSync(fd, buf, 0, max + 1, 0);
-    return len > max ? null : buf.toString("utf8", 0, len);
-  } catch {
+    if (len > max) { unreadable(); return null; }
+    return decode(buf.subarray(0, len));
+  } catch (error) {
+    if (error.code !== "ENOENT") unreadable();
     return null;
   } finally {
     if (fd !== undefined) closeSync(fd);
@@ -133,10 +135,11 @@ function logbooks(root) {
   } catch {}
   const books = folders.map(({ name: folder }) => {
     const dir = join(root, folder);
-    const checkout = small(join(dir, "checkout.txt"), 4096)?.trim() || null;
+    let checkoutError = false;
+    const checkout = small(join(dir, "checkout.txt"), 4096, decodeCheckout, () => { checkoutError = true; });
     // The owner's settings of the logbook (sage config name= and archived=), as the rich board reads them: a bad value is not used.
     const settings = (() => { try { return logbookSettings(JSON.parse(small(join(dir, "config.json"), 64 * 1024) ?? "{}")); } catch { return logbookSettings(null); } })();
-    const book = { folder, name: FOLDER.exec(folder)[1], dir, checkout, displayName: settings.name, archived: settings.archived, tasks: [], runs: [], gates: [], programs: [], changed: {}, reviewed: {}, error: null };
+    const book = { folder, name: FOLDER.exec(folder)[1], dir, checkout, checkoutError, displayName: settings.name, archived: settings.archived, tasks: [], runs: [], gates: [], programs: [], changed: {}, reviewed: {}, error: null };
     try {
       const [tasks, runs, gates, ledger, decisions] = Object.keys(FORMAT).map((t) => read(dir, t).map((row) => clean(t, row)));
       for (const [task, at] of [...runs.flatMap((r) => [[r.task, r.started], [r.task, r.ended]]), ...[...gates, ...ledger, ...decisions].map((r) => [r.task, r.at])]) {
@@ -284,6 +287,8 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
   const label = (b) => (b.shown !== b.key ? `${b.key} (${text(b.shown, 40)})` : b.key);
   const selectable = books.filter(b => checkoutIdentity(b.checkout));
   const known = selectable.map(label).join(", ") || "none";
+  const warning = books.some(b => b.checkoutError) ? "Some checkout files cannot be read. Project counts may be incomplete." : "";
+  const withWarning = message => warning ? `${message}\n\n${warning}` : message;
   let shown;
   let title;
   const want = slug(scope);
@@ -291,12 +296,12 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
   else if (want === "this") {
     const mine = sessionBooks(books, project, env);
     if (mine.length) [shown, title] = [mine, label(mine[0])];
-    else return "No verified logbook for this project. Show the board for all projects to see the other logbooks.";
+    else return withWarning("No verified logbook for this project. Show the board for all projects to see the other logbooks.");
   } else {
     let sure;
     [shown, sure] = named(selectable, scope, want);
-    if (!shown.length) return `No project named "${text(scope, 40)}". Known projects: ${known}.`;
-    if (!sure) return `Not sure which project "${text(scope, 40)}" is. Candidates: ${shown.map(label).join(", ")}. Type the key or the real name.`;
+    if (!shown.length) return withWarning(`No project named "${text(scope, 40)}". Known projects: ${known}.`);
+    if (!sure) return withWarning(`Not sure which project "${text(scope, 40)}" is. Candidates: ${shown.map(label).join(", ")}. Type the key or the real name.`);
     title = label(shown[0]);
   }
   const cap = want === "all" || want === "this" ? CAP.active : Infinity;
@@ -379,7 +384,7 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
   const needCount = (b) => gates(b).length + verified(b).length;
   if (archived.length) section(`Archived (${archived.length})`, archived.map((b) => `${label(b)}: ${plural(b.tasks.length, "task")}${needCount(b) ? ` · ${needCount(b)} need${needCount(b) === 1 ? "s" : ""} you` : ""}`), archived.length);
   if (save) remember(root, shown, now.toISOString().slice(0, 19) + "Z");
-  return L.join("\n");
+  return withWarning(L.join("\n"));
 }
 
 return { board, answerPaths };
