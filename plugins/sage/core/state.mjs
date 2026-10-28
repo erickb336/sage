@@ -2355,15 +2355,17 @@ function sage(argv, env = process.env) {
     try {
       if (env.SAGE_BOARD_ROOTS && Buffer.byteLength(env.SAGE_BOARD_ROOTS) > 65536) throw new Error("root configuration is too large");
       sources = env.SAGE_BOARD_ROOTS ? JSON.parse(env.SAGE_BOARD_ROOTS) : [{ id: "current", label: "Current provider", path: root }];
-      const project = opt.project ?? env.PWD;
+      const project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
       const logbookKey = readOnly && !env.SAGE_BOARD_ROOTS && project ? `current/${basename(storeDir(project, env))}` : null;
       return boardView({ sources, scope, project, logbookKey, taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view });
     } catch (error) { refuse(error.message); }
   }
   const globalConfig = cmd === "config" && !pos.some(ownKey);
   const project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
+  const boardScope = opt["name-hex"] === undefined ? pos[0] : unhex(opt["name-hex"]);
+  const globalBoard = cmd === "board" && boardScope !== undefined && slug(boardScope) === "all";
   // Project commands resolve identity before the first migration can write. Global commands need no Git identity.
-  const dir = cmd === "projects" || globalConfig ? undefined : storeDir(project, env);
+  const dir = cmd === "projects" || globalConfig || globalBoard ? undefined : storeDir(project, env);
   if (!readOnly && statSync(root, { throwIfNoEntry: false })?.isDirectory() && ["projects.tsv", "projects.made"].every((f) => !lstatSync(join(root, f), { throwIfNoEntry: false }))) known(root); // the first writing command of this version lists today's logbooks
   if (cmd === "projects") return pos.join(" ") === "rebuild" && opt["accept-listing"] === "yes" ? rebuild(root) : refuse(`projects takes only: ${REBUILD.slice(5)}. It lists each logbook folder that is in ${root} now as a known project, so that its verdicts count in the merge check. Run it only when the user asks for it, and show the user the folders that it prints.`);
   if (cmd === "merge-check") {

@@ -4163,14 +4163,131 @@ function identityFailureFixture(context, provider) {
       if (candidates.has(path)) throw Error('simulated missing system Git');
       return realpath(path, ...args);
     };
+    for (const name of ['openSync', 'readFileSync', 'readdirSync', 'lstatSync', 'statSync']) {
+      const original = fs[name];
+      fs[name] = (path, ...args) => {
+        if (process.env.T53_FORBIDDEN_READ && String(path).startsWith(process.env.T53_FORBIDDEN_READ + '/'))
+          process.stderr.write('unexpected foreign logbook access\\n');
+        return original(path, ...args);
+      };
+    }
     syncBuiltinESMExports();
   `);
-  const run = (args, at = f.project, missing = false) => spawnSync(process.execPath,
+  const run = (args, at = f.project, missing = false, extra = {}) => spawnSync(process.execPath,
     [...(missing ? ["--import", preload] : []), tool, ...args, "--project", at],
-    { env: f.env, encoding: "utf8", timeout });
+    { env: { ...f.env, ...extra }, encoding: "utf8", timeout });
   const init = run(["init"]);
   assert.equal(init.status, 0, init.stderr);
   return { ...f, tool, preload, run, locations: { main: f.project, subdir, linked }, plain };
+}
+
+for (const provider of ["sage", "sage-codex"]) {
+  for (const populated of [false, true]) {
+    test(`T53 R717: ${provider} global board needs no Git with ${populated ? "existing" : "zero"} logbooks`, context => {
+      const f = identityFailureFixture(context, provider);
+      const root = populated ? f.env.SAGE_HOME : join(f.base, "empty-root");
+      if (populated) assert.equal(f.run(["task", "add", "--priority", "P2", "--title", "Global board task", "--size", "small"]).status, 0);
+      const before = populated ? snapshot(root) : null;
+      const result = f.run(["board", "all", "--remember", "no"], f.locations.linked, true, { SAGE_HOME: root });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, populated ? /Global board task/ : /No logbooks yet/);
+      assert.deepEqual(populated ? snapshot(root) : (existsSync(root) ? snapshot(root) : null), before);
+    });
+  }
+  for (const location of ["main", "subdir", "linked"]) {
+    for (const missing of [false, true]) {
+      test(`T53 R717: ${provider} rich project board at ${location} ${missing ? "refuses missing Git before foreign access" : "selects its own project"}`, context => {
+        const f = identityFailureFixture(context, provider);
+        const at = f.locations[location], name = basename(at);
+        mkdirSync(join(f.base, "foreign"));
+        const foreign = f.repo(`foreign/${name}`);
+        for (const [project, title] of [[f.project, "Assigned project task"], [foreign, "Foreign project task"]]) {
+          if (project === foreign) assert.equal(f.run(["init"], project).status, 0);
+          const add = f.run(["task", "add", "--priority", "P2", "--title", title, "--size", "small"], project);
+          assert.equal(add.status, 0, add.stderr);
+        }
+        const foreignBook = f.run(["logbook"], foreign).stdout.trim();
+        const before = snapshot(f.env.SAGE_HOME);
+        const result = f.run(["board", "this", "--view", "chat"], at, missing, { T53_FORBIDDEN_READ: foreignBook });
+        if (missing) {
+          assert.notEqual(result.status, 0, result.stdout);
+          assert.match(result.stderr, /no trusted system Git executable is available/);
+          assert.doesNotMatch(result.stderr, /unexpected foreign logbook access/);
+          assert.equal(result.stdout, "");
+        } else {
+          assert.equal(result.status, 0, result.stderr);
+          assert.match(result.stdout, /Assigned project task/);
+          assert.doesNotMatch(result.stdout, /Foreign project task/);
+        }
+        assert.deepEqual(snapshot(f.env.SAGE_HOME), before);
+      });
+    }
+  }
+  test(`T53 R717 extra: ${provider} rich views join the assigned project across sources and refuse missing Git`, context => {
+    const f = identityFailureFixture(context, provider);
+    const otherRoot = join(f.base, "second-source"), sources = JSON.stringify([{ id: "first", path: f.env.SAGE_HOME }, { id: "second", path: otherRoot }]);
+    for (const [root, title] of [[f.env.SAGE_HOME, "First assigned task"], [otherRoot, "Second assigned task"]]) {
+      if (root === otherRoot) assert.equal(f.run(["init"], f.project, false, { SAGE_HOME: root }).status, 0);
+      const add = f.run(["task", "add", "--priority", "P2", "--title", title, "--size", "small"], f.project, false, { SAGE_HOME: root });
+      assert.equal(add.status, 0, add.stderr);
+    }
+    const before = [snapshot(f.env.SAGE_HOME), snapshot(otherRoot)];
+    for (const project of Object.values(f.locations)) for (const view of ["chat", "status", "html"]) {
+      const args = ["board", "this", "--view", view];
+      const result = f.run(args, project, false, { SAGE_BOARD_ROOTS: sources });
+      assert.equal(result.status, 0, result.stderr);
+      if (view === "status") assert.match(result.stdout, /framed 2/);
+      else { assert.match(result.stdout, /First assigned task/); assert.match(result.stdout, /Second assigned task/); }
+      const refused = f.run(args, project, true, { SAGE_BOARD_ROOTS: sources });
+      assert.notEqual(refused.status, 0, refused.stdout);
+      assert.match(refused.stderr, /no trusted system Git executable is available/);
+      assert.equal(refused.stdout, "");
+    }
+    assert.deepEqual([snapshot(f.env.SAGE_HOME), snapshot(otherRoot)], before);
+  });
+  test(`T53 R717 extra: ${provider} does not choose a foreign project when its own logbook is absent`, context => {
+    const f = identityFailureFixture(context, provider), root = join(f.base, "foreign-source");
+    mkdirSync(join(f.base, "foreign"));
+    const foreign = f.repo("foreign/subdir");
+    assert.equal(f.run(["init"], foreign, false, { SAGE_HOME: root }).status, 0);
+    assert.equal(f.run(["task", "add", "--priority", "P2", "--title", "Foreign project task", "--size", "small"], foreign, false, { SAGE_HOME: root }).status, 0);
+    const before = snapshot(root);
+    const result = f.run(["board", "this", "--view", "chat"], f.locations.subdir, false, { SAGE_HOME: root });
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.stderr, /No recorded project matches this board scope/);
+    assert.equal(result.stdout, "");
+    assert.deepEqual(snapshot(root), before);
+  });
+  test(`T53 R717 extra: ${provider} named rich project views require Git but global views do not`, context => {
+    const f = identityFailureFixture(context, provider);
+    assert.equal(f.run(["task", "add", "--priority", "P2", "--title", "Named project task", "--size", "small"]).status, 0);
+    const before = snapshot(f.env.SAGE_HOME);
+    for (const args of [["board", "project", "--view", "chat"], ["board", "--name-hex", Buffer.from("project").toString("hex"), "--view", "chat"]]) {
+      const shown = f.run(args);
+      assert.equal(shown.status, 0, shown.stderr);
+      assert.match(shown.stdout, /Named project task/);
+      const refused = f.run(args, f.locations.linked, true);
+      assert.notEqual(refused.status, 0, refused.stdout);
+      assert.match(refused.stderr, /no trusted system Git executable is available/);
+      assert.equal(refused.stdout, "");
+    }
+    const global = f.run(["board", "all", "--view", "chat"], f.locations.linked, true);
+    assert.equal(global.status, 0, global.stderr);
+    assert.match(global.stdout, /Named project task/);
+    assert.deepEqual(snapshot(f.env.SAGE_HOME), before);
+  });
+  test(`T53 R717 extra: ${provider} global board shows a gate without offering an unverified answer path`, context => {
+    const f = identityFailureFixture(context, provider);
+    assert.equal(f.run(["task", "add", "--priority", "P2", "--title", "Gate task", "--size", "small"]).status, 0);
+    const gate = f.run(["gate", "add", "T1", "--question", "Choose a sample?", "--options", "yes|no", "--recommend", "yes"]);
+    assert.equal(gate.status, 0, gate.stderr);
+    const before = snapshot(f.env.SAGE_HOME);
+    const result = f.run(["board", "all", "--remember", "no"], f.locations.linked, true);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Choose a sample/);
+    assert.match(result.stdout, /this board does not know its folder/);
+    assert.deepEqual(snapshot(f.env.SAGE_HOME), before);
+  });
 }
 
 for (const provider of ["sage", "sage-codex"]) {
