@@ -13,7 +13,7 @@ const SHA = "1".repeat(40);
 
 // T54: saving a page and ending a run are separate from the provider's capture
 // of the child's report. Exercise the whole MCP flow, without native Codex.
-for (const capture of ["none", "start-only", "start-stop"]) test(`T54: pages and run_done with ${capture} report capture`, async t => {
+for (const capture of ["none", "start-only", "start-stop", "documented-child", "documented-parent", "documented-null"]) test(`T54: pages and run_done with ${capture} report capture`, async t => {
   const s = await connect(t);
   const git = (...args) => execFileSync("git", ["-C", s.project, "-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8" }).trim();
   git("checkout", "-qb", "codex/t1-report");
@@ -28,35 +28,55 @@ for (const capture of ["none", "start-only", "start-stop"]) test(`T54: pages and
   assert.equal(await s.call("brief", { task_name: "sage_code_reviewer_t1_r1", brief }),
     "brief sage_code_reviewer_t1_r1 checked: all 10 fields. Spawn the agent with this task name and this brief.");
   const text = `STATUS done\nRESULT CLEAN\nEVIDENCE sample check passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED installed behavior\nBRANCH codex/t1-report; head ${head}`;
-  // Use the same documented event shape as codex-report-gate.test.mjs. The
-  // fixture supplies hook inputs, never a kept-report file or native receipt.
+  // Sample hook inputs only: never a kept-report file or native receipt.
+  // The release contract does not promise the transcript's internal format:
+  // https://learn.chatgpt.com/docs/hooks (read 2026-10-28). Test both possible
+  // start transcript owners and its documented null value. These are fixture
+  // cases, not observations of which transcript the installed host supplies.
+  const documented = capture.startsWith("documented-");
+  const bound = ["start-only", "start-stop", "documented-child"].includes(capture);
+  const stopped = capture === "start-stop" || documented;
   const transcript = join(s.dir, "sample-child.jsonl");
+  const parentTranscript = join(s.dir, "sample-parent.jsonl");
+  const parent = "019a0000-0000-7000-8000-0000000000aa";
+  const child = "019a0000-0000-7000-8000-0000000000bb";
+  writeFileSync(parentTranscript, `${JSON.stringify({ type: "session_meta", payload: { id: parent } })}\n`);
   const role = execFileSync(process.execPath, [join(s.dir, "plugin/skills/sage/role.mjs"), "code-reviewer"], { env: s.env, encoding: "utf8" });
   writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: {
-    id: "019a0000-0000-7000-8000-0000000000bb", agent_path: "/root/sage_code_reviewer_t1_r1",
-  } })}\n${JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: `${role}\n\n${brief}` }] } })}\n`);
+    id: child, agent_path: "/root/sage_code_reviewer_t1_r1",
+  } })}\n${documented ? "" : `${JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: `${role}\n\n${brief}` }] } })}\n`}`);
+  const common = documented ? { session_id: parent, turn_id: "sample-turn", transcript_path: parentTranscript,
+    model: "gpt-6.1-sol", permission_mode: "default", agent_id: child, agent_type: "default" } : {};
   const hook = (file, input) => {
     const result = spawnSync(process.execPath, [join(s.dir, "plugin/hooks", file)], {
-      input: JSON.stringify({ cwd: s.project, ...input }), env: s.env, encoding: "utf8",
+      input: JSON.stringify({ cwd: s.project, ...common, ...input }), env: s.env, encoding: "utf8",
     });
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
   if (capture !== "none") {
-    const start = hook("brief-hook.mjs", { hook_event_name: "SubagentStart", transcript_path: transcript });
-    assert.equal(start.hookSpecificOutput.hookEventName, "SubagentStart");
-    assert.ok(start.hookSpecificOutput.additionalContext.endsWith(brief));
+    const start = hook("brief-hook.mjs", { hook_event_name: "SubagentStart",
+      transcript_path: capture === "documented-null" ? null : capture === "documented-parent" ? parentTranscript : transcript });
+    if (bound) {
+      assert.equal(start.hookSpecificOutput.hookEventName, "SubagentStart");
+      assert.ok(start.hookSpecificOutput.additionalContext.endsWith(brief));
+    } else if (capture === "documented-parent") assert.deepEqual(start, {});
+    else assert.match(start.systemMessage, /could not read what Codex sent it/);
   }
-  if (capture === "start-stop") assert.deepEqual(hook("report-gate.mjs", {
+  assert.equal(existsSync(join(logbook, "kept", "R1.child")), bound);
+  if (stopped) assert.deepEqual(hook("report-gate.mjs", {
     hook_event_name: "SubagentStop", agent_transcript_path: transcript, stop_hook_active: false, last_assistant_message: text,
-  }), {});
+  }), bound ? {} : { systemMessage: "sage: R1's report is not kept: no child started for R1 while it ran, so it backs no verdict." });
   const saved = await s.call("pages", { task: "T1", run, text });
   const report = saved.match(/^page (\/.+) · sha256 [0-9a-f]{64}$/)?.[1];
   assert.ok(report, saved);
   assert.equal(await s.call("run_done", { run, status: "done", usage: "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "wait_agent gives no token count", report }), `${run} done`);
   const before = readFileSync(join(logbook, "ledger.tsv"), "utf8");
   const verdict = await s.call("verdict", { task: "T1", run, kind: "review-clean", sha: head, cycle: 1 });
-  if (capture === "start-stop") {
+  // Characterize the unsupported cases; this is not a production repair.
+  // Start must currently expose the child's session_meta.agent_path. The
+  // documented event fields alone provide no task/run correlation.
+  if (stopped && bound) {
     assert.equal(verdict, `T1 review-clean · ${head.slice(0, 7)} · cycle 1`);
     assert.match(readFileSync(join(logbook, "ledger.tsv"), "utf8"), new RegExp(`\\nT1\\t\\t${head}\\treview-clean\\t1\\tR1\\t`));
   } else {
@@ -64,7 +84,7 @@ for (const capture of ["none", "start-only", "start-stop"]) test(`T54: pages and
     assert.equal(readFileSync(join(logbook, "ledger.tsv"), "utf8"), before);
     assert.deepEqual(hook("report-gate.mjs", {
       hook_event_name: "SubagentStop", agent_transcript_path: transcript, stop_hook_active: false, last_assistant_message: text,
-    }), { systemMessage: capture === "none"
+    }), { systemMessage: !bound
       ? "sage: R1's report is not kept: no child started for R1 while it ran, so it backs no verdict."
       : "sage: R1's report is not kept: R1 ended as done before this stop, so no report is kept." });
     assert.equal(existsSync(join(logbook, "kept", "R1.json")), false);
