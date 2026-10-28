@@ -2,6 +2,9 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
 
+/** Failure to discover Git is not evidence that a folder is outside a repository. */
+export class GitDiscoveryError extends Error {}
+
 /** Fixed system locations only: never PATH, cwd, or a caller-selected executable.
  * macOS uses the actual developer-tools binary, not /usr/bin/git's environment-sensitive launcher.
  * Resolve symlinks, then require root ownership and no group/other writes for the file and every parent.
@@ -22,7 +25,7 @@ function trustedGit() {
       return executable;
     } catch { /* Try the next fixed system location; never fall back to PATH. */ }
   }
-  throw Error("no trusted system Git executable is available");
+  throw new GitDiscoveryError("no trusted system Git executable is available");
 }
 
 /** Local repository reads must not inherit selectors, fetch missing objects, or run transport helpers. */
