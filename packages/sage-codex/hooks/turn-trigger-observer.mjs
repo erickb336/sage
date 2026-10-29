@@ -19,65 +19,17 @@ const unavailable = reason => ({ status: 'unavailable', reason });
 class Refusal extends Error { constructor(reason) { super(); this.reason = reason; } }
 const refuse = reason => { throw new Refusal(reason); };
 
-// Validate only the seven retained non-lifecycle event variants, against the pinned
-// protocol.rs definitions. Serde Option permits absence/null; a defaulted Vec permits
-// absence but not null. Do not infer evidence from these discarded message contents.
-const textValue = value => typeof value === 'string';
-const integer = value => Number.isInteger(value) && value >= -(2 ** 63) && value < 2 ** 63;
-const unsigned = value => Number.isInteger(value) && value >= 0 && value < 2 ** 64;
-const uint32 = value => unsigned(value) && value <= 0xffffffff;
-const boolean = value => typeof value === 'boolean';
-const optional = check => value => value == null || check(value);
-const defaulted = check => value => value === undefined || check(value);
-const array = check => value => Array.isArray(value) && value.every(check);
-const shape = fields => value => object(value) && Object.entries(fields).every(([key, check]) => check(value[key]));
-const choice = values => value => values.includes(value);
-const strings = array(textValue);
-const details = defaulted(array(optional(choice(['auto', 'low', 'high', 'original']))));
-const usage = shape({ input_tokens: integer, cached_input_tokens: integer, cache_write_input_tokens: defaulted(integer),
-  output_tokens: integer, reasoning_output_tokens: integer, total_tokens: integer });
-const window = shape({ used_percent: Number.isFinite, window_minutes: optional(integer), resets_at: optional(integer) });
-const hook = shape({
-  turn_id: optional(textValue),
-  run: shape({ id: textValue, event_name: choice(['pre_tool_use', 'permission_request', 'post_tool_use', 'pre_compact',
-    'post_compact', 'session_start', 'session_end', 'user_prompt_submit', 'subagent_start', 'subagent_stop', 'stop',
-    'interrupt', 'pre_model_request', 'post_model_request']), handler_type: choice(['command', 'mcp_tool', 'prompt', 'agent']),
-  execution_mode: choice(['sync', 'async']), scope: choice(['thread', 'turn']), source_path: pathValue,
-  source: defaulted(choice(['system', 'user', 'project', 'mdm', 'session_flags', 'plugin', 'cloud_requirements',
-    'cloud_managed_config', 'legacy_managed_config_file', 'legacy_managed_config_mdm', 'unknown'])),
-  display_order: integer, status: choice(['running', 'completed', 'failed', 'blocked', 'stopped']),
-  status_message: optional(textValue), started_at: integer, completed_at: optional(integer), duration_ms: optional(integer),
-  entries: array(shape({ kind: choice(['warning', 'stop', 'feedback', 'context', 'error']), text: textValue })) }),
-});
-const question = shape({ title: textValue, options: optional(strings) });
-const eventPayloads = {
-  user_message: shape({ message: textValue, client_id: optional(textValue), images: optional(strings),
-    image_details: details, file_ids: optional(strings), file_id_details: details,
-    image_order: defaulted(array(choice(['inline', 'file']))), local_images: defaulted(strings), local_image_details: details,
-    audio: optional(strings), local_audio: defaulted(strings), text_elements: defaulted(array(shape({
-      byte_range: shape({ start: unsigned, end: unsigned }), placeholder: optional(textValue),
-    }))) }),
-  agent_message: shape({ message: textValue, phase: optional(choice(['commentary', 'partial_answer', 'final_answer'])),
-    memory_citation: optional(shape({ entries: array(shape({ path: textValue, lineStart: uint32, lineEnd: uint32, note: textValue })),
-      rolloutIds: strings })), delivery: optional(choice(['async'])),
-    questions: optional(array(value => question(value) && Object.keys(value).every(key => ['title', 'options'].includes(key)))) }),
-  agent_reasoning: shape({ text: textValue }),
-  agent_reasoning_raw_content: shape({ text: textValue }),
-  token_count: shape({ info: optional(shape({ total_token_usage: usage, last_token_usage: usage, model_context_window: optional(integer) })),
-    rate_limits: optional(shape({ limit_id: optional(textValue), limit_name: optional(textValue), normal_model_slug: optional(textValue),
-      primary: optional(window), secondary: optional(window),
-      credits: optional(shape({ has_credits: boolean, unlimited: boolean, balance: optional(textValue) })),
-      individual_limit: optional(shape({ limit: textValue, used: textValue, remaining_percent: value => integer(value)
-        && value >= -2147483648 && value <= 2147483647, resets_at: integer })),
-      spend_control_reached: optional(boolean), plan_type: optional(textValue),
-      rate_limit_reached_type: optional(choice(['rate_limit_reached', 'workspace_owner_credits_depleted',
-        'workspace_member_credits_depleted', 'workspace_owner_usage_limit_reached', 'workspace_member_usage_limit_reached'])) })) }),
-  hook_started: hook,
-  hook_completed: hook,
-};
+// Only these discriminators are supported. Their message, model and telemetry
+// contents are bounded opaque JSON, not evidence for the trigger classification.
+const opaqueEvents = new Set(['user_message', 'agent_message', 'agent_reasoning',
+  'agent_reasoning_raw_content', 'token_count', 'hook_started', 'hook_completed']);
+const terminals = new Set(['task_complete', 'turn_aborted']);
+const responses = new Set(['message', 'reasoning', 'function_call', 'function_call_output',
+  'custom_tool_call', 'custom_tool_call_output']);
+const uint64 = value => typeof value === 'bigint' && value <= 18446744073709551615n;
 
 // JSON.parse alone silently accepts duplicate keys. Reject those, invalid UTF-8 and deep nesting.
-function json(bytes, reason) {
+function json(bytes, reason, readOrdinal = false) {
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     const value = JSON.parse(text);
@@ -91,8 +43,14 @@ function json(bytes, reason) {
         if (top?.key) {
           const key = JSON.parse(text.slice(start, i + 1));
           if (top.keys.has(key)) refuse(reason);
-          top.keys.add(key); top.key = false;
+          top.keys.add(key); top.key = false; top.name = key;
         }
+      } else if (readOrdinal && stack.length === 1 && stack[0].name === 'ordinal' && /[-0-9]/.test(char)) {
+        // Preserve the wire integer before JSON.parse rounding. Decimal/exponent
+        // spellings and values outside u64 are not diagnostic ordinals.
+        const token = text.slice(i).match(/^[^,}\s]+/)[0];
+        if (/^[0-9]{1,20}$/.test(token)) value.ordinal = BigInt(token);
+        i += token.length - 1;
       } else if (char === '{' || char === '[') {
         stack.push(char === '{' ? { key: true, keys: new Set() } : {});
         if (stack.length > 32) refuse(reason);
@@ -108,8 +66,7 @@ function callbackFields(callback, options) {
     || !pathValue(options.project)) refuse('invalid_boundary');
   if (!object(callback) || callback.hook_event_name !== 'UserPromptSubmit'
     || !uuid(callback.session_id) || !uuid(callback.turn_id) || !pathValue(callback.cwd)
-    || !pathValue(callback.transcript_path) || typeof callback.prompt !== 'string'
-    || typeof callback.model !== 'string' || typeof callback.permission_mode !== 'string') refuse('invalid_callback');
+    || !pathValue(callback.transcript_path)) refuse('invalid_callback');
   if ('agent_id' in callback || 'agent_type' in callback) refuse('child_evidence');
   const keys = ['hook_event_name', 'session_id', 'turn_id', 'cwd', 'transcript_path', 'prompt', 'model', 'permission_mode'];
   if (Object.keys(callback).some(key => !keys.includes(key))) refuse('unsupported_layout');
@@ -181,29 +138,39 @@ function snapshot(path, io, checkTime) {
 }
 
 function classify(data, callback, options, checkTime) {
-  const header = json(data.header, 'malformed_record');
+  const header = json(data.header, 'malformed_record', true);
   if (!object(header) || header.type !== 'session_meta' || typeof header.timestamp !== 'string' || !object(header.payload)) refuse('unsupported_layout');
   const meta = header.payload;
-  if (!uuid(meta.id) || !uuid(meta.session_id) || !pathValue(meta.cwd)
-    || typeof meta.cli_version !== 'string' || !meta.cli_version || meta.cli_version.length > 128) refuse('unsupported_layout');
+  if (!uuid(meta.id) || !uuid(meta.session_id) || !pathValue(meta.cwd)) refuse('unsupported_layout');
   if (meta.parent_thread_id != null || meta.agent_path != null && meta.agent_path !== '/root'
     || meta.agent_role != null || meta.agent_type != null || meta.agent_nickname != null
     || meta.subagent_history_start_ordinal != null || object(meta.source)
     || meta.thread_source != null && meta.thread_source !== 'user') refuse('child_evidence');
-  if (meta.source !== 'cli' || meta.history_base != null || meta.forked_from_id != null) refuse('unsupported_layout');
+  if (meta.source !== 'cli' || meta.history_base != null || meta.forked_from_id != null
+    || meta.forked_from_ordinal_exclusive != null) refuse('unsupported_layout');
   if (meta.id !== callback.session_id || meta.session_id !== callback.session_id || meta.cwd !== options.project) refuse('identity_mismatch');
+
+  const historyMode = meta.history_mode === undefined ? 'legacy' : meta.history_mode;
+  if (historyMode !== 'legacy' && historyMode !== 'paginated') refuse('unsupported_layout');
+  const paginated = historyMode === 'paginated';
+  if (paginated ? !uint64(header.ordinal) || header.ordinal !== 0n : Object.hasOwn(header, 'ordinal')) refuse('unsupported_layout');
+  // Only the unread cut permits a gap. Every complete tail record is consecutive.
+  let previousOrdinal = data.cut ? undefined : header.ordinal;
 
   let matched;
   let activeTurn;
   const seenTurns = new Set();
   let count = 0;
-  const terminals = new Set(['task_complete', 'turn_aborted', 'turn_suspended']);
-  const responses = new Set(['message', 'reasoning', 'function_call', 'function_call_output', 'custom_tool_call', 'custom_tool_call_output']);
   for (const bytes of splitLines(data.tail)) {
     checkTime();
     if (++count > 2048) refuse('record_bound');
-    const row = json(bytes, 'malformed_record');
+    const row = json(bytes, 'malformed_record', true);
     if (!object(row) || !object(row.payload) || typeof row.timestamp !== 'string') refuse('unsupported_layout');
+    if (paginated) {
+      if (!uint64(row.ordinal) || row.ordinal <= header.ordinal
+        || previousOrdinal !== undefined && row.ordinal !== previousOrdinal + 1n) refuse('unsupported_layout');
+      previousOrdinal = row.ordinal;
+    } else if (Object.hasOwn(row, 'ordinal')) refuse('unsupported_layout');
     const p = row.payload;
     if (row.type === 'event_msg') {
       if (typeof p.type !== 'string') refuse('unsupported_layout');
@@ -218,16 +185,21 @@ function classify(data, callback, options, checkTime) {
           || !Object.hasOwn(a, 'parent_turn_id') || !Object.hasOwn(a, 'initiating_agent_path')) refuse('unsupported_layout');
         if (a.parent_turn_id !== null || a.initiating_agent_path !== null) refuse('child_evidence');
         if (a.turn_id !== p.turn_id || a.root_turn_id !== p.turn_id || p.root_turn_id !== p.turn_id) refuse('identity_mismatch');
-        if (a.turn_trigger !== 'user') refuse('unsupported_trigger');
-        if (p.turn_id === callback.turn_id) matched = true;
+        if (a.turn_trigger != null && typeof a.turn_trigger !== 'string') refuse('unsupported_trigger');
+        if (p.turn_id === callback.turn_id) {
+          if (a.turn_trigger !== 'user') refuse('unsupported_trigger');
+          matched = true;
+        }
       } else if (terminals.has(p.type)) {
+        if (p.root_turn_id != null && (!uuid(p.root_turn_id) || p.root_turn_id !== p.turn_id)) refuse('identity_mismatch');
         if (!uuid(p.turn_id) || matched || p.turn_id === callback.turn_id
           || activeTurn && p.turn_id !== activeTurn || !activeTurn && seenTurns.has(p.turn_id)) refuse('terminal_evidence');
         seenTurns.add(p.turn_id); // A start can be outside the tail; its terminal still counts.
         activeTurn = undefined;
-      } else if (!Object.hasOwn(eventPayloads, p.type) || !eventPayloads[p.type](p)) refuse('unsupported_layout');
+      } else if (!opaqueEvents.has(p.type)) refuse('unsupported_layout');
     } else if (row.type === 'turn_context') {
-      if (!uuid(p.turn_id) || activeTurn && p.turn_id !== activeTurn
+      if (!uuid(p.turn_id) || !pathValue(p.cwd) || activeTurn && p.turn_id !== activeTurn
+        || !activeTurn && seenTurns.has(p.turn_id)
         || p.root_turn_id != null && p.root_turn_id !== p.turn_id
         || p.turn_id === callback.turn_id && p.cwd !== options.project) refuse('identity_mismatch');
     } else if (row.type !== 'response_item' || !responses.has(p.type)) refuse('unsupported_layout');

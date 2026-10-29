@@ -19,6 +19,11 @@ try {
   const callback = { hook_event_name: 'UserPromptSubmit', session_id: session, turn_id: turn, cwd: root,
     transcript_path: path, prompt: 'SAMPLE DATA', model: 'sample', permission_mode: 'default' };
   const command = fileURLToPath(new URL('../../../packages/sage-codex/hooks/turn-trigger-observer.mjs', import.meta.url));
+  const success = { status: 'observed', trigger: 'user',
+    matches: { session: true, root: true, project: true, turn: true, attribution: true } };
+  const paginated = structuredClone(rows);
+  paginated[0].payload.history_mode = 'paginated';
+  paginated.forEach((record, index) => { record.ordinal = index; });
   const samples = [
     ['root start', rows, { status: 'observed', trigger: 'user',
       matches: { session: true, root: true, project: true, turn: true, attribution: true } }],
@@ -28,7 +33,16 @@ try {
       { status: 'unavailable', reason: 'identity_mismatch' }],
     ['duplicate preceding terminal', [rows[0], ...[1, 2].map(() => row('event_msg', { type: 'task_complete', turn_id: other })), rows[1]],
       { status: 'unavailable', reason: 'terminal_evidence' }],
-    ['malformed user event', [...rows, row('event_msg', { type: 'user_message', message: 123, images: null, local_images: [] })],
+    ['revised contract: numeric message content is opaque', [...rows, row('event_msg', { type: 'user_message', message: 123, images: null, local_images: [] })],
+      success],
+    ['fork ordinal excludes inherited history', [{ ...rows[0], payload: { ...rows[0].payload, forked_from_ordinal_exclusive: 1 } }, rows[1]],
+      { status: 'unavailable', reason: 'unsupported_layout' }],
+    ['conflicting preceding terminal root', [rows[0], row('event_msg', { type: 'task_complete', turn_id: other, root_turn_id: turn }), rows[1]],
+      { status: 'unavailable', reason: 'identity_mismatch' }],
+    ['consecutive paginated ordinals', paginated, success],
+    ['duplicate paginated ordinals', [paginated[0], { ...paginated[1], ordinal: 0 }],
+      { status: 'unavailable', reason: 'unsupported_layout' }],
+    ['unverified suspension event', [...rows, row('event_msg', { type: 'turn_suspended', turn_id: turn })],
       { status: 'unavailable', reason: 'unsupported_layout' }],
   ];
   for (const [name, records, expected] of samples) {
@@ -39,6 +53,6 @@ try {
     assert.equal(result.status, 0, result.stderr);
     const observed = JSON.parse(result.stdout);
     assert.deepEqual(observed, expected);
-    console.log(`SAMPLE DATA — ${name}: ${JSON.stringify(observed)}`);
+    console.log(`SYNTHETIC SAMPLE DATA — ${name}: ${JSON.stringify(observed)}`);
   }
 } finally { rmSync(root, { recursive: true, force: true }); }

@@ -37,6 +37,23 @@ test('synthetic root start gives only a fixed trigger and agreement flags', t =>
   assert.deepEqual(f.inspect(), success);
 });
 
+test('T90 regression: fork ordinal excludes inherited history', t => {
+  const f = fixture(t); f.rows[0].payload.forked_from_ordinal_exclusive = 1; f.write();
+  assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+});
+
+test('T90 regression: preceding terminal root must agree', t => {
+  const f = fixture(t);
+  f.rows.splice(1, 0, line('event_msg', { type: 'task_complete', turn_id: other, root_turn_id: turn })); f.write();
+  assert.deepEqual(f.inspect(), unavailable('identity_mismatch'));
+});
+
+test('T90 regression: duplicate paginated ordinals refuse', t => {
+  const f = fixture(t); f.rows[0].payload.history_mode = 'paginated';
+  f.rows[0].ordinal = 0; f.rows[1].ordinal = 0; f.write();
+  assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+});
+
 for (const placement of ['before', 'after']) {
   for (const root of [undefined, null, turn]) test(`repair context control: ${placement}, root ${root}`, t => {
     const f = fixture(t);
@@ -73,9 +90,9 @@ for (const cut of [false, true]) {
     assert.deepEqual(f.inspect(), success);
   });
   for (const terminal of ['task_complete', 'turn_aborted', 'turn_suspended']) {
-    test(`repair terminal conflict: ${terminal} without visible start, cut ${cut}`, t => {
+    test(`T90 terminal conflict (unverified suspension is unsupported): ${terminal}, cut ${cut}`, t => {
       const f = fixture(t); earlierTerminal(f, [terminal]); f.write();
-      assert.deepEqual(f.inspect(), unavailable('terminal_evidence'));
+      assert.deepEqual(f.inspect(), unavailable(terminal === 'turn_suspended' ? 'unsupported_layout' : 'terminal_evidence'));
     });
   }
 }
@@ -136,9 +153,9 @@ const malformedEvents = [
   ['invalid hook entry', { type: 'hook_started', turn_id: turn, run: { ...hookRun, entries: [{ kind: 'context', text: 123 }] } }],
 ];
 for (const [name, payload] of malformedEvents) for (const placement of ['before', 'after']) {
-  test(`repair malformed event: ${name} ${placement} start`, t => {
+  test(`T90 revised opaque-content contract retains historical payload: ${name} ${placement} start`, t => {
     const f = fixture(t); f.rows.splice(placement === 'before' ? 1 : 2, 0, line('event_msg', payload)); f.write();
-    assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+    assert.deepEqual(f.inspect(), name === 'array event type' ? unavailable('unsupported_layout') : success);
   });
 }
 
@@ -158,7 +175,6 @@ const cases = [
   ['header thread mismatch', f => { f.rows[0].payload.id = other; }, 'identity_mismatch'],
   ['header project mismatch', f => { f.rows[0].payload.cwd = '/other'; }, 'identity_mismatch'],
   ['missing root identity', f => { delete f.rows[0].payload.session_id; }, 'unsupported_layout'],
-  ['missing recorded version', f => { delete f.rows[0].payload.cli_version; }, 'unsupported_layout'],
   ['child parent', f => { f.rows[0].payload.parent_thread_id = other; }, 'child_evidence'],
   ['child path', f => { f.rows[0].payload.agent_path = '/root/child'; }, 'child_evidence'],
   ['review source', f => { f.rows[0].payload.source = { subagent: 'review' }; }, 'child_evidence'],
@@ -316,4 +332,221 @@ test('inactive command times out an unfinished callback', async t => {
   const status = await new Promise(resolve => child.once('exit', resolve));
   assert.equal(status, 0);
   assert.deepEqual(JSON.parse(output), unavailable('time_bound'));
+});
+
+// R847/R850/R851 reproductions remain visible under the adopted T90 contract.
+// These are deliberately nonconforming message payloads; none supplies diagnostic evidence.
+for (const placement of ['before', 'after']) {
+  const opaqueRows = [
+    ['response role/content', line('response_item', { type: 'message', role: 123, content: 123 })],
+    ['function arguments', line('response_item', { type: 'function_call', name: 'SAMPLE', call_id: 'SAMPLE', arguments: 123 })],
+    ['context model', line('turn_context', { turn_id: turn, model: 123 })],
+    ['context realtime', line('turn_context', { turn_id: turn, realtime_active: 'yes' })],
+    ['context plugin IDs', line('turn_context', { turn_id: turn, disabled_plugin_ids: [123] })],
+  ];
+  for (const [name, row] of opaqueRows) test(`T90 revised opaque-content contract: historical ${name} ${placement}`, t => {
+    const f = fixture(t); const record = structuredClone(row);
+    if (record.type === 'turn_context') record.payload.cwd = f.root;
+    f.rows.splice(placement === 'before' ? 1 : 2, 0, record); f.write();
+    assert.deepEqual(f.inspect(), success);
+  });
+}
+for (const [field, value] of [['model_context_window', 'invalid'], ['trace_id', 123], ['started_at', { bad: true }]]) {
+  test(`T90 revised opaque-content contract: historical start ${field}`, t => {
+    const f = fixture(t); f.rows[1].payload[field] = value; f.write();
+    assert.deepEqual(f.inspect(), success);
+  });
+}
+test('T90 revised opaque-content contract: historical terminal message', t => {
+  const f = fixture(t);
+  f.rows.splice(1, 0, line('event_msg', { type: 'task_complete', turn_id: other, last_agent_message: 123 })); f.write();
+  assert.deepEqual(f.inspect(), success);
+});
+test('T90 revised opaque-content contract: callback content and recorded version are unused', t => {
+  const f = fixture(t); f.callback.prompt = { sample: true }; f.callback.model = 123; delete f.callback.permission_mode;
+  delete f.rows[0].payload.cli_version; f.write();
+  assert.deepEqual(f.inspect(), success);
+});
+for (const type of ['message', 'reasoning', 'function_call', 'function_call_output', 'custom_tool_call', 'custom_tool_call_output']) {
+  test(`T90 opaque response discriminator control: ${type}`, t => {
+    const f = fixture(t); f.rows.push({ ...line('response_item', { type, content: { sample: true } }), metadata: [123, null] }); f.write();
+    assert.deepEqual(f.inspect(), success);
+  });
+}
+for (const mode of [undefined, 'legacy', 'paginated']) test(`T90 history control: ${mode}`, t => {
+  const f = fixture(t); f.rows[0].payload.history_mode = mode;
+  if (mode === 'paginated') f.rows.forEach((row, i) => { row.ordinal = i; }); f.write();
+  assert.deepEqual(f.inspect(), success);
+});
+for (const mode of [null, 1, [], {}, 'future', 'Paginated']) test(`T90 unsupported history mode: ${JSON.stringify(mode)}`, t => {
+  const f = fixture(t); f.rows[0].payload.history_mode = mode; f.write();
+  assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+});
+for (const mode of [undefined, 'legacy']) for (const where of [0, 1, 2]) {
+  test(`T90 legacy refuses declared ordinal: ${mode}, row ${where}`, t => {
+    const f = fixture(t); f.rows[0].payload.history_mode = mode;
+    f.rows.push(line('response_item', { type: 'message' })); f.rows[where].ordinal = 0; f.write();
+    assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+  });
+}
+for (const placement of ['header', 'before', 'start', 'after']) {
+  for (const value of [undefined, null, '1', true, [], {}, -1, 0.5, 18446744073709551616]) {
+    test(`T90 paginated ordinal type/range: ${placement} ${JSON.stringify(value)}`, t => {
+      const f = fixture(t); f.rows[0].payload.history_mode = 'paginated';
+      f.rows.splice(1, 0, line('event_msg', { type: 'user_message' }));
+      f.rows.push(line('response_item', { type: 'message' }));
+      f.rows.forEach((row, i) => { row.ordinal = i; });
+      f.rows[['header', 'before', 'start', 'after'].indexOf(placement)].ordinal = value; f.write();
+      assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+    });
+  }
+  if (placement !== 'header') for (const shift of [-1, 1]) {
+    test(`T90 paginated duplicate/gap: ${placement}, shift ${shift}`, t => {
+      const f = fixture(t); f.rows[0].payload.history_mode = 'paginated';
+      f.rows.splice(1, 0, line('event_msg', { type: 'user_message' }));
+      f.rows.push(line('response_item', { type: 'message' }));
+      f.rows.forEach((row, i) => { row.ordinal = i; });
+      f.rows[['header', 'before', 'start', 'after'].indexOf(placement)].ordinal += shift; f.write();
+      assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+    });
+  }
+}
+for (const token of ['-0', '1.0', '1e0', '1.0000000000000001', '18446744073709551616']) {
+  test(`T90 ordinals use exact unsigned integer tokens: ${token}`, t => {
+    const f = fixture(t); f.rows[0].payload.history_mode = 'paginated';
+    f.rows.forEach((row, i) => { row.ordinal = i; }); f.write();
+    fs.writeFileSync(f.file, fs.readFileSync(f.file, 'utf8').replace('"ordinal":1', `"ordinal":${token}`));
+    assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+  });
+}
+for (const [first, next, expected] of [
+  ['5', '6', success],
+  ['9007199254740992', '9007199254740993', success],
+  ['18446744073709551614', '18446744073709551615', success],
+  ['9007199254740992', '9007199254740992', unavailable('unsupported_layout')],
+  ['9007199254740992', '9007199254740994', unavailable('unsupported_layout')],
+  ['18446744073709551615', '18446744073709551616', unavailable('unsupported_layout')],
+  ['0', '1', unavailable('unsupported_layout')],
+]) test(`T90 cut permits header-tail gap with exact consecutive u64: ${first}, ${next}`, t => {
+  const f = fixture(t); f.rows[0].payload.history_mode = 'paginated'; f.rows[0].ordinal = 0;
+  f.rows.splice(1, 0, { ...line('response_item', { type: 'message', content: 'SAMPLE '.repeat(50000) }), ordinal: 1 });
+  f.rows[2].ordinal = 'FIRST'; f.rows.push({ ...line('response_item', { type: 'message' }), ordinal: 'NEXT' }); f.write();
+  fs.writeFileSync(f.file, fs.readFileSync(f.file, 'utf8').replace('"ordinal":"FIRST"', `"ordinal":${first}`).replace('"ordinal":"NEXT"', `"ordinal":${next}`));
+  assert.deepEqual(f.inspect(), expected);
+});
+for (const type of ['task_complete', 'turn_aborted']) {
+  for (const root of [undefined, null, other, turn, 123, {}]) test(`T90 preceding terminal root: ${type} ${JSON.stringify(root)}`, t => {
+    const f = fixture(t); f.rows.splice(1, 0, line('event_msg', { type, turn_id: other, root_turn_id: root })); f.write();
+    assert.deepEqual(f.inspect(), root == null || root === other ? success : unavailable('identity_mismatch'));
+  });
+}
+for (const placement of ['before', 'after']) test(`T90 unverified turn_suspended refuses: ${placement}`, t => {
+  const f = fixture(t); f.rows.splice(placement === 'before' ? 1 : 2, 0, line('event_msg', { type: 'turn_suspended', turn_id: other })); f.write();
+  assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+});
+for (const field of ['parent_thread_id', 'agent_path', 'agent_role', 'agent_type', 'agent_nickname', 'subagent_history_start_ordinal',
+  'thread_source', 'history_base', 'forked_from_id', 'forked_from_ordinal_exclusive']) {
+  for (const value of [false, 0, '', [], {}]) test(`T90 lineage/history exclusion: ${field} ${JSON.stringify(value)}`, t => {
+    const f = fixture(t); f.rows[0].payload[field] = value; f.write();
+    const reason = ['history_base', 'forked_from_id', 'forked_from_ordinal_exclusive'].includes(field) ? 'unsupported_layout' : 'child_evidence';
+    assert.deepEqual(f.inspect(), unavailable(reason));
+  });
+}
+for (const trigger of [undefined, null, 'internal']) test(`T90 only matching start classifies trigger: earlier ${trigger}`, t => {
+  const f = fixture(t); const previous = structuredClone(f.rows[1]);
+  previous.payload.turn_id = other; previous.payload.root_turn_id = other;
+  previous.payload.turn_attribution = { turn_id: other, root_turn_id: other, turn_trigger: trigger, parent_turn_id: null, initiating_agent_path: null };
+  f.rows.splice(1, 0, previous, line('event_msg', { type: 'task_complete', turn_id: other })); f.write();
+  assert.deepEqual(f.inspect(), success);
+});
+for (const placement of ['before', 'after']) for (const field of ['turn_id', 'cwd', 'root_turn_id']) {
+  for (const value of [undefined, null, 123, {}]) test(`T90 context identities: ${field} ${JSON.stringify(value)} ${placement}`, t => {
+    const f = fixture(t); const context = { turn_id: turn, root_turn_id: turn, cwd: f.root }; context[field] = value;
+    f.rows.splice(placement === 'before' ? 1 : 2, 0, line('turn_context', context)); f.write();
+    assert.deepEqual(f.inspect(), field === 'root_turn_id' && value == null ? success : unavailable('identity_mismatch'));
+  });
+}
+test('T90 context cannot follow its terminated turn', t => {
+  const f = fixture(t); f.rows.splice(1, 0, line('event_msg', { type: 'task_complete', turn_id: other }),
+    line('turn_context', { turn_id: other, cwd: f.root })); f.write();
+  assert.deepEqual(f.inspect(), unavailable('identity_mismatch'));
+});
+
+for (const field of ['session_id', 'turn_id', 'cwd', 'transcript_path']) {
+  for (const value of [undefined, null, 123, {}]) test(`T90 callback required identity: ${field} ${JSON.stringify(value)}`, t => {
+    const f = fixture(t); f.callback[field] = value;
+    assert.deepEqual(f.inspect(), unavailable('invalid_callback'));
+  });
+}
+for (const field of ['id', 'session_id', 'cwd', 'source']) {
+  for (const value of [undefined, null, 123]) test(`T90 header required identity/source: ${field} ${JSON.stringify(value)}`, t => {
+    const f = fixture(t); f.rows[0].payload[field] = value; f.write();
+    assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+  });
+}
+for (const field of ['turn_id', 'root_turn_id']) for (const value of [undefined, null, 123, {}]) {
+  test(`T90 start required identity: ${field} ${JSON.stringify(value)}`, t => {
+    const f = fixture(t); f.rows[1].payload[field] = value; f.write();
+    assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+  });
+  test(`T90 attribution required identity: ${field} ${JSON.stringify(value)}`, t => {
+    const f = fixture(t); f.rows[1].payload.turn_attribution[field] = value; f.write();
+    assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+  });
+}
+for (const field of ['parent_turn_id', 'initiating_agent_path']) for (const value of [undefined, 123, {}, '']) {
+  test(`T90 attribution exclusion: ${field} ${JSON.stringify(value)}`, t => {
+    const f = fixture(t); f.rows[1].payload.turn_attribution[field] = value; f.write();
+    assert.deepEqual(f.inspect(), unavailable(value === undefined ? 'unsupported_layout' : 'child_evidence'));
+  });
+}
+for (const trigger of [null, 123, {}, [], false]) test(`T90 matching literal trigger: ${JSON.stringify(trigger)}`, t => {
+  const f = fixture(t); f.rows[1].payload.turn_attribution.turn_trigger = trigger; f.write();
+  assert.deepEqual(f.inspect(), unavailable('unsupported_trigger'));
+});
+for (const placement of ['before', 'after']) {
+  for (const type of ['task_complete', 'turn_aborted']) for (const id of [undefined, null, 123, {}]) {
+    test(`T90 terminal required turn: ${type} ${JSON.stringify(id)} ${placement}`, t => {
+      const f = fixture(t); f.rows.splice(placement === 'before' ? 1 : 2, 0, line('event_msg', { type, turn_id: id })); f.write();
+      assert.deepEqual(f.inspect(), unavailable('terminal_evidence'));
+    });
+  }
+  for (const row of [line('future', {}), line('event_msg', { type: 'future' }), line('response_item', { type: 'future' }),
+    line('event_msg', { type: 123 }), line('response_item', { type: ['message'] }), line('response_item', null),
+    { ...line('event_msg', { type: 'user_message' }), timestamp: null }]) {
+    test(`T90 unsupported envelope/discriminator ${JSON.stringify(row)} ${placement}`, t => {
+      const f = fixture(t); f.rows.splice(placement === 'before' ? 1 : 2, 0, row); f.write();
+      assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+    });
+  }
+}
+test('T90 valid root exclusions can be absent or null', t => {
+  const f = fixture(t);
+  Object.assign(f.rows[0].payload, { parent_thread_id: null, agent_path: '/root', agent_role: null, agent_type: null,
+    agent_nickname: null, subagent_history_start_ordinal: null, thread_source: 'user', history_base: null,
+    forked_from_id: null, forked_from_ordinal_exclusive: null }); f.write();
+  assert.deepEqual(f.inspect(), success);
+});
+test('T90 opaque nested ordinal is not a record ordinal', t => {
+  const f = fixture(t); f.rows[0].payload.history_mode = 'paginated';
+  f.rows.forEach((row, i) => { row.ordinal = i; });
+  f.rows[1].payload.model_settings = { ordinal: 'ignored', content: 123 }; f.write();
+  assert.deepEqual(f.inspect(), success);
+});
+test('T90 duplicate keys remain malformed within opaque content', t => {
+  const f = fixture(t);
+  fs.appendFileSync(f.file, '{"timestamp":"SAMPLE","type":"response_item","payload":{"type":"message","content":{"x":1,"x":2}}}\n');
+  assert.deepEqual(f.inspect(), unavailable('malformed_record'));
+});
+for (const depth of [29, 30]) test(`T90 opaque content depth: ${depth}`, t => {
+  const f = fixture(t); let content = 0;
+  for (let i = 0; i < depth; i++) content = [content];
+  f.rows.push(line('response_item', { type: 'message', content })); f.write();
+  assert.deepEqual(f.inspect(), success);
+});
+test('T90 opaque content still refuses excessive depth', t => {
+  const f = fixture(t); let content = 0;
+  for (let i = 0; i < 31; i++) content = [content];
+  f.rows.push(line('response_item', { type: 'message', content })); f.write();
+  assert.deepEqual(f.inspect(), unavailable('malformed_record'));
 });
