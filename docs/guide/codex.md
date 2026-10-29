@@ -314,6 +314,44 @@ Limits:
 - A `js` call of the desktop app's REPL can run shell commands that no sage hook sees; sage mode allows it so the chief keeps its browser previews. The REPL runs the code in its own Node process, so a push, a merge or a file change in that code passes every sage rule. The `exec` tool of code mode is different: each tool call inside its code reaches the sage hook.
 - Under full access (`danger-full-access`), sage mode gives no guarantee: an agent can write any file, also the mode files, the logbook and Codex's record of your messages.
 
+## Inactive trigger observation
+
+`packages/sage-codex/hooks/turn-trigger-observer.mjs` is a separate, inactive command for synthetic fixtures. It prepares a later bounded CLI observation proposal. No manifest calls it.
+
+It never changes sage mode, permissions or authorization, and it writes no capture or telemetry.
+
+Run the labelled sample from the checkout:
+
+```sh
+node scripts/fixtures/codex-native/turn-trigger-sample.mjs
+```
+
+The sample creates its own temporary fixtures, calls the command, prints one observed case and one refusal, then removes its fixtures. To supply another synthetic fixture, send a normal `UserPromptSubmit` callback as JSON on stdin:
+
+```sh
+node packages/sage-codex/hooks/turn-trigger-observer.mjs --synthetic-root /absolute/sample-root --project /absolute/sample-project < sample-callback.json
+```
+
+The explicit root grants access only to the callback-selected regular file below it. The command never infers a provider home or searches for files.
+
+Use only made-up data. A live profile boundary needs a separate owner decision; this command does not establish one.
+
+The supported subset follows [the pinned Codex record layout](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/protocol/src/protocol.rs#L2303): a `session_meta` header and `event_msg` records with `task_started` and complete `turn_attribution`. Only a root CLI record with the literal trigger `user`, matching root and turn identities, and no parent lineage is supported. Other triggers, sources and layouts return unavailable.
+
+The recorded CLI version is metadata, not proof of the executable version.
+
+An observed result contains only `trigger: "user"` and true match flags for session, root, project, turn and attribution. A refusal contains only `status: "unavailable"` and a fixed reason code. The command returns no request text, report, path, native identifier or arbitrary source string.
+
+Identity comparisons establish agreement, not independent authentication of the callback or file.
+
+The command limits callback input to 64 KiB, header data to 16 KiB, and total file data to 256 KiB. It reads the header and one contiguous tail that ends at the captured file size. A cut first tail record is discarded.
+
+The necessary start and every later record must be complete. The command checks at most 2,048 tail records and stops after a 1.8-second deadline, including callback input. It refuses malformed JSON, duplicate keys, incomplete sections, missing attribution, conflicting starts or terminals, mismatched identities, links, changed files and exceeded bounds.
+
+The fixture root and its ancestors must remain under the caller's control. The reader checks file and ancestor identities before and after reads; it does not authenticate a hostile local writer. It makes no claim about unseen history, freshness, initial input, recovery or a running executable.
+
+Synthetic checks do not establish live CLI or desktop behavior, installed delivery, activation, or an autopilot lock. No owner action is needed to run the sample.
+
 ## What comes next
 
 The lead role, agent caps and the board phrases come later in the same plugin. Codex draws its own approval prompts in both front ends, so sage adds none. The runtime notes of the parked Codex fork, for example the [Claude parity audit](../../packages/sage-codex/runtime/claude-parity-audit.md), stay as evidence.
