@@ -2525,7 +2525,9 @@ test("shared chief Codex instructions keep unsupported routes inactive, and merg
   assert.match(text, /call `spawn_agent` in the `collaboration` namespace/);
   assert.match(text, /`fork_turns: "none"`/);
   assert.doesNotMatch(text, /sage_prepare_task|admission|preparation/i);
-  assert.match(text, /PE, designer, and arena-judge routes are not yet integrated and verified/);
+  assert.match(text, /PE and designer use the public skill-led helper/);
+  assert.match(text, /Arena candidates and arena-judge remain unavailable/);
+  assert.match(text, /installed acceptance/);
   assert.match(text, /Autopilot off:\*\* the user merges\. Never push to main, force-push/);
   assert.match(text, /The plugin's hook allows only this exact command when the merge check passes/);
   assert.match(text, /state tool checks at least one cycle/);
@@ -5084,4 +5086,29 @@ test("continuation failure core retries resolve competing reservations at atomic
   finally { fs.linkSync = original; syncBuiltinESMExports(); }
   assert.equal(raced, true);
   assert.equal(f.api.readAdmission(f.dir).reservations.length, 3);
+});
+
+
+test("T85 isolated public PE and designer helpers render shared contracts and truthful design guidance", async t => {
+  const f = await roleInstructionsFixture(t);
+  const helper = join(f.plugin, "skills/sage/role.mjs");
+  for (const role of ["pe", "designer"]) {
+    const result = spawnSync(process.execPath, [helper, role], { encoding: "utf8", cwd: f.dir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `${f.api.renderRoleInstructions(role, f.bindings[role])}\n\n${f.api.renderReportInstructions(f.bindings.report)}\n`);
+    for (const field of f.api.REPORT_FIELDS) assert.match(result.stdout, new RegExp(`^${field} +`, "m"));
+    assert.match(result.stdout, role === "pe" ? /You change nothing/ : /Use sample data, and label it as sample data/);
+    assert.doesNotMatch(result.stdout, /\{\{|sage:report|CLAUDE_CONFIG_DIR/);
+  }
+  const roles = readFileSync(join(f.plugin, "skills/sage/references/roles.md"), "utf8");
+  const workflow = readFileSync(join(f.plugin, "skills/sage/references/workflow.md"), "utf8");
+  const briefs = readFileSync(join(f.plugin, "skills/sage/references/briefs.md"), "utf8");
+  assert.match(roles, /role\.mjs pe/);
+  assert.match(roles, /role\.mjs designer/);
+  assert.match(roles, /installed acceptance/);
+  assert.match(workflow, /designer → PE → owner.*approval → build/);
+  assert.match(workflow, /ordinary.*design.*gate.*not.*merge refusal/i);
+  assert.match(briefs, /pages.*folder/);
+  assert.match(briefs, /CHANGE/);
+  assert.doesNotMatch(roles + workflow + briefs, /Large design\/PE work stays with the parent/);
 });

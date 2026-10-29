@@ -370,3 +370,56 @@ test("T83 sample investigation and independent evidence check retain real output
   assert.match((await s.call("merge_check", { sha: SHA, pr: 1, head: "codex/sample" })).error, /no verdicts/);
   console.log("T83 SAMPLE: investigate R1 answer=42; independent evidence-review R2 PASS; exact reports retained; chief evidence-clean without SHA; T1 concluded; merge refused");
 });
+
+test("T85 synthetic designer prototype, separate PE report and chief artifact records preserve authority", async t => {
+  const s = await connect(t);
+  const book = (await s.call("init")).slice(8);
+  assert.match(await s.call("task_add", { title: "SAMPLE: design review", size: "large", priority: "P2" }), /route design,pe,build/);
+  const folder = await s.call("pages", { task: "T1" });
+  assert.equal(typeof folder, "string");
+  const branch = "codex/t1-sample-design";
+  assert.match((await s.call("run_add", { task: "T1", role: "designer" })).error, /designer run needs --branch/);
+  assert.match(await s.call("run_add", { task: "T1", role: "designer", branch }), /^R1 running/);
+  for (const role of ["designer", "implementer"]) {
+    assert.match((await s.call("run_add", { task: "T1", role, branch })).error, /branch has one writer/);
+  }
+  const prototype = join(folder, "sample-prototype.html");
+  const html = '<!doctype html><title>SAMPLE DATA: design fixture</title><h1>SAMPLE DATA</h1><details><summary>Show sample result</summary><p>Sample success</p></details>\n';
+  // This fixture writes sample artifacts itself. It does not dispatch a designer or verify a browser screenshot.
+  writeFileSync(prototype, html);
+  const { briefHook } = await import(pathToFileURL(join(s.dir, "plugin/hooks/brief-hook.mjs")));
+  const { reportGate } = await import(pathToFileURL(join(s.dir, "plugin/hooks/report-gate.mjs")));
+  const ledger = () => readFileSync(join(book, "ledger.tsv"), "utf8"), before = ledger();
+  const retained = [];
+  for (const [role, run] of [["designer", "R1"], ["pe", "R2"]]) {
+    if (role === "pe") {
+      assert.match(await s.call("run_add", { task: "T1", role }), /^R2 running/);
+      assert.equal(readFileSync(prototype, "utf8"), html, "PE receives the actual recorded sample artifact");
+      assert.equal(readFileSync(join(folder, "R1-report.md"), "utf8"), retained[0]);
+    }
+    const file = join(s.dir, `${run}-synthetic-transcript.jsonl`);
+    writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `sample-${run}`, agent_path: `/root/sage_${role}_t1_${run.toLowerCase()}` } }) + "\n");
+    briefHook({ hook_event_name: "SubagentStart", session_id: "sample-root", transcript_path: file, cwd: s.project }, s.env);
+    const report = `STATUS done\nRESULT ${role === "designer" ? prototype : "OK: sample artifact contains the agreed example"}\nEVIDENCE SYNTHETIC SAMPLE T1 ${run} ${role}: ${prototype}; fixture reads match saved bytes\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED actual role dispatch, screenshots, installed hooks or owner approval\nBRANCH ${role === "designer" ? branch : "none"}\n`;
+    assert.deepEqual(reportGate({ hook_event_name: "SubagentStop", stop_hook_active: false, agent_transcript_path: file, cwd: s.project, last_assistant_message: report }, s.env), {});
+    assert.equal(JSON.parse(readFileSync(join(book, "kept", `${run}.json`), "utf8")).text, report);
+    assert.match(await s.call("pages", { task: "T1", run, text: report }), /^page /);
+    assert.equal(readFileSync(join(folder, `${run}-report.md`), "utf8"), report);
+    if (role === "designer") {
+      assert.match(await s.call("pages", { task: "T1", record: prototype }), /^page .*sample-prototype\.html · sha256 [0-9a-f]{64}$/);
+      assert.equal(readFileSync(prototype, "utf8"), html, "recording preserves the artifact");
+    }
+    // One token is a sample fixture value, not measured agent usage.
+    assert.equal(await s.call("run_done", { run, status: "done", report: join(folder, `${run}-report.md`), tokens: 1 }), `${run} done`);
+    assert.match((await s.call("verdict", { task: "T1", kind: "review-clean", sha: SHA, run })).error, /backs no review-clean verdict/);
+    assert.equal(ledger(), before, "design reports grant no review verdict or design approval");
+    retained.push(report);
+  }
+  assert.match(await s.call("gate_add", { task: "T1", question: "SAMPLE: approve this design?", options: "approve|change", recommend: "approve" }), /^G1 open/);
+  assert.match((await s.call("merge_check", { sha: SHA, pr: 1, head: branch })).error, /no verdicts/);
+  // Chief procedure: only a simulated owner answer in this fixture permits its next build step.
+  assert.match(await s.call("gate_answer", { gate: "G1", option: "1" }), /G1/);
+  assert.match(await s.call("run_add", { task: "T1", role: "implementer", branch }), /^R3 running/);
+  assert.equal(await s.call("run_done", { run: "R3", status: "blocked" }), "R3 blocked");
+  console.log("T85 SYNTHETIC SAMPLE: designer R1 → recorded prototype/report → separate PE R2 → simulated owner answer → build R3; no verdict; missing-review merge refusal preserved; no installed execution");
+});

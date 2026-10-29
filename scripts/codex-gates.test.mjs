@@ -1526,8 +1526,8 @@ for (const scenario of ["missing", "project alias", "writable executable", "writ
   });
 }
 
-for (const role of ["investigate", "evidence-review"]) {
-  test(`T83 ${role}: assigned reads pass; source, config, logbook, spawn, send and foreign-project calls refuse`, t => {
+for (const role of ["investigate", "evidence-review", "pe", "designer"]) {
+  test(`${["pe", "designer"].includes(role) ? "T85" : "T83"} ${role}: assigned reads and existing edit authority; restricted calls refuse`, t => {
     const w = world(t), child = w.child(`/root/sage_${role.replaceAll("-", "_")}_t1_r1`);
     const other = join(w.dir, "foreign");
     mkdirSync(other);
@@ -1536,8 +1536,9 @@ for (const role of ["investigate", "evidence-review"]) {
     for (const command of ["cat README.md", `${cli} task T1 ${project}`, `${cli} config ${project}`, `${cli} board T1 --view task ${project}`]) {
       assert.equal(w.send(pre("Bash", command, child)), undefined, command);
     }
-    assert.equal(denied(w.send(pre("apply_patch", patch("*** Add File: source.js", "+bad"), child))), RO(role));
-    assert.equal(denied(w.send(pre("Bash", "echo bad > source.js", child))), RO(role));
+    const editDenial = role === "designer" ? undefined : RO(role);
+    assert.equal(denied(w.send(pre("apply_patch", patch("*** Add File: design/T1/index.html", "+<p>SAMPLE DATA</p>"), child))), editDenial);
+    assert.equal(denied(w.send(pre("Bash", "echo sample > design/T1/screen.svg", child))), editDenial);
     assert.match(denied(w.send(pre("Bash", "echo bad > .codex/config.toml", child))), /no agent changes files under a \.codex folder/);
     for (const command of [`${cli} config max_agents=20 ${project}`, `${cli} task T1 set state=concluded ${project}`,
       `${cli} pages T1 record --run R1 --text bad ${project}`, `${cli} task T1 --project '${other}'`, `${cli} config --project '${other}'`,
