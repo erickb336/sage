@@ -23,6 +23,14 @@ The plugin's report check (a `SubagentStop` hook) reads each agent whose task na
 
 The check runs only after you trust the plugin hooks in Codex.
 
+## Compare a retained report
+
+The chief can call `report_compare` through the sage MCP server for its assigned project. Supply `project`, `task`, `run` and `sha256`. Compute the SHA256 over the exact UTF-8 report text, including every newline and space. The comparison also works after the run ends.
+
+The result contains only `status`: `match`, `mismatch`, `missing` or `damaged`. A match requires valid stored identity fields and an equal recomputed digest. Existing records have no stored digest. Unknown or incomplete storage formats return `damaged`; access and input failures remain errors. No report text or private identifiers leave this operation.
+
+This read changes no logbook, retained report, review decision or approval. It uses the existing one-call gate admission. Role agents cannot call it. A match describes the observed stored text; it does not prove native authenticity or successful review. An incomplete, blocked or question report can match. A manually saved report page does not count as retained text.
+
 ## Read-only investigation roles
 
 Use `role.mjs investigate` for the investigator and `role.mjs evidence-review` for a separate evidence reviewer. Each prints its own instructions and the shared report contract. These names are exact; do not relabel another role.

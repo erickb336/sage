@@ -974,6 +974,53 @@ function keptOf(dir, run) {
   return { damaged: true };
 }
 
+/** Compare one existing report. Admission belongs to the caller; this read creates no state or review authority. */
+function compareRetainedReport(input, env = process.env) {
+  if (!updateKeys(input, ["project", "task", "run", "sha256"])
+    || typeof input.project !== "string" || !isAbsolute(input.project)
+    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
+    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run)
+    || typeof input.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(input.sha256)) refuse("Invalid retained report comparison input.");
+  const result = status => ({ status });
+  try {
+    const project = projectRoot(input.project), dir = storeDir(project, env);
+    if (realpathSync(dir) !== resolve(dir)
+      || readRegular(join(dir, "checkout.txt"), { link: false, max: 65536 }) !== `${project}\n`)
+      refuse("Invalid retained report comparison project.");
+    const tasks = read(dir, "tasks").filter(row => row.id === input.task);
+    const runs = read(dir, "runs").filter(row => row.id === input.run);
+    if (tasks.length !== 1 || runs.length !== 1 || runs[0].task !== input.task || !RUN_ROLES.includes(runs[0].role))
+      refuse("Invalid retained report comparison task or run association.");
+    const folder = join(dir, "kept"), folderStat = lstatSync(folder, { throwIfNoEntry: false });
+    if (!folderStat) return result("missing");
+    if (!folderStat.isDirectory()) return result("damaged");
+    let bytes;
+    try { bytes = readRegular(keptFile(dir, input.run), { link: false, max: 6 * KEPT_MAX + 4096, encoding: null }); }
+    catch (error) {
+      if (error instanceof Refusal || ["ELOOP", "ENOTDIR"].includes(error.code)) return result("damaged");
+      throw error;
+    }
+    if (bytes === undefined) return result("missing");
+    let kept;
+    try { kept = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+    catch { return result("damaged"); }
+    // The existing format has no stored digest. Reject incomplete or unknown formats instead of guessing their meaning.
+    if (!updateKeys(kept, ["task", "run", "role", "sha", "text", "at"])
+      || kept.task !== input.task || kept.run !== input.run || kept.role !== runs[0].role
+      || typeof kept.sha !== "string" || !/^(?:[0-9a-f]{40})?$/.test(kept.sha)
+      || typeof kept.at !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(kept.at)
+      || !Number.isFinite(Date.parse(kept.at)) || new Date(kept.at).toISOString() !== kept.at.replace("Z", ".000Z")
+      || typeof kept.text !== "string" || Buffer.byteLength(kept.text, "utf8") > KEPT_MAX
+      || Buffer.from(kept.text, "utf8").toString("utf8") !== kept.text) return result("damaged");
+    const digest = createHash("sha256").update(kept.text, "utf8").digest("hex");
+    return result(digest === input.sha256 ? "match" : "mismatch");
+  } catch (error) {
+    // Never disclose private storage paths or table contents, including through filesystem errors.
+    if (error instanceof Refusal && /^Invalid retained report comparison/.test(error.message)) throw error;
+    refuse("Retained report comparison cannot read the project or report; check access and permissions.");
+  }
+}
+
 /**
  * Does a kept report back this review or QA verdict on a task with a build block (T483)? The run that --run names is a
  * run of the task, of a role that gives the kind, that ended done, with a kept report that reads, on the commit of --sha
@@ -3195,5 +3242,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

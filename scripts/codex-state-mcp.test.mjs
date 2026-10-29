@@ -5,6 +5,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, re
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { ROOT } from "./build.mjs";
@@ -72,12 +73,32 @@ test("the state server lists one tool for each state-tool command, and marks onl
   const s = await connect(t);
   const tools = await s.tools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["brief", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer",
-    "init", "log", "merge_check", "pages", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
-  assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "standing", "status"]);
+    "init", "log", "merge_check", "pages", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
+  assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
   // T500: a task_add needs its priority, from the scale.
   const add = tools.find((tool) => tool.name === "task_add").inputSchema;
   assert.deepEqual([add.required.sort(), add.properties.priority.enum], [["priority", "project", "size", "title"], ["P0", "P1", "P2", "P3"]]);
+});
+
+test("T91: MCP compares synthetic retained reports with status-only results and existing admission", async t => {
+  const s = await connect(t);
+  const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
+  const dir = (await s.call("init")).slice(8);
+  await s.call("task_add", { title: "Synthetic", size: "large", priority: "P2" });
+  await s.call("run_add", { task: "T1", role: "pe" });
+  const text = "STATUS question\nRESULT café 🙂\r\n ";
+  const args = { task: "T1", run: "R1", sha256: createHash("sha256").update(text).digest("hex") };
+  assert.match((await s.call("report_compare", args, { gate: false })).error, /gate is not running/);
+  assert.equal(await s.call("report_compare", args), '{"status":"missing"}');
+  tool.keepReport(s.project, { task: "T1", run: "R1", role: "pe", text }, s.env);
+  await s.call("run_done", { run: "R1", status: "question" });
+  assert.equal(await s.call("report_compare", args), '{"status":"match"}');
+  assert.equal(await s.call("report_compare", { ...args, sha256: "0".repeat(64) }), '{"status":"mismatch"}');
+  assert.match((await s.call("report_compare", { ...args, run: "R9" })).error, /comparison/);
+  assert.match((await s.call("report_compare", { ...args, sha256: "bad" })).error, /validation/i);
+  writeFileSync(join(dir, "kept/R1.json"), "{");
+  assert.equal(await s.call("report_compare", args), '{"status":"damaged"}');
 });
 
 test("T48: task_adopt and approved repair reach the shared rule through Codex MCP", async t => {
