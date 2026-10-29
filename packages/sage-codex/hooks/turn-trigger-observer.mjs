@@ -19,6 +19,63 @@ const unavailable = reason => ({ status: 'unavailable', reason });
 class Refusal extends Error { constructor(reason) { super(); this.reason = reason; } }
 const refuse = reason => { throw new Refusal(reason); };
 
+// Validate only the seven retained non-lifecycle event variants, against the pinned
+// protocol.rs definitions. Serde Option permits absence/null; a defaulted Vec permits
+// absence but not null. Do not infer evidence from these discarded message contents.
+const textValue = value => typeof value === 'string';
+const integer = value => Number.isInteger(value) && value >= -(2 ** 63) && value < 2 ** 63;
+const unsigned = value => Number.isInteger(value) && value >= 0 && value < 2 ** 64;
+const uint32 = value => unsigned(value) && value <= 0xffffffff;
+const boolean = value => typeof value === 'boolean';
+const optional = check => value => value == null || check(value);
+const defaulted = check => value => value === undefined || check(value);
+const array = check => value => Array.isArray(value) && value.every(check);
+const shape = fields => value => object(value) && Object.entries(fields).every(([key, check]) => check(value[key]));
+const choice = values => value => values.includes(value);
+const strings = array(textValue);
+const details = defaulted(array(optional(choice(['auto', 'low', 'high', 'original']))));
+const usage = shape({ input_tokens: integer, cached_input_tokens: integer, cache_write_input_tokens: defaulted(integer),
+  output_tokens: integer, reasoning_output_tokens: integer, total_tokens: integer });
+const window = shape({ used_percent: Number.isFinite, window_minutes: optional(integer), resets_at: optional(integer) });
+const hook = shape({
+  turn_id: optional(textValue),
+  run: shape({ id: textValue, event_name: choice(['pre_tool_use', 'permission_request', 'post_tool_use', 'pre_compact',
+    'post_compact', 'session_start', 'session_end', 'user_prompt_submit', 'subagent_start', 'subagent_stop', 'stop',
+    'interrupt', 'pre_model_request', 'post_model_request']), handler_type: choice(['command', 'mcp_tool', 'prompt', 'agent']),
+  execution_mode: choice(['sync', 'async']), scope: choice(['thread', 'turn']), source_path: pathValue,
+  source: defaulted(choice(['system', 'user', 'project', 'mdm', 'session_flags', 'plugin', 'cloud_requirements',
+    'cloud_managed_config', 'legacy_managed_config_file', 'legacy_managed_config_mdm', 'unknown'])),
+  display_order: integer, status: choice(['running', 'completed', 'failed', 'blocked', 'stopped']),
+  status_message: optional(textValue), started_at: integer, completed_at: optional(integer), duration_ms: optional(integer),
+  entries: array(shape({ kind: choice(['warning', 'stop', 'feedback', 'context', 'error']), text: textValue })) }),
+});
+const question = shape({ title: textValue, options: optional(strings) });
+const eventPayloads = {
+  user_message: shape({ message: textValue, client_id: optional(textValue), images: optional(strings),
+    image_details: details, file_ids: optional(strings), file_id_details: details,
+    image_order: defaulted(array(choice(['inline', 'file']))), local_images: defaulted(strings), local_image_details: details,
+    audio: optional(strings), local_audio: defaulted(strings), text_elements: defaulted(array(shape({
+      byte_range: shape({ start: unsigned, end: unsigned }), placeholder: optional(textValue),
+    }))) }),
+  agent_message: shape({ message: textValue, phase: optional(choice(['commentary', 'partial_answer', 'final_answer'])),
+    memory_citation: optional(shape({ entries: array(shape({ path: textValue, lineStart: uint32, lineEnd: uint32, note: textValue })),
+      rolloutIds: strings })), delivery: optional(choice(['async'])),
+    questions: optional(array(value => question(value) && Object.keys(value).every(key => ['title', 'options'].includes(key)))) }),
+  agent_reasoning: shape({ text: textValue }),
+  agent_reasoning_raw_content: shape({ text: textValue }),
+  token_count: shape({ info: optional(shape({ total_token_usage: usage, last_token_usage: usage, model_context_window: optional(integer) })),
+    rate_limits: optional(shape({ limit_id: optional(textValue), limit_name: optional(textValue), normal_model_slug: optional(textValue),
+      primary: optional(window), secondary: optional(window),
+      credits: optional(shape({ has_credits: boolean, unlimited: boolean, balance: optional(textValue) })),
+      individual_limit: optional(shape({ limit: textValue, used: textValue, remaining_percent: value => integer(value)
+        && value >= -2147483648 && value <= 2147483647, resets_at: integer })),
+      spend_control_reached: optional(boolean), plan_type: optional(textValue),
+      rate_limit_reached_type: optional(choice(['rate_limit_reached', 'workspace_owner_credits_depleted',
+        'workspace_member_credits_depleted', 'workspace_owner_usage_limit_reached', 'workspace_member_usage_limit_reached'])) })) }),
+  hook_started: hook,
+  hook_completed: hook,
+};
+
 // JSON.parse alone silently accepts duplicate keys. Reject those, invalid UTF-8 and deep nesting.
 function json(bytes, reason) {
   try {
@@ -140,8 +197,6 @@ function classify(data, callback, options, checkTime) {
   let activeTurn;
   const seenTurns = new Set();
   let count = 0;
-  const benignEvents = new Set(['user_message', 'agent_message', 'agent_reasoning', 'agent_reasoning_raw_content',
-    'token_count', 'hook_started', 'hook_completed']);
   const terminals = new Set(['task_complete', 'turn_aborted', 'turn_suspended']);
   const responses = new Set(['message', 'reasoning', 'function_call', 'function_call_output', 'custom_tool_call', 'custom_tool_call_output']);
   for (const bytes of splitLines(data.tail)) {
@@ -151,6 +206,7 @@ function classify(data, callback, options, checkTime) {
     if (!object(row) || !object(row.payload) || typeof row.timestamp !== 'string') refuse('unsupported_layout');
     const p = row.payload;
     if (row.type === 'event_msg') {
+      if (typeof p.type !== 'string') refuse('unsupported_layout');
       if (p.type === 'task_started') {
         if (!uuid(p.turn_id)) refuse('unsupported_layout');
         if (matched || activeTurn || seenTurns.has(p.turn_id)) refuse('conflicting_start');
@@ -167,11 +223,13 @@ function classify(data, callback, options, checkTime) {
       } else if (terminals.has(p.type)) {
         if (!uuid(p.turn_id) || matched || p.turn_id === callback.turn_id
           || activeTurn && p.turn_id !== activeTurn || !activeTurn && seenTurns.has(p.turn_id)) refuse('terminal_evidence');
+        seenTurns.add(p.turn_id); // A start can be outside the tail; its terminal still counts.
         activeTurn = undefined;
-      } else if (!benignEvents.has(p.type)) refuse('unsupported_layout');
+      } else if (!Object.hasOwn(eventPayloads, p.type) || !eventPayloads[p.type](p)) refuse('unsupported_layout');
     } else if (row.type === 'turn_context') {
       if (!uuid(p.turn_id) || activeTurn && p.turn_id !== activeTurn
-        || matched && p.cwd !== options.project) refuse('identity_mismatch');
+        || p.root_turn_id != null && p.root_turn_id !== p.turn_id
+        || p.turn_id === callback.turn_id && p.cwd !== options.project) refuse('identity_mismatch');
     } else if (row.type !== 'response_item' || !responses.has(p.type)) refuse('unsupported_layout');
   }
   if (!matched) refuse(data.cut ? 'tail_bound' : 'missing_start');

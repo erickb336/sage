@@ -37,6 +37,111 @@ test('synthetic root start gives only a fixed trigger and agreement flags', t =>
   assert.deepEqual(f.inspect(), success);
 });
 
+for (const placement of ['before', 'after']) {
+  for (const root of [undefined, null, turn]) test(`repair context control: ${placement}, root ${root}`, t => {
+    const f = fixture(t);
+    f.rows.splice(placement === 'before' ? 1 : 2, 0, line('turn_context', { turn_id: turn, root_turn_id: root, cwd: f.root }));
+    f.write();
+    assert.deepEqual(f.inspect(), success);
+  });
+  for (const field of ['root_turn_id', 'cwd']) test(`repair context contradiction: ${field} ${placement} start`, t => {
+    const f = fixture(t);
+    const context = { turn_id: turn, root_turn_id: turn, cwd: f.root };
+    context[field] = field === 'cwd' ? '/sample-other' : other;
+    f.rows.splice(placement === 'before' ? 1 : 2, 0, line('turn_context', context)); f.write();
+    assert.deepEqual(f.inspect(), unavailable('identity_mismatch'));
+  });
+}
+
+test('repair context control: an earlier turn can have a different project', t => {
+  const f = fixture(t);
+  f.rows.splice(1, 0, line('turn_context', { turn_id: other, root_turn_id: other, cwd: '/sample-earlier' })); f.write();
+  assert.deepEqual(f.inspect(), success);
+});
+
+for (const cut of [false, true]) {
+  function earlierTerminal(f, duplicates = []) {
+    const previous = structuredClone(f.rows[1]);
+    previous.payload.turn_id = other; previous.payload.root_turn_id = other;
+    previous.payload.turn_attribution.turn_id = other; previous.payload.turn_attribution.root_turn_id = other;
+    const prefix = cut ? [previous, line('response_item', { type: 'message', content: 'SAMPLE '.repeat(50000) })] : [];
+    f.rows.splice(1, 0, ...prefix, line('event_msg', { type: 'task_complete', turn_id: other }),
+      ...duplicates.map(type => line('event_msg', { type, turn_id: other, reason: 'interrupted' })));
+  }
+  test(`repair terminal control: one preceding terminal, cut ${cut}`, t => {
+    const f = fixture(t); earlierTerminal(f); f.write();
+    assert.deepEqual(f.inspect(), success);
+  });
+  for (const terminal of ['task_complete', 'turn_aborted', 'turn_suspended']) {
+    test(`repair terminal conflict: ${terminal} without visible start, cut ${cut}`, t => {
+      const f = fixture(t); earlierTerminal(f, [terminal]); f.write();
+      assert.deepEqual(f.inspect(), unavailable('terminal_evidence'));
+    });
+  }
+}
+
+test('repair terminal conflict: a terminated preceding turn cannot restart', t => {
+  const f = fixture(t);
+  const previous = structuredClone(f.rows[1]);
+  previous.payload.turn_id = other; previous.payload.root_turn_id = other;
+  previous.payload.turn_attribution.turn_id = other; previous.payload.turn_attribution.root_turn_id = other;
+  f.rows.splice(1, 0, line('event_msg', { type: 'task_complete', turn_id: other }), previous,
+    line('event_msg', { type: 'task_complete', turn_id: other })); f.write();
+  assert.deepEqual(f.inspect(), unavailable('conflicting_start'));
+});
+
+// All payloads are made-up data with the field shapes from the pinned public protocol.
+const tokenUsage = { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0, total_tokens: 2 };
+const hookRun = { id: 'SAMPLE', event_name: 'user_prompt_submit', handler_type: 'command', execution_mode: 'sync', scope: 'turn',
+  source_path: '/sample/hook', display_order: 0, status: 'running', started_at: 0, entries: [{ kind: 'context', text: 'SAMPLE' }] };
+const eventControls = [
+  { type: 'user_message', message: 'SAMPLE DATA', images: null, local_images: [],
+    image_details: [null, 'original'], text_elements: [{ byte_range: { start: 0, end: 6 }, placeholder: null }] },
+  { type: 'agent_message', message: 'SAMPLE DATA', phase: 'commentary', delivery: 'async',
+    memory_citation: { entries: [{ path: 'SAMPLE', lineStart: 1, lineEnd: 1, note: 'SAMPLE' }], rolloutIds: [] },
+    questions: [{ title: 'SAMPLE', options: ['SAMPLE'] }] },
+  { type: 'agent_reasoning', text: 'SAMPLE DATA' },
+  { type: 'agent_reasoning_raw_content', text: 'SAMPLE DATA' },
+  { type: 'token_count', info: { total_token_usage: tokenUsage, last_token_usage: tokenUsage, model_context_window: null },
+    rate_limits: { primary: { used_percent: 1, window_minutes: null, resets_at: null }, credits: { has_credits: true, unlimited: false } } },
+  { type: 'hook_started', turn_id: turn, run: hookRun },
+  { type: 'hook_completed', turn_id: turn, run: { ...hookRun, status: 'completed' } },
+];
+for (const control of eventControls) for (const placement of ['before', 'after']) {
+  test(`repair event control: ${control.type} ${placement} start`, t => {
+    const f = fixture(t); f.rows.splice(placement === 'before' ? 1 : 2, 0, line('event_msg', control)); f.write();
+    assert.deepEqual(f.inspect(), success);
+  });
+}
+const malformedEvents = [
+  ['array event type', { type: ['user_message'], message: 'SAMPLE DATA' }],
+  ['numeric user message', { type: 'user_message', message: 123, images: null, local_images: [] }],
+  ['missing user message', { type: 'user_message' }],
+  ['null user message', { type: 'user_message', message: null }],
+  ['non-string image', { ...eventControls[0], images: [123] }],
+  ['null defaulted array', { ...eventControls[0], local_images: null }],
+  ['unknown image detail', { ...eventControls[0], image_details: ['future'] }],
+  ['invalid text element', { ...eventControls[0], text_elements: [{ byte_range: { start: '0', end: 1 } }] }],
+  ['numeric agent message', { type: 'agent_message', message: 123 }],
+  ['unknown message phase', { ...eventControls[1], phase: 'future' }],
+  ['invalid citation', { ...eventControls[1], memory_citation: { entries: [], rolloutIds: [123] } }],
+  ['invalid question', { ...eventControls[1], questions: [{ title: 123 }] }],
+  ['numeric reasoning', { type: 'agent_reasoning', text: 123 }],
+  ['missing raw reasoning', { type: 'agent_reasoning_raw_content' }],
+  ['invalid token info', { type: 'token_count', info: 123 }],
+  ['invalid usage', { type: 'token_count', info: { total_token_usage: { ...tokenUsage, input_tokens: '1' }, last_token_usage: tokenUsage } }],
+  ['invalid rate window', { type: 'token_count', rate_limits: { primary: { used_percent: '1' } } }],
+  ['missing hook run', { type: 'hook_started', turn_id: turn }],
+  ['invalid hook run', { type: 'hook_completed', turn_id: turn, run: {} }],
+  ['invalid hook entry', { type: 'hook_started', turn_id: turn, run: { ...hookRun, entries: [{ kind: 'context', text: 123 }] } }],
+];
+for (const [name, payload] of malformedEvents) for (const placement of ['before', 'after']) {
+  test(`repair malformed event: ${name} ${placement} start`, t => {
+    const f = fixture(t); f.rows.splice(placement === 'before' ? 1 : 2, 0, line('event_msg', payload)); f.write();
+    assert.deepEqual(f.inspect(), unavailable('unsupported_layout'));
+  });
+}
+
 const cases = [
   ['callback child', f => { f.callback.agent_id = other; }, 'child_evidence'],
   ['callback null child field', f => { f.callback.agent_type = null; }, 'child_evidence'],

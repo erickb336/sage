@@ -326,7 +326,7 @@ Run the labelled sample from the checkout:
 node scripts/fixtures/codex-native/turn-trigger-sample.mjs
 ```
 
-The sample creates its own temporary fixtures, calls the command, prints one observed case and one refusal, then removes its fixtures. To supply another synthetic fixture, send a normal `UserPromptSubmit` callback as JSON on stdin:
+The sample creates temporary fixtures, calls the command, and prints one observed case and four refusals. It then removes its fixtures. To supply another synthetic fixture, send a normal `UserPromptSubmit` callback as JSON on stdin:
 
 ```sh
 node packages/sage-codex/hooks/turn-trigger-observer.mjs --synthetic-root /absolute/sample-root --project /absolute/sample-project < sample-callback.json
@@ -347,6 +347,10 @@ Identity comparisons establish agreement, not independent authentication of the 
 The command limits callback input to 64 KiB, header data to 16 KiB, and total file data to 256 KiB. It reads the header and one contiguous tail that ends at the captured file size. A cut first tail record is discarded.
 
 The necessary start and every later record must be complete. The command checks at most 2,048 tail records and stops after a 1.8-second deadline, including callback input. It refuses malformed JSON, duplicate keys, incomplete sections, missing attribution, conflicting starts or terminals, mismatched identities, links, changed files and exceeded bounds.
+
+Context identities must agree before and after the matching start. A terminal remains evidence even when its start falls outside the tail.
+
+The seven supported message, reasoning, token and hook event variants must match their [pinned payload field types](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/protocol/src/protocol.rs#L2671). These checks preserve the schema's optional and defaulted fields.
 
 The fixture root and its ancestors must remain under the caller's control. The reader checks file and ancestor identities before and after reads; it does not authenticate a hostile local writer. It makes no claim about unseen history, freshness, initial input, recovery or a running executable.
 
