@@ -316,7 +316,7 @@ test("T314: an archived project's tasks leave the columns and the counts, and th
   ]);
   assert.deepEqual(model.columns.flatMap(column => column.tasks.map(card => `${card.projectName} ${card.id}`)), ["live T1", "live T2"]);
   assert.deepEqual(model.counts, { tasks: 2, needsOwner: 1, recordedAgents: 0, inferredWork: 0, inReview: 0 });
-  assert.deepEqual(model.archived, [{ key: "old-000001", name: "Old app", tasks: 3, needsOwner: 1 }]);
+  assert.deepEqual(model.archived, [{ key: model.projects.find(project => project.name === "Old app").key, name: "Old app", tasks: 3, needsOwner: 1 }]);
   assert.equal(model.tasks.filter(card => card.archived).length, 3, "its tasks stay in the model, for their task pages");
 });
 
@@ -495,45 +495,51 @@ test("T305: a run's time is minutes or hours up to 24 h; after 24 h with no logb
 });
 
 /** Two sources, each with projects given as { name, checkout, tasks, ...fields }: in memory, as the reader gives them. */
-const twoSources = (claude, codex) => buildBoardModel([["claude", "Claude", claude], ["codex", "Codex", codex]].map(([id, provider, books]) => ({ id, label: id, provider, diagnostics: [], projects: books.map(({ name, tasks, ...rest }) => ({ key: `${id}/${name}`, name, diagnostics: [], warnings: [], tables: { tasks }, ...rest })) })), { now });
+const twoSources = (claude, codex, root) => buildBoardModel([["claude", "Claude", claude], ["codex", "Codex", codex]].map(([id, provider, books]) => ({ id, label: id, provider, diagnostics: [], projects: books.map(({ name, tasks, ...rest }) => {
+  const checkout = rest.checkout ? join(root, rest.checkout.slice("/sample/".length)) : undefined;
+  if (checkout) mkdirSync(checkout, { recursive: true });
+  return { key: `${id}/${name}`, name, diagnostics: [], warnings: [], tables: { tasks }, ...rest, checkout };
+}) })), { now });
 
-test("T305: one repository is one project: the logbooks of one key and one checkout merge; tasks keep source-qualified keys", () => {
+test("T305: one repository is one project: the logbooks of one key and one checkout merge; tasks keep source-qualified keys", t => {
+  const root = mkdtempSync(join(tmpdir(), "sage-model-sample-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const make = (claude, codex) => twoSources(claude, codex, root);
   const book = (tasks, extra = {}) => ({ name: "sage-43265b", checkout: "/sample/work/sage", repository: "https://github.com/sample-owner/sage", tasks, ...extra });
-  const model = twoSources([book([task("T9", "framed")])], [book([task("T9", "held")])]);
-  assert.deepEqual(model.projects.map(project => [project.key, project.name, project.providers]), [["sage-43265b", "sage", ["Claude", "Codex"]]]);
-  assert.deepEqual(model.tasks.map(card => [card.key, card.group, card.providerStandIn]), [["claude/sage-43265b/T9", "sage-43265b", "Claude"], ["codex/sage-43265b/T9", "sage-43265b", "Codex"]]);
+  const model = make([book([task("T9", "framed")])], [book([task("T9", "held")])]), group = model.projects[0].key;
+  assert.deepEqual(model.projects.map(project => [project.name, project.providers]), [["sage", ["Claude", "Codex"]]]);
+  assert.deepEqual(model.tasks.map(card => [card.key, card.group, card.providerStandIn]), [["claude/sage-43265b/T9", group, "Claude"], ["codex/sage-43265b/T9", group, "Codex"]]);
   assert.deepEqual(model.notes, []);
-  const missing = twoSources([book([task("T1", "framed")])], [book([task("T2", "framed")], { checkout: undefined })]);
-  assert.equal(missing.projects.length, 1);
-  assert.deepEqual(missing.notes.map(note => note.message), ["One project: the checkout of codex/sage-43265b is not known, and the logbook key is the same."]);
-  const apart = twoSources([book([task("T1", "framed")])], [book([task("T2", "framed")], { checkout: "/sample/other/sage" })]);
-  assert.deepEqual(apart.projects.map(project => project.key).sort(), ["claude/sage-43265b", "codex/sage-43265b"], "never merge on doubt");
-  assert.deepEqual(apart.notes.map(note => note.message), ["Two projects: claude/sage-43265b and codex/sage-43265b have one logbook key but name different checkouts, so the board keeps them apart."]);
-  const clones = twoSources([book([task("T1", "framed")]), book([task("T1", "framed")], { name: "sage-9a9a9a", checkout: "/sample/clone/sage" })], []);
-  assert.deepEqual(clones.projects.map(project => [project.key, project.name]).sort(), [["sage-43265b", "sage"], ["sage-9a9a9a", "sage"]], "two clones at two paths stay two projects");
-  assert.deepEqual(clones.projects.map(project => [project.key, project.pathSub]).sort(), [["sage-43265b", "…/work/sage · sample-owner/sage"], ["sage-9a9a9a", "…/clone/sage · sample-owner/sage"]], "F-T305-11, R1076-4: on the Mac's page, two clones in folders of one name show the end of their paths first, as far as they differ");
-  assert.deepEqual(clones.projects.map(project => [project.key, project.sub]).sort(), [["sage-43265b", "clone 1 · sample-owner/sage"], ["sage-9a9a9a", "clone 2 · sample-owner/sage"]], "R1079-1: every other viewer sees clone 1 and clone 2, by the order of the logbook keys");
-  const local = twoSources([book([task("T1", "framed")], { repository: null, checkout: "/sample/a/lab" }), book([task("T1", "framed")], { name: "lab-9a9a9a", repository: null, checkout: "/sample/b/lab" }), book([task("T1", "framed")], { name: "lab-copy-1b1b1b", repository: null, checkout: "/sample/b/lab-copy" })], []);
+  const missing = make([book([task("T1", "framed")])], [book([task("T2", "framed")], { checkout: undefined })]);
+  assert.deepEqual(missing.projects.map(project => project.books[0]).sort(), ["claude/sage-43265b", "codex/sage-43265b"]);
+  assert.deepEqual(missing.notes.map(note => note.message), ["Separate logbooks: claude/sage-43265b and codex/sage-43265b share a key, but their checkouts do not establish one project."]);
+  const apart = make([book([task("T1", "framed")])], [book([task("T2", "framed")], { checkout: "/sample/other/sage" })]);
+  assert.deepEqual(apart.projects.map(project => project.books[0]).sort(), ["claude/sage-43265b", "codex/sage-43265b"], "never merge on doubt");
+  assert.deepEqual(apart.notes.map(note => note.message), ["Separate logbooks: claude/sage-43265b and codex/sage-43265b share a key, but their checkouts do not establish one project."]);
+  const clones = make([book([task("T1", "framed")]), book([task("T1", "framed")], { name: "sage-9a9a9a", checkout: "/sample/clone/sage" })], []);
+  assert.deepEqual(clones.projects.map(project => [project.books[0], project.name]).sort(), [["claude/sage-43265b", "sage"], ["claude/sage-9a9a9a", "sage"]], "two clones at two paths stay two projects");
+  assert.deepEqual(clones.projects.map(project => [project.books[0], project.pathSub]).sort(), [["claude/sage-43265b", "…/work/sage · sample-owner/sage"], ["claude/sage-9a9a9a", "…/clone/sage · sample-owner/sage"]]);
+  assert.deepEqual(clones.projects.map(project => project.sub).sort(), ["clone 1 · sample-owner/sage", "clone 2 · sample-owner/sage"]);
+  const local = make([book([task("T1", "framed")], { repository: null, checkout: "/sample/a/lab" }), book([task("T1", "framed")], { name: "lab-9a9a9a", repository: null, checkout: "/sample/b/lab" }), book([task("T1", "framed")], { name: "lab-copy-1b1b1b", repository: null, checkout: "/sample/b/lab-copy" })], []);
   assert.deepEqual(local.projects.map(project => project.sub).sort(), ["clone 1 · no GitHub remote", "clone 2 · no GitHub remote", "no GitHub remote · folder lab-copy"]);
   assert.deepEqual(local.projects.map(project => project.pathSub).sort(), [null, "…/a/lab · no GitHub remote", "…/b/lab · no GitHub remote"]);
   // F-T305-3: one unreadable logbook does not rename the project that the other logbook names.
-  const broken = twoSources([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([], { diagnostics: ["tasks: damaged table header"] })]);
+  const broken = make([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([], { diagnostics: ["tasks: damaged table header"] })]);
   assert.deepEqual(broken.projects.map(project => [project.name, project.problem]), [["Sage (sample)", "tasks: damaged table header"]]);
   assert.deepEqual(broken.tasks.map(card => card.projectName), ["Sage (sample)"]);
-  const unnamed = twoSources([book([task("T1", "framed")])], [book([], { diagnostics: ["tasks: damaged table header"] })]);
+  const unnamed = make([book([task("T1", "framed")])], [book([], { diagnostics: ["tasks: damaged table header"] })]);
   assert.deepEqual(unnamed.projects.map(project => project.name), ["sage"], "the remote names it");
-  const names = twoSources([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([task("T2", "framed")], { displayName: "Other name", archived: true })]);
+  const names = make([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([task("T2", "framed")], { displayName: "Other name", archived: true })]);
   assert.deepEqual([names.projects[0].name, names.projects[0].archived], ["Sage (sample)", false], "R1070-1: archived only when all its logbooks are");
   assert.deepEqual(names.notes.map(note => note.message), ['Two display names: the board shows "Sage (sample)" (the first source), not "Other name".', "Archived in codex/sage-43265b only: the board does not archive the project."]);
-  const both = twoSources([book([task("T1", "framed")], { archived: true })], [book([task("T2", "framed")], { archived: true })]);
+  const both = make([book([task("T1", "framed")], { archived: true })], [book([task("T2", "framed")], { archived: true })]);
   assert.equal(both.projects[0].archived, true);
-  // R1070-1: a joined logbook without checkout.txt never gives the name or the archive.
-  const stray = twoSources([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([task("T2", "framed")], { checkout: undefined, displayName: "Sample other name", archived: true })]);
-  assert.deepEqual([stray.projects[0].name, stray.projects[0].archived], ["Sage (sample)", false]);
-  const first = twoSources([book([task("T1", "framed")], { checkout: undefined, displayName: "Sample other name", archived: true })], [book([task("T2", "framed")])]);
-  assert.deepEqual([first.projects[0].name, first.projects[0].archived], ["sage", false], "also when it comes first");
+  // An unassigned logbook keeps its own name and archive state.
+  const stray = make([book([task("T1", "framed")], { displayName: "Sage (sample)" })], [book([task("T2", "framed")], { checkout: undefined, displayName: "Sample other name", archived: true })]);
+  assert.deepEqual(stray.projects.map(project => [project.name, project.archived]).sort(), [["Sage (sample)", false], ["Sample other name", true]]);
+  const first = make([book([task("T1", "framed")], { checkout: undefined, displayName: "Sample other name", archived: true })], [book([task("T2", "framed")])]);
+  assert.deepEqual(first.projects.map(project => [project.name, project.archived]).sort(), [["Sample other name", true], ["sage", false]], "also when it comes first");
   // R1075-6: an error code reads as a plain reason.
-  const denied = twoSources([book([task("T1", "framed")])], [book([], { diagnostics: ["tasks: EACCES"] })]);
+  const denied = make([book([task("T1", "framed")])], [book([], { diagnostics: ["tasks: EACCES"] })]);
   assert.equal(denied.projects[0].problem, "its tasks file has no read permission");
 });
 
@@ -641,7 +647,9 @@ test("T233 C4: PG1 in the Claude and the Codex logbook of one project stays two 
   const codex = { tasks: [{ ...programsTables().tasks[0], id: "T2", state: "framed", program: "PG1", waits: "T1" }, { ...programsTables().tasks[0], id: "T5", state: "framed", program: "PG1" }],
     gates: [{ id: "G1", task: "T5", question: "Approve program PG1? No task builds before you approve.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "approve", at: "" }],
     programs: [{ id: "PG1", name: "Codex own", goal: "g", pilot: "T5", gate: "G1", at: "" }], decisions: [] };
-  const model = programsModel([programsSource("claude"), programsSource("codex", codex)]);
+  const sources = [programsSource("claude"), programsSource("codex", codex)];
+  for (const source of sources) source.projects[0].checkout = tmpdir();
+  const model = programsModel(sources);
   assert.equal(model.projects.length, 1, "one project: one checkout");
   const both = model.programs.filter(item => item.id === "PG1");
   assert.deepEqual(both.map(item => [item.key, item.name, item.progressText]), [["claude/sage-ff5ee2/PG1", "Codex support", "3 of 7 merged · T10 abandoned"], ["codex/sage-ff5ee2/PG1", "Codex own", "0 of 2 merged"]]);

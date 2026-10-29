@@ -1,4 +1,5 @@
-import { basename, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
+import { checkoutIdentity } from "./board-identity.mjs";
 import { readBoardSources } from "./board-reader.mjs";
 import { buildBoardModel, projectName } from "./board-model.mjs";
 import { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
@@ -26,29 +27,36 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
   if (taskId !== null && !/^T[1-9]\d*$/.test(taskId)) throw new TypeError("task id must be T followed by a positive number");
   const snapshots = readBoardSources(sources, { now: Date.parse(now), logbookKey });
   const projects = snapshots.flatMap(source => source.projects);
+  const current = project && (scope === "this" || logbookKey !== null)
+    ? checkoutIdentity(createStateTool({ defaultRoot: () => { throw new Error("the board names each root"); } }).projectRoot(resolve(project))) : null;
   let keys = new Set(projects.map(book => book.key));
   // An exact logbook key (source/folder) chooses that one logbook. Any other scope chooses projects as the board shows them:
   // the Claude and the Codex logbook of one checkout are one project (R1069-3), and two clones stay two.
   if (logbookKey !== null) {
-    if (!projects.some(book => book.key === logbookKey)) throw new RangeError("No recorded logbook matches this project.");
+    if (!projects.some(book => book.key === logbookKey && book.checkoutIdentity && book.checkoutIdentity === current)) throw new RangeError("No recorded logbook matches this project.");
     keys = new Set([logbookKey]);
   }
-  else if (projects.some(book => book.key === scope)) keys = new Set([scope]);
+  else if (projects.some(book => book.key === scope && book.checkoutIdentity)) keys = new Set([scope]);
   else if (scope !== "all") {
     const groups = buildBoardModel(snapshots, { now }).projects, bare = name => name.replace(/-[0-9a-f]{6}$/, "");
     let selected;
     if (scope === "this") {
       if (!project) throw new RangeError("this board needs the current project");
-      let here = projects.filter(book => book.checkout && resolve(book.checkout) === resolve(project));
-      if (!here.length) here = projects.filter(book => fold(bare(book.name)) === fold(basename(project)));
-      selected = groups.filter(group => group.books.some(key => here.some(book => book.key === key)));
+      const here = projects.filter(book => book.checkoutIdentity && book.checkoutIdentity === current);
+      keys = new Set(here.map(book => book.key));
+      selected = [];
     // A scope is any name that the board shows or that the logbook has: its key, its folder with or without the hash, its
     // checkout's folder, or its shown name (the display name, else the upstream or origin repository's name).
-    } else selected = groups.filter(group => [group.key, group.name, ...group.terms, ...group.terms.map(bare), ...projects.filter(book => group.books.includes(book.key)).map(projectName)].some(name => fold(name) === fold(scope)));
-    if (!selected.length || scope !== "this" && selected.length !== 1) throw new RangeError(selected.length ? `The project is ambiguous. Choose: ${selected.flatMap(group => group.books).join(", ")}` : "No recorded project matches this board scope.");
-    keys = new Set(selected.flatMap(group => group.books));
+    } else selected = groups.filter(group => group.books.every(key => projects.some(book => book.key === key && book.checkoutIdentity)) && [group.key, group.name, ...group.terms, ...group.terms.map(bare), ...projects.filter(book => group.books.includes(book.key)).map(projectName)].some(name => fold(name) === fold(scope)));
+    if (scope !== "this") {
+      if (!selected.length || selected.length !== 1) throw new RangeError(selected.length ? `The project is ambiguous. Choose: ${selected.flatMap(group => group.books).join(", ")}` : "No recorded project matches this board scope.");
+      keys = new Set(selected.flatMap(group => group.books));
+    }
   }
-  const model = buildBoardModel(snapshots.map(source => ({ ...source, projects: source.projects.filter(book => keys.has(book.key)) })), { now, landing: landingRule(sources, logbookKey) });
+  const model = buildBoardModel(snapshots.map(source => ({ ...source,
+    diagnostics: scope !== "all" && source.projects.some(book => !keys.has(book.key) && book.diagnostics.some(message => message.startsWith("checkout: ")))
+      ? [...source.diagnostics, "Some checkout files cannot be read. Project counts may be incomplete."] : source.diagnostics,
+    projects: source.projects.filter(book => keys.has(book.key)) })), { now, landing: landingRule(sources, logbookKey) });
   if (taskId) {
     const tasks = model.tasks.filter(task => task.id === taskId);
     if (tasks.length !== 1) {

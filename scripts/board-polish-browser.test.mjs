@@ -20,6 +20,8 @@ const model = buildBoardModel([programsSource()], { now: NOW });
 const other = programsSource("codex");
 Object.assign(other.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
 const two = buildBoardModel([programsSource(), other], { now: NOW });
+const sageGroup = model.projects[0].key, otherGroup = two.projects.find(project => project.books.includes("codex/other-abc123")).key;
+const projectHash = group => `p=${encodeURIComponent(group)}`;
 // A program name with no space: it must wrap, not push the page sideways.
 const unbroken = programsTables();
 unbroken.programs.find(row => row.id === "PG1").name = "Providerneutralboardcoreforalltoolsandeverylogbookthatsagereads";
@@ -65,35 +67,35 @@ test("T374-1: the board reads needs=1 once, takes it out of the address, and a r
   assert.equal(await page.evaluate(() => location.hash), "", "needs=1 is gone from the address");
   await page.reload();
   assert.equal(await page.locator("[data-filter=needs]").getAttribute("aria-pressed"), "false");
-  const kept = await open(t, `/#p=sage-ff5ee2&needs=1`);
-  assert.equal(await kept.evaluate(() => location.hash), "#p=sage-ff5ee2", "the project stays in the address");
+  const kept = await open(t, `/#${projectHash(sageGroup)}&needs=1`);
+  assert.equal(await kept.evaluate(() => location.hash), `#${projectHash(sageGroup)}`, "the project stays in the address");
 });
 
 test("T374-7: a project change clears a Program filter whose program is in another project, and keeps one of the new project", async t => {
-  const page = await open(t, `/two#p=sage-ff5ee2&pg=${key("PG1")}`);
+  const page = await open(t, `/two#${projectHash(sageGroup)}&pg=${key("PG1")}`);
   assert.equal(await page.locator("#f-program").inputValue(), key("PG1"));
   await page.click("#pick-trig");
-  await page.click('#pick-list [role=option][data-key="sage-ff5ee2"]');
+  await page.click(`#pick-list [role=option][data-key="${sageGroup}"]`);
   assert.equal(await page.locator("#f-program").inputValue(), key("PG1"), "the same project keeps the filter");
   await page.click("#pick-trig");
-  await page.click('#pick-list [role=option][data-key="other-abc123"]');
+  await page.click(`#pick-list [role=option][data-key="${otherGroup}"]`);
   assert.equal(await page.locator("#f-program").inputValue(), "", "the filter of the other project ends");
-  assert.equal(await page.evaluate(() => location.hash), "#p=other-abc123");
+  assert.equal(await page.evaluate(() => location.hash), `#${projectHash(otherGroup)}`);
   assert.ok((await page.locator(".card[data-key]:not([hidden])").count()) > 0, "the new project's cards show");
 });
 
 test("R1371-2: an address with a Program filter of another project drops the filter: the chosen project's cards show", async t => {
-  const page = await open(t, `/two#p=other-abc123&pg=${key("PG1")}`);
+  const page = await open(t, `/two#${projectHash(otherGroup)}&pg=${key("PG1")}`);
   assert.equal(await page.locator("#f-program").inputValue(), "");
-  assert.equal(await page.evaluate(() => location.hash), "#p=other-abc123");
+  assert.equal(await page.evaluate(() => location.hash), `#${projectHash(otherGroup)}`);
   assert.ok((await page.locator(".card[data-key]:not([hidden])").count()) > 0, "the project's cards show");
 });
 
 test("R1371-2 (reopened): with needs=1 also in the address, in any order, the Program filter of another project goes and the address keeps only the project", async t => {
-  for (const hash of [`p=other-abc123&pg=${key("PG1")}&needs=1`, `needs=1&pg=${key("PG1")}&p=other-abc123`]) {
+  for (const hash of [`${projectHash(otherGroup)}&pg=${key("PG1")}&needs=1`, `needs=1&pg=${key("PG1")}&${projectHash(otherGroup)}`]) {
     const page = await open(t, `/two#${hash}`);
     assert.equal(await page.locator("#f-program").inputValue(), "", hash);
-    assert.equal(await page.evaluate(() => location.hash), "#p=other-abc123", hash);
+    assert.equal(await page.evaluate(() => location.hash), `#${projectHash(otherGroup)}`, hash);
     assert.equal(await page.locator("[data-filter=needs]").getAttribute("aria-pressed"), "true", hash);
   }
 });

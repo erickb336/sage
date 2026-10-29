@@ -102,7 +102,7 @@ test("T308: Codex agents come from the logbook only: running, no activity, no he
   const byRun = Object.fromEntries(rows(model).map(agent => [agent.runId, agent]));
   assert.deepEqual([byRun.R7.provider, byRun.R7.state, byRun.R7.why, byRun.R7.idle], ["codex", "unk", "Codex sends no activity notes yet", null]);
   assert.deepEqual(model.providers, [{ name: "Claude", count: 1 }, { name: "Codex", count: 2 }]);
-  assert.deepEqual(model.projects.map(project => [project.name, project.cap]), [["sample", { label: "Claude", used: 1, cap: 3 }], ["solo", null]]);
+  assert.deepEqual(model.projects.map(project => [project.name, project.cap]), [["sample", { label: "Claude", used: 1, cap: 3 }], ["sample", null], ["solo", null]]);
   assert.deepEqual(model.caps, [{ label: "Claude", total: { used: 1, cap: 20 }, projects: [{ name: "sample", used: 1, cap: 3 }] }]);
 });
 

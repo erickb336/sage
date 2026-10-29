@@ -11,6 +11,7 @@ import { closeSync, constants, existsSync, fstatSync, openSync, readSync, readdi
 import { createHash, randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import { projectName as shownName } from "./board-model.mjs";
+import { checkoutIdentity, decodeCheckout, sameCheckout } from "./board-identity.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { checkPrograms, gateLines } from "./program-rules.mjs";
 export function createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock }) {
@@ -97,15 +98,17 @@ function repoOf(path, remote = "origin") {
  * The text of a small regular file, or null: for a missing file, a link, a FIFO, a device, a folder or a file over max
  * bytes. It never blocks (the open does not wait for a FIFO's writer) and reads at most max + 1 bytes.
  */
-function small(path, max) {
+function small(path, max, decode = bytes => bytes.toString("utf8"), unreadable = () => {}) {
   let fd;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
-    if (!fstatSync(fd).isFile()) return null;
+    if (!fstatSync(fd).isFile()) { unreadable(); return null; }
     const buf = Buffer.alloc(max + 1);
     const len = readSync(fd, buf, 0, max + 1, 0);
-    return len > max ? null : buf.toString("utf8", 0, len);
-  } catch {
+    if (len > max) { unreadable(); return null; }
+    return decode(buf.subarray(0, len));
+  } catch (error) {
+    if (error.code !== "ENOENT") unreadable();
     return null;
   } finally {
     if (fd !== undefined) closeSync(fd);
@@ -132,10 +135,11 @@ function logbooks(root) {
   } catch {}
   const books = folders.map(({ name: folder }) => {
     const dir = join(root, folder);
-    const checkout = small(join(dir, "checkout.txt"), 4096)?.trim() || null;
+    let checkoutError = false;
+    const checkout = small(join(dir, "checkout.txt"), 4096, decodeCheckout, () => { checkoutError = true; });
     // The owner's settings of the logbook (sage config name= and archived=), as the rich board reads them: a bad value is not used.
     const settings = (() => { try { return logbookSettings(JSON.parse(small(join(dir, "config.json"), 64 * 1024) ?? "{}")); } catch { return logbookSettings(null); } })();
-    const book = { folder, name: FOLDER.exec(folder)[1], dir, checkout, displayName: settings.name, archived: settings.archived, tasks: [], runs: [], gates: [], programs: [], changed: {}, reviewed: {}, error: null };
+    const book = { folder, name: FOLDER.exec(folder)[1], dir, checkout, checkoutError, displayName: settings.name, archived: settings.archived, tasks: [], runs: [], gates: [], programs: [], changed: {}, reviewed: {}, error: null };
     try {
       const [tasks, runs, gates, ledger, decisions] = Object.keys(FORMAT).map((t) => read(dir, t).map((row) => clean(t, row)));
       for (const [task, at] of [...runs.flatMap((r) => [[r.task, r.started], [r.task, r.ended]]), ...[...gates, ...ledger, ...decisions].map((r) => [r.task, r.at])]) {
@@ -173,16 +177,15 @@ function named(books, typed, want) {
 }
 
 /**
- * The session's logbook as a list: the one storeDir gives, else the one whose checkout.txt names the project, else the
- * logbooks without checkout.txt that have its name (one is sure; two or more are candidates).
+ * The session's logbook must name the current checkout. A folder key alone is not proof of identity.
  */
 function sessionBooks(books, project, env) {
   if (!project) return [];
   const exact = storeDir(project, env);
-  const root = real(project);
-  const name = projectName(project);
-  const sure = books.find((b) => b.dir === exact) ?? books.find((b) => b.checkout && real(b.checkout) === root);
-  return sure ? [sure] : books.filter((b) => !b.checkout && b.name === name);
+  const root = real(projectRoot(resolve(project)));
+  const matches = books.filter((b) => sameCheckout(b.checkout, root));
+  const sure = matches.find((b) => b.dir === exact) ?? matches[0];
+  return sure ? [sure] : [];
 }
 
 /**
@@ -202,8 +205,8 @@ function home(p, env) {
  * found once per board.
  */
 function answerPath(b, here, env) {
-  const h = here?.dir === b.dir ? here : home(b.checkout, env);
-  return h?.dir === b.dir ? h.root : null;
+  const h = here?.dir === b.dir && sameCheckout(b.checkout, here.root) ? here : home(b.checkout, env);
+  return h?.dir === b.dir && sameCheckout(b.checkout, h.root) ? h.root : null;
 }
 /** Each logbook with an open gate, by its key, and the folder where its answers go (null when none is known). */
 function answerPaths({ project, env = process.env } = {}) {
@@ -259,9 +262,9 @@ function remember(root, books, at) {
 }
 
 /**
- * The board as Markdown. scope: "this" (the session's project, and one line per other project with something waiting),
+ * The board as Markdown. scope: "this" (the session's verified project),
  * "all", or a project's key or logbook folder, as a slug like projectName gives (so any case, and "_", "." or a space
- * for "-"). project: the session's folder; a session outside every project shows all. The "this" and "all" boards show
+ * for "-"). project: the session's folder. The "this" and "all" boards show
  * at most 8 active tasks per project, those with a PR in review first; a board for one named project shows all of them.
  */
 function board({ scope = "this", project, env = process.env, now = new Date(), save = true } = {}) {
@@ -282,28 +285,29 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
     b.shown = shownName({ displayName: b.displayName, upstream: b.home ? repoOf(b.home, "upstream") : null, repository: b.repo, checkout: b.real ?? b.key, name: b.folder });
   }
   const label = (b) => (b.shown !== b.key ? `${b.key} (${text(b.shown, 40)})` : b.key);
-  const known = books.map(label).join(", ");
+  const selectable = books.filter(b => checkoutIdentity(b.checkout));
+  const known = selectable.map(label).join(", ") || "none";
+  const warning = books.some(b => b.checkoutError) ? "Some checkout files cannot be read. Project counts may be incomplete." : "";
+  const withWarning = message => warning ? `${message}\n\n${warning}` : message;
   let shown;
-  let others = [];
   let title;
   const want = slug(scope);
   if (want === "all") [shown, title] = [books, "all projects"];
   else if (want === "this") {
     const mine = sessionBooks(books, project, env);
-    if (mine.length > 1) return `Not sure which project this folder is. Candidates: ${mine.map(label).join(", ")}. Type the key or the real name.`;
-    if (mine.length) [shown, others, title] = [mine, books.filter((b) => b !== mine[0]), label(mine[0])];
-    else [shown, title] = [books, "all projects (this folder has no logbook)"];
+    if (mine.length) [shown, title] = [mine, label(mine[0])];
+    else return withWarning("No verified logbook for this project. Show the board for all projects to see the other logbooks.");
   } else {
     let sure;
-    [shown, sure] = named(books, scope, want);
-    if (!shown.length) return `No project named "${text(scope, 40)}". Known projects: ${known}.`;
-    if (!sure) return `Not sure which project "${text(scope, 40)}" is. Candidates: ${shown.map(label).join(", ")}. Type the key or the real name.`;
+    [shown, sure] = named(selectable, scope, want);
+    if (!shown.length) return withWarning(`No project named "${text(scope, 40)}". Known projects: ${known}.`);
+    if (!sure) return withWarning(`Not sure which project "${text(scope, 40)}" is. Candidates: ${shown.map(label).join(", ")}. Type the key or the real name.`);
     title = label(shown[0]);
   }
   const cap = want === "all" || want === "this" ? CAP.active : Infinity;
   // An archived project shows only as a count, as on the rich board: its gates and tasks are on no other line.
-  const archived = [...shown, ...others].filter((b) => b.archived);
-  [shown, others] = [shown.filter((b) => !b.archived), others.filter((b) => !b.archived)];
+  const archived = shown.filter((b) => b.archived);
+  shown = shown.filter((b) => !b.archived);
 
   const pr = (b, t) => (!t.pr ? "no PR" : t.pr === "?" ? "PR ?" : b.repo ? `[#${t.pr}](${b.repo}/pull/${t.pr})` : `PR #${t.pr}`);
   const many = shown.length > 1;
@@ -322,7 +326,6 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
         if (!checked.has(t)) checked.set(t, mergeable(b, t, env));
         return { t, ...checked.get(t), why: t.size === "large" ? "large" : t.risk ? `risk ${t.risk}` : "autopilot may merge it tonight" };
       });
-  const waiting = (b) => verified(b).filter((v) => v.ok);
   // A gate shows in full, never cut, with its project's key also on a board of one project, and each option on its own
   // line: the owner answers only a question that the board showed whole, and the chief records it in that gate's logbook.
   // The options come last: a line after a list item would join that item's text.
@@ -378,17 +381,10 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
     if (!active.length) L.push("- no active tasks");
     L.push(`- framed backlog: ${framed.length}${framed.length ? ` · next up (framed, in id order): ${framed.slice(0, CAP.next).map((t) => `${t.id} ${text(t.title, 30)}`).join("; ")}` : ""}`);
   }
-  const elsewhere = others
-    .map((b) => {
-      const parts = [b.error ? "logbook cannot be read" : "", gates(b).length ? `${plural(gates(b).length, "gate")} waiting` : "", waiting(b).length ? `${plural(waiting(b).length, "PR")} waiting for your merge` : ""].filter(Boolean);
-      return parts.length ? `${label(b)}: ${parts.join(", ")}` : null;
-    })
-    .filter(Boolean);
-  if (elsewhere.length) section("Other projects", elsewhere, elsewhere.length);
   const needCount = (b) => gates(b).length + verified(b).length;
   if (archived.length) section(`Archived (${archived.length})`, archived.map((b) => `${label(b)}: ${plural(b.tasks.length, "task")}${needCount(b) ? ` · ${needCount(b)} need${needCount(b) === 1 ? "s" : ""} you` : ""}`), archived.length);
   if (save) remember(root, shown, now.toISOString().slice(0, 19) + "Z");
-  return L.join("\n");
+  return withWarning(L.join("\n"));
 }
 
 return { board, answerPaths };

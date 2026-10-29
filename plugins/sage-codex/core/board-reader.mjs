@@ -2,6 +2,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { createHash } from "node:crypto";
+import { checkoutIdentity, decodeCheckout } from "./board-identity.mjs";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { PROGRAM_ID, TASK_ID, checkPrograms } from "./program-rules.mjs";
@@ -87,8 +88,9 @@ function githubRemotes(config) {
  */
 export function logbookIdentity(directory, budget = null, into = { diagnostics: [], warnings: [] }) {
   const found = { checkout: undefined, repository: null, upstream: null, archived: false };
-  try { found.checkout = regular(join(directory, "checkout.txt"), budget).trim(); }
+  try { found.checkout = decodeCheckout(regularBytes(join(directory, "checkout.txt"), budget)); }
   catch (error) { if (error.code !== "ENOENT") into.diagnostics.push(`checkout: ${error.code ?? error.message}`); }
+  found.checkoutIdentity = checkoutIdentity(found.checkout);
   // The PR link needs the checkout's GitHub origin, and the project's name may come from its upstream. Read its Git
   // config as a file; run no Git command. No remote: no link.
   const remotes = (() => { try { return isAbsolute(found.checkout ?? "") ? githubRemotes(regular(join(found.checkout, ".git", "config"), budget)) : {}; } catch { return {}; } })();

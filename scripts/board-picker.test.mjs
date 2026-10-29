@@ -83,8 +83,8 @@ test("T305: the picker opens with /, moves with the arrows, chooses with Enter, 
   assert.equal(await focused(page), "pick-trig", "focus goes back to the button");
   assert.equal(await page.locator("#pick-name").textContent(), "Council Record (sample)");
   assert.deepEqual(await shown(page), ["T3 Council Record (sample)", "T41 Council Record (sample)"], "the Claude and the Codex task of one repository");
-  assert.match(await page.evaluate(() => location.hash), /^#p=product-demos-[0-9a-f]{6}$/);
-  assert.match(await page.evaluate(() => localStorage.getItem("board-project")), /^product-demos-[0-9a-f]{6}$/);
+  assert.match(await page.evaluate(() => location.hash), /^#p=checkout-[0-9a-f]{64}$/);
+  assert.match(await page.evaluate(() => localStorage.getItem("board-project")), /^checkout-[0-9a-f]{64}$/);
   // Esc closes and gives focus back; the choice stays.
   await page.keyboard.press("/");
   await page.keyboard.press("Escape");
@@ -92,7 +92,7 @@ test("T305: the picker opens with /, moves with the arrows, chooses with Enter, 
   assert.equal(await focused(page), "pick-trig");
   assert.equal(await page.locator("#pick-name").textContent(), "Council Record (sample)");
   // A chip for each other project that needs you takes you there in one click.
-  await page.locator('#pick-chips [data-pick^="sage-"]').click();
+  await page.locator('#pick-chips .chip[title^="sage ·"]').click();
   assert.equal(await page.locator("#pick-name").textContent(), "sage");
   assert.equal(await page.locator("#pick-all").isVisible(), true);
   await page.locator("#pick-all").click();
@@ -125,7 +125,7 @@ test("T305: search matches other names and says why; no match, archived and a re
   assert.deepEqual(await shown(page), ["T2 old-site", "T3 old-site"], "an archived project's tasks show when you choose it");
   // The choice comes back after a reload: from the hash, and from the browser's storage without one.
   const address = await page.evaluate(() => location.href);
-  assert.match(address, /#p=old-site-[0-9a-f]{6}$/);
+  assert.match(address, /#p=checkout-[0-9a-f]{64}$/);
   await reload(page, renderBoardHtml(sample(), { snapshot: false }), address);
   assert.equal(await page.locator("#pick-name").textContent(), "old-site");
   await reload(page, renderBoardHtml(sample(), { snapshot: false }));
@@ -280,16 +280,18 @@ test("T305 F-T305-8: at 375 px a tap on Close closes the sheet and gives focus b
 
 test("T305 F-T305-9 and F-T305-6: under each filter the project chips add up to Needs you, and each chip's count is what Needs you says there; a long name ends in an ellipsis", async t => {
   const long = "Council Record, the sample project with a much longer display name";
-  const page = await open(t, { html: renderBoardHtml(sample(read => { for (const project of read.flatMap(source => source.projects)) if (project.displayName) project.displayName = long; }), { snapshot: false }) });
-  const chips = () => page.locator("#pick-chips .chip:not([hidden])").evaluateAll(list => list.map(chip => [chip.dataset.pick.replace(/-[0-9a-f]{6}$/, ""), Number(chip.querySelector("[data-n]").textContent)]));
+  const model = sample(read => { for (const project of read.flatMap(source => source.projects)) if (project.displayName) project.displayName = long; });
+  const labels = new Map(model.projects.map(project => [project.key, project.books[0].split("/").at(-1).replace(/-[0-9a-f]{6}$/, "")]));
+  const page = await open(t, { html: renderBoardHtml(model, { snapshot: false }) });
+  const chips = async () => (await page.locator("#pick-chips .chip:not([hidden])").evaluateAll(list => list.map(chip => [chip.dataset.pick, Number(chip.querySelector("[data-n]").textContent)]))).map(([key, count]) => [labels.get(key), count, key]);
   const seen = {};
   for (const priority of ["", "P0", "P1", "P3"]) {
     await page.locator("#f-priority").selectOption(priority);
     const list = await chips(), total = Number(await page.locator("#needs-count").textContent());
-    seen[priority || "any"] = [total, list];
+    seen[priority || "any"] = [total, list.map(([name, count]) => [name, count])];
     assert.equal(list.reduce((n, [, count]) => n + count, 0), total, `${priority}: ${JSON.stringify(list)}`);
-    for (const [key, count] of list) {
-      await page.locator(`#pick-chips .chip[data-pick^="${key}-"]`).click();
+    for (const [name, count, key] of list) {
+      await page.locator(`#pick-chips .chip[data-pick="${key}"]`).click();
       assert.equal(Number(await page.locator("#needs-count").textContent()), count, `${priority} ${key}`);
       await page.locator("#pick-all").click();
     }
@@ -347,7 +349,7 @@ test("R1075-3, R1071-5, R1069-1: the project-gone banner is a status that clears
   await reload(page, renderBoardHtml(sample(), { snapshot: false }));
   assert.equal(await page.locator("#gone").isVisible(), true);
   assert.equal(await page.locator("#gone").evaluate(banner => banner.closest("[role=status]") !== null), true, "a screen reader hears it");
-  await page.locator('#pick-chips [data-pick^="sage-"]').click();
+  await page.locator('#pick-chips .chip[title^="sage ·"]').click();
   assert.equal(await page.locator("#gone").isVisible(), false, "another pick clears it");
   assert.equal(await page.locator("#pick-arch").isVisible(), false);
   await choose(page, "old-site");
@@ -531,7 +533,8 @@ test("R1075-6: a logbook that the board cannot read has a mark and a plain reaso
   try { model = sample(); } finally { chmodSync(file, 0o644); }
   const page = await open(t, { html: renderBoardHtml(model, { snapshot: false }) });
   await page.locator("#pick-trig").click();
-  const row = page.locator(`#pick-list [role=option][data-key="${folder}"]`);
+  const group = model.projects.find(project => project.books.includes(`claude/${folder}`)).key;
+  const row = page.locator(`#pick-list [role=option][data-key="${group}"]`);
   assert.equal(await row.getAttribute("class"), "opt warn");
   assert.equal(await row.locator(".sub svg").count(), 1, "the mark");
   assert.equal(await row.locator(".sub").innerText(), "Logbook unreadable: its tasks file has no read permission · Claude");

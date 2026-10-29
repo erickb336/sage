@@ -1,8 +1,14 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderBoardHtml, renderAgentsHtml, renderProgramsHtml, renderBoardText, renderTaskText, renderBoardStatus, needCounts, cardFits, BOARD_ENHANCEMENT } from "../packages/sage-core/board-render.mjs";
 import { NOW as PROGRAMS_NOW, programsSource, programsTables } from "./fixtures/board-programs.mjs";
+const sampleRoot = mkdtempSync(join(tmpdir(), "sage-render-sample-")), sampleSage = join(sampleRoot, "sage"), sampleDemo = join(sampleRoot, "sdc", "product-demos");
+mkdirSync(sampleSage, { recursive: true }); mkdirSync(sampleDemo, { recursive: true });
+after(() => rmSync(sampleRoot, { recursive: true, force: true }));
 function model() {
   return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [{ key: "sample/project-abcdef", name: "project-abcdef", diagnostics: [], tables: { tasks: [{ id: "T1", title: "<script>alert(1)</script> & [sample](https://example.test)", size: "small", risk: "auth", route: "build,code-review,qa", state: "held", branch: "", pr: "", round: "1", keys: "" }], gates: [{ id: "G1", task: "T1", question: "Sample: go on?", answer: "" }] } }] }], { now: "2026-10-08T20:00:00Z" });
 }
@@ -292,26 +298,26 @@ test("T314 R1045-3: the task text shows the priority and the kind when they are 
 
 // T305: the picker, the filter bar, the theme and the live pill, as the page gives them. Sample data only.
 const providers = () => buildBoardModel([
-  { id: "claude", label: "claude", provider: "Claude", diagnostics: [], projects: [{ key: "claude/sage-43265b", name: "sage-43265b", checkout: "/sample/sage", diagnostics: [], tables: { tasks: [row("T1", "awaiting-you", { priority: "P0", kind: "ui" })] } }, { key: "claude/demo-111111", name: "demo-111111", checkout: "/sample/sdc/product-demos", displayName: "seacc (Council Record)", diagnostics: [], tables: { tasks: [row("T2", "framed")] } }] },
-  { id: "codex", label: "codex", provider: "Codex", diagnostics: [], projects: [{ key: "codex/sage-43265b", name: "sage-43265b", checkout: "/sample/sage", diagnostics: [], tables: { tasks: [row("T1", "framed")] } }] },
+  { id: "claude", label: "claude", provider: "Claude", diagnostics: [], projects: [{ key: "claude/sage-43265b", name: "sage-43265b", checkout: sampleSage, diagnostics: [], tables: { tasks: [row("T1", "awaiting-you", { priority: "P0", kind: "ui" })] } }, { key: "claude/demo-111111", name: "demo-111111", checkout: sampleDemo, displayName: "seacc (Council Record)", diagnostics: [], tables: { tasks: [row("T2", "framed")] } }] },
+  { id: "codex", label: "codex", provider: "Codex", diagnostics: [], projects: [{ key: "codex/sage-43265b", name: "sage-43265b", checkout: sampleSage, diagnostics: [], tables: { tasks: [row("T1", "framed")] } }] },
 ], { now: at });
 
 test("T305: the picker is one button with an ARIA combobox and listbox, every project as an option with the names that search reads", () => {
-  const html = renderBoardHtml(providers(), { snapshot: false });
+  const data = providers(), group = data.projects.find(project => project.name === "sage").key, html = renderBoardHtml(data, { snapshot: false });
   assert.ok(html.includes('<button class="trigger" type="button" id="pick-trig" aria-haspopup="listbox" aria-expanded="false" aria-controls="pick-pop">'));
   assert.ok(html.includes('<input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project"'));
   assert.ok(html.includes('<div class="list"><ul class="opts" role="listbox" id="pick-list" aria-label="Projects"><li role="option" id="pick-o-all" class="opt" data-key="" data-name="All projects" aria-selected="false">'));
   const listbox = html.slice(html.indexOf('role="listbox"'), html.indexOf("</ul>", html.lastIndexOf('role="option"')));
   assert.ok(!/<button/.test(listbox), "R1071-4: the listbox holds only options and their groups");
   assert.ok(html.includes('<div class="vh" id="pick-say" role="status" aria-live="polite"></div>'), "R1075-6: a polite status says the count of matches");
-  const sage = /<li role="option" id="pick-o-[^"]+" class="opt" data-key="sage-43265b"[^>]*>/.exec(html)[0];
+  const sage = new RegExp(`<li role="option" id="pick-o-[^"]+" class="opt" data-key="${group}"[^>]*>`).exec(html)[0];
   assert.ok(sage.includes('data-name="sage"') && sage.includes('data-provider="claude codex"') && sage.includes('data-providers="Claude + Codex"'), sage);
   assert.ok(sage.includes('data-terms="sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b"'), sage);
   // R1069-2: the checkout paths go only to the Mac's own page, which the server asks for with paths.
-  assert.ok(!html.includes("/sample/sage") && !renderBoardHtml(providers()).includes("/sample/sage"), "no path for a tunnel viewer or in the offline snapshot");
-  assert.ok(renderBoardHtml(providers(), { snapshot: false, paths: true }).includes('data-terms="sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b\n/sample/sage"'));
+  assert.ok(!html.includes(sampleSage) && !renderBoardHtml(data).includes(sampleSage), "no path for a tunnel viewer or in the offline snapshot");
+  assert.ok(renderBoardHtml(data, { snapshot: false, paths: true }).includes(`data-terms="sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b\n${sampleSage}"`));
   assert.ok(html.includes('data-list="needs"><div class="grp" id="pick-g-needs"><span>Needs you</span><span class="n">1</span></div>'));
-  assert.ok(/id="pick-chips"><span class="vh">Projects that need you:<\/span><button class="chip" type="button" id="need-[^"]+" data-pick="sage-43265b" data-provider="claude codex"[^>]*><span class="dot p\d" aria-hidden="true"><\/span><span class="cn">sage<\/span> <span class="badge"><span data-n>1<\/span><span class="vh"> need you<\/span><\/span><\/button><\/span>/.test(html), "one chip for each project that needs you, with its count");
+  assert.ok(html.includes(`data-pick="${group}" data-provider="claude codex"`), "one chip for each project that needs you, with its count");
   assert.equal((html.match(/data-pick="seacc|data-pick="demo-111111"/g) ?? []).length, 0, "no chip for a project that needs nothing");
   const empty = renderBoardHtml(buildBoardModel([], { now: at }), { snapshot: false });
   assert.ok(empty.includes("<b>No projects yet.</b>") && !empty.includes('id="pick-chips"><span'));
@@ -344,12 +350,12 @@ test("T305: the picker's search matches the shown name, else another name, and s
 });
 
 test("T305: the filter bar has Who from the sources, Priority P0 to P3 or none, and the ten kinds; it needs the script", () => {
-  const html = renderBoardHtml(providers(), { snapshot: false });
+  const data = providers(), group = data.projects.find(project => project.name === "sage").key, html = renderBoardHtml(data, { snapshot: false });
   assert.ok(html.includes('<div class="seg" role="group" aria-label="Who"><button type="button" id="who-all" data-who="" aria-pressed="true">All</button><button type="button" id="who-claude" data-who="claude" aria-pressed="false">Claude</button><button type="button" id="who-codex" data-who="codex" aria-pressed="false">Codex</button></div>'));
   assert.deepEqual([.../<select id="f-priority" data-f="priority">(.*?)<\/select>/.exec(html)[1].matchAll(/<option value="([^"]*)">([^<]*)</g)].map(m => `${m[1]}=${m[2]}`), ["=Any", "P0=P0", "P1=P1", "P2=P2", "P3=P3", "none=No priority"]);
   assert.deepEqual([.../<select id="f-kind" data-f="kind">(.*?)<\/select>/.exec(html)[1].matchAll(/<option value="([^"]*)">([^<]*)</g)].map(m => m[2]), ["Any", "Design", "UI", "Orchestration", "Optimization", "Bug fix", "Logbook", "Docs", "Security", "Providers", "Checks"]);
   assert.ok(html.includes("html:not(.scripted) .pick,html:not(.scripted) .fbar{display:none}"));
-  assert.ok(/<a class="card needs" id="card-[^"]+" href="[^"]+" data-key="claude\/sage-43265b\/T1" data-project="sage-43265b" data-provider="claude" data-priority="P0" data-kind="ui"/.test(html));
+  assert.ok(html.includes(`data-key="claude/sage-43265b/T1" data-project="${group}" data-provider="claude" data-priority="P0" data-kind="ui"`));
   assert.ok(html.includes('<span class="who" title="The logbook that holds this task">Codex</span>'), "each card names the provider whose logbook holds it");
 });
 
@@ -612,7 +618,8 @@ test("R1307-1: when the programs table cannot be read, the cards show no program
 test("R1307-2: a logbook that the board cannot read is an item of Needs you, under Other, with the reason, and counts in needs you", () => {
   const codex = programsSource("codex", { gates: [], runs: [] });
   codex.projects[0].diagnostics = ["tasks: line 14 has 9 cells, and its header has 16"];
-  const model = buildBoardModel([programsSource(), codex], { now: PROGRAMS_NOW }), text = renderBoardText(model);
+  const claude = programsSource(); claude.projects[0].checkout = sampleSage; codex.projects[0].checkout = sampleSage;
+  const model = buildBoardModel([claude, codex], { now: PROGRAMS_NOW }), text = renderBoardText(model);
   assert.ok(text.includes("\n🔴 5 needs you · "), text.slice(0, 200));
   assert.ok(sectionOf(text, "#### Other").startsWith("#### Other\n**2 · PG2 Lead build is stuck** · claude · sage \\(sample\\)\n> The pilot T21 was abandoned\\. Choose a new pilot, or drop the program\\.\n\n**3 · The breakdown gate G30 of PG7 is not in the logbook** · claude · sage \\(sample\\)\n> Ask the chief to repair the logbook, or to propose PG7 again\\.\n\n**4 · The Codex logbook cannot be read** · codex · sage \\(sample\\)\n> tasks\\.tsv line 14 has 9 cells, and its header has 16\\. The board shows only the Claude logbook of sage \\(sample\\)\\. Ask the chief to repair the logbook\\.\n\n**5 · T70 Sample T70**"), sectionOf(text, "#### Other"));
   assert.deepEqual([model.projects[0].needsOwner, model.programNeeds.length], [5, 3]);
@@ -679,7 +686,7 @@ test("T368 QD: the Program filter lists the programs by key, with No program; a 
   assert.deepEqual([...select.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)].map(m => [m[1] && m[1] !== "none" ? Buffer.from(m[1], "base64url").toString() : m[1], m[2]]), [
     ["", "Any"], [KEY("PG1"), "PG1 Codex support"], [KEY("PG2"), "PG2 Lead build"], [KEY("PG3"), "PG3 Board programs"], [KEY("PG4"), "PG4 Agent caps"], [KEY("PG5"), "PG5 Old pilot (done)"],
     [KEY("PG6"), "PG6 Dropped idea"], [KEY("PG7"), "PG7 Lost gate"], [KEY("PG8"), "PG8 Loop"], [KEY("PG9"), "PG9 Changes"], ["none", "No program"]]);
-  assert.ok(select.includes(`<option value="${B64(KEY("PG5"))}" data-project="sage-ff5ee2" data-why="Its tasks ended more than 7 days ago, and the board shows the last 7 days of Done." data-href="/program/${B64(KEY("PG5"))}">`), select);
+  assert.ok(select.includes(`<option value="${B64(KEY("PG5"))}" data-project="${programsModel().projects[0].key}" data-why="Its tasks ended more than 7 days ago, and the board shows the last 7 days of Done." data-href="/program/${B64(KEY("PG5"))}">`), select);
   assert.ok(html.includes('<div class="emptyboard" id="noprog" hidden><b>No task of <span id="noprog-name"></span> shows on the board.</b>'));
   // A dropped program with no task left is no option; with no program at all there is no filter.
   const out = programsTables(); out.tasks.find(task => task.id === "T60").program = "";
@@ -713,7 +720,7 @@ test("T368: a program's page: goal and progress, what moves next, the tasks in o
   const tables = programsTables();
   tables.decisions.push({ at: "2026-10-14T09:00:00Z", task: "T1", decision: "state merged", why: "sample" }, { at: "2026-10-12T09:00:00Z", task: "T1", decision: "PG1 proposed with gate G1, pilot T1", why: "sage" }, { at: "2026-10-13T09:00:00Z", task: "T1", decision: "state building", why: "sample" });
   const model = programsModel(tables), pg1 = renderProgramsHtml(model, { programKey: KEY("PG1"), live: true });
-  assert.ok(pg1.includes(`<a class="back" href="/programs">← Programs</a><a class="back" href="/#p=sage-ff5ee2&amp;pg=${B64(KEY("PG1"))}">Its tasks on the board</a>`));
+  assert.ok(pg1.includes(`<a class="back" href="/programs">← Programs</a><a class="back" href="/#p=${encodeURIComponent(model.projects[0].key)}&amp;pg=${B64(KEY("PG1"))}">Its tasks on the board</a>`));
   assert.ok(pg1.includes('<h1 class="ptitle"><span aria-hidden="true">◫</span> Codex support</h1>'));
   assert.ok(pg1.includes(`<p><b>Pilot:</b> <a href="/task/${B64(KEY("T1"))}">T1</a> Sample T1 · <span class="stw-done">merged</span></p><p class="faint">Approved total: 7 tasks (gate G1). Done when every task that is not abandoned is merged or concluded: 6 of the 7.</p>`), pg1);
   assert.ok(pg1.includes('<b>Now:</b> T12 is in review. <span class="faint">1 more waits.</span> <span class="stw-cant">T11 cannot start.</span></span></div><div class="nextline"><b>Then:</b> T13 can start when T12 merges.</div><div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>T11 cannot start: it waits for T10, which was abandoned. Ask the chief to remove the wait, or to drop T11.</span></div>'), pg1);
@@ -746,11 +753,11 @@ test("T368: the task page shows its program with the progress, each wait with it
 });
 
 test("T368 C9: the offline snapshot holds the programs list and each program's page as anchors, and links to them", () => {
-  const html = renderBoardHtml(programsModel());
+  const model = programsModel(), html = renderBoardHtml(model);
   assert.ok(html.includes('<nav class="boardtabs" id="board-pages" aria-label="Board pages"><a href="#" aria-current="page">Task board</a><a href="#programs">Programs</a></nav>'));
   assert.ok(html.includes('<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span><input type="checkbox" id="flip-programs" class="vh flip" form="themes"><label class="chip theme" for="flip-programs">'));
   assert.ok(html.includes(`<a class="prog" href="#program-${B64(KEY("PG1"))}">`) && html.includes(`<section class="page" id="program-${B64(KEY("PG1"))}" aria-label="PG1">`));
-  assert.ok(html.includes(`<a class="back" href="#programs">← Programs</a><a class="back" href="#p=sage-ff5ee2&amp;pg=${B64(KEY("PG1"))}">Its tasks on the board</a>`));
+  assert.ok(html.includes(`<a class="back" href="#programs">← Programs</a><a class="back" href="#p=${encodeURIComponent(model.projects[0].key)}&amp;pg=${B64(KEY("PG1"))}">Its tasks on the board</a>`));
   assert.ok(html.includes(`<a class="t" href="#task-${B64(KEY("T13"))}">Sample T13</a>`));
 });
 
@@ -798,10 +805,10 @@ test("R1324-5: the programs list, a program page and the not-found page have the
   for (const html of [renderProgramsHtml(model), renderProgramsHtml(model, { programKey: KEY("PG1") }), renderProgramsHtml(model, { programKey: KEY("PG99") })]) {
     const header = html.slice(html.indexOf("<header>"), html.indexOf("</header>"));
     assert.ok(header.includes(`<a class="chip need" href="/#needs=1">`) && header.includes('Needs you <span class="count" id="needs-count">4</span></a>'), header);
-    assert.ok(header.includes('<button class="trigger" type="button" id="pick-trig"') && header.includes(`data-key="sage-ff5ee2" data-name="sage (sample)"`), header);
+    assert.ok(header.includes('<button class="trigger" type="button" id="pick-trig"') && header.includes(`data-key="${model.projects[0].key}" data-name="sage (sample)"`), header);
     assert.ok(!header.includes('id="pick-chips"'), "the project chips are the board's only");
   }
-  assert.ok(renderProgramsHtml(model).includes('<li data-project="sage-ff5ee2"><a class="prog'), "each row carries its project, for the picker");
+  assert.ok(renderProgramsHtml(model).includes(`<li data-project="${model.projects[0].key}"><a class="prog`), "each row carries its project, for the picker");
   assert.ok(BOARD_ENHANCEMENT.includes("if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs')") && BOARD_ENHANCEMENT.includes("if(list&&$('board-summary'))"));
 });
 
@@ -811,7 +818,7 @@ test("R1322-2: the Program filter keeps a dropped program while a card of it sho
   tables.decisions.push({ at: "2026-10-19T09:00:00Z", task: "T60", decision: "state merged", why: "sample" });
   const html = renderBoardHtml(programsModel(tables), { snapshot: false });
   assert.ok(cardIn(html, "T60").includes(`data-program="${B64(KEY("PG6"))}"`), "T60 shows in Done");
-  assert.ok(html.includes(`<option value="${B64(KEY("PG6"))}" data-project="sage-ff5ee2" data-why="A filter hides its tasks."`), "PG6 is an option");
+  assert.ok(html.includes(`<option value="${B64(KEY("PG6"))}" data-project="${programsModel().projects[0].key}" data-why="A filter hides its tasks."`), "PG6 is an option");
   tables.decisions.pop(); tables.decisions.push({ at: "2026-10-01T09:00:00Z", task: "T60", decision: "state merged", why: "sample" });
   assert.ok(!renderBoardHtml(programsModel(tables), { snapshot: false }).includes(`value="${B64(KEY("PG6"))}"`), "no card on the board: no option");
 });
