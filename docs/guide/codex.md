@@ -314,6 +314,64 @@ Limits:
 - A `js` call of the desktop app's REPL can run shell commands that no sage hook sees; sage mode allows it so the chief keeps its browser previews. The REPL runs the code in its own Node process, so a push, a merge or a file change in that code passes every sage rule. The `exec` tool of code mode is different: each tool call inside its code reaches the sage hook.
 - Under full access (`danger-full-access`), sage mode gives no guarantee: an agent can write any file, also the mode files, the logbook and Codex's record of your messages.
 
+## Inactive trigger observation
+
+`packages/sage-codex/hooks/turn-trigger-observer.mjs` is a separate, inactive command for synthetic fixtures. It prepares a later bounded CLI observation proposal. No manifest calls it.
+
+It never changes sage mode, permissions or authorization, and it writes no capture or telemetry.
+
+Run the labelled sample from the checkout:
+
+```sh
+node scripts/fixtures/codex-native/turn-trigger-sample.mjs
+```
+
+The sample creates temporary fixtures, calls the command, and prints three observed cases and seven refusals. It then removes its fixtures. To supply another synthetic fixture, send a normal `UserPromptSubmit` callback as JSON on stdin:
+
+```sh
+node packages/sage-codex/hooks/turn-trigger-observer.mjs --synthetic-root /absolute/sample-root --project /absolute/sample-project < sample-callback.json
+```
+
+The explicit root grants access only to the callback-selected regular file below it. The command never infers a provider home or searches for files.
+
+Use only made-up data. A live profile boundary needs a separate owner decision; this command does not establish one.
+
+The supported subset follows [the pinned Codex record layout](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/protocol/src/protocol.rs#L2303): a `session_meta` header and `event_msg` records with `task_started` and complete `turn_attribution`. The matching start must have the literal trigger `user`, matching root and turn identities, and no parent lineage.
+
+Earlier starts must have consistent attribution; their triggers do not classify the current turn. Other matching triggers, sources and layouts return unavailable.
+
+The recorded CLI version is opaque metadata. It is not required diagnostic evidence or proof of the executable version.
+
+An observed result contains only `trigger: "user"` and true match flags for session, root, project, turn and attribution. A refusal contains only `status: "unavailable"` and a fixed reason code. The command returns no request text, report, path, native identifier or arbitrary source string.
+
+Identity comparisons establish agreement, not independent authentication of the callback or file.
+
+The command limits callback input to 64 KiB, header data to 16 KiB, and total file data to 256 KiB. It reads the header and one contiguous tail that ends at the captured file size. A cut first tail record is discarded.
+
+The necessary start and every later record must be complete. The command checks at most 2,048 tail records and stops after a 1.8-second deadline, including callback input. It refuses malformed JSON, duplicate keys, incomplete sections, missing attribution, conflicting starts or terminals, mismatched identities, links, changed files and exceeded bounds.
+
+Context identities must agree before and after the matching start. A terminal remains evidence even when its start falls outside the tail.
+
+A supplied terminal root must equal its turn identity. Repeated terminals and context after its terminal return unavailable.
+
+The diagnostic contract validates strict UTF-8 and JSON, unique keys, complete records, supported envelopes and discriminators, and diagnostic facts. It does not validate full message-payload conformance. Unknown variants, including the unverified `turn_suspended` event, return unavailable.
+
+Supported event discriminators are `task_started`, `task_complete`, `turn_aborted`, `user_message`, `agent_message`, `agent_reasoning`, `agent_reasoning_raw_content`, `token_count`, `hook_started` and `hook_completed`. Supported response discriminators are `message`, `reasoning`, `function_call`, `function_call_output`, `custom_tool_call` and `custom_tool_call_output`. A `turn_context` supplies context identities; a second `session_meta` is unsupported.
+
+Message bodies, model settings, telemetry and response delivery metadata remain opaque JSON within the same limits, including nesting depth 32. Callback content and the recorded version also provide no diagnostic evidence. For example, a numeric message body does not change a valid trigger result; a conflicting context root returns unavailable.
+
+The header excludes child, fork and inherited-history evidence, including `forked_from_ordinal_exclusive`. An absent `history_mode` means `legacy`; explicit `legacy` records also use file order and must omit ordinals. An unknown or null history mode returns unavailable.
+
+For `paginated` history, every record requires an exact unsigned 64-bit integer ordinal. The root header starts at zero, and each contiguous section has consecutive ordinals.
+
+A cut permits a gap between the header and tail, but no duplicate, backward or skipped ordinal within the tail. Null, decimal, exponent, missing and overflowing ordinals return unavailable.
+
+These rules follow the pinned [rollout envelope](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/history/src/rollout_payload.rs) and [ordinal rules](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/rollout/src/ordinal.rs). The tests retain earlier malformed-payload reproductions and label changed expectations with the revised diagnostic contract.
+
+The fixture root and its ancestors must remain under the caller's control. The reader checks file and ancestor identities before and after reads; it does not authenticate a hostile local writer. It makes no claim about unseen history, freshness, initial input, recovery or a running executable.
+
+Synthetic checks do not establish live CLI or desktop behavior, installed delivery, activation, or an autopilot lock. No owner action is needed to run the sample.
+
 ## What comes next
 
 The lead role, agent caps and the board phrases come later in the same plugin. Codex draws its own approval prompts in both front ends, so sage adds none. The runtime notes of the parked Codex fork, for example the [Claude parity audit](../../packages/sage-codex/runtime/claude-parity-audit.md), stay as evidence.
