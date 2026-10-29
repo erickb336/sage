@@ -52,6 +52,32 @@ function fixed({ sage = true, autopilot = false, ok = true } = {}) {
   return { run: (input) => gate(input, deps), checks };
 }
 
+test("T91: retained report comparison admits only the chief's assigned project", async t => {
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "sage-compare-gate-")));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  const g = fixed(), args = { project, task: "T1", run: "R1", sha256: "1".repeat(64) };
+  assert.equal(await g.run(mcp("report_compare", args, { cwd: project })), undefined);
+  assert.equal(denied(await g.run(mcp("report_compare", args, { cwd: project, ...CHILD }))), LOGBOOK);
+  assert.match(denied(await g.run(mcp("report_compare", { ...args, project: SCRATCH_HOME }, { cwd: project }))), /assigned.*project/);
+  assert.match(denied(await g.run(mcp("report_compare", { ...args, project: "relative" }, { cwd: project }))), /assigned.*project/);
+  assert.equal(denied(await g.run(pre("Bash", `node ${TOOL} report-compare T1 R1 --sha256=${args.sha256} --project=${project}`, { cwd: project, ...CHILD }))), LOGBOOK);
+});
+
+test("T91: comparison admission cannot be reused for changed input or another call", async t => {
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "sage-compare-proof-")));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  const { takeProof } = await import(HOOK);
+  const args = { project, task: "T1", run: "R1", sha256: "1".repeat(64) }, meta = { callId: "compare", sessionId: base.session_id };
+  const g = fixed();
+  for (const changed of [{ project: SCRATCH_HOME }, { task: "T2" }, { run: "R2" }, { sha256: "2".repeat(64) }]) {
+    assert.equal(await g.run(mcp("report_compare", args, { cwd: project, tool_use_id: "compare" })), undefined);
+    assert.equal(takeProof(meta, "report_compare", process.env, { ...args, ...changed }), false);
+  }
+  assert.equal(await g.run(mcp("report_compare", args, { cwd: project, tool_use_id: "compare" })), undefined);
+  assert.equal(takeProof(meta, "report_compare", process.env, args), true);
+  assert.equal(takeProof(meta, "report_compare", process.env, args), false);
+});
+
 test("an input shape that the gate does not know is denied with one line, and a request gets no decision", async () => {
   const g = fixed({ sage: false });
   for (const input of [null, "text", {}, { ...pre("Bash", "ls"), session_id: undefined }, { ...pre("Bash", "ls"), cwd: "relative" },
