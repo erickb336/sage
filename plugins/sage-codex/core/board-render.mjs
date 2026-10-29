@@ -270,6 +270,9 @@ function banners(model) {
   return `${note}${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
 }
 
+const goneBanner = view => `<div role="status"><div class="banner info" id="gone" data-gone hidden><div>The project selection is no longer available. ${view} <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
+const GONE_PROGRAMS = "The list shows programs from projects that are not archived.";
+
 // Theme (bug bash R1023-4, T349): the page is dark until you choose light; a choice is kept in the browser and the head
 // script applies it before the first paint. The switch is a checkbox, so it works with scripts off: it shows the
 // other theme. Its label names the theme that it switches to. With scripts, a change keeps the shown theme as the choice.
@@ -355,6 +358,7 @@ select{font:inherit;color:var(--text);background:var(--panel);border:1px solid v
 .summary{display:flex;gap:18px;padding:10px 20px;color:var(--muted);font-size:12px;flex-wrap:wrap}
 .summary b{color:var(--text);font-variant-numeric:tabular-nums}.summary b.needn{color:var(--need)}
 .banner{display:flex;gap:8px;align-items:flex-start;margin:0 20px 10px;padding:8px 10px;border-radius:10px;font-size:12px}
+.snapshot-warning{position:sticky;top:0;z-index:9;background:var(--shell)}
 .banner.warn{background:var(--warn-soft);color:var(--warn)}.banner.info{background:var(--accent-soft);color:var(--accent)}.banner svg{flex:none;margin-top:1px}.diag{margin:4px 0 0;padding-left:16px;overflow-wrap:anywhere}
 .board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(170px,1fr);gap:12px;padding:6px 20px 24px;overflow-x:auto;align-items:start}
 .col{background:var(--panel2);border-radius:18px;padding:5px;min-height:120px;min-width:0}
@@ -575,9 +579,8 @@ const S={project:'',needs:false,who:'',priority:'',kind:'',program:'',open:false
 // takes needs=1 out of the address, so a reload does not turn the filter on again.
 // A Program filter of a program in another project ends when you choose a project, also in the address (R1371-2).
 function ownProgram(){const o=S.program&&S.program!=='none'&&S.project&&all('#f-program option').find(o=>o.value===S.program);if(o&&o.dataset.project!==S.project){S.program='';return true}return false}
-function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.program=h.get('pg')||'';if(ownProgram()){h.delete('pg');save()}if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs');const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
-fromHash();
-function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{if(!location.hash||/^#(p|pg|needs)=/.test(location.hash)){const h=new URLSearchParams();if(S.project)h.set('p',S.project);if(S.program)h.set('pg',S.program);const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
+function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';if(h.has('p'))S.gone=false;S.program=h.get('pg')||'';if(ownProgram()){h.delete('pg');save()}if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs');const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
+function save(){try{localStorage.setItem('board-project',S.project)}catch(e){}try{const h=new URLSearchParams(location.hash.slice(1));if(!location.hash||location.hash.includes('=')||h.has('p')||h.has('pg')||h.has('needs')){if(S.project)h.set('p',S.project);else h.delete('p');if(S.program)h.set('pg',S.program);else h.delete('pg');const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
 const options=()=>all('#pick-list [role=option]');
 function filter(){
   const list=$('pick-list');
@@ -605,12 +608,13 @@ function filter(){
   const opt=sel&&S.program&&S.program!=='none'?all('option',sel).find(o=>o.value===S.program):null,noprog=!!opt&&!shown.length,np=$('noprog');
   if(np){np.hidden=!noprog;if(noprog){set('noprog-name',opt.textContent);set('noprog-why',opt.dataset.why);$('noprog-link').href=opt.dataset.href}}
   const none=$('nomatch');if(none)none.hidden=!cards.length||shown.length>0||lacks||noprog;
-  const gone=$('gone');if(gone)gone.hidden=!S.gone;
+  all('[data-gone]').forEach(gone=>gone.hidden=!S.gone);
   // The programs list keeps the chosen project's programs, with the count of each group.
   let rows=0;all('[data-plist]').forEach(ul=>{const own=all('li[data-project]',ul);own.forEach(li=>li.hidden=!!S.project&&li.dataset.project!==S.project);const n=own.filter(li=>!li.hidden).length,head=ul.closest('details')||ul.previousElementSibling;rows+=n;ul.hidden=!n;if(head){head.hidden=!n;const c=head.querySelector('.n');if(c)c.textContent=String(n)}});
   const noprograms=$('noprograms');if(noprograms)noprograms.hidden=rows>0;
   draw();
 }
+function applyHash(){const h=new URLSearchParams(location.hash.slice(1));fromHash();filter();if(h.has('p')&&$('pick-list'))try{localStorage.setItem('board-project',S.project)}catch(e){}}
 function draw(){
   const pop=$('pick-pop'),input=$('pick-q');if(!pop||!input)return;
   pop.hidden=!S.open;$('pick-trig').setAttribute('aria-expanded',String(S.open));if(input.value!==S.query)input.value=S.query;
@@ -644,9 +648,9 @@ document.addEventListener('click',e=>{const t=e.target;
   const w=t.closest('[data-who]');if(w){S.who=w.dataset.who;filter();return}
   if(t.closest('[data-clearf]')){S.who=S.priority=S.kind=S.program='';save();filter();return}
   if(t.closest('[data-showall]')){S.who='';filter();return}
-  if(t.closest('[data-reset]')){S.project='';S.needs=false;S.who=S.priority=S.kind=S.program='';save();filter();return}
+  if(t.closest('[data-reset]')){S.project='';S.gone=false;S.needs=false;S.who=S.priority=S.kind=S.program='';save();filter();return}
   if(t.closest('[data-dismiss]')){S.gone=false;filter();return}});
-window.addEventListener('hashchange',()=>{if(/^#(p|pg|needs)=/.test(location.hash)){fromHash();filter()}});
+window.addEventListener('hashchange',()=>{const h=new URLSearchParams(location.hash.slice(1));if(h.has('p')||h.has('pg')||h.has('needs'))applyHash()});
 document.addEventListener('change',e=>{const f=e.target.dataset&&e.target.dataset.f;if(f){S[f]=e.target.value;if(f==='program')save();filter()}
   if(e.target.classList&&e.target.classList.contains('flip')){const now=getComputedStyle(document.documentElement).getPropertyValue('--scheme').trim();document.documentElement.dataset.theme=now;e.target.checked=false;try{localStorage.setItem('board-theme',now)}catch(x){}}});
 // A theme chosen in another tab of the board shows here too.
@@ -665,7 +669,7 @@ document.addEventListener('keydown',e=>{const inQ=e.target.id==='pick-q';
   else if(e.key==='Home'&&!S.query){e.preventDefault();S.active=S.keys[0];draw()}
   else if(e.key==='End'&&!S.query){e.preventDefault();S.active=S.keys[n-1];draw()}
   else if(e.key==='Enter'&&n&&S.active!==null){e.preventDefault();choose(S.active)}});
-filter();`;
+applyHash();`;
 
 // The live script (bug bash R1023-1, -2 and -5). It replaces a part only when the server's HTML of that part changed, then
 // gives back what the viewer had: the open details (by data-key), the page and column scroll, and the focus (by id). The
@@ -792,8 +796,9 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
     const nomatch = `<div class="emptyboard" id="nomatch" hidden><b>No task matches.</b> No visible task fits this filter. <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprog = `<div class="emptyboard" id="noprog" hidden><b>No task of <span id="noprog-name"></span> shows on the board.</b> <span id="noprog-why"></span> <a id="noprog-link" href="">Open the program</a> · <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprov = `<div class="emptyboard" id="noprov" hidden><b>No <span id="noprov-who"></span> logbook in this project.</b> <span id="noprov-name"></span> has tasks only in <span id="noprov-has"></span>. <button class="linkbtn" type="button" data-showall>Show all providers</button></div>`;
-    const gone = `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. The board shows all projects. <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
-    body = `<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.programs?.length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
+    const gone = goneBanner(`The project picker shows All projects.${snapshot ? " The Programs list shows programs from projects that are not archived." : ""}`);
+    // A snapshot can clear the saved choice on any route, including a detail. Keep its warning outside the routed sections.
+    body = `${snapshot ? `<div class="snapshot-warning">${gone}</div>` : ""}<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.programs?.length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${snapshot ? "" : gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
       // Offline, the task pages, the programs list and each program's page are sections of the one file (C9).
       + (snapshot ? `<form id="themes" hidden></form><div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.programs?.length ? `<section class="page" id="programs" aria-label="Programs"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-programs", true)}</div>${programsList(ctx, model, false)}</section>` : ""}${(model.programs ?? []).map(program => `<section class="page" id="${esc(programAnchor(program.key))}" aria-label="${esc(program.id)}">${programPage(ctx, program, false)}</section>`).join("")}</div>` : "");
   }
@@ -1039,7 +1044,7 @@ export function renderProgramsHtml(model, { programKey = null, live = false, pat
   // A program that is not on the board has no stream: the server answers its stream with 404 (R1322-3).
   live = live && (!programKey || !!program);
   const body = `<div class="boardview"><header><h1>Sage board</h1>${pagesNav("programs", model)}${livePill(`Board · ${at}`)}<span class="spacer"></span>${THEME_SWITCH}${picker(ctx, model, paths, false)}</header>`
-    + `<div id="board-content" data-at="${esc(at)}">${banners(model)}<main class="page open" aria-label="${program ? esc(program.id) : programKey ? "Program not found" : "Programs"}">${main}</main></div></div>`;
+    + `<div id="board-content" data-at="${esc(at)}">${banners(model)}${goneBanner(programKey ? "The project picker shows All projects." : GONE_PROGRAMS)}<main class="page open" aria-label="${program ? esc(program.id) : programKey ? "Program not found" : "Programs"}">${main}</main></div></div>`;
   const stream = programKey ? `/program/${b64(programKey)}?events=1` : "/programs?events=1";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${program ? `${esc(program.id)} · ` : programKey ? "Program not found · " : ""}Sage programs</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(stream, ["board-content", "board-pages", "pick-list", "needs-count"]) : ""}</script></body></html>`;
 }

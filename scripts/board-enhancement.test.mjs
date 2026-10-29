@@ -115,7 +115,7 @@ test("T205, T305: real DOM keeps the chosen project, the needs filter and the th
   await needsButton(page).click();
   assert.deepEqual(await visibleCards(page), ["T5 · Sample gamma work"]);
 
-  // T305 "project gone": the chosen project has no logbook now. The board shows all projects and says so.
+  // T305 "project gone": the chosen project option is unavailable. The board shows all projects and says so.
   await update(page, model({ delta: true }));
   assert.equal(await page.locator('#pick-list [data-name="gamma"]').count(), 0);
   assert.equal(await picked(page), "All projects");

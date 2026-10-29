@@ -805,6 +805,219 @@ test("R1324-5: the programs list, a program page and the not-found page have the
   assert.ok(BOARD_ENHANCEMENT.includes("if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs')") && BOARD_ENHANCEMENT.includes("if(list&&$('board-summary'))"));
 });
 
+// Simulate the rendered page with an in-memory browser store. The options and rows come from the page HTML.
+function programsSelection(html, saved, hash = "") {
+  const body = html.slice(0, html.lastIndexOf("<script>"));
+  const options = [...body.matchAll(/<li role="option"[^>]*data-key="([^"]*)" data-name="([^"]*)"[^>]*>/g)].map(([, key, name]) => ({
+    dataset: { key, name }, setAttribute() {}, closest() { return null; },
+  }));
+  const lists = [...body.matchAll(/<ul class="plist" data-plist>([\s\S]*?)<\/ul>/g)].map(([, content]) => {
+    const rows = [...content.matchAll(/<li data-project="([^"]*)">/g)].map(([, project]) => ({ dataset: { project }, hidden: false }));
+    return { rows, closest() { return null; }, previousElementSibling: null, querySelectorAll() { return rows; } };
+  });
+  // Model the snapshot CSS ancestors, not only each warning's own hidden flag.
+  const ancestors = new Map(), pages = new Set(), stack = [];
+  for (const [, close, tag, attrs] of body.slice(body.indexOf("<body>")).matchAll(/<(\/?)(div|main|section)\b([^>]*)>/g)) {
+    if (close) { stack.pop(); continue; }
+    const id = attrs.match(/\bid="([^"]*)"/)?.[1], classes = (attrs.match(/\bclass="([^"]*)"/)?.[1] || "").split(" ");
+    if (classes.includes("page")) pages.add(id);
+    if (/\bdata-gone\b/.test(attrs)) ancestors.set(id, [...stack]);
+    stack.push({ tag, id, classes, hidden: /\bhidden\b/.test(attrs) });
+  }
+  const banners = [...body.matchAll(/<div role="status"><div class="banner info" id="(gone(?:-programs)?)"(?: data-gone)? hidden><div>(.*?)<button/g)]
+    .map(([, id, text]) => ({ id, hidden: true, text, ancestors: ancestors.get(id) || [] }));
+  const gone = banners.find(banner => banner.id === "gone") || null;
+  const name = { textContent: "All projects" }, handlers = {};
+  const elements = { "pick-list": {}, "pick-name": name, gone };
+  const document = {
+    documentElement: { classList: { add() {} } },
+    getElementById(id) { return elements[id] || null; },
+    querySelectorAll(selector) { return selector === "#pick-list [role=option]" ? options : selector === "[data-plist]" ? lists : selector === "[data-gone]" ? banners : []; },
+    addEventListener(type, handler) { handlers[type] = handler; },
+  };
+  const store = new Map([["board-project", saved]]), location = { hash, pathname: "/programs", search: "" };
+  const localStorage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) };
+  const history = { replaceState(_state, _title, url) { location.hash = url.startsWith("#") ? url : ""; } };
+  const windowHandlers = {}, window = { addEventListener(type, handler) { windowHandlers[type] = handler; } };
+  new Function("document", "window", "localStorage", "location", "history", BOARD_ENHANCEMENT)(document, window, localStorage, location, history);
+  const click = (selector, target = {}) => handlers.click({ target: { closest: s => s === selector ? target : null } });
+  const changeHash = hash => { location.hash = hash; windowHandlers.hashchange(); };
+  const visibleBanners = () => banners.filter(banner => !banner.hidden && banner.ancestors.every(parent =>
+    !parent.hidden && !(parent.classes.includes("boardview") && pages.has(location.hash.slice(1)))
+    && !(parent.classes.includes("page") && !parent.classes.includes("open") && parent.id !== location.hash.slice(1))));
+  return { gone, banners, name, store, location, rows: lists.flatMap(list => list.rows), click, changeHash, visibleBanners };
+}
+
+function twoPrograms() {
+  const other = programsSource("codex");
+  Object.assign(other.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
+  return buildBoardModel([programsSource(), other], { now: PROGRAMS_NOW });
+}
+
+test("T72: an unavailable saved project shows the global programs and a warning", t => {
+  const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
+  const page = programsSelection(renderProgramsHtml(missing), "other-abc123");
+  assert.equal(page.store.get("board-project"), "");
+  assert.equal(page.name.textContent, "All projects");
+  assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+  t.diagnostic("A missing saved choice was cleared, and rows from both sample projects were shown.");
+  assert.ok(page.gone, "the Programs page has an accessible warning");
+  assert.equal(page.gone.hidden, false);
+  assert.doesNotMatch(page.gone.text, /no logbook/i, "the missing picker option does not prove the logbook is absent");
+  assert.equal(page.gone.text, "The project selection is no longer available. The list shows programs from projects that are not archived. ");
+  page.click("[data-dismiss]");
+  assert.equal(page.gone.hidden, true, "Dismiss clears the warning");
+});
+
+test("T72: the Board gives the same reason for an unavailable saved project", () => {
+  const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
+  const page = programsSelection(renderBoardHtml(missing, { snapshot: false }), "other-abc123");
+  assert.equal(page.gone?.hidden, false);
+  assert.doesNotMatch(page.gone.text, /no logbook/i, "the missing picker option does not prove the logbook is absent");
+  assert.equal(page.gone.text, "The project selection is no longer available. The project picker shows All projects. ");
+});
+
+test("T72: an unavailable project in the address gets the same warning", () => {
+  const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
+  const page = programsSelection(renderProgramsHtml(missing), "", "#p=other-abc123");
+  assert.equal(page.name.textContent, "All projects");
+  assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+  assert.equal(page.gone?.hidden, false);
+  assert.equal(page.gone.text, "The project selection is no longer available. The list shows programs from projects that are not archived. ");
+});
+
+test("T72: valid saved choices and All projects keep their normal program rows", () => {
+  const html = renderProgramsHtml(twoPrograms());
+  const chosen = programsSelection(html, "other-abc123");
+  assert.equal(chosen.name.textContent, "other (sample)");
+  assert.deepEqual([...new Set(chosen.rows.filter(row => !row.hidden).map(row => row.dataset.project))], ["other-abc123"]);
+  assert.equal(chosen.gone?.hidden, true);
+  const all = programsSelection(html, "");
+  assert.equal(all.name.textContent, "All projects");
+  assert.deepEqual([...new Set(all.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+  assert.equal(all.gone?.hidden, true);
+  chosen.click("#pick-list [role=option]", { dataset: { key: "" } });
+  assert.equal(chosen.name.textContent, "All projects");
+  assert.equal(chosen.rows.filter(row => !row.hidden).length, all.rows.length);
+});
+
+test("T72: an empty list and a program page explain an unavailable saved choice", () => {
+  const empty = programsSelection(renderProgramsHtml(buildBoardModel([], { now: PROGRAMS_NOW })), "gone-abcdef");
+  assert.equal(empty.name.textContent, "All projects");
+  assert.equal(empty.gone?.hidden, false);
+  const detail = programsSelection(renderProgramsHtml(twoPrograms(), { programKey: "claude/sage-ff5ee2/PG1" }), "gone-abcdef");
+  assert.equal(detail.gone?.hidden, false);
+  assert.equal(detail.gone?.text, "The project selection is no longer available. The project picker shows All projects. ");
+});
+
+test("T72: without JavaScript the warning stays hidden and all program rows remain in the page", () => {
+  const html = renderProgramsHtml(twoPrograms()).split("<script>").slice(0, -1).join("<script>");
+  assert.match(html, /role="status"><div class="banner info" id="gone" data-gone hidden>/);
+  assert.ok(html.includes('<li data-project="other-abc123">') && html.includes('<li data-project="sage-ff5ee2">'));
+});
+
+test("T72 R739-2: a snapshot warns visibly before detail entry consumes the saved choice", () => {
+  const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
+  const html = renderBoardHtml(missing), detailHash = `#program-${B64(KEY("PG1"))}`;
+  assert.ok(html.includes('.page{display:none;') && html.includes('.page:target,.page.open{display:block}'));
+  assert.ok(html.includes('body:has(.page:target) .boardview{display:none}'));
+  assert.ok(html.includes('.snapshot-warning{position:sticky;top:0;'), "anchor scrolling keeps the shared warning in view");
+  const detail = programsSelection(html, "other-abc123", detailHash);
+  assert.equal(detail.store.get("board-project"), "");
+  assert.equal(detail.location.hash, detailHash);
+  assert.equal(detail.visibleBanners().length, 1, "clearing the choice must warn outside the hidden Board and Programs ancestors");
+  detail.changeHash("#programs");
+  assert.equal(detail.visibleBanners().length, 1, "the same warning remains visible on Programs");
+  detail.changeHash(detailHash);
+  const reloaded = programsSelection(html, detail.store.get("board-project"), detail.location.hash);
+  reloaded.changeHash("#programs");
+  assert.equal(reloaded.name.textContent, "All projects");
+  assert.equal(reloaded.visibleBanners().length, 0, "a reload keeps the already explained All-project choice");
+  assert.deepEqual([...new Set(reloaded.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+});
+
+for (const hash of ["", "#programs", `#program-${B64(KEY("PG1"))}`, `#task-${B64(KEY("T13"))}`]) {
+  test(`T72 R738-1 R739-2 R740-1: snapshot ${hash || "Board"} shares a visible warning and keeps valid choices and dismissal`, () => {
+    const data = twoPrograms(), missing = { ...data, projects: data.projects.filter(project => project.key !== "other-abc123") };
+    const html = renderBoardHtml(missing), page = programsSelection(html, "other-abc123", hash);
+    assert.equal(page.visibleBanners().length, 1, "the fallback warning has visible ancestors on this route");
+    assert.equal(page.banners.length, 1, "all snapshot routes use one warning region");
+    const warning = page.visibleBanners()[0];
+    assert.ok(warning.ancestors.every(parent => !parent.classes.includes("boardview") && !parent.classes.includes("page")));
+    assert.equal(warning.text, "The project selection is no longer available. The project picker shows All projects. The Programs list shows programs from projects that are not archived. ");
+    assert.equal(page.store.get("board-project"), "");
+    assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+    page.click("[data-dismiss]");
+    page.changeHash(hash === "#programs" ? "" : "#programs");
+    assert.equal(page.visibleBanners().length, 0, "dismissal holds when the snapshot route changes");
+    const reset = programsSelection(html, "other-abc123", hash);
+    reset.click("[data-reset]");
+    assert.ok(reset.banners.every(banner => banner.hidden));
+    assert.equal(reset.store.get("board-project"), "");
+    for (const saved of ["sage-ff5ee2", ""]) {
+      const valid = programsSelection(html, saved, hash);
+      assert.ok(valid.banners.every(banner => banner.hidden));
+      assert.equal(valid.store.get("board-project"), saved);
+      assert.deepEqual([...new Set(valid.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), saved ? [saved] : ["other-abc123", "sage-ff5ee2"]);
+    }
+    assert.match(html, /id="gone" data-gone hidden>/, "the script-free warning stays hidden");
+    assert.match(html, /<section class="page" id="programs"/, "script-free Programs content remains available");
+  });
+}
+
+test("T72 R739-1: a valid address change clears a stale warning and persists the choice", () => {
+  const page = programsSelection(renderProgramsHtml(twoPrograms()), "gone-abcdef");
+  assert.equal(page.gone.hidden, false);
+  page.changeHash("#p=sage-ff5ee2");
+  assert.equal(page.gone.hidden, true);
+  assert.equal(page.name.textContent, "sage (sample)");
+  assert.equal(page.store.get("board-project"), "sage-ff5ee2");
+  assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))], ["sage-ff5ee2"]);
+  page.changeHash("#extra=1&p=other-abc123");
+  assert.equal(page.name.textContent, "other (sample)");
+  assert.equal(page.store.get("board-project"), "other-abc123");
+  assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))], ["other-abc123"]);
+  page.changeHash("#extra=1&p=");
+  assert.equal(page.name.textContent, "All projects");
+  assert.equal(page.store.get("board-project"), "");
+  assert.equal(page.gone.hidden, true);
+  assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))].sort(), ["other-abc123", "sage-ff5ee2"]);
+});
+
+test("T72 R740-2: a choice replaces a missing address project after earlier parameters and survives reload", () => {
+  const html = renderProgramsHtml(twoPrograms());
+  const page = programsSelection(html, "", "#extra=1&p=gone-abcdef");
+  assert.equal(page.gone.hidden, false);
+  page.click("#pick-list [role=option]", { dataset: { key: "sage-ff5ee2" } });
+  const params = new URLSearchParams(page.location.hash.slice(1));
+  assert.equal(params.get("extra"), "1");
+  assert.equal(params.get("p"), "sage-ff5ee2");
+  const reloaded = programsSelection(html, page.store.get("board-project"), page.location.hash);
+  assert.equal(reloaded.name.textContent, "sage (sample)");
+  assert.equal(reloaded.gone.hidden, true);
+  assert.deepEqual([...new Set(reloaded.rows.filter(row => !row.hidden).map(row => row.dataset.project))], ["sage-ff5ee2"]);
+  for (const hash of ["#p", "#extra&p"]) {
+    const bare = programsSelection(html, "", hash);
+    bare.click("#pick-list [role=option]", { dataset: { key: "sage-ff5ee2" } });
+    assert.equal(new URLSearchParams(bare.location.hash.slice(1)).get("p"), "sage-ff5ee2");
+    assert.equal(programsSelection(html, bare.store.get("board-project"), bare.location.hash).name.textContent, "sage (sample)");
+  }
+});
+
+test("T72 R738-2 R740-3: warning describes only non-archived Programs rows", () => {
+  const archived = programsSource("codex");
+  Object.assign(archived.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", archived: true });
+  const model = buildBoardModel([programsSource(), archived], { now: PROGRAMS_NOW });
+  const page = programsSelection(renderProgramsHtml(model), "gone-abcdef");
+  assert.equal(page.gone.hidden, false);
+  assert.deepEqual([...new Set(page.rows.filter(row => !row.hidden).map(row => row.dataset.project))], ["sage-ff5ee2"]);
+  assert.equal(page.gone.text, "The project selection is no longer available. The list shows programs from projects that are not archived. ");
+  const allArchived = programsSelection(renderProgramsHtml(buildBoardModel([archived], { now: PROGRAMS_NOW })), "gone-abcdef");
+  assert.equal(allArchived.gone.hidden, false);
+  assert.equal(allArchived.rows.length, 0);
+  assert.match(renderProgramsHtml(buildBoardModel([archived], { now: PROGRAMS_NOW })), /Every program is in an archived project/);
+});
+
 test("R1322-2: the Program filter keeps a dropped program while a card of it shows in Done", () => {
   const tables = programsTables(), t60 = tables.tasks.find(task => task.id === "T60");
   t60.state = "merged";
