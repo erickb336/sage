@@ -1695,7 +1695,7 @@ test("a refusal says merge check, and escapes the control characters of its reas
   s.send(prompt("autopilot on"));
   const reason = denied(s.send(bash(MERGE))) ?? "";
   assert.match(reason, /^sage: the merge check refuses: /);
-  assert.match(reason, /home\\u001b\[31m/);
+  assert.match(reason, /home\\x1b\[31m/);
   assert.doesNotMatch(reason, /\u001b/);
 });
 
