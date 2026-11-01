@@ -76,7 +76,7 @@ Use the Codex CLI 0.160 to 0.166, and a multi-agent v2 model; the desktop app sh
    codex plugin add sage@sage
    ```
 2. Run `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA. Each report goes in the task's pages folder.
-3. With autopilot on, Codex still asks you at least 5 times in each small task: before the worktree, the add, the commit, the push and the pull request. Approve each one; read the choices and the option for fewer prompts first ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)).
+3. With autopilot on, Codex still asks you at least 5 times in each small task: before the worktree, the add, the commit, the push and the pull request. Approve each one; read the choices first ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)).
 
 ## The board
 

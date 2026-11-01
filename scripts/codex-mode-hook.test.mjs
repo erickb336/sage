@@ -279,7 +279,7 @@ test("T603: the chief role holds the pilot's rules: a v2 model only, no fresh le
   assert.match(roles, /A lead that has no spawn tools is the exception: start no fresh lead until the owner says that the session runs on a v2 model\./);
 });
 
-test("T603: the Codex pages hold no v1 path for a task, and the guide gives the approval count, the opt-in and the turn rule", () => {
+test("T603: the Codex pages hold no v1 path for a task, and the guide gives the approval count, what the pilot did not prove and the turn rule", () => {
   const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\s+/g, " ");
   const guide = read("../docs/guide/codex.md"), readme = read("../README.md");
   for (const [name, text] of Object.entries({ guide, readme,
@@ -289,7 +289,11 @@ test("T603: the Codex pages hold no v1 path for a task, and the guide gives the 
   }
   assert.match(guide, /sage on Codex needs a multi-agent v2 model for the chief and each child\./);
   assert.match(guide, /each small task still asks you at least 5 times before its merge/);
-  assert.match(guide, /writable_roots = \["\/absolute\/project\/\.git"\] network_access = true/);
+  assert.match(guide, /\*\*`writable_roots` and the network: not proved\.\*\* sage keeps Codex's defaults, and it does not recommend this option/);
+  assert.match(guide, /`git worktree add -b` failed in the sandbox, but it left the branch\. 2\. The escalated retry stopped with `a branch named 'sage\/t1-demo' already exists`, so no worktree came to exist\./);
+  assert.match(guide, /\*\*Not proved yet:\*\* - An escalated push under a strict sandbox\./);
+  assert.doesNotMatch(guide, /Opt in to fewer prompts|writable_roots = /);
+  assert.doesNotMatch(readme, /option for fewer prompts/);
   assert.match(guide, /With `approval_policy = "never"`, Codex refuses each escalation, so a build cannot commit/);
   assert.match(guide, /A child's report starts no turn in Codex\./);
   assert.match(guide, /fails with `collab spawn failed: agent thread limit reached`/);

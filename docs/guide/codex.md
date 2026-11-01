@@ -147,6 +147,7 @@ With autopilot on, each small task still asks you at least 5 times before its me
 - The count is for one small task with separate commands. A model that joins `git add` and `git commit` in one command gets one prompt for both.
 - Each repair adds its own commit and push. A worktree outside the project asks once more, for a file change.
 - A sandbox refusal is not a failed task. The role texts tell each agent to run the command again with escalated permissions, so that the prompt comes to you.
+- After a refusal of `git worktree add -b`, the agent first checks for a branch that the failed step left. When it finds that branch, it runs the command with no `-b`.
 - With `approval_policy = "never"`, Codex refuses each escalation, so a build cannot commit. Use an approval policy that asks.
 - The sage logbook tools ask nothing, also for a lead.
 - With sage mode and autopilot on, the merge needs no prompt: the sage hook allows the verified merge command itself.
@@ -174,17 +175,19 @@ To remove a saved rule, delete its line from `~/.codex/rules/default.rules` (or 
 
 The desktop app gets the same choices from Codex, but its docs do not name their text, and sage was not run in the app yet. So it is not checked yet that a child's prompt reaches you there.
 
-**Opt in to fewer prompts.** sage keeps Codex's defaults and changes none of these settings. To get fewer prompts, you can give your Codex sessions write access to the project's `.git` folder and the network:
+**`writable_roots` and the network: not proved.** sage keeps Codex's defaults, and it does not recommend this option: `writable_roots` with the project's `.git` folder, and `network_access = true`. With the worktree inside the project, the pilot's git commands asked for no approval, but the push failed on the scratch remote. sage's task folders are outside the project, and there the pilot failed:
 
-```toml
-[sandbox_workspace_write]
-writable_roots = ["/absolute/project/.git"]
-network_access = true
-```
+1. `git worktree add -b` failed in the sandbox, but it left the branch.
+2. The escalated retry stopped with `a branch named 'sage/t1-demo' already exists`, so no worktree came to exist.
+3. Each later step failed, and the sage hook refused the push.
 
-With these settings, the pilot's git commands asked for no approval. The pilot used a test model and a scratch remote, and the network part did not run against a real remote.
+The role texts now cover this retry, but no run tried it with this option. The option also lets agents write git's own files and reach the network with no prompt, so the limits under [The rules in Codex](#the-rules-in-codex) that say to keep network access off lose their stop.
 
-> **Trade-off:** agents can then write git's own files and reach the network with no prompt. The sage gate catches some of this, not all. The limits under [The rules in Codex](#the-rules-in-codex) that say to keep network access off then lose their stop.
+**Not proved yet:**
+
+- An escalated push under a strict sandbox. The pilot's push reached a scratch remote only with `/tmp` writable, and with no escalation. With `/tmp` excluded, the push failed, and no run tried it again with escalation.
+- A real push and a real `gh pr create`. No run called a real remote.
+- The `git worktree add` retry with no `-b` in Codex. It was checked only with git alone, not in a Codex run.
 
 ## The logbook tools
 
