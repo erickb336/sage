@@ -5651,6 +5651,7 @@ async function taskUpdateCoordinator(f, request) {
   const [project, ownerSession, epoch] = JSON.parse(context.owner);
   let update;
   const coordination = {
+    native: context.native,
     history(digest, proposal) {
       const row = f.core.readAdmission(f.options.directory).taskUpdates?.find(row => !row.void &&
         Object.entries({ project, session: ownerSession, epoch, request: request.request, task: request.task, digest, disruptive: proposal.disruptive })
@@ -5685,6 +5686,11 @@ test('T594: a chief with another logbook root settles a committed row of a share
   mkdirSync(shared, { recursive: true });
   renameSync(f.assignmentLogbook, folder);
   writeFileSync(join(shared, 'bindings.tsv'), `root\tfolder\tcommits\tat\n${realpathSync(f.options.projectDirectory)}\t${basename(folder)}\t\t2026-11-01T00:00:00Z\n`);
+  // A task of a shared logbook takes a change only from its owning chief (T604): this chief claims it first.
+  const { chiefLogbook } = await import(pathToFileURL(join(f.plugin, 'runtime/logbook-owner.mjs')));
+  const context = chiefLogbook(f.native(session), f.options), project = f.options.projectDirectory;
+  const chief = context.tool.chiefFor(project, context.native, f.assignmentEnv);
+  context.tool.sage(['claim', 'T1', '--version', f.snapshot().version, '--chief', chief, '--project', project], f.assignmentEnv);
   const { run, coordination } = await taskUpdateCoordinator(f, f.request({ title: 'Shared' }));
   // The chief stops after the commit: its journal row stays open, and only the shared logbook holds the receipt.
   assert.throws(() => run({ ...coordination, release() { throw Error('Injected stop'); } }), { code: 'uncertain-outcome' });

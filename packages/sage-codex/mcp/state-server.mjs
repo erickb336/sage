@@ -96,6 +96,10 @@ export const TOOLS = {
     input: { task, kind: z.enum(tool.KINDS), sha: sha.optional(), cycle: count("the cycle number"), pr: count("the pull request number"), run: optional("the run id of the review or QA") },
     pos: ["task"], argv: (i) => ["verdict", i.task],
   },
+  claim: {
+    describe: "Take a task with no owning chief in a shared logbook. The version is the one that the refusal of your last write printed.",
+    input: { task, version: z.string().regex(/^[0-9a-f]{64}$/).describe("the task's current version") }, pos: ["task"], argv: (i) => ["claim", i.task],
+  },
   round: { describe: "Start a repair round on the open findings marked fix. It names the roles to run again.", input: { task }, pos: ["task"], argv: (i) => ["round", i.task] },
   merge_check: {
     describe: "Check that the logbook allows the merge of this head SHA: clean cycles, no open findings, no open gates.",
@@ -144,7 +148,7 @@ export function createStateServer({ env = process.env } = {}) {
   const registerTool = (name, spec, run) => server.registerTool(name, spec, async (input, extra) => {
     const caller = takeProof(extra?.mcpReq?._meta, name, env, input);
     const why = caller ? callerRefusal(caller, name, input, env) : NO_GATE;
-    return why ? { isError: true, content: [{ type: "text", text: why }] } : run(input);
+    return why ? { isError: true, content: [{ type: "text", text: why }] } : run(input, caller, extra?.mcpReq?._meta?.sessionId);
   });
   const project = z.string().refine(isAbsolute, "an absolute path").describe("the absolute path of the project's checkout");
   for (const [name, spec] of Object.entries(TOOLS)) {
@@ -152,8 +156,10 @@ export function createStateServer({ env = process.env } = {}) {
       description: spec.describe,
       inputSchema: z.object({ project, ...spec.input }).strict(),
       annotations: { readOnlyHint: CHILD_READS.has(name), destructiveHint: false },
-    }, async (input) => {
-      const { code, text } = tool.command(argvFor(name, input), env);
+    }, async (input, caller, native) => {
+      // The session id is the root's on the root, a lead and a helper (T554): a shared logbook's chief is the root.
+      const argv = argvFor(name, input);
+      const { code, text } = tool.command([...argv, ...tool.actorOptions(input.project, argv, { native, leadTask: caller.role === "lead" ? caller.task : undefined }, env)], env);
       return { ...(code ? { isError: true } : {}), content: [{ type: "text", text }] };
     });
   }

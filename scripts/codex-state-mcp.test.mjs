@@ -46,8 +46,7 @@ async function connect(t, overrides = {}) {
      * PreToolUse with its id, then the server gets the same id and session in _meta (R1916-2); gate: false skips the gate.
      * With agent, the call comes from the child at that agent path, and a refusal of the gate is { denied }.
      */
-    call: async (name, args = {}, { gate = true, callId = `call_${++calls}`, agent } = {}) => {
-      const sessionId = "019a0000-0000-7000-8000-0000000000aa";
+    call: async (name, args = {}, { gate = true, callId = `call_${++calls}`, agent, sessionId = "019a0000-0000-7000-8000-0000000000aa" } = {}) => {
       let thread = { transcript_path: null };
       if (agent) {
         thread = { agent_id: "agent-1", transcript_path: join(dir, `child-${callId}.jsonl`) };
@@ -84,6 +83,29 @@ test("the state server serves only a call that sage's gate saw: with no hook run
   }
   s.writeProof("status", "chief_form", { role: "chief" });
   assert.equal((await s.call("status", {}, { gate: false, callId: "chief_form" })).error, undefined, "the chief's own form serves");
+});
+
+test("a shared logbook through the server: the root's session is one chief, a lead acts for it, a child reads, and a task with no chief takes the claim tool (T604)", async (t) => {
+  const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-shared-")));
+  t.after(() => rmSync(shared, { recursive: true, force: true }));
+  const s = await connect(t, { SAGE_SHARED_HOME: shared });
+  const other = "019a0000-0000-7000-8000-0000000000cc";
+  await s.call("link", { separate: true });
+  assert.match(await s.call("task_add", { title: "first", size: "small", priority: "P2" }), /^T1 framed .* · chief C1$/);
+  assert.match((await s.call("task_set", { task: "T1", fields: { title: "taken" } }, { sessionId: other })).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\. Nothing changed\./);
+  assert.match(await s.call("task_add", { title: "second", size: "small", priority: "P2" }, { sessionId: other }), /^T2 framed .* · chief C2$/);
+  await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "sage/t1-a" } });
+  assert.match(await s.call("run_add", { task: "T1", role: "lead" }), /^R1 running/);
+  assert.match((await s.call("task_set", { task: "T1", fields: { state: "building" } }, { agent: LEAD })), /^T1 building/, "a lead acts for the chief of its lead run");
+  assert.match(await s.call("run_add", { task: "T1", role: "qa" }, { agent: LEAD }), /^R2 running/);
+  assert.match((await s.call("task_set", { task: "T1", fields: { title: "x" } }, { agent: `${LEAD}/sage_qa_t1_r2` })).denied, /./, "a child writes nothing");
+  assert.match(await s.call("status", {}, { agent: `${LEAD}/sage_qa_t1_r2` }), /tasks {3}2/, "a child reads");
+  const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
+  const dir = tool.storeDir(s.project, s.env), tasks = join(dir, "tasks.tsv");
+  assert.equal(readFileSync(join(dir, "chiefs.tsv"), "utf8").trim().split("\n").length, 3, "a header and two chiefs: the lead made no row");
+  writeFileSync(tasks, readFileSync(tasks, "utf8").replace(/\tC2\n/, "\t\n"));
+  const version = /--version ([0-9a-f]{64})/.exec((await s.call("task_set", { task: "T2", fields: { title: "x" } })).error)[1];
+  assert.equal(await s.call("claim", { task: "T2", version }), "T2 claimed · chief C1");
 });
 
 const BRIEF = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map((field) => `${field}: the ${field.toLowerCase()}.`).join("\n");
@@ -347,7 +369,7 @@ test("F-T552-2: a lead's verdict on a commit of the ledger passes while a repair
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {
   const s = await connect(t);
   const tools = await s.tools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["brief", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer",
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["brief", "claim", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer",
     "init", "link", "log", "merge_check", "pages", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));

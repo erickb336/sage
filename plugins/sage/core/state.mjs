@@ -25,10 +25,11 @@ import { REPORT_FIELDS, parseReport } from "./report.mjs";
 import { cleanReport, fieldsOf, readReport } from "./report-reader.mjs";
 import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
-import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
+import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { createSharedRoot, sharedRoot } from "./shared-root.mjs";
+import { CHIEF, createChiefs, writerClass } from "./chiefs.mjs";
 
 export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [] }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
@@ -94,12 +95,22 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption", "approvals"], findings: ["run", "class"] };
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link"];
+const FILLED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption", "approvals"], findings: ["run", "class"] };
+/**
+ * The column that only a table with a chief row has: a table without it reads as it is, so its rows and their task
+ * versions stay. An older sage refuses to write a table with a column that it does not know, so a legacy logbook never
+ * gets it (columnsOf). It comes last.
+ */
+const CHIEF_COLUMN = "chief";
+const TABLES = { ...PLAIN_TABLES, tasks: [...PLAIN_TABLES.tasks, CHIEF_COLUMN], runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN] };
+/** The columns that a table may lack. */
+const ADDED = { ...FILLED, runs: [...FILLED.runs, CHIEF_COLUMN], tasks: [...FILLED.tasks, CHIEF_COLUMN] };
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss"],
   link: ["to", "separate"],
+  claim: ["version"],
   "projects rebuild": ["accept-listing"],
   "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
   "task-adopt": ["source-logbook", "source-provider", "source-task", "pr", "branch"],
@@ -474,7 +485,7 @@ function sheet(dir, table, also = [], max = Infinity) {
   if (text === undefined) throw lost(dir, table, "is missing or is a link to nothing", also);
   const { cols, lines } = sheetText(text);
   if (!cols.length) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
-  if (!TABLES[table].every((c) => cols.includes(c) || ADDED[table]?.includes(c))) refuse(`the header of ${file} is damaged: its first line must be the column names ${TABLES[table].join(", ")}, separated by tabs. Ask the user to fix or add that line.`);
+  if (!TABLES[table].every((c) => cols.includes(c) || ADDED[table]?.includes(c))) refuse(`the header of ${file} is damaged: its first line must be the column names ${PLAIN_TABLES[table].join(", ")}, separated by tabs. Ask the user to fix or add that line.`);
   return { cols, lines };
 }
 
@@ -503,7 +514,7 @@ const rowsOf = ({ cols, lines }) =>
     return Object.fromEntries(cols.map((c, i) => [c, v[i] ?? ""]));
   });
 /** A table's rows, with an empty cell after the others for each column that a later version added and the file does not have yet. */
-const rowsIn = (table, text) => rowsOf(text).map((row) => ({ ...row, ...Object.fromEntries((ADDED[table] ?? []).filter((c) => !Object.hasOwn(row, c)).map((c) => [c, ""])) }));
+const rowsIn = (table, text) => rowsOf(text).map((row) => ({ ...row, ...Object.fromEntries((FILLED[table] ?? []).filter((c) => !Object.hasOwn(row, c)).map((c) => [c, ""])) }));
 const read = (dir, table) => rowsIn(table, sheet(dir, table));
 
 /**
@@ -583,7 +594,7 @@ function updateRows(table, text, cols = TABLES[table]) {
   const sheet = sheetText(text);
   if (!cols.every(key => sheet.cols.includes(key) || ADDED[table]?.includes(key))
     || sheet.cols.some(key => !cols.includes(key)) || new Set(sheet.cols).size !== sheet.cols.length) updateDeny();
-  return rowsOf(sheet).map(row => ({ ...row, ...Object.fromEntries((ADDED[table] ?? [])
+  return rowsOf(sheet).map(row => ({ ...row, ...Object.fromEntries((FILLED[table] ?? [])
     .filter(key => cols.includes(key) && !Object.hasOwn(row, key)).map(key => [key, ""])) }));
 }
 function updateFacts(rows, readiness, maxRounds) {
@@ -607,7 +618,7 @@ function checkUpdateFacts(facts) {
     || !updateKeys(r.config, ["cycles.small", "cycles.large", "cycles.risk"])
     || Object.entries(r.config).some(([key, value]) => !Number.isSafeInteger(value) || valid(key, value) !== value))) updateDeny();
 }
-function planNativeTaskUpdate(before, reference, at, facts, columns = TABLES, legacyRounds = false) {
+function planNativeTaskUpdate(before, reference, at, facts, columns = Object.fromEntries(Object.keys(before).map(table => [table, columnsOf(table, before[table])])), legacyRounds = false) {
   checkUpdateFacts(facts);
   const old = before.tasks.filter(row => row.id === reference.task);
   if (old.length !== 1 || taskVersion(old[0]) !== reference.version) updateDeny();
@@ -672,6 +683,7 @@ const taskUpdates = coordinatedWrites({ schema: 8, previousSchemas: [6], tables:
 
 /** Native task updates require a trusted durable admission decision, never a model-supplied proof. */
 function updateRequestedTask(input, env, coordination) {
+  // The caller's session supplies the chief, as with every native writer (actorOf); it is no part of the saved request.
   if (!input || typeof input.project !== "string" || !input.project || !coordination
     || ["decide", "acknowledge", "release", "void", "history"].some(key => typeof coordination[key] !== "function")) updateDeny();
   const { project, ...request } = input, reference = updateReference(request), dir = storeDir(project, env);
@@ -693,6 +705,9 @@ function updateRequestedTask(input, env, coordination) {
     const current = before.tasks.filter(row => row.id === reference.task);
     if (current.length !== 1) throw new TaskUpdateError("invalid-state");
     if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
+    if (isShared(dir, env)) {
+      if (ownerBar(dir, current[0], chiefRow(dir, coordination.native).id)) throw new TaskUpdateError("other-chief");
+    }
     const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null,
       Object.hasOwn(reference.changes, "approval") ? config(env, dir).max_rounds : undefined);
     const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
@@ -751,8 +766,8 @@ function savedWriteColumns(tables, deny) {
 }
 
 /** The frames that a saved create may hold. Before T591, a tiny arena's route had the code review only when the request added it. */
-function savedFrames(id, { title, size, risk, add }) {
-  const current = taskFrame(id, title, size, risk, add);
+function savedFrames(id, { title, size, risk, add }, chief) {
+  const current = { ...taskFrame(id, title, size, risk, add), ...(chief === undefined ? {} : { chief }) };
   if (size !== "tiny" || !add.includes("arena") || add.includes("code-review")) return [current];
   return [current, { ...current, route: list(current.route).filter(block => block !== "code-review").join(",") }];
 }
@@ -761,7 +776,8 @@ function savedFrames(id, { title, size, risk, add }) {
 function validateTaskWrite({ reference, result }, tables) {
   const deny = () => refuse("The saved task update is damaged. No task table changed.");
   if (!result || typeof result.id !== "string" || !/^T[1-9]\d*$/.test(result.id)
-    || !savedFrames(result.id, reference).some(frame => JSON.stringify(frame) === JSON.stringify(result))) deny();
+    || (result.chief !== undefined && !CHIEF.test(result.chief))
+    || !savedFrames(result.id, reference, result.chief).some(frame => JSON.stringify(frame) === JSON.stringify(result))) deny();
   if (!tables) return;
   const columns = savedWriteColumns(tables, deny);
   const rows = (table, text) => {
@@ -783,7 +799,7 @@ function validateTaskWrite({ reference, result }, tables) {
 }
 
 /** Create one task for a durable caller request. The provider authenticates the opaque owner scope. */
-function createRequestedTask(input, env = process.env) {
+function createRequestedTask(input, env = process.env, native) {
   const fields = ["project", "owner", "request", "title", "size", "risk", "add", "why"];
   const deny = () => refuse("Task creation needs a complete, unchanged request and a valid route.");
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
@@ -813,7 +829,7 @@ function createRequestedTask(input, env = process.env) {
     const prior = taskWrites.readReceipt(dir, reference);
     if (prior) return { decision: "already-created", task: checked(prior) };
     ready(dir);
-    const task = taskFrame(nextId(dir, "T"), input.title, input.size, input.risk, input.add);
+    const task = { ...taskFrame(nextId(dir, "T"), input.title, input.size, input.risk, input.add), ...(isShared(dir, env) ? { chief: chiefRow(dir, native).id } : {}) };
     const decisions = read(dir, "decisions");
     if (input.add.length) decisions.push({ at: now(), task: task.id, decision: `added ${input.add.join(",")}`, why: input.why });
     taskWrites.commit(dir, { reference, result: task }, { tasks: tableText("tasks", [...read(dir, "tasks"), task]), decisions: tableText("decisions", decisions) });
@@ -826,7 +842,7 @@ const runWrites = recordedWrites({ schema: 3, tables: ["runs"], folder: "run-req
   name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json", validate: validateRunWrite });
 
 /** Record one run request using the same writer, branch, round and model rules as the CLI. */
-function createRequestedRun(input, env = process.env) {
+function createRequestedRun(input, env = process.env, native) {
   const fields = ["project", "owner", "request", "task", "role", "branch", "candidate"];
   const deny = () => refuse("Run creation needs a complete, unchanged request and an existing task.");
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
@@ -856,6 +872,11 @@ function createRequestedRun(input, env = process.env) {
     notHeld(matches[0], "run add");
     if (input.candidate && candidateOf(input.candidate) !== input.candidate) deny();
     const run = runFrame(dir, matches[0], input.role, input.branch, input.candidate, env);
+    if (isShared(dir, env)) {
+      run.chief = chiefRow(dir, native).id;
+      const bar = ownerBar(dir, matches[0], run.chief);
+      if (bar) refuse(bar);
+    }
     runWrites.commit(dir, { reference, result: run }, { runs: tableText("runs", [...read(dir, "runs"), run]) });
     status(dir, true);
     return { decision: "run-created", run };
@@ -902,8 +923,9 @@ function validateRunWrite({ reference, result: run }, tables) {
     || !Number.isSafeInteger(Number(run.round)) || !RUN_ROLES.includes(run.role) || typeof run.model !== "string" || cell(run.model) !== run.model
     || typeof run.started !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(run.started)
     || !Number.isFinite(Date.parse(run.started)) || new Date(run.started).toISOString().replace(".000Z", "Z") !== run.started
+    || (run.chief !== undefined && !CHIEF.test(run.chief))
     || JSON.stringify(run) !== JSON.stringify({ id: run.id, task: reference.task, role: reference.role, round: run.round,
-      candidate: reference.candidate, branch: reference.branch, status: "running", started: run.started, model: run.model })) deny();
+      candidate: reference.candidate, branch: reference.branch, status: "running", started: run.started, model: run.model, ...(run.chief === undefined ? {} : { chief: run.chief }) })) deny();
   if (!tables) return;
   const { cols, lines } = sheetText(tables.runs.before);
   if (!TABLES.runs.every(c => cols.includes(c) || ADDED.runs?.includes(c))
@@ -967,7 +989,7 @@ function reviewResult(reference, claims, at) {
 }
 
 /** The same pure delta defines fresh publication and validates a saved recovery intent. */
-function reviewDelta({ reference, result }, claims, rows, columns = TABLES) {
+function reviewDelta({ reference, result }, claims, rows, columns = {}) {
   const deny = () => refuse("The saved review update is damaged. No review tables changed.");
   const { task: id, run, role, review } = reference;
   const { tasks, findings, ledger, decisions } = structuredClone(rows);
@@ -1531,7 +1553,9 @@ function captureReviewTarget(input, env = process.env) {
   });
 }
 
-function tableText(table, rows, cols = TABLES[table]) {
+/** The columns that a write gives a table: all, but the chief column only when a row has it. */
+const columnsOf = (table, rows) => TABLES[table].filter((c) => c !== CHIEF_COLUMN || rows.some((r) => Object.hasOwn(r, c)));
+function tableText(table, rows, cols = columnsOf(table, rows)) {
   return [cols.join("\t"), ...rows.map((r) => cols.map((c) => cell(r[c])).join("\t"))].join("\n") + "\n";
 }
 function write(dir, table, rows) {
@@ -1590,11 +1614,11 @@ function parse(cmd, args) {
     }
   }
   const name = OPTIONS[`${cmd} ${pos[0]}`] ? `${cmd} ${pos[0]}` : cmd;
-  const takes = [...(OPTIONS[name] ?? []), "project"];
-  for (const o of Object.keys(opt)) if (!takes.includes(o)) refuse(`${name} takes no --${o}. Its options: ${takes.map((t) => `--${t}`).join(", ")}.`);
+  const takes = [...(OPTIONS[name] ?? []), "project"], actor = ["chief", "lead"]; // every command takes the actor; only a shared logbook reads it
+  for (const o of Object.keys(opt)) if (![...takes, ...actor].includes(o)) refuse(`${name} takes no --${o}. Its options: ${takes.map((t) => `--${t}`).join(", ")}.`);
   for (const o of spaced) {
     const v = opt[o];
-    if (v === undefined || (v.startsWith("--") && takes.includes(v.slice(2).split("=")[0]))) refuse(`--${o} needs a value. A value that starts with -- goes after =: --${o}=<value>.`);
+    if (v === undefined || (v.startsWith("--") && [...takes, ...actor].includes(v.slice(2).split("=")[0]))) refuse(`--${o} needs a value. A value that starts with -- goes after =: --${o}=<value>.`);
   }
   return { pos, opt };
 }
@@ -1958,7 +1982,7 @@ function frame(dir, title, size, risk, add, tags = {}) {
   return task;
 }
 /** A task's priority, kind and program for a printed line: nothing when it has none. */
-const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.program ? ` · program ${task.program}` : ""}`;
+const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.program ? ` · program ${task.program}` : ""}${task.chief ? ` · chief ${task.chief}` : ""}`;
 const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}${task.waits ? ` · waits ${task.waits.replaceAll(",", ", ")}` : ""}`;
 
 function move(task, to) {
@@ -2448,6 +2472,7 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
       const [table, col] = /^R[1-9]\d*$/.test(id) ? ["runs", "id"] : /^F-T[1-9]\d*-[1-9]\d*$/.test(id) ? ["findings", "key"] : [];
       return table ? one(rows(table).filter((r) => r[col] === id)) : undefined;
     },
+    shared: isShared(dir, env),
     leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
     findings: (task) => rows("findings").filter((f) => f.task === task),
     /**
@@ -2544,6 +2569,7 @@ function sage(argv, env = process.env) {
     } catch (error) { refuse(error.message); }
   }
   if (!readOnly && statSync(root, { throwIfNoEntry: false })?.isDirectory() && ["projects.tsv", "projects.made"].every((f) => !lstatSync(join(root, f), { throwIfNoEntry: false }))) known(root); // the first writing command of this version lists today's logbooks
+  if (cmd === "projects" && isShared(storeDir(project, env), env)) guard(storeDir(project, env), cmd, pos, opt);
   if (cmd === "projects") return pos.join(" ") === "rebuild" && opt["accept-listing"] === "yes" ? rebuild(dirname(storeDir(project, env))) : refuse(`projects takes only: ${REBUILD.slice(5)}. It lists each logbook folder that is in ${root} now as a known project, so that its verdicts count in the merge check. Run it only when the user asks for it, and show the user the folders that it prints.`);
   if (cmd === "link") {
     if (pos.length) refuse("link takes one of --to <folder> or --separate, and no other words.");
@@ -2567,6 +2593,7 @@ function sage(argv, env = process.env) {
       set[k] = (count ? typed(k, v) : valid(k, v)) ?? refuse(`config takes ${KEYS}, and arena_models as a list of ${MODELS.join(", ")}`);
     }
     if (pos.length) {
+      if (isShared(home, env)) guard(home, cmd, pos, opt);
       notePlugin(env);
       // A shared project has one home for its cycle counts: a value that it writes never lands in a provider root.
       const common = isShared(home, env) ? pick(set, SHARED_KEYS) : {}, own = Object.fromEntries(Object.entries(set).filter(([k]) => !Object.hasOwn(common, k)));
@@ -2586,6 +2613,7 @@ function sage(argv, env = process.env) {
     return board({ scope: hex === undefined ? pos[0] : unhex(hex), project, env, save: opt.remember !== "no" });
   }
   const place = locate(project, env), { dir } = place;
+  if (!place.shared && (opt.chief !== undefined || opt.lead !== undefined || cmd === "claim")) refuse(`${visible(project)} has no shared logbook, and only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim. Nothing changed.`);
   const repair = cmd === "logbook" && pos[0] === "repair";
   const skip = repair ? [...new Set(list(opt["accept-loss"]))] : [];
   const odd = skip.filter((t) => !Object.hasOwn(TABLES, t));
@@ -2598,8 +2626,9 @@ function sage(argv, env = process.env) {
   if (readOnly || (cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
   notePlugin(env);
   if (place.row && !place.row.commits && fillCommits(place.checkout, env)) locate(project, env); // the filled row may show a folder of another project
-  const run = () => change(cmd, pos, opt, dir, env, skip, project);
+  const run = () => change(cmd, pos, opt, dir, env, skip, project, place.shared);
   if (cmd !== "init") return run();
+  if (place.shared) guard(dir, cmd, pos, opt);
   // init takes the root's lock and checks the known project list first, so a refusal there makes no logbook.
   let out;
   known(dirname(dir), basename(dir), () => {
@@ -2608,14 +2637,75 @@ function sage(argv, env = process.env) {
   return out;
 }
 
-/** One command that changes a logbook: its lock, the settle step and the integrity check, the command, then the status file. */
-function change(cmd, pos, opt, dir, env, skip, project) {
+/** One command that changes a logbook: its lock, the settle step and the integrity check, the writer guard, the command, then the status file. */
+function change(cmd, pos, opt, dir, env, skip, project, guarded) {
   return withLock(dir, () => {
     ready(dir, skip);
+    if (guarded) opt.chief = guard(dir, cmd, pos, opt);
     const out = act(cmd, pos, opt, dir, env, skip, project);
     status(dir, true);
     return out;
   });
+}
+
+/** Why this chief does not write this task, or "". An empty cell is a task with no owning chief. */
+function ownerBar(dir, task, chief) {
+  if (!task.chief) return `${task.id} has no owning chief, so ${chief} cannot change it. Claim it first: sage claim ${task.id} --version ${taskVersion(task)} --chief ${chief}. Nothing changed.`;
+  if (task.chief === chief) return "";
+  const owner = chiefs(dir).find((r) => r.id === task.chief);
+  return `${task.id} belongs to chief ${task.chief}${owner ? ` (${owner.provider})` : ""}, not to ${chief}. Nothing changed. Change only your own tasks. If ${task.chief} stopped, ask the owner.`;
+}
+
+/**
+ * The one guard of a shared logbook: step 5 of every writer. It gives the chief that this command acts for, or refuses.
+ * The check prevents mistakes by normal agents; it does not stop an agent that gives another chief's id (F4). A lead acts
+ * for the chief of its lead run, while that run runs, on the task of that run only (P4). A command with no chief only reads.
+ */
+function guard(dir, cmd, pos, opt) {
+  const need = writerClass(cmd, pos);
+  if (["read", "owner"].includes(need.kind)) return undefined;
+  const name = [cmd, ...pos.slice(0, 1)].join(" ");
+  if (opt.chief !== undefined && opt.lead !== undefined) refuse(`${name} takes --chief or --lead, not both. Nothing changed.`);
+  const lead = opt.lead === undefined ? undefined : read(dir, "runs").find((r) => r.id === opt.lead && r.role === "lead" && r.status === "running")
+    ?? refuse(`${visible(opt.lead)} is not a running lead run, so this lead writes nothing. Report to your chief. Nothing changed.`);
+  const chief = lead?.chief ?? opt.chief ?? refuse(`this logbook is shared, and a command with no chief only reads: add --chief <your C id> to ${name}. Nothing changed.`);
+  if (!lead && !chiefs(dir).some((r) => r.id === chief)) refuse(`${visible(chief)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
+  const tasks = need.kind === "any" ? [] : read(dir, "tasks"); // a repair of a lost tasks table is an any class
+  const old = need.kind === "program" ? read(dir, "programs").find((p) => p.id === pos[1]) : undefined;
+  const ids = need.kind === "program"
+    ? [opt.pilot ?? old?.pilot, ...(opt.tasks === undefined ? tasks.filter((t) => old && t.program === old.id).map((t) => t.id) : opt.tasks === "none" ? [] : waitWords(opt.tasks))]
+    : [need.task ?? (need.run && read(dir, "runs").find((r) => r.id === need.run)?.task)];
+  const named = ids.filter(Boolean); // a task or a run that the logbook lacks gets the command's own refusal
+  if (lead && (!named.length || named.some((id) => id !== lead.task))) refuse(`${name} is not a write on ${lead.task}, and a lead acts only on the task of its lead run. Report what else the logbook needs. Nothing changed.`);
+  if (need.kind !== "any") for (const id of new Set(named)) {
+    const bar = tasks.find((t) => t.id === id) && ownerBar(dir, tasks.find((t) => t.id === id), chief);
+    if (bar) refuse(bar);
+  }
+  return chief;
+}
+
+/** The chief of a provider's session in a project, its row added at its first write. Undefined for a legacy project. */
+function chiefFor(project, native, env = process.env) {
+  const { dir, shared } = locate(project, env);
+  if (!shared) return undefined;
+  return rowOf(dir, native)?.id ?? withLock(dir, () => chiefRow(dir, native).id);
+}
+
+/**
+ * The options that a provider adds to a command that it runs for its caller: --chief, --lead for a lead, or none for a
+ * read, a gate answer or a legacy project. A logbook that refuses gives none: the command then gives its own refusal.
+ */
+function actorOptions(project, [cmd, ...rest], { native, leadTask }, env = process.env) {
+  try {
+    const { pos } = parse(cmd, rest);
+    if (["read", "owner"].includes(writerClass(cmd, pos).kind) || !locate(project, env).shared) return [];
+    if (!leadTask) return [`--chief=${chiefFor(project, native, env)}`];
+    const run = logbookView(project, env).leadRun(leadTask);
+    return run ? [`--lead=${run.id}`] : [];
+  } catch (error) {
+    if (error instanceof Refusal) return [];
+    throw error;
+  }
 }
 
 /** Makes a new logbook's folders and tables, or checks an existing one, as init does. */
@@ -2653,6 +2743,9 @@ function raiseCounts(shared, env) {
   fileOrNone(file);
   swap(file, JSON.stringify({ ...held, ...next }, null, 2) + "\n");
 }
+
+/** The chief cell of a new task or run: only a shared logbook's write has a chief. */
+const chiefTag = (opt) => (opt.chief === undefined ? {} : { chief: opt.chief });
 
 function act(cmd, pos, opt, dir, env, skip, project) {
   const [sub, id, ...more] = pos;
@@ -2715,6 +2808,15 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     }
     case "config":
       return logbookConfig(dir, pos);
+    case "claim": {
+      const { tasks, task } = taskOf(dir, need(sub, "the task id"));
+      if (task.chief) refuse(`${task.id} belongs to chief ${task.chief}, so it takes no claim. Nothing changed.`);
+      if (opt.version !== taskVersion(task)) refuse(`${task.id} changed, so this claim is out of date: read it again, then claim it with --version ${taskVersion(task)}. Nothing changed.`);
+      task.chief = opt.chief;
+      write(dir, "tasks", tasks);
+      write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: task.id, decision: `${task.id} claimed by ${opt.chief}`, why: "claim" }]);
+      return `${task.id} claimed · chief ${opt.chief}`;
+    }
     case "init":
       // A new logbook's tables, tasks.tsv last: the merge check takes a folder with it for a whole logbook. An existing
       // logbook passed the integrity check (ready), so init makes no table there.
@@ -2796,7 +2898,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (odd.length) refuse(`unknown: ${odd.join(", ")}. Risks: ${RISKS.join(", ")}. Blocks: ${BLOCKS.join(", ")}`);
         if (size === "investigate" && list(opt.add).includes("build")) refuse("an investigation changes no code, so it takes no build block. Frame the build as its own task: sage task add --size tiny, small or large");
         const why = opt.add ? need(opt.why, "--why for the added blocks") : ""; // refuse before anything is written
-        const tags = { priority: priorityOf(opt.priority), ...(opt.kind !== undefined ? { kind: tag("kind", opt.kind) } : {}) };
+        const tags = { priority: priorityOf(opt.priority), ...(opt.kind !== undefined ? { kind: tag("kind", opt.kind) } : {}), ...chiefTag(opt) };
         const graph = graphOf(dir), next = { id: nextId(dir, "T"), state: "framed" };
         if (opt.waits !== undefined) tags.waits = waitsValue(next, opt.waits, [...graph.byId.values()]);
         if (opt.program !== undefined) tags.program = programValue(next, opt.program, graph); // no loop: no task or pilot cell names a new id (IDS)
@@ -2944,7 +3046,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const role = cell(need(opt.role, "--role")).toLowerCase();
         const branch = opt.branch === undefined ? "" : branchOf(opt.branch);
         const candidate = opt.candidate === undefined ? "" : candidateOf(opt.candidate);
-        const run = runFrame(dir, task, role, branch, candidate, env);
+        const run = { ...runFrame(dir, task, role, branch, candidate, env), ...chiefTag(opt) };
         if (opt["usage-interface"] !== undefined) {
           const entry = USAGE_INTERFACES.get(opt["usage-interface"]);
           if (!entry) refuse("Unknown usage interface. Nothing changed.");
@@ -3056,7 +3158,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const title = need(cell(opt.to), '--to "<the follow-up task\'s title>"');
         const size = opt.size ?? "small";
         if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");
-        const to = frame(dir, title, size, [], [], { priority: "P2" }); // a follow-up is P2 on the scale; the chief may set another
+        const to = frame(dir, title, size, [], [], { priority: "P2", ...chiefTag(opt) }); // a follow-up is P2 on the scale; the chief may set another
         const was = f.key, from = f.run || /^(R[1-9]\d*)-/.exec(was)?.[1];
         Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: 0, triage: "", run: "" }); // its run is a run of the old task
         write(dir, "findings", findings);
@@ -3423,5 +3525,6 @@ const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, merg
 const { fillCommits, link, locate, notePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
   listed: (root) => known(root, undefined, undefined, true),
   enroll: (root, folder, make) => known(root, folder, make, false, true) });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

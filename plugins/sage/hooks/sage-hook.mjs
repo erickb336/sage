@@ -330,6 +330,8 @@ export function handle(input, state, slots) {
   const why = event === "PreToolUse" ? (main ? chiefProblem(input, state.sage) : agentWriteProblem(input, slots)) : undefined;
   const verdict = event === "PreToolUse" && main && state.sage && !why ? chiefVerdictProblem(input, slots) : undefined;
   if (verdict) return deny(event, verdict);
+  const notChief = event === "PreToolUse" && main && !why ? chiefIdProblem(input) : undefined;
+  if (notChief) return deny(event, notChief);
   if (why && main) return deny(event, `${why} Only sage.mjs changes the logbook: run the state tool's command for this change (node <path to skills/sage/sage.mjs> ...), as a command of its own. If no command does it, ask the user.`);
   if (why && input.agent_type === "sage:lead") return deny(event, `${why} A lead writes the logbook only with ${LEAD_FORM}. Report to the sage what else the logbook needs.`);
   if (why) return deny(event, `${why} Only the chief writes the logbook. An agent may run only ${READ_FORM}. Report what the logbook needs, and the chief records it.`);
@@ -1285,6 +1287,8 @@ function leadProblem(input, cmd, pos, opt, slots) {
   const view = logbookOf(input.cwd);
   if (digest(view.dir) !== lead.logbook) return `this command's folder gives another logbook than the one of ${own}'s lead (F-T273-1). Run it in the project's folder or one of its worktrees.`;
   if (view.leadRun(own)?.id !== lead.run) return `${own}'s lead run ${lead.run} no longer runs, so this lead writes nothing (F-T273-4).`;
+  // A lead acts for the chief of its lead run: on a shared logbook its write names that run, and the state tool's guard reads it.
+  if (view.shared && (opt.lead !== lead.run || opt.chief !== undefined)) return `this project's logbook is shared, so a lead's write names its lead run: add --lead ${lead.run}, with no --chief.`;
   const task = view.task(own);
   if (!task) return `the logbook has no task ${own}.`;
   // A held or ended task takes no lead write at all: no run, finding, verdict or move (F-T273-7, F-T273-12, F-T289-7).
@@ -1340,6 +1344,26 @@ function chiefStateWords(input) {
  * holds too: no verdict of a role while that lead's helpers have findings that it did not record (R1816-2). A command
  * that runs a state tool in a form that chiefStateWords cannot read is refused (unreadVerdict). The reason, or undefined.
  */
+/**
+ * A write of a shared logbook names its chief, and the hook knows the session: it adds this session's row at its first
+ * write, and refuses a command with no --chief or another chief's id. A legacy project has no chief. A logbook that cannot
+ * be read passes here: the state tool then gives its own refusal.
+ */
+function chiefIdProblem(input) {
+  if (input.tool_name !== "Bash") return undefined;
+  const words = chiefStateWords(input);
+  if (!words) return undefined;
+  const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
+  if (["read", "owner"].includes(core.writerClass(cmd, pos).kind)) return undefined;
+  let id;
+  try {
+    id = stateTool.chiefFor(realpathSync.native(resolve(input.cwd ?? process.cwd(), opt.project ?? process.env.SAGE_PROJECT ?? ".")), input.session_id);
+  } catch {
+    return undefined;
+  }
+  if (!id || opt.chief === id) return undefined;
+  return opt.chief === undefined ? `this project's logbook is shared, so each write names its chief: add --chief ${id} to this command.` : `this session is chief ${id}, not ${quoted(opt.chief)}: give --chief ${id}.`;
+}
 function chiefVerdictProblem(input, slots) {
   if (input.tool_name !== "Bash") return undefined;
   const words = chiefStateWords(input);

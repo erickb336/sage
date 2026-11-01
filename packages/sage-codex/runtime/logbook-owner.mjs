@@ -12,5 +12,5 @@ export function chiefLogbook(context, options) {
   if (!owner) throw Error("Logbook changes need the current root owner");
   const tool = logbookTool(() => { throw Error("No ambient logbook"); });
   return { tool, project: options.projectDirectory, owner: JSON.stringify([owner.project, owner.session, owner.epoch]),
-    env: logbookEnv(options) };
+    env: logbookEnv(options), native: native.actor };
 }

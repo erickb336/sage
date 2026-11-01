@@ -286,6 +286,33 @@ The chief runs a link only after your answer in the chat:
 
 A Codex chief calls the `link` tool of the same name. A retry changes nothing.
 
+**One chief owns each task.** A task's `chief` column names its owning chief, and `task add` gives the task to the chief that adds it. An existing project shows no change: only a shared logbook has this column and `chiefs.tsv`.
+
+- Each chief has a row in `chiefs.tsv`, with its provider and its session.
+- A resume keeps the session, so it is the same chief.
+- Claude's `/clear` starts a new session, so it is a new chief.
+
+| Who | Writes |
+| --- | --- |
+| The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `task-adopt`, `gate add <T>`, `program propose` for its pilot and each of its tasks, and `log <T>`. |
+| A lead | What the chief of its lead run may write, on the task of that run only, while that run runs. |
+| Any chief | `task add`, `claim`, `gate add` with no task, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe`, `run usage`, `logbook repair` and `projects rebuild`. |
+| You | `gate answer`, in your own words, from either provider. |
+| A stop hook | The report and the end of the run of its own slot, so no report is lost. |
+| A helper, or a command with no chief | Nothing. It only reads. |
+
+- A Claude chief adds `--chief C<n>` to each write, and a Claude lead adds `--lead R<n>`. The hook names the id at the first write.
+- A Codex chief or lead adds nothing, because the server knows its session.
+- A checkout has no chief until it has a row, so `link` needs none.
+
+| Situation | Result |
+| --- | --- |
+| The task belongs to another chief | The write refuses, names the owning chief and changes nothing. If that chief stopped, the chief asks you. A later sage adds the transfer. |
+| The task has no owning chief | The write refuses and prints the claim that works: `sage claim <T> --version <version> --chief C<n>`. A Codex chief calls the `claim` tool. |
+| The task changed before the claim, or another chief claimed it first | The claim refuses and changes nothing. |
+
+This check prevents mistakes. It does not stop an agent that gives another chief's id on purpose. An older sage does not write a shared logbook that has the `chief` column: it refuses and asks you to update the plugin, and its reads go on.
+
 | Situation | Result |
 | --- | --- |
 | The project has a logbook in the Claude or Codex root | The link refuses, because the link would hide its tasks. Keep using that logbook. A later command moves existing projects. |
