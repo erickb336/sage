@@ -3596,7 +3596,8 @@ test("T594: a project's own .sage folder behaves as before: only the home's .sag
     assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `agent: ${command}`);
     assert.equal(denied(s.send(bash(command))), undefined, `chief: ${command}`);
   }
-  for (const command of ["rm -rf ~/.sage", "echo x > ~/.SAGE/y", "cp a $HOME/./.sage/b"]) {
+  assert.equal(denied(s.send(bash("cd sub && rm -rf .sage/cache"))), undefined, "a cd in the project");
+  for (const command of ["rm -rf ~/.sage", "echo x > ~/.SAGE/y", "cp a $HOME/./.sage/b", "cd ~ && rm -rf .sage", "cd && rm .sage/bindings.tsv", "cd ${HOME}/ ; rm -rf ./.sage"]) {
     assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, `agent: ${command}`);
     assert.match(denied(s.send(bash(command))) ?? "", /the chief never writes, moves or removes a logbook file/, `chief: ${command}`);
   }

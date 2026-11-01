@@ -171,7 +171,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
   function notePlugin(env) {
     if (!provider) return;
     try {
-      const shared = sharedRoot(env);
+      const shared = rootOf(env);
       if (table(shared, "plugins", PLUGINS).some((r) => r.provider === provider && r.contract === CONTRACT)) return;
       mkdirSync(shared, { recursive: true });
       withLock(shared, () => writePlugin(shared));

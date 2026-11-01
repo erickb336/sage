@@ -108,6 +108,7 @@ test("a relative SAGE_SHARED_HOME refuses: another folder would find another roo
   assert.throws(() => claudeSage(["status", "--project", w.project], env), /SAGE_SHARED_HOME is "shared", but it must be an absolute path/);
   assert.throws(() => tool.sage(["link", "--separate", "--project", w.project], env), /must be an absolute path/);
   assert.equal(tool.mergeCheck("a".repeat(40), env, { project: w.project }).ok, false);
+  assert.equal(existsSync(join(process.cwd(), "shared")), false, "no root appears under the folder of the command");
 });
 
 test("no row: an existing project works as before, and no row or table appears from a read", (t) => {
