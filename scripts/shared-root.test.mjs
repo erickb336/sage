@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { locate as claudeLocate, sage as claudeSage } from "../plugins/sage/skills/sage/sage.mjs";
+import { locate as claudeLocate, sage as claudeSage, sageRoot as claudeRootOf } from "../plugins/sage/skills/sage/sage.mjs";
 import { tool } from "../plugins/sage-codex/skills/sage/sage.mjs";
 import { sharedRoot } from "../packages/sage-core/index.mjs";
 
@@ -49,6 +49,51 @@ test("one function picks the shared root: the fixed option, SAGE_SHARED_HOME, <S
   assert.equal(sharedRoot(all), "/x");
   assert.equal(sharedRoot({ HOME: "/h", SAGE_HOME: "/s" }), "/s/shared");
   assert.equal(sharedRoot({ HOME: "/h" }), "/h/.sage");
+});
+
+/** Puts the process's own HOME in a scratch folder, so that os.homedir() returns it and nothing below can reach the real root. */
+function processHome(t, home) {
+  const saved = { HOME: process.env.HOME, SAGE_HOME: process.env.SAGE_HOME };
+  t.after(() => { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
+  process.env.HOME = home;
+  delete process.env.SAGE_HOME;
+}
+
+test("each default root reads the HOME of the env that the caller gives, and the process's home only when that env has none", async (t) => {
+  processHome(t, "/process-home");
+  const { modeDirectory } = await import("../plugins/sage-codex/hooks/sage-codex-hook.mjs");
+  assert.equal(claudeRootOf({ HOME: "/h" }), "/h/.claude/sage");
+  assert.equal(tool.sageRoot({ HOME: "/h" }), "/h/.codex/sage");
+  assert.equal(modeDirectory({ HOME: "/h" }), "/h/.codex/sage/.hooks/codex");
+  assert.equal(claudeRootOf({}), "/process-home/.claude/sage");
+  assert.equal(tool.sageRoot({}), "/process-home/.codex/sage");
+  assert.equal(modeDirectory({}), "/process-home/.codex/sage/.hooks/codex");
+  // The order of the settings stays.
+  assert.equal(claudeRootOf({ HOME: "/h", CLAUDE_CONFIG_DIR: "/c" }), "/c/sage");
+  assert.equal(tool.sageRoot({ HOME: "/h", CODEX_HOME: "/c" }), "/c/sage");
+  assert.equal(modeDirectory({ HOME: "/h", CODEX_HOME: "/c" }), "/c/sage/.hooks/codex");
+  assert.equal(claudeRootOf({ HOME: "/h", CLAUDE_CONFIG_DIR: "/c", SAGE_HOME: "/s" }), "/s");
+  assert.equal(tool.sageRoot({ HOME: "/h", CODEX_HOME: "/c", SAGE_HOME: "/s" }), "/s");
+});
+
+test("a run with SAGE_HOME removed and HOME in scratch writes under that HOME, and the old fault lands in a scratch decoy, never the real root", (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-env-home-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const decoy = join(base, "decoy"), home = join(base, "home");
+  mkdirSync(decoy);
+  processHome(t, decoy); // Before any sage call: os.homedir() now returns the decoy, in place of the real home folder.
+  const env = { ...process.env, HOME: home, SAGE_TEST_PIDS: "{}" };
+  for (const name of ["SAGE_SHARED_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "SAGE_WORKTREES"]) delete env[name];
+  for (const [name, run, root] of [["claude", claudeSage, ".claude"], ["codex", tool.sage, ".codex"]]) {
+    const project = join(base, name);
+    mkdirSync(project);
+    git(project, "init", "-q", "-b", "main");
+    git(project, "commit", "-q", "--allow-empty", "-m", "first");
+    run(["init", "--project", project], env);
+    run(["task", "add", "--priority", "P2", "--title", "Task in scratch", "--size", "tiny", "--project", project], env);
+    assert.equal(dirname(run(["logbook", "--project", project], env)), join(home, root, "sage"));
+    assert.deepEqual(readdirSync(decoy), []);
+  }
 });
 
 test("a production-shaped Codex env keeps the shared root out of the Codex root, and the launcher's option wins", async (t) => {
