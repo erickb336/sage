@@ -90,7 +90,7 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 
 ## The arena
 
-For a design with no clear answer, or when the user says "arena" or "arena N": first read the sage skill's `references/arena.md`, then follow its nine steps in order: the rubric, the candidates, their records, the judge, its record, then the build or the design, and the two rules for the branches. You run the arena yourself. Each candidate and the judge work on their own branch, and a candidate's branch never merges. A large task's arena is a design arena: arena, PE, the user's approval, build. A tiny arena has the code review.
+For a design with no clear answer, or when the user says "arena" or "arena N": first read the sage skill's `references/arena.md`, then follow its nine steps in order. You run the arena yourself. A candidate's branch never merges.
 
 ## Seal the lesson
 
