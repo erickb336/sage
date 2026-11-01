@@ -1394,7 +1394,8 @@ function reviewHead(project, branch, env) {
 
 /**
  * Validate recorded work immediately before provider preparation or dispatch. This grants no role authority. An arena's
- * candidate and its judge each work on their own branch, so only they may differ from the task's branch.
+ * candidate and its judge each work on their own branch, so only they may differ from the task's branch, and only on a
+ * branch of that task. A branch that another task names is not theirs, as mayName alone would let it be.
  */
 function captureRunAssignment(input, env = process.env) {
   const keys = ["project", "task", "run", "role"];
@@ -1418,7 +1419,7 @@ function captureRunAssignment(input, env = process.env) {
       || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
       || !Number.isSafeInteger(Number(task.round))
       || (task.branch && !mayName(all, task, branchOf(task.branch)))
-      || (run.branch && run.branch !== task.branch && !isCandidate(run) && run.role !== "arena-judge")
+      || (run.branch && run.branch !== task.branch && !((isCandidate(run) || run.role === "arena-judge") && branchOfTask(task, run.branch)))
       || (WRITERS.includes(run.role) && !run.branch)) deny();
     if (WRITERS.includes(run.role) && read(dir, "runs").some(row => row.id !== run.id
       && row.status === "running" && WRITERS.includes(row.role) && sameBranch(row.branch, run.branch))) deny();

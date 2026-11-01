@@ -2557,6 +2557,37 @@ test('T586: a design arena has no task branch, and a run of a role with no arena
   assert.throws(() => capture('T3', 'R7', 'implementer'), /needs one active run on its current task, role, branch, and round/);
 });
 
+test("T586: a candidate or a judge passes on a branch of its own task, and is refused on another task's branch", async t => {
+  const f = await composedPolicyFixture(t);
+  const capture = (task, run, role) => f.assignmentTool.captureRunAssignment({ project: f.options.projectDirectory, task, run, role }, f.assignmentEnv);
+  const refused = (task, run, role) => assert.throws(() => capture(task, run, role), /needs one active run on its current task, role, branch, and round/, `${run} ${role}`);
+  // T2 has no branch=. A name of T1, a task's own named branch, and a task that does not exist are all another task's.
+  f.assignmentCli('run', 'add', 'T2', '--role', 'implementer', '--branch', 'codex/t1-c9', '--candidate', '1'); // R4
+  refused('T2', 'R4', 'implementer');
+  f.assignmentCli('run', 'add', 'T2', '--role', 'designer', '--branch', 'codex/t1-fixture', '--candidate', '2'); // R5
+  refused('T2', 'R5', 'designer');
+  f.assignmentCli('run', 'add', 'T2', '--role', 'arena-judge', '--branch', 'codex/t5-judge'); // R6
+  refused('T2', 'R6', 'arena-judge');
+  // The shared case: T3 joins T1's branch. It may use that branch as its task branch, and a name of its own, but no other name of T1.
+  f.assignmentCli('task', 'add', '--priority', 'P2', '--title', 'Shared', '--size', 'small', '--add', 'arena', '--why', 'open design');
+  f.assignmentCli('task', 'T3', 'set', 'branch=codex/t1-fixture');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t3-c1', '--candidate', '1'); // R7
+  assert.equal(capture('T3', 'R7', 'implementer').runBranch, 'codex/t3-c1');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t1-c8', '--candidate', '2'); // R8
+  refused('T3', 'R8', 'implementer');
+  f.assignmentCli('run', 'done', 'R7', '--status', 'done');
+  f.assignmentCli('run', 'done', 'R8', '--status', 'failed');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'arena-judge', '--branch', 'codex/t3-judge'); // R9
+  assert.equal(capture('T3', 'R9', 'arena-judge').runBranch, 'codex/t3-judge');
+  f.assignmentCli('run', 'done', 'R9', '--status', 'done');
+  // A second arena after a done judge has no open step, and its runs on their own branches still pass.
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t3-c1-2', '--candidate', '1'); // R10
+  assert.equal(capture('T3', 'R10', 'implementer').runBranch, 'codex/t3-c1-2');
+  f.assignmentCli('run', 'done', 'R10', '--status', 'done');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'arena-judge', '--branch', 'codex/t3-judge-2'); // R11
+  assert.equal(capture('T3', 'R11', 'arena-judge').runBranch, 'codex/t3-judge-2');
+});
+
 test("T586: a review reads its task's branch: it passes on the judge's branch, and a run on a candidate's branch is refused", async t => {
   const f = await composedPolicyFixture(t);
   const review = run => f.assignmentTool.captureReviewTarget({ project: f.options.projectDirectory, task: 'T1', run, role: 'code-reviewer', cycle: 1 }, f.assignmentEnv);
