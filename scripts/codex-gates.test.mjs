@@ -441,7 +441,9 @@ test("no thread names the shared root in a shell command: its default, SAGE_SHAR
   assert.deepEqual(clean.filter((c) => namesSageFolder(c, byDefault)), [], "no false match");
   assert.equal(namesSageFolder("cat /shared/root/bindings.tsv", { ...byDefault, SAGE_SHARED_HOME: "/shared/root" }), true, "a set folder");
   w.mode({ sage: true, autopilot: false });
-  assert.match(denied(w.send(pre("Bash", `cat ${w.env.SAGE_SHARED_HOME}/bindings.tsv`, CHILD))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder/);
+  for (const thread of [CHILD, w.child("/root/sage_lead_t1_r1")]) {
+    assert.match(denied(w.send(pre("Bash", `cat ${w.env.SAGE_SHARED_HOME}/bindings.tsv`, thread))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder/);
+  }
 });
 
 test("the .sage folder outside the project counts by name, in the shell and in a patch, in any mode; the project's own .sage stays free (T594)", (t) => {

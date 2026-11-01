@@ -436,6 +436,28 @@ test("T594: the link tool starts a shared logbook or joins one, with the CLI's r
   assert.equal(readFileSync(join(shared, "plugins.tsv"), "utf8").split("\n")[1].split("\t").slice(0, 2).join(" "), "codex 1");
 });
 
+test("T594 with T552: a lead's rules read the shared logbook, and only the chief links", async (t) => {
+  const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-shared-")));
+  t.after(() => rmSync(shared, { recursive: true, force: true }));
+  const s = await connect(t, { SAGE_SHARED_HOME: shared });
+  const folder = (await s.call("link", { separate: true })).split(" ").at(-1);
+  await s.call("task_add", { title: "Shared", size: "small", priority: "P2" });
+  await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "sage/t1-a" } });
+  await s.call("run_add", { task: "T1", role: "lead" });
+  // The lead's rule finds T1 and its lead run only in the shared logbook: the provider root has none.
+  assert.match(await s.call("run_add", { task: "T1", role: "qa" }, { agent: LEAD }), /^R2 running/);
+  assert.match(readFileSync(join(folder, "runs.tsv"), "utf8"), /\nR2\tT1\tqa\t/);
+  const bindings = readFileSync(join(shared, "bindings.tsv"), "utf8");
+  const LINK_LEAD = "sage: a lead records only its own task, and link is not one of its tools. Put what the logbook needs in your report";
+  const LINK_CHILD = "sage: role agents report; only the chief records the logbook. Put this in your report";
+  for (const [agent, reason, caller] of [[LEAD, LINK_LEAD, { role: "lead", task: "T1", run: "R1", project: s.project }], ["/root/sage_qa_t1_r2", LINK_CHILD, { role: "child" }]]) {
+    assert.equal((await s.call("link", { separate: true }, { agent })).denied, reason, `the gate, ${agent}`);
+    s.writeProof("link", `forced_${agent}`, caller);
+    assert.equal((await s.call("link", { separate: true }, { gate: false, callId: `forced_${agent}` })).error, `${reason}.`, `the server, ${agent}`);
+  }
+  assert.equal(readFileSync(join(shared, "bindings.tsv"), "utf8"), bindings, "no refused call changes the table");
+});
+
 test("the Codex chief's list of tools names the link tool, with the owner's answer first", () => {
   const { PROJECT_SETUP } = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8"));
   assert.match(PROJECT_SETUP, /`link`\. Call `link` only after the owner's answer in the chat\./);
