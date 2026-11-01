@@ -131,7 +131,7 @@ test("T483: the chief's review child keeps its report with the head that the gat
   const twice = run(), first = child(`/root/sage_code_reviewer_t12_${twice.toLowerCase()}`), second = child(`/root/sage_code_reviewer_t12_${twice.toLowerCase()}`);
   begin(first);
   begin(second);
-  assert.deepEqual(end(second), { systemMessage: `sage: ${twice}'s report is not kept: this agent is not the child that started for ${twice}, so it backs no verdict.` });
+  assert.deepEqual(end(second), { systemMessage: `sage: ${twice}'s report is not kept: this agent is not the child that started for ${twice}.` });
   assert.deepEqual(end(first), {}, "the bound child's report is kept");
   assert.match(end(first, clean.replace("npm test passed", "a second stop")).systemMessage ?? "", /^sage: R\d+'s report is not kept: (?!this agent)/, "a second report of the bound child is refused, and said");
   // No start, no run in the task name, another role or task, or a first stop without the full report: nothing is kept.
@@ -164,35 +164,91 @@ test("T585: an arena keeps the reports of its candidates and its judge, and a ca
   const book = ok("logbook"), kept = (id) => JSON.parse(readFileSync(join(book, "kept", `${id}.json`), "utf8"));
   const report = (id) => `STATUS done\nRESULT PASS\nEVIDENCE npm test passed for ${id}\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none`;
   let threads = 0;
-  // A child runs from its start (the brief hook binds it) to its stop (the gate keeps its report); `during` runs between them.
-  const play = (role, id, during = () => {}) => {
+  const add = (role, ...args) => ok("run", "add", "T1", "--role", role, ...args).split(" ")[0];
+  const spawned = (role, id) => {
     const file = join(dir, `arena-${++threads}.jsonl`);
     writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `01a1726e-0000-7000-8000-${String(threads).padStart(12, "0")}`, agent_path: `/root/sage_${role}_t1_${id.toLowerCase()}` } }) + "\n");
-    assert.equal(spawnSync("node", [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "SubagentStart", session_id: "s", transcript_path: file, cwd: project }), encoding: "utf8", env: ENV }).status, 0);
+    return file;
+  };
+  const start = (file) => assert.equal(spawnSync("node", [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "SubagentStart", session_id: "s", transcript_path: file, cwd: project }), encoding: "utf8", env: ENV }).status, 0);
+  const finish = (file, text) => gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: text }));
+  // A child runs from its start (the brief hook binds it) to its stop (the gate keeps its report); `during` runs between them.
+  const play = (role, id, during = () => {}) => {
+    const file = spawned(role, id);
+    start(file);
     during();
-    assert.deepEqual(gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: report(id) })), {});
+    assert.deepEqual(finish(file, report(id)), {});
   };
   // A candidate on its own branch: its report is kept exactly, with the head of that branch, not of the task's branch.
-  const a = ok("run", "add", "T1", "--role", "implementer", "--branch", "codex/t1-a", "--candidate", "A").split(" ")[0];
+  const a = add("implementer", "--branch", "codex/t1-a", "--candidate", "A");
   play("implementer", a);
   assert.deepEqual([kept(a).text, kept(a).sha, kept(a).role], [report(a), headA, "implementer"]);
   assert.notEqual(headA, base);
-  // A candidate whose branch moves during its run gets no SHA, also when the task's branch did not move.
-  const b = ok("run", "add", "T1", "--role", "implementer", "--branch", "codex/t1-b", "--candidate", "B").split(" ")[0];
-  play("implementer", b, () => { commit("candidate b moves"); });
-  assert.deepEqual([kept(b).text, kept(b).sha], [report(b), ""]);
-  // A judge's report is kept exactly. It builds on a branch of its own, so it takes no SHA from the task's branch.
-  const judge = ok("run", "add", "T1", "--role", "arena-judge").split(" ")[0];
+  // A candidate that commits during its run keeps the head of its branch at the stop.
+  const b = add("implementer", "--branch", "codex/t1-b", "--candidate", "B");
+  let headB;
+  play("implementer", b, () => { headB = commit("candidate b moves"); });
+  assert.deepEqual([kept(b).text, kept(b).sha], [report(b), headB]);
+  // So does a judge on its own branch, and a designer.
+  const judgeRun = add("arena-judge", "--branch", "codex/t1-judge");
+  git("branch", "-q", "codex/t1-judge");
+  let headJudge;
+  play("arena_judge", judgeRun, () => { git("checkout", "-q", "codex/t1-judge"); headJudge = commit("the judge grafts"); });
+  assert.deepEqual([kept(judgeRun).sha, kept(judgeRun).role], [headJudge, "arena-judge"]);
+  // A branch that the run creates keeps its head at the stop.
+  const c = add("designer", "--branch", "codex/t1-c");
+  let headC;
+  play("designer", c, () => { git("checkout", "-q", "-b", "codex/t1-c"); headC = commit("the design"); });
+  assert.deepEqual([kept(c).sha, kept(c).role], [headC, "designer"]);
+  // A branch that is gone at the stop gives no SHA. The gate never reads the task's branch instead.
+  git("branch", "-q", "codex/t1-d");
+  const d = add("implementer", "--branch", "codex/t1-d", "--candidate", "D");
+  play("implementer", d, () => git("branch", "-q", "-D", "codex/t1-d"));
+  assert.equal(kept(d).sha, "");
+  // A judge with no branch takes no SHA from the task's branch either.
+  const judge = add("arena-judge");
   play("arena_judge", judge);
   assert.deepEqual([kept(judge).text, kept(judge).sha, kept(judge).role], [report(judge), "", "arena-judge"]);
+  // A review or QA run with --branch of another branch reads the branch of its task, and the other branch does not matter.
+  for (const role of ["code-reviewer", "qa"]) {
+    const id = add(role, "--branch", "codex/t1-a");
+    play(role.replaceAll("-", "_"), id, () => git("branch", "-q", "-f", "codex/t1-a", headB));
+    assert.equal(kept(id).sha, base, role);
+    git("branch", "-q", "-f", "codex/t1-a", headA);
+  }
+  // When the branch of its task moves during the run, it gets no SHA, as a run with no --branch.
+  for (const role of ["code-reviewer", "qa"]) {
+    const id = add(role, "--branch", "codex/t1-a"), before = git("rev-parse", "codex/t1");
+    play(role.replaceAll("-", "_"), id, () => git("branch", "-q", "-f", "codex/t1", headB));
+    assert.equal(kept(id).sha, "", role);
+    git("branch", "-q", "-f", "codex/t1", before);
+  }
   // The retained reports compare by digest, as the chief compares them with report_compare.
   // The comparison wants real paths, as the MCP server has them; the folder of the test may sit behind a link.
   const real = realpathSync(dir), here = { ...ENV, HOME: join(real, "home"), CODEX_HOME: join(real, "codex-home") };
   const digest = (text) => createHash("sha256").update(text, "utf8").digest("hex");
-  for (const id of [a, b, judge]) {
+  for (const id of [a, b, judgeRun, judge]) {
     assert.deepEqual(tool.compareRetainedReport({ project, task: "T1", run: id, sha256: digest(report(id)) }, here), { status: "match" }, id);
     assert.deepEqual(tool.compareRetainedReport({ project, task: "T1", run: id, sha256: digest(`${report(id)} `) }, here), { status: "mismatch" }, id);
   }
+  // A candidate backs no verdict, so a report that is not kept says only what happened.
+  const candidate = () => add("implementer", "--branch", `codex/t1-e${++threads}`);
+  const other = candidate(), bound = spawned("implementer", other), stranger = spawned("implementer", other);
+  start(bound);
+  start(stranger);
+  assert.deepEqual(finish(stranger, report(other)), { systemMessage: `sage: ${other}'s report is not kept: this agent is not the child that started for ${other}.` });
+  const again = candidate(), twice = spawned("implementer", again);
+  start(twice);
+  assert.deepEqual(finish(twice, report(again)), {});
+  assert.deepEqual(finish(twice, `${report(again)}\nAnother report`), { systemMessage: `sage: ${again}'s report is not kept: ${again} already has a kept report, and a report is kept once: this other report of ${again} is not kept.` });
+  const late = candidate(), after = spawned("implementer", late);
+  ok("run", "done", late, "--status", "blocked");
+  start(after);
+  assert.deepEqual(finish(after, report(late)), { systemMessage: `sage: ${late}'s report is not kept: no child started for ${late} while it ran.` });
+  const ended = candidate(), stopped = spawned("implementer", ended);
+  start(stopped);
+  ok("run", "done", ended, "--status", "blocked");
+  assert.deepEqual(finish(stopped, report(ended)), { systemMessage: `sage: ${ended}'s report is not kept: ${ended} ended as blocked before this stop, so no report is kept.` });
 });
 
 test("T483 R1933-2: a review child's task name gives its role, task and run, also for ids of many digits", async () => {
@@ -214,6 +270,7 @@ test("T560: a review child's unreadable report gets one fix chance at its first 
   assert.equal(gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12_r40"), last_assistant_message: unreadable, stop_hook_active: true })).decision, undefined, "the second stop goes through");
   assert.equal(gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12_r40"), last_assistant_message: FULL })).decision, undefined, "a readable report is not blocked");
   assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/sage_lead_t12_r40"), last_assistant_message: unreadable })), {}, "a role that backs no verdict is not read");
+  for (const role of ["implementer", "arena_judge"]) assert.equal(gate(stop({ agent_transcript_path: transcript(`/root/sage_${role}_t12_r40`), last_assistant_message: unreadable })).decision, undefined, `${role} backs no verdict, so it is not read`);
 });
 
 test("an agent without the sage_ task name passes, with or without a report", () => {
