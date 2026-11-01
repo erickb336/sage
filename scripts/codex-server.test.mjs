@@ -5842,6 +5842,22 @@ test('T584: a native move to verified refuses an open arena step, and goes on af
   assert.equal(f.update().task.state, 'verified');
 });
 
+test('T591: a native move to concluded refuses an open arena step, and goes on after a judge ended done', async t => {
+  const f = await taskUpdateReadinessFixture(t);
+  f.cli('task', 'add', '--priority', 'P2', '--title', 'Why', '--size', 'investigate', '--add', 'arena', '--why', 'no clear answer');
+  for (const state of ['briefed', 'building', 'reviewing', 'verifying']) f.cli('task', 'T2', 'set', `state=${state}`);
+  f.cli('verdict', 'T2', '--kind', 'evidence-clean');
+  const { updateNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
+  const stateOf = () => f.tool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T2' }, f.env);
+  const conclude = () => updateNativeTask({ request: 'a7777777-7777-4777-8777-777777777777', task: 'T2', version: stateOf().version, changes: { state: 'concluded' } }, f.native(session), f.options);
+  assert.throws(conclude, /not allowed from the current task state/); // a native refusal has only its fixed text
+  assert.equal(stateOf().task.state, 'verifying');
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+  f.cli('run', 'add', 'T2', '--role', 'arena-judge', '--branch', 'codex/t2-judge');
+  for (const row of f.tool.read(f.logbook, 'runs').filter(row => row.task === 'T2' && row.status === 'running')) f.cli('run', 'done', row.id, '--status', 'done');
+  assert.equal(conclude().task.state, 'concluded');
+});
+
 test('T584: an update saved before the arena rules replays: a logbook check reads it, and a merge goes on', async t => {
   const f = await taskUpdateReadinessFixture(t);
   assert.equal(f.update().task.state, 'verified');

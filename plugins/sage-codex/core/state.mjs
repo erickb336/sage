@@ -218,12 +218,18 @@ const ofTask = (task, name) => BRANCH.test(name) && new RegExp(`^(?:[A-Za-z0-9_-
 const sameBranch = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 /** A run of an arena's candidate, on its own branch. A review run may carry a candidate's number, but it writes nothing. */
 const isCandidate = (run) => !!run.candidate && !!run.branch && CANDIDATES.includes(run.role);
-/** Is a task's arena step open: its route has the block or it has a candidate run, and no judge of it ended done? A repair after that needs no number. */
-const arenaOpen = (task, runs) => (list(task.route).includes("arena") || runs.some((r) => r.task === task.id && isCandidate(r)))
+/**
+ * Is a task's arena step open: its route has the block or it has a candidate run, and no judge of it ended done? A repair
+ * after that needs no number. An abandoned task has no open step: abandon is one of the step's exits, so it ends the step.
+ */
+const arenaOpen = (task, runs) => task.state !== "abandoned"
+  && (list(task.route).includes("arena") || runs.some((r) => r.task === task.id && isCandidate(r)))
   && !runs.some((r) => r.task === task.id && r.role === "arena-judge" && r.status === "done");
 const ARENA_STEP = "its route has the arena block or it has a candidate run, and no arena-judge run of it ended done";
 /** The ways out of an open arena step. --candidate is none of them for a task with no arena: it marks the build's branch as a candidate's. */
 const arenaExits = (id) => `Finish a judge: sage run add ${id} --role arena-judge --branch sage/${id.toLowerCase()}-judge, then sage run done <R> --status done. A task that needs no arena: sage task ${id} set state=abandoned, then frame it again with sage task add, on a new branch.`;
+/** Why a task with an open arena step cannot end, or "". */
+const openBar = (task, runs) => (arenaOpen(task, runs) ? `${task.id}'s arena step is open: ${ARENA_STEP}, so ${task.id} has no final version yet. ${arenaExits(task.id)}` : "");
 /**
  * Why a task must not go on, or "": the branch that would land is an arena candidate's, its arena step is open, or it
  * has candidates and names no branch. The rule reads the branch, not the SHA: a judge with no graft keeps the candidate's
@@ -233,15 +239,20 @@ const arenaExits = (id) => `Finish a judge: sage run add ${id} --role arena-judg
 const candidateBar = (task, landing, candidates, runs) => {
   const { id } = task, entry = landing && candidates.find((r) => sameBranch(r.branch, landing));
   if (entry) return `${id} would land ${landing}, the branch of arena candidate ${entry.candidate} (${entry.id}), and a candidate's branch never merges. Open the pull request from the judge's or the build's branch, then run sage task ${id} set branch=<that branch>. With no such branch yet, start a judge: sage run add ${id} --role arena-judge --branch sage/${id.toLowerCase()}-judge.`;
-  if (arenaOpen(task, runs)) return `${id}'s arena step is open: ${ARENA_STEP}, so ${id} has no final version yet. ${arenaExits(id)}`;
+  const open = openBar(task, runs);
+  if (open) return open;
   if (!landing && candidates.some((r) => r.task === id)) return `${id} has arena candidate runs and no branch=, so nothing says what would land, and a candidate's branch never merges. Run sage task ${id} set branch=<the judge's or the build's branch>, then try again.`;
   return "";
 };
 /** The bar on what a task's branch= would land, for a new command only. A replay of a saved update keeps the rules of its writer. */
 const landingBar = (task, runs) => candidateBar(task, task.branch, runs.filter(isCandidate), runs);
-/** A planned move to verified that the bar refuses. Planning replays saved updates, so each new command calls this, and planTaskChanges does not. */
-const barVerified = (moved, planned) => {
-  const bar = moved && landingBar(planned.task, planned.runs);
+/**
+ * A planned move that the arena refuses: to verified, by what would land; to concluded, by the open step, because an
+ * investigation lands nothing. changes are the command's key=value pairs. Planning replays saved updates, so each new
+ * command calls this, and planTaskChanges does not.
+ */
+const barMove = (changes, { task, runs }) => {
+  const bar = changes.includes("state=verified") ? landingBar(task, runs) : changes.includes("state=concluded") && openBar(task, runs);
   if (bar) refuse(bar);
 };
 /** An arena candidate's number as the table stores it: a whole number from 1, after the same cleaning as every cell. */
@@ -692,8 +703,9 @@ function updateRequestedTask(input, env, coordination) {
     const openFindings = facts.findings.filter(row => row.task === reference.task && row.status === "open");
     if (needsReady && openFindings.length) throw new TaskUpdateError("readiness-findings", openFindings.map(row => row.key));
     const at = now();
-    const preliminary = planTaskChanges(before, reference.task, Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`), at, facts);
-    barVerified(reference.changes.state === "verified", preliminary);
+    const changes = Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`);
+    const preliminary = planTaskChanges(before, reference.task, changes, at, facts);
+    barMove(changes, preliminary);
     if (["verified", "pr-ready"].includes(preliminary.task.state)) {
       const cfg = config(env, dir);
       if (Object.values(cfg).includes("invalid")) throw new TaskUpdateError("readiness-config");
@@ -870,6 +882,8 @@ function runFrame(dir, task, role, branch, candidate, env) {
     if (CANDIDATES.includes(role) && !candidate && arenaOpen(task, runs)) refuse(`${task.id}'s arena step is open: ${ARENA_STEP}. So this ${role} run needs --candidate <k>, on its own branch. ${arenaExits(task.id)} Nothing changed.`);
     // An arena on a large task is a design arena: arena, PE, the owner's approval, build. So its build waits for briefed.
     if (role === "implementer" && candidate && task.size === "large" && ["framed", "designing", "awaiting-you"].includes(task.state)) refuse(`${task.id} is large and ${task.state}, so its arena is a design arena, and an implementer is no candidate of it: use --role designer. A build arena runs on a tiny or small task, or on a briefed task after an approved design. Nothing changed.`);
+    // A candidate run opens the step with no arena block, and a run cannot change the route, so a build with no code review takes none.
+    if (CANDIDATES.includes(role) && candidate && builds(task) && !list(task.route).includes("code-review")) refuse(`${task.id}'s route has no code review, so it takes no arena candidate: a judge's graft is new code that nobody read. Abandon ${task.id}: sage task ${task.id} set state=abandoned. Then frame it again on a new branch with sage task add --add arena, which adds the code review. Nothing changed.`);
     const other = there.find(row => row.status === "running" && WRITERS.includes(row.role));
     if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
   }
@@ -1920,9 +1934,12 @@ const priorityOf = (value, task) => {
   return refuse(`${PRIORITY_SCALE} ${why} Nothing changed.`);
 };
 
-/** Frames a task with its route and writes it: the least route of its size, the security review for a risk, and the added blocks. */
+/**
+ * Frames a task with its route and writes it: the least route of its size, the security review for a risk, the added
+ * blocks, and the code review of a tiny arena, because a judge's graft is new code that nobody read.
+ */
 function taskFrame(id, title, size, risk, add) {
-  const blocks = new Set([...SIZES[size], ...(risk.length && size !== "investigate" ? ["security-review"] : []), ...add]);
+  const blocks = new Set([...SIZES[size], ...(risk.length && size !== "investigate" ? ["security-review"] : []), ...(size === "tiny" && add.includes("arena") ? ["code-review"] : []), ...add]);
   const task = { id, title, size, risk: risk.join(","), route: BLOCKS.filter((b) => blocks.has(b)).join(","), state: "framed", round: 0 }; // the blocks in their order
   return task;
 }
@@ -2448,7 +2465,7 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     verdicts: (task) => rows("ledger").filter((r) => r.task === task),
     /**
      * The clean cycles of a task on one SHA, as the merge check counts them: 0 for an unknown task, and null for a task whose
-     * route has no review or QA (a tiny task without a risk flag), which needs no cycle (R1991-1).
+     * route has no review or QA (a tiny task without a risk flag or an arena), which needs no cycle (R1991-1).
      */
     cleanCycles: (id, sha) => {
       const task = one(rows("tasks").filter((t) => t.id === id)), on = rows("ledger").filter((r) => r.task === id && String(r.sha).toLowerCase() === String(sha).toLowerCase());
@@ -2786,7 +2803,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
         const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env, dir).max_rounds });
-        barVerified(more.includes("state=verified"), planned); // after the plan, so that a branch= in the same command counts, in either order
+        barMove(more, planned); // after the plan, so that a branch= in the same command counts, in either order
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);
         if (JSON.stringify(planned.runs) !== JSON.stringify(before.runs)) write(dir, "runs", planned.runs);
         write(dir, "tasks", planned.tasks);
