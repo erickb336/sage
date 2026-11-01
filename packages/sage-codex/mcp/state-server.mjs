@@ -78,7 +78,7 @@ export const TOOLS = {
     pos: ["task", "key", "decision"], argv: (i) => ["finding", "triage", i.task, i.key, i.decision],
   },
   finding_close: {
-    describe: "Close a fixed finding after a review confirms the fix.",
+    describe: "Close a fixed finding. In a repair round, close each fix key after the repair's commit, before the task moves to reviewing.",
     input: { task, key: z.string().describe("the finding key") }, pos: ["task", "key"], argv: (i) => ["finding", "close", i.task, i.key],
   },
   finding_move: {

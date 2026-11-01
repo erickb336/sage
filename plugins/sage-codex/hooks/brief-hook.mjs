@@ -54,7 +54,7 @@ function startNote(input, env) {
   const standing = tool.command(["standing", `--project=${input.cwd}`], env);
   const brief = readBrief(input.cwd, task, env);
   const parts = standing.code === 0 ? [`sage: the standing orders of this project, from its logbook. Follow each one.\n\n${standing.text}`] : [];
-  if (brief && !brief.missing.length) parts.push(`FORBIDDEN, from your checked brief. Never do these:\n${briefSections(brief.text).FORBIDDEN}`, `Your checked brief (${task}), as the chief recorded it:\n\n${brief.text}`);
+  if (brief && !brief.missing.length) parts.push(`FORBIDDEN, from your checked brief. Never do these:\n${briefSections(brief.text).FORBIDDEN}`, `Your checked brief (${task}), as it was recorded:\n\n${brief.text}`);
   else parts.push("sage: no checked brief for this task.");
   return { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: parts.join("\n\n") } };
 }

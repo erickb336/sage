@@ -65,7 +65,7 @@ test("a line of another field that starts with a field's word, a list item or a 
   assert.match(briefSections(text).CONTEXT, /FORBIDDEN words are flagged by the check\.\n- FORBIDDEN: a list item\n {3}FORBIDDEN: an indented line\n```\nFORBIDDEN: in a code block\n```$/);
 });
 
-test("the start note of a sage child: the standing orders, the FORBIDDEN field and the checked brief", (t) => {
+test("F-T552-9: the start note of a sage child: the standing orders, the FORBIDDEN field and the checked brief, in words true for a chief's brief and a lead's", (t) => {
   const w = world(t);
   assert.equal(w.sage("init").status, 0);
   assert.deepEqual(recordBrief(w.project, "sage_implementer_t1", brief(), w.env), []);
@@ -74,7 +74,7 @@ test("the start note of a sage child: the standing orders, the FORBIDDEN field a
   const [orders, forbidden, recorded] = note.split(/\n\n(?=FORBIDDEN, from|Your checked brief)/);
   assert.match(orders, /^sage: the standing orders of this project, from its logbook\. Follow each one\.\n\n# Standing orders\n/);
   assert.equal(forbidden, "FORBIDDEN, from your checked brief. Never do these:\nnever push to main.\nNever run real ps.");
-  assert.equal(recorded, `Your checked brief (sage_implementer_t1), as the chief recorded it:\n\n${brief()}`);
+  assert.equal(recorded, `Your checked brief (sage_implementer_t1), as it was recorded:\n\n${brief()}`);
   assert.doesNotMatch(note, /no checked brief/);
 });
 
@@ -82,7 +82,7 @@ test("a second run of a role on the same task has its own task name, sage_<role>
   const w = world(t);
   assert.equal(w.sage("init").status, 0);
   assert.deepEqual(recordBrief(w.project, "sage_code_reviewer_t1_r7", brief(), w.env), []);
-  assert.match(w.context(w.send(w.start("sage_code_reviewer_t1_r7"))), /\n\nYour checked brief \(sage_code_reviewer_t1_r7\), as the chief recorded it:\n\nGOAL: /);
+  assert.match(w.context(w.send(w.start("sage_code_reviewer_t1_r7"))), /\n\nYour checked brief \(sage_code_reviewer_t1_r7\), as it was recorded:\n\nGOAL: /);
   assert.ok(w.context(w.send(w.start("sage_code_reviewer_t1_r8"))).endsWith(`\n\n${NO_BRIEF}`), "the next run has no brief yet");
   assert.deepEqual(w.send(w.spawned("sage_code_reviewer_t1_r7")), {}, "no warning for the checked run");
   for (const bad of ["sage_code_reviewer_t1_r0", "sage_code_reviewer_t1_r", "sage_code_reviewer_r7_t1"]) assert.throws(() => recordBrief(w.project, bad, brief(), w.env), /is not a sage task name: sage_, the role with _ for -, the task, and the run/, bad);
