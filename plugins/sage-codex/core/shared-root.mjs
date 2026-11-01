@@ -104,8 +104,21 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
   }
 
   const disjoint = (a, b) => !!a && !!b && !a.split(",").some((commit) => b.split(",").includes(commit));
-  /** The row that a logbook belongs to: its oldest row with first commits. A later row with none of them is the foreign one, so the owner keeps working. */
-  const ownerOf = (rows, folder) => rows.filter((r) => r.folder === folder && r.commits).sort((a, b) => a.at.localeCompare(b.at))[0];
+  const shares = (a, b) => !!a && !!b && !disjoint(a, b);
+  /** Is a row's checkout gone from the disk? A path that cannot be read may still be there, so it counts as live. */
+  const gone = ({ root }) => {
+    try {
+      return !present(root);
+    } catch {
+      return false;
+    }
+  };
+  /**
+   * The row that a logbook belongs to: its oldest live row with first commits, or its oldest gone row when none is live.
+   * A later row with none of them is the foreign one, so the owner keeps working. A row of a checkout that left stays
+   * and does no harm: it can refuse a newcomer, but never the only live checkout.
+   */
+  const ownerOf = (rows, folder) => rows.filter((r) => r.folder === folder && r.commits).sort((a, b) => gone(a) - gone(b) || a.at.localeCompare(b.at))[0];
   const offer = (checkout) => `Nothing changed. Ask the user, then run sage link --to <folder> or sage link --separate, in ${visible(checkout)}.`;
   /** The logbook of a row. A row that names a missing folder, or a folder that another project owns, refuses and offers the link. */
   function boundFolder(shared, rows, row) {
@@ -175,6 +188,28 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     return "";
   }
 
+  /**
+   * A checkout with no row and no logbook, with the first commit of a shared logbook: a moved checkout, a clone or a fork.
+   * A new legacy logbook here would hide the shared one, and link refuses a project with a legacy logbook, so the refusal
+   * offers the link now. It runs only on the way to that refusal or to init, so a normal command calls no Git. A repository
+   * that Git cannot read has no first commit to compare: it keeps today's result.
+   */
+  function refuseNewLogbook(checkout, env) {
+    const shared = rootOf(env), rows = bindings(shared);
+    if (!rows.some((r) => r.commits)) return;
+    let commits;
+    try {
+      commits = firstCommits(checkout);
+    } catch (e) {
+      if (e instanceof Refusal) return;
+      throw e;
+    }
+    const twins = rows.filter((r) => shares(r.commits, commits) && healthy(shared, rows, r));
+    if (!twins.length) return;
+    const folders = [...new Set(twins.map((r) => r.folder))];
+    refuse(`no logbook for the project ${visible(checkout)}, but it has the first commit of the shared logbook ${folders.join(" and ")}, which ${visible(twins[0].root)} used. A new logbook here would hide that one. Nothing changed. Ask the user. For a moved checkout or a clone, run sage link --to ${folders.length === 1 ? folders[0] : "<folder>"}. For another project, run sage link --separate. Run it in ${visible(checkout)}.`);
+  }
+
   /** The provider's row in plugins.tsv, under the root's lock. */
   function writePlugin(shared) {
     const rows = table(shared, "plugins", PLUGINS);
@@ -226,7 +261,10 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     if (legacy) refuse(`this project has a logbook at ${legacy}. A link would hide its tasks, so sage made no row. Nothing changed. Keep using that logbook, and ask the user to wait for the move: only the move takes an existing project to the shared root.`);
     const others = rows.filter((r) => r !== row);
     if (to !== undefined) {
-      if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() || !present(join(dir, "tasks.tsv")) || !listed(shared)?.has(to)) refuse(`${dir} is not a logbook of the shared root. Nothing changed. List the logbook folders in ${join(shared, "projects.tsv")}, then run sage link --to <folder> with one of them, or run sage link --separate to start a new logbook.`);
+      if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() || !present(join(dir, "tasks.tsv")) || !listed(shared)?.has(to)) {
+        const names = [...(listed(shared) ?? [])].sort().map(visible); // named here, because an agent may not read the list
+        refuse(`${dir} is not a logbook of the shared root. Nothing changed. ${names.length ? `Its logbooks are ${names.join(", ")}. Run sage link --to <folder> with one of them, or run` : "Run"} sage link --separate to start a new logbook.`);
+      }
       const owner = ownerOf(others, to);
       if (owner && disjoint(owner.commits, commits)) refuse(`${to} belongs to another project (${visible(owner.root)}): the two checkouts have no first commit in common. ${SHALLOW} Nothing changed. Use sage link --separate, or name the right folder.`);
     } else if (present(dir) || others.some((r) => r.folder === folder)) refuse(`the logbook folder ${dir} is already in use, so sage made no row. Nothing changed. Ask the user to link to it with sage link --to ${folder}, or to rename or remove it.`);
@@ -234,7 +272,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     if (to === undefined) enroll(shared, folder, () => makeLogbook(dir, checkout, env));
     try { if (provider) writePlugin(shared); } catch {} // only for a later move, as in notePlugin
     writeBindings(shared, [...others, { root: key, folder, commits, at: now() }]); // last: a stop before it leaves no row to a half-made logbook
-    const twin = to === undefined && commits ? others.find((r) => r.commits.split(",").some((commit) => commits.split(",").includes(commit))) : undefined;
+    const twin = to === undefined ? others.find((r) => shares(r.commits, commits)) : undefined;
     return `${visible(checkout)} now uses the shared logbook ${dir}${twin ? `, apart from ${twin.folder}, which has the same first commit` : ""}`;
   }
 
@@ -262,5 +300,5 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     }
   }
 
-  return { bindings, fillCommits, link, locate, notePlugin };
+  return { bindings, fillCommits, link, locate, notePlugin, refuseNewLogbook };
 }

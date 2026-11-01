@@ -428,7 +428,7 @@ test("T594: the link tool starts a shared logbook or joins one, with the CLI's r
   assert.match((await s.call("link", {})).error, form);
   assert.match((await s.call("link", { to: "a-123456", separate: true })).error, form);
   assert.match((await s.call("link", { to: "Not A Folder" })).error, /"Not A Folder" is not a logbook folder: its name is <project>-<6 hex>, as sage link prints it/);
-  assert.match((await s.call("link", { to: "absent-123456" })).error, /is not a logbook of the shared root\. Nothing changed\. List the logbook folders in .*projects\.tsv, then run sage link --to <folder> with one of them, or run sage link --separate to start a new logbook\.$/);
+  assert.match((await s.call("link", { to: "absent-123456" })).error, /is not a logbook of the shared root\. Nothing changed\. Run sage link --separate to start a new logbook\.$/);
   assert.match(await s.call("link", { separate: true }), new RegExp(`now uses the shared logbook ${shared}/project-[0-9a-f]{6}$`));
   assert.match(await s.call("link", { separate: true }), /^already linked: /);
   assert.match(await s.call("task_add", { title: "Shared", size: "tiny", priority: "P2" }), /T1/);
