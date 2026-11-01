@@ -8,7 +8,7 @@ You say what you want in a session; the agents design, build, review and test it
   <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage"></a>
 </p>
 
-**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex, sage mode and autopilot now work through the sage plugin, and the lead and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
+**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex, sage mode and autopilot now work through the sage plugin, the lead has source tests but no real run yet, and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
 
 Start with the [Quick start](#quick-start). Then follow one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
 
@@ -75,7 +75,7 @@ Use the Codex CLI 0.160 to 0.164; the desktop app should work the same way, but 
    ```sh
    codex plugin add sage@sage
    ```
-2. Run `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). The chief starts the implementer, the reviewers and QA itself (no lead yet), and saves each report in the task's pages folder.
+2. Run `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA. Each report goes in the task's pages folder.
 3. With autopilot on, Codex still asks you 4 times in each task: before the worktree, the commit, the push and the pull request. Choose **Yes, and don't ask again** the first time each one comes, or **Yes, proceed** to be asked each time; read the trade-off first ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)).
 
 ## The board

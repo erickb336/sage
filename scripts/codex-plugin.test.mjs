@@ -143,7 +143,7 @@ test("the Codex guide carries the owner's lines for install, trust, removal, the
   assert.match(readFileSync(join(ROOT, "CHANGELOG.md"), "utf8"), /- A limit: Codex 0\.164\.0 runs no hook for text that an agent types into a shell that still runs \(`write_stdin`\)/, "R1675-2");
   assert.doesNotMatch(guide, /the chief and the leads use/);
   // R1670-8: the README's limits table is gone (T521); the Codex guide's rules table keeps these stops.
-  for (const rule of ["| Only the chief records the logbook |", "| A role agent starts no agents |", "| No agent runs Codex from the shell |"]) assert.ok(guide.includes(rule), `R1670-8: ${rule}`);
+  for (const rule of ["| The chief and a lead record the logbook |", "| A role agent starts no agents |", "| No agent runs Codex from the shell |"]) assert.ok(guide.includes(rule), `R1670-8: ${rule}`);
 });
 
 test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy before the pilot", () => {
@@ -164,7 +164,7 @@ test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy
     ],
     readme: [
       "**sage is a Claude Code and Codex plugin for developers who", // F-T470-11
-      "and the lead and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md))", // F-T470-11
+      "the lead has source tests but no real run yet, and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md))", // F-T470-11
       "You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).", // F-T470-15, T467
     ],
     changelog: [
