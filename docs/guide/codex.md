@@ -117,6 +117,7 @@ Send each phrase alone, as the whole message, in any letter case.
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
 - To turn on autopilot after an install, send `sage mode`, then `autopilot on`, each alone: nothing else is needed.
+- When autopilot turns on, sage reads once per session (with `gh`, read only) whether the default branch requires a pull request, and warns in one line if not. Autopilot still runs. A failed read says "could not check".
 - The chief lands a verified pull request with the same `gh pr merge` command as in Claude Code, and the sage gate allows it only with autopilot on and a passing merge check. The gate reads your typed phrases from Codex's own record of the session, so a phrase in a tool output, an agent's report or a mode file that an agent writes does not count.
 - Send a phrase when Codex is idle. To stop merges at once, press Esc to stop Codex's turn, then send the off phrase for autopilot alone.
 - Only your own typed message switches a mode: Codex gives the hook no agent text. A Codex review or approval check sends its own prompt, and that prompt switches nothing.

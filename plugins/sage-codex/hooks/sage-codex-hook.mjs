@@ -20,7 +20,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { exactPhrase, MODE_DAMAGED, readModeFile, renderChiefInstructions, switchModes } from "../core/index.mjs";
+import { exactPhrase, MODE_DAMAGED, protectionNote, readModeFile, renderChiefInstructions, switchModes } from "../core/index.mjs";
 import { privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -66,7 +66,7 @@ function known(input) {
 }
 
 /** The answer to one event. state is the session's mode state ({ sage, autopilot, given, off }); handle changes it. */
-export function handle(input, state) {
+export function handle(input, state, env = process.env) {
   if (!known(input)) {
     state.autopilot = false;
     return { systemMessage: UNKNOWN };
@@ -78,7 +78,7 @@ export function handle(input, state) {
     return input.source === "compact" && state.sage ? context(event, chiefText()) : undefined;
   }
   const was = { sage: Boolean(state.sage), autopilot: Boolean(state.autopilot) };
-  const notes = switchModes({ owner: true, text: input.prompt, all: input.prompt }, state, { autopilotOn: () => AUTOPILOT_ON, host: CODEX_HOST });
+  const notes = switchModes({ owner: true, text: input.prompt, all: input.prompt }, state, { autopilotOn: () => AUTOPILOT_ON + protectionNote(state, input.cwd, env), host: CODEX_HOST });
   if (state.sage && !state.given) {
     state.given = true;
     notes.unshift(chiefText());
@@ -113,7 +113,7 @@ export function answer(input, env) {
       return { systemMessage: MODE_DAMAGED, ...note };
     }
     const before = JSON.stringify(state);
-    const output = handle(input, state);
+    const output = handle(input, state, env);
     if (JSON.stringify(state) !== before) saveState(file, state);
     return output;
   } catch {

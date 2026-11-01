@@ -93,8 +93,8 @@ test("T453: the autopilot phrases record autopilot with no warning line, and the
   assert.deepEqual(await s.prompt("autopilot on"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: 'sage: autopilot did not switch on, because it turns on only while sage mode is on. Ask the user to send "sage mode" first, then "autopilot on", each as a message alone.' } });
   await s.prompt("sage mode");
   assert.deepEqual(await s.prompt("autopilot on"), {
-    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is on. In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. After a task's clean cycles and a passing merge_check, merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is on." },
-  });
+    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is on. In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. After a task's clean cycles and a passing merge_check, merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>. sage could not check whether the default branch of this repository requires a pull request on GitHub. Autopilot still runs.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is on." },
+  }, "T547: this test has no gh on PATH, so the read fails and the note says so (the cases with a fake gh are in branch-protection.test.mjs)");
   assert.equal(await modes(s), "sage mode on, autopilot on");
   assert.deepEqual(await s.prompt("autopilot off"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is off. Work stops at verified, and the user merges.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is off." } });
   assert.equal(await modes(s), "sage mode on, autopilot off");

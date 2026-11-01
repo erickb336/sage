@@ -6,6 +6,7 @@ export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
 export { createCommandPolicy, mentionsMerge, gitSubcommand, programName } from "./command-policy.mjs";
 export { createPushPolicy, gitHubRepository, gitInternalPath } from "./push-policy.mjs";
 export { PR, pullRequestHead } from "./pull-request.mjs";
+export { branchProtection, protectionNote } from "./branch-protection.mjs";
 export { fileWriteOutsideRoots } from "./protected-paths.mjs";
 export { commandWrites } from "./shell-write-policy.mjs";
 export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";
