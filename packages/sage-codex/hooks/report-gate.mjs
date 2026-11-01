@@ -41,8 +41,8 @@ export const agentPath = (path) => agentPathOf(sessionMeta(path));
 /** The task name of a Codex child: the last part of its agent path. */
 export const childTask = (path) => agentPath(path).at(-1) ?? "";
 
-/** Roles whose reports the hook retains. Design and investigation retention does not back or grant a verdict. */
-const REPORT_ROLES = { pe: "pe", designer: "designer", investigate: "investigate", evidence_review: "evidence-review", code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
+/** Roles whose reports the hook retains. Design, investigation, build and arena-judge retention does not back or grant a verdict. */
+const REPORT_ROLES = { implementer: "implementer", arena_judge: "arena-judge", pe: "pe", designer: "designer", investigate: "investigate", evidence_review: "evidence-review", code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
 /**
  * The run of a design, review, QA or investigation child of the chief (T483): its task name carries the run (sage_qa_t12_r40), and its agent path
  * is the root thread and that name, so a child of a child never names a run. Its thread id is the session_meta id.
@@ -65,12 +65,16 @@ export function bindChild(transcript, cwd, env = process.env) {
     const child = reviewChild(sessionMeta(transcript)), run = child && tool.logbookView(cwd, env).row(child.run);
     if (!run || run.task !== child.task || run.role !== child.role || run.status !== "running") return;
     mkdirSync(dirname(bindingOf(cwd, child.run, env)), { recursive: true, mode: 0o700 });
-    writeFileSync(bindingOf(cwd, child.run, env), JSON.stringify({ thread: child.thread, tip: branchHead(cwd, child.task, env) }), { flag: "wx", mode: 0o600 });
+    writeFileSync(bindingOf(cwd, child.run, env), JSON.stringify({ thread: child.thread, tip: branchHead(cwd, child.run, env) }), { flag: "wx", mode: 0o600 });
   } catch {}
 }
-/** The commit at the head of a task's branch in the project's repository, or "" (as the Claude hook reads it). */
-function branchHead(cwd, task, env) {
-  const branch = tool.logbookView(cwd, env).task(task)?.branch;
+/** The roles that build on their own branch, never on the branch of their task: an arena candidate and a judge (T585). */
+const BUILDERS = ["implementer", "arena-judge"];
+/** The commit at the head of a run's branch in the project's repository, or "" (as the Claude hook reads it). A builder run
+ * names its own branch at run add. Another run reviews the branch of its task (T585). */
+function branchHead(cwd, run, env) {
+  const view = tool.logbookView(cwd, env), row = view.row(run);
+  const branch = row?.branch || (BUILDERS.includes(row?.role) ? "" : view.task(row?.task)?.branch);
   if (!branch) return "";
   const clean = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
   const r = spawnSync("git", ["-C", cwd, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"], env: clean });
@@ -90,7 +94,7 @@ function keep(meta, text, cwd, env) {
   try {
     const bound = JSON.parse(readFileSync(bindingOf(cwd, child.run, env), "utf8"));
     if (bound?.thread !== child.thread) return `sage: ${child.run}'s report is not kept: this agent is not the child that started for ${child.run}, so it backs no verdict.`;
-    const sha = bound.tip && bound.tip === branchHead(cwd, child.task, env) ? bound.tip : "";
+    const sha = bound.tip && bound.tip === branchHead(cwd, child.run, env) ? bound.tip : "";
     tool.keepReport(cwd, { role: child.role, task: child.task, run: child.run, sha, text }, env);
   } catch (error) {
     return error?.code === "ENOENT" ? `sage: ${child.run}'s report is not kept: no child started for ${child.run} while it ran, so it backs no verdict.` : `sage: ${child.run}'s report is not kept: ${error?.message ?? error}`;
