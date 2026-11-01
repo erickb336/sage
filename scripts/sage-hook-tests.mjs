@@ -7511,6 +7511,110 @@ test("T483 R1932-1 R1933-1: the sage's own review keeps a report only for its ow
   assert.equal(chiefVerdict(s, "review-clean", still), undefined, "the commit at the start, which is still the head");
 });
 
+// T581: the order that lead R2051 saw. The lead's Agent tool has no name and no run_in_background field and returns only at
+// the helper's end, so the Agent call's PostToolUse comes after the helper's SubagentStop. No start event names its call.
+const firstLine = (run, task = "T1") => `Run ${run} · task ${task}`;
+const foregroundSpawn = (run, role, line = firstLine(run), description = `${run} check`) => tool("Agent", { subagent_type: `sage:${role}`, prompt: `${line}\n${BRIEF}`, description }, { tool_use_id: `fg-${run}`, ...LEAD });
+const startEvent = (agent_id, agent_type) => ({ hook_event_name: "SubagentStart", agent_id, agent_type });
+const slotsOf = (s) => slotsFor(join(s.vars.SAGE_HOOKS_STATE, "slots"), "s1", Date.now(), "s1");
+/** A foreground helper from its spawn to the Agent call's result. seen runs between the start and the stop. */
+function foregroundHelper(s, run, role, message = cleanOf(role), seen = () => {}) {
+  assert.equal(denied(s.send(foregroundSpawn(run, role))), undefined, `the helper of ${run}`);
+  s.send(startEvent(`child-${run}`, `sage:${role}`));
+  seen();
+  assert.equal(s.send(ended(`child-${run}`, `sage:${role}`, { stop_hook_active: false, last_assistant_message: message })), undefined, `the stop of ${run}`);
+  s.send(resultOf(`fg-${run}`, `child-${run}`, LEAD, "completed"));
+}
+const keptReport = (s, run) => join(s.sage("logbook"), "kept", `${run}.json`);
+
+test("T581: a foreground helper of a lead knows its run while it works, keeps its report, and backs its lead's verdict once", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const run = leadAdd(s, "code-reviewer");
+  foregroundHelper(s, run, "code-reviewer", cleanOf("code-reviewer"), () => assert.equal(slotsOf(s).runOf(`child-${run}`)?.run, run, "the hook knows the run during the helper's work"));
+  const saved = JSON.parse(readFileSync(keptReport(s, run), "utf8"));
+  assert.equal(saved.sha, s.head(), "the tip at the start, which is still the head");
+  assert.equal(saved.text, cleanOf("code-reviewer"));
+  assert.deepEqual(helperSlots(s), [], "the stop frees the helper's slot");
+  assert.equal(denied(stateRun(s, `run done ${run} --status done --tokens 1`)), undefined, "the lead ends the run");
+  s.sage("run", "done", run, "--status", "done", "--tokens", "1");
+  assert.equal(leadVerdict(s, "review-clean", run), undefined, "the lead's verdict passes the hook");
+  assert.match(s.sage("verdict", "T1", "--kind", "review-clean", "--sha", s.head(), "--cycle", "1", "--pr", "5", "--run", run), /^T1 review-clean · [0-9a-f]{7} · cycle 1/, "the state tool records it");
+  assert.match(leadVerdict(s, "review-clean", run) ?? "", /already backs the review-clean verdict/, "one verdict per run");
+  assert.match(denied(s.send(foregroundSpawn(run, "code-reviewer"))) ?? "", /is not a running code-reviewer run of T1/, "an ended run gets no helper");
+});
+
+test("T581: a helper's stop reports its medium finding to its lead, and a branch that moved keeps no commit", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const found = leadAdd(s, "qa");
+  foregroundHelper(s, found, "qa", report("FAIL", "- K1 medium src/a.js:1 an empty name saves a row"));
+  assert.match(waitOut(s), new RegExp(`^${found} stopped · qa · FAIL · findings medium`), "the wait gives the lead the kept result");
+  assert.match(denied(stateRun(s, `run done ${found} --status done --tokens 1`)) ?? "", /this lead's qa helpers reported medium or high findings on T1/, "the lead records the finding first");
+  const moved = leadAdd(s, "code-reviewer");
+  foregroundHelper(s, moved, "code-reviewer", cleanOf("code-reviewer"), () => s.commit());
+  assert.equal(JSON.parse(readFileSync(keptReport(s, moved), "utf8")).sha, "", "the tip at the start is no longer the head");
+});
+
+test("T581: a brief's first line gives the run with no name, and the lead rules hold for it", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const run = leadAdd(s, "qa");
+  const spawn = (line, description) => denied(s.send(foregroundSpawn(run, "qa", line, description))) ?? "";
+  assert.match(spawn(firstLine(run, "T2"), "check"), /^sage: the brief's first line names T2, and this lead runs T1/, "another task in the line");
+  assert.match(spawn(firstLine("R3"), "check"), /^sage: R3 is not a running qa run of T1/, "another task's run");
+  assert.match(spawn(firstLine("R4"), run), new RegExp(`^sage: the helper's name ${run} and the brief's first line R4 name two runs`), "two runs");
+  assert.match(denied(s.send(foregroundSpawn(leadAdd(s, "code-reviewer"), "qa"))) ?? "", /is not a running qa run of T1/, "the wrong role");
+  assert.match(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, description: "check" }, { tool_use_id: "no-run", ...LEAD }))) ?? "", /a lead names each helper by its run id/, "no run at all");
+  assert.equal(spawn(firstLine(run), "check"), "", "the line alone, with a description that is no run id");
+  s.send(startEvent("line-child", "sage:qa"));
+  s.send(ended("line-child", "sage:qa", { stop_hook_active: false, last_assistant_message: cleanOf("qa") }));
+  assert.equal(existsSync(keptReport(s, run)), true, "the helper of the line's run keeps its report");
+  assert.match(denied(s.send({ ...foregroundSpawn(run, "qa"), tool_use_id: "second" })) ?? "", new RegExp(`^sage: ${run} already has its helper`), "a shared run: one child backs one run");
+});
+
+test("T581: helpers of different roles bind at their starts; two calls of one role wait for the result, so neither takes the other's run", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  // One message with a review and QA: their starts arrive in any order.
+  const review = leadAdd(s, "code-reviewer"), qa = leadAdd(s, "qa");
+  for (const [run, role] of [[review, "code-reviewer"], [qa, "qa"]]) assert.equal(denied(s.send(foregroundSpawn(run, role))), undefined);
+  s.send(startEvent(`child-${qa}`, "sage:qa"));
+  s.send(startEvent(`child-${review}`, "sage:code-reviewer"));
+  assert.equal(slotsOf(s).runOf(`child-${qa}`)?.run, qa);
+  assert.equal(slotsOf(s).runOf(`child-${review}`)?.run, review);
+  for (const [run, role] of [[review, "code-reviewer"], [qa, "qa"]]) {
+    s.send(ended(`child-${run}`, `sage:${role}`, { stop_hook_active: false, last_assistant_message: cleanOf(role) }));
+    s.send(resultOf(`fg-${run}`, `child-${run}`, LEAD, "completed"));
+    assert.equal(existsSync(keptReport(s, run)), true, `${run} keeps its report`);
+  }
+  // Two calls of one role: a start cannot tell them apart. Nothing is kept for a wrong run, and each run ends with no report.
+  const a = leadAdd(s, "qa"), b = leadAdd(s, "qa");
+  for (const run of [a, b]) assert.equal(denied(s.send(foregroundSpawn(run, "qa"))), undefined);
+  for (const run of [b, a]) s.send(startEvent(`child-${run}`, "sage:qa"));
+  assert.equal(slotsOf(s).runOf(`child-${a}`), undefined, "no run yet");
+  for (const run of [a, b]) {
+    s.send(ended(`child-${run}`, "sage:qa", { stop_hook_active: false, last_assistant_message: cleanOf("qa") }));
+    s.send(resultOf(`fg-${run}`, `child-${run}`, LEAD, "completed"));
+    assert.equal(existsSync(keptReport(s, run)), false, `${run} keeps no report`);
+    assert.match(denied(stateRun(s, `run done ${run} --status done --tokens 1`)) ?? "", /gave no report, so .* ends only as failed or blocked/, `${run} fails closed`);
+  }
+  assert.deepEqual(helperSlots(s), [], "both slots free");
+});
+
+test("T581: a foreground helper whose Agent call fails frees its slot, and its run may get a new helper", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const run = leadAdd(s, "qa");
+  assert.equal(denied(s.send(foregroundSpawn(run, "qa"))), undefined);
+  s.send(startEvent(`child-${run}`, "sage:qa"));
+  assert.equal(helperSlots(s).length, 1);
+  s.send({ hook_event_name: "PostToolUseFailure", tool_name: "Agent", tool_use_id: `fg-${run}`, ...LEAD });
+  assert.deepEqual(helperSlots(s), [], "the failed call frees the slot");
+  assert.equal(slotsOf(s).runOf(`child-${run}`), undefined, "the dead agent holds no run");
+  assert.equal(denied(s.send({ ...foregroundSpawn(run, "qa"), tool_use_id: "again" })), undefined, "a new helper for the run");
+});
+
 test("T483: the sage's verdict rule reads --project as the state tool does, and refuses a review or QA verdict on a logbook that it cannot read", () => {
   const s = leadSession();
   s.sage("run", "done", "R1", "--status", "blocked"); // no running lead run: only the state tool's rule
