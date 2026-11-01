@@ -83,10 +83,15 @@ When a design has no clear answer, the chief can run an **arena**. You can also 
 </picture>
 </a>
 
-N candidates (3 by default) get the same brief, each with a different angle and its own branch. Each commits its artifact.
+N candidates (3 by default) get the same brief, each with a different angle and its own branch. Each commits its artifact and opens no pull request.
 
-A judge scores them against a rubric that they do not see. It makes a new branch from the best candidate, and grafts the best parts of the others into one final version.
+A judge scores them against a rubric that they do not see. It makes a new branch from the best candidate, and grafts the best parts of the others into one final version. If the candidates disagree on the product, the judge gives you both choices with a recommendation through the chief, and goes on with your answer.
 
-That version goes through reviews and QA like any build. The candidates never merge: the merge check refuses a candidate's branch.
+What happens next depends on the arena:
 
-Branches and pages stay until you delete them. Worktrees go at the end of the task.
+- **A build:** the judge opens a pull request from its branch, and that version goes through reviews and QA like any build.
+- **A design:** the PE checks the version, you approve it, and the build starts on a new branch from main.
+
+A candidate's branch never merges: the state tool refuses it at verified and at the merge check.
+
+Candidate branches and pages stay until you delete them, and so does the judge's branch of a design. A merge deletes the branch that it lands, and its commits are in main. Worktrees go at the end of the task.
