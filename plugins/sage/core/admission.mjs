@@ -102,13 +102,13 @@ function touchesFinish(state, request, value, continuation) {
   return actors.has(value.issuer) || actors.has(value.child) || (predecessor && actors.has(predecessor.child));
 }
 function refuseFencedWork(state, value, continuation) {
-  if ((state.interruptedFinishes ?? []).some(row => !row.receiptHash && touchesFinish(state, row.request, value, continuation)))
+  if ((state.interruptedFinishes ?? []).some(row => !row.void && !row.receiptHash && touchesFinish(state, row.request, value, continuation)))
     refuse("interrupted run publication still owns this child team");
 }
 const taskGeneration = (state, project, task) => (state.taskUpdates ?? []).filter(row => row.update.project === project
-  && row.update.task === task && row.accepted && row.update.disruptive).length;
+  && row.update.task === task && !row.void && row.accepted && row.update.disruptive).length;
 const taskFence = (state, project, task) => (state.taskUpdates ?? []).find(row => row.update.project === project
-  && row.update.task === task && row.accepted && !row.released);
+  && row.update.task === task && !row.void && row.accepted && !row.released);
 function taskUpdateRequest(input) {
   fields(input, ["project", "session", "epoch", "request", "task", "digest", "disruptive"]);
   if (typeof input.disruptive !== "boolean") refuse("invalid update settlement rule");
@@ -145,6 +145,11 @@ function reportRecord(input) {
   return report;
 }
 function action(input) {
+  if (input?.kind === "void") {
+    const update = Object.hasOwn(input, "update");
+    fields(input, ["kind", update ? "update" : "request"]);
+    return update ? { kind: "void", update: taskUpdateRequest(input.update) } : { kind: "void", request: interruptedFinish(input.request) };
+  }
   if (["begin-interrupted-finish", "end-interrupted-finish"].includes(input?.kind)) {
     const end = input.kind === "end-interrupted-finish";
     fields(input, ["kind", "request", ...(end ? ["receiptHash"] : [])]);
@@ -244,9 +249,14 @@ function apply(state, event, replay = false) {
   }
   if (!owner || owner.epoch !== value.epoch) refuse("assignment has no current session owner");
   if (event.update) {
-    const prior = (copy.taskUpdates ?? []).find(row => ["project", "session", "epoch", "request"].every(key => row.update[key] === value[key]));
+    const prior = (copy.taskUpdates ?? []).find(row => !row.void && ["project", "session", "epoch", "request"].every(key => row.update[key] === value[key]));
     if (prior) {
       if (json(prior.update) !== json(value)) refuse("task update request changed");
+      if (event.kind === "void") {
+        if (prior.receiptHash) refuse("a task update with a receipt cannot be void");
+        prior.void = true;
+        return { state: copy, result: prior, changed: true };
+      }
       if (event.kind === "decide-task-update") return { state, result: prior, changed: false };
       if (!prior.accepted) refuse("a rejected task update cannot be acknowledged or released");
       if (prior.receiptHash && prior.receiptHash !== event.receiptHash) refuse("task update receipt changed");
@@ -281,9 +291,14 @@ function apply(state, event, replay = false) {
   }
   if (event.request) {
     const request = event.request;
-    const previous = (copy.interruptedFinishes ?? []).find(row => row.request.binding.assignment === value.assignment);
+    const previous = (copy.interruptedFinishes ?? []).find(row => !row.void && row.request.binding.assignment === value.assignment);
     if (previous) {
       if (json(previous.request) !== json(request)) refuse("interrupted run already has a different finish request");
+      if (event.kind === "void") {
+        if (previous.receiptHash) refuse("a finished run cannot be void");
+        previous.void = true;
+        return { state: copy, result: previous, changed: true };
+      }
       if (event.kind === "begin-interrupted-finish") return { state, result: previous, changed: false };
       if (previous.receiptHash) {
         if (previous.receiptHash !== event.receiptHash) refuse("interrupted run receipt differs");
@@ -662,6 +677,9 @@ export const endInterruptedRunFinish = (dir, request, receiptHash) => commit(dir
 export const decideTaskUpdate = (directory, update) => commit(directory, { kind: "decide-task-update", update });
 export const acknowledgeTaskUpdate = (directory, update, receiptHash) => commit(directory, { kind: "acknowledge-task-update", update, receiptHash });
 export const releaseTaskUpdate = (directory, update, receiptHash) => commit(directory, { kind: "release-task-update", update, receiptHash });
+/** A row with no receipt and no saved change never happened: void it, so that a retry gets a fresh answer. */
+export const voidTaskUpdate = (directory, update) => commit(directory, { kind: "void", update });
+export const voidInterruptedRunFinish = (directory, request) => commit(directory, { kind: "void", request });
 export function assertTaskAdmissionOpen(directory, project, task, preparationId) {
   const state = readAdmission(directory);
   if (taskFence(state, project, task)) refuse("task update is unresolved; authority is fenced");

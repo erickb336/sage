@@ -1,6 +1,7 @@
 import { taskUpdateHistory } from "./task-update-history.mjs";
-import { decideTaskUpdate, acknowledgeTaskUpdate, releaseTaskUpdate, readAdmission, TaskUpdateError, AdmissionError } from "sage-core";
+import { decideTaskUpdate, acknowledgeTaskUpdate, releaseTaskUpdate, voidTaskUpdate, TaskUpdateError, AdmissionError } from "sage-core";
 import { chiefLogbook } from "./logbook-owner.mjs";
+import { settleNativeWrites } from "./task-settle.mjs";
 
 /** Fixed authenticated ownership supplies coordination; model arguments contain only the requested change. */
 export function updateNativeTask(input, context, options) {
@@ -19,14 +20,7 @@ export function updateNativeTask(input, context, options) {
   const update = (digest, disruptive) => ({ project: journalProject, session, epoch, request: input.request,
     task: input.task, digest, disruptive });
   let current;
-  const saved = digest => {
-    if (current?.digest === digest) return current;
-    // A historical retry uses its own saved decision, never the current task or a later fence.
-    const row = readAdmission(options.directory).taskUpdates?.find(row => row.update.project === journalProject
-      && row.update.session === session && row.update.epoch === epoch && row.update.request === input.request && row.update.digest === digest);
-    if (!row) throw Error("Task update admission decision is missing");
-    return row.update;
-  };
+  settleBeforeDecide(options);
   return tool.updateRequestedTask({ ...input, project, owner }, env, {
     history(digest, proposal, reference) {
       if (reference.owner !== owner || reference.request !== input.request || reference.task !== input.task)
@@ -39,13 +33,23 @@ export function updateNativeTask(input, context, options) {
       return { digest: result.update.digest, accepted: result.accepted, reason: result.reason };
     },
     acknowledge(digest, receiptHash) {
-      const result = acknowledgeTaskUpdate(options.directory, saved(digest), receiptHash);
+      const result = acknowledgeTaskUpdate(options.directory, current, receiptHash);
       return { digest: result.update.digest, receiptHash: result.receiptHash };
     },
     release(digest, receiptHash) {
-      const result = releaseTaskUpdate(options.directory, saved(digest), receiptHash);
+      const result = releaseTaskUpdate(options.directory, current, receiptHash);
       if (!result.released) throw Error("Task update fence is unresolved");
       return { digest: result.update.digest, receiptHash: result.receiptHash };
     },
+    void() { voidTaskUpdate(options.directory, current); },
   });
+}
+
+/** A damaged journal or saved change reads as saved state, never as an unknown outcome. */
+function settleBeforeDecide(options) {
+  try { settleNativeWrites(options); }
+  catch (error) {
+    if (error instanceof TaskUpdateError || error.code) throw error;
+    throw new TaskUpdateError("invalid-state");
+  }
 }

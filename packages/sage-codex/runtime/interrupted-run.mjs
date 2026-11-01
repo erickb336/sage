@@ -1,6 +1,7 @@
 import { createStateTool, readAdmission, beginInterruptedRunFinish, endInterruptedRunFinish } from "sage-core";
 import { nativeToolContext } from "./native-tool.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
+import { settleNativeWrites } from "./task-settle.mjs";
 
 const refuse = () => { throw Error("Sage could not finish this interrupted run"); };
 /** A current root chief selects a known run, never supplies terminal evidence or a child identity. */
@@ -11,7 +12,7 @@ export function finishNativeInterruptedRun(input, context, options) {
     || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run)
     || !["blocked", "question", "failed"].includes(input.status)) refuse();
   const native = nativeToolContext(context);
-  validateLogbookLocation(options);
+  settleNativeWrites(options);
   const state = readAdmission(options.directory), session = `codex:${native.actor}`;
   const owner = state.sessions.find(row => row.project === options.project && row.session === session);
   if (!owner) refuse();

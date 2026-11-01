@@ -9,6 +9,7 @@ import { readNativeFollowup } from "./identity.mjs";
 import { preparedTaskMessage } from "./instructions.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
 import { captureNativeRunAssignment, checkNativeRunAssignment, checkPreparationIssuer } from "./run-assignment.mjs";
+import { settleNativeWrites } from "./task-settle.mjs";
 
 const NAME = /^(?!root$)[a-z0-9_]{1,256}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -62,6 +63,7 @@ export function prepareNativeTask(input, context, options) {
   const keys = ["task", "run", "name", "role", "brief", ...(hasCycle ? ["reviewCycle"] : []), ...(hasPrevious ? ["previous"] : [])];
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
     || keys.some(key => !Object.hasOwn(input, key)) || typeof input.name !== "string" || !NAME.test(input.name)) refuse();
+  settleNativeWrites(options);
   const { scope, role, task, issuerAssignment } = actorScope(options, native);
   if (role === "lead" && input.task !== task) refuse();
   const generation = assertNativeTaskOpen(options, input.task);
@@ -90,6 +92,7 @@ export function reservePreparedSpawn(input, context, options) {
   if (typeof message !== "string" || !message || Buffer.byteLength(message, "utf8") > 1024 * 1024
     || Buffer.from(message, "utf8").toString("utf8") !== message) refuse();
   const taskHash = createHash("sha256").update(message).digest("hex");
+  settleNativeWrites(options);
   const { scope, role, task, issuerAssignment, issuerTurn } = actorScope(options, native);
   if (scope.session !== `codex:${observed.session}` || (issuerTurn && issuerTurn !== observed.turn)) refuse();
   const prepared = readAdmission(options.directory).preparations.filter(row => row.project === scope.project
@@ -130,6 +133,7 @@ export function reservePreparedFollowup(input, context, options) {
   if (observed?.kind !== "dispatch-request" || observed.mode !== "task"
     || Object.keys(event.tool_input).length !== 2 || !Object.hasOwn(event.tool_input, "target")
     || !Object.hasOwn(event.tool_input, "message") || !UUID.test(event.tool_input.target ?? "")) refuse();
+  settleNativeWrites(options);
   const { scope, role, task, issuerAssignment, issuerTurn } = actorScope(options, native);
   if (scope.session !== `codex:${event.session_id}` || (issuerTurn && issuerTurn !== event.turn_id)) refuse();
   const message = event.tool_input.message;

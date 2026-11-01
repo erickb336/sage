@@ -28,7 +28,7 @@ export function checkPreparedRunTarget(options, assigned, prepared) {
     || assigned.rolePlan.role !== prepared.rolePlan.role) refuse();
   validateLogbookLocation(options);
   const tool = createStateTool({ defaultRoot: refuse });
-  const updates = readAdmission(options.directory).taskUpdates?.filter(row => row.accepted && row.update.disruptive
+  const updates = readAdmission(options.directory).taskUpdates?.filter(row => !row.void && row.accepted && row.update.disruptive
     && row.update.project === prepared.project && row.update.task === prepared.task) ?? [];
   const retired = updates[prepared.generation ?? 0]?.update;
   const retirement = retired ? { owner: JSON.stringify([retired.project, retired.session, retired.epoch]),

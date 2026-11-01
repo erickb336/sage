@@ -3,7 +3,7 @@ import { USAGE_FIELDS, tokenCount, usageText, usageRegistry, usageSnapshot, vali
 import { parseRunTarget } from "./run-target.mjs";
 import { readLocalGit } from "./local-git.mjs";
 import { TaskUpdateError } from "./task-update-error.mjs";
-import { recordedWrites, coordinatedWrites, assertNoPendingWrite, RecordedWriteError } from "./recorded-write.mjs";
+import { recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingText, settlePendingWrite, RecordedWriteError } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
 // The store is plain TSV and Markdown under the configured root ($SAGE_HOME overrides it), and every
 // table has one writer: this tool. It holds the rules that prompts alone did not hold in Orchestrator: no dropped
@@ -471,7 +471,7 @@ const check = (dir, skip = [], max = Infinity) => {
 const hasRows = (dir, max = Infinity) => Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`), { max }) ?? "").trim().split(/\r?\n/).length > 1);
 
 function ready(dir, skip = []) {
-  assertNoPendingWrite(dir);
+  settle(dir);
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
   if (!skip.includes("tasks") && !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false })) {
     if (skip.length || hasRows(dir)) throw lost(dir, "tasks", "is missing", skip);
@@ -612,47 +612,48 @@ const taskUpdates = coordinatedWrites({ schema: 8, previousSchemas: [6], tables:
 /** Native task updates require a trusted durable admission decision, never a model-supplied proof. */
 function updateRequestedTask(input, env, coordination) {
   if (!input || typeof input.project !== "string" || !input.project || !coordination
-    || ["decide", "acknowledge", "release", "history"].some(key => typeof coordination[key] !== "function")) updateDeny();
+    || ["decide", "acknowledge", "release", "void", "history"].some(key => typeof coordination[key] !== "function")) updateDeny();
   const { project, ...request } = input, reference = updateReference(request), dir = storeDir(project, env);
   if (realpathSync(dir) !== resolve(dir)) updateDeny();
-  let phase = "state";
+  let phase = "publish";
   try { return withLock(dir, () => {
+    settle(dir);
+    phase = "state";
+    const reply = (outcome, proposal, decision) => outcome.accepted ? { decision, task: proposal.task, version: proposal.version }
+      : { decision: "task-update-rejected", reason: outcome.reason };
     const prior = taskUpdates.readReceipt(dir, reference);
-    const pending = !prior && taskUpdates.pending(dir);
-    if (pending && pending.reference.owner !== reference.owner) throw new TaskUpdateError("old-owner");
-    if (pending && JSON.stringify(pending.reference) !== JSON.stringify(reference)) throw new TaskUpdateError("pending-request");
-    if (!prior && !pending) {
-      ready(dir);
-      const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, read(dir, table)]));
-      const current = before.tasks.filter(row => row.id === reference.task);
-      if (current.length !== 1) throw new TaskUpdateError("invalid-state");
-      if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
-      const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null,
-        Object.hasOwn(reference.changes, "approval") ? config(env).max_rounds : undefined);
-      const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
-      phase = needsReady ? "readiness" : "plan";
-      const openFindings = facts.findings.filter(row => row.task === reference.task && row.status === "open");
-      if (needsReady && openFindings.length) throw new TaskUpdateError("readiness-findings", openFindings.map(row => row.key));
-      const at = now();
-      const preliminary = planTaskChanges(before, reference.task, Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`), at, facts);
-      if (["verified", "pr-ready"].includes(preliminary.task.state)) {
-        const cfg = config(env);
-        if (Object.values(cfg).includes("invalid")) throw new TaskUpdateError("readiness-config");
-        const branch = branchOf(preliminary.task.branch);
-        let head;
-        try { head = reviewHead(project, branch, env); } catch { throw new TaskUpdateError("readiness-branch"); }
-        facts.readiness = { head, branch, cycles: cyclesFor(preliminary.task, cfg),
-          config: Object.fromEntries(["cycles.small", "cycles.large", "cycles.risk"].map(key => [key, cfg[key]])) };
-      }
-      const planned = planNativeTaskUpdate(before, reference, at, facts);
-      phase = "publish";
-      taskUpdates.prepare(dir, reference, { at, facts, task: planned.task, version: taskVersion(planned.task), disruptive: planned.disruptive },
-        Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, tableText(table, planned[table])])));
+    if (prior) {
+      // Authenticate either historical outcome without creating a decision or inspecting current tables.
+      taskUpdates.authenticate(prior, coordination.history);
+      return reply(prior.outcome, prior.intent.proposal, "task-update-history");
     }
+    ready(dir);
+    const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, read(dir, table)]));
+    const current = before.tasks.filter(row => row.id === reference.task);
+    if (current.length !== 1) throw new TaskUpdateError("invalid-state");
+    if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
+    const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null,
+      Object.hasOwn(reference.changes, "approval") ? config(env).max_rounds : undefined);
+    const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
+    phase = needsReady ? "readiness" : "plan";
+    const openFindings = facts.findings.filter(row => row.task === reference.task && row.status === "open");
+    if (needsReady && openFindings.length) throw new TaskUpdateError("readiness-findings", openFindings.map(row => row.key));
+    const at = now();
+    const preliminary = planTaskChanges(before, reference.task, Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`), at, facts);
+    if (["verified", "pr-ready"].includes(preliminary.task.state)) {
+      const cfg = config(env);
+      if (Object.values(cfg).includes("invalid")) throw new TaskUpdateError("readiness-config");
+      const branch = branchOf(preliminary.task.branch);
+      let head;
+      try { head = reviewHead(project, branch, env); } catch { throw new TaskUpdateError("readiness-branch"); }
+      facts.readiness = { head, branch, cycles: cyclesFor(preliminary.task, cfg),
+        config: Object.fromEntries(["cycles.small", "cycles.large", "cycles.risk"].map(key => [key, cfg[key]])) };
+    }
+    const planned = planNativeTaskUpdate(before, reference, at, facts);
     phase = "publish";
-    const receipt = taskUpdates.recover(dir, reference, coordination);
-    return receipt.outcome.accepted ? { decision: prior ? "task-update-history" : "task-updated", task: receipt.intent.proposal.task, version: receipt.intent.proposal.version }
-      : { decision: "task-update-rejected", reason: receipt.outcome.reason };
+    const proposal = { at, facts, task: planned.task, version: taskVersion(planned.task), disruptive: planned.disruptive };
+    taskUpdates.prepare(dir, reference, proposal, Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, tableText(table, planned[table])])));
+    return reply(taskUpdates.publish(dir, reference, coordination), proposal, "task-updated");
   }); } catch (error) {
     if (error instanceof TaskUpdateError) throw error;
     throw new TaskUpdateError(error instanceof RecordedWriteError || phase === "state" ? "invalid-state"
@@ -737,8 +738,7 @@ function createRequestedTask(input, env = process.env) {
     return result;
   };
   return withLock(dir, () => {
-    const recovered = taskWrites.recover(dir, reference);
-    if (recovered) { const task = checked(recovered); status(dir, true); return { decision: "task-created", task }; }
+    settle(dir);
     const prior = taskWrites.readReceipt(dir, reference);
     if (prior) return { decision: "already-created", task: checked(prior) };
     ready(dir);
@@ -776,8 +776,7 @@ function createRequestedRun(input, env = process.env) {
     return run;
   };
   return withLock(dir, () => {
-    const recovered = runWrites.recover(dir, reference);
-    if (recovered) { const run = checked(recovered); status(dir, true); return { decision: "run-created", run }; }
+    settle(dir);
     const prior = runWrites.readReceipt(dir, reference);
     if (prior) return { decision: "already-created", run: checked(prior) };
     ready(dir);
@@ -1101,8 +1100,7 @@ function acceptReportedReview(input, env = process.env) {
   const dir = storeDir(input.project, env);
   if (realpathSync(dir) !== resolve(dir)) deny();
   return withLock(dir, () => {
-    const recovered = reviewWrites.recover(dir, reference);
-    if (recovered) { const result = recovered.result; status(dir, true); return { decision: "review-accepted", ...result }; }
+    settle(dir);
     const prior = reviewWrites.readReceipt(dir, reference);
     if (prior) return { decision: "already-accepted", ...prior.result };
     ready(dir);
@@ -1128,6 +1126,33 @@ function acceptReportedReview(input, env = process.env) {
 
 const interruptedWrites = recordedWrites({ schema: 5, tables: ["runs"], folder: "interrupted-runs",
   name: /^[0-9a-f-]{36}\.json$/, receiptName: reference => `${reference.binding.assignment}.json`, validate: validateInterruptedWrite });
+/** The consumer of each schema of a saved change. Schema 6 is the old marker of a task update. */
+const SAVED = { 2: taskWrites, 3: runWrites, 4: reviewWrites, 5: interruptedWrites, 6: taskUpdates, 7: usageWrites, 8: taskUpdates };
+/** Step 3 of every writer, and of a read that takes the lock. Call under the lock. An I/O fault leaves the marker for the next writer. */
+function settle(dir) {
+  let settled;
+  try { settled = settlePendingWrite(dir, SAVED); }
+  catch (error) {
+    if (error.code && !(error instanceof TaskUpdateError)) throw error;
+    throw new RecordedWriteError(`A saved change (request ${pendingRequest(dir)}) cannot finish, so writes and merges of this project stop until the owner repairs it. Keep the saved change. Other projects continue. ${error.message}`);
+  }
+  if (settled) status(dir, true);
+}
+/** Settle for a provider that has its own journal: journal runs under the same lock, and reads each receipt through its two readers. */
+function settleWrites({ project }, env, journal) {
+  const dir = storeDir(project, env);
+  if (realpathSync(dir) !== resolve(dir)) refuse("Invalid logbook location");
+  return withLock(dir, () => {
+    settle(dir);
+    return journal({
+      update: ({ owner, request, digest }) => taskUpdates.outcome(dir, owner, request, digest),
+      finish: reference => {
+        const receipt = interruptedWrites.readReceipt(dir, reference);
+        return receipt && { receiptHash: createHash("sha256").update(JSON.stringify(receipt)).digest("hex") };
+      },
+    });
+  });
+}
 const interruptedKeys = ["binding", "task", "run", "role", "status", "evidenceHash", "runTarget"];
 function interruptedReference(value) {
   const deny = () => refuse("The interrupted run reference is damaged.");
@@ -1206,8 +1231,7 @@ function finishInterruptedRun(input, env = process.env, fence) {
       if (!finished || finished.then || JSON.stringify(finished.request) !== JSON.stringify(reference) || finished.receiptHash !== receiptHash) deny();
       return receipt.result;
     };
-    const recovered = interruptedWrites.recover(dir, reference, begin);
-    if (recovered) { const result = acknowledge(recovered); status(dir, true); return { decision: "run-finished", ...result }; }
+    settle(dir);
     const prior = interruptedWrites.readReceipt(dir, reference);
     if (prior) return { decision: "already-finished", ...acknowledge(prior) };
     ready(dir);
@@ -1339,9 +1363,8 @@ function validateTerminalAssignment(input, env = process.env, historyProof) {
   const target = parseRunTarget(input.target), dir = storeDir(input.project, env);
   if (realpathSync(dir) !== resolve(dir)) deny();
   return withLock(dir, () => {
-    const pending = taskUpdates.pending(dir);
-    const tables = pending ? Object.fromEntries(["tasks", "runs"].map(table => [table, updateRows(table, pending.tables[table].before)]))
-      : Object.fromEntries(["tasks", "runs"].map(table => [table, read(dir, table)]));
+    settle(dir);
+    const tables = Object.fromEntries(["tasks", "runs"].map(table => [table, read(dir, table)]));
     const pair = (rows, optional = false) => {
       const tasks = rows.tasks.filter(row => row.id === target.task), runs = rows.runs.filter(row => row.id === target.run);
       if (optional && (!tasks.length || !runs.length)) return null;
@@ -1362,22 +1385,12 @@ function validateTerminalAssignment(input, env = process.env, historyProof) {
     const retires = intent => retirement !== null && intent.reference.owner === retirement.owner
       && intent.reference.request === retirement.request
       && createHash("sha256").update(JSON.stringify(intent)).digest("hex") === retirement.digest;
-    const retired = retirement !== null && !(pending && retires(pending));
+    const retired = retirement !== null;
     let proven = immutable(current) && active(current) && !retired;
     if (!proven) {
       const receipts = taskUpdates.history(dir).filter(row => row.intent.reference.task === target.task);
-      const completed = [];
-      for (const receipt of receipts) {
-        if (pending && receipt.intent.reference.owner === pending.reference.owner
-          && receipt.intent.reference.request === pending.reference.request) {
-          taskUpdates.authenticatePending(receipt, pending, historyProof);
-        } else {
-          taskUpdates.authenticate(receipt, historyProof);
-          completed.push(receipt);
-        }
-      }
-      // The pending receipt is not a completed transition, even after acknowledgement.
-      const history = completed.filter(row => row.outcome.accepted)
+      for (const receipt of receipts) taskUpdates.authenticate(receipt, historyProof);
+      const history = receipts.filter(row => row.outcome.accepted)
         .map(row => ({ retires: row.intent.proposal.disruptive && retires(row.intent), before: pair(Object.fromEntries(["tasks", "runs"].map(table => [table, updateRows(table, row.intent.tables[table].before)])), true),
           after: pair(Object.fromEntries(["tasks", "runs"].map(table => [table, updateRows(table, row.intent.tables[table].after)])), true) })).filter(row => row.before && row.after);
       // Follow exact coherent task/run pairs; a gap cannot explain a changed target.
@@ -2052,13 +2065,19 @@ function boardLandingCheck(sha, env, logbook, pr) {
   return assessMerge(sha, env, { pr, readOnly: true }, logbook);
 }
 
-function assessMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook = null) {
+function assessMerge(sha, env, options, logbook = null) {
+  const skipped = [], verdict = judgeMerge(sha, env, options, logbook, skipped);
+  return skipped.length ? { ...verdict, reason: `${verdict.reason} Skipped ${skipped.map(visible).join(", ")}: a saved change waits there, and it has no row for this commit.` } : verdict;
+}
+
+function judgeMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook, skipped) {
   const root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
     if (head !== undefined && !pr) return { ok: false, reason: "--head needs --pr: the head branch is the pull request's." };
     if (head === "") return { ok: false, reason: "--head is empty: give the pull request's head branch (F-T273-10)." };
     const mine = project === undefined ? undefined : basename(storeDir(project, env)); // the merged project's logbook
+    if (mine !== undefined && !readOnly && hasPendingWrite(join(root, mine))) withLock(join(root, mine), () => settle(join(root, mine)));
     sha = String(sha).toLowerCase(); // the ledger holds SHAs as git prints them
     pr &&= prNumber(String(pr)); // the tasks table holds it as text; "040" is PR 40
     const cfg = config(env); // once: the merge check may judge thousands of tasks
@@ -2067,6 +2086,11 @@ function assessMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook 
     const [listed, strangers, absent] = [known(root, undefined, undefined, readOnly), [], []];
     if (!listed) return { ok: false, reason: `the known project list is missing. This read-only check does not make it: sage merge-check --sha <sha> makes ${join(root, "projects.tsv")} or says how to get it back.` };
     const each = (logbook === null ? folders(root) : [join(root, logbook)]).flatMap((dir) => {
+      // A saved change stops only the project that holds it: this check looks at that logbook only when it names this commit.
+      if (hasPendingWrite(dir)) {
+        if (![readRegular(join(dir, "ledger.tsv")), pendingText(dir)].some((text) => text?.includes(sha))) return skipped.push(dir), [];
+        throw new RecordedWriteError(`${visible(dir)} holds a saved change that names ${sha.slice(0, 7)}. Any write of that project settles it. Then check again.`);
+      }
       // A folder with tasks.tsv, also a link, is a logbook, and it must pass the integrity check. A folder without it is
       // none: init has not finished it, or it lost its tasks. Its verdicts name tasks that it does not have, so they refuse.
       const book = lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false }) && check(dir);
@@ -2172,6 +2196,7 @@ function assessMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook 
     const out = bad.some((r) => r.own) ? ", or push a new commit and record its verdicts under the live tasks only" : ""; // a new commit leaves behind only verdicts
     return { ok: false, reason: `${all}; ${bad.length} fail${bad.length === 1 ? "s" : ""}. ${bad.map((r) => `${visible(r.dir)} ${r.reason}`).join(" ")} To merge, make each one pass${out}.` };
   } catch (e) {
+    if (e instanceof RecordedWriteError) return { ok: false, reason: `the merge check refuses this merge: ${e.message}` };
     if (e instanceof Refusal) return { ok: false, reason: `the merge check refuses every merge, because ${e.message}` }; // it names the file and what to do
     const [at, why] = [e?.path, e?.code ?? e?.message ?? e];
     if (at === undefined) return { ok: false, reason: `the merge check failed (${why}), so it refuses every merge.` };
@@ -2465,10 +2490,6 @@ function sage(argv, env = process.env) {
   if (readOnly || (cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
   const run = () =>
     withLock(dir, () => {
-      if (cmd === "run" && pos[0] === "usage") {
-        const recovered = usageWrites.recover(dir, usageReference(pos[1], opt));
-        if (recovered) { status(dir, true); return `${pos[1]} usage measured`; }
-      }
       ready(dir, skip);
       const out = act(cmd, pos, opt, dir, env, skip, project);
       status(dir, true);
@@ -3248,5 +3269,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

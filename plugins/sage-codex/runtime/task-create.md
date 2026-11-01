@@ -4,7 +4,7 @@
 
 The authenticated chief supplies a UUID request and the task fields. The provider fixes the project, owner, and logbook location. Each owner has a separate request namespace. A retry with the same request and fields returns the original result. A changed request or a missing saved task is refused.
 
-The core holds the logbook lock while it saves an intent, both tables, and an immutable receipt. The intent uses `review-pending.json`, the shared marker for guarded recorded writes. After an interrupted write, only the exact request can finish the saved publication. Recovery refuses unrelated table edits. This does not protect older installations that lack the pending guard.
+The core holds the logbook lock while it saves an intent, both tables, and an immutable receipt. The intent uses `review-pending.json`, the shared marker for guarded recorded writes. After an interrupted write, the next writer of the logbook, from either provider, finishes the saved publication from the marker alone, and then runs its own command. Settling refuses unrelated table edits. This does not protect older installations that lack the pending guard.
 
 Guarded snapshots compare receipt names before and after the table reads. They refuse pending writes and transactions that finish between those reads. Read-only aliases remain supported; mutation paths and receipt directories must be canonical. An empty logbook reader may return no task before a guarded snapshot. This grants no authority: a missing task cannot pass a merge check.
 

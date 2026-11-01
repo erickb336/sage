@@ -4,8 +4,6 @@ const messages = {
   'invalid-request': 'The update request is invalid. Check its task ID, version and supported changes before submitting a corrected request.',
   'invalid-change': 'This change is not allowed from the current task state. Read the task and choose a supported transition or value.',
   'owner-required': 'Only the current chief can update this task. Use its authenticated connection; do not substitute another owner.',
-  'old-owner': 'An unresolved update belongs to another owner. Preserve it and recover through the original owner connection. Automatic takeover is unavailable.',
-  'pending-request': 'An update is unresolved. Retry its original request UUID and identical contents before submitting another change.',
   'uncertain-outcome': 'The update outcome is uncertain. Retry the original request UUID and identical contents. Do not submit a replacement request.',
   'invalid-state': 'Saved state or update proof is invalid. Preserve it and inspect or repair the state before retrying the original request. Do not overwrite it.',
   'readiness': 'The current commit needs the required clean checks and review cycles. Complete them before reading the task and submitting a new request.',
