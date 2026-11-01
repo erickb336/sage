@@ -220,7 +220,9 @@ const adoptionOf = task => {
     || !/^[a-f0-9]{64}$/.test(a.digest ?? "")) refuse(`${task.id} has a damaged adoption record.`);
   return a;
 };
-const mayName = (tasks, task, name) => ofTask(task.id, name) || adoptionOf(task)?.branch === name || tasks.some((other) => other.id !== task.id && other.branch === name);
+/** Is a branch this task's own: named for its id, or the branch that it adopted, which carries the source task's number. */
+const branchOfTask = (task, name) => ofTask(task.id, name) || adoptionOf(task)?.branch === name;
+const mayName = (tasks, task, name) => branchOfTask(task, name) || tasks.some((other) => other.id !== task.id && other.branch === name);
 const branchOf = (name) => (BRANCH.test(name) ? name : refuse(`${JSON.stringify(name)} is not a task branch: use letters, digits and . _ / - (for example sage/t12 or tool/t12-short-name), not main, master or HEAD in any case, not under refs/, heads/, remotes/ or origin/, and not a name that starts with - or holds .., @{ or a space.`));
 
 /** The project's name: its main checkout's folder name as a slug. The store's folder and the cap.<project> config key use it. */
@@ -2082,8 +2084,11 @@ function assessMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook 
       // there and then moved to another branch still owns it (R1709-1).
       const ranOn = new Map();
       for (const r of runs) if (sameBranch(r.branch, head) && !ranOn.has(r.task)) ranOn.set(r.task, r.id);
+      // An adopted branch carries the source task's number, so an unrelated task of that number owns it only by a record (T575).
+      const adopter = head === undefined ? undefined : tasks.find((t) => adoptionOf(t)?.branch === head);
+      const named = (id) => ofTask(id, String(head)) && (!adopter || adopter.id === id);
       // How a task owns the head: the refusal says what will work, for only a task that owns it by branch= alone can move off it (R1741-1).
-      const how = (id) => (ofTask(id, String(head)) ? "by its name" : ranOn.has(id) ? `by run ${ranOn.get(id)} on it` : byId.get(id)?.branch === head ? "by its branch=" : "");
+      const how = (id) => (named(id) ? "by its name" : ranOn.has(id) ? `by run ${ranOn.get(id)} on it` : byId.get(id)?.branch === head ? "by its branch=" : "");
       const owns = (id) => how(id) !== "";
       // The way back for a task of the PR that does not own the head (R1759-1): a rename leaves the other task behind, so
       // set its branch= to the head. A task shares only another task's branch= (mayName), so the task whose name the head
@@ -2510,7 +2515,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const broken = Object.keys(sourceConfig).find(k => sourceConfig[k] === "invalid");
       if (broken) refuse(`the source ${broken} is not a number. Nothing changed.`);
       const decisions = read(dir, "decisions"), ledger = read(dir, "ledger"), runs = read(dir, "runs");
-      const claims = (t, decisions, ledger, runs) => prsOf(t, decisions, ledger).has(pr) || ofTask(t.id, branch) || sameBranch(t.branch, branch)
+      // Only a record claims: provider task numbers overlap, so a branch name that looks like a task's number is no claim (T575).
+      const claims = (t, decisions, ledger, runs) => prsOf(t, decisions, ledger).has(pr) || sameBranch(t.branch, branch)
         || runs.some(r => r.task === t.id && sameBranch(r.branch, branch));
       const claimed = tasks.find(t => t.id !== task.id && claims(t, decisions, ledger, runs));
       if (claimed) refuse(`${claimed.id} already claimed this PR or branch. Nothing changed.`);
@@ -3242,5 +3248,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

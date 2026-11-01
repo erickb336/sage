@@ -990,7 +990,7 @@ const LEAD_PAIRS = {
   // A branch that another task uses, by its branch= or by a run on it, is shared too, also when it carries this task's
   // name: only the sage moves a task off it or onto it, so no lead brings another task's commits to its own PR (R1740-1).
   branch: (branch, task, view, own) => {
-    if (!(branch !== "" && stateTool.ofTask(own, branch) && (!task.branch || stateTool.ofTask(own, task.branch)))) return false;
+    if (!(branch !== "" && stateTool.branchOfTask(task, branch) && (!task.branch || stateTool.branchOfTask(task, task.branch)))) return false;
     if (branch === task.branch) return true; // no move: the lead's build step names the branch that it has
     const shared = [task.branch, branch].find((name) => name && [...view.branchTasks(name)].some((id) => id !== own));
     return !shared || `${shared} is shared with ${[...view.branchTasks(shared)].filter((id) => id !== own).join(", ")}: only the sage moves a task onto a shared branch or off it.`;

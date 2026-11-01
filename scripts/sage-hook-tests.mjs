@@ -5885,6 +5885,19 @@ test("T439: a lead adds a run on its task's shared branch, but only the sage put
   assert.equal(denied(stateRun(s, "task T1 set branch=claude/t1")), undefined, "from a branch named for its task, to another one");
 });
 
+test("T575: a lead names and runs on the branch that its task adopted, and on no other task's", () => {
+  const s = leadSession(); // the lead of T1
+  const file = join(s.sage("logbook").trim(), "tasks.tsv");
+  const [head, ...rows] = readFileSync(file, "utf8").trimEnd().split("\n").map((line) => line.split("\t"));
+  const adoption = { version: 1, provider: "codex", task: "T95", logbook: "/sample/logbook", project: "/sample/project", pr: "5", branch: "codex/t95-x", round: 0, cycles: 1, digest: "0".repeat(64) };
+  rows[0][head.indexOf("branch")] = "codex/t95-x";
+  rows[0][head.indexOf("adoption")] = JSON.stringify(adoption);
+  writeFileSync(file, `${[head, ...rows].map((row) => row.join("\t")).join("\n")}\n`);
+  assert.equal(denied(stateRun(s, "task T1 set branch=codex/t95-x")), undefined, "the lead's build step names the branch that it has");
+  assert.equal(denied(stateRun(s, "run add T1 --role implementer --branch codex/t95-x")), undefined);
+  assert.match(denied(stateRun(s, "task T1 set branch=codex/t96-x")) ?? "", NOT_OWN, "only the adopted branch");
+});
+
 // R1740-1: the lead of T1 on claude/t1-x, which the sage shared with T2, and a run of T2's implementer on it.
 function sharedLeadSession() {
   const s = leadSession(); // the lead of T1, at briefed
