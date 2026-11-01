@@ -47,6 +47,8 @@ REPORT      {{REPORT_REFERENCE}}, what RESULT means for this step, and BRANCH wi
 STANDING    the output of `sage standing`, word for word
 ```
 
+The brief of a review or QA that you start yourself begins with one more line before GOAL: `Run R<n> · task T<n> (...)`, with the run id that `sage run add` printed. Without it, no report is kept for the run.
+
 A task that waits for other tasks (its waits, or the pilot of its program) gets the final report of each of them in full in CONTEXT.
 
 Give each round to a fresh agent, with the original brief, the later decisions and the earlier reports. {{FRESH_AGENT}}

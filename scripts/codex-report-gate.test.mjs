@@ -155,6 +155,15 @@ test("T483 R1933-2: a review child's task name gives its role, task and run, als
   assert.equal(of("sage_qa_t12_r40", "/root/sage_lead_t12_r1/sage_qa_t12_r40"), undefined, "a child of a child");
 });
 
+test("T560: a review child's unreadable report gets one fix chance at its first stop, as in the Claude stop gate", () => {
+  const unreadable = FULL.replace("RESULT PASS", "RESULT FINDINGS"), message = gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12_r40"), last_assistant_message: unreadable }));
+  assert.equal(message.decision, "block");
+  assert.match(message.reason, /^sage: the report check cannot read your report: RESULT is FINDINGS, but FINDINGS is none\. Give each field once/);
+  assert.equal(gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12_r40"), last_assistant_message: unreadable, stop_hook_active: true })).decision, undefined, "the second stop goes through");
+  assert.equal(gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12_r40"), last_assistant_message: FULL })).decision, undefined, "a readable report is not blocked");
+  assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/sage_implementer_t12_r40"), last_assistant_message: unreadable })), {}, "a role that backs no verdict is not read");
+});
+
 test("an agent without the sage_ task name passes, with or without a report", () => {
   assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/explorer") })), {});
   assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/explorer_sage_t1"), last_assistant_message: null })), {});
