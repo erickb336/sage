@@ -16,6 +16,7 @@ const messages = {
   'readiness-gates': 'Answer the pending gates before submitting a new readiness request.',
   'readiness-runs': 'Finish the running reviewers before submitting a new readiness request.',
   'readiness-findings': 'Resolve the blocking findings before submitting a new readiness request.',
+  'arena-open': "This task's arena has no final version here: its arena step is open, or its branch is a candidate's, and a candidate's branch never merges. Finish an arena-judge run on its own branch and name a branch that can land on the task, then read the task and submit a new request. A task that needs no arena: abandon it, then frame it again on a new branch.",
 };
 export class TaskUpdateError extends Error {
   constructor(code, ids = []) {
