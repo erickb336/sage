@@ -1,6 +1,6 @@
 # Start a role agent
 
-The chief starts each supported role agent (implementer, pe, designer, code-reviewer, security-reviewer, ux-reviewer, qa, investigate, evidence-review) as a Codex child agent. Lead and arena routes remain unavailable. Codex plugins cannot ship agent roles, so the role text goes at the top of the spawn message. The plugin writes no role files into your Codex home.
+The chief starts each supported role agent (implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate, evidence-review) as a Codex child agent. The lead route remains unavailable. Codex plugins cannot ship agent roles, so the role text goes at the top of the spawn message. The plugin writes no role files into your Codex home.
 
 **The shape is flat for now.** The chief starts every role agent and does the lead's work (the briefs, the review cycles and the repair rounds). Leads come later. Role agents start no agents and record nothing in the logbook: the plugin's hook refuses their `spawn_agent` and the sage tools that write, so the chief records what their reports say. Record each run with the `run_add` tool of the sage MCP server before the spawn.
 
@@ -50,5 +50,13 @@ Both roles keep the existing assigned-project reads. PE edits refuse. The design
 Use a direct child with its task, run and role in the name, such as `sage_designer_t12_r40` or `sage_pe_t12_r41`. The trusted start hook binds that identity to the running run. The stop hook retains its exact report, with a SHA when available. A missing SHA is allowed. Missing, conflicting, nested or ended-run identities cannot retain a report. An exact repeat preserves the first report; different text cannot replace it.
 
 Incomplete reports continue once, then remain incomplete if the child stops again. Retain `blocked`, `question` and PE `CHANGE` outcomes as given. Retention grants no verdict or design approval. The chief follows the [design procedure](workflow.md#design-before-build).
+
+## Arena candidates and the judge
+
+An arena candidate is a designer or an implementer with `candidate` on its `run_add`. Use its usual `role.mjs` text and task name, such as `sage_designer_t12_r40`. The arena judge uses `role.mjs arena-judge` and a name such as `sage_arena_judge_t12_r44`. The steps are in [run an arena](arena.md).
+
+Each candidate and the judge write on their own branch, in their own worktree, so that branch differs from the task's branch. The start and stop hooks bind each one and keep its report, with the head of its own branch. The judge makes its branch and commits on it. It leaves the pull request to the chief, as an implementer does. A kept report grants no verdict, and a score replaces no review.
+
+## Before installed acceptance
 
 Generated-package tests establish source support only. Before installed acceptance, verify the package version, both public role texts, actual child runs, permission refusals, exact retention and the saved prototype. Synthetic hook events do not prove installed execution or protected native completion. Stop at a protected denial; do not try another path.

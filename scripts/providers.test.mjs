@@ -2632,6 +2632,23 @@ test("shared chief instructions preserve the packaged agent and every brief fiel
   assert.match(text, /model sonnet/);
 });
 
+test("T586: the Codex arena steps come in Claude's order, and the Codex steps name only Codex's tools", () => {
+  const titles = (text) => [...text.matchAll(/^\d\. \*\*(.+?)\*\*/gm)].map(([, title]) => title.replace(/[.:,]$/, ""));
+  const claude = titles(JSON.parse(source("packages/sage-claude/chief-bindings.json")).ARENA);
+  const steps = source("packages/sage-codex/skills/sage/references/arena.md");
+  assert.equal(claude.length, 9);
+  // Two titles differ by provider: Claude names its agent, and its judge opens the pull request.
+  assert.deepEqual(titles(steps), claude.map((title) => title.replace("`sage:arena-judge`", "the arena judge").replace("draft pull request", "branch")));
+  assert.doesNotMatch(steps, /sage:arena-judge|sage run add|sage task|sage-pr|\bopus\b|\bsonnet\b/);
+  // A design arena's task has no branch, and the state tool refuses a PE run on any other branch.
+  assert.match(steps, /Run the PE with the judge's branch and page in its brief\. Give its `run_add` no `branch`/);
+  assert.doesNotMatch(steps, /PE on the judge's branch/);
+  // Claude's judge still opens its draft pull request, and its text no longer says anything about the chief's work.
+  const judge = source("plugins/sage/agents/arena-judge.md");
+  assert.match(judge, /\n {3}- For a build: push your branch and open a draft pull request from it, as an implementer does\.\n/);
+  assert.doesNotMatch(judge, /leaves? the pull request to the chief/);
+});
+
 test("shared chief Codex instructions keep unsupported routes inactive, and merge only by autopilot through the plugin's hook", async t => {
   const f = isolated(t, "codex");
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
@@ -2649,7 +2666,9 @@ test("shared chief Codex instructions keep unsupported routes inactive, and merg
   assert.match(text, /`fork_turns: "none"`/);
   assert.doesNotMatch(text, /sage_prepare_task|admission|preparation/i);
   assert.match(text, /PE and designer use the public skill-led helper/);
-  assert.match(text, /Arena candidates and arena-judge remain unavailable/);
+  assert.match(text, /\| arena-judge \| Scores/);
+  assert.match(text, /first read the sage skill's `references\/arena\.md`/);
+  assert.doesNotMatch(text, /arena[^\n]*(?:unavailable|not yet integrated)/i);
   assert.match(text, /installed acceptance/);
   assert.match(text, /Autopilot off:\*\* the user merges\. Never push to main, force-push/);
   assert.match(text, /The plugin's hook allows only this exact command when the merge check passes/);

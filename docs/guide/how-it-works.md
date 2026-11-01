@@ -60,7 +60,7 @@ Each task gets the least route for its size. The chief can add steps, never remo
 <a href="../assets/lifecycle-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/lifecycle-dark.svg">
-  <img alt="A task's states: framed, briefed, building, reviewing, verifying, verified, merged. A product question moves a building task to held until your answer. Findings to fix, or a QA fail, move it to repairing, and the next round goes back to reviewing: 3 rounds by default, then the task is held. Verified needs 1 clean cycle; autopilot merges after 1 for a tiny or small task, 2 for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass. Other states: designing, awaiting you, pr-ready, replan, concluded and abandoned." src="../assets/lifecycle-light.svg" width="100%">
+  <img alt="A task's states: framed, briefed, building, reviewing, verifying, verified, merged. A product question moves a building task to held until your answer. Findings to fix, or a QA fail, move it to repairing, and the next round goes back to reviewing: 3 rounds by default, then the task is held. Verified needs 1 clean cycle; autopilot merges after 1 for a tiny or small task, 2 for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass. A tiny arena has the code review. Other states: designing, awaiting you, pr-ready, replan, concluded and abandoned." src="../assets/lifecycle-light.svg" width="100%">
 </picture>
 </a>
 
