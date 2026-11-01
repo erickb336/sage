@@ -442,6 +442,82 @@ test("a folder that is not a Git repository links with no commits: no first comm
   assert.equal(w.rows()[0][2], "");
 });
 
+/** Each way that Git cannot read a repository with commits. Each returns the folder to link. */
+const UNREADABLE = {
+  "an unknown repository extension": (w, repo) => {
+    git(repo, "config", "core.repositoryformatversion", "1");
+    git(repo, "config", "extensions.nosuchextension", "true");
+    return repo;
+  },
+  "a broken config": (w, repo) => {
+    writeFileSync(join(repo, ".git", "config"), "[core\n");
+    return repo;
+  },
+  "a garbage HEAD": (w, repo) => {
+    writeFileSync(join(repo, ".git", "HEAD"), "garbage\n");
+    return repo;
+  },
+  "a garbage branch ref": (w, repo) => {
+    writeFileSync(join(repo, ".git", "refs", "heads", "main"), "garbage\n");
+    return repo;
+  },
+  "a garbage packed-refs file": (w, repo) => {
+    git(repo, "pack-refs", "--all");
+    writeFileSync(join(repo, ".git", "packed-refs"), "garbage\n");
+    return repo;
+  },
+  "a linked worktree whose target is gone": (w, repo) => {
+    const linked = join(w.base, "linked");
+    git(repo, "worktree", "add", "-q", linked, "-b", "linked");
+    rmSync(join(repo, ".git", "worktrees", "linked"), { recursive: true });
+    return linked;
+  },
+  "a folder inside a repository with a garbage HEAD": (w, repo) => {
+    writeFileSync(join(repo, ".git", "HEAD"), "garbage\n");
+    mkdirSync(join(repo, "sub"));
+    return join(repo, "sub");
+  },
+};
+
+for (const [name, damage] of Object.entries(UNREADABLE)) {
+  test(`a repository with commits and ${name}: a link refuses, says what to do, and makes no row`, (t) => {
+    const w = world(t);
+    w.claude("link", "--separate");
+    const before = w.table("bindings.tsv"), folder = w.name();
+    const project = damage(w, w.repo("broken"));
+    for (const how of [["--to", folder], ["--separate"]]) {
+      assert.throws(() => claudeSage(["link", ...how, "--project", project], w.env), /git cannot read the repository at .*made no row\. Ask the user to repair the repository, or to remove its \.git entry, then run the link again\./);
+      assert.throws(() => tool.sage(["link", ...how, "--project", project], w.env), /git cannot read the repository at .*made no row/);
+    }
+    assert.equal(w.table("bindings.tsv"), before);
+    assert.deepEqual(readdirSync(w.shared).filter((entry) => /-[0-9a-f]{6}$/.test(entry)), [folder]);
+  });
+}
+
+test("a row with no commits stays empty while Git cannot read the repository, its writes go on, and a repair fills it", (t) => {
+  const w = world(t, { commit: false });
+  w.claude("link", "--separate");
+  git(w.project, "commit", "-q", "--allow-empty", "-m", "first");
+  const commit = commitOf(w.project), head = join(w.project, ".git", "HEAD"), good = readFileSync(head, "utf8");
+  writeFileSync(head, "garbage\n");
+  assert.match(w.claude(...ADD), /T1/);
+  assert.equal(w.rows()[0][2], "");
+  writeFileSync(head, good);
+  assert.match(w.claude(...ADD), /T2/);
+  assert.equal(w.rows()[0][2], commit);
+});
+
+test("no commit is not a failed read: a real empty repository and a folder with no .git entry link to a logbook with commits", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const folder = w.name(), empty = w.repo("empty", false), plain = join(w.base, "plain");
+  mkdirSync(plain);
+  for (const project of [empty, plain]) {
+    assert.match(claudeSage(["link", "--to", folder, "--project", project], w.env), /now uses the shared logbook/);
+    assert.equal(w.rows().find(([root]) => root === project)[2], "");
+  }
+});
+
 /** A branch ref that blocks each reader of HEAD: the hardened Git call uses a fixed binary, so a fake on PATH cannot stand in for it. */
 function hangHead(project) {
   const ref = join(project, ".git", "refs", "heads", "main");

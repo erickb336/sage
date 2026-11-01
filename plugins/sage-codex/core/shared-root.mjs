@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readLocalGit } from "./local-git.mjs";
 
 const BINDINGS = ["root", "folder", "commits", "at"];
@@ -139,10 +139,23 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     return { dir: join(sageRoot(env), folder), checkout, shared: false, legacy: all.some((root) => seen(join(root, folder, "tasks.tsv"))) };
   }
 
+  /** The nearest folder, from the checkout up, with a .git entry: where Git looks for a repository. A path that cannot be read counts as one. */
+  const gitEntry = (checkout) => {
+    for (let dir = realOf(checkout); ; dir = dirname(dir)) {
+      try {
+        if (present(join(dir, ".git"))) return dir;
+      } catch {
+        return dir;
+      }
+      if (dir === dirname(dir)) return undefined;
+    }
+  };
+
   /**
-   * The first commits of a checkout, sorted, or "" when it has none or is not a Git repository. The call is the hardened
-   * local read, because the folder may be a planted one. Replace refs do not count, and no missing object is fetched. A
-   * call that does not end with an exit code, or that fails on a repository with a HEAD commit, refuses.
+   * The first commits of a checkout, sorted, or "" when HEAD has no commit yet or no repository is there. The call is the
+   * hardened local read, because the folder may be a planted one. Replace refs do not count, and no missing object is
+   * fetched. Every other failed read refuses, because a repository that Git cannot read may have commits. symbolic-ref
+   * tells a branch with no commit yet from a garbage ref: it fails on the garbage ref, and rev-parse fails on both.
    */
   function firstCommits(checkout) {
     const read = (args) => {
@@ -156,6 +169,9 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     const out = read(["rev-list", "--max-parents=0", "HEAD"]);
     if (out !== undefined) return out.split("\n").filter(Boolean).sort().join(",");
     if (read(["rev-parse", "--verify", "-q", "HEAD"]) !== undefined) refuse(`git cannot read the history of ${visible(checkout)}, which has a HEAD commit. sage made no row. Ask the user to repair the repository.`);
+    if (read(["symbolic-ref", "-q", "HEAD"]) !== undefined) return "";
+    const repository = gitEntry(checkout);
+    if (repository) refuse(`git cannot read the repository at ${visible(repository)}, so sage cannot find its first commit. sage made no row. Ask the user to repair the repository, or to remove its .git entry, then run the link again.`);
     return "";
   }
 
