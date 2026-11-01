@@ -6,7 +6,7 @@ import { McpServer, serveStdio, z } from "../runtime/mcp-sdk.mjs";
 import { tool } from "../skills/sage/sage.mjs";
 import { BRIEF_FIELDS, PRIORITIES, PRIORITY_SCALE } from "sage-core";
 import { BRIEF_LIMIT, NAME_RULE, recordBrief } from "../hooks/brief-hook.mjs";
-import { CHILD_READS, NO_GATE, takeProof } from "../hooks/gate-hook.mjs";
+import { callerRefusal, CHILD_READS, NO_GATE, takeProof } from "../hooks/gate-hook.mjs";
 import { TASK_NAME } from "../hooks/report-gate.mjs";
 
 // The state tool as MCP tools. Codex starts this server outside the shell sandbox, so it can write the logbook
@@ -78,7 +78,7 @@ export const TOOLS = {
     pos: ["task", "key", "decision"], argv: (i) => ["finding", "triage", i.task, i.key, i.decision],
   },
   finding_close: {
-    describe: "Close a fixed finding after a review confirms the fix.",
+    describe: "Close a fixed finding. In a repair round, close each fix key after the repair's commit, before the task moves to reviewing.",
     input: { task, key: z.string().describe("the finding key") }, pos: ["task", "key"], argv: (i) => ["finding", "close", i.task, i.key],
   },
   finding_move: {
@@ -134,9 +134,13 @@ export function argvFor(name, input) {
 export function createStateServer({ env = process.env } = {}) {
   const server = new McpServer({ name: "sage", version: "0.1.0" });
   // Each tool runs only for a call that sage's gate saw (R1916-2): Codex runs no plugin hook that the user has not
-  // trusted, also after each sage update, and then no sage rule holds.
-  const registerTool = (name, spec, run) => server.registerTool(name, spec, async (input, extra) => (takeProof(extra?.mcpReq?._meta, name, env, input)
-    ? run(input) : { isError: true, content: [{ type: "text", text: NO_GATE }] }));
+  // trusted, also after each sage update, and then no sage rule holds. The proof names the caller, whose rule the server
+  // applies itself: a lead serves only its own task (T552).
+  const registerTool = (name, spec, run) => server.registerTool(name, spec, async (input, extra) => {
+    const caller = takeProof(extra?.mcpReq?._meta, name, env, input);
+    const why = caller ? callerRefusal(caller, name, input, env) : NO_GATE;
+    return why ? { isError: true, content: [{ type: "text", text: why }] } : run(input);
+  });
   const project = z.string().refine(isAbsolute, "an absolute path").describe("the absolute path of the project's checkout");
   for (const [name, spec] of Object.entries(TOOLS)) {
     registerTool(name, {

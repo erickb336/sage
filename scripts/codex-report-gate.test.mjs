@@ -257,7 +257,78 @@ test("T483 R1933-2: a review child's task name gives its role, task and run, als
   assert.deepEqual(of("sage_implementer_t12_r40"), { role: "implementer", task: "T12", run: "R40", thread: "thread-1" });
   assert.deepEqual(of("sage_arena_judge_t12_r41"), { role: "arena-judge", task: "T12", run: "R41", thread: "thread-1" });
   for (const name of ["sage_lead_t12_r40", "sage_qa_t12", "sage_qa_t012_r40", "sage_qa_t12_r40x", "sage_qa_tdd_rdd"]) assert.equal(of(name), undefined, name);
-  assert.equal(of("sage_qa_t12_r40", "/root/sage_lead_t12_r1/sage_qa_t12_r40"), undefined, "a child of a child");
+  assert.equal(of("sage_qa_t12_r40", "/root/sage_qa_t12_r1/sage_qa_t12_r40"), undefined, "a child of a child");
+});
+
+test("T552: a team child of its task's lead names its run; any other path under a sage or other name names none", async () => {
+  const { reviewChild } = await import(pathToFileURL(GATE));
+  const of = (path) => reviewChild({ id: "thread-1", agent_path: path });
+  const qa = { role: "qa", task: "T12", run: "R40", thread: "thread-1" };
+  assert.deepEqual(of("/root/sage_lead_t12_r1/sage_qa_t12_r40"), qa);
+  assert.deepEqual(of("/root/sage_lead_t12/sage_qa_t12_r40"), qa, "a lead's name with no run");
+  assert.deepEqual(of("/root/sage_lead_t12_r1/sage_implementer_t12_r41"), { role: "implementer", task: "T12", run: "R41", thread: "thread-1" });
+  for (const path of ["/root/sage_lead_t13_r1/sage_qa_t12_r40", "/root/sage_lead_t1_r1/sage_qa_t12_r40", "/root/sage_lead_t123_r1/sage_qa_t12_r40", "/root/sage_pe_t12/sage_qa_t12_r40", "/root/worker/sage_qa_t12_r40",
+    "/root/sage_lead_t12_r1/sage_pe_t12_r40", "/root/sage_lead_t12_r1/sage_designer_t12_r40", "/root/sage_lead_t12_r1/sage_lead_t12_r2/sage_qa_t12_r40", "/root/sage_pe_t12/sage_lead_t12_r1/sage_qa_t12_r40", "/other/sage_lead_t12_r1/sage_qa_t12_r40"]) {
+    assert.equal(of(path), undefined, path);
+  }
+});
+
+test("T552: a reviewer under a lead has its report bound and kept, so that it backs a verdict; its first unreadable report gets one fix chance", () => {
+  const project = realpathSync(mkdtempSync(join(dir, "lead-project-")));
+  const git = (...args) => spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).stdout.trim();
+  git("init", "-q", "-b", "sage/t1-a");
+  git("commit", "-q", "--allow-empty", "-m", "work");
+  const head = git("rev-parse", "HEAD");
+  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", project], { encoding: "utf8", env: ENV });
+  const ok = (...args) => { const r = sage(...args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  ok("init");
+  ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  ok("task", "T1", "set", "branch=sage/t1-a");
+  assert.match(ok("run", "add", "T1", "--role", "lead"), /^R1 /);
+  const clean = "STATUS done\nRESULT CLEAN\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH sage/t1-a";
+  const child = (path, thread) => {
+    const file = join(dir, `lead-child-${thread}.jsonl`);
+    writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: thread, agent_path: path } }) + "\n");
+    return file;
+  };
+  const begin = (file) => assert.equal(spawnSync("node", [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "SubagentStart", session_id: "s", transcript_path: file, cwd: project }), encoding: "utf8", env: ENV }).status, 0);
+  const end = (file, message) => gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: message }));
+  const add = (role) => ok("run", "add", "T1", "--role", role).split(" ")[0];
+  const verdict = (run) => sage("verdict", "T1", "--kind", "review-clean", "--sha", head, "--run", run);
+
+  const bound = add("code-reviewer"), file = child(`/root/sage_lead_t1_r1/sage_code_reviewer_t1_${bound.toLowerCase()}`, "thread-a");
+  begin(file);
+  assert.equal(end(file, "STATUS done\nRESULT MAYBE\nEVIDENCE x\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none").decision, "block", "the one reader reads its report at the first stop");
+  assert.deepEqual(end(file, clean), {});
+  ok("run", "done", bound, "--status", "done", "--tokens", "1");
+  assert.equal(verdict(bound).status, 0, "its kept report backs review-clean on the head that the gate saw");
+
+  // The same rule as a flat child: another thread of that name keeps nothing, and a path under another task's lead binds nothing.
+  const twice = add("code-reviewer"), first = child(`/root/sage_lead_t1_r1/sage_code_reviewer_t1_${twice.toLowerCase()}`, "thread-b"), second = child(`/root/sage_lead_t1_r1/sage_code_reviewer_t1_${twice.toLowerCase()}`, "thread-c");
+  begin(first);
+  begin(second);
+  assert.deepEqual(end(second, clean), { systemMessage: `sage: ${twice}'s report is not kept: this agent is not the child that started for ${twice}.` });
+  assert.deepEqual(end(first, clean), {});
+  const other = add("code-reviewer"), under = child(`/root/sage_lead_t2_r9/sage_code_reviewer_t1_${other.toLowerCase()}`, "thread-d");
+  begin(under);
+  assert.deepEqual(end(under, clean), {});
+  ok("run", "done", other, "--status", "done", "--tokens", "1");
+  assert.match(verdict(other).stderr, new RegExp(`^sage: ${other} has no kept report`), "a child under another task's lead backs no verdict");
+});
+
+test("F-T551-7: after a spawn with no checked brief, a lead gets the steps that it can take: no message, a fresh agent on a new run", () => {
+  const project = realpathSync(mkdtempSync(join(dir, "warn-project-")));
+  spawnSync("git", ["init", "-q", project]);
+  assert.equal(spawnSync("node", [TOOL, "init", "--project", project], { encoding: "utf8", env: ENV }).status, 0);
+  const warn = (extra) => {
+    const r = spawnSync("node", [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "PostToolUse", session_id: "s", cwd: project, tool_name: "collaborationspawn_agent", tool_input: { task_name: "sage_qa_t1_r7" }, ...extra }), encoding: "utf8", env: ENV });
+    return JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+  };
+  const lead = warn({ agent_id: "agent-1" });
+  assert.match(lead, /^sage: sage_qa_t1_r7 started with no checked brief: no brief is on record/);
+  assert.match(lead, /A lead sends no message, so this agent stays without the note\. Close it with `close_agent`, end its run as failed with the sage tool `run_done`, add a new run with `run_add`, run the sage tool `brief` with the new run's task name/);
+  assert.doesNotMatch(lead, /with `send_message`/);
+  assert.match(warn({}), /then send the agent the fixed brief with `send_message`\.$/, "the chief's steps stay");
 });
 
 test("T560: a review child's unreadable report gets one fix chance at its first stop, as in the Claude stop gate", () => {

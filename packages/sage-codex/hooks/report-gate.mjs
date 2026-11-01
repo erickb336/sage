@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FINDING_FORM, REPORT_FIELDS, RESULT_WORDS, missingReportFields, readReport } from "sage-core";
+import { FINDING_FORM, REPORT_FIELDS, RESULT_WORDS, TEAM, missingReportFields, readReport } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
 
 const UNREAD = "sage: the report check could not read this agent's stop, so it did not check its report.";
@@ -44,19 +44,21 @@ export const childTask = (path) => agentPath(path).at(-1) ?? "";
 /** Roles whose reports the hook retains. Design, investigation, build and arena-judge retention does not back or grant a verdict. */
 const REPORT_ROLES = { implementer: "implementer", arena_judge: "arena-judge", pe: "pe", designer: "designer", investigate: "investigate", evidence_review: "evidence-review", code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
 /**
- * The run of a design, review, QA or investigation child of the chief (T483): its task name carries the run (sage_qa_t12_r40), and its agent path
- * is the root thread and that name, so a child of a child never names a run. Its thread id is the session_meta id.
+ * The run of a design, review, QA or investigation child of the chief (T483), or of a team child of its task's lead (T552): its task name carries the
+ * run (sage_qa_t12_r40), and its agent path is the root thread, that lead if it has one, and that name, so no other child of a child names a run.
+ * Its thread id is the session_meta id.
  */
 export function reviewChild(meta) {
   const path = agentPathOf(meta), [, role, number, run] = /^sage_([a-z_]+)_t([1-9]\d*)_(r[1-9]\d*)$/.exec(path.at(-1) ?? "") ?? [];
-  if (!REPORT_ROLES[role] || path.length !== 2 || path[0] !== "root" || typeof meta.id !== "string" || !meta.id) return undefined;
+  const underLead = path.length === 3 && TEAM.has(REPORT_ROLES[role]) && new RegExp(`^sage_lead_t${number}(?:_r[1-9]\\d*)?$`).test(path[1]);
+  if (!REPORT_ROLES[role] || (path.length !== 2 && !underLead) || path[0] !== "root" || typeof meta.id !== "string" || !meta.id) return undefined;
   return { role: REPORT_ROLES[role], task: `T${number}`, run: run.toUpperCase(), thread: meta.id };
 }
 /** The roles whose report the stop gate reads with the one reader (the Claude hook's REVIEWERS). */
 const REVIEWERS = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
 const bindingOf =(cwd, run, env) => join(tool.storeDir(cwd, env), "kept", `${run}.child`);
 /**
- * At a design, review, QA or investigation child's start (SubagentStart, from the brief hook): the first child of the chief that starts for a
+ * At a design, review, QA or investigation child's start (SubagentStart, from the brief hook): the first such child (reviewChild) that starts for a
  * running run binds the run to its thread, once (R1908-3), with the tip of its task's branch at the start: the commit that
  * it reviews (R1933-1), or no SHA for a task without a branch. Only that child's report is kept for the run.
  */

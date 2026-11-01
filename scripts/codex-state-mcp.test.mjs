@@ -24,7 +24,7 @@ async function connect(t, overrides = {}) {
   const env = { ...inherited, HOME: join(dir, "home"), CODEX_HOME: join(dir, "codex-home"), SAGE_WORKTREES: join(dir, "worktrees"), ...overrides };
   const child = spawn(process.execPath, [join(dir, "plugin/mcp/state-server.mjs")], { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "", id = 0, calls = 0;
-  const { gate: gateOf } = await import(pathToFileURL(join(dir, "plugin/hooks/gate-hook.mjs")).href);
+  const { gate: gateOf, writeProof } = await import(pathToFileURL(join(dir, "plugin/hooks/gate-hook.mjs")).href);
   child.stderr.on("data", (data) => { stderr += data; });
   const closed = new Promise((resolve) => child.once("close", (code) => resolve(code)));
   const pending = new Map();
@@ -38,15 +38,25 @@ async function connect(t, overrides = {}) {
   t.after(async () => { child.stdin.end(); assert.equal(await closed, 0); assert.equal(stderr, ""); });
   return {
     dir, project, env,
+    /** A proof of this call with this caller, as the gate saves it. */
+    writeProof: (name, id, caller) => writeProof({ tool_use_id: id, session_id: "019a0000-0000-7000-8000-0000000000aa", tool_name: `mcp__sage__${name}` }, env, caller),
     tools: async () => (await rpc("tools/list", {})).result.tools,
     /**
      * A tool's text, or { error } with the text of a refusal. As in Codex, the built gate first sees the call as
      * PreToolUse with its id, then the server gets the same id and session in _meta (R1916-2); gate: false skips the gate.
+     * With agent, the call comes from the child at that agent path, and a refusal of the gate is { denied }.
      */
-    call: async (name, args = {}, { gate = true, callId = `call_${++calls}` } = {}) => {
+    call: async (name, args = {}, { gate = true, callId = `call_${++calls}`, agent } = {}) => {
       const sessionId = "019a0000-0000-7000-8000-0000000000aa";
-      if (gate) assert.equal(await gateOf({ hook_event_name: "PreToolUse", session_id: sessionId, turn_id: "t1", transcript_path: null, cwd: project, model: "m",
-        permission_mode: "default", tool_name: `mcp__sage__${name}`, tool_use_id: callId, tool_input: { project, ...args } }, { env }), undefined);
+      let thread = { transcript_path: null };
+      if (agent) {
+        thread = { agent_id: "agent-1", transcript_path: join(dir, `child-${callId}.jsonl`) };
+        writeFileSync(thread.transcript_path, JSON.stringify({ type: "session_meta", payload: { id: "019a0000-0000-7000-8000-0000000000bb", agent_path: agent, source: { subagent: { thread_spawn: { depth: 1 } } } } }) + "\n");
+      }
+      const out = gate ? await gateOf({ hook_event_name: "PreToolUse", session_id: sessionId, turn_id: "t1", cwd: project, model: "m",
+        permission_mode: "default", tool_name: `mcp__sage__${name}`, tool_use_id: callId, tool_input: { project, ...args }, ...thread }, { env }) : undefined;
+      if (agent && out) return { denied: out.hookSpecificOutput.permissionDecisionReason };
+      assert.equal(out, undefined);
       const reply = await rpc("tools/call", { name, arguments: { project, ...args }, _meta: { callId, sessionId, threadId: sessionId } });
       assert.equal(reply.error, undefined);
       const text = reply.result.content.map((part) => part.text).join("\n");
@@ -64,9 +74,274 @@ test("the state server serves only a call that sage's gate saw: with no hook run
   assert.equal((await s.call("init", {}, { callId: "call_once" })).error, undefined, "the gate saw it");
   assert.equal(existsSync(join(s.env.CODEX_HOME, "sage")), true, "the logbook is made");
   assert.deepEqual(await s.call("init", {}, { gate: false, callId: "call_once" }), { error: NO_GATE }, "a proof serves one call");
-  const { writeProof } = await import(pathToFileURL(join(s.dir, "plugin/hooks/gate-hook.mjs")).href);
-  writeProof({ tool_use_id: "call_other", session_id: "019a0000-0000-7000-8000-0000000000aa", tool_name: "mcp__sage__status" }, s.env);
+  s.writeProof("status", "call_other", { role: "chief" });
   assert.deepEqual(await s.call("init", {}, { gate: false, callId: "call_other" }), { error: NO_GATE }, "a proof of another tool");
+  // A proof with no caller, or with a caller in another form, serves no call: a forged proof fails closed (T552).
+  for (const [id, caller] of [["no_caller", undefined], ["no_role", {}], ["bad_form", "chief"], ["null", null], ["other_role", { role: "qa", task: "T1", run: "R5" }], ["lead_no_task", { role: "lead", project: s.project }], ["lead_bad_task", { role: "lead", task: "12", project: s.project }],
+    ["lead_no_project", { role: "lead", task: "T1" }], ["lead_bad_run", { role: "lead", task: "T1", run: "x", project: s.project }]]) {
+    s.writeProof("status", id, caller);
+    assert.deepEqual(await s.call("status", {}, { gate: false, callId: id }), { error: NO_GATE }, id);
+  }
+  s.writeProof("status", "chief_form", { role: "chief" });
+  assert.equal((await s.call("status", {}, { gate: false, callId: "chief_form" })).error, undefined, "the chief's own form serves");
+});
+
+const BRIEF = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map((field) => `${field}: the ${field.toLowerCase()}.`).join("\n");
+const LEAD = "/root/sage_lead_t1_r1";
+/** A project with T1 and T2, each briefed on its branch with a running lead run: R1 on T1, R2 on T2. */
+async function leadWorld(t) {
+  const s = await connect(t);
+  await s.call("init");
+  for (const n of [1, 2]) {
+    await s.call("task_add", { title: `task ${n}`, size: "small", priority: "P2" });
+    await s.call("task_set", { task: `T${n}`, fields: { state: "briefed", branch: `sage/t${n}-a` } });
+    await s.call("run_add", { task: `T${n}`, role: "lead" });
+  }
+  const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
+  return { ...s, tool, lead: (name, args, options) => s.call(name, args, { agent: LEAD, ...options }) };
+}
+/** A run of a role that ends done with a kept report, as Codex's stop hook keeps it (T483). Its id. */
+async function reviewed(w, role, text) {
+  const run = (await w.lead("run_add", { task: "T1", role })).split(" ")[0];
+  w.tool.keepReport(w.project, { task: "T1", run, role, sha: SHA, text }, w.env);
+  assert.equal(await w.lead("run_done", { run, status: "done", tokens: 1 }), `${run} done`);
+  return run;
+}
+const CLEAN = `STATUS done\nRESULT CLEAN\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH sage/t1-a head ${SHA}`;
+const FOUND = CLEAN.replace("RESULT CLEAN", "RESULT FINDINGS").replace("FINDINGS none", "FINDINGS\n- K1 medium a.js:1 a bad value");
+
+test("T552: a lead records its own task's cycle through the state server, from a build to a repair", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  assert.match(await lead("task_set", { task: "T1", fields: { state: "building" } }), /^T1 building/);
+  assert.equal(await lead("run_add", { task: "T1", role: "implementer", branch: "sage/t1-a" }), "R3 running · implementer on T1 · sage/t1-a");
+  assert.equal(await lead("brief", { task_name: "sage_implementer_t1_r3", brief: BRIEF }), "brief sage_implementer_t1_r3 checked: all 10 fields. Spawn the agent with this task name and this brief.");
+  assert.equal(await lead("run_done", { run: "R3", status: "done" }), "R3 done");
+  assert.match(await lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } }), /^T1 reviewing .* PR 5/);
+  const found = await reviewed(w, "code-reviewer", FOUND);
+  assert.equal(await lead("finding_add", { task: "T1", source: "code-reviewer", severity: "medium", summary: "a.js:1 a bad value", run: found, class: "state-edge" }), "F-T1-1 open · medium · T1");
+  assert.match(await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: found }), /^T1 findings · 1111111/);
+  assert.equal(await lead("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix" }), "F-T1-1 open · fix");
+  assert.equal(await lead("round", { task: "T1" }), "T1 repairing · round 1 of 3 · fix F-T1-1 · re-run code-reviewer on the repair's diff");
+  assert.equal(await lead("finding_close", { task: "T1", key: "F-T1-1" }), "F-T1-1 closed · fix");
+  assert.match(await lead("task_set", { task: "T1", fields: { state: "reviewing" } }), /^T1 reviewing/);
+  assert.equal(await lead("finding_add", { task: "T1", source: "qa", severity: "low", summary: "d.js:4 slow", run: found, class: "speed" }), "F-T1-2 open · low · T1");
+  assert.equal(await lead("finding_triage", { task: "T1", key: "F-T1-2", decision: "dismiss", reason: "polish" }), "F-T1-2 dismissed · dismiss");
+  const clean = await reviewed(w, "qa", CLEAN);
+  assert.match(await lead("verdict", { task: "T1", kind: "qa-pass", sha: SHA, pr: 5, run: clean }), /^T1 qa-pass · 1111111/);
+  const pages = await lead("pages", { task: "T1" });
+  assert.match(await lead("pages", { task: "T1", run: clean, text: CLEAN }), new RegExp(`${clean}-report\\.md`));
+  assert.ok(pages.endsWith("/pages/T1"), pages);
+  assert.match(await lead("status"), /^sage · project/, "a lead reads as every child does");
+});
+
+test("T552: each call of a lead on another task is refused with its reason, by the gate and by the server", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  await lead("task_set", { task: "T1", fields: { state: "building" } });
+  await w.call("task_set", { task: "T2", fields: { state: "building" } });
+  await w.call("task_set", { task: "T2", fields: { state: "reviewing" } });
+  await w.call("run_add", { task: "T2", role: "qa" }); // R3
+  await w.call("finding_add", { task: "T2", source: "qa", severity: "low", summary: "x", run: "R3", class: "other" });
+  const before = readFileSync(join(w.env.CODEX_HOME, "sage", readdirSync(join(w.env.CODEX_HOME, "sage")).find((name) => name.startsWith("project-")), "runs.tsv"), "utf8");
+  const other = /^sage: (?:T2|R2|R3|F-T2-1) is not of T1, and a lead records only its own task/;
+  for (const [name, args] of [["run_add", { task: "T2", role: "qa" }], ["run_done", { run: "R3", status: "failed" }], ["run_done", { run: "R2", status: "failed" }], ["finding_add", { task: "T2", source: "qa", severity: "low", summary: "x", run: "R3", class: "other" }],
+    ["finding_triage", { task: "T2", key: "F-T2-1", decision: "fix" }], ["finding_triage", { task: "T1", key: "F-T2-1", decision: "fix" }], ["finding_close", { task: "T2", key: "F-T2-1" }], ["finding_close", { task: "T1", key: "F-T2-1" }],
+    ["verdict", { task: "T2", kind: "qa-pass", sha: SHA, pr: 5, run: "R3" }], ["round", { task: "T2" }], ["pages", { task: "T2" }], ["pages", { task: "T2", run: "R3", text: "x" }], ["task_set", { task: "T2", fields: { state: "verifying" } }]]) {
+    const { denied } = await lead(name, args);
+    assert.match(String(denied), other, `the gate: ${name} ${JSON.stringify(args)}`);
+    // A proof of a lead of T1 for this call, as if the gate had let it through: the server holds the rule itself.
+    const callId = `forced_${name}_${JSON.stringify(args).length}`;
+    w.writeProof(name, callId, { role: "lead", task: "T1", run: "R1", project: w.project });
+    assert.match(String((await w.call(name, args, { gate: false, callId })).error), other, `the server: ${name} ${JSON.stringify(args)}`);
+  }
+  assert.match((await lead("brief", { task_name: "sage_qa_t2_r9", brief: BRIEF })).denied, /^sage: a lead records a brief only for the team of T1, not for "sage_qa_t2_r9"/);
+  assert.match((await lead("brief", { task_name: "sage_pe_t1_r9", brief: BRIEF })).denied, /^sage: a lead records a brief only for the team of T1, not for "sage_pe_t1_r9"/);
+  assert.equal(readFileSync(join(w.env.CODEX_HOME, "sage", readdirSync(join(w.env.CODEX_HOME, "sage")).find((name) => name.startsWith("project-")), "runs.tsv"), "utf8"), before, "nothing changed");
+});
+
+test("T552: a lead's own task keeps the rules of the flow: its team, a kept report, the round, the chief's calls", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  const refused = async (name, args, reason) => assert.match(String((await lead(name, args)).denied), reason, `${name} ${JSON.stringify(args)}`);
+  await refused("run_add", { task: "T1", role: "lead" }, /^sage: a lead adds only runs of its team \(implementer, code-reviewer, security-reviewer, ux-reviewer, qa\), not "lead"/);
+  await refused("run_add", { task: "T1", role: "pe" }, /adds only runs of its team/);
+  await refused("run_add", { task: "T1", role: "implementer", branch: "sage/t2-a" }, /^sage: sage\/t2-a is not a branch of T1/);
+  await refused("run_done", { run: "R1", status: "done" }, /^sage: R1 is a lead run: only the chief ends it/);
+  await refused("finding_add", { task: "T1", source: "qa", severity: "low", summary: "x", key: "F-T1-1" }, /^sage: only the chief opens a known finding again/);
+  for (const [name, args] of Object.entries({ task_add: { title: "x", size: "small", priority: "P2" }, gate_add: { task: "T1", question: "q", options: "a|b", recommend: "a" }, gate_answer: { gate: "G1", option: 1 },
+    log: { task: "T1", decision: "d", why: "w" }, standing_add: { order: "o" }, report_compare: { task: "T1", run: "R1", sha256: "0".repeat(64) }, finding_move: { task: "T1", key: "F-T1-1", to: "later" } })) {
+    assert.equal((await lead(name, args)).denied, `sage: a lead records only its own task, and ${name} is not one of its tools. Put what the logbook needs in your report`, name);
+  }
+  await refused("task_set", { task: "T1", fields: { title: "x" } }, /^sage: a lead sets only state, branch, pr of its task, not title/);
+  await refused("task_set", { task: "T1", fields: { state: "merged" } }, /^sage: T1 is briefed: a lead moves it only to building/);
+  await refused("task_set", { task: "T1", fields: { state: "abandoned" } }, /a lead moves it only to building/);
+  await refused("task_set", { task: "T1", fields: { branch: "sage/t2-a" } }, /is not a branch named for T1/);
+  await lead("task_set", { task: "T1", fields: { state: "building" } });
+  await lead("task_set", { task: "T1", fields: { state: "reviewing" } });
+  const qa = await reviewed(w, "qa", CLEAN);
+  await refused("verdict", { task: "T1", kind: "qa-pass", sha: SHA, pr: 5, run: qa }, /^sage: a lead's verdict names its task's PR \(T1 has none yet/);
+  await lead("task_set", { task: "T1", fields: { pr: "5" } });
+  await refused("task_set", { task: "T1", fields: { pr: "6" } }, /^sage: a lead gives T1 one PR, once/);
+  await refused("verdict", { task: "T1", kind: "checks-pass", sha: SHA, pr: 5 }, /^sage: the checks-pass verdict is the chief's/);
+  await refused("verdict", { task: "T1", kind: "evidence-clean", sha: SHA, pr: 5 }, /^sage: the evidence-clean verdict is the chief's/);
+  await refused("verdict", { task: "T1", kind: "qa-pass", sha: SHA, pr: 6, run: qa }, /names its task's PR \(pr 5\)/);
+  await refused("verdict", { task: "T1", kind: "qa-pass", sha: SHA, pr: 5 }, /names a run of T1 in its current round 0, whose kept report backs it; "no run"/);
+  // A run with no kept report backs no verdict, and the state tool says so.
+  const none = (await lead("run_add", { task: "T1", role: "code-reviewer" })).split(" ")[0];
+  await lead("run_done", { run: none, status: "done", tokens: 1 });
+  assert.match((await lead("verdict", { task: "T1", kind: "review-clean", sha: SHA, pr: 5, run: none })).error, new RegExp(`^sage: ${none} has no kept report`));
+  // A finding: the lead dismisses only a low one, and never one triaged ask.
+  await lead("finding_add", { task: "T1", source: "qa", severity: "medium", summary: "a", run: qa, class: "other" }); // F-T1-1
+  await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "r" }, /^sage: F-T1-1 is medium: a lead dismisses only a low finding/);
+  await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "ask" }, /^sage: a lead asks the owner nothing/);
+  await refused("finding_close", { task: "T1", key: "F-T1-1" }, /^sage: F-T1-1 is not triaged fix/);
+  await w.call("finding_triage", { task: "T1", key: "F-T1-1", decision: "ask" });
+  await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix" }, /^sage: F-T1-1 is triaged ask: only the chief changes it/);
+  await w.call("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix" });
+  // A repair goes through round: no close and no verdict on a new commit before it.
+  await refused("finding_close", { task: "T1", key: "F-T1-1" }, /^sage: T1 has a medium or high finding triaged fix and is not repairing: run round first/);
+  const newer = await reviewed(w, "code-reviewer", CLEAN.replaceAll(SHA, "2".repeat(40)));
+  await refused("verdict", { task: "T1", kind: "review-clean", sha: "2".repeat(40), pr: 5, run: newer }, /run round first/);
+  // Round rules: a key that joined after the round waits; a verdict names a run of the current round; a chief's dismissal stays.
+  assert.match(await lead("round", { task: "T1" }), /^T1 repairing · round 1/);
+  await lead("finding_add", { task: "T1", source: "qa", severity: "low", summary: "b", run: qa, class: "other" }); // F-T1-2
+  await lead("finding_triage", { task: "T1", key: "F-T1-2", decision: "fix" });
+  await refused("finding_close", { task: "T1", key: "F-T1-2" }, /^sage: F-T1-2 is not a fix of T1's round/);
+  await refused("verdict", { task: "T1", kind: "review-clean", sha: "2".repeat(40), pr: 5, run: newer }, new RegExp(`names a run of T1 in its current round 1, whose kept report backs it; "${newer}"`));
+  await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "r" }, /is medium/);
+  // The chief's calls on the same task stay as they are.
+  assert.match(await w.call("log", { task: "T1", decision: "T1 kept", why: "chief" }), /^logged$/);
+  assert.match(await w.call("verdict", { task: "T1", kind: "checks-pass", sha: SHA }), /^T1 checks-pass/);
+});
+
+test("T552: a reviewer, QA, an implementer, a run of another task and a lead that is not the chief's child are refused; a lead stops with its lead run or its task", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
+  for (const agent of ["/root/sage_code_reviewer_t1_r5", "/root/sage_security_reviewer_t1_r5", "/root/sage_ux_reviewer_t1_r5", "/root/sage_qa_t1_r5", "/root/sage_implementer_t1_r5", `${LEAD}/sage_qa_t1_r5`, `${LEAD}/sage_implementer_t1_r5`,
+    "/root/sage_pe_t1/sage_lead_t1_r1", "/root/worker/sage_lead_t1_r1", `${LEAD}/sage_lead_t1_r1`, "/root/sage_lead_x", "/root/Sage_Lead_T1_r1"]) {
+    for (const [name, args] of [["run_add", { task: "T1", role: "qa" }], ["verdict", { task: "T1", kind: "qa-pass", sha: SHA, run: "R1" }], ["brief", { task_name: "sage_qa_t1_r9", brief: BRIEF }]]) {
+      assert.equal((await w.call(name, args, { agent })).denied, LOGBOOK, `${agent} ${name}`);
+    }
+    assert.match(await w.call("status", {}, { agent }), /^sage · project/, `${agent} reads`);
+    w.writeProof("run_add", `forced_${agent}`, { role: "child" });
+    assert.equal((await w.call("run_add", { task: "T1", role: "qa" }, { gate: false, callId: `forced_${agent}` })).error, `${LOGBOOK}.`, "the server holds the rule itself");
+  }
+  // A lead's name names its lead run: another run, or a task with no running lead run, records nothing.
+  assert.match((await lead("run_add", { task: "T1", role: "qa" }, { agent: "/root/sage_lead_t1_r9" })).denied, /^sage: T1 has no running lead run R9, so this lead records nothing/);
+  assert.match(await lead("run_add", { task: "T1", role: "qa" }, { agent: "/root/sage_lead_t1" }), /^R3 running/, "a name with no run: its task's running lead run");
+  // The project: a lead records only the logbook of the folder that Codex gives its thread.
+  const elsewhere = join(w.dir, "elsewhere");
+  mkdirSync(elsewhere);
+  execFileSync("git", ["init", "-q", elsewhere]);
+  assert.match((await lead("run_add", { project: elsewhere, task: "T1", role: "qa" })).denied, /^sage: a lead records only the logbook of its own project/);
+  // A held task, and a lead run that the chief ended.
+  await w.call("task_set", { task: "T1", fields: { state: "abandoned" } });
+  assert.match((await lead("round", { task: "T1" })).denied, /^sage: T1 is abandoned, so its lead records nothing/);
+  await w.call("run_done", { run: "R1", status: "failed" });
+  assert.match((await lead("round", { task: "T1" })).denied, /^sage: T1 has no running lead run R1/);
+});
+
+/** A leadWorld whose T1 is reviewing on PR 5, with a done code-reviewer run that holds a medium finding. Its run id. */
+async function reviewingWorld(t) {
+  const w = await leadWorld(t);
+  await w.lead("task_set", { task: "T1", fields: { state: "building" } });
+  await w.lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } });
+  return { ...w, found: await reviewed(w, "code-reviewer", FOUND) };
+}
+const add = (w, severity, summary = "a.js:1 a bad value") => w.lead("finding_add", { task: "T1", source: "code-reviewer", severity, summary, run: w.found, class: "other" });
+const triage = (w, key, decision = "fix") => w.lead("finding_triage", { task: "T1", key, decision });
+
+test("F-T552-1: a lead leaves repairing only after it closed each fix key of the round, so a correct repair never ends in replan", async (t) => {
+  const w = await reviewingWorld(t), { lead } = w;
+  await add(w, "medium"); // F-T1-1
+  await add(w, "low", "b.js:2 slow"); // F-T1-2
+  await triage(w, "F-T1-1");
+  await triage(w, "F-T1-2");
+  assert.match(await lead("round", { task: "T1" }), /^T1 repairing · round 1/);
+  const OPEN = "sage: T1 has an open fix finding of its round: close each one after the repair's commit (finding_close), then move it to reviewing";
+  assert.equal((await lead("task_set", { task: "T1", fields: { state: "reviewing" } })).denied, OPEN);
+  assert.equal(await lead("finding_close", { task: "T1", key: "F-T1-1" }), "F-T1-1 closed · fix");
+  assert.equal((await lead("task_set", { task: "T1", fields: { state: "reviewing" } })).denied, OPEN, "a low fix key of the round counts too");
+  assert.equal(await lead("finding_close", { task: "T1", key: "F-T1-2" }), "F-T1-2 closed · fix");
+  assert.match(await lead("task_set", { task: "T1", fields: { state: "reviewing" } }), /^T1 reviewing/);
+});
+
+test("F-T552-1: the refusal of finding_close gives a step that the lead can take in its state", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  await lead("task_set", { task: "T1", fields: { state: "building" } });
+  const qa = (await lead("run_add", { task: "T1", role: "qa" })).split(" ")[0];
+  await lead("finding_add", { task: "T1", source: "qa", severity: "medium", summary: "a", run: qa, class: "other" });
+  await triage(w, "F-T1-1");
+  assert.match((await lead("round", { task: "T1" })).error, /^sage: T1 is building\. A repair starts from reviewing or verifying/, "so round is no step from here");
+  const close = async () => (await lead("finding_close", { task: "T1", key: "F-T1-1" })).denied;
+  assert.equal(await close(), "sage: T1 has a medium or high finding triaged fix and is not repairing: move it to reviewing, run round, then repair");
+  await lead("task_set", { task: "T1", fields: { state: "reviewing" } });
+  assert.equal(await close(), "sage: T1 has a medium or high finding triaged fix and is not repairing: run round first, then repair");
+  assert.match(await lead("round", { task: "T1" }), /^T1 repairing · round 1/);
+  assert.equal(await lead("finding_close", { task: "T1", key: "F-T1-1" }), "F-T1-1 closed · fix");
+});
+
+const CHIEF_NAMES = ["/root/sage_chief_t1", "/root/worker/sage_chief_t1", "/root/sage_chief_t1_r9", "/root/sage_lead_t1_r1/sage_chief_t1"];
+
+test("F-T552-5: a child named like a chief calls only what a child calls, at the gate and at the server", async (t) => {
+  const w = await reviewingWorld(t);
+  await add(w, "low");
+  await w.call("gate_add", { task: "T1", question: "q", options: "a|b", recommend: "a" });
+  const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
+  for (const agent of CHIEF_NAMES) {
+    for (const [name, args] of [["gate_answer", { gate: "G1", option: 1 }], ["verdict", { task: "T1", kind: "checks-pass", sha: SHA }], ["task_set", { task: "T1", fields: { state: "merged" } }],
+      ["finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "r" }]]) {
+      assert.equal((await w.call(name, args, { agent })).denied, LOGBOOK, `${agent} ${name}`);
+      w.writeProof(name, `forced_${agent}_${name}`, { role: "child" });
+      assert.equal((await w.call(name, args, { gate: false, callId: `forced_${agent}_${name}` })).error, `${LOGBOOK}.`, `the server: ${agent} ${name}`);
+    }
+    assert.match(await w.call("status", {}, { agent }), /^sage · project/, `${agent} reads`);
+  }
+  assert.match(await w.call("status"), /G1/, "the gate stays open");
+  assert.match(await w.call("gate_answer", { gate: "G1", option: 1 }), /G1/, "the root thread is the chief");
+});
+
+test("F-T552-2: a lead moves no task off a branch that another task shares", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  assert.match(await lead("task_set", { task: "T1", fields: { branch: "sage/t1-b" } }), /^T1 briefed/, "a free branch of its task");
+  assert.match(await w.call("task_set", { task: "T2", fields: { branch: "sage/t1-b" } }), /^T2 briefed/);
+  assert.equal((await lead("task_set", { task: "T1", fields: { branch: "sage/t1-c" } })).denied, "sage: sage/t1-b is shared with another task: only the chief moves a task onto a shared branch or off it");
+});
+
+test("F-T552-2: a task on a branch of another task keeps it for a lead: no move off it, and a run on it", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  assert.match(await w.call("task_set", { task: "T1", fields: { branch: "sage/t2-a" } }), /^T1 briefed/);
+  assert.equal((await lead("task_set", { task: "T1", fields: { branch: "sage/t1-c" } })).denied, 'sage: "sage/t1-c" is not a branch named for T1, or T1 is on a branch of another task: only the chief sets that');
+  assert.match(await lead("run_add", { task: "T1", role: "implementer", branch: "sage/t2-a" }), /^R3 running · implementer on T1 · sage\/t2-a/, "a run on the task's own branch, whatever its name");
+});
+
+test("F-T552-2: a lead gives its task no PR that another task has or had", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  await w.call("task_set", { task: "T2", fields: { pr: "7" } });
+  assert.equal((await lead("task_set", { task: "T1", fields: { pr: "7" } })).denied, "sage: a lead gives T1 one PR, once, that no other task has or had");
+  assert.match(await lead("task_set", { task: "T1", fields: { pr: "8" } }), /PR 8/);
+});
+
+test("F-T552-2: a lead dismisses no fix key of a round, of this round or an earlier one", async (t) => {
+  const w = await reviewingWorld(t), { lead } = w;
+  await add(w, "medium"); // F-T1-1
+  await add(w, "low", "b.js:2 slow"); // F-T1-2, a key of the round
+  await add(w, "low", "c.js:3 slow"); // F-T1-3, from before the round
+  await triage(w, "F-T1-1");
+  await triage(w, "F-T1-2");
+  await lead("round", { task: "T1" });
+  await lead("finding_close", { task: "T1", key: "F-T1-1" }); // so the state tool's own rule (a medium finding is open) does not act
+  await triage(w, "F-T1-3");
+  for (const key of ["F-T1-2", "F-T1-3"]) {
+    assert.equal((await lead("finding_triage", { task: "T1", key, decision: "dismiss", reason: "polish" })).denied, `sage: ${key} is a fix key of a round: only the chief dismisses it`);
+  }
+});
+
+test("F-T552-2: a lead's verdict on a commit of the ledger passes while a repair waits, so a cycle's other reports still count", async (t) => {
+  const w = await reviewingWorld(t), { lead } = w;
+  await add(w, "medium");
+  await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: w.found });
+  await triage(w, "F-T1-1");
+  const other = await reviewed(w, "code-reviewer", FOUND);
+  assert.match(await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: other }), /^T1 findings · 1111111/);
 });
 
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {
@@ -250,7 +525,7 @@ test("brief checks a brief's fields, keeps it by task name in the logbook, and t
   writeFileSync(meta, JSON.stringify({ type: "session_meta", payload: { id: "c1", agent_path: "/root/sage_implementer_t1" } }) + "\n");
   const start = { session_id: "s1", turn_id: "t1", transcript_path: meta, cwd: s.project, hook_event_name: "SubagentStart", model: "m", permission_mode: "default", agent_id: "c1", agent_type: "default" };
   const out = JSON.parse(execFileSync(process.execPath, [join(s.dir, "plugin/hooks/brief-hook.mjs")], { input: JSON.stringify(start), env: s.env, encoding: "utf8" }));
-  assert.ok(out.hookSpecificOutput.additionalContext.endsWith(`Your checked brief (sage_implementer_t1), as the chief recorded it:\n\n${text()}`));
+  assert.ok(out.hookSpecificOutput.additionalContext.endsWith(`Your checked brief (sage_implementer_t1), as it was recorded:\n\n${text()}`));
   assert.match(out.hookSpecificOutput.additionalContext, /\n\nFORBIDDEN, from your checked brief\. Never do these:\nThe forbidden of T1\.\n\n/);
 });
 
