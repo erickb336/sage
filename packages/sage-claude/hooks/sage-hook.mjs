@@ -168,7 +168,9 @@ function switchModes(prompt, state, cwd) {
     return ["sage: the mode policy cannot load. Autopilot is off. Reinstall or update the sage plugin."];
   }
   return modePolicy.switchModes(prompt, state, { autopilotOn: () => {
-    const c = stateTool.config();
+    let logbook; // the counts of this session's project: a shared project's live in the shared root
+    try { logbook = stateTool.storeDir(cwd); } catch {}
+    const c = stateTool.config(process.env, logbook);
     const broken = Object.keys(c).find((k) => c[k] === "invalid");
     const [small, large, risky] = [{}, { size: "large" }, { risk: "auth" }].map((task) => stateTool.cyclesFor(task, c));
     if (broken) return `sage: autopilot is on. ${broken} in config.json is not a number: no merge until it is fixed (sage config ${broken}=<n>).`;
@@ -636,35 +638,38 @@ function names(part, name) {
   }
 }
 const HOME = /^(?:~|\$home)(?:\/|$)/;
-/** The sage root's text and canonical path, in lower case. strict: throw when the root cannot be resolved (for agents). */
+/** The text and canonical path of the sage root, then of the shared root, in lower case. strict: throw when a root cannot be resolved (for agents). */
 function rootsOf(strict) {
   let raw;
   try {
     raw = stateTool.sageRoot(process.env);
-    return [fold(raw), canonical(raw)];
+    const shared = core.sharedRoot(process.env);
+    return [fold(raw), canonical(raw), fold(shared), canonical(shared)];
   } catch (e) {
     if (strict) throw e;
     return raw ? [fold(raw)] : [];
   }
 }
-/** The word that names the sage root: its path or a variable that sets it, or .claude then sage in one path, in any case or as a pattern. */
+/** The canonical paths in the list that rootsOf gives. */
+const canonicalRoots = (roots) => roots.filter((_, k) => k % 2 === 1);
+/** The word that names a root: its path or a variable that sets it, .claude then sage in one path, or .sage, in any case or as a pattern. */
 function namesRoot(text, words, roots, cwd) {
   const low = fold(unquote(text));
   const root = roots.find((r) => low.includes(r));
-  return usesRootVar(text, roots[1], cwd) ?? (root && (words.find((w) => w.low.includes(root))?.word ?? root)) ?? words.find(({ parts }) => parts.some((p, k) => names(p, ".claude") && names(parts[k + 1] ?? "", "sage")))?.word;
+  return usesRootVar(text, canonicalRoots(roots), cwd) ?? (root && (words.find((w) => w.low.includes(root))?.word ?? root)) ?? words.find(({ parts }) => parts.some((p, k) => (p.startsWith(".s") && names(p, ".sage")) || (names(p, ".claude") && names(parts[k + 1] ?? "", "sage"))))?.word;
 }
 /**
- * The first use in the text of a variable that sets the sage root (sageRoot: SAGE_HOME, CLAUDE_CONFIG_DIR), or undefined.
+ * The first use in the text of a variable that sets a root (sageRoot: SAGE_HOME, CLAUDE_CONFIG_DIR; sharedRoot: SAGE_SHARED_HOME), or undefined.
  * Every $VAR (also ${VAR}, $env:VAR, %VAR%) is a use, whatever assignments come before it (T83-N2: a prefix, a subshell,
  * a pipe, a $( ) or a skipped && can each keep the real value). An assignment is a use unless its value is a plain path
- * that does not overlap the real root (a scratch SAGE_HOME for tests). A bare name is a use in a command with a
- * substitution or a pipe, which can read the variable (printenv). Without the real root (root), every mention is a use.
+ * that does not overlap a real root (a scratch SAGE_HOME for tests). A bare name is a use in a command with a
+ * substitution or a pipe, which can read the variable (printenv). Without the real roots (real), every mention is a use.
  */
-const ROOT_VAR = /(\$\{?|\$env:|%)?\b(SAGE_HOME|CLAUDE_CONFIG_DIR)\b(=([^\s;&|<>()`]*))?/gi;
-function usesRootVar(text, root, cwd) {
+const ROOT_VAR = /(\$\{?|\$env:|%)?\b(SAGE_HOME|SAGE_SHARED_HOME|CLAUDE_CONFIG_DIR)\b(=([^\s;&|<>()`]*))?/gi;
+function usesRootVar(text, real, cwd) {
   const reads = /\$\(|`|\|/.test(text);
   for (const [use, ref, , set, value] of unquote(text).matchAll(ROOT_VAR)) {
-    if (ref || (set ? !root || !value || /[$`*?[{%]/.test(value) || overlaps(canonical(from(cwd, pathOf(value))), root) : reads)) return use;
+    if (ref || (set ? !real.length || !value || /[$`*?[{%]/.test(value) || real.some((root) => overlaps(canonical(from(cwd, pathOf(value))), root)) : reads)) return use;
   }
   return undefined;
 }
@@ -728,7 +733,7 @@ function nearLogbook(text, roots, cwd) {
     namesRoot(text, plain, roots, cwd) ??
     plain.find(({ low, parts }) => parts.includes(".claude") && !worktree(low))?.word ??
     (leaves ? words.find(({ word }) => GLOB.test(word))?.word ?? namesTable(words) : undefined) ??
-    unique.find((w) => !/[$`]/.test(w) && overlaps(fold(physical(from(cwd, pathOf(w)), disk)), roots[1])) ??
+    unique.find((w) => !/[$`]/.test(w) && canonicalRoots(roots).some((root) => overlaps(fold(physical(from(cwd, pathOf(w)), disk)), root))) ??
     unique.find((w) => linkOnPattern(w, cwd)) ??
     words.find(({ low }) => fromHome(low) && /[*?[{$]/.test(low.replace(/^\$home/, "")))?.word ??
     (/(?:^|[\s;&|(`])(?:cd|pushd)[ \t]*(?:$|[\n;&|)`])/m.test(fold(text)) ? "cd" : undefined) ??
@@ -869,12 +874,12 @@ function stateToolOnly(command) {
     return false; // the hook cannot read it
   }
 }
-/** The file that a file tool changes, as a canonical path under the sage root, or undefined. It throws when it cannot resolve a path. */
+/** The file that a file tool changes, as a canonical path under the sage root or the shared root, or undefined. It throws when it cannot resolve a path. */
 function underRoot(input) {
   const ti = input.tool_input ?? {};
-  const root = canonical(stateTool.sageRoot(process.env));
   const path = canonical(from(input.cwd ?? process.cwd(), String(ti.file_path ?? ti.notebook_path ?? "")));
-  return path === root || path.startsWith(root + sep) ? `the sage root ${root} (${path})` : undefined;
+  const root = [stateTool.sageRoot(process.env), core.sharedRoot(process.env)].map(canonical).find((r) => path === r || path.startsWith(r + sep));
+  return root ? `the sage root ${root} (${path})` : undefined;
 }
 /**
  * T347: the one file the chief may change in sage mode is a Markdown file of Claude Code's own memory folder:
@@ -1469,7 +1474,7 @@ function agentCheck(input, file, slots) {
   const cwd = input.cwd ?? process.cwd();
   const texts = runFields(ti);
   // T529: a run's own scratch work passes; a scratch script that names the state tool, a merge or a push is refused.
-  const scratch = ownScratch(input, slots, roots[1]);
+  const scratch = ownScratch(input, slots, canonicalRoots(roots));
   let note = ` ${scratch.why}`;
   if (scratch.folder) {
     const script = texts.map((t) => scratchScriptProblem(t, scratch.folder, cwd)).find(Boolean);
@@ -1492,7 +1497,7 @@ function agentCheck(input, file, slots) {
     return `"${[cmd, ...pos.slice(0, 1)].join(" ")}" writes the logbook, or is not a read command of the state tool.`;
   }
   if (!texts.some(t => writes(t, cwd))) return undefined;
-  const word = nearLogbook(texts.join("\n"), roots, cwd) ?? texts.map((t) => linksNear(t, roots[1], cwd)).find(Boolean);
+  const word = nearLogbook(texts.join("\n"), roots, cwd) ?? canonicalRoots(roots).flatMap((root) => texts.map((t) => linksNear(t, root, cwd))).find(Boolean);
   const hint = word && /\$\?/.test(word) ? " The hook does not expand $?, so its ? is a pattern character: to show an exit code, write || echo FAIL or ; echo done after the command instead." : "";
   return word && `an agent never writes, moves or removes a logbook file from the shell, and never writes near one with a pattern, a variable or a link to it. ${quoted(word)} makes this command near the logbook: change or remove it.${hint}${note}`;
 }
@@ -1514,7 +1519,7 @@ export function ownScratch(input, slots, root) {
   if (!/^[\w-]{1,128}$/.test(session) || !/^[\w.-]{1,255}$/.test(project) || /^\.\.?$/.test(project) || uid === undefined) return none;
   try {
     const folder = join(realpathSync.native(process.env.CLAUDE_CODE_TMPDIR || "/tmp"), `claude-${uid}`, project, session, "scratchpad", mark.run);
-    return root && overlaps(fold(folder), root) ? { why: `The scratch folder of ${mark.run} overlaps the sage root, so it is none.` } : { folder };
+    return root?.some((r) => overlaps(fold(folder), r)) ? { why: `The scratch folder of ${mark.run} overlaps the sage root or the shared root, so it is none.` } : { folder };
   } catch {
     return none;
   }
@@ -1547,8 +1552,8 @@ export function inScratch(word, folder, cwd) {
 /** The programs of a scratch command (T529): the data writers, the plain readers, and mkdir, chmod and node on scratch paths. */
 const SCRATCH_DATA = /^(?:cat|echo|printf)$/, SCRATCH_READ = /^(?:head|tail|grep|wc)$/;
 /** The variables that move a home, config or sage root folder: in a scratch command, each is set only to a path in the folder (R1896-1). */
-const SCRATCH_HOMES = /^(?:SAGE_HOME|CLAUDE_CONFIG_DIR|CODEX_HOME|HOME)=/i;
-const SCRATCH_FORMS = "Each command of a scratch command is one of: cat with a quoted heredoc (<<'EOF'), echo or printf, with output only into the folder; head, tail, grep or wc of files that are not the logbook, with no output to a file; mkdir or chmod in the folder; node <script in the folder> or node -e <code> whose paths are in the folder, with each argument a path in the folder or a plain word (no . or /), and output only into the folder. SAGE_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME and HOME are set only to paths in the folder.";
+const SCRATCH_HOMES = /^(?:SAGE_HOME|SAGE_SHARED_HOME|CLAUDE_CONFIG_DIR|CODEX_HOME|HOME)=/i;
+const SCRATCH_FORMS = "Each command of a scratch command is one of: cat with a quoted heredoc (<<'EOF'), echo or printf, with output only into the folder; head, tail, grep or wc of files that are not the logbook, with no output to a file; mkdir or chmod in the folder; node <script in the folder> or node -e <code> whose paths are in the folder, with each argument a path in the folder or a plain word (no . or /), and output only into the folder. SAGE_HOME, SAGE_SHARED_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME and HOME are set only to paths in the folder.";
 /**
  * Why this shell text is not only work inside the run's scratch folder (T529), or undefined when it is. Each command is
  * one of SCRATCH_FORMS, joined by ;, &&, || or a line break, or piped. No substitution, group, cd, or redirection to a
@@ -1602,7 +1607,7 @@ function scratchMiss(text, folder, cwd, roots) {
  * still build a path while it runs: the sandbox is the full guard, as for node <script>.
  */
 function scratchCode(code, folder, cwd) {
-  if (typeof code !== "string" || /\$\{|\b(?:SAGE_HOME|CLAUDE_CONFIG_DIR|CODEX_HOME|HOME|homedir|USERPROFILE|tmpdir)\b|\.claude|~/i.test(code)) return false;
+  if (typeof code !== "string" || /\$\{|\b(?:SAGE_HOME|SAGE_SHARED_HOME|CLAUDE_CONFIG_DIR|CODEX_HOME|HOME|homedir|USERPROFILE|tmpdir)\b|\.claude|\.sage\b|~/i.test(code)) return false;
   if (namesTable(partsOf(code))) return false;
   const strings = [...code.matchAll(/(['"`])((?:\\.|(?!\1)[^\\\n])*)\1/g)].map((m) => m[2]);
   return strings.every((s) => !s.includes("/") || s.startsWith("node:") || inScratch(s, folder, cwd));

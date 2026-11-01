@@ -1,4 +1,5 @@
-import { createStateTool, readAdmission, beginInterruptedRunFinish, endInterruptedRunFinish } from "sage-core";
+import { readAdmission, beginInterruptedRunFinish, endInterruptedRunFinish } from "sage-core";
+import { logbookEnv, logbookTool } from "./logbook-env.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
 import { settleNativeWrites } from "./task-settle.mjs";
@@ -31,9 +32,9 @@ export function finishNativeInterruptedRun(input, context, options) {
     || JSON.stringify(terminal) !== JSON.stringify({ ...binding, outcome: "interrupted", evidenceHash: terminal.evidenceHash })) refuse();
   const request = { binding, task: assigned.assignment.task, run: input.run, role: assigned.rolePlan.role,
     status: input.status, evidenceHash: terminal.evidenceHash, runTarget: preparation.runTarget };
-  const tool = createStateTool({ defaultRoot: () => refuse() });
+  const tool = logbookTool(() => refuse());
   return tool.finishInterruptedRun({ project: options.projectDirectory, ...request },
-    { ...process.env, SAGE_HOME: options.logbookRoot }, {
+    logbookEnv(options), {
       begin: value => beginInterruptedRunFinish(options.directory, value),
       end: (value, receiptHash) => endInterruptedRunFinish(options.directory, value, receiptHash),
     });

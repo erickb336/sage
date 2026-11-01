@@ -1,14 +1,15 @@
 import { taskUpdateHistory } from "./task-update-history.mjs";
 import { assertNativeTaskOpen } from "./task-authority.mjs";
-import { createStateTool, REVIEW_ROLES, readAdmission } from "sage-core";
+import { REVIEW_ROLES, readAdmission } from "sage-core";
+import { logbookEnv, logbookTool } from "./logbook-env.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
 
 /** Fixed launcher storage and a verified binding identify the current logbook run. */
 export function captureNativeRunAssignment(options, input) {
   validateLogbookLocation(options);
-  const tool = createStateTool({ defaultRoot: () => { throw Error("Sage needs its configured logbook."); } });
+  const tool = logbookTool(() => { throw Error("Sage needs its configured logbook."); });
   return tool.captureRunAssignment({ project: options.projectDirectory, task: input.task, run: input.run,
-    role: input.role }, { ...process.env, SAGE_HOME: options.logbookRoot });
+    role: input.role }, logbookEnv(options));
 }
 
 /** Old preparations remain readable but cannot authorize tools without a saved target. */
@@ -27,14 +28,14 @@ export function checkPreparedRunTarget(options, assigned, prepared) {
     || ["project", "session", "epoch", "issuer", "task", "run"].some(key => assigned.assignment[key] !== prepared[key])
     || assigned.rolePlan.role !== prepared.rolePlan.role) refuse();
   validateLogbookLocation(options);
-  const tool = createStateTool({ defaultRoot: refuse });
+  const tool = logbookTool(refuse);
   const updates = readAdmission(options.directory).taskUpdates?.filter(row => !row.void && row.accepted && row.update.disruptive
     && row.update.project === prepared.project && row.update.task === prepared.task) ?? [];
   const retired = updates[prepared.generation ?? 0]?.update;
   const retirement = retired ? { owner: JSON.stringify([retired.project, retired.session, retired.epoch]),
     request: retired.request, digest: retired.digest } : null;
   return tool.validateTerminalAssignment({ project: options.projectDirectory, target: prepared.runTarget,
-    review: prepared.review ?? null, retirement }, { ...process.env, SAGE_HOME: options.logbookRoot }, taskUpdateHistory(options));
+    review: prepared.review ?? null, retirement }, logbookEnv(options), taskUpdateHistory(options));
 }
 
 /** New authority requires both the child target and the original issuing lead. */

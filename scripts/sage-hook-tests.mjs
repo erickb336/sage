@@ -3533,9 +3533,9 @@ test("Q2-WORD: a refusal names the word that made the command near the logbook (
  * <session>/scratchpad/<run>. The hook takes each part from the event and the slot, and Claude Code's temp folder from
  * CLAUDE_CODE_TMPDIR. The hook only reads these commands; no test passes them to a shell (order 25).
  */
-function scratchSession() {
+function scratchSession(extra = () => ({})) {
   const temp = realpathSync(mkdtempSync(join(tmpdir(), "sage-claude-tmp-")));
-  const s = session({ CLAUDE_CODE_TMPDIR: temp });
+  const s = session({ CLAUDE_CODE_TMPDIR: temp, ...extra(temp) });
   s.sage("config", "max_agents=20");
   s.send(prompt("sage mode"));
   const transcript_path = join(s.dir, "config", "projects", "-work-proj", "s1.jsonl");
@@ -3547,6 +3547,47 @@ function scratchSession() {
   const pad = join(temp, `claude-${process.getuid()}`, "-work-proj", "s1", "scratchpad");
   return { s, pad, agent, transcript_path, own: join(pad, "R1873"), reviewer: agent("rev1", "sage:code-reviewer", "Run R1873 · task T523") };
 }
+
+test("T594: the scratch rules name the shared root: SAGE_SHARED_HOME stays in the folder, node -e names no shared root, and a folder in the shared root is none", () => {
+  const { s, own, reviewer } = scratchSession((temp) => ({ SAGE_SHARED_HOME: join(temp, "shared") }));
+  const shell = (command) => denied(s.send(bash(command, FEATURE, reviewer))) ?? "";
+  assert.equal(shell(`SAGE_SHARED_HOME=${own}/s node ${own}/p.mjs > ${own}/x; echo "$*"`), "", "a scratch shared root");
+  assert.match(shell(`SAGE_SHARED_HOME=${s.vars.SAGE_SHARED_HOME} node ${own}/p.mjs > ${own}/x; echo "$*"`), LOGBOOK_SHELL, "the real shared root");
+  for (const code of [`console.log(process.env.SAGE_SHARED_HOME); console.log("$*")`, `console.log("~/.sage")`]) {
+    assert.match(shell(`node -e '${code}' > ${own}/x`), LOGBOOK_SHELL, code);
+  }
+  const inside = scratchSession((temp) => ({ SAGE_SHARED_HOME: temp }));
+  assert.match(denied(inside.s.send(bash(`echo "$*" > ${inside.own}/x`, FEATURE, inside.reviewer))) ?? "", /overlaps the sage root or the shared root/);
+});
+
+test("T594: the shared root is the sage root's equal: no agent and no chief changes it, by a path, a variable, a link or a file tool", () => {
+  const root = join(realpathSync(mkdtempSync(join(tmpdir(), "sage-shared-"))), "shared");
+  const s = session({ SAGE_SHARED_HOME: root });
+  const scratch = mkdtempSync(join(tmpdir(), "sage-scratch-"));
+  const refused = [
+    `cp x ${join(root, "bindings.tsv")}`,
+    `echo x >> ${join(root, "proj-abc123", "ledger.tsv")}`,
+    "rm -rf $SAGE_SHARED_HOME/p",
+    `SAGE_SHARED_HOME=${root} npm test > ${scratch}/log.txt`,
+    `SAGE_SHARED_HOME=${join(root, "p")} npm test > ${scratch}/log.txt`,
+    `cp x "$(printenv SAGE_SHARED_HOME)"/p/x`,
+    "rm -rf ~/.sage/p",
+    "echo x > $HOME/.sage/bindings.tsv",
+  ];
+  for (const command of refused) {
+    assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, `agent: ${command}`);
+    assert.match(denied(s.send(bash(command))) ?? "", /the chief never writes, moves or removes a logbook file/, `chief: ${command}`);
+  }
+  for (const name of ["bindings.tsv", "plugins.tsv", "projects.tsv", "moved.json"]) assert.match(denied(s.send(bash(`cd .. && rm ${name}`, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, name);
+  assert.match(denied(s.send(bash(`ln -s ${root} ${scratch}/link`, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, "a link to the root");
+  for (const command of [`SAGE_SHARED_HOME=${scratch} npm test > ${scratch}/log.txt`]) {
+    assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `agent: ${command}`);
+    assert.equal(denied(s.send(bash(command))), undefined, `chief: ${command}`);
+  }
+  const write = tool("Write", { file_path: join(root, "bindings.tsv"), content: "x" }, { cwd: s.dir });
+  assert.match(denied(s.send({ ...write, ...AGENT })) ?? "", /never writes under the sage root/);
+  assert.match(denied(s.send(write)) ?? "", /the chief never writes under the sage root/);
+});
 
 test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and runs node -e with spawnSync, all in its own scratch subfolder", () => {
   const { s, own, reviewer } = scratchSession();

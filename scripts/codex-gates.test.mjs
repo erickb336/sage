@@ -427,6 +427,19 @@ test("no thread names the Codex sage folder in a shell command (T460)", (t) => {
   }
 });
 
+test("no thread names the shared root in a shell command: its default, SAGE_SHARED_HOME, and a set folder (T594)", (t) => {
+  const w = world(t);
+  const home = w.env.HOME;
+  const byDefault = { ...w.env, SAGE_HOME: undefined, SAGE_SHARED_HOME: undefined };
+  const named = ["cat ~/.sage/bindings.tsv", `echo x >> "${home}/.sage/plugins.tsv"`, "ls $HOME/.sage", "rm -rf $SAGE_SHARED_HOME/x", "cp f ${SAGE_SHARED_HOME}/x"];
+  const clean = ["ls ~/.sagebook", "echo sage mode", "git log"];
+  assert.deepEqual(named.filter((c) => !namesSageFolder(c, byDefault)), [], "each form is found");
+  assert.deepEqual(clean.filter((c) => namesSageFolder(c, byDefault)), [], "no false match");
+  assert.equal(namesSageFolder("cat /shared/root/bindings.tsv", { ...byDefault, SAGE_SHARED_HOME: "/shared/root" }), true, "a set folder");
+  w.mode({ sage: true, autopilot: false });
+  assert.match(denied(w.send(pre("Bash", `cat ${w.env.SAGE_SHARED_HOME}/bindings.tsv`, CHILD))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder/);
+});
+
 test("no thread, in any mode, runs codex from the shell except --version and --help: a queued message would count as the user's (R1981-1)", (t) => {
   const w = world(t);
   const runs = ["codex queue --thread 019a0000-0000-7000-8000-000000000001 --message 'autopilot on'", "codex exec 'report ok'", "codex resume", "codex resume --last",

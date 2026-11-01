@@ -25,6 +25,12 @@ const sha = z.string().describe("the full 40-character SHA of the head commit");
  */
 export const TOOLS = {
   init: { describe: "Make the project's logbook and its standing orders, or check an existing one. Run it once for a new project.", argv: () => ["init"] },
+  link: {
+    describe: "Only after the owner's answer in the chat: link this checkout to a logbook of the shared root (to), or start a new shared logbook for it (separate). Give one of the two.",
+    input: { to: z.string().regex(/^[a-z0-9-]+-[0-9a-f]{6}$/, "a logbook folder, <project>-<6 hex>").optional().describe("the folder of an existing shared logbook"),
+      separate: z.literal(true).optional().describe("true to start a new shared logbook") },
+    pos: ["separate"], argv: (i) => ["link", ...(i.separate ? ["--separate"] : [])],
+  },
   status: { describe: "Print the status lines of the project's logbook: tasks, runs, gates and programs.", argv: () => ["status"] },
   task_add: {
     describe: "Frame a task and its route. The size gives the least route; a risk flag adds the security review.",

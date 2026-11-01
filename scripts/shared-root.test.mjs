@@ -1,0 +1,443 @@
+import "./test-env.mjs";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { locate as claudeLocate, sage as claudeSage } from "../plugins/sage/skills/sage/sage.mjs";
+import { tool } from "../plugins/sage-codex/skills/sage/sage.mjs";
+import { sharedRoot } from "../packages/sage-core/index.mjs";
+
+const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
+const FIRST = "1".repeat(40), OTHER = "2".repeat(40);
+const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
+const git = (cwd, ...args) => execFileSync("git", args, { cwd, env: gitEnv, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+
+/** A scratch home with both provider roots and a shared root. No SAGE_HOME: each tool uses its own root, as in production. */
+function world(t, { commit = true } = {}) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-shared-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: join(base, "home"), CLAUDE_CONFIG_DIR: join(base, "claude"), CODEX_HOME: join(base, "codex"), SAGE_SHARED_HOME: join(base, "shared"), SAGE_TEST_PIDS: "{}" };
+  delete env.SAGE_HOME;
+  const claudeRoot = join(env.CLAUDE_CONFIG_DIR, "sage"), codexRoot = join(env.CODEX_HOME, "sage"), shared = env.SAGE_SHARED_HOME;
+  const repo = (name, made = commit) => {
+    const project = join(base, name);
+    mkdirSync(project, { recursive: true });
+    git(project, "init", "-q", "-b", "main");
+    if (made) git(project, "commit", "-q", "--allow-empty", "-m", `first of ${name}`);
+    return project;
+  };
+  const project = repo("project");
+  const claude = (...args) => claudeSage([...args, "--project", project], env);
+  const codex = (...args) => tool.sage([...args, "--project", project], env);
+  const name = () => basename(tool.storeDir(project, env));
+  const table = (file) => readFileSync(join(shared, file), "utf8");
+  const rows = () => table("bindings.tsv").trim().split("\n").slice(1).map((line) => line.split("\t"));
+  const bind = (...lines) => {
+    mkdirSync(shared, { recursive: true });
+    writeFileSync(join(shared, "bindings.tsv"), ["root\tfolder\tcommits\tat", ...lines].join("\n") + "\n");
+  };
+  return { base, env, claudeRoot, codexRoot, shared, repo, project, claude, codex, name, table, rows, bind };
+}
+const commitOf = (project) => git(project, "rev-list", "--max-parents=0", "HEAD");
+
+test("one function picks the shared root: the fixed option, SAGE_SHARED_HOME, <SAGE_HOME>/shared, then ~/.sage", () => {
+  const all = { HOME: "/h", SAGE_HOME: "/s", SAGE_SHARED_HOME: "/x" };
+  assert.equal(sharedRoot(all, "/fixed"), "/fixed");
+  assert.equal(sharedRoot(all), "/x");
+  assert.equal(sharedRoot({ HOME: "/h", SAGE_HOME: "/s" }), "/s/shared");
+  assert.equal(sharedRoot({ HOME: "/h" }), "/h/.sage");
+});
+
+test("a production-shaped Codex env keeps the shared root out of the Codex root, and the launcher's option wins", async (t) => {
+  const { logbookEnv } = await import("../plugins/sage-codex/runtime/logbook-env.mjs");
+  const saved = { HOME: process.env.HOME, SAGE_SHARED_HOME: process.env.SAGE_SHARED_HOME, SAGE_HOME: process.env.SAGE_HOME };
+  t.after(() => { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
+  delete process.env.SAGE_SHARED_HOME; delete process.env.SAGE_HOME;
+  process.env.HOME = "/h";
+  const logbookRoot = "/h/.codex/sage";
+  const env = logbookEnv({ logbookRoot });
+  assert.equal(env.SAGE_HOME, logbookRoot);
+  assert.equal(sharedRoot(env), "/h/.sage");
+  assert.equal(sharedRoot(logbookEnv({ logbookRoot, sharedRoot: "/fixed" })), "/fixed");
+});
+
+test("each Codex place that sets the logbook gets its env from the one helper", () => {
+  const folder = join(REPO, "packages/sage-codex/runtime");
+  const named = readdirSync(folder).filter((file) => file.endsWith(".mjs") && !file.endsWith(".test.mjs") && file !== "logbook-env.mjs" && /SAGE_HOME:\s*options\.logbookRoot/.test(readFileSync(join(folder, file), "utf8")));
+  assert.deepEqual(named, []);
+  const users = readdirSync(folder).filter((file) => file.endsWith(".mjs") && /logbookEnv\(options\)/.test(readFileSync(join(folder, file), "utf8"))).sort();
+  assert.deepEqual(users, ["interrupted-run.mjs", "logbook-owner.mjs", "preparation.mjs", "run-assignment.mjs", "run-report.mjs", "task-authority.mjs", "task-settle.mjs"]);
+});
+
+test("the launcher's shared root may not sit in the logbook root, and configuration version 4 carries it", async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-shared-config-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const { validateLogbookLocation } = await import("../plugins/sage-codex/runtime/run-report.mjs");
+  const [logbookRoot, projectDirectory, directory, observationsRoot] = ["logbook", "project", "journal", "observations"].map((name) => join(base, name));
+  for (const path of [logbookRoot, projectDirectory, directory, observationsRoot]) mkdirSync(path);
+  const options = { logbookRoot, projectDirectory, directory, observationsRoot, sessionsDir: join(base, "sessions") };
+  assert.doesNotThrow(() => validateLogbookLocation({ ...options, sharedRoot: join(base, "shared") }));
+  assert.throws(() => validateLogbookLocation({ ...options, sharedRoot: join(logbookRoot, "shared") }));
+  assert.throws(() => validateLogbookLocation({ ...options, sharedRoot: base }));
+});
+
+test("no row: an existing project works as before, and no row or table appears from a read", (t) => {
+  const w = world(t);
+  assert.equal(w.claude("init"), `logbook ${join(w.claudeRoot, w.name())}`);
+  assert.equal(readFileSync(join(w.claudeRoot, w.name(), "checkout.txt"), "utf8"), `${w.project}\n`);
+  assert.equal(w.claude("logbook"), join(w.claudeRoot, w.name()));
+  assert.equal(existsSync(join(w.shared, "bindings.tsv")), false);
+  assert.equal(claudeLocate(w.project, w.env).shared, false);
+});
+
+test("no row and neither legacy logbook: today's refusal for a command, and a new legacy logbook for init (rule 3 stays off)", (t) => {
+  const w = world(t);
+  assert.throws(() => w.claude("status"), /no logbook for the project/);
+  assert.deepEqual([claudeLocate(w.project, w.env).shared, claudeLocate(w.project, w.env).legacy], [false, false]);
+  assert.match(w.codex("init"), new RegExp(`^logbook ${w.codexRoot}/`));
+  assert.equal(existsSync(join(w.shared, "bindings.tsv")), false);
+});
+
+test("a legacy logbook in the other provider's root counts as legacy, and this provider keeps today's refusal", (t) => {
+  const w = world(t);
+  w.codex("init");
+  assert.deepEqual([claudeLocate(w.project, w.env).shared, claudeLocate(w.project, w.env).legacy], [false, true]);
+  assert.throws(() => w.claude("status"), /no logbook for the project/);
+});
+
+test("a moved marker in either provider root refuses, reads too, and says to run the move again", (t) => {
+  const w = world(t);
+  w.claude("init");
+  mkdirSync(join(w.codexRoot, w.name()), { recursive: true });
+  writeFileSync(join(w.codexRoot, w.name(), "moved.json"), "{}\n");
+  for (const command of [["status"], ["task", "add", "--title", "x", "--size", "tiny", "--priority", "P2"], ["init"]]) {
+    assert.throws(() => w.claude(...command), /the move did not finish .*Run the move again/);
+  }
+  assert.equal(tool.mergeCheck("a".repeat(40), w.env, { project: w.project }).ok, false);
+  assert.match(tool.mergeCheck("a".repeat(40), w.env, { project: w.project }).reason, /Run the move again/);
+});
+
+test("--separate makes a shared logbook that both providers use, with one row, and every command finds it again", (t) => {
+  const w = world(t);
+  const folder = basename(tool.storeDir(w.project, w.env));
+  assert.equal(w.claude("link", "--separate"), `${w.project} now uses the shared logbook ${join(w.shared, folder)}`);
+  assert.equal(w.codex("logbook"), join(w.shared, folder));
+  assert.equal(w.claude("logbook"), join(w.shared, folder));
+  const [[root, saved, commits]] = w.rows();
+  assert.deepEqual([root, saved, commits], [w.project, folder, commitOf(w.project)]);
+  w.claude("task", "add", "--title", "From Claude", "--size", "tiny", "--priority", "P2");
+  w.codex("task", "add", "--title", "From Codex", "--size", "tiny", "--priority", "P2");
+  assert.deepEqual(tool.read(join(w.shared, folder), "tasks").map((row) => [row.id, row.title]), [["T1", "From Claude"], ["T2", "From Codex"]]);
+  assert.equal(existsSync(join(w.shared, folder, "checkout.txt")), false, "bindings.tsv replaces it for a shared logbook");
+  assert.match(w.table("projects.tsv"), new RegExp(`^${folder}\\t`, "m"));
+  assert.equal(existsSync(join(w.claudeRoot, folder)), false, "no legacy logbook");
+});
+
+test("the folder name stays the one saved in the row after the checkout moves on disk: link --to joins it, and a read never computes it again", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const folder = w.name(), moved = join(w.base, "moved");
+  execFileSync("mv", [w.project, moved]);
+  const run = (...args) => claudeSage([...args, "--project", moved], w.env);
+  assert.throws(() => run("status"), /no logbook for the project/, "no row for the new path, as today");
+  assert.equal(run("link", "--to", folder), `${moved} now uses the shared logbook ${join(w.shared, folder)}`);
+  assert.equal(run("logbook"), join(w.shared, folder));
+  assert.deepEqual(w.rows().map(([root, saved]) => [root, saved]), [[w.project, folder], [moved, folder]], "a row whose path is gone stays");
+});
+
+test("a linked worktree uses its main checkout's row and needs no row of its own", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const worktree = join(w.base, "tree");
+  git(w.project, "worktree", "add", "-q", "-b", "feature", worktree);
+  assert.equal(claudeSage(["logbook", "--project", worktree], w.env), join(w.shared, w.name()));
+  assert.equal(w.rows().length, 1);
+});
+
+test("a retry of link is safe, and a checkout never holds two logbooks", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const before = w.table("bindings.tsv"), folder = w.name();
+  assert.equal(w.codex("link", "--separate"), `already linked: ${join(w.shared, folder)}. Nothing changed.`);
+  assert.equal(w.codex("link", "--to", folder), `already linked: ${join(w.shared, folder)}. Nothing changed.`);
+  const other = w.repo("other");
+  assert.match(claudeSage(["link", "--separate", "--project", other], w.env), /now uses the shared logbook/);
+  const otherFolder = basename(tool.storeDir(other, w.env));
+  assert.throws(() => w.claude("link", "--to", otherFolder), /already linked to .* and a checkout has one logbook/);
+  assert.equal(w.rows().find(([root]) => root === w.project)[1], folder);
+  assert.ok(w.table("bindings.tsv").startsWith(before));
+});
+
+test("link refuses a project with a legacy logbook in either root: only the move takes its tasks over", (t) => {
+  const w = world(t);
+  w.codex("init");
+  assert.throws(() => w.claude("link", "--separate"), /has a logbook at .*only the move/i);
+  assert.equal(existsSync(join(w.shared, "bindings.tsv")), false);
+});
+
+test("link takes exactly one form, and --to names a real logbook of the shared root", (t) => {
+  const w = world(t);
+  assert.throws(() => w.claude("link"), /one of --to <folder> or --separate/);
+  assert.throws(() => w.claude("link", "--separate", "--to", "a-123456"), /one of --to <folder> or --separate/);
+  assert.throws(() => w.claude("link", "--separate=no"), /one of --to <folder> or --separate/);
+  assert.throws(() => w.claude("link", "--to", "../escape-123456"), /not a logbook folder/);
+  assert.throws(() => w.claude("link", "--to", "absent-123456"), /is not a logbook of the shared root/);
+  assert.throws(() => claudeSage(["link", "--separate", "--project", join(w.base, "absent")], w.env), /is not a folder/);
+  mkdirSync(join(w.shared, "planted-123456"), { recursive: true });
+  writeFileSync(join(w.shared, "planted-123456", "tasks.tsv"), "");
+  assert.throws(() => w.claude("link", "--to", "planted-123456"), /is not a logbook of the shared root/, "a folder that link did not make is not listed");
+  assert.equal(existsSync(join(w.shared, "bindings.tsv")), false);
+});
+
+test("link --to refuses a logbook of another project, and --separate refuses a folder name in use", (t) => {
+  const w = world(t);
+  const other = w.repo("other");
+  claudeSage(["link", "--separate", "--project", other], w.env);
+  const folder = basename(tool.storeDir(other, w.env));
+  assert.throws(() => w.claude("link", "--to", folder), /belongs to another project .*no first commit in common/);
+  mkdirSync(join(w.shared, w.name()));
+  assert.throws(() => w.claude("link", "--separate"), /already in use/);
+  assert.equal(w.rows().length, 1);
+});
+
+test("a clone joins with an explicit link; without one it is a project of its own, and a fork's --separate names its twin", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const clone = join(w.base, "clone"), fork = join(w.base, "fork");
+  git(w.base, "clone", "-q", w.project, clone);
+  git(w.base, "clone", "-q", w.project, fork);
+  assert.throws(() => claudeSage(["status", "--project", clone], w.env), /no logbook for the project/, "a matching first commit never joins a logbook");
+  assert.match(tool.sage(["link", "--to", w.name(), "--project", clone], w.env), /now uses the shared logbook/);
+  assert.equal(claudeSage(["logbook", "--project", clone], w.env), join(w.shared, w.name()));
+  assert.match(claudeSage(["link", "--separate", "--project", fork], w.env), new RegExp(`apart from ${w.name()}, which has the same first commit`));
+});
+
+for (const [name, lines, expected] of [
+  ["a folder that is missing", (w) => [`${w.project}\tgone-123456\t${FIRST}\t2026-11-01T00:00:00Z`], /names the logbook gone-123456, which is missing.*sage link --to <folder> or sage link --separate/],
+  ["a folder of another project", (w) => [`${w.project}\tshared-123456\t${FIRST}\t2026-11-01T00:00:00Z`, `/elsewhere\tshared-123456\t${OTHER}\t2026-11-01T00:00:00Z`], /belongs to another project \(\/elsewhere\).*sage link --to <folder> or sage link --separate/],
+  ["two rows for one path", (w) => [`${w.project}\tshared-123456\t\t2026-11-01T00:00:00Z`, `${w.project}\tshared-123456\t\t2026-11-01T00:00:01Z`], /has two rows for/],
+  ["a row with a bad folder", (w) => [`${w.project}\t../shared-123456\t\t2026-11-01T00:00:00Z`], /has a damaged row/],
+  ["a row of three cells", (w) => [`${w.project}\tshared-123456\t2026-11-01T00:00:00Z`], /has a damaged row/],
+]) test(`a binding row with ${name} refuses reads and writes, and never falls through to the legacy logbook`, (t) => {
+  const w = world(t);
+  w.claude("init"); // a legacy logbook that a fall-through would use
+  const tasks = join(w.claudeRoot, w.name(), "tasks.tsv"), before = readFileSync(tasks, "utf8");
+  mkdirSync(join(w.shared, "shared-123456"), { recursive: true });
+  writeFileSync(join(w.shared, "shared-123456", "tasks.tsv"), "");
+  w.bind(...lines(w));
+  for (const run of [w.claude, w.codex]) {
+    assert.throws(() => run("status"), expected);
+    assert.throws(() => run("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2"), expected);
+    assert.throws(() => run("config"), expected);
+  }
+  assert.equal(tool.mergeCheck("a".repeat(40), w.env, { project: w.project }).ok, false);
+  assert.equal(readFileSync(tasks, "utf8"), before);
+});
+
+for (const [name, damage, expected] of [
+  ["a folder in its place", (w) => mkdirSync(join(w.shared, "bindings.tsv"), { recursive: true }), /cannot be read/],
+  ["a link in its place", (w) => { mkdirSync(w.shared, { recursive: true }); symlinkSync(join(w.base, "nowhere"), join(w.shared, "bindings.tsv")); }, /cannot be read/],
+  ["no header", (w) => { mkdirSync(w.shared, { recursive: true }); writeFileSync(join(w.shared, "bindings.tsv"), `${w.project}\tx-123456\t\tnow\n`); }, /does not start with the column names root, folder, commits, at/],
+  ["a shared root that is a file", (w) => writeFileSync(w.shared, ""), /cannot be read/],
+]) test(`a binding table with ${name} refuses every project and never falls through`, (t) => {
+  const w = world(t);
+  const made = claudeSage(["init", "--project", w.project], { ...w.env, SAGE_SHARED_HOME: join(w.base, "before") });
+  assert.match(made, /^logbook /);
+  damage(w);
+  assert.throws(() => w.claude("status"), expected);
+  assert.throws(() => w.claude("init"), expected);
+  assert.throws(() => w.codex("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2"), expected);
+  assert.match(tool.mergeCheck("a".repeat(40), w.env, { project: w.project }).reason, expected);
+});
+
+test("a repository with no commits: the row has empty commits, a read leaves them, and the next write fills them", (t) => {
+  const w = world(t, { commit: false });
+  w.claude("link", "--separate");
+  assert.equal(w.rows()[0][2], "");
+  git(w.project, "commit", "-q", "--allow-empty", "-m", "first");
+  w.claude("status");
+  assert.equal(w.rows()[0][2], "", "a read runs no first-commit call");
+  w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
+  assert.equal(w.rows()[0][2], commitOf(w.project));
+});
+
+test("a filled row that shows a folder of another project refuses at that write", (t) => {
+  const w = world(t, { commit: false });
+  const other = w.repo("other", true);
+  claudeSage(["link", "--separate", "--project", other], w.env);
+  const folder = basename(tool.storeDir(other, w.env));
+  w.claude("link", "--to", folder); // no commits yet, so no compare
+  git(w.project, "commit", "-q", "--allow-empty", "-m", "own first");
+  assert.throws(() => w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2"), /belongs to another project/);
+});
+
+test("a folder that is not a Git repository links with no commits: no first commit, so no guard", (t) => {
+  const w = world(t);
+  const plain = join(w.base, "plain");
+  mkdirSync(plain);
+  assert.match(claudeSage(["link", "--separate", "--project", plain], w.env), /now uses the shared logbook/);
+  assert.equal(w.rows()[0][2], "");
+});
+
+/** A git on PATH that logs each rev-list, and with hang never answers it. Everything else goes to the real git. */
+function fakeGit(w, hang) {
+  const bin = join(w.base, "bin"), log = join(w.base, "rev-list.log");
+  mkdirSync(bin);
+  const real = execFileSync("/usr/bin/which", ["git"], { encoding: "utf8" }).trim();
+  writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in\n  *" rev-list "*) echo call >> ${log}; ${hang ? "exec /bin/sleep 20" : ""} ;;\nesac\nexec ${real} "$@"\n`);
+  chmodSync(join(bin, "git"), 0o755);
+  return { env: { ...w.env, PATH: `${bin}:${w.env.PATH}` }, calls: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").length : 0) };
+}
+
+test("the first-commit call runs only at the write that makes a row, never at a read", (t) => {
+  const w = world(t), fake = fakeGit(w, false);
+  claudeSage(["link", "--separate", "--project", w.project], fake.env);
+  assert.equal(fake.calls(), 1);
+  claudeSage(["status", "--project", w.project], fake.env);
+  claudeSage(["logbook", "--project", w.project], fake.env);
+  claudeSage(["task", "add", "--title", "x", "--size", "tiny", "--priority", "P2", "--project", w.project], fake.env);
+  assert.equal(fake.calls(), 1);
+});
+
+test("a first-commit call that passes the timeout refuses and makes no row", (t) => {
+  const w = world(t), fake = fakeGit(w, true);
+  assert.throws(() => claudeSage(["link", "--separate", "--project", w.project], fake.env), /git took more than 5 s .*made no row/);
+  assert.equal(existsSync(join(w.shared, "bindings.tsv")), false);
+  assert.equal(existsSync(join(w.shared, w.name())), false);
+});
+
+test("plugins.tsv gets each provider's row at its first locking command, never at a read, and only once", (t) => {
+  const w = world(t);
+  w.claude("init");
+  assert.equal(existsSync(join(w.shared, "plugins.tsv")), true, "the first command that takes the lock");
+  const lines = () => w.table("plugins.tsv").trim().split("\n").map((line) => line.split("\t").slice(0, 2).join(" "));
+  assert.deepEqual(lines(), ["provider contract", "claude 1"]);
+  const first = w.table("plugins.tsv");
+  w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
+  assert.equal(w.table("plugins.tsv"), first);
+  const w2 = world(t);
+  assert.throws(() => w2.claude("status"), /no logbook/);
+  assert.equal(existsSync(join(w2.shared, "plugins.tsv")), false, "a read writes no row");
+  w.codex("init");
+  assert.deepEqual(lines(), ["provider contract", "claude 1", "codex 1"]);
+});
+
+test("a shared root that cannot be written stops no legacy command: plugins.tsv only tells a later move what ran", (t) => {
+  const w = world(t);
+  mkdirSync(w.shared);
+  chmodSync(w.shared, 0o500);
+  try {
+    assert.match(w.claude("init"), /^logbook /);
+    assert.match(w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2"), /T1/);
+    assert.equal(existsSync(join(w.shared, "plugins.tsv")), false);
+  } finally {
+    chmodSync(w.shared, 0o700);
+  }
+});
+
+const counts = (root) => JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+
+test("a legacy project reads and writes cycle counts in the provider root, and no shared config appears", (t) => {
+  const w = world(t);
+  w.claude("init");
+  w.claude("config", "cycles.large=4", "max_rounds=5");
+  assert.deepEqual(counts(w.claudeRoot), { "cycles.large": 4, max_rounds: 5 });
+  assert.equal(existsSync(join(w.shared, "config.json")), false);
+  assert.match(w.claude("config"), /cycles\.large=4/);
+});
+
+test("the first shared write takes the larger of the provider values, and a shared project reads and writes them in one home", (t) => {
+  const w = world(t);
+  claudeSage(["config", "cycles.large=3", "max_rounds=2", "--project", w.base], w.env);
+  tool.sage(["config", "cycles.large=5", "max_rounds=4", "cycles.risk=3", "--project", w.base], w.env);
+  w.claude("link", "--separate");
+  assert.deepEqual(counts(w.shared), { "cycles.small": 1, "cycles.large": 5, "cycles.risk": 3, max_rounds: 4 });
+  assert.match(w.claude("config"), /cycles\.large=5/);
+  assert.match(w.codex("config"), /cycles\.large=5/);
+  // A write goes to the shared root only, and a provider root's own value no longer counts for this project.
+  w.claude("config", "cycles.large=7");
+  assert.equal(counts(w.shared)["cycles.large"], 7);
+  assert.equal(counts(w.claudeRoot)["cycles.large"], 3);
+  assert.equal(counts(w.codexRoot)["cycles.large"], 5);
+  assert.match(w.codex("config"), /cycles\.large=7/);
+  // The keys of a provider stay there, also in one command with a shared key.
+  w.claude("config", "cycles.small=2", "arena=4", "max_agents=7", "cap_total=9");
+  assert.equal(counts(w.shared)["cycles.small"], 2);
+  assert.deepEqual(Object.keys(counts(w.shared)).sort(), ["cycles.large", "cycles.risk", "cycles.small", "max_rounds"]);
+  assert.deepEqual([counts(w.claudeRoot).arena, counts(w.claudeRoot).max_agents, counts(w.claudeRoot).cap_total, counts(w.claudeRoot)["cycles.small"]], [4, 7, 9, undefined]);
+  assert.equal(counts(w.codexRoot).arena, undefined);
+});
+
+test("a later link only raises a shared count, and an invalid provider count refuses the link with no row", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  assert.equal(counts(w.shared)["cycles.large"], 2);
+  const other = w.repo("other"), third = w.repo("third");
+  claudeSage(["config", "cycles.large=6", "--project", w.base], w.env);
+  claudeSage(["link", "--separate", "--project", other], w.env);
+  assert.equal(counts(w.shared)["cycles.large"], 6);
+  mkdirSync(w.codexRoot, { recursive: true });
+  writeFileSync(join(w.codexRoot, "config.json"), JSON.stringify({ "cycles.large": "lots" }));
+  assert.throws(() => claudeSage(["link", "--separate", "--project", third], w.env), /cycles\.large in .*config\.json is not a number/);
+  assert.equal(w.rows().length, 2);
+  assert.equal(existsSync(join(w.shared, basename(tool.storeDir(third, w.env)))), false, "a refusal here leaves no half-made logbook behind");
+});
+
+test("the merge check of a shared project reads its verdicts from the shared root, its list and its counts", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const sha = "a".repeat(40), folder = w.name();
+  w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
+  w.claude("verdict", "T1", "--sha", sha, "--kind", "checks-pass");
+  assert.match(w.claude("merge-check", "--sha", sha), /T1 may merge/);
+  assert.match(w.codex("merge-check", "--sha", sha), /T1 may merge/, "from either provider");
+  // A folder of the shared root with verdicts on the SHA, that link never listed, refuses.
+  const planted = join(w.shared, "planted-123456");
+  mkdirSync(planted);
+  for (const file of readdirSync(join(w.shared, folder)).filter((name) => name.endsWith(".tsv"))) writeFileSync(join(planted, file), readFileSync(join(w.shared, folder, file)));
+  assert.throws(() => w.claude("merge-check", "--sha", sha), new RegExp(`not in the known project list \\(${join(w.shared, "projects.tsv")}\\)`));
+  rmSync(planted, { recursive: true });
+  // An invalid shared count refuses, and names the shared config.
+  writeFileSync(join(w.shared, "config.json"), JSON.stringify({ "cycles.small": "lots" }));
+  assert.throws(() => w.claude("merge-check", "--sha", sha), new RegExp(`cycles\\.small in ${join(w.shared, "config.json")} is not a number`));
+});
+
+test("projects rebuild lists the root of this project's logbook", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  rmSync(join(w.shared, "projects.tsv"));
+  assert.throws(() => w.claude("merge-check", "--sha", "a".repeat(40)), /known project list, is missing/);
+  assert.match(w.claude("projects", "rebuild", "--accept-listing", "yes"), new RegExp(`${join(w.shared, "projects.tsv")}, the known project list, now names the 1 logbook folder`));
+});
+
+test("the PR script takes a shared logbook, which has no checkout.txt", async (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
+  w.claude("task", "T1", "set", "branch=sage/t1");
+  git(w.project, "remote", "add", "origin", "https://github.com/example/project.git");
+  const { record } = await import("../plugins/sage/skills/sage/sage-pr.mjs");
+  const saved = record("T1", "view", { ...w.env, SAGE_PROJECT: w.project });
+  assert.deepEqual([saved.dir, saved.branch], [join(w.shared, w.name()), "sage/t1"]);
+});
+
+test("a chief with another logbook root finds a receipt of a shared project, so the Codex settle step cannot void a live row", (t) => {
+  const w = world(t);
+  const envA = { ...w.env, SAGE_HOME: join(w.base, "root-a") }, envB = { ...w.env, SAGE_HOME: join(w.base, "root-b") };
+  mkdirSync(envA.SAGE_HOME); mkdirSync(envB.SAGE_HOME);
+  tool.sage(["link", "--separate", "--project", w.project], envA);
+  tool.sage(["task", "add", "--title", "x", "--size", "tiny", "--priority", "P2", "--project", w.project], envA);
+  const owner = "chief", request = "00000000-0000-4000-8000-000000000594";
+  let digest;
+  const { version } = tool.readTaskSnapshot({ project: w.project, task: "T1" }, envA);
+  tool.updateRequestedTask({ project: w.project, owner, request, task: "T1", version, changes: { title: "y" } }, envA, {
+    decide: (value) => { digest = value; return { digest: value, accepted: true, reason: "" }; },
+    acknowledge: (value, receiptHash) => ({ digest: value, receiptHash }), release: (value, receiptHash) => ({ digest: value, receiptHash }),
+    void() {}, history() { throw Error("No history here"); } });
+  const seen = (env) => tool.settleWrites({ project: w.project }, env, (receipts) => !!receipts.update({ owner, request, digest }));
+  assert.equal(seen(envA), true);
+  assert.equal(seen(envB), true, "the row of the shared project gives both chiefs one folder and one lock");
+});

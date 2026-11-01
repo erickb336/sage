@@ -54,7 +54,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, real
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, shellCommands, switchModes } from "sage-core";
+import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, switchModes } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
@@ -295,12 +295,12 @@ function wordsOf(command, cwd, env) {
 
 const codexHome = (env) => resolve(env.CODEX_HOME ?? join(homedir(), ".codex"));
 /**
- * Whether a shell command names the Codex sage folder (also from ~ or $HOME, $SAGE_HOME or $CODEX_HOME/sage) or the
- * Codex sessions folder: in its text, or in a word as the shell reads it (without quotes, R1669-4), also as a path
- * from the folder the word runs in.
+ * Whether a shell command names the Codex sage folder (also from ~ or $HOME, $SAGE_HOME or $CODEX_HOME/sage), the
+ * shared root (also from $SAGE_SHARED_HOME) or the Codex sessions folder: in its text, or in a word as the shell reads
+ * it (without quotes, R1669-4), also as a path from the folder the word runs in.
  */
 export const namesSageFolder = (command, env = process.env, cwd = "/") => names(command, env, cwd,
-  [dirname(dirname(modeDirectory(env))), join(codexHome(env), "sessions")], ["\\$\\{?SAGE_HOME\\b", "\\$\\{?CODEX_HOME\\}?/(?:sage|sessions)(?![\\w.-])", "\\.hooks/codex"]);
+  [dirname(dirname(modeDirectory(env))), sharedRoot(env), join(codexHome(env), "sessions")], ["\\$\\{?SAGE_HOME\\b", "\\$\\{?SAGE_SHARED_HOME\\b", "\\$\\{?CODEX_HOME\\}?/(?:sage|sessions)(?![\\w.-])", "\\.hooks/codex"]);
 /**
  * Whether a shell command names Codex's config file, which keeps the trust records of the hooks, or the folder of this
  * installed plugin, whose hooks are the gate (R1916-2): the same forms as the sage folder.

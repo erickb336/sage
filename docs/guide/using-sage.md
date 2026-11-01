@@ -269,9 +269,47 @@ Claude Code keeps the plugin files in `~/.claude/plugins/cache/sage/` after the 
 
 The uninstall keeps your logbooks, the task pages in each project's pages folder and the board's config; only step 3 deletes the board's offline pages. They are plain files in the folders below. Delete them yourself when you no longer want the record.
 
+## Shared logbooks
+
+A shared logbook is one logbook that Claude and Codex both use for a project. A project uses one when its checkout has a row in `bindings.tsv` in the shared root.
+
+- Sage finds the logbook again at each command.
+- Today a project gets a row only by a link. An existing project has no row, and it works as before.
+- Linked worktrees use the row of their main checkout.
+
+The chief runs a link only after your answer in the chat:
+
+| Command | Does |
+| --- | --- |
+| `sage link --separate` | Makes a new shared logbook and a row for this checkout. |
+| `sage link --to <folder>` | Adds a row for this checkout to a logbook of the shared root. Use it for a second clone, or for a checkout that you moved. |
+
+A Codex chief calls the `link` tool of the same name. A retry changes nothing.
+
+| Situation | Result |
+| --- | --- |
+| The project has a logbook in the Claude or Codex root | The link refuses, because the link would hide its tasks. A later command moves existing projects. |
+| The checkout is already linked to another logbook | The link refuses. A checkout has one logbook. |
+| `--to` names a logbook whose checkouts have no first commit in common with this one | The link refuses. |
+| The Git call for the first commit takes more than 5 s | The link refuses and makes no row. Run it again. |
+| A row names a missing logbook, or a logbook of another project | Each read and write of that project refuses and offers the link. The link replaces that row. |
+| `bindings.tsv` has two rows for one path, or cannot be read | Every command of every project refuses. Sage never falls back to another logbook. Fix the file. |
+| A project has a marker that its move did not finish | Each command refuses and says to run the move again. |
+
+A moved folder with no Git commits, or that is no Git repository, has no first commit, so sage cannot compare it. This is a limit.
+
+**Cycle counts.**
+
+- A shared project reads `cycles.*` and `max_rounds` from the `config.json` of the shared root, and `sage config` writes them there.
+- Each link raises each count to the largest value of the shared root and both provider roots, so a project never needs fewer cycles than you wrote.
+- Model keys, `arena`, the agent caps and the hook state stay in each provider root.
+
+**Limit.** The board does not show a shared logbook yet.
+
 ## Where sage keeps things
 
 - **The logbook** of each project: `~/.claude/sage/<project>-<hash>/`. It holds the tasks, the agent runs, the findings, the verdicts, your answers and the decision trail. So you can leave and come back: a new session on the same Mac continues the work, and Remote Control lets you follow it from a phone.
+- **The shared root**: `~/.sage/`, or `SAGE_SHARED_HOME`. It holds the logbooks that Claude and Codex share, `bindings.tsv` (which checkout uses which logbook), `plugins.tsv` (which providers ran) and the cycle counts of the shared logbooks. See [Shared logbooks](#shared-logbooks).
 - **The hook's state**: `~/.claude/sage/.hooks/`. It keeps the mode, autopilot and the agent slots.
 - **The pages** of each task: `~/sage-worktrees/<project>-<hash>/pages/<task>/`, outside the logbook. Agents save their research pages and designs there. The chief makes the folder and prints its path.
 - **The board's config**: `~/.config/sage-board/`, when you use the board server. It holds `board.json` (with your board password's hash), `board.log` and `board.pid`.

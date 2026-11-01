@@ -6,7 +6,8 @@ path and the policy loader. Hook requests cannot select either one.
 
 The JSON file has exactly two fields: `version` and `mode`. Version 1 keeps
 the mode-only contract. Version 2 adds `observationsRoot` to the mode object.
-Both versions require `directory`, `project`, `projectDirectory`, and `sessionsDir`.
+Version 3 adds `logbookRoot`. Version 4 adds `sharedRoot`, the launcher's fixed choice of the shared root.
+Each version requires `directory`, `project`, `projectDirectory`, and `sessionsDir`.
 
 - `directory` names an existing admission journal.
 - `project` is an identity key already configured in that journal.
@@ -15,6 +16,11 @@ Both versions require `directory`, `project`, `projectDirectory`, and `sessionsD
 - `observationsRoot` names an existing canonical directory for native event records.
   It must be separate from the admission journal: neither directory can contain
   the other. Event subdirectories would otherwise invalidate the journal.
+- `sharedRoot` names the shared root. It may not exist yet, and neither it nor
+  `logbookRoot` can contain the other. The runtime sets `SAGE_HOME` to `logbookRoot`,
+  also in production, so this option keeps the shared root from falling under the
+  Codex root. Without it, `logbook-env.mjs` picks the root from the server's own
+  environment: `SAGE_SHARED_HOME`, `<SAGE_HOME>/shared`, then `~/.sage`.
 
 All paths must be absolute and canonical. The journal and project directories
 must already exist. The session directory may be absent under an existing

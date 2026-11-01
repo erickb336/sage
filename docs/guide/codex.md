@@ -174,6 +174,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | Tool | Command of the state tool |
 | --- | --- |
 | `init`, `status` | `init`, `status` |
+| `link` | `link --to <folder>`, `link --separate`: [shared logbooks](using-sage.md#shared-logbooks), only after your answer |
 | `task_add`, `task_set` | `task add`, `task <T> set` |
 | `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR, with fresh destination reviews |
 | `run_add`, `run_done` | `run add`, `run done` |

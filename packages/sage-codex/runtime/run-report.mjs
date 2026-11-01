@@ -1,6 +1,7 @@
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { createStateTool, readAdmission } from "sage-core";
+import { readAdmission } from "sage-core";
+import { logbookEnv, logbookTool } from "./logbook-env.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { finishNativeInterruptedRun } from "./interrupted-run.mjs";
 import { hasReportRecovery } from "./report-recovery.mjs";
@@ -21,6 +22,9 @@ export function validateLogbookLocation(options) {
   if (typeof sessions !== "string" || sessions.length > 4096 || /\p{Cc}/u.test(sessions)
     || !isAbsolute(sessions) || resolve(sessions) !== sessions) refuse();
   if ([...paths.slice(1), sessions].some(path => contains(paths[0], path) || contains(path, paths[0]))) refuse();
+  const shared = options.sharedRoot;
+  if (shared !== undefined && (typeof shared !== "string" || shared.length > 4096 || /\p{Cc}/u.test(shared) || !isAbsolute(shared)
+    || resolve(shared) !== shared || contains(paths[0], shared) || contains(shared, paths[0]))) refuse();
 }
 
 /** Only the current root chief can finish a run from a receipt already saved by its verified parent. */
@@ -40,10 +44,10 @@ function recordedRun(input, context, options) {
     || !state.sessions.some(row => row.project === options.project && row.session === session && row.epoch === saved.binding.epoch)) refuse();
   const assigned = state.reservations.find(row => row.assignment.id === input.assignment);
   if (!assigned?.rolePlan?.role || !hasReportRecovery(saved, options)) refuse();
-  const tool = createStateTool({ defaultRoot: () => { refuse(); } });
+  const tool = logbookTool(() => { refuse(); });
   return { tool, state, assigned, work: { project: options.projectDirectory, task: saved.task, run: saved.run,
     role: assigned.rolePlan.role, assignment: input.assignment, reportHash: saved.reportHash, text: saved.text },
-    env: { ...process.env, SAGE_HOME: options.logbookRoot } };
+    env: logbookEnv(options) };
 }
 
 
