@@ -158,8 +158,7 @@ export function createStateServer({ env = process.env } = {}) {
       annotations: { readOnlyHint: CHILD_READS.has(name), destructiveHint: false },
     }, async (input, caller, native) => {
       // The session id is the root's on the root, a lead and a helper (T554): a shared logbook's chief is the root.
-      const argv = argvFor(name, input);
-      const { code, text } = tool.command([...argv, ...tool.actorOptions(input.project, argv, { native, leadTask: caller.role === "lead" ? caller.task : undefined }, env)], env);
+      const { code, text } = tool.command(argvFor(name, input), env, { project: input.project, native, leadTask: caller.role === "lead" ? caller.task : undefined });
       return { ...(code ? { isError: true } : {}), content: [{ type: "text", text }] };
     });
   }

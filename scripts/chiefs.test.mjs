@@ -2,13 +2,14 @@
 // Each shared case runs twice: a Claude chief against a Codex chief, then the other way, so both providers give one result.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { shellCommands } from "../plugins/sage/core/command-reader.mjs";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
 
@@ -70,6 +71,18 @@ test("a legacy project has no chief: no chiefs.tsv, no chief column, the same ta
   for (const args of [["status", "--chief", "C1"], ["task", "T1", "set", "title=b", "--chief", "C1"], ["status", "--lead", "R1"], ["claim", "T1", "--version", "0".repeat(64)]]) {
     assert.throws(() => run(...args), /only a shared logbook has chiefs/);
   }
+});
+
+test("F-T604-8: a legacy project refuses --chief and --lead also on the commands that return before they open a logbook, and makes no row", (t) => {
+  const w = scratch(t);
+  const run = (...args) => claude.sage([...args, "--project", w.project], w.env);
+  run("init");
+  for (const args of [["config", "--chief", "C1"], ["config", "max_rounds=4", "--lead", "R1"], ["link", "--separate", "--chief", "C1"], ["projects", "rebuild", "--accept-listing", "yes", "--lead", "R1"],
+    ["board", "--chief", "C1"], ["board", "--remember", "no", "--lead", "R1"], ["merge-check", "--sha", SHA, "--chief", "C1"]]) {
+    assert.throws(() => run(...args), /only a shared logbook has chiefs: leave out --chief and --lead/, args.join(" "));
+  }
+  assert.equal(claude.locate(w.project, w.env).shared, false, "the refused link made no row");
+  assert.match(run("config"), /max_rounds=3/, "the refused config changed nothing");
 });
 
 for (const [name, own, other] of pairs) {
@@ -186,6 +199,7 @@ for (const [name, own, other] of pairs) {
     writeFileSync(join(w.dir, "tasks.tsv"), w.cells("tasks").replace(/\tC1\n/, "\t\n")); // as a moved task starts
     const [, version] = (() => { try { w.intruder("task", "T1", "set", "title=x"); } catch (e) { return /--version ([0-9a-f]{64}) --chief C2/.exec(e.message); } return []; })();
     assert.match(version, /^[0-9a-f]{64}$/, "the refusal names the claim that works");
+    assert.throws(() => w.intruder("task", "T1", "set", "title=x"), new RegExp(`Claim it first: call the claim tool with this task and version ${version}, or run sage claim T1 --version ${version} --chief C2\\.`), "F-T604-11: each provider has a form that works");
     assert.throws(() => w.intruder("claim", "T1", "--version", "0".repeat(64)), /T1 changed, so this claim is out of date/);
     assert.throws(() => w.nobody("claim", "T1", "--version", version), NO_CHIEF);
     assert.equal(w.intruder("claim", "T1", "--version", version), "T1 claimed · chief C2");
@@ -203,6 +217,23 @@ for (const [name, own, other] of pairs) {
     w.owner("finding", "move", "T1", "F-T1-1", "--to", "later");
     assert.equal(row(w.cells("tasks"), "T2").chief, "C1");
   });
+
+  test(`${name}: F-T604-1: a write with a quoted value, read as the shell reads it, gives the plain write's result on both providers`, (t) => {
+    const w = world(t, own, other);
+    const words = (line) => shellCommands(line)[0].words;
+    assert.match(w.owner(...words('task add --title "two words" --size small --priority P2')), /^T1 framed .* · chief C1$/);
+    assert.match(w.intruder(...words('task add --title "two more" --size small --priority P2')), /^T2 framed .* · chief C2$/);
+    assert.throws(() => w.nobody(...words('task add --title "two words" --size small --priority P2')), NO_CHIEF);
+    w.owner("run", "add", "T1", "--role", "qa");
+    for (const line of ['log T1 "a decision" --why "a reason"', 'gate add T1 --question "a question?" --options "a|b" --recommend a', 'finding add T1 --source sage --severity low --summary "a problem"']) {
+      const before = w.tables();
+      assert.throws(() => w.intruder(...words(line)), /^Error: T1 belongs to chief C1 .* Change only your own tasks\. If C1 stopped, ask the owner\.$/, line);
+      assert.throws(() => w.nobody(...words(line)), NO_CHIEF, line);
+      assert.equal(w.tables(), before, line);
+      w.owner(...words(line));
+      assert.notEqual(w.tables(), before, line);
+    }
+  });
 }
 
 test("a native writer of a shared logbook names the session's chief, a retry keeps it, and another chief's task refuses", async (t) => {
@@ -219,8 +250,9 @@ test("a native writer of a shared logbook names the session's chief, a retry kee
   const { version } = codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
   const never = () => { throw Error("an update of another chief reaches no decision"); };
   const update = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000608", task: "T1", version, changes: { title: "b" } };
+  const owned = "T1 belongs to chief C1 (codex), not to C4. Nothing changed. Change only your own tasks. If C1 stopped, ask the owner.";
   assert.throws(() => codex.updateRequestedTask(update, w.env, { native: "session-c", decide: never, acknowledge: never, release: never, void: never, history: never }),
-    (e) => e.code === "other-chief");
+    (e) => e.code === "other-chief" && e.message === owned);
   let digest;
   const out = codex.updateRequestedTask(update, w.env, { native: "session-a", decide: (value) => { digest = value; return { digest: value, accepted: true, reason: "" }; },
     acknowledge: (value, receiptHash) => ({ digest: value, receiptHash }), release: (value, receiptHash) => ({ digest: value, receiptHash }), void() {}, history: never });
@@ -229,6 +261,105 @@ test("a native writer of a shared logbook names the session's chief, a retry kee
   assert.ok(digest);
   assert.equal(row(w.cells("tasks"), "T1").title, "b");
   assert.equal(row(w.cells("tasks"), "T1").chief, "C1", "the update keeps the chief cell");
+});
+
+test("F-T604-4, F-T604-12: a native update of a task with no owning chief gives the guard's words, with the version to claim", (t) => {
+  const w = world(t, codex, claude);
+  w.owner("task", "add", "--title", "a", ...ADD);
+  writeFileSync(join(w.dir, "tasks.tsv"), w.cells("tasks").replace(/\tC1\n/, "\t\n"));
+  const { version } = codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
+  const never = () => { throw Error("an update of a task with no owning chief reaches no decision"); };
+  const update = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000609", task: "T1", version, changes: { title: "b" } };
+  assert.throws(() => codex.updateRequestedTask(update, w.env, { native: "session-a", decide: never, acknowledge: never, release: never, void: never, history: never }),
+    (e) => e.code === "other-chief" && e.message.startsWith(`T1 has no owning chief, so C1 cannot change it. Claim it first: call the claim tool with this task and version ${version}`));
+});
+
+test("F-T604-18: a provider's command gives the real cause of a refusal: a damaged chiefs.tsv, a busy lock, or a lead with no lead run", (t) => {
+  const w = world(t, codex, claude);
+  const argv = ["task", "add", "--title", "a", ...ADD, `--project=${w.project}`];
+  const refused = (actor) => {
+    const { code, text } = codex.withLock(w.dir, () => codex.command(argv, w.env, { project: w.project, ...actor }));
+    assert.equal(code, 1, text);
+    return text;
+  };
+  assert.match(refused({ native: "a-new-session" }), /^sage: the logbook is busy: /);
+  assert.equal(codex.command(["task", "T1", "set", "title=x", `--project=${w.project}`], w.env, { project: w.project, native: "session-a", leadTask: "T1" }).text,
+    "sage: T1 has no running lead run, so this lead writes nothing. Report to your chief. Nothing changed.");
+  writeFileSync(join(w.dir, "chiefs.tsv"), "id\tother\n");
+  const { code, text } = codex.command(argv, w.env, { project: w.project, native: "session-a" });
+  assert.equal(code, 1);
+  assert.match(text, /chiefs\.tsv is damaged, so sage cannot tell which chief owns a task/);
+});
+
+test("F-T604-19: the stop writers keep a report and end a run with no chief on a shared logbook, and the chief cell stays", (t) => {
+  const w = world(t, codex, claude);
+  w.owner("task", "add", "--title", "a", ...ADD);
+  w.owner("run", "add", "T1", "--role", "implementer", "--branch", "codex/t1-report");
+  w.owner("run", "add", "T1", "--role", "qa", "--branch", "codex/t1-report");
+  codex.keepReport(w.project, { task: "T1", run: "R2", role: "qa", sha: SHA, text: "STATUS done" }, w.env);
+  assert.equal(JSON.parse(readFileSync(join(w.dir, "kept", "R2.json"), "utf8")).text, "STATUS done");
+  const text = "STATUS: done\nRESULT: complete\nEVIDENCE: e\nFINDINGS: none\nQUESTIONS: none\nNOT VERIFIED: n\nBRANCH: b";
+  const done = codex.finishReportedRun({ project: w.project, task: "T1", run: "R1", role: "implementer", assignment: "11111111-2222-4333-8444-555555555555", reportHash: createHash("sha256").update(text).digest("hex"), text }, w.env);
+  assert.equal(done.decision, "run-finished");
+  assert.equal(row(w.cells("runs"), "R1").status, "done");
+  assert.deepEqual(["R1", "R2"].map((id) => row(w.cells("runs"), id).chief), ["C1", "C1"]);
+  assert.equal(row(w.cells("tasks"), "T1").chief, "C1");
+});
+
+test("F-T604-19: parallel processes get unique chiefs, the same ones on a repeat, one claim, and no lost task", async (t) => {
+  const w = world(t, claude, codex);
+  const script = (tool) => `const m = await import(${JSON.stringify(pathToFileURL(tool).href)}); console.log((m.tool ?? m).chiefFor(${JSON.stringify(w.project)}, process.argv[1]));`;
+  const CLAUDE = TOOL, CODEX = at("../plugins/sage-codex/skills/sage/sage.mjs");
+  const start = (args) => new Promise((done) => {
+    const child = spawn("node", args, { env: w.env, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (b) => { out += b; });
+    child.stderr.on("data", (b) => { out += b; });
+    child.on("close", () => done(out.trim()));
+  });
+  /** Each process at once. One that found the logbook busy changed nothing, so it runs again, alone: the wait for the lock is 3 s, and a loaded machine may pass it. */
+  const all = async (jobs) => {
+    const outs = await Promise.all(jobs.map(start));
+    for (const [k, out] of outs.entries()) if (/logbook is busy/.test(out)) outs[k] = await start(jobs[k]);
+    return outs;
+  };
+  const jobs = Array.from({ length: 12 }, (_, k) => ["--input-type=module", "-e", script(k % 2 ? CODEX : CLAUDE), `parallel-${k}`]);
+  const ids = await all(jobs);
+  assert.deepEqual([...ids].sort((a, b) => a.slice(1) - b.slice(1)), Array.from({ length: 12 }, (_, k) => `C${k + 3}`), "world's two chiefs, then twelve new ones");
+  assert.deepEqual(await all(jobs), ids, "a repeat is the same chief");
+
+  w.owner("task", "add", "--title", "a", ...ADD);
+  writeFileSync(join(w.dir, "tasks.tsv"), w.cells("tasks").replace(/\tC1\n/, "\t\n"));
+  const { version } = codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
+  const claims = await all(ids.slice(0, 8).map((id) => [TOOL, "claim", "T1", "--version", version, "--chief", id, "--project", w.project]));
+  assert.equal(claims.filter((c) => /^T1 claimed · chief C\d+$/.test(c)).length, 1, claims.join("\n"));
+  assert.equal(claims.filter((c) => /T1 belongs to chief C\d+, so it takes no claim/.test(c)).length, 7, claims.join("\n"));
+
+  await all(ids.slice(0, 10).map((id, k) => [TOOL, "task", "add", "--title", `t${k}`, ...ADD, "--chief", id, "--project", w.project]));
+  const rows = w.cells("tasks").trim().split("\n").slice(1).map((line) => line.split("\t")[0]);
+  assert.deepEqual(rows, Array.from({ length: 11 }, (_, k) => `T${k + 1}`), "each parallel task add has its row and its own id");
+});
+
+test("F-T604-19: an older sage, whose tables have no chief column, refuses to write a shared logbook and says to update; its reads go on", async (t) => {
+  const w = world(t, claude, codex);
+  w.owner("task", "add", "--title", "a", ...ADD);
+  // The older sage as a fixture: this plugin with the one line that adds the column taken out.
+  const plugin = join(w.base, "older");
+  cpSync(at("../plugins/sage-codex"), plugin, { recursive: true });
+  const state = join(plugin, "core/state.mjs"), source = readFileSync(state, "utf8");
+  const older = source.replace(", tasks: [...PLAIN_TABLES.tasks, CHIEF_COLUMN], runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN] };", " };");
+  assert.notEqual(older, source, "the fixture removes the column");
+  writeFileSync(state, older);
+  const { tool } = await import(pathToFileURL(join(plugin, "skills/sage/sage.mjs")).href);
+  const run = (...args) => tool.sage([...args, "--project", w.project], w.env);
+  const before = w.tables();
+  for (const args of [["task", "T1", "set", "title=x"], ["task", "add", "--title", "b", ...ADD], ["log", "T1", "a decision", "--why", "w"]]) {
+    assert.throws(() => run(...args), /tasks\.tsv has columns that this version of sage does not know \(chief\).*Update the sage plugin/, args.join(" "));
+  }
+  assert.equal(w.tables(), before, "nothing changed");
+  assert.match(run("status"), /tasks {3}1/);
+  assert.match(run("task", "T1"), /^T1 framed /);
+  assert.equal(run("logbook"), w.dir);
 });
 
 /** The Claude hook as Claude Code runs it, over one linked project, with scratch roots. */
@@ -258,6 +389,52 @@ test("the Claude hook adds the session's row at its first write, names its id, a
   assert.equal(w.bash("gate answer G1 --option 1"), undefined);
 });
 
+// Each write that the skill teaches with a quoted value. The plain form has one-word values: the hook must give both one result.
+const QUOTED = {
+  "task add": ['task add --title "two words" --size small --priority P2', "task add --title word --size small --priority P2"],
+  log: ['log T1 "a decision" --why "a reason"', "log T1 decision --why reason"],
+  "gate add": ['gate add T1 --question "a question?" --options "a|b" --recommend a', "gate add T1 --question question --options yes,no --recommend yes"],
+  "finding add": ['finding add T1 --source sage --severity low --summary "a problem"', "finding add T1 --source sage --severity low --summary problem"],
+  "standing add": ['standing add "an order"', "standing add order"],
+  "program propose": ['program propose --name "a name" --goal "a goal" --pilot T1 --tasks none', "program propose --name name --goal goal --pilot T1 --tasks none"],
+};
+for (const [name, [quoted, plain]] of Object.entries(QUOTED)) {
+  test(`F-T604-1, F-T604-3, F-T604-13, F-T604-14: the Claude hook gives a quoted ${name} the plain form's result`, (t) => {
+    const w = hookWorld(t);
+    claude.sage(["link", "--separate", "--project", w.project], w.env);
+    const dir = claude.storeDir(w.project, w.env), chiefs = join(dir, "chiefs.tsv");
+    assert.equal(existsSync(chiefs), false);
+    const first = /^sage: this project's logbook is shared, so each write names its chief: add --chief C1 to this command\.$/;
+    assert.match(w.bash(quoted), first, "a new session's first write makes its row and names its id");
+    assert.equal(readFileSync(chiefs, "utf8").trim().split("\n").length, 2);
+    assert.equal(w.bash(plain), w.bash(quoted));
+    assert.equal(w.bash(`${quoted} --chief C1`), undefined);
+    assert.equal(w.bash(`${plain} --chief C1`), undefined);
+    const other = /^sage: this session is chief C2, not "?C1"?: give --chief C2\.$/;
+    assert.match(w.bash(`${quoted} --chief C1`, "s2"), other, "a new session does not write as the old chief");
+    assert.match(w.bash(`${plain} --chief C1`, "s2"), other);
+  });
+}
+
+test("the Claude hook reads the shell's forms of one write, leaves a read and a legacy project alone, and passes a line that holds more than the state tool's own command", (t) => {
+  const w = hookWorld(t);
+  const legacy = 'task add --title "two words" --size small --priority P2';
+  assert.equal(w.bash(`${legacy} --project ${w.project}`), undefined, "a legacy project has no chief");
+  claude.sage(["link", "--separate", "--project", w.project], w.env);
+  const NAMED = /add --chief C1 to this command/;
+  assert.match(w.bash('log T1 "a decision" --why="a reason"'), NAMED);
+  assert.match(w.bash(`log T1 "a decision" --why "$(cat <<'EOF'\na reason\nEOF\n)"`), NAMED);
+  assert.match(w.bash('log T1 "a decision" \\\n  --why "a reason" 2>&1'), NAMED);
+  assert.equal(w.bash('status "--project" .'), undefined);
+  assert.equal(w.bash('task "T1"'), undefined);
+  assert.equal(w.bash('gate answer "G1" --option 1'), undefined);
+  const raw = (command) => w.denied(w.send({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }));
+  assert.match(raw(`node "${TOOL}" task add --title "two words" --size small --priority P2`), NAMED, "a quoted path is the tool too");
+  assert.equal(raw(`cd /tmp && node ${TOOL} task add --title "two words" --size small --priority P2`), undefined, "not one command: the state tool refuses it");
+  assert.equal(raw(`node ${TOOL} task add --title "open`), undefined, "a line that the reader cannot read");
+  assert.equal(raw('node other.mjs task add --title "two words"'), undefined, "another program");
+});
+
 test("the Claude hook keeps a lead on its lead run in a shared logbook, and a helper writes nothing", (t) => {
   const w = hookWorld(t);
   const sage = (...args) => claude.sage([...args, "--project", w.project], w.env);
@@ -275,6 +452,7 @@ test("the Claude hook keeps a lead on its lead run in a shared logbook, and a he
   assert.match(w.bash("task T1 set state=building", "s1", lead), /a lead's write names its lead run: add --lead R1, with no --chief/);
   assert.match(w.bash(`task T1 set state=building --lead R1 --chief ${chief}`, "s1", lead), /add --lead R1, with no --chief/);
   assert.match(w.bash("task T1 set state=building --lead R9", "s1", lead), /add --lead R1/);
+  assert.match(w.bash("standing add order --lead R1", "s1", lead), /A lead writes the logbook only with .* on a shared logbook with --lead <its lead run>/, "F-T604-10: the lead form names the option");
   assert.equal(w.bash("task T1 set state=building --lead R1", "s1", lead), undefined);
   assert.match(w.bash("task T1 set state=building", "s1", { agent_id: "qa-1", agent_type: "sage:qa" }), /writes the logbook, or is not a read command/);
 });

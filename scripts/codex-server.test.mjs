@@ -4141,6 +4141,41 @@ test('T336: core native run creation refuses a lead run while a wait is unmet, a
   assert.equal(tool.createRequestedRun({ ...input, role: 'pe', request: turns[2] }, f.env).run.role, 'pe');
 });
 
+test('T604: on a shared logbook, sage_update_task and sage_create_run give the guard\'s words: the owning chief, or the version to claim', async t => {
+  const f = await composedPolicyFixture(t);
+  const project = join(f.dir, 'shared-project'), options = { ...f.options, projectDirectory: project, logbookRoot: join(f.dir, 'shared-logbook') };
+  const earlier = process.env.SAGE_SHARED_HOME;
+  process.env.SAGE_SHARED_HOME = join(f.dir, 'shared'); // the server's own environment, as a launcher sets it
+  t.after(() => { process.env.SAGE_SHARED_HOME = earlier; });
+  mkdirSync(project); mkdirSync(options.logbookRoot); mkdirSync(options.observationsRoot, { recursive: true });
+  execFileSync('git', ['init', '-q', '-b', 'main', project]);
+  execFileSync('git', ['-C', project, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'first']);
+  const { logbookEnv, logbookTool } = await import(pathToFileURL(join(f.plugin, 'runtime/logbook-env.mjs')));
+  const tool = logbookTool(() => { throw Error('No ambient logbook'); }), env = logbookEnv(options);
+  tool.sage(['link', '--separate', '--project', project], env);
+  const rival = tool.chiefFor(project, 'rival-session', env);
+  tool.sage(['task', 'add', '--title', 'a', '--size', 'small', '--priority', 'P2', '--project', project, '--chief', rival], env);
+  writeFileSync(f.entry, `import { servePreparations } from './plugin/runtime/preparation-server.mjs'; servePreparations(${JSON.stringify(options)});`);
+  const [read, update, create] = await Promise.all(['sage_read_task', 'sage_update_task', 'sage_create_run'].map(name => connect(t, f, '0.160.0', '', name)));
+  const attempt = async () => {
+    const { version, error } = await read.call({ task: 'T1' });
+    assert.equal(error, undefined);
+    return { version, updated: (await update.call({ request: turns[0], task: 'T1', version, changes: { title: 'b' } })).error,
+      created: (await create.call({ request: turns[1], task: 'T1', role: 'qa', branch: '', candidate: '' })).error };
+  };
+  const owned = 'T1 belongs to chief C1 (codex), not to C2. Nothing changed. Change only your own tasks. If C1 stopped, ask the owner.';
+  const held = await attempt();
+  assert.equal(held.updated, `Sage could not update this task. [other-chief] ${owned}`);
+  assert.equal(held.created, `Sage could not create this run. ${owned}`);
+  const tasks = join(tool.storeDir(project, env), 'tasks.tsv');
+  writeFileSync(tasks, readFileSync(tasks, 'utf8').replace(/\tC1\n/, '\t\n'));
+  const free = await attempt();
+  const claim = `T1 has no owning chief, so C2 cannot change it. Claim it first: call the claim tool with this task and version ${free.version}, or run sage claim T1 --version ${free.version} --chief C2. Nothing changed.`;
+  assert.equal(free.updated, `Sage could not update this task. [other-chief] ${claim}`);
+  assert.equal(free.created, `Sage could not create this run. ${claim}`);
+  await Promise.all([read, update, create].map(client => client.close()));
+});
+
 test('T337: core native run creation refuses a lead run while the program breakdown is not approved, as the CLI does, and creates one after', async t => {
   const f = await runCreationFixture(t);
   const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); } });

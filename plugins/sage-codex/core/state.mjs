@@ -705,9 +705,7 @@ function updateRequestedTask(input, env, coordination) {
     const current = before.tasks.filter(row => row.id === reference.task);
     if (current.length !== 1) throw new TaskUpdateError("invalid-state");
     if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
-    if (isShared(dir, env)) {
-      if (ownerBar(dir, current[0], chiefRow(dir, coordination.native).id)) throw new TaskUpdateError("other-chief");
-    }
+    if (isShared(dir, env)) guard(dir, "task", [reference.task, "set"], { chief: chiefRow(dir, coordination.native).id });
     const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null,
       Object.hasOwn(reference.changes, "approval") ? config(env, dir).max_rounds : undefined);
     const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
@@ -734,6 +732,7 @@ function updateRequestedTask(input, env, coordination) {
     return reply(taskUpdates.publish(dir, reference, coordination), proposal, "task-updated");
   }); } catch (error) {
     if (error instanceof TaskUpdateError) throw error;
+    if (error.code === "other-chief") throw new TaskUpdateError(error.code, [], error.message);
     if (error.code === "stuck-write") throw new TaskUpdateError(error.code);
     throw new TaskUpdateError((error instanceof RecordedWriteError && !error.code) || phase === "state" ? "invalid-state"
       : phase === "publish" ? "uncertain-outcome" : phase === "readiness" ? "readiness" : "invalid-change");
@@ -867,16 +866,13 @@ function createRequestedRun(input, env = process.env, native) {
     const prior = runWrites.readReceipt(dir, reference);
     if (prior) return { decision: "already-created", run: checked(prior) };
     ready(dir);
+    const chief = isShared(dir, env) ? guard(dir, "run", ["add", input.task], { chief: chiefRow(dir, native).id }) : undefined;
     const matches = read(dir, "tasks").filter(row => row.id === input.task);
     if (matches.length !== 1 || !/^(0|[1-9]\d*)$/.test(matches[0].round) || !Number.isSafeInteger(Number(matches[0].round))) deny();
     notHeld(matches[0], "run add");
     if (input.candidate && candidateOf(input.candidate) !== input.candidate) deny();
     const run = runFrame(dir, matches[0], input.role, input.branch, input.candidate, env);
-    if (isShared(dir, env)) {
-      run.chief = chiefRow(dir, native).id;
-      const bar = ownerBar(dir, matches[0], run.chief);
-      if (bar) refuse(bar);
-    }
+    if (chief) run.chief = chief;
     runWrites.commit(dir, { reference, result: run }, { runs: tableText("runs", [...read(dir, "runs"), run]) });
     status(dir, true);
     return { decision: "run-created", run };
@@ -2556,6 +2552,8 @@ function sage(argv, env = process.env) {
   const { pos, opt } = parse(cmd, rest);
   const readOnly = scopedRead(cmd, pos, opt);
   const root = sageRoot(env), project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
+  // First, because board, link, config, projects and merge-check return before they open a logbook. Only a command that names an actor locates here, so link can still replace a row that locate refuses.
+  if ((opt.chief !== undefined || opt.lead !== undefined || cmd === "claim") && !locate(project, env).shared) refuse(`${visible(project)} has no shared logbook, and only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim. Nothing changed.`);
   if (cmd === "board" && opt.view !== undefined) {
     if (pos.length > 1 || opt.remember !== undefined) refuse("rich board takes one scope or task id and never remembers state");
     const scope = opt["name-hex"] !== undefined ? unhex(opt["name-hex"]) : /^T[1-9]\d*$/.test(pos[0] ?? "") ? "this" : pos[0] ?? "this";
@@ -2613,7 +2611,6 @@ function sage(argv, env = process.env) {
     return board({ scope: hex === undefined ? pos[0] : unhex(hex), project, env, save: opt.remember !== "no" });
   }
   const place = locate(project, env), { dir } = place;
-  if (!place.shared && (opt.chief !== undefined || opt.lead !== undefined || cmd === "claim")) refuse(`${visible(project)} has no shared logbook, and only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim. Nothing changed.`);
   const repair = cmd === "logbook" && pos[0] === "repair";
   const skip = repair ? [...new Set(list(opt["accept-loss"]))] : [];
   const odd = skip.filter((t) => !Object.hasOwn(TABLES, t));
@@ -2650,7 +2647,7 @@ function change(cmd, pos, opt, dir, env, skip, project, guarded) {
 
 /** Why this chief does not write this task, or "". An empty cell is a task with no owning chief. */
 function ownerBar(dir, task, chief) {
-  if (!task.chief) return `${task.id} has no owning chief, so ${chief} cannot change it. Claim it first: sage claim ${task.id} --version ${taskVersion(task)} --chief ${chief}. Nothing changed.`;
+  if (!task.chief) return `${task.id} has no owning chief, so ${chief} cannot change it. Claim it first: call the claim tool with this task and version ${taskVersion(task)}, or run sage claim ${task.id} --version ${taskVersion(task)} --chief ${chief}. Nothing changed.`;
   if (task.chief === chief) return "";
   const owner = chiefs(dir).find((r) => r.id === task.chief);
   return `${task.id} belongs to chief ${task.chief}${owner ? ` (${owner.provider})` : ""}, not to ${chief}. Nothing changed. Change only your own tasks. If ${task.chief} stopped, ask the owner.`;
@@ -2668,7 +2665,7 @@ function guard(dir, cmd, pos, opt) {
   if (opt.chief !== undefined && opt.lead !== undefined) refuse(`${name} takes --chief or --lead, not both. Nothing changed.`);
   const lead = opt.lead === undefined ? undefined : read(dir, "runs").find((r) => r.id === opt.lead && r.role === "lead" && r.status === "running")
     ?? refuse(`${visible(opt.lead)} is not a running lead run, so this lead writes nothing. Report to your chief. Nothing changed.`);
-  const chief = lead?.chief ?? opt.chief ?? refuse(`this logbook is shared, and a command with no chief only reads: add --chief <your C id> to ${name}. Nothing changed.`);
+  const chief = lead?.chief ?? opt.chief ?? refuse(`this logbook is shared, and a command with no chief only reads: add --chief <your C id> to ${name}. To get your id, run this write again as one command of its own: the session's hook names the id. Nothing changed.`);
   if (!lead && !chiefs(dir).some((r) => r.id === chief)) refuse(`${visible(chief)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
   const tasks = need.kind === "any" ? [] : read(dir, "tasks"); // a repair of a lost tasks table is an any class
   const old = need.kind === "program" ? read(dir, "programs").find((p) => p.id === pos[1]) : undefined;
@@ -2679,7 +2676,7 @@ function guard(dir, cmd, pos, opt) {
   if (lead && (!named.length || named.some((id) => id !== lead.task))) refuse(`${name} is not a write on ${lead.task}, and a lead acts only on the task of its lead run. Report what else the logbook needs. Nothing changed.`);
   if (need.kind !== "any") for (const id of new Set(named)) {
     const bar = tasks.find((t) => t.id === id) && ownerBar(dir, tasks.find((t) => t.id === id), chief);
-    if (bar) refuse(bar);
+    if (bar) throw Object.assign(new Refusal(bar), { code: "other-chief" }); // a native writer passes these words on
   }
   return chief;
 }
@@ -2693,19 +2690,14 @@ function chiefFor(project, native, env = process.env) {
 
 /**
  * The options that a provider adds to a command that it runs for its caller: --chief, --lead for a lead, or none for a
- * read, a gate answer or a legacy project. A logbook that refuses gives none: the command then gives its own refusal.
+ * read, a gate answer or a legacy project. A refusal here is the real cause, such as a damaged chiefs.tsv or a busy lock.
  */
 function actorOptions(project, [cmd, ...rest], { native, leadTask }, env = process.env) {
-  try {
-    const { pos } = parse(cmd, rest);
-    if (["read", "owner"].includes(writerClass(cmd, pos).kind) || !locate(project, env).shared) return [];
-    if (!leadTask) return [`--chief=${chiefFor(project, native, env)}`];
-    const run = logbookView(project, env).leadRun(leadTask);
-    return run ? [`--lead=${run.id}`] : [];
-  } catch (error) {
-    if (error instanceof Refusal) return [];
-    throw error;
-  }
+  const { pos } = parse(cmd, rest);
+  if (["read", "owner"].includes(writerClass(cmd, pos).kind) || !locate(project, env).shared) return [];
+  if (!leadTask) return [`--chief=${chiefFor(project, native, env)}`];
+  const run = logbookView(project, env).leadRun(leadTask) ?? refuse(`${leadTask} has no running lead run, so this lead writes nothing. Report to your chief. Nothing changed.`);
+  return [`--lead=${run.id}`];
 }
 
 /** Makes a new logbook's folders and tables, or checks an existing one, as init does. */
@@ -3502,10 +3494,13 @@ const shown = (text) => text.split("\n").map(visible).join("\n");
 /** The standing orders as a person wrote them, for briefs to copy word for word: tabs stay, a CRLF or CR line end prints as a plain one, and no hidden character stays. */
 const orders = (text) => text.replace(/\r\n?/g, "\n").replace(HIDDEN, "");
 
-/** One command as the CLI runs it: the text that it prints, or its refusal (code 1) or error (code 2) after "sage: ". */
-function command(argv, env = process.env) {
+/**
+ * One command as the CLI runs it: the text that it prints, or its refusal (code 1) or error (code 2) after "sage: ".
+ * A provider that runs it for a caller gives actor: { project, native, leadTask }, the input of actorOptions.
+ */
+function command(argv, env = process.env, actor) {
   try {
-    return { code: 0, text: (argv[0] === "standing" ? orders : shown)(sage(argv, env)) };
+    return { code: 0, text: (argv[0] === "standing" ? orders : shown)(sage(actor ? [...argv, ...actorOptions(actor.project, argv, actor, env)] : argv, env)) };
   } catch (err) {
     const said = err instanceof Refusal || err instanceof RecordedWriteError; // its text is for a person
     return { code: said ? 1 : 2, text: `sage: ${shown(said ? err.message : err.stack)}` };

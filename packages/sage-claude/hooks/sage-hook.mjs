@@ -985,7 +985,7 @@ const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: 
  */
 const LEAD_READ_MAX = 4 * 1024 * 1024;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
-const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task, or its task's branch=); run done <a run of these roles on its task>; finding add <its task> (no --key; --run only of a run that it added, and --class); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round or of an earlier one; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch= of a branch named for its task that no other task names or ran on, while no other task uses its branch, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, while its lead run runs";
+const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task, or its task's branch=); run done <a run of these roles on its task>; finding add <its task> (no --key; --run only of a run that it added, and --class); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round or of an earlier one; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch= of a branch named for its task that no other task names or ran on, while no other task uses its branch, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, and on a shared logbook with --lead <its lead run>, while its lead run runs";
 /** Each key=value of task set: a key at most once, and each value as the lead may set it on this task (F-T273-2, F-T273-7). */
 const LEAD_PAIRS = {
   // Only a branch named for its task: a lead never clears it (T275), and only the sage puts a task on another task's branch
@@ -1337,6 +1337,21 @@ function chiefStateWords(input) {
   return words.length && PLAIN.test(words.join(" ")) ? words : undefined;
 }
 /**
+ * The words after the state tool's path, as the shell reads them, so a quoted value is one word: the line is this hook's
+ * state tool as one command, and a substitution in its words does not change that. Any other line gives undefined.
+ */
+function chiefWriteWords(input) {
+  let commands;
+  try {
+    commands = core.shellCommands(String(input.tool_input?.command ?? ""));
+  } catch {
+    return undefined;
+  }
+  const [one, ...more] = commands.filter((c) => !c.host);
+  const [node, path, ...rest] = one?.words ?? [];
+  return !more.length && node === "node" && /(?:^|\/)skills\/sage\/sage\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(TOOL) ? rest : undefined;
+}
+/**
  * The sage's review or QA verdict, early (T483). The state tool is the boundary: its verdict command refuses a review or
  * QA verdict that no kept report backs, in any shell form. The hook runs the same rule first (verdictBacking), on the
  * logbook that the state tool finds (--project or SAGE_PROJECT, from the command's folder), for a better message. A
@@ -1351,8 +1366,8 @@ function chiefStateWords(input) {
  */
 function chiefIdProblem(input) {
   if (input.tool_name !== "Bash") return undefined;
-  const words = chiefStateWords(input);
-  if (!words) return undefined;
+  const words = chiefWriteWords(input);
+  if (!words?.length) return undefined;
   const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
   if (["read", "owner"].includes(core.writerClass(cmd, pos).kind)) return undefined;
   let id;

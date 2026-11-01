@@ -55,8 +55,8 @@ export function createPreparationServer(options = {}) {
       if (Buffer.byteLength(JSON.stringify(input), "utf8") > 16 * 1024) throw Error("Invalid request size");
       const { createNativeRun } = await import("./run-create.mjs");
       return { content: [{ type: "text", text: JSON.stringify(createNativeRun(input, native, fixed)) }] };
-    } catch {
-      return { isError: true, content: [{ type: "text", text: "Sage could not create this run. Check the chief identity, request UUID, task, role, and branch writer. Retry an incomplete request with the same fields." }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: "text", text: `Sage could not create this run. ${error.code === "other-chief" ? error.message : "Check the chief identity, request UUID, task, role, and branch writer. Retry an incomplete request with the same fields."}` }] };
     }
   });
   server.registerTool("sage_prepare_task", {

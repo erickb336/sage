@@ -49,7 +49,8 @@ Each command is one plain command from Bash, in the project's folder:
 
 - no `--project` and no `SAGE_PROJECT`;
 - no quotes, variables, pipes, `;` or `&&`;
-- each option once.
+- each option once;
+- on a shared logbook, `--lead R<n>` on each write, where `R<n>` is your lead run (the first line of your brief).
 
 So a summary or a reason is one word, with hyphens: `--summary=empty-name-saves-a-row`.
 

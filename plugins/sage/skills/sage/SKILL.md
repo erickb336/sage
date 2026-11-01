@@ -16,7 +16,7 @@ Only sage.mjs changes the logbook, so that each change leaves its record. The ho
 
 Each option takes a value: `--name value`, or `--name=value` for a value that starts with `--`. A command refuses an option that it does not take, and names the options that it takes. It refuses an option given twice.
 
-In a shared logbook, each write names its actor: the chief adds `--chief C<n>`, and a lead adds `--lead R<n>`, its own lead run. The hook names the id at the first write and refuses another chief's id. A write on a task of another chief refuses and names that chief. A command with no chief only reads. A legacy logbook refuses both options, and `claim`.
+In a shared logbook, each write names its actor: the chief adds `--chief C<n>`, and a lead adds `--lead R<n>`, its own lead run. The hook names the id at the first write and refuses another chief's id, also when a value is in quotes. It reads a write that is one command of its own: after `cd` or in a pipe, it names no id. A write on a task of another chief refuses and names that chief. A command with no chief only reads. A legacy logbook refuses both options, and `claim`.
 
 ## Commands
 
