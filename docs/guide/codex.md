@@ -16,12 +16,12 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the `sage` skill's commands read it and show the board |
 | The stop check | Yes | No, until native captures prove it |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
-| Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer and the arena judge | The public helper supports each of these roles and the investigation roles. The chief starts one lead for each task with a build, and the lead starts its team and records its task; other role agents start no agents and record nothing. No real run has checked a lead yet, and on multi-agent v1 the chief does the lead's work (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
+| Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer and the arena judge | The public helper supports each of these roles and the investigation roles. The chief starts one lead for each task with a build, and the lead starts its team and records its task; other role agents start no agents and record nothing. A pilot on stock Codex ran a lead and its team with a test model, and each thread needs a multi-agent v2 model (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
 | The brief check | Yes: the hook refuses a brief without every field | Yes, as a check, not a block: the chief runs the `brief` tool before each spawn. Each role agent starts with the project's standing orders and its checked brief, and a spawn with no checked brief gives the chief a warning ([The brief check](#the-brief-check)) |
-| The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
+| The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. A review or QA agent's report goes through the same reader as in Claude Code: a report that the reader cannot read gets one more turn too |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
 | sage mode: agent caps in code | Yes | No |
-| Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt. Codex still asks you 4 times in each task, before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)) |
+| Autopilot | Yes | Yes: autopilot merges verified work. The hook allows only the exact merge command when the merge check passes, with no prompt. Codex still asks you at least 5 times in each task, before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)) |
 | The merge rule, the no-edit rules and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)) |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | No: use the manual skill commands |
@@ -30,10 +30,11 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 
 ## What you need
 
-- Codex 0.160 to 0.164. sage was checked with the Codex CLI 0.160.0 and 0.164.0 on macOS, with a test model. The desktop app carries its own Codex (0.164.0-alpha in ChatGPT 26.1021); sage should work the same way there, but it was not run in the app yet.
+- Codex 0.160 to 0.166. sage was checked with the Codex CLI 0.160.0, 0.164.0 and 0.166.0 on macOS, with a test model. The desktop app carries its own Codex (0.164.0-alpha in ChatGPT 26.1021); sage should work the same way there, but it was not run in the app yet.
 - The Codex CLI on your PATH, in that range, also when you use only the desktop app: the install commands below are CLI commands. To get it, run `npm install -g @openai/codex@0.164.0`.
 - Node.js 20 or later, on your PATH: the sage hooks are Node scripts.
 - `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch and autopilot merges nothing.
+- A multi-agent v2 model for the chief and each child. In Codex 0.164.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5.6-luna` is not ([limits](#the-rules-in-codex)).
 - For a full lead team, `agents.max_concurrent_threads_per_session` set to 10 in your Codex config. The default of 4 threads holds the chief, a lead and 2 helpers ([limits](#the-rules-in-codex)).
 
 ## Install
@@ -67,7 +68,7 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
    The other limit is a Codex version outside the tested range, for example:
 
    ```text
-   sage: this is Codex 0.165.0, and sage is tested only with Codex 0.160 to 0.164. Some sage rules may not run.
+   sage: this is Codex 0.167.0, and sage is tested only with Codex 0.160 to 0.166. Some sage rules may not run.
    ```
 
    Codex starts a session at your first message, so a warning comes then. The status counts the trust records in your Codex config; Codex itself checks the hash of each hook and of the plugin's files, and it runs a hook only when both match.
@@ -114,7 +115,7 @@ Send each phrase alone, as the whole message, in any letter case.
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff: the hook adds the chief's role to that turn. Send your request next. |
 | `sage mode off` | A normal session again. Autopilot goes off too. The hook adds the role no more, also after a compaction. |
-| `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. Each task still asks you 4 times before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)). |
+| `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. Each task still asks you at least 5 times before the merge ([The approval prompts of each task](#the-approval-prompts-of-each-task)). |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
 - To turn on autopilot after an install, send `sage mode`, then `autopilot on`, each alone: nothing else is needed.
@@ -134,15 +135,23 @@ The hooks run only after you trust them (step 3). In `codex exec`, Codex skips h
 
 ### The approval prompts of each task
 
-With autopilot on, each task still asks you 4 times before its merge: Codex asks, not sage. In the default `workspace-write` sandbox, "`<writable_root>/.git` is protected as read-only", and network access is off ([Codex: Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)). So these commands must run outside the sandbox, and Codex asks you first.
+With autopilot on, each small task still asks you at least 5 times before its merge: Codex asks, not sage. In the default `workspace-write` sandbox, "`<writable_root>/.git` is protected as read-only", and network access is off ([Codex: Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)). So these commands must run outside the sandbox, and Codex asks you first.
 
 | Prompt | What it is for | Why Codex asks |
 | --- | --- | --- |
 | Create the task worktree (`git worktree add`) | The implementer's own folder and branch for the task | It writes to `.git` |
-| Commit on the task branch (`git -C <folder> add <files> && git -C <folder> commit …`, one prompt for both) | The change of the task | Both commands write to `.git` |
+| Add the change (`git -C <folder> add <files>`) | The files of the commit | It writes to `.git` |
+| Commit on the task branch (`git -C <folder> commit …`) | The change of the task | It writes to `.git` |
 | Send the task branch (`git -C <folder> push -u <remote> <branch>`) | The branch of the pull request on GitHub | It writes to `.git` and needs the network |
 | Open the pull request (`gh pr create`) | The pull request that the reviews and the merge check read | It needs the network |
+| Read the pull request and its checks (`gh pr view`, `gh pr checks`) | The chief's check of a ready task, before the merge | It needs the network |
 
+- The count of 5 is for the first five rows, in one small task with separate commands. A model that joins `git add` and `git commit` in one command gets one prompt for both.
+- Each repair adds its own commit and push. A worktree outside the project asks once more, for a file change.
+- A sandbox refusal is not a failed task or a failed check. The role texts tell each agent, and the skill tells the chief, to run the command again with escalated permissions, so that the prompt comes to you. So QA and a reviewer can ask you too, for example when a check needs the network.
+- After a refusal of `git worktree add -b`, the agent first checks for a branch that the failed step left. When it finds that branch, it runs the command with no `-b`.
+- With `approval_policy = "never"`, Codex refuses each escalation, so a build cannot commit. Use an approval policy that asks.
+- The sage logbook tools ask nothing, also for a lead.
 - With sage mode and autopilot on, the merge needs no prompt: the sage hook allows the verified merge command itself.
 - With sage mode on and autopilot off, the hook refuses the merge, and you merge the pull request yourself.
 - With sage mode off, Codex shows its normal prompt for the merge too.
@@ -158,7 +167,7 @@ In the CLI, Codex 0.164.0 gives these choices for such a prompt ([the choice tex
 
 Codex 0.164.0 offers no choice for "this session" only for these prompts.
 
-On autopilot, choose **Yes, and don't ask again** the first time each of the 4 prompts comes. After that, Codex asks no more for that kind of step, and autopilot does not stall. To be asked each time, choose **Yes, proceed**.
+Choose **Yes, proceed** to be asked each time. **Yes, and don't ask again** helps only when its prefix fits the next task too, so read the prefix before you choose. In the pilot on Codex 0.164.0, the proposed prefix held the exact folder and branch of the task (for example `git worktree add -b sage/t1-demo …`), so it fits only that command.
 
 > **Trade-off:** the saved rule lets a later command that starts the same way run with no prompt and outside Codex's sandbox, from any Codex thread, and `git commit` runs the project's own git hooks. The sage hook still refuses a push to main and a merge that is not ready.
 
@@ -166,7 +175,21 @@ When a network proxy is on, the prompt shows **Yes, just this once** in place of
 
 To remove a saved rule, delete its line from `~/.codex/rules/default.rules` (or `$CODEX_HOME/rules/default.rules` when you set `CODEX_HOME`), then restart Codex: Codex reads its rules at startup ([Codex: Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)).
 
-The desktop app gets the same choices from Codex, but its docs do not name their text, and sage was not run in the app yet.
+The desktop app gets the same choices from Codex, but its docs do not name their text, and sage was not run in the app yet. So it is not checked yet that a child's prompt reaches you there.
+
+**`writable_roots` and the network: not proved.** sage keeps Codex's defaults, and it does not recommend this option: `writable_roots` with the project's `.git` folder, and `network_access = true`. With the worktree inside the project, the pilot's git commands asked for no approval, but the push failed on the scratch remote. sage's task folders are outside the project, and there the pilot failed:
+
+1. `git worktree add -b` failed in the sandbox, but it left the branch.
+2. The escalated retry stopped with `a branch named 'sage/t1-demo' already exists`, so no worktree came to exist.
+3. Each later step failed, and the sage hook refused the push.
+
+The role texts now cover this retry, but no run tried it with this option. The option also lets agents write git's own files and reach the network with no prompt, so the limits under [The rules in Codex](#the-rules-in-codex) that say to keep network access off lose their stop.
+
+**Not proved yet:**
+
+- An escalated push under a strict sandbox. The pilot's push reached a scratch remote only with `/tmp` writable, and with no escalation. With `/tmp` excluded, the push failed, and no run tried it again with escalation.
+- A real push and a real `gh pr create`. No run called a real remote.
+- The `git worktree add` retry with no `-b` in Codex. It was checked only with git alone, not in a Codex run.
 
 ## The logbook tools
 
@@ -196,6 +219,10 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it.
 - Under full access (`danger-full-access`), an agent's shell can write any file, also the logbook, the mode files and Codex's record of your messages. So sage mode gives no guarantee there.
 - The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.
+- Limit: `logbook repair` has no tool, and the sandbox keeps the logbook closed to the chief's shell. So the Codex chief cannot run either repair.
+- When a saved change cannot finish and you have no backup, accept the loss, then run this yourself in a terminal, outside Codex: `node ~/.codex/plugins/cache/sage/sage/<version>/skills/sage/sage.mjs logbook repair --accept-change-loss yes --project <project>`.
+- To find `<version>`, run `ls ~/.codex/plugins/cache/sage/sage/` and use the current one. When you set `CODEX_HOME`, use that folder in place of `~/.codex`.
+- Limit: the repair cannot compare a receipt with Codex's journal. A receipt that differs from its journal row still stops Codex writes after the repair, and that case needs a backup.
 
 ## Design roles and acceptance
 
@@ -323,8 +350,15 @@ Limits:
 - In sage mode, every tool other than sage's own runs with no sage rule, by your choice: app tools, MCP tools of other servers, and dynamic tools. For example, the Sites publish tool publishes a page with no sage check. The rules above cover only shell commands, `apply_patch`, agent starts, messages to other threads and the sage logbook tools.
 - A `js` call of the desktop app's REPL can run shell commands that no sage hook sees; sage mode allows it so the chief keeps its browser previews. The REPL runs the code in its own Node process, so a push, a merge or a file change in that code passes every sage rule. The `exec` tool of code mode is different: each tool call inside its code reaches the sage hook.
 - Under full access (`danger-full-access`), sage mode gives no guarantee: an agent can write any file, also the mode files, the logbook and Codex's record of your messages.
-- A lead needs multi-agent v2. A v1 child gets no spawn tools, so on v1 the chief starts no lead, and it does the lead's work.
-- Codex v2 allows 4 threads in a session by default: the chief and 3 children. When no thread is idle, a spawn fails with `AgentLimitReached`, and the agent waits for a running agent. Set `agents.max_concurrent_threads_per_session` to 10 for a full lead team, because sage caps no agents in code here.
+- sage on Codex needs a multi-agent v2 model for the chief and each child. On a v1 model, sage cannot name a child or keep its report, so no review reaches a merge, and a lead cannot start helpers.
+  - On a v1 session, the chief starts no agents and tells you to start a new session on a v2 model. Codex's model catalog sets the version at a thread's first turn.
+  - In Codex 0.164.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5.6-luna` and `gpt-5.5` are not.
+  - Do not switch the model during a run: a child gets the collaboration tools only when its own model is v2. A lead with no spawn tools reports it, and the chief stops and tells you the same fix.
+- A child's report starts no turn in Codex. So the chief and a lead do not end their turn while a child runs: they wait with `wait_agent`.
+  - If the chief stops all the same, its last line says so. Send any message, and one more if the report has not come.
+- Codex v2 allows 4 threads in a session by default: the chief and 3 children. So a lead and 2 helpers fill the default, and a third helper at the same time fails with `collab spawn failed: agent thread limit reached`.
+  - A finished or interrupted agent frees its thread, and the agent then tries again with the same name.
+  - One lead with one helper at a time needs no change. Set `agents.max_concurrent_threads_per_session` to 10 before you run more than one lead, because sage caps no agents in code here.
 - The reviewer's limits above hold for a lead too: its shell write is blocked only in the plain forms. A lead sends the branch and opens the pull request from the shell, under the same push and `gh` rules as the chief, and it never merges. It starts no lead, PE, designer or arena judge.
 - A lead records every finding of a helper's report. Nothing refuses a lead that leaves one out: Claude's hook checks the count of medium and high findings (its gap rule), and the Codex gate does not. The lead's role text gives the rule, and a lead that drops a finding acts against its brief.
 - The chief's own `resume_agent` is not blocked. The chief's text says to start a fresh agent.

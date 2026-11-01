@@ -341,6 +341,27 @@ test("T560: a review child's unreadable report gets one fix chance at its first 
   for (const role of ["implementer", "arena_judge"]) assert.equal(gate(stop({ agent_transcript_path: transcript(`/root/sage_${role}_t12_r40`), last_assistant_message: unreadable })).decision, undefined, `${role} backs no verdict, so it is not read`);
 });
 
+test("T461: a report that the Claude stop gate refuses cannot pass in Codex: the name of a review child does not matter, and a field obeys the one field rule", () => {
+  const stopOf = (path, message, again = false) => gate(stop({ agent_transcript_path: transcript(path), last_assistant_message: message, stop_hook_active: again }));
+  // A high finding with no list mark: the reader cannot read it. Each name is a review child that the gate cannot bind to a run.
+  const hidden = "STATUS done\nRESULT PASS\nEVIDENCE x\nFINDINGS\nK1 high a.js:1 data loss\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none";
+  for (const path of ["/root/sage_qa_t12", "/root/sage_code_reviewer_t12", "/root/sage_security_reviewer_t12", "/root/sage_ux_reviewer_t12", "/root/Sage_QA_T12_R40", "/root/SAGE_CODE_REVIEWER_T12", "/root/sage_pe_t12/sage_qa_t12_r40", "/root/sage_qa"]) {
+    const message = stopOf(path, hidden);
+    assert.equal(message.decision, "block", path);
+    assert.match(message.reason, /^sage: the report check cannot read your report: a line under FINDINGS is not none alone and not a finding in the form - <key> <severity> <summary>: "K1 high a\.js:1 data loss"\./, path);
+    assert.equal(stopOf(path, hidden, true).decision, undefined, `${path}: the second stop goes through`);
+    assert.deepEqual(stopOf(path, FULL), {}, `${path}: a report that the reader can read passes`);
+  }
+  for (const path of ["/root/sage_implementer_t12", "/root/sage_pe_t12", "/root/sage_lead_t12", "/root/sage_quality_t12", "/root/explorer"]) assert.deepEqual(stopOf(path, hidden), {}, `${path} backs no verdict, so its FINDINGS are not read`);
+  // A field in a list item, on an indented line or in a code block is not a field, for each sage role.
+  const noStatus = (form) => FULL.replace("STATUS done", form);
+  for (const path of ["/root/sage_implementer_t12", "/root/sage_qa_t12_r40"]) {
+    for (const [why, message] of [["a list item", noStatus("- STATUS done")], ["an indented line", noStatus("  STATUS done")], ["a numbered list item", noStatus("1. STATUS done")], ["a code block", noStatus("```\nSTATUS done\n```")]]) {
+      assert.equal(stopOf(path, message).reason, BLOCK.reason.replace("no EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH", "no STATUS"), `${path}: ${why}`);
+    }
+  }
+});
+
 test("an agent without the sage_ task name passes, with or without a report", () => {
   assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/explorer") })), {});
   assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/explorer_sage_t1"), last_assistant_message: null })), {});
@@ -358,9 +379,10 @@ test("an input that the gate cannot read stops nothing and gives one plain line"
 // (gpt-6.1-sol: functions, clock and collaboration namespaces; fake-model: the multi_agent_v1 list), with the
 // spawn_agent parameters. MCP: the tools of the plugin's sage MCP server (T454, PR 327), read from the server itself.
 // V2: the gpt-6.1-sol part of that list, with the tools of multi-agent v2, the only place where a lead runs.
+// timeout_ms: the one parameter of wait_agent (run R2221, Q6).
 const V2 = ["exec", "wait", "request_user_input", "request_user_input_async", "sleep", "followup_task", "interrupt_agent",
   "list_agents", "send_message", "spawn_agent", "wait_agent", "task_name", "fork_turns", "reasoning_effort", "exec_command",
-  "write_stdin", "view_image"];
+  "write_stdin", "view_image", "timeout_ms"];
 const STOCK = [...V2, "close_agent", "resume_agent", "send_input", "fork_context", "get_goal", "create_goal", "update_goal", "web_search"];
 const MCP = Object.keys((await import(pathToFileURL(join(ROOT, "plugins/sage-codex/mcp/state-server.mjs")))).TOOLS);
 /** Each tool-like name (snake case in a code span) that a binding text names, except an example sage task name. */
@@ -405,7 +427,7 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   assert.equal(script, join(ROOT, "plugins/sage-codex/skills/sage/role.mjs"), "the real path of the script");
   assert.match(spawnSync("node", [script, "qa"], { encoding: "utf8" }).stdout, /^# QA\n/, "the command that the lead runs prints a helper's role text");
   // How it waits, reads and records, and that its messages are refused.
-  assert.match(r.stdout, /Call `wait_agent` for the helper, and read its report\./);
+  assert.match(r.stdout, /Call `wait_agent` again until that helper's report comes\./);
   assert.match(r.stdout, /Save the whole report with `pages`/);
   for (const tool of ["run_add", "run_done", "brief", "finding_add", "finding_triage", "finding_close", "round", "verdict", "task_set"]) assert.ok(r.stdout.includes(`\`${tool}\``), tool);
   assert.match(r.stdout, /The gate refuses `send_message`, `followup_task` and `send_input` from a lead/);
@@ -413,8 +435,7 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   // The carried limits, each with what to do.
   assert.match(r.stdout, /record every finding of the report, before you end its run/);
   assert.match(r.stdout, /Nothing refuses a lead that leaves one out: Claude's hook checks the count of medium and high findings \(its gap rule\), and the Codex gate does not/);
-  assert.match(r.stdout, /`AgentLimitReached` means that no thread is free/);
-  assert.match(r.stdout, /A v1 child cannot start agents\./);
+  assert.match(r.stdout, /`collab spawn failed: agent thread limit reached` means that no thread is free/);
   assert.doesNotMatch(r.stdout, /\{\{|<role\.mjs>/);
   // Each tool that the steps give a lead exists on v2. The two v1 names are there only as refusals (F-T553-1).
   assert.deepEqual(named(r.stdout).filter((name) => !V2.includes(name) && !MCP.includes(name)), ["send_input", "resume_agent"], "each tool that the steps name exists on v2");
@@ -426,6 +447,27 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   assert.match(r.stdout, /`finding_triage`: give `task`, `key` and `decision`: `fix`/);
   assert.match(r.stdout, /`gh pr create --head <branch> --title <title> --body <body>`/);
   for (const role of ["implementer", "qa", "pe"]) assert.doesNotMatch(spawnSync("node", [ROLE, role], { encoding: "utf8" }).stdout, /Your steps in Codex/, role);
+});
+
+test("T603: the lead's text holds the pilot's rules, each role that writes git or reaches the network gets the approval line, and each other role gets the short line", () => {
+  const text = (role) => spawnSync("node", [ROLE, role], { encoding: "utf8" }).stdout;
+  const lead = text("lead");
+  assert.match(lead, /\*\*No spawn tools\.\*\* sage on Codex needs a multi-agent v2 model for the chief and each child\. When your tools have no `spawn_agent` in the `collaboration` namespace, start nothing, and report STATUS blocked at once with the reason that you have no spawn tools\./);
+  assert.match(lead, /Do not end your turn while a helper runs: a helper's report starts no turn/);
+  assert.match(lead, /Call `wait_agent`\. It takes only `timeout_ms` \(at most 3600000, one hour\), and it has no target\. It wakes on any message or at the time-out, and it returns no report\./);
+  assert.match(lead, /Codex allows 4 threads by default: the chief, you and 2 helpers, so a third helper at the same time fails\./);
+  assert.match(lead, /A finished or interrupted helper frees its thread\./);
+  assert.match(lead, /with the sage tools\. They ask for no approval\./);
+  assert.doesNotMatch(lead, /AgentLimitReached|the chief does the lead's work|Multi-agent v1|wait_agent` for the helper/);
+  const line = /\n\*\*Approvals in Codex\.\*\* In Codex's default sandbox, `\.git` is read-only and the network is off\. So each git write \(for example `git worktree add` and `git commit`\) and each network step asks the owner for approval, at least 5 clicks in each small task\. When the sandbox refuses such a step, run the same command again with escalated permissions, and wait for the owner\. The exception is `git worktree add -b <branch> <path>`: first run `git branch --list <branch>`\. If it prints the branch, the failed step left it, so run `git worktree add <path> <branch>` with escalated permissions and no `-b`\. If it prints nothing, run the same command again with escalated permissions\. A sandbox refusal is not a failed task\. When the approval policy is `never` or the owner says no, report STATUS blocked and name the step\.\n\n# The sage report\n/;
+  for (const role of ["lead", "implementer", "designer", "arena-judge"]) assert.match(text(role), line, role);
+  // A role that does not build gets the short line: a sandbox refusal never reads as a failed check or a finding.
+  const short = /\n\*\*Sandbox refusals in Codex\.\*\* A sandbox refusal is not a failed check or a finding: run the same command again with escalated permissions, and wait for the owner\. When the approval policy is `never` or the owner says no, name the step under NOT VERIFIED\.\n\n# The sage report\n/;
+  for (const role of ["pe", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "investigate", "evidence-review"]) {
+    assert.match(text(role), short, role);
+    assert.doesNotMatch(text(role), /Approvals in Codex/, role);
+  }
+  for (const role of ["lead", "implementer", "designer", "arena-judge"]) assert.doesNotMatch(text(role), /Sandbox refusals in Codex/, role);
 });
 
 test("T553: a lead's steps record a report's findings and verdict first, and triage fix after (F-T552-22)", () => {

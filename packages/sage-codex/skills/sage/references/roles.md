@@ -4,8 +4,6 @@ Each role agent (lead, implementer, pe, designer, arena-judge, code-reviewer, se
 
 **The shape.** The chief starts each lead, one for each task with a build, and each pe, designer, arena-judge, investigate and evidence-review agent. A lead starts the implementer, the reviewers and QA of its own task, and records that task: `role.mjs lead` prints its steps. Other role agents start no agents and record nothing in the logbook: the plugin's hook refuses their `spawn_agent` and the sage tools that write, so the chief or the lead records what their reports say. Record each run with the `run_add` tool of the sage MCP server before the spawn.
 
-**Multi-agent v1.** A v1 child gets no spawn tools, so a lead cannot start helpers there. On v1 the chief starts no lead: it starts every role agent and does the lead's work (the briefs, the review cycles and the repair rounds).
-
 ## Steps
 
 1. Print the role text. Run the `role.mjs` script beside this skill with the role name, for example `node <this skill folder>/role.mjs implementer`.
@@ -15,9 +13,7 @@ Each role agent (lead, implementer, pe, designer, arena-judge, code-reviewer, se
    - `message`: the message of step 2.
    - `fork_turns: "none"`. The default, `all`, gives the agent the chief's history in place of a clean start.
    - Leave out `agent_type`: sage has no Codex role of that name.
-4. Wait for the agent with `wait_agent`, and read its report.
-
-When your tool list has `spawn_agent` only in the `multi_agent_v1` namespace (an older model), give `message` alone. That spawn form has no task name, so the report check does not check the agent: read its report yourself.
+4. Wait for the agent, as **Run the route** says, and read its report. `wait_agent` has no target, and it wakes on any message or after `timeout_ms` (default 30 s, at most one hour). It returns no report, so read the sender of each message in your next input, and call it again until the agent's report comes.
 
 ## Start a lead
 
@@ -35,22 +31,26 @@ The chief records the lead run, the checks verdicts, the move to verified, and i
 
 ## The lead's report
 
+Steps 3 and 4 need the network, as your other git writes and network steps do, also the push and the pull request after an arena. When the sandbox refuses one, run the same command again with escalated permissions, and wait for the owner. A sandbox refusal is not a failed check: a check fails only when `gh pr checks` lists it as failed. When the approval policy is `never` or the owner says no, record no verdict, and tell the owner which step stopped.
+
 1. Check the report against `status`: each run, finding and verdict that it names is in the logbook.
 2. Do what only you do: ask its QUESTIONS with `gate_add`, dismiss each medium or high finding that it names as wrong, when you agree, and end each run that it names as never started.
 3. For a ready report (the task at verifying), take the PR number from the logbook, never from the report. Take the head SHA from `gh pr view <n> --json headRefOid`, and compare it with the SHA in the report. When they differ, or a run of the task other than the lead run still runs, record no verdict: start a fresh lead.
 4. Run `gh pr checks <n>`. When every check passes on that SHA, record `checks-pass` with `verdict`, then move the task to verified with `task_set`. Then merge (autopilot on), or tell the user that the pull request is ready.
 5. When a check fails, record `checks-fail`, add a finding with `finding_add` (`source` qa, `class` the problem's class, `run` the lead run), triage it fix, then start a fresh lead.
-6. For a blocked report, take no state from it. Read the task's state, round and findings with `status`, decide from them, and start a fresh lead on a new lead run, with the original brief, the decision and the earlier report. It goes on from the logbook.
+6. For a blocked report, take no state from it. Read the task's state, round and findings with `status`, decide from them, and start a fresh lead on a new lead run, with the original brief, the decision and the earlier report. It goes on from the logbook. A lead that has no spawn tools is the exception: start no fresh lead until the owner says that the session runs on a v2 model.
 
 ## Thread limit
 
-Codex v2 allows 4 threads in a session by default: the chief and 3 children. So a lead and 2 helpers fill the default. When no thread is idle, a spawn fails with `AgentLimitReached`, and the setting is `agents.max_concurrent_threads_per_session`.
+Codex v2 allows 4 threads in a session by default: the chief and 3 children. So a lead and 2 helpers fill the default, and a third helper at the same time fails. When no thread is free, a spawn fails with `collab spawn failed: agent thread limit reached`, and the setting is `agents.max_concurrent_threads_per_session`. A finished or interrupted agent frees its thread. With the setting at 10, a lead ran 4 helpers at the same time.
 
-When a spawn of the chief fails so, wait for a running agent with `wait_agent`, then call `spawn_agent` again with the same task name. Ask the owner to set the limit to 10 before a task with a full team. An agent never changes that setting.
+When a spawn of the chief fails so, wait for a running agent with `wait_agent`, then call `spawn_agent` again with the same task name. One lead with one helper at a time stays inside the default. Three leads fill it, and then no lead can start a helper, so ask the owner to set the limit to 10 before you run more than one lead. An agent never changes that setting.
 
 ## The report check
 
 The plugin's report check (a `SubagentStop` hook) reads each agent whose task name starts with `sage_`. When the agent stops and its last message has no field of the report (`STATUS` to `BRANCH`), the check continues the agent once and names the missing fields. At the second stop, the agent stops, and you see one plain line that names the fields that are still missing. Read that report as it is. Other agents pass.
+
+A field counts only at the start of a line that is not indented, not a list item and not in a code block. The report of a code, security or UX reviewer or of QA also goes through the reader of Claude Code, also when its task name has no run. When the reader cannot read that report, the check continues the agent once with the reason. At the second stop, the agent stops.
 
 The check runs only after you trust the plugin hooks in Codex.
 

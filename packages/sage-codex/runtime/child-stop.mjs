@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { readAdmission, completeAdmission, interruptAdmission, REPORT_FIELDS, missingReportFields } from "sage-core";
+import { readAdmission, completeAdmission, interruptAdmission, REPORT_FIELDS, missingFields } from "sage-core";
 import { checkPreparedRunTarget } from "./run-assignment.mjs";
 import { settleNativeWrites } from "./task-settle.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
@@ -149,7 +149,7 @@ export async function childStopOutput(input, context, loadPolicy) {
     reason: "After compaction, read your current assignment with sage_read_assignment before completing this task." };
   // A native terminal record ends correction. Otherwise ask once, as Claude does.
   if (result.decision === "stop-observed" && !stop_hook_active) {
-    const missing = missingReportFields(last_assistant_message);
+    const missing = missingFields(REPORT_FIELDS, last_assistant_message);
     if (missing.length) return { decision: "block", reason: `Sage: your report has no ${missing.join(", ")}. End with all required fields: ${REPORT_FIELDS.join(", ")}, each at the start of a line, with "none" where a field has nothing.` };
   }
   return {};

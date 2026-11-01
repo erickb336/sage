@@ -35,7 +35,7 @@ const CODEX_HOST = {
 };
 
 /** The Codex versions (major.minor, both ends included) that sage was checked with. */
-export const TESTED_CODEX = ["0.160", "0.164"];
+export const TESTED_CODEX = ["0.160", "0.166"];
 
 const AUTOPILOT_ON ="sage: autopilot is on. In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. After a task's clean cycles and a passing merge_check, merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.";
 const UNKNOWN = `sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (${TESTED_CODEX.join(" to ")}).`;

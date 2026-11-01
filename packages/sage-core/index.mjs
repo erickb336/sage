@@ -25,8 +25,8 @@ export { renderBoardHtml, renderAgentsHtml, renderProgramsHtml, renderBoardText,
 export { boardView, landingRule } from "./board-view.mjs";
 export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
 
-export { REPORT_FIELDS, missingReportFields, parseReport } from "./report.mjs";
-export { FINDING_FORM, RESULT_WORDS, cleanReport, fieldsOf, readReport } from "./report-reader.mjs";
+export { REPORT_FIELDS, parseReport } from "./report.mjs";
+export { FINDING_FORM, RESULT_WORDS, cleanReport, fieldsOf, missingFields, readReport } from "./report-reader.mjs";
 
 export { roleEditDenied, TEAM } from "./role-policy.mjs";
 
