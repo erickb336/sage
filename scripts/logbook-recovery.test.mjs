@@ -305,16 +305,18 @@ function linkedProjects(t) {
   git('init', '-q', '-b', 'main', first);
   git('-C', first, 'commit', '-q', '--allow-empty', '-m', 'first');
   git('clone', '-q', first, second);
-  const checkout = project => ({ project, env, run: (provider, ...args) => provider([...args, '--project', project], env) });
+  let actor = []; // a write of a shared logbook names its chief (T604): after the links, each call here acts as one chief
+  const checkout = project => ({ project, env, run: (provider, ...args) => provider([...args, '--project', project, ...actor], env) });
   const one = checkout(first), two = checkout(second);
   one.run(codex, 'link', '--separate');
   const dir = one.run(codex, 'logbook');
   two.run(claude, 'link', '--to', basename(dir));
+  actor = ['--chief', tool.chiefFor(first, 'test-chief', env)];
   one.run(codex, 'task', 'add', '--priority', 'P2', '--title', 'Task of the project', '--size', 'tiny');
   Object.assign(one, { dir }); Object.assign(two, { dir });
   const logbooks = root => existsSync(root) ? readdirSync(root).filter(name => existsSync(join(root, name, 'tasks.tsv'))) : [];
   const providerLogbooks = () => [...logbooks(join(env.CLAUDE_CONFIG_DIR, 'sage')), ...logbooks(join(env.CODEX_HOME, 'sage'))];
-  return { base, env, shared: env.SAGE_SHARED_HOME, dir, one, two, providerLogbooks };
+  return { base, env, shared: env.SAGE_SHARED_HOME, dir, one, two, actor, providerLogbooks };
 }
 
 for (const [name, provider] of [['Claude', claude], ['Codex', codex]]) {
@@ -337,9 +339,10 @@ for (const [name, provider] of [['Claude', claude], ['Codex', codex]]) {
 }
 
 test('T593 a path to a linked checkout through a link is no link to the logbook: the repair works', t => {
-  const { base, dir, env, one } = linkedProjects(t), file = stuck(t, one), link = join(base, 'first-link');
+  const { actor, base, dir, env, one } = linkedProjects(t), file = stuck(t, one), link = join(base, 'first-link');
   symlinkSync(one.project, link);
-  assert.match(claude([...REPAIR, '--project', link], env), /The saved change \(request R1\) is lost: .*The logbook check passes/);
+  assert.throws(() => claude([...REPAIR, '--project', link], env), /a command with no chief only reads: add --chief/, 'a repair is a write of any chief');
+  assert.match(claude([...REPAIR, '--project', link, ...actor], env), /The saved change \(request R1\) is lost: .*The logbook check passes/);
   assert.deepEqual(lostFiles(dir), [`${MARKER}.lost-1`]);
   assert.equal(existsSync(file), false);
 });
@@ -356,12 +359,12 @@ test('T593 a linked project: the repair refuses a change that can finish, and a 
 });
 
 test('T593 a shared root reached through a link: the repair refuses, and the setting that the line names finishes the change', t => {
-  const { base, dir, env, one, two, shared } = linkedProjects(t);
+  const { actor, base, dir, env, one, two, shared } = linkedProjects(t);
   savedUsage(t, one);
-  const link = join(base, 'shared-link'), linked = { ...env, SAGE_SHARED_HOME: link }, write = ['task', 'add', '--priority', 'P2', '--title', 'Saved', '--size', 'tiny', '--project', two.project], saved = snapshot(shared);
+  const link = join(base, 'shared-link'), linked = { ...env, SAGE_SHARED_HOME: link }, write = ['task', 'add', '--priority', 'P2', '--title', 'Saved', '--size', 'tiny', '--project', two.project, ...actor], saved = snapshot(shared);
   symlinkSync(shared, link);
   assert.throws(() => claude(write, linked), { message: STUCK });
-  assert.throws(() => claude([...REPAIR, '--project', two.project], linked), { message: LINKED(dir, join(link, basename(dir)), shared, 'SAGE_SHARED_HOME') });
+  assert.throws(() => claude([...REPAIR, '--project', two.project, ...actor], linked), { message: LINKED(dir, join(link, basename(dir)), shared, 'SAGE_SHARED_HOME') });
   assert.deepEqual(snapshot(shared), saved);
   claude(write, { ...env, SAGE_SHARED_HOME: shared });
   assert.equal(row(dir, 'runs', 'R1').tokens, '50', 'the real path finishes the change');
