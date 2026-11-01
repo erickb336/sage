@@ -90,7 +90,7 @@ export function handle(input, state, env = process.env) {
 }
 
 /** The mode files: under the Codex logbook root (SAGE_HOME, or CODEX_HOME/sage), as the Codex state tool finds it. */
-export const modeDirectory = (env) => resolve(env.SAGE_HOME ?? join(env.CODEX_HOME ?? join(homedir(), ".codex"), "sage"), ".hooks", "codex");
+export const modeDirectory = (env) => resolve(env.SAGE_HOME ?? join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage"), ".hooks", "codex");
 
 /** The hook's whole answer to one parsed event: it reads and saves the session's mode file with the core reader. */
 export function answer(input, env) {
