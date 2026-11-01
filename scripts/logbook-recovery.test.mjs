@@ -10,7 +10,7 @@ import { sage as claude, mergeCheck } from '../plugins/sage/skills/sage/sage.mjs
 import { tool } from '../plugins/sage-codex/skills/sage/sage.mjs';
 
 const codex = tool.sage, SHA = 'a'.repeat(40), MARKER = 'review-pending.json';
-const STUCK = 'This project cannot save changes, and nothing changed. Other projects work. Ask the chief to restore the logbook from a copy, then run the command again. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.';
+const STUCK = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. The owner restores the folder that `sage logbook` prints from a backup; rows newer than the backup are lost. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.';
 
 function fixture(t, names = ['one']) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'sage-recovery-')));
@@ -122,7 +122,7 @@ test('T578 the merge check skips another project that holds a saved change, with
   const before = readFileSync(join(two.dir, MARKER), 'utf8');
   const verdict = mergeCheck(SHA, env, { project: one.project });
   assert.equal(verdict.ok, true, verdict.reason);
-  assert.match(verdict.reason, new RegExp(`Skipped .*${basename(two.dir)}: a saved change waits there`));
+  assert.match(verdict.reason, new RegExp(`Skipped .*${basename(two.dir)}: a saved change is incomplete there`));
   assert.equal(readFileSync(join(two.dir, MARKER), 'utf8'), before, 'the merge check of a project settles only that project');
 });
 
@@ -143,7 +143,7 @@ for (const [name, damage] of Object.entries(DAMAGE)) test(`T578 a saved change t
   damage(join(two.dir, MARKER));
   const other = mergeCheck(SHA, env, { project: one.project });
   assert.equal(other.ok, true, other.reason);
-  assert.match(other.reason, new RegExp(`Skipped ${basename(two.dir)}: a saved change waits there`));
+  assert.match(other.reason, new RegExp(`Skipped ${basename(two.dir)}: a saved change is incomplete there`));
   const own = mergeCheck(SHA, env, { project: two.project });
   assert.equal(own.ok, false);
   assert.equal(own.reason, `the merge check refuses this merge: ${STUCK}`);
@@ -157,7 +157,7 @@ test('T578 a saved change that names the commit refuses the merge with no ledger
     assert.equal(tool.read(two.dir, 'ledger').length, 0);
     const verdict = mergeCheck(SHA, env, { project: one.project });
     assert.equal(verdict.ok, false);
-    assert.equal(verdict.reason, `the merge check refuses this merge: Project ${basename(two.dir)} holds a saved change that names ${SHA.slice(0, 7)}. Any write in that project finishes it. Then check again.`);
+    assert.equal(verdict.reason, `the merge check refuses this merge: Project ${basename(two.dir)} holds a saved change that names ${SHA.slice(0, 7)}. It is incomplete. Any write in that project finishes it or says what to do. Then check again.`);
   }
 });
 
@@ -172,12 +172,12 @@ test('T578 a marker of another project that the check cannot read refuses the me
   assert.match(verdict.reason, /^the merge check cannot read .*review-pending\.json \(EACCES\), so it refuses every merge\./);
 });
 
-test('T578 the merge note names the project, not its path, and asks for nothing', t => {
+test('T578 the merge note names the project, not its path', t => {
   const f = fixture(t, ['one', 'two']), { env, one, two } = f;
   passing(one);
   savedUsage(t, two);
   const { reason } = mergeCheck(SHA, env, { project: one.project });
-  assert.ok(reason.endsWith(`Skipped ${basename(two.dir)}: a saved change waits there, and it has no row for this commit. No action is needed. Any write there finishes the change.`), reason);
+  assert.ok(reason.endsWith(`Skipped ${basename(two.dir)}: a saved change is incomplete there, and it has no row for this commit. Any write there finishes it or says what to do.`), reason);
   assert.equal(reason.includes(two.dir), false);
 });
 
@@ -185,13 +185,15 @@ test('T578 a read asks for any write, and the CLI prints the short line with no 
   const { env, one } = fixture(t);
   savedUsage(t, one);
   const asked = tool.command(['status', '--project', one.project], env);
-  assert.deepEqual(asked, { code: 1, text: 'sage: A saved change is incomplete. Any write in this project finishes it. Then run this command again.' });
+  assert.deepEqual(asked, { code: 1, text: 'sage: A saved change is incomplete. Any write in this project finishes it or says what to do. Then run this command again.' });
   one.run(claude, 'init');
   assert.equal(existsSync(join(one.dir, MARKER)), false);
   assert.equal(row(one.dir, 'runs', 'R1').tokens, '50');
   writeFileSync(join(one.dir, MARKER), '{}');
   const stuck = tool.command(['task', 'add', '--priority', 'P2', '--title', 'Stopped', '--size', 'tiny', '--project', one.project], env);
   assert.deepEqual(stuck, { code: 1, text: `sage: ${STUCK}` });
+  // The line sends the owner to this command, so it must work with the stuck marker.
+  for (const provider of [claude, codex]) assert.equal(one.run(provider, 'logbook').replace(/^logbook /, '').trim(), one.dir);
 });
 
 test('T578 a file error while a saved change finishes keeps the change, and the command can run again', t => {
@@ -251,7 +253,7 @@ function held(t) {
   return { env, one };
 }
 
-for (const step of ['tasks', 'runs', 'decisions']) for (const after of [false, true]) test(`T578 a rollback stopped ${after ? 'after' : 'before'} ${step}: the next write restores the before tables`, t => {
+for (const step of ['tasks', 'runs', 'decisions', 'clear']) for (const after of [false, true]) test(`T578 a rollback stopped ${after ? 'after' : 'before'} ${step}: the next write restores the before tables`, t => {
   const { env, one } = held(t), before = tables(one.dir);
   const first = stopAt(t, one.dir, 'receipt', false, UPDATES);
   assert.throws(() => update(env, one, { state: 'briefed' }, answer(true)), uncertain);
@@ -261,8 +263,26 @@ for (const step of ['tasks', 'runs', 'decisions']) for (const after of [false, t
   const second = stopAt(t, one.dir, step, after, UPDATES);
   assert.throws(() => one.run(claude, 'init'), /file error \(EIO\)/);
   second();
-  assert.equal(existsSync(join(one.dir, MARKER)), true);
+  assert.equal(existsSync(join(one.dir, MARKER)), !(step === 'clear' && after));
   one.run(claude, 'init');
+  assert.equal(existsSync(join(one.dir, MARKER)), false);
+  assert.deepEqual(tables(one.dir), before);
+  assert.equal(receipts(one.dir), 0);
+});
+
+// The first stop leaves the update on some tables only, and the settle that undoes it stops too.
+for (const [first, second] of [['runs', 'tasks'], ['decisions', 'runs']]) test(`T578 a settle stopped at ${second}, after a stop at ${first} left mixed tables: the next write restores the before tables`, t => {
+  const { env, one } = held(t), before = tables(one.dir);
+  const publish = stopAt(t, one.dir, first, false, UPDATES);
+  assert.throws(() => update(env, one, { state: 'briefed' }, answer(true)), uncertain);
+  publish();
+  const same = dir => tables(dir).filter((text, index) => text === before[index]).length;
+  assert.equal(same(one.dir), first === 'runs' ? 2 : 1, 'the first stop left mixed tables');
+  const settle = stopAt(t, one.dir, second, false, UPDATES);
+  assert.throws(() => one.run(claude, 'init'), /file error \(EIO\)/);
+  settle();
+  assert.notEqual(same(one.dir), 3, 'the stopped settle left the tables mixed');
+  one.run(codex, 'init');
   assert.equal(existsSync(join(one.dir, MARKER)), false);
   assert.deepEqual(tables(one.dir), before);
   assert.equal(receipts(one.dir), 0);

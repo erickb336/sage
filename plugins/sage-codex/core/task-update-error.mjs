@@ -1,5 +1,5 @@
 /** The one line for a saved change that cannot finish, in Claude and in Codex. */
-export const STUCK_WRITE = 'This project cannot save changes, and nothing changed. Other projects work. Ask the chief to restore the logbook from a copy, then run the command again. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.';
+export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. The owner restores the folder that `sage logbook` prints from a backup; rows newer than the backup are lost. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.';
 // Public update guidance comes only from these codes, never an exception's private text.
 const messages = {
   'stale-version': 'The task changed. Read it again with sage_read_task, review the current state, and submit a new request UUID.',

@@ -71,7 +71,7 @@ export function hasPendingWrite(dir) {
   catch (error) { if (["ENOTDIR", "ELOOP"].includes(error.code)) return false; throw error; }
 }
 export function assertNoPendingWrite(dir) {
-  if (hasPendingWrite(dir)) throw new RecordedWriteError("A saved change is incomplete. Any write in this project finishes it. Then run this command again.");
+  if (hasPendingWrite(dir)) throw new RecordedWriteError("A saved change is incomplete. Any write in this project finishes it or says what to do. Then run this command again.");
 }
 /** Do the marker's bytes hold this text? For a reader that must not settle it. A marker that is gone or not a plain file holds nothing here: its own project refuses it when it settles. Any other read error goes to the caller. */
 export function pendingNames(dir, text) {

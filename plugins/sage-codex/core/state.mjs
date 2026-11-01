@@ -2073,7 +2073,7 @@ function boardLandingCheck(sha, env, logbook, pr) {
 
 function assessMerge(sha, env, options, logbook = null) {
   const skipped = [], verdict = judgeMerge(sha, env, options, logbook, skipped);
-  return skipped.length ? { ...verdict, reason: `${verdict.reason} Skipped ${skipped.map(visible).join(", ")}: a saved change waits there, and it has no row for this commit. No action is needed. Any write there finishes the change.` } : verdict;
+  return skipped.length ? { ...verdict, reason: `${verdict.reason} Skipped ${skipped.map(visible).join(", ")}: a saved change is incomplete there, and it has no row for this commit. Any write there finishes it or says what to do.` } : verdict;
 }
 
 function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, logbook, skipped) {
@@ -2095,10 +2095,10 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
     const [listed, strangers, absent] = [known(root, undefined, undefined, readOnly), [], []];
     if (!listed) return { ok: false, reason: `the known project list is missing. This read-only check does not make it: sage merge-check --sha <sha> makes ${join(root, "projects.tsv")} or says how to get it back.` };
     const each = (logbook === null ? folders(root) : [join(root, logbook)]).flatMap((dir) => {
-      // A saved change stops only the project that holds it: this check looks at that logbook only when it names this commit.
+      // A saved change stops the project that holds it: this check refuses for that logbook only when it names this commit, or when its marker cannot be read.
       if (hasPendingWrite(dir)) {
         if (!readRegular(join(dir, "ledger.tsv"))?.includes(sha) && !pendingNames(dir, sha)) return skipped.push(basename(dir)), [];
-        throw new RecordedWriteError(`Project ${visible(basename(dir))} holds a saved change that names ${sha.slice(0, 7)}. Any write in that project finishes it. Then check again.`);
+        throw new RecordedWriteError(`Project ${visible(basename(dir))} holds a saved change that names ${sha.slice(0, 7)}. It is incomplete. Any write in that project finishes it or says what to do. Then check again.`);
       }
       // A folder with tasks.tsv, also a link, is a logbook, and it must pass the integrity check. A folder without it is
       // none: init has not finished it, or it lost its tasks. Its verdicts name tasks that it does not have, so they refuse.

@@ -12,6 +12,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
 import { keepReport, sage as sageTool } from "../plugins/sage/skills/sage/sage.mjs";
+import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
 import { backed } from "./verdict-backing.mjs";
 
 const TOOL = fileURLToPath(new URL("../plugins/sage/skills/sage/sage.mjs", import.meta.url));
@@ -334,9 +335,36 @@ test("T578: merge refuses a saved change that cannot finish, and it keeps the ch
   const { w } = savedChange(t);
   const marker = join(w.logbook, "review-pending.json");
   writeFileSync(marker, "{}");
-  refused(w.pr("merge", "T1"), /merge check: the merge check refuses this merge: This project cannot save changes, and nothing changed\./);
+  refused(w.pr("merge", "T1"), /merge check: the merge check refuses this merge: This command changed nothing\. This project cannot save changes; other projects work\. Tell the owner\./);
   assert.equal(readFileSync(marker, "utf8"), "{}");
   assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0);
+});
+
+test("T578: merge reads the task again after the merge check settles: a stopped update to verified goes back, and no merge runs", (t) => {
+  const w = world();
+  const head = w.commit("b.txt");
+  w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
+  w.pr("create", "T1");
+  w.forge("T1", "state", "verifying");
+  for (const kind of ["review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
+  const target = { project: w.at("project"), task: "T1" };
+  const { version } = codex.readTaskSnapshot(target, w.env);
+  const { linkSync: link } = fs;
+  t.mock.method(fs, "linkSync", (...args) => {
+    if (String(args[1]).startsWith(join(w.logbook, "task-updates"))) throw Object.assign(Error("Injected stop"), { code: "EIO" });
+    return link(...args);
+  });
+  syncBuiltinESMExports();
+  const said = { decide: (digest) => ({ digest, accepted: true, reason: "" }), acknowledge() {}, release() {}, void() {}, history() {} };
+  const update = { ...target, owner: "chief", request: "00000000-0000-4000-8000-000000000578", version, changes: { state: "verified" } };
+  assert.throws(() => codex.updateRequestedTask(update, w.env, said), { code: "uncertain-outcome" });
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+  assert.equal(w.task("T1").state, "verified", "the stop left the update on the tables");
+  refused(w.pr("merge", "T1"), /a saved change finished and changed T1: run sage-pr merge T1 again/);
+  assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0);
+  assert.equal(w.task("T1").state, "verifying");
+  refused(w.pr("merge", "T1"), /T1 is verifying, not verified or pr-ready/);
 });
 
 test("R1708-1: merge runs the head branch rule too: a task that shares the branch but is not on the pull request refuses it", () => {

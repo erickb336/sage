@@ -5631,7 +5631,7 @@ test('T578: a saved change that cannot finish stops even a historical retry, and
   const before = readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8');
   assert.throws(() => f.update(first), { code: 'stuck-write' });
   const client = await connect(t, f, '0.160.0', '', 'sage_update_task');
-  assert.equal((await client.call(first)).error, 'Sage could not update this task. [stuck-write] This project cannot save changes, and nothing changed. Other projects work. Ask the chief to restore the logbook from a copy, then run the command again. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.');
+  assert.equal((await client.call(first)).error, 'Sage could not update this task. [stuck-write] This command changed nothing. This project cannot save changes; other projects work. Tell the owner. The owner restores the folder that `sage logbook` prints from a backup; rows newer than the backup are lost. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.');
   await client.close();
   assert.equal(readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8'), before);
   assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), true);
@@ -5980,7 +5980,7 @@ test('T578: MCP settles a stopped update for another owner, and it names corrupt
   const file = join(f.assignmentLogbook, 'review-pending.json'), original = readFileSync(file, 'utf8');
   writeFileSync(file, '{}');
   const corrupt = await client.call(request);
-  assert.match(corrupt.error, /\[stuck-write\] This project cannot save changes/);
+  assert.match(corrupt.error, /\[stuck-write\] This command changed nothing\. This project cannot save changes/);
   assert.doesNotMatch(corrupt.error, new RegExp(f.dir)); assert.doesNotMatch(corrupt.error, /private uncertainty detail|codex:/);
   assert.deepEqual(updateTableBytes(f), before);
   writeFileSync(file, original);

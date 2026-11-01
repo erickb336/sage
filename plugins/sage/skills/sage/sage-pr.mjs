@@ -462,6 +462,9 @@ function merge({ project, dir, t, branch, head, url, repo }, temp, env) {
   // sagePr holds this logbook's lock, and withLock is not reentrant.
   const r = mergeCheck(head, env, { pr, head: branch, project, locked: true });
   if (!r.ok) no(`merge check: ${r.reason}`);
+  // The merge check can settle a saved change, and record() read the logbook before that: the settled records decide (R2087-1).
+  const now = record(t.id, "merge", env);
+  if (JSON.stringify([now.t, now.head]) !== JSON.stringify([t, head])) no(`a saved change finished and changed ${t.id}: run sage-pr merge ${t.id} again`);
   const moved = ". If GitHub says that the head changed, the branch moved after review: review the new head and record its verdicts";
   let out, failed;
   try {
