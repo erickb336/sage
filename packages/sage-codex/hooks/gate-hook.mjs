@@ -476,7 +476,8 @@ const partsOf = (path) => path.toLowerCase().split("/");
 const asWord = (path) => `: '${path.replaceAll("'", "'\\''")}'`;
 /**
  * The words of a command that may lead out of the project, as paths. A word with a variable has no known place, and
- * neither has any word of a line that the reader cannot read (it stops at "cd ~"), so each of those counts.
+ * neither has any word of a line that the reader cannot read (it stops at "cd ~"), so each of those counts. A checkout
+ * of the same repository, such as a task worktree in a sibling folder, is the project.
  */
 function leavingPaths(command, env, cwd) {
   const home = env.HOME || homedir(), root = projectRoot(cwd), read = wordsOf(command, cwd, env);
@@ -486,8 +487,13 @@ function leavingPaths(command, env, cwd) {
     const path = start(word);
     if (/[$`]/.test(path)) return [path];
     const place = relative(root, resolve(dir, path));
-    return place === ".." || place.startsWith("../") || isAbsolute(place) ? [resolve(dir, path)] : [];
+    return (place === ".." || place.startsWith("../") || isAbsolute(place)) && !sameRepository(resolve(dir, path), cwd) ? [resolve(dir, path)] : [];
   });
+}
+/** Whether a path's nearest .git entry is a checkout of the cwd's repository. Core verifies it: a planted .git file is a project of its own. */
+function sameRepository(path, cwd) {
+  const top = projectRoot(path);
+  return existsSync(join(top, ".git")) && real(tool.projectRoot(top)) === real(tool.projectRoot(cwd));
 }
 /**
  * Whether a shell command names Codex's config file, which keeps the trust records of the hooks, or the folder of this

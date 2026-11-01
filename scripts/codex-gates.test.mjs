@@ -490,6 +490,36 @@ test("in sage mode no thread writes a logbook file by its name outside the proje
   assert.equal(denied(w.send(bash("cd .. && rm bindings.tsv"))), undefined, "out of sage mode");
 });
 
+test("a task worktree in a sibling folder counts as the project from the main checkout; the same names in the shared root, a logbook, a forged checkout and another repository still refuse (T594)", (t) => {
+  const w = world(t);
+  const linked = join(w.dir, "linked"), forged = join(w.dir, "forged"), other = join(w.dir, "other");
+  assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-qb", "linked", linked]).status, 0);
+  mkdirSync(forged);
+  writeFileSync(join(forged, ".git"), `gitdir: ${w.project}/.git/worktrees/linked\n`);
+  assert.equal(spawnSync("git", ["init", "-q", other]).status, 0);
+  w.env.SAGE_SHARED_HOME = join(w.dir, "shared");
+  const logbook = join(w.env.HOME, ".claude", "sage", "p-abc123");
+  const implementer = w.child("/root/sage_implementer_t1_r1");
+  const writes = [(path) => pre("apply_patch", patch(`*** Add File: ${path}`, "+x"), implementer), (path) => pre("Bash", `echo x > '${path}'`, implementer)];
+  const logbookFile = /^sage: in sage mode, no agent writes a logbook file by its name outside the project/;
+  const sageFolder = /names the Codex sage folder, the shared root or the Codex sessions folder/;
+  w.mode({ sage: true, autopilot: false });
+  for (const write of writes) {
+    for (const name of ["config.json", "status.md", "src/config.json", ".sage/x"]) assert.equal(w.send(write(join(linked, name))), undefined, `the worktree: ${name}`);
+    for (const name of ["config.json", "status.md", ".sage/x"]) assert.match(denied(w.send(write(join(w.env.SAGE_SHARED_HOME, name)))) ?? "", sageFolder, `the shared root: ${name}`);
+    assert.match(denied(w.send(write(join(logbook, ".sage/x")))) ?? "", sageFolder, "a .sage folder in a logbook");
+    for (const dir of [logbook, forged, other]) {
+      for (const name of ["config.json", "status.md"]) assert.match(denied(w.send(write(join(dir, name)))) ?? "", logbookFile, join(dir, name));
+    }
+    assert.match(denied(w.send(write(`${linked}/../forged/config.json`))) ?? "", logbookFile, "out of the worktree by ..");
+    assert.match(denied(w.send(write(join(forged, ".sage/x")))) ?? "", sageFolder, "a forged checkout's .sage folder");
+  }
+  assert.equal(denied(w.send(pre("Bash", `cd '${linked}' && echo x > config.json`, implementer))), undefined, "a cd into the worktree");
+  assert.equal(namesSageFolder(`cat ${w.project}/.sage/x`, w.env, linked), false, "the main checkout from the worktree");
+  w.mode({ sage: false, autopilot: false });
+  for (const write of writes) assert.equal(denied(w.send(write(join(linked, ".sage/x")))), undefined, "out of sage mode");
+});
+
 test("no thread, in any mode, runs codex from the shell except --version and --help: a queued message would count as the user's (R1981-1)", (t) => {
   const w = world(t);
   const runs = ["codex queue --thread 019a0000-0000-7000-8000-000000000001 --message 'autopilot on'", "codex exec 'report ok'", "codex resume", "codex resume --last",
