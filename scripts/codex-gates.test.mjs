@@ -1141,6 +1141,7 @@ test("a child's node run of a file that only has the state tool's name in it, or
     `rg -l x ${server} | node scripts/count.mjs`, `git diff | node scripts/count.mjs`, `node ${TOOL} logbook`, `node ${TOOL} logbook --project ${CWD}`,
     `node ${TOOL} standing`, `node ${TOOL} standing --project ${CWD}`];
   const writes = [`node ${TOOL} logbook repair --accept-loss runs --project ${CWD}`, `node ${TOOL} logbook --project ${CWD} repair --accept-loss runs`,
+    `node ${TOOL} logbook repair --accept-change-loss yes --project ${CWD}`,
     `node ${TOOL} standing add x --project ${CWD}`, `node ${TOOL} standing --project ${CWD} add x`];
   for (const mode of [{ sage: false }, { sage: true }]) {
     const g = fixed(mode);

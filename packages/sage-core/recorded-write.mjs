@@ -93,11 +93,20 @@ export function pendingRequest(dir) {
  */
 export function settlePendingWrite(dir, writers) {
   if (!hasPendingWrite(dir)) return false;
+  const { writer, saved } = savedWrite(dir, writers);
+  writer.settle(dir, saved);
+  return true;
+}
+/** Can a saved change finish? The checks of settlePendingWrite, with no write: it throws what the settle would throw. Call under the logbook lock. */
+export function verifyPendingWrite(dir, writers) {
+  const { writer, saved } = savedWrite(dir, writers);
+  writer.verify(dir, saved);
+}
+function savedWrite(dir, writers) {
   canonical(dir);
   const saved = decode(join(dir, PENDING));
   if (!Object.hasOwn(writers, String(saved?.schema))) fail();
-  writers[saved.schema].settle(dir, saved);
-  return true;
+  return { writer: writers[saved.schema], saved };
 }
 /** Guarded core consumers share one pending marker. Each saved change holds its whole receipt, so any writer publishes it. */
 export function recordedWrites({ schema, tables: TABLES, folder: FOLDER, name: NAME, receiptName, validate }) {
@@ -130,7 +139,7 @@ function readReceipt(dir, reference) {
   return value;
 }
 /** Pending intent preserves all before/after bytes. Settling refuses any unrelated table edit. */
-function settle(dir, pending) {
+function verify(dir, pending) {
   canonical(dir);
   if (!keys(pending, ["schema", "receipt", "tables"]) || pending.schema !== schema
     || !keys(pending.receipt, ["reference", "result"]) || !keys(pending.tables, TABLES)) fail();
@@ -146,6 +155,10 @@ function settle(dir, pending) {
   const folder = receiptFolder(dir), receipt = encode(pending.receipt);
   const existing = regular(join(folder, recordName(reference)));
   if (existing !== undefined && existing !== receipt) fail();
+  return { folder, receipt };
+}
+function settle(dir, pending) {
+  const { folder, receipt } = verify(dir, pending), { reference } = pending.receipt;
   mkdirSync(folder, { recursive: true, mode: 0o700 }); canonical(folder); sync(dir);
   for (const table of TABLES) {
     const file = `${table}.tsv`, value = pending.tables[table];
@@ -173,7 +186,7 @@ function commit(dir, receipt, after, beforePublish = () => {}) {
   return settle(dir, { schema, receipt, tables });
 }
 
-return { readVersion, readReceipt, settle, commit };
+return { readVersion, readReceipt, verify, settle, commit };
 }
 
 /**
@@ -234,12 +247,16 @@ export function coordinatedWrites({ schema, previousSchemas = [], tables: TABLES
   };
   const clear = dir => { unlinkSync(join(dir, PENDING)); sync(dir); };
   /** Step 3: the receipt decides. An old rejected receipt also restores "before". */
-  function settle(dir, saved) {
+  function verify(dir, saved) {
     canonical(dir);
     const intent = checkIntent(saved);
     checkCurrent(dir, intent);
     const receipt = readReceipt(dir, intent.reference);
     if (receipt && json(receipt.intent) !== json(intent)) fail();
+    return { intent, receipt };
+  }
+  function settle(dir, saved) {
+    const { intent, receipt } = verify(dir, saved);
     publishTables(dir, intent, receipt?.outcome.accepted ? "after" : "before");
     clear(dir);
   }
@@ -315,5 +332,5 @@ export function coordinatedWrites({ schema, previousSchemas = [], tables: TABLES
     assertNoPendingWrite(dir);
     return json(version);
   }
-  return { prepare, publish, settle, outcome, readReceipt, history, readVersion, authenticate };
+  return { prepare, publish, verify, settle, outcome, readReceipt, history, readVersion, authenticate };
 }

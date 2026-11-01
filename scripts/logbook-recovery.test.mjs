@@ -10,7 +10,7 @@ import { sage as claude, mergeCheck } from '../plugins/sage/skills/sage/sage.mjs
 import { tool } from '../plugins/sage-codex/skills/sage/sage.mjs';
 
 const codex = tool.sage, SHA = 'a'.repeat(40), MARKER = 'review-pending.json';
-const STUCK = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. The owner restores the folder that `sage logbook` prints from a backup; rows newer than the backup are lost. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.';
+const STUCK = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
 
 function fixture(t, names = ['one']) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'sage-recovery-')));
@@ -98,6 +98,173 @@ for (const [change, value] of [['schema', 99], ['hash', '0'.repeat(64)]]) test(`
   assert.equal(readFileSync(file, 'utf8'), bytes);
   assert.deepEqual(tables(one.dir), before);
   assert.match(two.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Goes on', '--size', 'tiny'), /T2/);
+});
+
+/** Every file of a logbook folder and its bytes, folders by name. */
+const snapshot = dir => Object.fromEntries(readdirSync(dir, { withFileTypes: true, recursive: true })
+  .map(entry => join(entry.parentPath, entry.name))
+  .map(file => [file, fs.statSync(file).isDirectory() ? 'folder' : readFileSync(file, 'utf8')]));
+const REPAIR = ['logbook', 'repair', '--accept-change-loss', 'yes'];
+const lostFiles = dir => readdirSync(dir).filter(name => name.startsWith(`${MARKER}.lost-`)).sort();
+/** A saved usage change that cannot finish: its hash no longer matches. The tables are at their "before" text. */
+function stuck(t, f) {
+  savedUsage(t, f);
+  const file = join(f.dir, MARKER), record = JSON.parse(readFileSync(file, 'utf8'));
+  record.hash = '0'.repeat(64);
+  writeFileSync(file, JSON.stringify(record) + '\n');
+  return file;
+}
+
+for (const [name, provider] of [['Claude', claude], ['Codex', codex]]) {
+  test(`T593 ${name}: after the owner accepts the loss, the marker is kept, the decision names it, and the next write works`, t => {
+    const { one } = fixture(t), file = stuck(t, one), bytes = readFileSync(file, 'utf8');
+    assert.throws(() => one.run(provider, 'task', 'add', '--priority', 'P2', '--title', 'Stopped', '--size', 'tiny'), { message: STUCK });
+    const out = one.run(provider, ...REPAIR), kept = `${file}.lost-1`;
+    assert.equal(out, `The saved change (request R1) is lost: ${MARKER} moved to ${kept}, and the decision is in decisions.tsv. A half-published update can leave mixed tables, where some tables hold the change and others do not. Sage does not repair them, so read the rows of the last work. The logbook check passes, and writes work again. The check reads each table alone, so it cannot show that the tables agree.`);
+    assert.equal(existsSync(file), false);
+    assert.equal(readFileSync(kept, 'utf8'), bytes);
+    const { decision, why, task } = tool.read(one.dir, 'decisions').at(-1);
+    assert.deepEqual({ decision, why, task }, { decision: `saved change (request R1) moved aside to ${kept}`, why: 'the owner accepts the loss of this saved change', task: '' });
+    assert.equal(row(one.dir, 'runs', 'R1').tokens, '', 'the lost change stays lost');
+    assert.match(one.run(provider, 'task', 'add', '--priority', 'P2', '--title', 'Saves again', '--size', 'tiny'), /T2/);
+    assert.equal(row(one.dir, 'tasks', 'T2').title, 'Saves again');
+  });
+
+  test(`T593 ${name}: the repair refuses a healthy logbook and a change that can finish, and it changes no file`, t => {
+    const { one } = fixture(t), before = snapshot(one.dir);
+    assert.throws(() => one.run(provider, ...REPAIR), { message: 'This logbook has no saved change, so there is nothing to repair. Nothing changed.' });
+    assert.deepEqual(snapshot(one.dir), before);
+    savedUsage(t, one);
+    const saved = snapshot(one.dir);
+    assert.ok(Object.keys(saved).some(file => file.endsWith(MARKER)), 'the saved change is there');
+    assert.throws(() => one.run(provider, ...REPAIR), { message: 'This saved change can finish, so it needs no repair: any write in this project finishes it. Nothing changed.' });
+    assert.deepEqual(snapshot(one.dir), saved);
+    one.run(provider, 'init');
+    assert.equal(row(one.dir, 'runs', 'R1').tokens, '50', 'the refused repair kept the change, and a write finishes it');
+  });
+}
+
+test('T593 the repair refuses a coordinated update that can finish, with no change', t => {
+  const { env, one } = held(t);
+  const stop = stopAt(t, one.dir, 'receipt', false, UPDATES);
+  assert.throws(() => update(env, one, { state: 'briefed' }, answer(true)), uncertain);
+  stop();
+  const saved = snapshot(one.dir);
+  assert.throws(() => one.run(claude, ...REPAIR), /This saved change can finish/);
+  assert.deepEqual(snapshot(one.dir), saved);
+});
+
+test('T593 a file error is no stuck change: the repair moves nothing, and the line says to run again', t => {
+  const { one } = fixture(t);
+  const file = stuck(t, one), saved = snapshot(one.dir);
+  const denied = denyOpen(t, file);
+  assert.throws(() => one.run(claude, ...REPAIR), /did not finish because of a file error \(EACCES\)/);
+  denied();
+  assert.deepEqual(snapshot(one.dir), saved);
+});
+
+test('T593 two repairs in a row keep two files, and each decision names its own', t => {
+  const { one } = fixture(t), file = stuck(t, one);
+  one.run(claude, ...REPAIR);
+  writeFileSync(file, 'second damaged marker');
+  one.run(codex, ...REPAIR);
+  assert.deepEqual(lostFiles(one.dir), [`${MARKER}.lost-1`, `${MARKER}.lost-2`]);
+  assert.equal(readFileSync(`${file}.lost-2`, 'utf8'), 'second damaged marker');
+  assert.notEqual(readFileSync(`${file}.lost-1`, 'utf8'), 'second damaged marker');
+  assert.deepEqual(tool.read(one.dir, 'decisions').filter(line => line.why.startsWith('the owner')).map(line => line.decision),
+    [`saved change (request R1) moved aside to ${file}.lost-1`, `saved change moved aside to ${file}.lost-2`]);
+});
+
+test('T593 the decision comes before the move: a move that fails leaves the marker, and the repair can run again', t => {
+  const { one } = fixture(t), file = stuck(t, one), { renameSync: original } = fs;
+  t.mock.method(fs, 'renameSync', (...args) => {
+    if (args[0] === file) throw Object.assign(Error('Injected stop'), { code: 'EIO' });
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  assert.throws(() => one.run(claude, ...REPAIR), /Injected stop/);
+  t.mock.restoreAll(); syncBuiltinESMExports();
+  assert.equal(existsSync(file), true);
+  assert.equal(tool.read(one.dir, 'decisions').at(-1).decision, `saved change (request R1) moved aside to ${file}.lost-1`);
+  one.run(claude, ...REPAIR);
+  assert.deepEqual(lostFiles(one.dir), [`${MARKER}.lost-1`]);
+});
+
+const MARKERS = {
+  'a folder': file => mkdirSync(file),
+  'a link': file => { writeFileSync(`${file}.target`, 'kept'); symlinkSync(`${file}.target`, file); },
+  'bytes that are not UTF-8': file => writeFileSync(file, Buffer.from([0xff, 0xfe])),
+};
+for (const [name, damage] of Object.entries(MARKERS)) test(`T593 the repair moves aside a marker that is ${name}, and never follows it`, t => {
+  const { one } = fixture(t), file = join(one.dir, MARKER);
+  damage(file);
+  one.run(claude, ...REPAIR);
+  assert.equal(existsSync(file), false);
+  assert.deepEqual(lostFiles(one.dir), [`${MARKER}.lost-1`]);
+  assert.match(one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Saves again', '--size', 'tiny'), /T2/);
+});
+
+test('T593 a table that the stuck change left damaged still fails the check: writes stop, and the table repair is the way on', t => {
+  const { one } = fixture(t);
+  savedUsage(t, one);
+  writeFileSync(join(one.dir, 'runs.tsv'), ''); // neither its before nor its after text
+  assert.throws(() => one.run(claude, 'init'), { message: STUCK });
+  const out = one.run(claude, ...REPAIR);
+  assert.match(out, /The saved change \(request R1\) is lost: .* The logbook check fails, so writes still stop: \S+runs\.tsv is empty \(0 bytes\).*logbook repair --accept-loss runs /);
+  assert.throws(() => one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Stopped', '--size', 'tiny'), /runs\.tsv is empty/);
+  one.run(claude, 'logbook', 'repair', '--accept-loss', 'runs');
+  assert.match(one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Saves again', '--size', 'tiny'), /T2/);
+});
+
+test('T593 mixed tables that are each whole stay as they are: the repair says so, and it does not restore them', t => {
+  const { env, one } = held(t), before = tables(one.dir);
+  const publish = stopAt(t, one.dir, 'runs', false, UPDATES);
+  assert.throws(() => update(env, one, { state: 'briefed' }, answer(true)), uncertain);
+  publish();
+  const mixed = tables(one.dir);
+  assert.notEqual(mixed[0], before[0], 'tasks hold the change');
+  assert.equal(mixed[1], before[1], 'runs do not');
+  const file = join(one.dir, MARKER), record = JSON.parse(readFileSync(file, 'utf8'));
+  record.hash = '0'.repeat(64);
+  writeFileSync(file, JSON.stringify(record) + '\n');
+  const out = one.run(claude, ...REPAIR);
+  assert.match(out, /A half-published update can leave mixed tables/);
+  assert.match(out, /The check reads each table alone, so it cannot show that the tables agree\.$/);
+  assert.equal(tables(one.dir)[0], mixed[0]);
+  assert.equal(tables(one.dir)[1], mixed[1]);
+});
+
+test('T593 a stuck change with a damaged decisions table: the repair refuses with the command that takes both, and that command works', t => {
+  const { one } = fixture(t), file = stuck(t, one), decisions = join(one.dir, 'decisions.tsv');
+  writeFileSync(decisions, '');
+  const saved = snapshot(one.dir);
+  assert.throws(() => one.run(claude, ...REPAIR), /The repair records its decision first, and decisions\.tsv fails the logbook check: .* Nothing changed\. If the owner accepts the loss of those rows too, run: sage logbook repair --accept-change-loss yes --accept-loss decisions --project <the project>\.$/);
+  assert.deepEqual(snapshot(one.dir), saved);
+  assert.throws(() => one.run(claude, 'logbook', 'repair', '--accept-loss', 'decisions'), { message: STUCK });
+  const out = one.run(claude, ...REPAIR, '--accept-loss', 'decisions');
+  assert.match(out, /^decisions\.tsv started again without rows; its old file is \S+decisions\.tsv\.lost-1\. The decision is in decisions\.tsv\. The saved change \(request R1\) is lost: /);
+  assert.deepEqual(lostFiles(one.dir), [`${MARKER}.lost-1`]);
+  assert.deepEqual(tool.read(one.dir, 'decisions').map(line => line.why), ['the user accepts the loss of its rows', 'the owner accepts the loss of this saved change']);
+  assert.equal(existsSync(file), false);
+  assert.match(one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Saves again', '--size', 'tiny'), /T2/);
+});
+
+test('T593 the flag takes only yes, and the repair still needs a named form', t => {
+  const { one } = fixture(t), file = stuck(t, one), saved = snapshot(one.dir);
+  assert.throws(() => one.run(claude, 'logbook', 'repair', '--accept-change-loss', 'no'), { message: '--accept-change-loss takes only yes. Run it only after the owner accepts the loss of the saved change.' });
+  assert.throws(() => one.run(claude, 'logbook', 'repair'), /logbook repair needs --accept-loss/);
+  assert.deepEqual(snapshot(one.dir), saved);
+  assert.equal(existsSync(file), true);
+});
+
+test('T593 after a repair, the merge check of the project works again', t => {
+  const f = fixture(t), { env, one } = f;
+  passing(one);
+  stuck(t, one);
+  assert.equal(mergeCheck(SHA, env, { project: one.project }).reason, `the merge check refuses this merge: ${STUCK}`);
+  one.run(claude, ...REPAIR);
+  const verdict = mergeCheck(SHA, env, { project: one.project });
+  assert.equal(verdict.ok, true, verdict.reason);
 });
 
 function passing(f) {

@@ -22,7 +22,7 @@ Each option takes a value: `--name value`, or `--name=value` for a value that st
 | --- | --- |
 | `init` | Makes the project's logbook and its standing orders. A new logbook has each table with only its header line. `init` writes tasks.tsv last, so a folder with tasks.tsv has every table. On an existing logbook it makes no table: a lost one refuses (see "The logbook check"). It adds the logbook's folder to the known project list, `projects.tsv` in the sage root, under the root's lock; it never removes a line. It checks the list and takes the root's lock before it writes the logbook, so a refusal there (a busy lock, a damaged or missing list) makes nothing. |
 | `projects rebuild --accept-listing yes` | Writes the known project list again: each folder of the sage root with tasks.tsv or ledger.tsv (`how` is `rebuild`), and prints each one. Run it only when the user asks for it, and show the user the listing: a folder that no project uses may be forged, so the user removes it and runs the rebuild again. A `projects.tsv` that is a folder refuses; a link is replaced by a regular file. |
-| `logbook` · `logbook repair --accept-loss <table>[,<table>...]` | Prints the logbook's folder. `repair` starts each named table that fails the logbook check again, without rows. Run it only after the user accepts the loss of their rows. Name every damaged table in one command, joined by commas (`--accept-loss tasks,ledger`): a repair refuses when another table fails too, and names the command with both. The old file stays beside each as `<table>.tsv.lost-<n>`, and the decision trail records each repair before the table starts again. A named table that passes the check refuses the whole command. |
+| `logbook` · `logbook repair --accept-loss <table>[,<table>...]` · `logbook repair --accept-change-loss yes` | Prints the logbook's folder. `repair --accept-loss` starts each named table that fails the logbook check again, without rows. Run it only after the user accepts the loss of their rows. Name every damaged table in one command, joined by commas (`--accept-loss tasks,ledger`): a repair refuses when another table fails too, and names the command with both. The old file stays beside each as `<table>.tsv.lost-<n>`, and the decision trail records each repair before the table starts again. A named table that passes the check refuses the whole command. `repair --accept-change-loss yes` is the way past a saved change that cannot finish (see "A saved change that cannot finish"). Only the chief runs it, after the owner's answer in the chat. |
 | `standing` · `standing add "<order>"` | Prints the standing orders as written, or adds one. Paste them into every brief. Tabs stay, CRLF line ends print as plain lines, and hidden characters are removed (see "Hidden characters"). |
 | `task add --title "<t>" --size tiny\|small\|large\|investigate [--risk auth,data,schema,money,secrets,input] [--add <blocks> --why "<reason>"] --priority P0\|P1\|P2\|P3 [--kind <kind>] [--waits <T,T>] [--program <PG>]` | Frames a task and its route. The size gives the least route. A risk adds the security review. `--add arena` on a tiny task also adds the code review, because a judge's graft is new code that nobody read. An investigation takes no build block: a build that it needs is its own task. Every task needs a priority, and `task add` refuses without one, with the scale: P0 the owner's current focus and what blocks it; P1 next: function or safety bugs, work in flight, pre-pilot items; P2 later: polish, hardening lows, follow-ups; P3 parked but kept. Give each task its priority on this scale. The kind is optional. The board shows both as tags on the task's card. A kind is one of: design, ui, orchestration, optimization, bug-fix, logbook, docs, security, providers, checks. Choose the task's main one. Another value refuses, with the list. |
 | `task <T> set priority=P0\|P1\|P2\|P3` · `task <T> set kind=<kind>\|none` | Sets the task's priority, or sets or clears (`none`) its kind, from the lists of `task add`. An open task's priority does not clear: only a merged, concluded or abandoned task takes `priority=none`. An older task with no priority still works: `status` names the open ones, the board marks each card "no priority", and you set one. A follow-up task of `finding move` gets P2. |
@@ -104,6 +104,24 @@ The programs table came after the others. A logbook made before it has no progra
 Limit: a table cut to only its header line is a table without rows. The check cannot tell it from a new table.
 
 A folder without tasks.tsv is no logbook: `init` has not finished it. `init` finishes it when its tables have no rows. When they have rows, its task list is lost, and `init` refuses: restore tasks.tsv, or repair it.
+
+## A saved change that cannot finish
+
+Each write starts by finishing or undoing a saved change that an earlier write left. Sage never drops a saved change by itself. When the change cannot finish, every write and merge of that project refuses with one line, and other projects go on. The line names two ways out:
+
+1. **With a backup:** the owner restores the folder that `sage logbook` prints. Rows newer than the backup are lost.
+2. **With no backup:** ask the owner in the chat to accept the loss of this saved change. After the answer, run `logbook repair --accept-change-loss yes`. This is the one step that passes a saved change, and it needs the owner's answer each time.
+
+What the repair does:
+
+- It refuses, and changes nothing, on a logbook with no saved change and on a saved change that can finish. Any write finishes that one.
+- It writes a decision row first. The row names the kept file and says that the owner accepts the loss.
+- It moves `review-pending.json` aside as `review-pending.json.lost-<n>`, and never deletes it. Each repair keeps its own file.
+- It does not repair the tables, and it says so. A half-published update can leave mixed tables: some tables hold the change and others do not. Its output ends with the result of the logbook check.
+
+When the check fails, the output prints the refusal, and the table repair above applies. The check reads each table alone, so tables that are each whole but do not agree pass it: read the rows of the last work.
+
+When decisions.tsv fails the check, the repair cannot write its decision, and it prints the command that takes both losses: `logbook repair --accept-change-loss yes --accept-loss decisions`.
 
 ## Hidden characters
 

@@ -5765,11 +5765,26 @@ test('T578: a saved change that cannot finish stops even a historical retry, and
   const before = readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8');
   assert.throws(() => f.update(first), { code: 'stuck-write' });
   const client = await connect(t, f, '0.160.0', '', 'sage_update_task');
-  assert.equal((await client.call(first)).error, 'Sage could not update this task. [stuck-write] This command changed nothing. This project cannot save changes; other projects work. Tell the owner. The owner restores the folder that `sage logbook` prints from a backup; rows newer than the backup are lost. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.');
+  assert.equal((await client.call(first)).error, 'Sage could not update this task. [stuck-write] This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.');
   await client.close();
   assert.equal(readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8'), before);
   assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), true);
   assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.at(-1).released, undefined);
+});
+
+test('T593: after the owner accepts the loss of a stuck update, its journal row closes and the next update saves', async t => {
+  const f = await nativeTaskUpdateFixture(t), second = f.request({ title: 'Lost title' }, 'a4444444-4444-4444-8444-444444444444');
+  const { run, coordination } = await taskUpdateCoordinator(f, second);
+  assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected outage'); } }));
+  appendFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'unrelated damaged row\n');
+  assert.throws(() => f.update(f.request({ title: 'Stopped' }, 'a5555555-5555-4555-8555-555555555555')), { code: 'stuck-write' });
+  f.assignmentCli('logbook', 'repair', '--accept-change-loss', 'yes');
+  const marker = join(f.assignmentLogbook, 'review-pending.json');
+  assert.equal(existsSync(marker), false);
+  assert.equal(existsSync(`${marker}.lost-1`), true);
+  assert.equal(f.update(f.request({ title: 'After the repair' }, 'a6666666-6666-4666-8666-666666666666')).decision, 'task-updated');
+  assert.equal(f.snapshot().task.title, 'After the repair');
+  assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.find(row => row.update.request === second.request).void !== undefined, true);
 });
 
 for (const sage of [true, false]) test(`T13: managed ${sage ? 'on' : 'off'} tool refuses a transaction begun during evaluation`, async t => {
