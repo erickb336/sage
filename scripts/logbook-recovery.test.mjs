@@ -1,5 +1,6 @@
 import './test-env.mjs';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -9,6 +10,7 @@ import { sage as claude, mergeCheck } from '../plugins/sage/skills/sage/sage.mjs
 import { tool } from '../plugins/sage-codex/skills/sage/sage.mjs';
 
 const codex = tool.sage, SHA = 'a'.repeat(40), MARKER = 'review-pending.json';
+const STUCK = 'This project cannot save changes, and nothing changed. Other projects work. Ask the chief to restore the logbook from a copy, then run the command again. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.';
 
 function fixture(t, names = ['one']) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'sage-recovery-')));
@@ -28,12 +30,12 @@ const tables = dir => ['tasks', 'runs', 'decisions'].map(table => readFileSync(j
 const row = (dir, table, id) => tool.read(dir, table).find(value => value.id === id);
 
 /** Stop one write at a file step: before or after the file call of that step, as a crash there would. */
-function stopAt(t, dir, step, after) {
+function stopAt(t, dir, step, after, folder = 'usage-requests') {
   const method = ['intent', 'receipt'].includes(step) ? 'linkSync' : step === 'clear' ? 'unlinkSync' : 'renameSync';
   const original = fs[method]; let hit = false;
   t.mock.method(fs, method, (...args) => {
     const to = String(args[method === 'unlinkSync' ? 0 : 1]);
-    const matches = step === 'receipt' ? to.startsWith(join(dir, 'usage-requests') + '/')
+    const matches = step === 'receipt' ? to.startsWith(join(dir, folder) + '/')
       : to === join(dir, ['intent', 'clear'].includes(step) ? MARKER : `${step}.tsv`);
     if (!hit && matches) {
       hit = true;
@@ -84,7 +86,7 @@ test('T578 a read with no lock shows a saved change and never settles it', t => 
   assert.equal(readFileSync(join(one.dir, MARKER), 'utf8'), before);
 });
 
-for (const [change, value] of [['schema', 99], ['hash', '0'.repeat(64)]]) test(`T578 a saved change with a bad ${change} cannot finish: it names the request and stops only its project`, t => {
+for (const [change, value] of [['schema', 99], ['hash', '0'.repeat(64)]]) test(`T578 a saved change with a bad ${change} cannot finish: it stops only its project`, t => {
   const f = fixture(t, ['one', 'two']), { one, two } = f;
   savedUsage(t, one);
   const file = join(one.dir, MARKER), record = JSON.parse(readFileSync(file, 'utf8'));
@@ -92,7 +94,7 @@ for (const [change, value] of [['schema', 99], ['hash', '0'.repeat(64)]]) test(`
   const bytes = JSON.stringify(record) + '\n';
   writeFileSync(file, bytes);
   const before = tables(one.dir);
-  assert.throws(() => one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Stopped', '--size', 'tiny'), /saved change \(request R1\) cannot finish/);
+  assert.throws(() => one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Stopped', '--size', 'tiny'), { message: STUCK });
   assert.equal(readFileSync(file, 'utf8'), bytes);
   assert.deepEqual(tables(one.dir), before);
   assert.match(two.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Goes on', '--size', 'tiny'), /T2/);
@@ -100,6 +102,17 @@ for (const [change, value] of [['schema', 99], ['hash', '0'.repeat(64)]]) test(`
 
 function passing(f) {
   f.run(claude, 'verdict', 'T1', '--kind', 'checks-pass', '--sha', SHA);
+}
+
+/** Open of one file fails with EACCES, as a folder with the wrong permissions does for any user. */
+function denyOpen(t, file) {
+  const { openSync: original } = fs;
+  t.mock.method(fs, 'openSync', (...args) => {
+    if (args[0] === file) throw Object.assign(Error('Injected denial'), { code: 'EACCES', path: file });
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  return () => { t.mock.restoreAll(); syncBuiltinESMExports(); };
 }
 
 test('T578 the merge check skips another project that holds a saved change, with a note', t => {
@@ -133,7 +146,7 @@ for (const [name, damage] of Object.entries(DAMAGE)) test(`T578 a saved change t
   assert.match(other.reason, new RegExp(`Skipped ${basename(two.dir)}: a saved change waits there`));
   const own = mergeCheck(SHA, env, { project: two.project });
   assert.equal(own.ok, false);
-  assert.equal(own.reason, 'the merge check refuses this merge: A saved change cannot finish, and sage cannot read its request. The saved change or its receipt is damaged, or a table has neither its before nor its after text. The saved change stays in review-pending.json, and sage does not delete it. Writes and merges of this project stop. Other projects continue. Next step for the owner: run sage logbook in this project to find the folder, repair that file or the table, then run this command again.');
+  assert.equal(own.reason, `the merge check refuses this merge: ${STUCK}`);
 });
 
 test('T578 a saved change that names the commit refuses the merge with no ledger row, also with bad bytes', t => {
@@ -144,8 +157,19 @@ test('T578 a saved change that names the commit refuses the merge with no ledger
     assert.equal(tool.read(two.dir, 'ledger').length, 0);
     const verdict = mergeCheck(SHA, env, { project: one.project });
     assert.equal(verdict.ok, false);
-    assert.equal(verdict.reason, `the merge check refuses this merge: Project ${basename(two.dir)} holds a saved change that names ${SHA.slice(0, 7)}. Run sage init in that project to finish the change, then check again.`);
+    assert.equal(verdict.reason, `the merge check refuses this merge: Project ${basename(two.dir)} holds a saved change that names ${SHA.slice(0, 7)}. Any write in that project finishes it. Then check again.`);
   }
+});
+
+test('T578 a marker of another project that the check cannot read refuses the merge, and it names the file', t => {
+  const f = fixture(t, ['one', 'two']), { env, one, two } = f;
+  passing(one);
+  savedUsage(t, two);
+  const denied = denyOpen(t, join(two.dir, MARKER));
+  const verdict = mergeCheck(SHA, env, { project: one.project });
+  denied();
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.reason, /^the merge check cannot read .*review-pending\.json \(EACCES\), so it refuses every merge\./);
 });
 
 test('T578 the merge note names the project, not its path, and asks for nothing', t => {
@@ -157,27 +181,24 @@ test('T578 the merge note names the project, not its path, and asks for nothing'
   assert.equal(reason.includes(two.dir), false);
 });
 
-test('T578 the refusals name a command that finishes the change, and the CLI prints no stack', t => {
+test('T578 a read asks for any write, and the CLI prints the short line with no stack', t => {
   const { env, one } = fixture(t);
   savedUsage(t, one);
   const asked = tool.command(['status', '--project', one.project], env);
-  assert.deepEqual(asked, { code: 1, text: 'sage: A saved change is incomplete. Run any write command in this project, such as sage init, to finish it. Then run this command again.' });
+  assert.deepEqual(asked, { code: 1, text: 'sage: A saved change is incomplete. Any write in this project finishes it. Then run this command again.' });
   one.run(claude, 'init');
   assert.equal(existsSync(join(one.dir, MARKER)), false);
   assert.equal(row(one.dir, 'runs', 'R1').tokens, '50');
   writeFileSync(join(one.dir, MARKER), '{}');
   const stuck = tool.command(['task', 'add', '--priority', 'P2', '--title', 'Stopped', '--size', 'tiny', '--project', one.project], env);
-  assert.equal(stuck.code, 1);
-  assert.match(stuck.text, /^sage: A saved change cannot finish, /);
-  assert.doesNotMatch(stuck.text, /\n\s+at /);
-  assert.equal(tool.command(['logbook', '--project', one.project], env).text, one.dir, 'the refusal sends the owner to this command');
+  assert.deepEqual(stuck, { code: 1, text: `sage: ${STUCK}` });
 });
 
 test('T578 a file error while a saved change finishes keeps the change, and the command can run again', t => {
   const { one } = fixture(t);
   savedUsage(t, one);
   const stop = stopAt(t, one.dir, 'runs', false);
-  assert.throws(() => one.run(claude, 'init'), /^Error: A saved change \(request R1\) did not finish because of a file error \(EIO\)\. The saved change stays\. Run the command again\.$/);
+  assert.throws(() => one.run(claude, 'init'), { message: 'A saved change (request R1) did not finish because of a file error (EIO). The saved change stays. Run the command again. If it repeats, check the logbook folder permissions.' });
   stop();
   assert.equal(existsSync(join(one.dir, MARKER)), true);
   one.run(claude, 'init');
@@ -185,7 +206,98 @@ test('T578 a file error while a saved change finishes keeps the change, and the 
   assert.equal(row(one.dir, 'runs', 'R1').tokens, '50');
 });
 
-test('T578 a file error before a task update stays an uncertain outcome, and damage stays invalid state', t => {
+for (const [name, request] of [['control characters', 'R1\u001b[2J'], ['an over-long id', `R${'1'.repeat(5000)}`]]) test(`T578 a file error prints no request with ${name}`, t => {
+  const { one } = fixture(t), file = join(one.dir, MARKER);
+  savedUsage(t, one);
+  const record = JSON.parse(readFileSync(file, 'utf8'));
+  record.value.receipt.reference.run = request;
+  record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+  writeFileSync(file, JSON.stringify(record) + '\n');
+  const denied = denyOpen(t, join(one.dir, 'runs.tsv'));
+  assert.throws(() => one.run(claude, 'init'), { message: 'A saved change did not finish because of a file error (EACCES). The saved change stays. Run the command again. If it repeats, check the logbook folder permissions.' });
+  denied();
+});
+
+// A stop during the settle itself: the next writer starts the settle again from the marker.
+for (const step of ['runs', 'decisions', 'receipt', 'clear']) for (const after of [false, true]) test(`T578 a settle stopped ${after ? 'after' : 'before'} ${step}: the next write finishes the saved change`, t => {
+  const { one } = fixture(t);
+  savedUsage(t, one);
+  const stop = stopAt(t, one.dir, step, after);
+  assert.throws(() => one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Second', '--size', 'tiny'), /file error \(EIO\)/);
+  stop();
+  one.run(codex, 'task', 'add', '--priority', 'P2', '--title', 'Third', '--size', 'tiny');
+  assert.equal(existsSync(join(one.dir, MARKER)), false);
+  assert.equal(row(one.dir, 'runs', 'R1').tokens, '50');
+  assert.equal(tool.read(one.dir, 'decisions').filter(line => line.decision === 'R1 usage measured').length, 1);
+  assert.equal(readdirSync(join(one.dir, 'usage-requests')).length, 1);
+  assert.equal(row(one.dir, 'tasks', 'T2').title, 'Third');
+});
+
+const REQUEST = '00000000-0000-4000-8000-000000000578', UPDATES = 'task-updates';
+const receipts = dir => existsSync(join(dir, UPDATES)) ? readdirSync(join(dir, UPDATES)).length : 0;
+function update(env, one, changes, callbacks) {
+  const { version } = tool.readTaskSnapshot({ project: one.project, task: 'T1' }, env);
+  return tool.updateRequestedTask({ project: one.project, owner: 'chief', request: REQUEST, task: 'T1', version, changes }, env, callbacks);
+}
+const answer = accepted => ({ voids: 0, decide: digest => ({ digest, accepted, reason: accepted ? '' : 'No' }),
+  acknowledge: (digest, receiptHash) => ({ digest, receiptHash }), release: (digest, receiptHash) => ({ digest, receiptHash }),
+  void() { this.voids += 1; }, history() { throw Error('No history here'); } });
+const uncertain = { code: 'uncertain-outcome' };
+/** T1 held with a running lead: an update to briefed changes tasks, runs and decisions. */
+function held(t) {
+  const { env, one } = fixture(t);
+  one.run(codex, 'run', 'add', 'T1', '--role', 'lead');
+  for (const state of ['briefed', 'building', 'held']) one.run(codex, 'task', 'T1', 'set', `state=${state}`);
+  return { env, one };
+}
+
+for (const step of ['tasks', 'runs', 'decisions']) for (const after of [false, true]) test(`T578 a rollback stopped ${after ? 'after' : 'before'} ${step}: the next write restores the before tables`, t => {
+  const { env, one } = held(t), before = tables(one.dir);
+  const first = stopAt(t, one.dir, 'receipt', false, UPDATES);
+  assert.throws(() => update(env, one, { state: 'briefed' }, answer(true)), uncertain);
+  first();
+  assert.equal(existsSync(join(one.dir, MARKER)), true);
+  tables(one.dir).forEach((text, index) => assert.notEqual(text, before[index]));
+  const second = stopAt(t, one.dir, step, after, UPDATES);
+  assert.throws(() => one.run(claude, 'init'), /file error \(EIO\)/);
+  second();
+  assert.equal(existsSync(join(one.dir, MARKER)), true);
+  one.run(claude, 'init');
+  assert.equal(existsSync(join(one.dir, MARKER)), false);
+  assert.deepEqual(tables(one.dir), before);
+  assert.equal(receipts(one.dir), 0);
+});
+
+for (const after of [false, true]) test(`T578 a roll forward stopped ${after ? 'after' : 'before'} clear: the update stays`, t => {
+  const { env, one } = fixture(t);
+  const first = stopAt(t, one.dir, 'clear', false, UPDATES);
+  assert.throws(() => update(env, one, { title: 'New' }, answer(true)), uncertain);
+  first();
+  assert.equal(receipts(one.dir), 1);
+  const second = stopAt(t, one.dir, 'clear', after, UPDATES);
+  assert.throws(() => one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Second', '--size', 'tiny'), /file error \(EIO\)/);
+  second();
+  one.run(claude, 'init');
+  assert.equal(existsSync(join(one.dir, MARKER)), false);
+  assert.equal(row(one.dir, 'tasks', 'T1').title, 'New');
+  assert.equal(receipts(one.dir), 1);
+});
+
+for (const [step, after] of [['intent', false], ['intent', true], ['clear', false], ['clear', true]]) test(`T578 a rejected update stopped ${after ? 'after' : 'before'} ${step} leaves no receipt, and a retry gets a fresh answer`, t => {
+  const { env, one } = fixture(t), before = tables(one.dir), no = answer(false);
+  const stop = stopAt(t, one.dir, step, after, UPDATES);
+  assert.throws(() => update(env, one, { title: 'New' }, no), uncertain);
+  stop();
+  assert.equal(no.voids, 0);
+  one.run(claude, 'init');
+  assert.equal(existsSync(join(one.dir, MARKER)), false);
+  assert.deepEqual(tables(one.dir), before);
+  assert.equal(receipts(one.dir), 0);
+  assert.equal(update(env, one, { title: 'New' }, answer(true)).decision, 'task-updated');
+  assert.equal(row(one.dir, 'tasks', 'T1').title, 'New');
+});
+
+test('T578 a file error before a task update stays an uncertain outcome, and a stuck change reads as in Claude', t => {
   const { env, one } = fixture(t);
   savedUsage(t, one);
   const input = { project: one.project, owner: 'chief', request: '00000000-0000-4000-8000-000000000578', task: 'T1', version: '0'.repeat(64), changes: { title: 'New' } };
@@ -194,7 +306,7 @@ test('T578 a file error before a task update stays an uncertain outcome, and dam
   assert.throws(() => tool.updateRequestedTask(input, env, callbacks), { code: 'uncertain-outcome' });
   stop();
   writeFileSync(join(one.dir, MARKER), '{}');
-  assert.throws(() => tool.updateRequestedTask(input, env, callbacks), { code: 'invalid-state' });
+  assert.throws(() => tool.updateRequestedTask(input, env, callbacks), { code: 'stuck-write', message: STUCK });
 });
 
 test('T578 the merge check settles its own project first', t => {

@@ -1,3 +1,5 @@
+/** The one line for a saved change that cannot finish, in Claude and in Codex. */
+export const STUCK_WRITE = 'This project cannot save changes, and nothing changed. Other projects work. Ask the chief to restore the logbook from a copy, then run the command again. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.';
 // Public update guidance comes only from these codes, never an exception's private text.
 const messages = {
   'stale-version': 'The task changed. Read it again with sage_read_task, review the current state, and submit a new request UUID.',
@@ -6,6 +8,7 @@ const messages = {
   'owner-required': 'Only the current chief can update this task. Use its authenticated connection; do not substitute another owner.',
   'uncertain-outcome': 'The update outcome is uncertain. Retry the original request UUID and identical contents. Do not submit a replacement request.',
   'invalid-state': 'Saved state or update proof is invalid. Preserve it and inspect or repair the state before retrying the original request. Do not overwrite it.',
+  'stuck-write': STUCK_WRITE,
   'readiness': 'The current commit needs the required clean checks and review cycles. Complete them before reading the task and submitting a new request.',
   'readiness-config': 'The review-cycle configuration is invalid. Correct it before reading the task and submitting a new request.',
   'readiness-branch': 'Readiness needs an existing task branch and its current commit. Check the branch before submitting a new request.',

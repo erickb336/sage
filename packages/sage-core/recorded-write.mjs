@@ -71,20 +71,20 @@ export function hasPendingWrite(dir) {
   catch (error) { if (["ENOTDIR", "ELOOP"].includes(error.code)) return false; throw error; }
 }
 export function assertNoPendingWrite(dir) {
-  if (hasPendingWrite(dir)) throw new RecordedWriteError("A saved change is incomplete. Run any write command in this project, such as sage init, to finish it. Then run this command again.");
+  if (hasPendingWrite(dir)) throw new RecordedWriteError("A saved change is incomplete. Any write in this project finishes it. Then run this command again.");
 }
-/** Do the marker's bytes hold this text? For a reader that must not settle it. A marker that does not open as a plain file holds nothing here: its own project refuses it when it settles. */
+/** Do the marker's bytes hold this text? For a reader that must not settle it. A marker that is gone or not a plain file holds nothing here: its own project refuses it when it settles. Any other read error goes to the caller. */
 export function pendingNames(dir, text) {
   try { return raw(join(dir, PENDING))?.includes(text) ?? false; }
-  catch { return false; }
+  catch (error) { if (error instanceof RecordedWriteError) return false; throw error; }
 }
-/** The request that a saved change names, for the refusal that stops its project. */
+/** The request that a saved change names, as the marker has it, or undefined. A caller checks its form before it prints it. */
 export function pendingRequest(dir) {
   try {
     const { value } = JSON.parse(regular(join(dir, PENDING)));
     const reference = value.reference ?? value.receipt.reference;
-    return String(reference.request ?? reference.run ?? "unknown");
-  } catch { return "unknown"; }
+    return reference.request ?? reference.run;
+  } catch { return undefined; }
 }
 /**
  * Step 3 of a write: finish or undo a saved change from the marker alone, by its schema. Call under the logbook lock.

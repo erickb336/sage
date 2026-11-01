@@ -1624,6 +1624,21 @@ test("the merge check gets the pull request's number from the merge command", ()
   assert.equal(s.send(bash(MERGE)), undefined, "T1 was on PR 41 too, and it passes on the SHA");
 });
 
+test("T578: the merge hook reads a saved change on disk: a stuck one refuses with its line, and a change of another project refuses only when it names the commit", () => {
+  const s = autopilotSession();
+  const marker = join(s.sage("logbook").trim(), "review-pending.json");
+  writeFileSync(marker, "{}");
+  assert.equal(denied(s.send(bash(MERGE))), "sage: the merge check refuses: the merge check refuses this merge: This project cannot save changes, and nothing changed. Other projects work. Ask the chief to restore the logbook from a copy, then run the command again. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.");
+  assert.equal(readFileSync(marker, "utf8"), "{}", "the check keeps the change");
+  rmSync(marker);
+  const other = join(s.vars.SAGE_HOME, "other-abc123");
+  mkdirSync(other);
+  writeFileSync(join(other, "review-pending.json"), `{"note":"${SHA}"}`);
+  assert.equal(denied(s.send(bash(MERGE))), `sage: the merge check refuses: the merge check refuses this merge: Project other-abc123 holds a saved change that names ${SHA.slice(0, 7)}. Any write in that project finishes it. Then check again.`);
+  writeFileSync(join(other, "review-pending.json"), "{}");
+  assert.equal(s.send(bash(MERGE)), undefined, "a change that names another commit does not stop this merge");
+});
+
 test("S1: the hook refuses the merge of a large task's PR that was framed again as small (T83)", () => {
   const s = autopilotSession(); // T1 (small) has 2 clean cycles on SHA under PR 41
   const B = "b".repeat(40);

@@ -20,7 +20,8 @@ current snapshot. Read the task again for its current state.
 Errors include a safe reason code and a next step. A `stale-version` refusal
 needs a fresh read and a new request UUID. `uncertain-outcome` requires the
 original UUID and identical contents. `invalid-state` requires preserved-state
-inspection or repair. Readiness errors name the missing prerequisite and bounded
+inspection or repair. `stuck-write` gives the same line as Claude: a saved change
+cannot finish, so restore the logbook from a copy. Readiness errors name the missing prerequisite and bounded
 task, gate, run or finding IDs. They do not include private exception text or
 finding summaries.
 

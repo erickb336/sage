@@ -3680,7 +3680,7 @@ test('T56: read-only aliases remain valid and missing task tables cannot approve
   writeFileSync(join(empty.logbook,'review-pending.json'),'{}');
   assert.equal(empty.tool.logbookView(empty.options.projectDirectory,empty.env).task('T1'),undefined);
   assert.equal(empty.tool.mergeCheck('1'.repeat(40),empty.env).ok,false);
-  assert.throws(()=>empty.cli('init'),/cannot finish/);
+  assert.throws(()=>empty.cli('init'),/cannot save changes/);
 });
 
 
@@ -5629,7 +5629,10 @@ test('T578: a saved change that cannot finish stops even a historical retry, and
   assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected outage'); } }));
   appendFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'unrelated damaged row\n');
   const before = readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8');
-  assert.throws(() => f.update(first), { code: 'invalid-state' });
+  assert.throws(() => f.update(first), { code: 'stuck-write' });
+  const client = await connect(t, f, '0.160.0', '', 'sage_update_task');
+  assert.equal((await client.call(first)).error, 'Sage could not update this task. [stuck-write] This project cannot save changes, and nothing changed. Other projects work. Ask the chief to restore the logbook from a copy, then run the command again. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.');
+  await client.close();
   assert.equal(readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8'), before);
   assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), true);
   assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.at(-1).released, undefined);
@@ -5977,7 +5980,7 @@ test('T578: MCP settles a stopped update for another owner, and it names corrupt
   const file = join(f.assignmentLogbook, 'review-pending.json'), original = readFileSync(file, 'utf8');
   writeFileSync(file, '{}');
   const corrupt = await client.call(request);
-  assert.match(corrupt.error, /\[invalid-state\].*Preserve/);
+  assert.match(corrupt.error, /\[stuck-write\] This project cannot save changes/);
   assert.doesNotMatch(corrupt.error, new RegExp(f.dir)); assert.doesNotMatch(corrupt.error, /private uncertainty detail|codex:/);
   assert.deepEqual(updateTableBytes(f), before);
   writeFileSync(file, original);
@@ -6373,6 +6376,45 @@ test('T578: a rejected update stopped before its void gets a fresh answer on ret
   assert.equal(f.update(request).task.state, 'briefed');
   assert.deepEqual(f.core.readAdmission(f.options.directory).taskUpdates.map(row => [row.accepted, row.void === true]), [[false, true], [true, false]]);
 });
+
+for (const claudeFirst of [true, false]) test(`T578: a rejected update stopped before clear ${claudeFirst ? 'settles from Claude' : 'settles on the retry'}, and the retry gets a fresh answer`, async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ state: 'briefed' }), logbook = f.assignmentLogbook, marker = join(logbook, 'review-pending.json');
+  const restore = await stopFileWrite(t, logbook, 'task-updates', 'clear', false);
+  assert.throws(() => f.update(request), error => error.code === 'uncertain-outcome');
+  restore();
+  assert.equal(existsSync(marker), true);
+  if (claudeFirst) { await otherProviderWrite(f, f.assignmentEnv); assert.equal(existsSync(marker), false); }
+  assert.equal(f.update(request).decision, 'task-update-rejected');
+  assert.equal(existsSync(marker), false);
+  assert.equal(f.snapshot().task.state, 'framed');
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  assert.equal(f.update(request).task.state, 'briefed');
+  assert.deepEqual(f.core.readAdmission(f.options.directory).taskUpdates.map(row => [row.accepted, row.void === true, row.released === true]),
+    [[false, true, false], [false, true, false], [true, false, true]]);
+});
+
+// A stop during Claude's settle of a Codex update: Codex then closes one journal row, with one decision.
+for (const [first, committed] of [['decisions', false], ['receipt', true]]) for (const after of [false, true]) {
+  test(`T578: a settle of a ${committed ? 'committed' : 'stopped'} update stopped ${after ? 'after' : 'before'} ${committed ? 'clear' : 'tasks'}, then Codex retries`, async t => {
+    const f = await nativeTaskUpdateFixture(t), logbook = f.assignmentLogbook, marker = join(logbook, 'review-pending.json');
+    for (const state of ['briefed', 'building', 'held']) f.assignmentCli('task', 'T1', 'set', `state=${state}`);
+    appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+    const request = f.request({ state: 'briefed' });
+    const stopped = await stopFileWrite(t, logbook, 'task-updates', first, true);
+    assert.throws(() => f.update(request), error => error.code === 'uncertain-outcome');
+    stopped();
+    const settling = await stopFileWrite(t, logbook, 'task-updates', committed ? 'clear' : 'tasks', after);
+    await assert.rejects(() => otherProviderWrite(f, f.assignmentEnv), /did not finish because of a file error \(EIO\)/);
+    settling();
+    await otherProviderWrite(f, f.assignmentEnv);
+    assert.equal(existsSync(marker), false);
+    assert.equal(f.assignmentTool.read(logbook, 'tasks').find(row => row.id === 'T1').state, committed ? 'briefed' : 'held');
+    assert.equal(f.update(request).decision, committed ? 'task-update-history' : 'task-updated');
+    assert.equal(f.assignmentTool.read(logbook, 'tasks').find(row => row.id === 'T1').state, 'briefed');
+    assert.equal(f.assignmentTool.read(logbook, 'decisions').filter(row => row.decision === 'R1 blocked: T1 went back to briefed').length, 1);
+    assert.deepEqual(f.core.readAdmission(f.options.directory).taskUpdates.filter(row => !row.void).map(row => [row.accepted, row.released]), [[true, true]]);
+  });
+}
 
 const STOPPED_WRITES = {
   'task creation': { folder: 'task-requests', tables: ['tasks', 'decisions'], fixture: taskCreationFixture, start: f => f.create(), fresh: 'task-created', retried: 'already-created' },

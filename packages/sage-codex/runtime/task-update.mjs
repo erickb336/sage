@@ -45,10 +45,11 @@ export function updateNativeTask(input, context, options) {
   });
 }
 
-/** A damaged journal or saved change reads as saved state, never as an unknown outcome. */
+/** A stuck saved change reads as in Claude. A damaged journal reads as saved state, never as an unknown outcome. */
 function settleBeforeDecide(options) {
   try { settleNativeWrites(options); }
   catch (error) {
+    if (error.code === "stuck-write") throw new TaskUpdateError(error.code);
     if (error instanceof TaskUpdateError || error.code) throw error;
     throw new TaskUpdateError("invalid-state");
   }

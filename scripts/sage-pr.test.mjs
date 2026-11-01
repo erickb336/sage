@@ -334,7 +334,7 @@ test("T578: merge refuses a saved change that cannot finish, and it keeps the ch
   const { w } = savedChange(t);
   const marker = join(w.logbook, "review-pending.json");
   writeFileSync(marker, "{}");
-  refused(w.pr("merge", "T1"), /merge check: the merge check refuses this merge: A saved change cannot finish, and sage cannot read its request\./);
+  refused(w.pr("merge", "T1"), /merge check: the merge check refuses this merge: This project cannot save changes, and nothing changed\./);
   assert.equal(readFileSync(marker, "utf8"), "{}");
   assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0);
 });

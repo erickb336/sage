@@ -2,7 +2,7 @@
 import { USAGE_FIELDS, tokenCount, usageText, usageRegistry, usageSnapshot, validUsageSnapshot, usageSummary } from "./usage.mjs";
 import { parseRunTarget } from "./run-target.mjs";
 import { readLocalGit } from "./local-git.mjs";
-import { TaskUpdateError } from "./task-update-error.mjs";
+import { STUCK_WRITE, TaskUpdateError } from "./task-update-error.mjs";
 import { recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingNames, settlePendingWrite, RecordedWriteError } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
 // The store is plain TSV and Markdown under the configured root ($SAGE_HOME overrides it), and every
@@ -656,6 +656,7 @@ function updateRequestedTask(input, env, coordination) {
     return reply(taskUpdates.publish(dir, reference, coordination), proposal, "task-updated");
   }); } catch (error) {
     if (error instanceof TaskUpdateError) throw error;
+    if (error.code === "stuck-write") throw new TaskUpdateError(error.code);
     throw new TaskUpdateError((error instanceof RecordedWriteError && !error.code) || phase === "state" ? "invalid-state"
       : phase === "publish" ? "uncertain-outcome" : phase === "readiness" ? "readiness" : "invalid-change");
   }
@@ -1136,9 +1137,9 @@ function settle(dir) {
   let settled;
   try { settled = settlePendingWrite(dir, SAVED); }
   catch (error) {
-    const request = pendingRequest(dir), unknown = request === "unknown", change = unknown ? "A saved change" : `A saved change (request ${request})`;
-    if (error.code && !(error instanceof TaskUpdateError)) throw Object.assign(new RecordedWriteError(`${change} did not finish because of a file error (${error.code}). The saved change stays. Run the command again.`), { code: error.code });
-    throw new RecordedWriteError(`${change} cannot finish${unknown ? ", and sage cannot read its request" : ""}. ${error.message} The saved change stays in review-pending.json, and sage does not delete it. Writes and merges of this project stop. Other projects continue. Next step for the owner: run sage logbook in this project to find the folder, repair that file or the table, then run this command again.`);
+    if (!error.code || error instanceof TaskUpdateError) throw Object.assign(new RecordedWriteError(STUCK_WRITE), { code: "stuck-write" });
+    const request = pendingRequest(dir), named = new RegExp(`^(?:R[1-9]\\d{0,9}|${UUID})$`).test(request);
+    throw Object.assign(new RecordedWriteError(`A saved change${named ? ` (request ${visible(request)})` : ""} did not finish because of a file error (${error.code}). The saved change stays. Run the command again. If it repeats, check the logbook folder permissions.`), { code: error.code });
   }
   if (settled) status(dir, true);
 }
@@ -2097,7 +2098,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
       // A saved change stops only the project that holds it: this check looks at that logbook only when it names this commit.
       if (hasPendingWrite(dir)) {
         if (!readRegular(join(dir, "ledger.tsv"))?.includes(sha) && !pendingNames(dir, sha)) return skipped.push(basename(dir)), [];
-        throw new RecordedWriteError(`Project ${visible(basename(dir))} holds a saved change that names ${sha.slice(0, 7)}. Run sage init in that project to finish the change, then check again.`);
+        throw new RecordedWriteError(`Project ${visible(basename(dir))} holds a saved change that names ${sha.slice(0, 7)}. Any write in that project finishes it. Then check again.`);
       }
       // A folder with tasks.tsv, also a link, is a logbook, and it must pass the integrity check. A folder without it is
       // none: init has not finished it, or it lost its tasks. Its verdicts name tasks that it does not have, so they refuse.
