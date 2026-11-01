@@ -11,6 +11,7 @@ const localRoles = new Map([
 ]);
 
 // These roles write git or reach the network, so Codex's default sandbox asks the owner each time.
+// Every other role only runs checks and reads, and gets the short text.
 const approvalRoles = new Set(["implementer", "designer", "arena-judge", "lead"]);
 
 export function roleMessage(role) {
@@ -18,7 +19,7 @@ export function roleMessage(role) {
   const local = localRoles.get(role);
   const instructions = local ? readFileSync(new URL(local, import.meta.url), "utf8").trim()
     : renderRoleInstructions(role, { ...bindings.common, ...bindings[role] });
-  return `${instructions}${role === "lead" ? leadSteps() : ""}${approvalRoles.has(role) ? `\n\n${reference("approvals.md")}` : ""}\n\n${renderReportInstructions(bindings.report)}\n`;
+  return `${instructions}${role === "lead" ? leadSteps() : ""}\n\n${reference(approvalRoles.has(role) ? "approvals.md" : "sandbox-refusal.md")}\n\n${renderReportInstructions(bindings.report)}\n`;
 }
 
 const reference = (name) => readFileSync(new URL(`references/${name}`, import.meta.url), "utf8").trim();

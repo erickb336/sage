@@ -428,7 +428,7 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   for (const role of ["implementer", "qa", "pe"]) assert.doesNotMatch(spawnSync("node", [ROLE, role], { encoding: "utf8" }).stdout, /Your steps in Codex/, role);
 });
 
-test("T603: the lead's text holds the pilot's rules, and each role that writes git or reaches the network gets the approval line", () => {
+test("T603: the lead's text holds the pilot's rules, each role that writes git or reaches the network gets the approval line, and each other role gets the short line", () => {
   const text = (role) => spawnSync("node", [ROLE, role], { encoding: "utf8" }).stdout;
   const lead = text("lead");
   assert.match(lead, /\*\*No spawn tools\.\*\* sage on Codex needs a multi-agent v2 model for the chief and each child\. When your tools have no `spawn_agent` in the `collaboration` namespace, start nothing, and report STATUS blocked at once with the reason that you have no spawn tools\./);
@@ -438,9 +438,15 @@ test("T603: the lead's text holds the pilot's rules, and each role that writes g
   assert.match(lead, /A finished or interrupted helper frees its thread\./);
   assert.match(lead, /with the sage tools\. They ask for no approval\./);
   assert.doesNotMatch(lead, /AgentLimitReached|the chief does the lead's work|Multi-agent v1|wait_agent` for the helper/);
-  const line = /\n\*\*Approvals in Codex\.\*\* In Codex's default sandbox, `\.git` is read-only and the network is off\. So each git write \(for example `git worktree add` and `git commit`\) and each network step asks the owner for approval, at least 5 clicks in each small task\. When the sandbox refuses such a step, run the same command again with escalated permissions, and wait for the owner\. The exception is `git worktree add -b <branch> <path>`: first run `git branch --list <branch>`\. If it prints the branch, the failed step left it, so run `git worktree add <path> <branch>` with escalated permissions and no `-b`\. If it prints nothing, run the same command again\. A sandbox refusal is not a failed task\. When the approval policy is `never` or the owner says no, report STATUS blocked and name the step\.\n\n# The sage report\n/;
+  const line = /\n\*\*Approvals in Codex\.\*\* In Codex's default sandbox, `\.git` is read-only and the network is off\. So each git write \(for example `git worktree add` and `git commit`\) and each network step asks the owner for approval, at least 5 clicks in each small task\. When the sandbox refuses such a step, run the same command again with escalated permissions, and wait for the owner\. The exception is `git worktree add -b <branch> <path>`: first run `git branch --list <branch>`\. If it prints the branch, the failed step left it, so run `git worktree add <path> <branch>` with escalated permissions and no `-b`\. If it prints nothing, run the same command again with escalated permissions\. A sandbox refusal is not a failed task\. When the approval policy is `never` or the owner says no, report STATUS blocked and name the step\.\n\n# The sage report\n/;
   for (const role of ["lead", "implementer", "designer", "arena-judge"]) assert.match(text(role), line, role);
-  for (const role of ["pe", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "investigate", "evidence-review"]) assert.doesNotMatch(text(role), /Approvals in Codex/, role);
+  // A role that does not build gets the short line: a sandbox refusal never reads as a failed check or a finding.
+  const short = /\n\*\*Sandbox refusals in Codex\.\*\* A sandbox refusal is not a failed check or a finding: run the same command again with escalated permissions, and wait for the owner\. When the approval policy is `never` or the owner says no, name the step under NOT VERIFIED\.\n\n# The sage report\n/;
+  for (const role of ["pe", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "investigate", "evidence-review"]) {
+    assert.match(text(role), short, role);
+    assert.doesNotMatch(text(role), /Approvals in Codex/, role);
+  }
+  for (const role of ["lead", "implementer", "designer", "arena-judge"]) assert.doesNotMatch(text(role), /Sandbox refusals in Codex/, role);
 });
 
 test("T553: a lead's steps record a report's findings and verdict first, and triage fix after (F-T552-22)", () => {

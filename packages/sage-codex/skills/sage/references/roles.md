@@ -31,6 +31,8 @@ The chief records the lead run, the checks verdicts, the move to verified, and i
 
 ## The lead's report
 
+Steps 3 and 4 need the network, as your other git writes and network steps do, also the push and the pull request after an arena. When the sandbox refuses one, run the same command again with escalated permissions, and wait for the owner. A sandbox refusal is not a failed check: a check fails only when `gh pr checks` lists it as failed. When the approval policy is `never` or the owner says no, record no verdict, and tell the owner which step stopped.
+
 1. Check the report against `status`: each run, finding and verdict that it names is in the logbook.
 2. Do what only you do: ask its QUESTIONS with `gate_add`, dismiss each medium or high finding that it names as wrong, when you agree, and end each run that it names as never started.
 3. For a ready report (the task at verifying), take the PR number from the logbook, never from the report. Take the head SHA from `gh pr view <n> --json headRefOid`, and compare it with the SHA in the report. When they differ, or a run of the task other than the lead run still runs, record no verdict: start a fresh lead.

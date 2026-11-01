@@ -34,6 +34,7 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 - The Codex CLI on your PATH, in that range, also when you use only the desktop app: the install commands below are CLI commands. To get it, run `npm install -g @openai/codex@0.164.0`.
 - Node.js 20 or later, on your PATH: the sage hooks are Node scripts.
 - `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch and autopilot merges nothing.
+- A multi-agent v2 model for the chief and each child. In Codex 0.164.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5.6-luna` is not ([limits](#the-rules-in-codex)).
 - For a full lead team, `agents.max_concurrent_threads_per_session` set to 10 in your Codex config. The default of 4 threads holds the chief, a lead and 2 helpers ([limits](#the-rules-in-codex)).
 
 ## Install
@@ -143,10 +144,11 @@ With autopilot on, each small task still asks you at least 5 times before its me
 | Commit on the task branch (`git -C <folder> commit …`) | The change of the task | It writes to `.git` |
 | Send the task branch (`git -C <folder> push -u <remote> <branch>`) | The branch of the pull request on GitHub | It writes to `.git` and needs the network |
 | Open the pull request (`gh pr create`) | The pull request that the reviews and the merge check read | It needs the network |
+| Read the pull request and its checks (`gh pr view`, `gh pr checks`) | The chief's check of a ready task, before the merge | It needs the network |
 
-- The count is for one small task with separate commands. A model that joins `git add` and `git commit` in one command gets one prompt for both.
+- The count of 5 is for the first five rows, in one small task with separate commands. A model that joins `git add` and `git commit` in one command gets one prompt for both.
 - Each repair adds its own commit and push. A worktree outside the project asks once more, for a file change.
-- A sandbox refusal is not a failed task. The role texts tell each agent to run the command again with escalated permissions, so that the prompt comes to you.
+- A sandbox refusal is not a failed task or a failed check. The role texts tell each agent, and the skill tells the chief, to run the command again with escalated permissions, so that the prompt comes to you. So QA and a reviewer can ask you too, for example when a check needs the network.
 - After a refusal of `git worktree add -b`, the agent first checks for a branch that the failed step left. When it finds that branch, it runs the command with no `-b`.
 - With `approval_policy = "never"`, Codex refuses each escalation, so a build cannot commit. Use an approval policy that asks.
 - The sage logbook tools ask nothing, also for a lead.

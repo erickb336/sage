@@ -266,7 +266,7 @@ test("T553: the chief role runs one lead for each task, starts the lead, PE and 
 
 test("T603: the chief role holds the pilot's rules: a v2 model only, no fresh lead with no spawn tools, its turn stays open, the real limit message, the approvals", async () => {
   const role = contextOf(await session().prompt("sage mode")).replace(/\s+/g, " ");
-  assert.match(role, /sage on Codex needs a multi-agent v2 model for the chief and each child\. With no `spawn_agent` in the `collaboration` namespace, start no agent, and tell the owner to start a new session on a v2 model\./);
+  assert.match(role, /sage on Codex needs a multi-agent v2 model for the chief and each child\. With no `spawn_agent` in the `collaboration` namespace, start no agent, and tell the owner to start a new session on a v2 model \(see the guide's What you need\)\./);
   assert.match(role, /Never switch the model during a run/);
   assert.match(role, /When a lead reports that it has no spawn tools, end its run, start no fresh lead, and tell the owner the same fix\./);
   assert.match(role, /Do not end your turn while a child runs: a child's report starts no turn\./);
@@ -277,6 +277,10 @@ test("T603: the chief role holds the pilot's rules: a v2 model only, no fresh le
   assert.doesNotMatch(role, /AgentLimitReached|multi-agent v1|do the lead's work/);
   const roles = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/roles.md", import.meta.url), "utf8").replace(/\s+/g, " ");
   assert.match(roles, /A lead that has no spawn tools is the exception: start no fresh lead until the owner says that the session runs on a v2 model\./);
+  // F-T603-1: the line comes before the steps that it guards, so a refused `gh pr checks` never reaches the checks-fail step.
+  const report = roles.slice(roles.indexOf("## The lead's report"));
+  const refusal = report.search(/When the sandbox refuses one, run the same command again with escalated permissions, and wait for the owner\. A sandbox refusal is not a failed check: a check fails only when `gh pr checks` lists it as failed\. When the approval policy is `never` or the owner says no, record no verdict, and tell the owner which step stopped\./);
+  assert.ok(refusal > 0 && refusal < report.indexOf("When a check fails, record `checks-fail`"), String(refusal));
 });
 
 test("T603: the Codex pages hold no v1 path for a task, and the guide gives the approval count, what the pilot did not prove and the turn rule", () => {
@@ -289,6 +293,10 @@ test("T603: the Codex pages hold no v1 path for a task, and the guide gives the 
   }
   assert.match(guide, /sage on Codex needs a multi-agent v2 model for the chief and each child\./);
   assert.match(guide, /each small task still asks you at least 5 times before its merge/);
+  assert.match(guide, /\| Read the pull request and its checks \(`gh pr view`, `gh pr checks`\) \| The chief's check of a ready task, before the merge \| It needs the network \|/);
+  assert.match(guide, /- A multi-agent v2 model for the chief and each child\. In Codex 0\.164\.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5\.6-luna` is not/);
+  const needs = guide.slice(guide.indexOf("## What you need"), guide.indexOf("## Install"));
+  assert.doesNotMatch(needs, /gpt-5\.5/, "seen only from one spawn output");
   assert.match(guide, /\*\*`writable_roots` and the network: not proved\.\*\* sage keeps Codex's defaults, and it does not recommend this option/);
   assert.match(guide, /`git worktree add -b` failed in the sandbox, but it left the branch\. 2\. The escalated retry stopped with `a branch named 'sage\/t1-demo' already exists`, so no worktree came to exist\./);
   assert.match(guide, /\*\*Not proved yet:\*\* - An escalated push under a strict sandbox\./);

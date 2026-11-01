@@ -1,0 +1,1 @@
+**Sandbox refusals in Codex.** A sandbox refusal is not a failed check or a finding: run the same command again with escalated permissions, and wait for the owner. When the approval policy is `never` or the owner says no, name the step under NOT VERIFIED.
