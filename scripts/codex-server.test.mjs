@@ -5682,7 +5682,7 @@ test('T594: a chief with another logbook root settles a committed row of a share
   const f = await nativeTaskUpdateFixture(t);
   const { settleNativeWrites } = await import(pathToFileURL(join(f.plugin, 'runtime/task-settle.mjs')));
   const shared = process.env.SAGE_SHARED_HOME, folder = join(shared, basename(f.assignmentLogbook));
-  t.after(() => { rmSync(join(shared, 'bindings.tsv'), { force: true }); rmSync(folder, { recursive: true, force: true }); });
+  t.after(() => { for (const file of ['bindings.tsv', 'bindings.made', 'plugins.tsv']) rmSync(join(shared, file), { force: true }); rmSync(folder, { recursive: true, force: true }); });
   mkdirSync(shared, { recursive: true });
   renameSync(f.assignmentLogbook, folder);
   writeFileSync(join(shared, 'bindings.tsv'), `root\tfolder\tcommits\tat\n${realpathSync(f.options.projectDirectory)}\t${basename(folder)}\t\t2026-11-01T00:00:00Z\n`);
