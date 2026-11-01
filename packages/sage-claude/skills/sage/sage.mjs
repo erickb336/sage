@@ -15,7 +15,7 @@ const legacyRoots = (env) => (env.SAGE_HOME ? [env.SAGE_HOME] : [
 ]);
 const tool = createStateTool({
   provider: "claude",
-  defaultRoot: (env) => join(env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "sage"),
+  defaultRoot: (env) => join(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage"),
   legacyRoots,
   models: ["opus", "sonnet", "haiku", "fable", "inherit"],
   modelDefaults: {
