@@ -1,10 +1,11 @@
 import './test-env.mjs';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { sage as claude, mergeCheck } from '../plugins/sage/skills/sage/sage.mjs';
 import { tool } from '../plugins/sage-codex/skills/sage/sage.mjs';
@@ -249,7 +250,7 @@ test('T593 a stuck change with a damaged decisions table: the repair refuses wit
   assert.match(one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Saves again', '--size', 'tiny'), /T2/);
 });
 
-const LINKED = real => `This logbook is reached through a link, so its saved change may finish from the real folder ${real}. Nothing changed. Run sage on a path with no link: put the folder back in place of the link, or set SAGE_HOME to the real folder's parent. Then any write finishes the change or says what to do.`;
+const LINKED = (real, setting = 'SAGE_HOME') => `This logbook is reached through a link, so its saved change may finish from the real folder ${real}. Nothing changed. Run sage on a path with no link: put the folder back in place of the link, or set ${setting} to the real folder's parent. Then any write finishes the change or says what to do.`;
 test('T593 a SAGE_HOME path through a link: the repair refuses, and the change that reads as stuck finishes from the real path', t => {
   const { env, one } = fixture(t);
   savedUsage(t, one);
@@ -275,6 +276,84 @@ test('T593 a logbook moved behind a link: the repair refuses also with the table
   rmSync(one.dir); fs.renameSync(moved, one.dir);
   assert.match(one.run(codex, ...REPAIR, '--accept-loss', 'decisions'), /The saved change \(request R1\) is lost: .*The logbook check passes/);
   assert.equal(readFileSync(`${file}.lost-1`, 'utf8'), bytes);
+});
+
+/**
+ * A shared logbook as sage link makes it: the first checkout's --separate, a clone's --to, and each provider with its own
+ * root and no SAGE_HOME, as in production. T1 is on the first checkout. The clone has no logbook of its own.
+ */
+function linkedProjects(t) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'sage-linked-')));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: join(base, 'home'), CLAUDE_CONFIG_DIR: join(base, 'claude'), CODEX_HOME: join(base, 'codex'), SAGE_SHARED_HOME: join(base, 'shared'), SAGE_TEST_PIDS: '{}' };
+  delete env.SAGE_HOME;
+  const gitEnv = { ...env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+  const git = (...args) => execFileSync('git', args, { cwd: base, env: gitEnv, stdio: 'ignore' });
+  const first = join(base, 'first'), second = join(base, 'second');
+  git('init', '-q', '-b', 'main', first);
+  git('-C', first, 'commit', '-q', '--allow-empty', '-m', 'first');
+  git('clone', '-q', first, second);
+  const checkout = project => ({ project, env, run: (provider, ...args) => provider([...args, '--project', project], env) });
+  const one = checkout(first), two = checkout(second);
+  one.run(codex, 'link', '--separate');
+  const dir = one.run(codex, 'logbook');
+  two.run(claude, 'link', '--to', basename(dir));
+  one.run(codex, 'task', 'add', '--priority', 'P2', '--title', 'Task of the project', '--size', 'tiny');
+  Object.assign(one, { dir }); Object.assign(two, { dir });
+  const logbooks = root => existsSync(root) ? readdirSync(root).filter(name => existsSync(join(root, name, 'tasks.tsv'))) : [];
+  const providerLogbooks = () => [...logbooks(join(env.CLAUDE_CONFIG_DIR, 'sage')), ...logbooks(join(env.CODEX_HOME, 'sage'))];
+  return { base, env, shared: env.SAGE_SHARED_HOME, dir, one, two, providerLogbooks };
+}
+
+for (const [name, provider] of [['Claude', claude], ['Codex', codex]]) {
+  test(`T593 ${name}: a linked project repairs its shared logbook, and every checkout of that logbook saves again`, t => {
+    const { dir, one, two, shared, providerLogbooks } = linkedProjects(t), file = stuck(t, one), bytes = readFileSync(file, 'utf8');
+    assert.equal(dirname(dir), shared, 'the logbook is in the shared root');
+    assert.equal(two.run(provider, 'logbook'), dir, 'the clone finds the same logbook');
+    assert.throws(() => two.run(provider, 'task', 'add', '--priority', 'P2', '--title', 'Stopped', '--size', 'tiny'), { message: STUCK });
+    const out = two.run(provider, ...REPAIR), kept = `${file}.lost-1`;
+    assert.match(out, /^The saved change \(request R1\) is lost: .*The logbook check passes, and writes work again\./);
+    assert.equal(existsSync(file), false);
+    assert.equal(readFileSync(kept, 'utf8'), bytes);
+    const { decision, why } = tool.read(dir, 'decisions').at(-1);
+    assert.deepEqual({ decision, why }, { decision: `saved change (request R1) moved aside to ${kept}`, why: 'the owner accepts the loss of this saved change' });
+    assert.deepEqual(providerLogbooks(), [], 'the repair wrote no logbook in a provider root');
+    assert.match(two.run(provider, 'task', 'add', '--priority', 'P2', '--title', 'From the clone', '--size', 'tiny'), /T2/);
+    assert.match(one.run(provider, 'task', 'add', '--priority', 'P2', '--title', 'From the first checkout', '--size', 'tiny'), /T3/);
+    assert.deepEqual(tool.read(dir, 'tasks').map(task => task.title), ['Task of the project', 'From the clone', 'From the first checkout']);
+  });
+}
+
+test('T593 a path to a linked checkout through a link is no link to the logbook: the repair works', t => {
+  const { base, dir, env, one } = linkedProjects(t), file = stuck(t, one), link = join(base, 'first-link');
+  symlinkSync(one.project, link);
+  assert.match(claude([...REPAIR, '--project', link], env), /The saved change \(request R1\) is lost: .*The logbook check passes/);
+  assert.deepEqual(lostFiles(dir), [`${MARKER}.lost-1`]);
+  assert.equal(existsSync(file), false);
+});
+
+test('T593 a linked project: the repair refuses a change that can finish, and a write from the other checkout finishes it', t => {
+  const { dir, one, two, shared } = linkedProjects(t);
+  savedUsage(t, one);
+  const saved = snapshot(shared);
+  assert.throws(() => two.run(claude, ...REPAIR), { message: 'This saved change can finish, so it needs no repair: any write in this project finishes it. Nothing changed.' });
+  assert.deepEqual(snapshot(shared), saved);
+  two.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Finishes it', '--size', 'tiny');
+  assert.equal(row(dir, 'runs', 'R1').tokens, '50', 'the refused repair kept the change, and a write finishes it');
+  assert.equal(existsSync(join(dir, MARKER)), false);
+});
+
+test('T593 a shared root reached through a link: the repair refuses, and the setting that the line names finishes the change', t => {
+  const { base, dir, env, one, two, shared } = linkedProjects(t);
+  savedUsage(t, one);
+  const link = join(base, 'shared-link'), linked = { ...env, SAGE_SHARED_HOME: link }, write = ['task', 'add', '--priority', 'P2', '--title', 'Saved', '--size', 'tiny', '--project', two.project], saved = snapshot(shared);
+  symlinkSync(shared, link);
+  assert.throws(() => claude(write, linked), { message: STUCK });
+  assert.throws(() => claude([...REPAIR, '--project', two.project], linked), { message: LINKED(dir, 'SAGE_SHARED_HOME') });
+  assert.deepEqual(snapshot(shared), saved);
+  claude(write, { ...env, SAGE_SHARED_HOME: realpathSync(link) });
+  assert.equal(row(dir, 'runs', 'R1').tokens, '50', 'the real path finishes the change');
+  assert.equal(existsSync(join(dir, MARKER)), false);
 });
 
 /** Write the saved change again with these changes, with a hash that matches. */

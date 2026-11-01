@@ -115,9 +115,10 @@ Each write starts by finishing or undoing a saved change that an earlier write l
 
 What the repair does:
 
+- It works the same on a shared logbook, from any checkout with a row in `bindings.tsv`, also on a path through a link to that checkout.
 - It refuses, and changes nothing, on a logbook with no saved change and on a saved change that can finish. Any write finishes that one.
 - It also refuses, and changes nothing, when the change may still finish elsewhere, each time with the next step:
-  - The logbook is reached through a link. The line names the real folder: use it.
+  - The logbook is reached through a link. The line names the real folder: use it. For a shared logbook, the line names `SAGE_SHARED_HOME`, because the shared root is the link.
   - A newer sage wrote the change: its schema is above the highest that this version knows, or a table has columns that this version does not know. Update the sage plugin.
 - It refuses when a receipt in `task-updates` fails its check, because writes would still stop after the repair. That case needs a backup.
 - It writes a decision row first. The row names the kept file and says that the owner accepts the loss.

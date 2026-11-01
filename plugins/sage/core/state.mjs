@@ -1236,10 +1236,10 @@ function settleFailure(dir, error) {
  * cannot finish, here or from the real folder or on a newer sage, the next write can work, and decisions.tsv can take the
  * decision row. It writes nothing itself.
  */
-function stuckChange(dir, skip) {
+function stuckChange(dir, skip, env) {
   if (!hasPendingWrite(dir)) refuse("This logbook has no saved change, so there is nothing to repair. Nothing changed.");
   const real = realpathSync(dir);
-  if (real !== resolve(dir)) refuse(`This logbook is reached through a link, so its saved change may finish from the real folder ${visible(real)}. Nothing changed. Run sage on a path with no link: put the folder back in place of the link, or set SAGE_HOME to the real folder's parent. Then any write finishes the change or says what to do.`);
+  if (real !== resolve(dir)) refuse(`This logbook is reached through a link, so its saved change may finish from the real folder ${visible(real)}. Nothing changed. Run sage on a path with no link: put the folder back in place of the link, or set ${isShared(dir, env) ? "SAGE_SHARED_HOME" : "SAGE_HOME"} to the real folder's parent. Then any write finishes the change or says what to do.`);
   try { verifyPendingWrite(dir, SAVED); }
   catch (error) {
     const failure = settleFailure(dir, error);
@@ -2792,7 +2792,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       // decision; a table reset without the others leaves the check failing, so nothing passes before the repair is whole.
       // A stuck saved change takes the same order: its decision, then its marker goes aside. A table that it left damaged
       // stays damaged, and the check says so.
-      const change = opt["accept-change-loss"] ? stuckChange(dir, skip) : undefined;
+      const change = opt["accept-change-loss"] ? stuckChange(dir, skip, env) : undefined;
       const tables = skip.map((table) => {
         const file = join(dir, `${table}.tsv`);
         try {
