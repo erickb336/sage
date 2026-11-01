@@ -607,8 +607,9 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   }
   if (SPAWN.test(f.tool)) {
     const under = thread.child && underSage(thread);
+    if (under && realLead(thread) && f.tool.endsWith("resume_agent")) return refuse(thread, LEAD_RESUME);
     if (under === false) return undefined;
-    const why = !under ? UNREAD_ROLE : realLead(thread) && f.tool.endsWith("resume_agent") ? LEAD_RESUME : childSpawn(thread, f.input.task_name);
+    const why = under ? childSpawn(thread, f.input.task_name) : UNREAD_ROLE;
     return why ? refuse(thread, why) : undefined;
   }
   if (f.tool === "apply_patch") {
