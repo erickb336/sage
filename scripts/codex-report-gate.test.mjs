@@ -2,6 +2,7 @@
 // The input shape is a SubagentStop input that stock Codex 0.160.0 sent in run R1648 (paths replaced).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -130,7 +131,7 @@ test("T483: the chief's review child keeps its report with the head that the gat
   const twice = run(), first = child(`/root/sage_code_reviewer_t12_${twice.toLowerCase()}`), second = child(`/root/sage_code_reviewer_t12_${twice.toLowerCase()}`);
   begin(first);
   begin(second);
-  assert.deepEqual(end(second), { systemMessage: `sage: ${twice}'s report is not kept: this agent is not the child that started for ${twice}, so it backs no verdict.` });
+  assert.deepEqual(end(second), { systemMessage: `sage: ${twice}'s report is not kept: this agent is not the child that started for ${twice}.` });
   assert.deepEqual(end(first), {}, "the bound child's report is kept");
   assert.match(end(first, clean.replace("npm test passed", "a second stop")).systemMessage ?? "", /^sage: R\d+'s report is not kept: (?!this agent)/, "a second report of the bound child is refused, and said");
   // No start, no run in the task name, another role or task, or a first stop without the full report: nothing is kept.
@@ -145,13 +146,116 @@ test("T483: the chief's review child keeps its report with the head that the gat
   }
 });
 
+test("T585: an arena keeps the reports of its candidates and its judge, and a candidate's SHA comes from its own branch", async () => {
+  const { tool } = await import(pathToFileURL(TOOL));
+  const project = realpathSync(mkdtempSync(join(dir, "arena-")));
+  const git = (...args) => spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).stdout.trim();
+  const commit = (message) => { git("commit", "-q", "--allow-empty", "-m", message); return git("rev-parse", "HEAD"); };
+  git("init", "-q", "-b", "codex/t1");
+  const base = commit("task branch");
+  git("checkout", "-q", "-b", "codex/t1-a");
+  const headA = commit("candidate a");
+  git("checkout", "-q", "-b", "codex/t1-b", "codex/t1");
+  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", project], { encoding: "utf8", env: ENV });
+  const ok = (...args) => { const r = sage(...args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  ok("init");
+  ok("task", "add", "--priority", "P2", "--title", "arena", "--size", "small");
+  ok("task", "T1", "set", "branch=codex/t1");
+  const book = ok("logbook"), kept = (id) => JSON.parse(readFileSync(join(book, "kept", `${id}.json`), "utf8"));
+  const report = (id) => `STATUS done\nRESULT PASS\nEVIDENCE npm test passed for ${id}\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none`;
+  let threads = 0;
+  const add = (role, ...args) => ok("run", "add", "T1", "--role", role, ...args).split(" ")[0];
+  const spawned = (role, id) => {
+    const file = join(dir, `arena-${++threads}.jsonl`);
+    writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `01a1726e-0000-7000-8000-${String(threads).padStart(12, "0")}`, agent_path: `/root/sage_${role}_t1_${id.toLowerCase()}` } }) + "\n");
+    return file;
+  };
+  const start = (file) => assert.equal(spawnSync("node", [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "SubagentStart", session_id: "s", transcript_path: file, cwd: project }), encoding: "utf8", env: ENV }).status, 0);
+  const finish = (file, text) => gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: text }));
+  // A child runs from its start (the brief hook binds it) to its stop (the gate keeps its report); `during` runs between them.
+  const play = (role, id, during = () => {}) => {
+    const file = spawned(role, id);
+    start(file);
+    during();
+    assert.deepEqual(finish(file, report(id)), {});
+  };
+  // A candidate on its own branch: its report is kept exactly, with the head of that branch, not of the task's branch.
+  const a = add("implementer", "--branch", "codex/t1-a", "--candidate", "A");
+  play("implementer", a);
+  assert.deepEqual([kept(a).text, kept(a).sha, kept(a).role], [report(a), headA, "implementer"]);
+  assert.notEqual(headA, base);
+  // A candidate that commits during its run keeps the head of its branch at the stop.
+  const b = add("implementer", "--branch", "codex/t1-b", "--candidate", "B");
+  let headB;
+  play("implementer", b, () => { headB = commit("candidate b moves"); });
+  assert.deepEqual([kept(b).text, kept(b).sha], [report(b), headB]);
+  // So does a judge on its own branch, and a designer.
+  const judgeRun = add("arena-judge", "--branch", "codex/t1-judge");
+  git("branch", "-q", "codex/t1-judge");
+  let headJudge;
+  play("arena_judge", judgeRun, () => { git("checkout", "-q", "codex/t1-judge"); headJudge = commit("the judge grafts"); });
+  assert.deepEqual([kept(judgeRun).text, kept(judgeRun).sha, kept(judgeRun).role], [report(judgeRun), headJudge, "arena-judge"]);
+  // A branch that the run creates keeps its head at the stop.
+  const c = add("designer", "--branch", "codex/t1-c");
+  let headC;
+  play("designer", c, () => { git("checkout", "-q", "-b", "codex/t1-c"); headC = commit("the design"); });
+  assert.deepEqual([kept(c).sha, kept(c).role], [headC, "designer"]);
+  // A branch that is gone at the stop gives no SHA. The gate never reads the task's branch instead.
+  git("branch", "-q", "codex/t1-d");
+  const d = add("implementer", "--branch", "codex/t1-d", "--candidate", "D");
+  play("implementer", d, () => git("branch", "-q", "-D", "codex/t1-d"));
+  assert.equal(kept(d).sha, "");
+  // A review or QA run with --branch of another branch reads the branch of its task, and the other branch does not matter.
+  for (const role of ["code-reviewer", "qa"]) {
+    const id = add(role, "--branch", "codex/t1-a");
+    play(role.replaceAll("-", "_"), id, () => git("branch", "-q", "-f", "codex/t1-a", headB));
+    assert.equal(kept(id).sha, base, role);
+    git("branch", "-q", "-f", "codex/t1-a", headA);
+  }
+  // When the branch of its task moves during the run, it gets no SHA, as a run with no --branch.
+  for (const role of ["code-reviewer", "qa"]) {
+    const id = add(role, "--branch", "codex/t1-a"), before = git("rev-parse", "codex/t1");
+    play(role.replaceAll("-", "_"), id, () => git("branch", "-q", "-f", "codex/t1", headB));
+    assert.equal(kept(id).sha, "", role);
+    git("branch", "-q", "-f", "codex/t1", before);
+  }
+  // The retained reports compare by digest, as the chief compares them with report_compare.
+  // The comparison wants real paths, as the MCP server has them; the folder of the test may sit behind a link.
+  const real = realpathSync(dir), here = { ...ENV, HOME: join(real, "home"), CODEX_HOME: join(real, "codex-home") };
+  const digest = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+  for (const id of [a, b, judgeRun]) {
+    assert.deepEqual(tool.compareRetainedReport({ project, task: "T1", run: id, sha256: digest(report(id)) }, here), { status: "match" }, id);
+    assert.deepEqual(tool.compareRetainedReport({ project, task: "T1", run: id, sha256: digest(`${report(id)} `) }, here), { status: "mismatch" }, id);
+  }
+  // A candidate backs no verdict, so a report that is not kept says only what happened.
+  const candidate = () => add("implementer", "--branch", `codex/t1-e${++threads}`);
+  const other = candidate(), bound = spawned("implementer", other), stranger = spawned("implementer", other);
+  start(bound);
+  start(stranger);
+  assert.deepEqual(finish(stranger, report(other)), { systemMessage: `sage: ${other}'s report is not kept: this agent is not the child that started for ${other}.` });
+  const again = candidate(), twice = spawned("implementer", again);
+  start(twice);
+  assert.deepEqual(finish(twice, report(again)), {});
+  assert.deepEqual(finish(twice, `${report(again)}\nAnother report`), { systemMessage: `sage: ${again}'s report is not kept: ${again} already has a kept report, and a report is kept once: this other report of ${again} is not kept.` });
+  const late = candidate(), after = spawned("implementer", late);
+  ok("run", "done", late, "--status", "blocked");
+  start(after);
+  assert.deepEqual(finish(after, report(late)), { systemMessage: `sage: ${late}'s report is not kept: no child started for ${late} while it ran.` });
+  const ended = candidate(), stopped = spawned("implementer", ended);
+  start(stopped);
+  ok("run", "done", ended, "--status", "blocked");
+  assert.deepEqual(finish(stopped, report(ended)), { systemMessage: `sage: ${ended}'s report is not kept: ${ended} ended as blocked before this stop, so no report is kept.` });
+});
+
 test("T483 R1933-2: a review child's task name gives its role, task and run, also for ids of many digits", async () => {
   const { reviewChild } = await import(pathToFileURL(GATE));
   const of = (name, path = `/root/${name}`) => reviewChild({ id: "thread-1", agent_path: path });
   assert.deepEqual(of("sage_code_reviewer_t483_r1932"), { role: "code-reviewer", task: "T483", run: "R1932", thread: "thread-1" });
   assert.deepEqual(of("sage_qa_t12_r40"), { role: "qa", task: "T12", run: "R40", thread: "thread-1" });
   assert.deepEqual(of("sage_security_reviewer_t1_r9"), { role: "security-reviewer", task: "T1", run: "R9", thread: "thread-1" });
-  for (const name of ["sage_implementer_t12_r40", "sage_qa_t12", "sage_qa_t012_r40", "sage_qa_t12_r40x", "sage_qa_tdd_rdd"]) assert.equal(of(name), undefined, name);
+  assert.deepEqual(of("sage_implementer_t12_r40"), { role: "implementer", task: "T12", run: "R40", thread: "thread-1" });
+  assert.deepEqual(of("sage_arena_judge_t12_r41"), { role: "arena-judge", task: "T12", run: "R41", thread: "thread-1" });
+  for (const name of ["sage_lead_t12_r40", "sage_qa_t12", "sage_qa_t012_r40", "sage_qa_t12_r40x", "sage_qa_tdd_rdd"]) assert.equal(of(name), undefined, name);
   assert.equal(of("sage_qa_t12_r40", "/root/sage_lead_t12_r1/sage_qa_t12_r40"), undefined, "a child of a child");
 });
 
@@ -161,7 +265,8 @@ test("T560: a review child's unreadable report gets one fix chance at its first 
   assert.match(message.reason, /^sage: the report check cannot read your report: RESULT is FINDINGS, but FINDINGS is none\. Give each field once/);
   assert.equal(gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12_r40"), last_assistant_message: unreadable, stop_hook_active: true })).decision, undefined, "the second stop goes through");
   assert.equal(gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12_r40"), last_assistant_message: FULL })).decision, undefined, "a readable report is not blocked");
-  assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/sage_implementer_t12_r40"), last_assistant_message: unreadable })), {}, "a role that backs no verdict is not read");
+  assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/sage_lead_t12_r40"), last_assistant_message: unreadable })), {}, "a role that backs no verdict is not read");
+  for (const role of ["implementer", "arena_judge"]) assert.equal(gate(stop({ agent_transcript_path: transcript(`/root/sage_${role}_t12_r40`), last_assistant_message: unreadable })).decision, undefined, `${role} backs no verdict, so it is not read`);
 });
 
 test("an agent without the sage_ task name passes, with or without a report", () => {
