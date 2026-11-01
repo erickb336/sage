@@ -89,9 +89,9 @@ A judge scores them against a rubric that they do not see. It makes a new branch
 
 What happens next depends on the arena:
 
-- **A build:** the judge opens a pull request from its branch, and that version goes through reviews and QA like any build.
-- **A design:** the PE checks the version, you approve it, and the build starts on a new branch from main.
+- **A build:** the judge opens a pull request from its branch, and that version goes through reviews and QA like any build. A build arena runs only on a tiny or small task, or after a design that you approved.
+- **A design:** the judge saves the final design as a page, the PE checks it, you approve that page, and the build starts on a new branch from main. An arena on a large task is always a design arena: it stands for the task's design step.
 
-A candidate's branch never merges: the state tool refuses it at verified and at the merge check.
+Until a judge ends done, the task cannot reach you as ready: the state tool, the merge check and `sage-pr create` refuse it. A candidate's branch never merges, for the same reason.
 
 Candidate branches and pages stay until you delete them, and so does the judge's branch of a design. A merge deletes the branch that it lands, and its commits are in main. Worktrees go at the end of the task.

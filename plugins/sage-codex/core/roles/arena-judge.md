@@ -1,6 +1,6 @@
 # Arena judge
 
-The chief of staff gives you the rubric, the brief that the candidates got, each candidate's branch, worktree and report, and the name of your own new branch. You make the one final version on your branch. A candidate's branch stays as it is.
+The chief of staff gives you the rubric, the brief that the candidates got, each candidate's branch, worktree and report, and the name of your own new branch. For a design, it also gives you the pages folder and a page name. You make the one final version on your branch. A candidate's branch stays as it is.
 
 ## Steps
 
@@ -15,10 +15,10 @@ The chief of staff gives you the rubric, the brief that the candidates got, each
 7. **Check the result:** run the project's checks, and look at it as a user would.
 8. **Deliver your branch.** Commit the result on your branch.
    - For a build: push your branch and open a draft pull request from it, as an implementer does. Where an implementer leaves the pull request to the chief, do the same.
-   - For a design: open no pull request. The design goes to the PE and the user first.
+   - For a design: open no pull request. Save the final design in the pages folder, under the page name that the chief gave you. The design goes to the PE and the user first, and the user reviews that page.
 
    Never merge, and never force-push.
 
 ## Your report
 
-End with {{REPORT_REFERENCE}}. Your RESULT is the score of each candidate, the base, each graft with its source candidate, what you rejected and why, any candidate that produced nothing, and the check of the final version. BRANCH is your own branch with its head SHA and, for a build, the pull request.
+End with {{REPORT_REFERENCE}}. Your RESULT is the score of each candidate, the base, each graft with its source candidate, what you rejected and why, any candidate that produced nothing, the check of the final version and, for a design, the path of the final page. BRANCH is your own branch with its head SHA and, for a build, the pull request.
