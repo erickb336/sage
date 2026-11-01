@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Principles Review</title>
+<style>:root{--bg:#f0f0f1;--panel:#ffffff;--panel2:#f6f6f7;--text:#0a0a0a;--muted:#57575c;--line:#e0e0e3;--edge:#87878d;--accent:#2a5fe6;--accent-soft:#edf2ff;--link:#2a5fe6;--need:#bf3a0c;--need-soft:#fff0e8;--ok:#16794a;--ok-soft:#e6f5ed;--run:#5a3fc9;--run-soft:#f1eefc;--warn:#875800;--warn-soft:#fbf2df;--ink:#323137;--ink-fg:#fafafa;--bar-h:64px}
+@media (prefers-color-scheme:dark){:root{--bg:#0c0c0d;--panel:#18181a;--panel2:#121213;--text:#ededed;--muted:#a8a8ad;--line:#2e2e32;--edge:#6e6e75;--accent:#86a2ff;--accent-soft:#1f2747;--link:#93acff;--need:#ff8a52;--need-soft:#3b1e12;--ok:#4cc38a;--ok-soft:#143020;--run:#ad9bff;--run-soft:#2a2145;--warn:#e8ad4a;--warn-soft:#352812;--ink:#f4f4f5;--ink-fg:#121213}}
+*{box-sizing:border-box}[hidden]{display:none!important}
+html{background:var(--bg);scroll-padding-top:calc(var(--bar-h) + 44px);-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;overflow-wrap:anywhere}
+a{color:var(--link)}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button,textarea{font:inherit;color:inherit}
+h1{font-size:24px;line-height:1.2;margin:0 0 8px;letter-spacing:-.015em}h2{font-size:16px;margin:0;letter-spacing:-.005em}h3{font-size:15px;line-height:1.3;margin:0}
+p{margin:0 0 8px}
+.proposal-flag{background:var(--warn-soft);color:var(--warn);font-weight:600;padding:8px 16px;text-align:center;border-bottom:1px solid var(--line)}
+.intro{max-width:880px;margin:0 auto;padding:24px 16px 8px}.lead{font-size:16px}
+.tally{display:flex;flex-wrap:wrap;gap:6px 16px;list-style:none;margin:12px 0;padding:0}.tally strong{font-size:18px}
+.h-how{margin-top:16px;font-size:14px}
+.key{margin:8px 0;display:grid;gap:6px}.key div{display:flex;gap:10px;align-items:baseline}.key dt{flex:0 0 72px}.key dd{margin:0}
+.k{display:inline-block;width:72px;text-align:center;border-radius:6px;padding:1px 0;font-weight:600;font-size:13px}
+.k.m-keep{background:var(--ok-soft);color:var(--ok)}.k.m-change{background:var(--warn-soft);color:var(--warn)}.k.m-drop{background:var(--need-soft);color:var(--need)}
+.hint{color:var(--muted)}
+.glance{margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}.glance summary{font-weight:600;cursor:pointer;min-height:28px}
+.glgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px 24px;margin-top:8px}.gl h3{font-size:13px;color:var(--muted);font-weight:600;margin-bottom:4px}.gl ul{margin:0;padding:0;list-style:none}.gl li{padding:2px 0}.from{color:var(--muted);font-size:12.5px;display:block}
+.banner{margin:8px auto;max-width:880px;padding:8px 14px;border-radius:8px}.banner.warn{background:var(--need-soft);color:var(--need);font-weight:600}
+.bar{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--line);margin-top:12px}
+.bar .banner{flex-basis:100%;margin:0;max-width:none}
+.progress{display:flex;flex-direction:column;gap:4px;min-width:150px;flex:1;font-weight:600}
+.meter{display:block;height:4px;border-radius:2px;background:var(--line);overflow:hidden;max-width:320px}#meter-fill{display:block;height:100%;width:0;background:var(--ok);transition:width .16s}
+.status{flex-basis:100%;margin:0;color:var(--muted);font-size:13px;min-height:0}.status:empty{display:none}.status.good{color:var(--ok);font-weight:600}.status.bad{color:var(--need);font-weight:600}.status button{margin-left:8px}
+.primary{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:0 16px;min-height:44px;font-weight:600;cursor:pointer}
+@media (prefers-color-scheme:dark){.primary{color:#0c0c0d}}
+.quiet{background:transparent;border:1px solid var(--edge);border-radius:8px;padding:0 14px;min-height:44px;cursor:pointer}.quiet.danger{border-color:var(--need);color:var(--need)}
+.linkish{background:none;border:0;padding:0;color:var(--link);text-decoration:underline;cursor:pointer}
+main{max-width:1560px;margin:0 auto;padding:12px 16px 24px}
+.filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.chip{border:1px solid var(--edge);background:var(--panel);border-radius:999px;padding:0 12px;min-height:36px;cursor:pointer}.chip[aria-pressed="true"]{background:var(--ink);color:var(--ink-fg);border-color:transparent}
+.empty{padding:16px;background:var(--panel);border-radius:10px;border:1px dashed var(--edge);text-align:center}
+table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed}
+thead th{position:sticky;top:var(--bar-h);z-index:3;background:var(--bg);text-align:left;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;padding:6px 12px;border-bottom:1px solid var(--line)}
+thead th:nth-child(1),thead th:nth-child(2){width:33%}thead th:nth-child(3){width:20%}thead th:nth-child(4){width:14%}
+.group th{text-align:left;padding:20px 4px 8px;background:var(--bg)}
+tbody tr:not(.group) td{vertical-align:top;padding:14px 12px;background:var(--panel);border-bottom:1px solid var(--line);border-right:1px solid var(--line)}
+tbody tr:not(.group) td:first-child{border-left:3px solid transparent}tbody tr[data-mark="keep"] td:first-child{border-left-color:var(--ok)}tbody tr[data-mark="change"] td:first-child{border-left-color:var(--warn)}tbody tr[data-mark="drop"] td:first-child{border-left-color:var(--need)}
+td.c-old{background:var(--panel2)!important;color:var(--muted)}td.c-old h3{color:var(--text)}
+tr:target td{box-shadow:inset 0 2px 0 var(--accent)}
+.head{display:flex;gap:8px;align-items:flex-start;margin-bottom:6px}.num{flex:none;min-width:22px;height:22px;padding:0 4px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;background:var(--line);color:var(--text);font-size:12px;font-weight:600}
+.origin{font-size:12px;color:var(--muted);margin:2px 0 0}
+.when{font-size:13px}.when span{font-weight:600}
+.md{font-size:14px}.md p{margin:0 0 8px}.md ul,.md ol{margin:0 0 8px;padding-left:20px}.md li{margin:2px 0}.md code{font-size:12.5px;background:var(--line);padding:0 3px;border-radius:3px}
+.src{font-size:11.5px;color:var(--muted);margin:8px 0 0;line-height:1.35}
+details>summary{cursor:pointer}.oldtext>summary{font-size:13px;font-weight:600;margin-bottom:6px;min-height:24px;color:var(--text)}
+.sub{font-size:12px;font-weight:600;color:var(--muted);margin:10px 0 2px}.plain{margin:0;padding-left:18px}.plain li{margin:3px 0}.lost{margin:0}
+.action{margin:0 0 6px;font-weight:600}.badge{display:inline-block;padding:1px 8px;border-radius:6px;font-weight:600;font-size:13px}
+.a-keep{background:var(--ok-soft);color:var(--ok)}.a-rewrite{background:var(--accent-soft);color:var(--accent)}.a-merge{background:var(--run-soft);color:var(--run)}.a-split{background:var(--warn-soft);color:var(--warn)}.a-drop{background:var(--need-soft);color:var(--need)}
+.reason{margin:0}.fit{font-size:13px;margin:0}.uses{margin:8px 0 0;display:flex;flex-direction:column;gap:3px}.use{font-size:12px;color:var(--muted)}.use.none{color:var(--warn)}
+.stick{position:sticky;top:calc(var(--bar-h) + 40px)}
+.marks{display:flex;flex-direction:column;gap:6px}
+.mark{min-height:44px;border:1px solid var(--edge);background:var(--panel);border-radius:8px;cursor:pointer;font-weight:600}
+.mark.m-keep[aria-pressed="true"]{background:var(--ok);border-color:var(--ok);color:var(--panel)}.mark.m-change[aria-pressed="true"]{background:var(--warn);border-color:var(--warn);color:var(--panel)}.mark.m-drop[aria-pressed="true"]{background:var(--need);border-color:var(--need);color:var(--panel)}
+.effect{font-size:12.5px;margin:8px 0 0;color:var(--muted)}.effect:empty{display:none}
+.note{display:block;margin-top:8px;font-size:12.5px;font-weight:600}.note textarea{display:block;width:100%;margin-top:4px;padding:6px 8px;background:var(--bg);border:1px solid var(--edge);border-radius:6px;font-size:14px;font-weight:400;resize:vertical}
+.questions{max-width:880px;margin:28px auto 0}.questions>p{color:var(--muted)}
+.q{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:12px 14px;margin:10px 0}.q legend{font-weight:600;padding:0 6px;display:flex;gap:6px;align-items:baseline}.why{font-size:13px;color:var(--muted)}
+.opts{display:grid;gap:6px}.opt{text-align:left;border:1px solid var(--edge);background:var(--panel);border-radius:8px;padding:8px 12px;cursor:pointer;min-height:44px}.opt[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft)}.optd{display:block;font-size:13px;color:var(--muted)}.rec{font-size:11.5px;color:var(--ok);font-weight:600;margin-left:4px}
+.finish{max-width:880px;margin:24px auto 0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}.finish h2{margin-bottom:4px}
+.finish-actions{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+#preview summary{min-height:28px}#copy-text{width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--edge);border-radius:6px;font:12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}
+footer{max-width:880px;margin:0 auto;padding:12px 16px 32px;color:var(--muted);font-size:12.5px}footer pre{white-space:pre-wrap;font-size:11.5px}
+@media (min-width:1000px){.oldtext>summary{pointer-events:auto}}
+@media (max-width:999px){
+  :root{--bar-h:66px}
+  table,thead,tbody,tr,td,th{display:block;width:100%}thead{display:none}
+  .group th{padding:18px 0 6px}
+  tbody tr:not(.group){margin-bottom:14px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  tbody tr[data-mark="keep"]{border-left:3px solid var(--ok)}tbody tr[data-mark="change"]{border-left:3px solid var(--warn)}tbody tr[data-mark="drop"]{border-left:3px solid var(--need)}
+  tbody tr:not(.group) td{border:0;border-bottom:1px solid var(--line);padding:12px}tbody tr:not(.group) td:last-child{border-bottom:0}tbody tr:not(.group) td:first-child{border-left:0}
+  td::before{content:attr(data-label);display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:4px}
+  .stick{position:static}.marks{flex-direction:row}.mark{flex:1}
+  .oldtext>summary{min-height:32px}
+}
+@media (prefers-reduced-motion:reduce){#meter-fill{transition:none}}
+</style>
+</head>
+<body>
+<div class="proposal-flag">Proposal for review. Nothing here is in force. No principle changes until you agree and a later task builds it.</div>
+<header class="intro">
+  <h1>Principles review</h1>
+  <p class="lead">This page proposes a new set of sage principles in sage's own words: 25 principles become 19. Mark each row, then paste your marks in the chat.</p>
+  <p>Goal: task T573 frees sage from pstack for version 1. No pstack text stays, only its credit. Next: an implementer builds what you mark. Until then, no file of sage changes.</p>
+  <ul class="tally">
+    <li><strong>18</strong> rewrite</li><li><strong>5</strong> merge</li><li><strong>1</strong> split</li><li><strong>1</strong> keep</li><li><strong>0</strong> drop</li>
+  </ul>
+  <h2 class="h-how">Your three marks</h2>
+  <dl class="key">
+    <div><dt><span class="k m-keep">Keep</span></dt><dd>Do what the row proposes.</dd></div>
+    <div><dt><span class="k m-change">Change</span></dt><dd>You want something else. Write what.</dd></div>
+    <div><dt><span class="k m-drop">Drop</span></dt><dd>This principle leaves sage, and its text goes nowhere.</dd></div>
+  </dl>
+  <p class="hint">Press a mark again to clear it. This browser remembers your marks when you reload.</p>
+  <details class="glance" open><summary>The 19 new principles at a glance</summary><div class="glgrid"><div class="gl"><h3>Decide what to build</h3><ul><li><a href="#row-experience-first">Experience first</a></li><li><a href="#row-compare-designs">Compare two or three designs</a></li><li><a href="#row-model-the-domain">Model the domain</a><span class="from"> takes in Foundational thinking, Type System Discipline</span></li><li><a href="#row-build-for-the-end-state">Build for the end state</a><span class="from"> takes in Outcome-Oriented Execution, Redesign From First Principles</span></li></ul></div><div class="gl"><h3>Keep the code simple</h3><ul><li><a href="#row-keep-it-small">Keep it small</a><span class="from"> takes in Foundational thinking, Subtract before you add</span></li><li><a href="#row-easy-to-read">Keep code easy to read</a></li></ul></div><div class="gl"><h3>Make it reliable</h3><ul><li><a href="#row-check-at-the-boundary">Check at the boundary</a></li><li><a href="#row-safe-to-run-twice">Safe to run twice</a></li><li><a href="#row-one-writer">One writer for each thing</a><span class="from"> takes in Foundational thinking</span></li></ul></div><div class="gl"><h3>Prove the result</h3><ul><li><a href="#row-prove-it-works">Prove it works</a><span class="from"> takes in Explain the Number</span></li><li><a href="#row-test-behaviour">Test behaviour, not implementation</a></li><li><a href="#row-one-checked-change">One checked change at a time</a><span class="from"> takes in Foundational thinking</span></li><li><a href="#row-script-the-work">Script the work</a></li></ul></div><div class="gl"><h3>Repair and learn</h3><ul><li><a href="#row-fix-root-causes">Fix root causes</a></li><li><a href="#row-question-the-assumption">Question the shared assumption</a></li><li><a href="#row-seal-the-lesson">Seal the lesson</a></li></ul></div><div class="gl"><h3>Work with the owner and with context</h3><ul><li><a href="#row-ask-only-what-you-must">Ask only what you must</a></li><li><a href="#row-write-for-the-reader">Write for the reader</a></li><li><a href="#row-guard-the-context">Guard the context</a></li></ul></div></div></details>
+</header>
+<noscript><p class="banner warn">The marks need JavaScript. You can still read the whole proposal here.</p></noscript>
+<div class="bar" id="bar">
+  <p class="banner warn" id="storage-warning" hidden>This browser does not keep your marks. Copy the text before you close the page.</p>
+  <div class="progress"><span id="count">0 of 25 rows marked</span><span class="meter" aria-hidden="true"><span id="meter-fill"></span></span></div>
+  <button type="button" class="primary" id="copy">Copy my choices</button>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+</div>
+<main>
+  <div class="filters" role="group" aria-label="Show rows">
+    <button type="button" class="chip" data-filter="all" aria-pressed="true">All rows</button>
+    <button type="button" class="chip" data-filter="open" aria-pressed="false">Not marked</button>
+    <button type="button" class="chip" data-filter="moved" aria-pressed="false">Merges and splits</button>
+  </div>
+  <p class="empty" id="empty" hidden></p>
+  <table role="table" aria-label="Old and new principles">
+    <thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Old</th><th role="columnheader" scope="col">New</th><th role="columnheader" scope="col">Proposal</th><th role="columnheader" scope="col">Your mark</th></tr></thead>
+    <tbody role="rowgroup"><tr role="row" class="group"><th role="columnheader" colspan="4" scope="colgroup"><h2>Decide what to build</h2></th></tr><tr role="row" id="row-experience-first" data-old="experience-first" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">1</span><div><h3>Experience first</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> a product, UX or scope trade-off comes up.</p>
+    <details class="oldtext" open><summary>Old text · 170 words</summary><div class="md"><p>When implementation convenience conflicts with the user's experience, choose the experience.</p><ul><li>Every feature, control and option has to justify itself.</li><li>Ship less, ship better: a polished experience with three features beats a rough one with ten.</li><li>Prototype before committing; a design decision is cheaper in a throwaway sketch than in production code.</li><li>Get the details right: transitions, alignment, spacing, feedback, error states.</li><li>Tighten the core loop: every feature serves the central workflow or gets out of the way.</li></ul><p>The user is whoever consumes the work. For a UI that is the end user. For a library or an internal API it is the colleague who imports it. The engineer who maintains the code next is a user too. Weigh their experience the same way, and explain impact from their perspective.</p><p>Foundations should serve the experience: foundational thinking governs the order of the work, this principle governs the target.</p><p><strong>Stop</strong> when a feature cannot be justified from the user's side. Cut it rather than polish it.</p></div>
+    <p class="src">Source: pstack principle-experience-first, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 58903529d733b1c1</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Experience first</h3><p class="origin">Same name · 147 words</p></div></div>
+      <p class="when"><span>Apply when</span> a choice sets the product, the screens or the scope against what is easy to build.</p>
+      <div class="md"><p>Choose what is best for the person who uses the work, also when another choice is easier to build.</p><p><strong>Who the user is.</strong> For a screen, the user is the person at the screen. For an internal API or a library, the user is the next developer or agent that calls it. The person who maintains the code is a user too.</p><p><strong>Do.</strong></p><ul><li>Make each feature, control and option earn its place.</li><li>Build fewer features, and finish them well.</li><li>Try a design as a quick prototype with sample data before you build it.</li><li>Finish the details: the empty, loading, failure and success states, the spacing and the feedback.</li><li>Describe each effect from the user's side.</li></ul><p><strong>Not when.</strong> The choice has no effect on any user.</p><p><strong>Stop</strong> when you cannot say what a feature gives the user. Remove it. Do not polish it.</p></div>
+      <p class="src">Source: pstack principle-experience-first, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The rule stays. The new text drops the pointer to Foundational thinking, which this proposal splits.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">Fits the owner's rule to prototype the screens first. The state list matches what the designer role already must show.</p>
+    <p class="uses"><span class="use">Hook: design request</span><span class="use">Roles: arena-judge, designer, ux-reviewer</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Experience first">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-compare-designs" data-old="exhaust-the-design-space" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">2</span><div><h3>Exhaust the design space</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> a new interaction or an architectural choice has no precedent in the code.</p>
+    <details class="oldtext" open><summary>Old text · 153 words</summary><div class="md"><p>When the right answer is not obvious, do not build the first idea. Sketch two or three competing designs and compare them side by side before you commit. Building the wrong thing costs more than exploring three options. A second flavour of the first shape does not count as an alternative.</p><p><strong>When it applies.</strong></p><ul><li>A new interaction with no prior art in the code.</li><li>An architectural choice with more than one viable approach.</li><li>A product decision that depends on feel, not logic.</li></ul><p><strong>When it does not.</strong></p><ul><li>Mechanical work with an established way of doing it.</li><li>A bug fix or a refactor with a clear target state.</li><li>A change where the constraints leave one viable approach.</li></ul><p><strong>Stop</strong> exploring once the options are concrete enough to compare and one is clearly better. Record the options you rejected and why, in a few lines, so the reviewer sees the choice.</p></div>
+    <p class="src">Source: pstack principle-exhaust-the-design-space, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 8583310d7297b782</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Compare two or three designs</h3><p class="origin">New name · 140 words</p></div></div>
+      <p class="when"><span>Apply when</span> a new interaction, an architecture choice or a product choice has no clear answer.</p>
+      <div class="md"><p>When the answer is not clear, make two or three designs and compare them before you choose. A design costs less to change before the build than after it.</p><p><strong>Do.</strong></p><ul><li>Give each option a different main idea. A small variant of one idea is not a second option.</li><li>Put the options side by side, with what each one gives up.</li><li>Recommend one.</li><li>For a product choice, give the owner the comparison.</li><li>Write down the rejected options and the reason in a few lines, so that a reviewer sees the choice.</li></ul><p><strong>Not when.</strong></p><ul><li>The work is mechanical, and the project has a known way to do it.</li><li>A repair or a refactor has a clear end state.</li><li>The limits leave one possible design.</li></ul><p><strong>Stop</strong> when you can compare the options and one wins.</p></div>
+      <p class="src">Source: pstack principle-exhaust-the-design-space, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The old name says &quot;exhaust&quot;, but the rule asks for two or three options. The new name says what to do.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">Fits the arena and the designer role. Adds one line: a product choice goes to the owner as a comparison.</p>
+    <p class="uses"><span class="use">Hook: design request</span><span class="use">Roles: arena-judge, designer, pe</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Compare two or three designs">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-foundational-thinking" data-old="foundational-thinking" data-action="split"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">3</span><div><h3>Foundational thinking</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> before writing logic, when choosing core types and data structures or ordering scaffold against features.</p>
+    <details class="oldtext" open><summary>Old text · 176 words</summary><div class="md"><p>Structural decisions protect your options later. Code-level decisions protect simplicity.</p><p><strong>Data structures first.</strong> Get the shape of the data right before writing logic. Define the core types early, trace every way the data is accessed, and choose structures that fit the dominant paths. Once the data is right, the code around it becomes obvious.</p><p>At code level, avoid repeating structure, not every line. Types and data models should converge. Three similar statements still beat a premature abstraction. Prefer explicit over clever.</p><p><strong>Shared state.</strong> Before two actors share state, ask what happens if another one changes it at the same time. If the answer is not &quot;nothing&quot;, isolate.</p><p><strong>Scaffold first.</strong> If something helps every later phase, do it first: build and test infrastructure, shared types, a check that runs on every change. Setup before features, tests before fixes. Keep each change small and single-purpose. Each increment should land one coherent abstraction or deepen one that exists, not spread a new capability across callers as special cases.</p><p>Subtraction comes before scaffolding: remove dead code first, then lay foundations.</p></div>
+    <p class="src">Source: pstack principle-foundational-thinking, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 864b827e8199d946</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>No text of its own</h3><p class="origin">Splits into 4 principles</p></div></div>
+      <p class="sub">Where each part goes</p><ul class="plain"><li><a href="#row-model-the-domain">Model the domain</a>: Get the data right before the logic, and the line that three similar statements beat an early abstraction.</li><li><a href="#row-one-writer">One writer for each thing</a>: Ask what happens when another actor changes shared state.</li><li><a href="#row-one-checked-change">One checked change at a time</a>: Do the setup that helps each later change first, and keep each change to one purpose.</li><li><a href="#row-keep-it-small">Keep it small</a>: Remove first, then lay the base.</li></ul>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-split">Split</span></p>
+    <p class="reason">It holds four separate rules under one vague name. Each part has a better home, so the mixed principle goes.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">The design hook moment and the PE role load it today. Model the domain takes both.</p>
+    <p class="uses"><span class="use">Hook: design request</span><span class="use">Roles: pe</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Foundational thinking">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-model-the-domain" data-old="model-the-domain" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">4</span><div><h3>Model the Domain</h3><p class="origin">pstack, as it is</p></div></div>
+    <p class="when"><span>Apply when</span> writing stateful logic, or when code branches a lot or repeats a shape assumption across files.</p>
+    <details class="oldtext" open><summary>Old text · 284 words</summary><div class="md"><p>Encode the real domain in a data structure instead of scattering it across conditionals.</p><p><strong>Why:</strong> Scattered booleans, repeated shape assumptions, and branching spread across files are accidental complexity. A structure that matches the domain makes invalid states unrepresentable and deletes branches. Choosing it at write time is cheap. Recovering it later reads as a refactor and gets deferred.</p><p><strong>Reach for structures like these:</strong></p><ul><li>A state machine instead of scattered booleans, phases, or lifecycle checks.</li><li>A typed object/model instead of loose parameters or repeated shape assumptions.</li><li>A map, registry, lookup table, or discriminated union instead of branching spread across files.</li><li>A reducer or command/event model instead of ad hoc state mutations.</li><li>A module organized around one body of domain knowledge instead of a sequence such as load, validate, transform, and save. Execution order is not ownership.</li><li>A small module boundary that gathers repeated behavior, ownership, or invariants.</li><li>A queue, cache, index, graph/tree, or normalized collection where the data access pattern calls for it.</li><li>Any other structure that fits. When none fits, work out what the code must never allow and how the data gets read, then find the structure that encodes exactly that.</li></ul><p>Do not force an abstraction. Prefer boring code if the current shape is already clear, local, and unlikely to grow. Be skeptical of an abstraction that adds indirection without removing branches, duplicated rules, invalid states, or lifecycle risk.</p><p>The sign that you skipped this is a new feature that grows an existing if/else chain by one more branch, or a second boolean that must stay in sync with the first. Temporal decomposition is another sign. Phase-named modules repeat the same domain rules across steps.</p></div>
+    <p class="src">Source: pstack principle-model-the-domain, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, as it is</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Model the domain</h3><p class="origin">New name · 184 words</p></div></div>
+      <p class="when"><span>Apply when</span> before you write logic, when you choose the core data, or when code repeats a branch or a shape.</p>
+      <div class="md"><p>Get the data right before you write the logic. Put the rules of the domain in one structure, not in conditions across many files. Good data makes the code short.</p><p><strong>Do.</strong></p><ul><li>List how the code reads and changes the data. Choose the structure that fits the main paths.</li><li>Make a wrong value impossible to build. Use a state machine, a tagged variant or a lookup table, not two flags that must agree.</li><li>Give each fact one source, and derive the rest.</li><li>Organize a module around one body of knowledge, not around the order of execution.</li></ul><p><strong>In a typed language.</strong></p><ul><li>Give values with different meanings different types, such as two kinds of id.</li><li>Do not use a cast to silence the compiler. Prove the fact, or check it.</li><li>Make the compiler fail when a new variant has no case.</li><li>Derive a type from its schema.</li></ul><p><strong>Not when.</strong> The shape is clear, local and not likely to grow. Three similar lines cost less than an early abstraction.</p><p><strong>Stop</strong> when the next feature adds a row, not a branch.</p></div>
+      <p class="src">Source: pstack principle-model-the-domain, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, rewritten in sage's words<br>Also from: pstack principle-foundational-thinking, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words<br>Also from: pstack principle-type-system-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">It takes the data part of Foundational thinking and the core of Type system discipline, so one principle covers how to shape data.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">No hook and no role load it today. It takes the design moment and the PE role. The type rules are one short section, because sage works in any language.</p>
+    <p class="uses"><span class="use none">Skill listing only</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Model the domain">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-type-system-discipline" data-old="type-system-discipline" data-action="merge"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">5</span><div><h3>Type System Discipline</h3><p class="origin">pstack, as it is</p></div></div>
+    <p class="when"><span>Apply when</span> designing types, reviewing a function signature, or writing code in any statically-typed language.</p>
+    <details class="oldtext" open><summary>Old text · 723 words</summary><div class="md"><p>The type checker is a proof assistant. Use it to eliminate impossible states, mismatched primitives, and unhandled variants at compile time. A case the types let you ignore becomes a runtime failure the compiler could have stopped. Prefer defining errors and special cases out of existence over proliferating handlers. Unrepresentable states, total functions, and interface redesign (the patterns below) are the tools.</p><p>Applies to any typed language. Skills like <code>typescript-best-practices</code> ground it in specific syntax.</p><p><strong>The patterns:</strong></p><ul><li><strong>Make illegal states unrepresentable.</strong> Model variants as sum types: discriminated unions in TypeScript, enums with payloads in Rust/Swift/Kotlin, sealed classes in Scala, ADTs in Haskell/OCaml. Don't model state as a bag of optional fields where contradictory combinations compile. A subtle anti-pattern: <code>{ completed: boolean; completedAt?: Date }</code> admits <code>completed: true; completedAt: undefined</code>, which is meaningless. Derive the boolean from a single source like <code>completedAt !== null</code>, or model the variants explicitly as <code>{ kind: 'open' } | { kind: 'done'; at: Date }</code>. If a bug forces the question &quot;wait, can this combination actually happen?&quot;, the type is too loose.</li><li><strong>Types are constructions, not restrictions.</strong> Build the type up from the values you want instead of carving them out of a looser type with checks. The invariant that seems to need a refinement type is usually a construction away. A non-empty list is a head plus a rest, not a list with a length check. A valid time range is a start plus a duration, not two timestamps you must keep ordered. No representation is privileged. A list of pairs is an even-length list if you interpret it that way, so choose the shape that cannot build the illegal value and expose the interface callers need on top.</li><li><strong>Brand semantic primitives.</strong> <code>UserId</code> and <code>OrderId</code> are strings underneath but should not be interchangeable. Newtypes in Rust, opaque types in Swift, value classes in Kotlin, phantom types in Haskell, branded intersections in TypeScript. Validate once at creation, trust the type downstream.</li><li><strong>External data is untyped until parsed.</strong> RPC payloads, JSON, IPC messages, CLI args, config files, environment variables, database rows. Have a parse function at every boundary that turns unstructured input into the typed model. See the <strong>boundary-discipline</strong> principle skill for where to put validation.</li><li><strong>Don't lie to the type system.</strong> Casts, unsafe coercions, and assertion functions that bypass the compiler are latent runtime crashes. If the compiler can't prove a fact, prove it (validate, narrow, refine the model) or accept that the cast is a hazard.</li><li><strong>Exhaustive matching is the compiler's job.</strong> When you match on a sum type, the compiler must fail compilation if a new variant is added without handling. Use the idiom your language provides: <code>never</code>-typed binding in TypeScript, unannotated <code>match</code> in Rust, <code>-Wincomplete-patterns</code> in Haskell, sealed-class match exhaustiveness in Kotlin.</li><li><strong>Derive types from authoritative schemas.</strong> When a protocol buffer, OpenAPI spec, GraphQL schema, database migration, or design-system token file defines a shape, derive from it instead of hand-rolling a parallel type. See the <strong>encode-lessons-in-structure</strong> principle skill.</li><li><strong>Strengthen a type only where partiality appears.</strong> A runtime assertion, null check, or &quot;this should never happen&quot; throw marks the place a type is too weak. Push that check up into the type. Then stop. The type system's job is to track the cases each use site must handle, not to describe the data as precisely as possible. Prefer total functions. <code>sum</code> of an empty list is 0, so it takes the plain list. <code>head</code> of an empty list has no answer, so it demands the non-empty one.</li></ul><p><strong>The tests:</strong></p><ul><li>&quot;Can I write a comment explaining when this combination of fields is valid?&quot; If yes, the type is too loose. Split it into a sum type.</li><li>&quot;Do two of my function arguments share a primitive type but mean different things?&quot; Brand them.</li><li>&quot;Where did this <code>any</code>, this <code>as</code>, this <code>assertNotNull</code> come from?&quot; Trace it to the boundary and validate there instead.</li><li>&quot;If a new variant is added next month, will the compiler tell the next agent where to add a case?&quot; If no, the match isn't exhaustive.</li><li>&quot;Is this type duplicating a shape another file owns?&quot; Derive instead.</li><li>&quot;Am I strengthening this type to keep an operation total, or just to be more precise?&quot; If nothing would otherwise panic, keep the plain type.</li></ul></div>
+    <p class="src">Source: pstack principle-type-system-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, as it is</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>No text of its own</h3><p class="origin">Goes into <a href="#row-model-the-domain">Model the domain</a></p></div></div>
+      <p class="sub">What moves</p><ul class="plain"><li>Wrong values that cannot be built, branded values, no false casts, exhaustive matches and derived types go to Model the domain.</li><li>Parse outside data at the entry point goes to Check at the boundary.</li></ul>
+      <p class="sub">What is lost</p><p class="lost">The sections about total functions, and about types as constructions, leave sage.</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-merge">Merge</span> into <a href="#row-model-the-domain">Model the domain</a></p>
+    <p class="reason">It repeats Model the domain and Check at the boundary. At 727 words it is far over the limit of 200.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">On the skill listing only. It names a skill, typescript-best-practices, that sage does not ship.</p>
+    <p class="uses"><span class="use none">Skill listing only</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Type System Discipline">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-build-for-the-end-state" data-old="migrate-callers-then-delete-legacy-apis" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">6</span><div><h3>Migrate callers, then delete legacy APIs</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> a change introduces a new internal API while callers of the old one still exist.</p>
+    <details class="oldtext" open><summary>Old text · 161 words</summary><div class="md"><p>When a new internal API is the right design, migrate its callers and remove the old one in the same change, instead of keeping a compatibility layer.</p><p><strong>The rule.</strong></p><ul><li>Do not keep an old path only because internal callers still use it.</li><li>List the callers, migrate them, and delete the old API now.</li><li>Treat a temporary adapter as exceptional and short-lived, not as architecture.</li><li>Update tests to assert the new contract; delete tests that only protected the old implementation.</li></ul><p><strong>Why.</strong> Keeping both paths doubles the ways through the code, slows cleanup, and makes the code feel append-only.</p><p><strong>Where it applies.</strong> Internal code that your change replaced, within this task. An external caller, or a public interface others depend on, is not yours to break: report it and leave it working. A repair stays within its task; a legacy path outside it is reported, not removed.</p><p><strong>Stop</strong> when the old API has no callers left and is gone.</p></div>
+    <p class="src">Source: pstack principle-migrate-callers-then-delete-legacy-apis, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 09978915a4a11990</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Build for the end state</h3><p class="origin">New name · 173 words</p></div></div>
+      <p class="when"><span>Apply when</span> a new requirement, a new internal API or a planned rewrite changes an existing design.</p>
+      <div class="md"><p>Design the change as if the new requirement was there from the start. Then go to that end state. Do not add a side path that you must remove later.</p><p><strong>Do.</strong></p><ul><li>Read the code that the change touches. Ask what you would build from nothing.</li><li>Replace an old internal API in the same task: list its callers, move them, and delete it.</li><li>Move the tests to the new behaviour. Remove a test that guards only the old code.</li><li>Carry the change into each type, document and example.</li><li>Split a large change into tasks that each merge with passing checks. A break can exist inside one branch, never on main.</li></ul><p><strong>Not when.</strong> Outside callers or a public API depend on the old path. Keep that path working, and report it. A repair stays in its task, so report an old path outside the task.</p><p><strong>Stop</strong> when no caller uses the old path and the old code is gone. An adapter needs a reason and a task that removes it.</p></div>
+      <p class="src">Source: pstack principle-migrate-callers-then-delete-legacy-apis, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words<br>Also from: pstack principle-outcome-oriented-execution, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, rewritten in sage's words<br>Also from: pstack principle-redesign-from-first-principles, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">Three principles say one thing: go to the end state and leave no extra path behind. One text replaces them.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">It keeps the old limit: a repair stays in its task, and a public interface stays up. The refactor hook moment and two roles load it.</p>
+    <p class="uses"><span class="use">Hook: refactor request</span><span class="use">Roles: code-reviewer, implementer</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Build for the end state">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-outcome-oriented-execution" data-old="outcome-oriented-execution" data-action="merge"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">7</span><div><h3>Outcome-Oriented Execution</h3><p class="origin">pstack, as it is</p></div></div>
+    <p class="when"><span>Apply when</span> during planned rewrites and migrations with explicit phase boundaries.</p>
+    <details class="oldtext" open><summary>Old text · 102 words</summary><div class="md"><p>Optimize for the intended, verifiable end state rather than preserving smooth intermediate states.</p><p><strong>Why:</strong> Keeping every intermediate step fully stable often creates temporary compatibility code that becomes long-lived debt. Converge on the target architecture and prove correctness at explicit verification boundaries.</p><p><strong>Core rule:</strong></p><ul><li>Prioritize end-state integrity over transitional stability</li><li>Intermediate breakage is acceptable when it is planned, scoped, and reversible</li></ul><p><strong>Guardrails:</strong></p><ul><li>Use this for planned rewrites and migrations with explicit phase boundaries</li><li>Declare where temporary breakage is acceptable</li><li>Keep high-signal checks for actively touched areas while migrating</li><li>Require full static and runtime verification at plan completion</li></ul></div>
+    <p class="src">Source: pstack principle-outcome-oriented-execution, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, as it is</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>No text of its own</h3><p class="origin">Goes into <a href="#row-build-for-the-end-state">Build for the end state</a></p></div></div>
+      <p class="sub">What moves</p><ul class="plain"><li>Aim at the end state, and do not keep a compatibility path only to stay smooth.</li></ul>
+      <p class="sub">What is lost</p><p class="lost">The permission for planned breakage on main leaves sage.</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-merge">Merge</span> into <a href="#row-build-for-the-end-state">Build for the end state</a></p>
+    <p class="reason">Its useful part is to aim at the end state. Sage merges only passing commits, so planned breakage stays inside one branch.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">Conflict today: it allows breakage between changes, and One checked change forbids it. The merged text ends the conflict, and it fits the clean cycles.</p>
+    <p class="uses"><span class="use none">Skill listing only</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Outcome-Oriented Execution">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-redesign-from-first-principles" data-old="redesign-from-first-principles" data-action="merge"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">8</span><div><h3>Redesign From First Principles</h3><p class="origin">pstack, as it is</p></div></div>
+    <p class="when"><span>Apply when</span> integrating a new requirement into an existing design.</p>
+    <details class="oldtext" open><summary>Old text · 86 words</summary><div class="md"><p>When integrating a change, don't bolt it onto the existing design. Redesign as if the requirement had been there from the start.</p><ul><li>Read all affected files and understand the current design</li><li>Ask: &quot;if we were writing this from scratch with this new requirement, what would we build?&quot;</li><li>Propagate the change through every reference: types, docs, examples, rationale sections</li><li>Think about the whole redesign, then deliver it incrementally</li></ul><p>This is the method for preserving option value when integrating changes into an existing design.</p></div>
+    <p class="src">Source: pstack principle-redesign-from-first-principles, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, as it is</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>No text of its own</h3><p class="origin">Goes into <a href="#row-build-for-the-end-state">Build for the end state</a></p></div></div>
+      <p class="sub">What moves</p><ul class="plain"><li>Design as if the requirement was there from the start.</li><li>Carry the change into each type, document and example.</li></ul>
+      <p class="sub">What is lost</p><p class="lost">Nothing.</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-merge">Merge</span> into <a href="#row-build-for-the-end-state">Build for the end state</a></p>
+    <p class="reason">Its one idea, to design as if the requirement was always there, is now the first line of Build for the end state.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">On the skill listing only: no hook and no role load it today.</p>
+    <p class="uses"><span class="use none">Skill listing only</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Redesign From First Principles">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr></tbody><tbody role="rowgroup"><tr role="row" class="group"><th role="columnheader" colspan="4" scope="colgroup"><h2>Keep the code simple</h2></th></tr><tr role="row" id="row-keep-it-small" data-old="laziness-protocol" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">9</span><div><h3>Laziness protocol</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> refactoring, judging a diff's size, or tempted to add an abstraction, a layer or a threaded signal.</p>
+    <details class="oldtext" open><summary>Old text · 162 words</summary><div class="md"><p>Aim for the most result with the least code and complexity.</p><ul><li><strong>Prefer deletion.</strong> When asked to refactor or improve, look for removals before additions.</li><li><strong>Keep the call hierarchy flat.</strong> If answering a question means tracing through more than three files or layers, flatten it. A rich interface that hides real work is fine; a chain of thin layers is not.</li><li><strong>Consolidate decisions.</strong> Do not repeat the same choice in several places. Put it behind one source of truth and pass the result on.</li><li><strong>Minimise the diff.</strong> Make the smallest change that solves the problem. Fewer lines beat elegant boilerplate.</li><li><strong>Question the threading.</strong> If the task asks you to pass a new signal through types, schemas, pipelines or similar layers, look for a more direct path first.</li><li><strong>Sweat the small leaks.</strong> Remove tiny pass-throughs and duplicated choices before they spread.</li></ul><p><strong>The test.</strong> If a developer would find the code exhausting to maintain, it is a bad solution.</p></div>
+    <p class="src">Source: pstack principle-laziness-protocol, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 9006579e9e3f3395</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Keep it small</h3><p class="origin">New name · 145 words</p></div></div>
+      <p class="when"><span>Apply when</span> you add, refactor or rewrite code, or you judge the size of a change.</p>
+      <div class="md"><p>Get the result with the least code. Remove first, then build. Each removal makes the next design easier to see.</p><p><strong>Do.</strong></p><ul><li>Look for what you can delete before you add.</li><li>Change as few lines as the problem allows.</li><li>Build for the use that you saw, not for a case that you imagine. Add no extra validator, option or guard.</li><li>Make each decision in one place, and pass on the result.</li><li>Before you carry a new value through many layers, look for a direct path.</li><li>Remove a small pass-through or an empty reference when you see it.</li><li>Treat briefs, skills and instructions the same way: cut each line that adds nothing.</li></ul><p><strong>Not when.</strong> A removal changes a behaviour that the task needs. Report it, and keep the behaviour.</p><p><strong>Stop</strong> when each remaining line does work that the task needs.</p></div>
+      <p class="src">Source: pstack principle-laziness-protocol, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words<br>Also from: pstack principle-foundational-thinking, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words<br>Also from: pstack principle-subtract-before-you-add, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The name does not say the rule. It merges with Subtract before you add, and its rules about layers move to Keep code easy to read.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">This is the most used principle: the refactor hook moment and four roles. The old text has a word that sage flags, &quot;pipelines&quot;.</p>
+    <p class="uses"><span class="use">Hook: refactor request</span><span class="use">Roles: arena-judge, code-reviewer, implementer, pe</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Keep it small">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-subtract-before-you-add" data-old="subtract-before-you-add" data-action="merge"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">10</span><div><h3>Subtract before you add</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> ordering an addition, a refactor or a rewrite.</p>
+    <details class="oldtext" open><summary>Old text · 151 words</summary><div class="md"><p>When evolving a system, remove complexity first, then build.</p><p><strong>Why.</strong> Adding to a complex system compounds its complexity. Removing first leaves less code, shows the essential structure, and usually makes the next design obvious. Default to subtraction.</p><p>Treat simplification as a continual investment. Leave the design a little simpler, and a little more capable, behind the same or a smaller surface than you found it.</p><p><strong>What to do.</strong></p><ul><li>Remove before you construct.</li><li>Cut before you polish: get to the minimum before investing in quality.</li><li>Design for observed usage, not speculative edge cases.</li><li>No speculative validators, parsers or guards beyond what the specification demands.</li><li>Simplify instructions and prompts: remove redundant lines and excess templates.</li><li>When a reference has no content of its own, delete it rather than leaving a stub.</li></ul><p><strong>Stop</strong> subtracting when the next removal would change behaviour the specification asks for. Report that instead.</p></div>
+    <p class="src">Source: pstack principle-subtract-before-you-add, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: a983a50e732c1ed3</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>No text of its own</h3><p class="origin">Goes into <a href="#row-keep-it-small">Keep it small</a></p></div></div>
+      <p class="sub">What moves</p><ul class="plain"><li>Remove first, then build.</li><li>Build for the use that you saw.</li><li>Cut instructions that add nothing.</li><li>Delete an empty reference.</li></ul>
+      <p class="sub">What is lost</p><p class="lost">Nothing.</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-merge">Merge</span> into <a href="#row-keep-it-small">Keep it small</a></p>
+    <p class="reason">&quot;Prefer deletion&quot; and &quot;remove first&quot; are the same rule. Two texts at the refactor moment cost context and add nothing.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">The refactor hook moment and the implementer role load it. Keep it small takes both, so the moment gives one text fewer.</p>
+    <p class="uses"><span class="use">Hook: refactor request</span><span class="use">Roles: implementer</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Subtract before you add">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-easy-to-read" data-old="minimize-reader-load" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">11</span><div><h3>Minimise reader load</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> reviewing or shaping code that is hard to follow.</p>
+    <details class="oldtext" open><summary>Old text · 199 words</summary><div class="md"><p>Maintainability is the work a reader must do to understand the code. Track two things:</p><ol><li><strong>Layers to trace.</strong> How many indirections sit between the question and the answer.</li><li><strong>State to hold.</strong> How much hidden or mutable context the reader must keep in their head.</li></ol><p><strong>Why.</strong> Code is read far more than it is written. The two axes are independent: a flat file with fifty globals is as hard as a six-layer adapter stack.</p><p><strong>What to do.</strong></p><ul><li>Collapse layers that cost more than they save: wrappers with one caller, adapters with no second implementation, indirection that was never needed.</li><li>Make adjacent layers change the abstraction. A layer that repeats the same methods and arguments adds load without compression.</li><li>Shrink the scope of state: pure functions over mutation, locals over fields, fields over module state. Derive instead of synchronising.</li><li>Name the invariant once, at the boundary, not in every consumer.</li><li>Before adding a layer or state, ask whether it saves at least as much reader load elsewhere.</li></ul><p><strong>The test.</strong> Can a new reader answer &quot;where does X come from?&quot; and &quot;what can change X?&quot; in thirty seconds? If not, say so in a finding.</p></div>
+    <p class="src">Source: pstack principle-minimize-reader-load, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 42551c5dc74cd578</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Keep code easy to read</h3><p class="origin">New name · 176 words</p></div></div>
+      <p class="when"><span>Apply when</span> you shape or review code that is hard to follow.</p>
+      <div class="md"><p>Code is easy to maintain when a reader needs little effort to understand it. Measure two things: the layers between a question and its answer, and the hidden or changing state that the reader must remember. Either one alone can make code hard.</p><p><strong>Do.</strong></p><ul><li>Remove a layer that costs more than it gives: a wrapper with one caller, an adapter with one implementation.</li><li>Try to answer a question in three files or fewer.</li><li>Make each layer add a new idea. A layer that repeats the one under it adds only length.</li><li>Make state small: a pure function before mutation, a local before a field, a field before a module variable.</li><li>Derive a value. Do not keep two copies that must agree.</li><li>State a rule about the data once, where the data enters.</li></ul><p><strong>Not when.</strong> A rich interface hides real work. That layer earns its place.</p><p><strong>Stop</strong> when a new reader finds where a value comes from, and what can change it, in thirty seconds. If not, report a low finding.</p></div>
+      <p class="src">Source: pstack principle-minimize-reader-load, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">This ends the overlap with the Laziness protocol: this row owns layers and state, and Keep it small owns size.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">The old text asks for a finding, but standing order 4 says that reviewers report no style. The new text says a low finding, as order 34 does.</p>
+    <p class="uses"><span class="use">Roles: code-reviewer</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Keep code easy to read">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr></tbody><tbody role="rowgroup"><tr role="row" class="group"><th role="columnheader" colspan="4" scope="colgroup"><h2>Make it reliable</h2></th></tr><tr role="row" id="row-check-at-the-boundary" data-old="boundary-discipline" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">12</span><div><h3>Boundary discipline</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> reviewing or writing validation, error handling or framework adapters.</p>
+    <details class="oldtext" open><summary>Old text · 186 words</summary><div class="md"><p>Put validation, type narrowing and error handling at the system's boundaries. Trust internal code. Keep business logic in pure functions; keep the shell thin and mechanical.</p><p><strong>Why.</strong> Scattered validation is noisy, redundant, and gives a false sense of safety. Logic kept out of framework wiring can be tested without the framework.</p><p><strong>What to do.</strong></p><ul><li>At a boundary (command-line arguments, configuration files, external APIs, network input, files): validate, return errors, handle defensively.</li><li>Inside: typed data, errors propagated, no re-validation. Trust the types.</li><li>Across the boundary: expose domain concepts, not the boundary's private representation. Keep general mechanism inside and special-purpose policy at the edge.</li></ul><p><strong>In practice.</strong> Parse raw data into domain types at the boundary. Do not re-export transport, storage or framework types through the public surface. No redundant nil checks deep in call chains when the boundary already validated. Prompt construction, parsing and scoring are pure transforms.</p><p><strong>Two tests.</strong> &quot;Is this data crossing a boundary right now?&quot; If not, validation is redundant. &quot;Can this be a pure function the shell calls?&quot; If yes, extract it.</p><p>As a reviewer, report input that reaches logic unvalidated.</p></div>
+    <p class="src">Source: pstack principle-boundary-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 62ac2862c2caa22d</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Check at the boundary</h3><p class="origin">New name · 166 words</p></div></div>
+      <p class="when"><span>Apply when</span> you write or review validation, error handling or an adapter to a framework.</p>
+      <div class="md"><p>Check data where it enters the system. Inside, trust it. Keep the logic in pure functions, and keep the outer shell thin.</p><p><strong>Do.</strong></p><ul><li>Treat arguments, configuration, files, network input and API replies as unknown. Parse them into your own types at the entry point, and return clear errors.</li><li>Inside, pass typed data and let errors travel up. Do not check the same fact again.</li><li>At an interface, show domain ideas. Do not show the types of your transport, storage or framework.</li><li>Put general mechanism inside, and special policy at the edge.</li></ul><p><strong>Two questions.</strong></p><ul><li>Does this data cross a boundary now? If not, the check is extra.</li><li>Can the shell call this logic as a pure function? If yes, move it.</li></ul><p><strong>Not when.</strong> A test or a local script reads data that it wrote itself.</p><p><strong>Stop</strong> when each entry point has one parser and no inner code repeats its checks. A reviewer reports each input that gets to the logic unchecked.</p></div>
+      <p class="src">Source: pstack principle-boundary-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">&quot;Discipline&quot; says nothing. The new name says the action. It takes the rule to parse outside data from Type system discipline.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">Fits the input risk flag. The security reviewer and PE roles load it.</p>
+    <p class="uses"><span class="use">Roles: pe, security-reviewer</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Check at the boundary">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-safe-to-run-twice" data-old="make-operations-idempotent" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">13</span><div><h3>Make Operations Idempotent</h3><p class="origin">pstack, as it is</p></div></div>
+    <p class="when"><span>Apply when</span> designing commands, lifecycle steps, or processing loops that run amid crashes, restarts, and retries.</p>
+    <details class="oldtext" open><summary>Old text · 166 words</summary><div class="md"><p>Design operations so they converge to the correct state regardless of how many times they run or where they start from. Every state-mutating operation should answer: &quot;What happens if this runs twice? What happens if the previous run crashed halfway?&quot;</p><p><strong>Why:</strong> Commands, lifecycle operations, and processing loops run where crashes, restarts, and retries are normal. If partial state changes the next run's outcome, every restart becomes a debugging session.</p><p><strong>The pattern:</strong></p><ul><li>Convergent startup: scan for existing state, clean stale artifacts, adopt live sessions</li><li>Content-based cleanup: compare by content equivalence, not creation order</li><li>Self-healing locks: use PID-based stale lock detection</li><li>Idempotent scheduling: failed work respawns cleanly, fresh input regenerated after each cycle</li></ul><p><strong>The test:</strong></p><ol><li>What happens if this runs twice in a row?</li><li>What happens if the previous run crashed at every possible point?</li><li>Does re-execution converge to the same end state?</li></ol><p>If any answer is &quot;it depends on what state was left behind,&quot; the operation needs a reconciliation step.</p></div>
+    <p class="src">Source: pstack principle-make-operations-idempotent, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, as it is</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Safe to run twice</h3><p class="origin">New name · 153 words</p></div></div>
+      <p class="when"><span>Apply when</span> you design a command, a lifecycle action or a loop that can crash, restart or retry.</p>
+      <div class="md"><p>Make each operation reach the same correct end state, however many times it runs and wherever the last run stopped.</p><p><strong>Ask.</strong></p><ol><li>What happens when this runs two times?</li><li>What happens when the last run stopped at any point?</li><li>Do all those paths reach the same end state?</li></ol><p>If the answer depends on what the last run left, add an action that repairs the state first.</p><p><strong>Do.</strong></p><ul><li>At the start, read what exists, remove what is stale, and use what is still live.</li><li>Compare by content, not by age or order.</li><li>Write a file whole: write a temporary file, then rename it.</li><li>Let failed work start again from clean input.</li><li>Give a lock a lease, so that it ends when its owner stops.</li></ul><p><strong>Not when.</strong> A command only reads.</p><p><strong>Stop</strong> when a test stops the operation halfway, runs it again and gets the same end state.</p></div>
+      <p class="src">Source: pstack principle-make-operations-idempotent, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The new name uses plain words. The advice to find stale locks by process id goes, because agents must not read the process list.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">Standing order 14 and the hook refuse process lists. Sage's own slots use a lease. On the skill listing only: see question Q3.</p>
+    <p class="uses"><span class="use none">Skill listing only</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Safe to run twice">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-one-writer" data-old="separate-before-serializing-shared-state" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">14</span><div><h3>Separate Before Serializing Shared State</h3><p class="origin">pstack, as it is</p></div></div>
+    <p class="when"><span>Apply when</span> concurrent actors might write to the same file, branch, key, or state object.</p>
+    <details class="oldtext" open><summary>Old text · 176 words</summary><div class="md"><p>When concurrent actors might share mutable state, first ask whether they need the same mutable object. If not, eliminate the sharing. When sharing is real, enforce serialization structurally: lockfiles, sequential phases, exclusive ownership. Instructions and conventions are not concurrency control.</p><p><strong>Why:</strong> Concurrent writes to shared state create race conditions that are intermittent, hard to reproduce, and expensive to debug.</p><p><strong>Pattern:</strong></p><ol><li><strong>Identify shared mutable state</strong> (files both read and write, branches both push to, APIs both define and consume).</li><li><strong>Default: eliminate the shared write target.</strong> Ask: do these actors need one canonical object, or are they publishing independent facts? Give each actor its own owned file, key, branch, or state directory, and merge only at the read/reporting boundary. Two workers writing their own <code>lastX</code> field into one <code>state.json</code> is still shared mutation. <code>indexer-state.json</code> + <code>metrics-state.json</code> is not.</li><li><strong>Only when one shared write target is a real invariant, serialize access structurally</strong> (lockfiles, sequential phases, single-writer actor, or atomic compare-and-swap). Treat &quot;we need a lock&quot; as a design smell to check, not as the default answer.</li></ol></div>
+    <p class="src">Source: pstack principle-separate-before-serializing-shared-state, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, as it is</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>One writer for each thing</h3><p class="origin">New name · 139 words</p></div></div>
+      <p class="when"><span>Apply when</span> two or more agents or programs can write the same file, branch, key or record.</p>
+      <div class="md"><p>When two actors can change the same thing, first remove the sharing. Add a lock only when one shared thing must exist. A written rule does not prevent a race.</p><p><strong>Do.</strong></p><ul><li>List what each actor writes: files, branches, keys and records.</li><li>Ask what breaks when a second actor writes at that moment. If anything breaks, separate them.</li><li>Give each actor its own file, branch or key. Join their facts only when you read them.</li><li>Count two actors that write different fields of one file as sharing that file.</li><li>When one shared target is a real need, enforce it in structure: a single writer, a lock, an atomic compare-and-swap or tasks in a fixed order.</li></ul><p><strong>Not when.</strong> Only one actor writes.</p><p><strong>Stop</strong> when each target has one writer, or a mechanism that holds the order.</p></div>
+      <p class="src">Source: pstack principle-separate-before-serializing-shared-state, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, rewritten in sage's words<br>Also from: pstack principle-foundational-thinking, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The old name is long and abstract. The new name is the rule. It takes the shared-state part of Foundational thinking.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">This is sage's own git rule: one writer for each branch. On the skill listing only: see question Q3.</p>
+    <p class="uses"><span class="use none">Skill listing only</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for One writer for each thing">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr></tbody><tbody role="rowgroup"><tr role="row" class="group"><th role="columnheader" colspan="4" scope="colgroup"><h2>Prove the result</h2></th></tr><tr role="row" id="row-prove-it-works" data-old="prove-it-works" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">15</span><div><h3>Prove it works</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> before declaring a task done, or when judging a claim that something works.</p>
+    <details class="oldtext" open><summary>Old text · 154 words</summary><div class="md"><p>Verify the result by checking the real thing directly. Do not infer it from a proxy, a self-report or &quot;it compiles&quot;.</p><p><strong>Why.</strong> Unverified work has unknown correctness. Indirect checks (a file's timestamp, fresh-looking output, an agent's own report, a cached screenshot) feel cheaper than direct observation, and acting on a wrong inference costs far more.</p><p><strong>Check the real thing.</strong></p><ul><li>Run the feature, read the actual value, inspect the diff.</li><li>Check that a process is alive directly, not through state derived from it.</li><li>When a check fails, suspect the way you observed before you suspect the system.</li></ul><p><strong>Script the check when you can.</strong> The strongest proof is a command that re-runs the same comparison, not a one-time look. Write it, run it, and keep its output where a reviewer can re-run it.</p><p><strong>Stop</strong> claiming when the evidence stops. Say what you ran and what you saw, and what you did not verify.</p></div>
+    <p class="src">Source: pstack principle-prove-it-works, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: ec79a15025bac8d3</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Prove it works</h3><p class="origin">Same name · 159 words</p></div></div>
+      <p class="when"><span>Apply when</span> before you say that a task is done, or when you judge a claim that something works.</p>
+      <div class="md"><p>Look at the real result. A passing build, a log line or an agent's report is not proof.</p><p><strong>Do.</strong></p><ul><li>Use the feature, read the real value, and look at the change.</li><li>When a check fails, first doubt how you looked. Then doubt the system.</li><li>Prefer a command that repeats the comparison to one look. Keep it, so that a reviewer can run it again.</li><li>Give each claim its evidence in the same text: the command and what it printed, or a screenshot.</li></ul><p><strong>For a number.</strong> Before you trust a measured number, name what limits it: why is it not double? Rule out errors, skipped or cached work, unequal settings and noise. Report the number with its run count, its spread and its limit.</p><p><strong>Not when.</strong> You cannot run a check. Then say so.</p><p><strong>Stop</strong> your claim where the evidence ends. List the commands that you ran, their results, and each thing that you left unchecked.</p></div>
+      <p class="src">Source: pstack principle-prove-it-works, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words<br>Also from: pstack principle-explain-the-number, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The name stays. The process check goes. A short section takes the number check from Explain the number.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">The old line about a live process conflicts with the hook that refuses process lists. The stop hook gives this text, so the name and id stay.</p>
+    <p class="uses"><span class="use">Hook: stop with no check</span><span class="use">Roles: arena-judge, implementer, lead, qa</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Prove it works">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-explain-the-number" data-old="explain-the-number" data-action="merge"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">16</span><div><h3>Explain the Number</h3><p class="origin">pstack, as it is</p></div></div>
+    <p class="when"><span>Apply when</span> before you trust, report, or act on a number you measured: a speedup, a regression, a throughput, a latency, or an eval result.</p>
+    <details class="oldtext" open><summary>Old text · 315 words</summary><div class="md"><p>A measured number is a claim about a system. Before you trust it, report it, or act on it, find what limits it and rule out that it measured something else.</p><p><strong>Why:</strong> A run that went wrong still prints a plausible number. Requests that failed, a cache that skipped the work, code that never ran, a side left on default settings, and run-to-run noise all produce results that look fine. If you cannot say why the number is not twice as good, you do not know what you measured.</p><p><strong>Pattern:</strong></p><ul><li><strong>Ask &quot;why not double?&quot;</strong> Name the resource or code path that bounds the result, such as a core, a lock, the disk, the network, or the load generator itself. Get it from a profile or from system counters taken during a run, then map it to source. A guess from reading the code is not a limiter.</li><li><strong>List what else the number could be measuring, and rule out each one with evidence.</strong> The usual suspects are errors, skipped or cached work, an untuned side, noise, and a piece too small to matter end to end.</li><li><strong>Keep the evidence with the number.</strong> Put the run count, the spread, and the limiter in the notes or a linked artifact, so a reader can check the claim.</li></ul><p>For a performance number, run the full procedure with the benchmark-checklist skill. For an eval result, ask the same of the trials: did every run do the task, does the gap hold across trials and models, and does the scenario matter.</p><p>You skipped this when the evidence behind a number has no run count, no spread, or no named limiter, or when the time saved is larger than the time the changed piece took.</p><p>Distinct from Prove It Works, which checks that an output is real. This checks that a measured number means what you say it means.</p></div>
+    <p class="src">Source: pstack principle-explain-the-number, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, as it is</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>No text of its own</h3><p class="origin">Goes into <a href="#row-prove-it-works">Prove it works</a></p></div></div>
+      <p class="sub">What moves</p><ul class="plain"><li>Why is it not double?</li><li>Rule out errors, skipped or cached work, unequal settings and noise.</li><li>Report the number with its run count, its spread and its limit.</li></ul>
+      <p class="sub">What is lost</p><p class="lost">The detail on profiles and system counters, and the eval questions, leave sage.</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-merge">Merge</span> into <a href="#row-prove-it-works">Prove it works</a></p>
+    <p class="reason">It asks the Prove it works question about numbers. A short section keeps what agents use: the limit, the other causes, the run count and the spread.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">On the skill listing only. It names a skill, benchmark-checklist, that sage does not ship. It fits the owner's rule to give costs with their basis and a range.</p>
+    <p class="uses"><span class="use none">Skill listing only</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Explain the Number">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-test-behaviour" data-old="test-behavior-not-implementation" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">17</span><div><h3>Test behaviour, not implementation</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> writing, changing or keeping a test.</p>
+    <details class="oldtext" open><summary>Old text · 183 words</summary><div class="md"><p>A test calls the code the way its users do and compares what they observe with a literal expected value. A test that asserts which calls the code made, or restates a constant the code contains, does neither.</p><p><strong>The check.</strong> Before you keep a test, ask whether it would still pass if every function it imports returned <code>undefined</code>. If yes, it cannot fail for a defect. Rewrite the assertion or delete the test.</p><p><strong>Shapes that pass anyway:</strong> a weak or missing assertion (<code>toBeDefined</code>, <code>not.toThrow</code>); only a mock or an absence (<code>toHaveBeenCalled</code>, <code>toEqual([])</code>); an expected value taken from the code under test; a constant pin that restates a default or a prompt string; a fixture asserting itself.</p><p><strong>The fix.</strong> Call the subject with one concrete input and assert the literal output or the observable effect. For an absence, assert the presence on another input too. For a constant, test the mechanism that reads it. For a mock, assert the payload or the state after the call.</p><p><strong>Keep</strong> tests of a relation across a table's rows (a key in two tables) and compile-time type tests.</p></div>
+    <p class="src">Source: pstack principle-test-behavior-not-implementation, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 87e40efe4e486f7e</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Test behaviour, not implementation</h3><p class="origin">Same name · 194 words</p></div></div>
+      <p class="when"><span>Apply when</span> you write, change or keep a test.</p>
+      <div class="md"><p>A good test calls the code like a real user, and compares the visible result with a fixed value. A test of internal calls, or of a constant copied from the code, proves nothing.</p><p><strong>The question.</strong> Would this test still pass if each function that it imports returned nothing? If yes, it cannot catch a fault. Make the assertion stronger, or remove the test.</p><p><strong>Weak tests.</strong></p><ul><li>The assertion says only that a value exists, or that nothing failed.</li><li>The test looks only at a mock or at an empty result.</li><li>The test takes its expected value from the code that it tests.</li><li>The test repeats a default or a text from the code.</li><li>The fixture checks itself.</li></ul><p><strong>Repair.</strong> Give one real input, and check the exact result or effect. For an empty result, also check a full result on another input. To test a constant, use the code that reads it. To test a mock, check the data that it got.</p><p><strong>Not when.</strong> A test shows that two tables agree on a key, or it is a compile-time type test.</p><p><strong>Stop</strong> when the test fails if the behaviour breaks.</p></div>
+      <p class="src">Source: pstack principle-test-behavior-not-implementation, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The name stays. The old text uses JavaScript words, such as undefined and toBeDefined. The new text works in any language.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">Fits the owner's rule that sage has no path for each language. The test-edit hook moment and three roles load it.</p>
+    <p class="uses"><span class="use">Hook: test edit</span><span class="use">Roles: code-reviewer, implementer, qa</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Test behaviour, not implementation">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-one-checked-change" data-old="sequence-verifiable-units" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">18</span><div><h3>Sequence verifiable units</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> multi-step work (a sweep, a migration, a run of similar edits) or the order of commits in a change.</p>
+    <details class="oldtext" open><summary>Old text · 191 words</summary><div class="md"><p>Order the work as a sequence of small units, each ending in a state you can check, and do not advance until the current one passes.</p><p><strong>Why.</strong> A break caught at the unit that caused it is cheap to find. A break caught after a batch is buried, and you have already built on a broken base. A sequence a reviewer can replay turns &quot;trust me&quot; into &quot;watch it go red, then green&quot;.</p><p><strong>Doing the work.</strong> In a sweep, a migration or any run of similar edits, verify each change before starting the next. Each unit is a bracket: a known-good state, one change, the check, then on. Start from a clean base so every check measures against the real baseline. When a script does the edits, the per-unit check is nearly free; run it anyway.</p><p><strong>Delivery.</strong> Order the units, and the commits that will carry them, so the sequence proves the work: the failing test first, then the fix; a removal before the reshape; the scaffold before the feature. Each unit stands on its own, and the sequence reads as an argument.</p><p>Keep each check real (see &quot;prove it works&quot;).</p></div>
+    <p class="src">Source: pstack principle-sequence-verifiable-units, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 2ccbbacc56ace5af</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>One checked change at a time</h3><p class="origin">New name · 132 words</p></div></div>
+      <p class="when"><span>Apply when</span> the work is a migration or many similar edits, or you choose the order of commits.</p>
+      <div class="md"><p>Split the work into small changes, and check each one before you start the next. A break that you see at once is easy to trace. A break under ten more changes is not.</p><p><strong>Do.</strong></p><ul><li>Start from a clean base that passes.</li><li>First do the setup that helps each later change: shared types, build and test tools, a check.</li><li>Give each change one purpose and one check. Run the smallest check that covers it.</li><li>Run the check also when a script made the edits.</li><li>Order the commits as an argument: the failing test, then the repair; a removal, then the new shape; the setup, then the feature.</li></ul><p><strong>Not when.</strong> The work is one small edit.</p><p><strong>Stop</strong> at the first failed check. Repair it before you go on.</p></div>
+      <p class="src">Source: pstack principle-sequence-verifiable-units, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words<br>Also from: pstack principle-foundational-thinking, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">&quot;Verifiable units&quot; is abstract. The new name is the rule. It takes &quot;setup first&quot; from Foundational thinking.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">The commit hook moment gives it. The new text asks for the smallest check, which fits order 31: one full test run for each head.</p>
+    <p class="uses"><span class="use">Hook: commit</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for One checked change at a time">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-script-the-work" data-old="build-the-lever" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">19</span><div><h3>Build the Lever</h3><p class="origin">pstack, as it is</p></div></div>
+    <p class="when"><span>Apply when</span> any non-trivial work, not just bulk work: edits, migrations, analyses, checks.</p>
+    <details class="oldtext" open><summary>Old text · 337 words</summary><div class="md"><p>When the work isn't trivial, build the tool that does it instead of doing it by hand.</p><p><strong>Why:</strong> Two payoffs. Throughput: a codemod, generator, or script does the work the same way every time and reruns for free. Confidence: the tool is one artifact a reviewer can read and rerun to check the work. Hand-done changes can only be re-verified by redoing them. A deterministic script turns &quot;trust me&quot; into &quot;run this&quot;.</p><p><strong>Pattern:</strong> Default to building the lever. Skip it only when the task is trivial, a couple of obvious edits you can see at a glance.</p><ul><li>Do the first unit by hand to learn the recipe, then build the tool. Prove it by rerunning it on that unit and diffing against your hand-done version. Make the lever safe to rerun.</li><li>Codemod or script for edits, generator for repetitive files, a dump-to-sqlite query for analysis, a rerunnable check for verification.</li><li>A deterministic lever beats fan-out. If the tool can process every unit in one pass, run it yourself. Don't fan out delegates to hand-apply what a script can do.</li><li>When you fan work out to subagents, write the lever as a skill they all read: the recipe, the verification contract, and the do-not-touch fences in one artifact. Keep it outside the delegates' write scope so they can't quietly edit the contract.</li><li>Applying this principle produces a file. If you cited it and there is no codemod, script, generator, or delegate skill in the diff, you didn't apply it.</li><li>Commit the lever when the work outlives the session.</li></ul><p><strong>Balance:</strong> The bar is triviality, not repetition. A one-off still earns a lever when the lever is what makes the work checkable. Per the Laziness Protocol, build the smallest script that does or proves the job, never a framework.</p><p>Distinct from Encode Lessons in Structure, which makes a recurring instruction a durable guardrail. This is throughput and reviewability on the work in front of you. For scripting the verification itself, see Prove It Works.</p></div>
+    <p class="src">Source: pstack principle-build-the-lever, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, as it is</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Script the work</h3><p class="origin">New name · 161 words</p></div></div>
+      <p class="when"><span>Apply when</span> the work is more than a few obvious edits: a sweep, a migration, an analysis or a check.</p>
+      <div class="md"><p>When the work is not trivial, use a tool that does it or proves it. Do not do it by hand. A script gives the same result each time, and a reviewer can run it again. Work by hand can only be checked by doing it again.</p><p><strong>Do.</strong></p><ul><li>First look for a mature, maintained, open-source tool. Pin its version.</li><li>Work one case by hand, and learn the recipe from it. Then write the tool, and compare its result with your case.</li><li>Make the tool safe to run again.</li><li>Let the tool do the whole batch. Never give agents work that fits in a script.</li><li>When agents must share the work, give them one recipe with its limits and its check.</li><li>Commit the tool when the work lasts longer than the session.</li></ul><p><strong>Not when.</strong> A few obvious edits need no tool.</p><p><strong>Stop</strong> at the smallest script that does the work. Never build a framework for it.</p></div>
+      <p class="src">Source: pstack principle-build-the-lever, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The image of a lever needs an explanation. The new text adds the owner's rule: look for a mature open-source tool first.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">On the skill listing only: see question Q3. Distinct from Seal the lesson: this one serves the work in front of you.</p>
+    <p class="uses"><span class="use none">Skill listing only</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Script the work">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr></tbody><tbody role="rowgroup"><tr role="row" class="group"><th role="columnheader" colspan="4" scope="colgroup"><h2>Repair and learn</h2></th></tr><tr role="row" id="row-fix-root-causes" data-old="fix-root-causes" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">20</span><div><h3>Fix root causes</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> debugging a failure or repairing a finding.</p>
+    <details class="oldtext" open><summary>Old text · 164 words</summary><div class="md"><p>Do not fix symptoms. Trace each problem to its root cause and fix it there.</p><p><strong>Why.</strong> Symptom fixes accumulate. Each workaround makes the system harder to reason about, and the real defect stays. A root-cause fix is slower up front and cheaper in total.</p><p><strong>What to do.</strong></p><ul><li>Reproduce first.</li><li>Ask &quot;why&quot; until you reach the cause.</li><li>Do not add guards: a nil check that silences a crash is a symptom fix.</li><li>If a workaround needs a paragraph to justify it, the code is wrong. Fix the code, not the comment.</li><li>Fix every instance, not just this one: search for the same shape elsewhere.</li><li>When stuck, measure instead of guessing: add logging, read the actual error.</li></ul><p><strong>Failures after a restart.</strong> Suspect stale persistent state before code: configuration files, caches, lock files, serialised state. If clearing state fixes it, validate that state.</p><p><strong>Stop</strong> when the reproduction no longer fails for the reason you found, not when the symptom is hidden.</p></div>
+    <p class="src">Source: pstack principle-fix-root-causes, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: ba4cd38da1dcc8fe</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Fix root causes</h3><p class="origin">Same name · 158 words</p></div></div>
+      <p class="when"><span>Apply when</span> you debug a failure or repair a finding.</p>
+      <div class="md"><p>Find why a problem happens, and repair it at that place. A repair of the symptom leaves the fault in the system and makes the next problem harder to find.</p><p><strong>Do.</strong></p><ul><li>Make the failure happen again first.</li><li>Keep asking &quot;why&quot; until you find the cause.</li><li>Measure when you are not sure: add a log, or read the real error.</li><li>Look for the same fault in other places. Repair it inside your task, and report it outside your task.</li><li>After a restart, first suspect old state: configuration, caches, lock files and saved data. When a reset repairs the failure, validate that state at load.</li><li>Do not add a guard that only hides a crash.</li></ul><p><strong>Not when.</strong> Main is broken and a short workaround makes it safe. Then open a task for the real repair.</p><p><strong>Stop</strong> when the failure no longer happens for the cause that you found, not when it only stops showing.</p></div>
+      <p class="src">Source: pstack principle-fix-root-causes, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The name stays. The old rule to fix every instance is now limited to the task, as the repair rules are.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">The old text can push a repair out of its task, and it has a flagged word, &quot;defect&quot;. The check-failed hook moment and the implementer load it.</p>
+    <p class="uses"><span class="use">Hook: failed check</span><span class="use">Roles: implementer</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Fix root causes">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-question-the-assumption" data-old="attack-the-premise" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">21</span><div><h3>Attack the premise</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> two or more fixes that share one premise have failed the same check or review.</p>
+    <details class="oldtext" open><summary>Old text · 189 words</summary><div class="md"><p>When two or more fixes that share one premise have failed the same gate, suspect the premise, not the fixes. Each failure under a shared premise is evidence about the premise.</p><p><strong>What to do.</strong></p><ul><li><strong>Write the premise down.</strong> It is the one sentence every failed fix assumed.</li><li><strong>Before the next fix, list what each failed fix assumed and what still failed.</strong> Look for the factor present every time: the same input, path, component or ordering.</li><li><strong>Follow that factor.</strong> If one thing is present in every failure, something puts it there. Find what does; that is the next &quot;why&quot; (see &quot;fix root causes&quot;).</li><li><strong>Remove the cause instead of compensating for it.</strong> A retry, a fallback, a special case or a periodic cleanup leaves the cause in place and adds work on every run.</li></ul><p><strong>Stop.</strong></p><ul><li>Do not start the next fix before the premise is written down and the list exists.</li><li>If no factor is common to the failures, the premise is not the cause. Look elsewhere and keep the list as evidence.</li></ul><p>Say in your output which premise you questioned and what you found.</p></div>
+    <p class="src">Source: pstack principle-attack-the-premise, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: c87bd7536f772f8a</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Question the shared assumption</h3><p class="origin">New name · 136 words</p></div></div>
+      <p class="when"><span>Apply when</span> two or more repairs that rest on one assumption failed the same check or review.</p>
+      <div class="md"><p>When two repairs that rest on one assumption fail the same check, stop repairing. The assumption is the likely fault, and each failure is evidence about it.</p><p><strong>Do.</strong></p><ul><li>Write the assumption in one sentence.</li><li>List each failed repair: what it assumed, and what still failed.</li><li>Find what is in every failure: the same input, path, part or order.</li><li>Find what puts it there. Then apply Fix root causes.</li><li>Take the cause away. Retries, fallbacks, special cases and scheduled cleanups all leave it in place.</li></ul><p><strong>Not when.</strong> Nothing is common to the failures. Then the assumption is not the cause. Look in other places. The list stays as evidence.</p><p><strong>Stop</strong> the next repair until the sentence and the list exist. Say in your report which assumption you tested and what you found.</p></div>
+      <p class="src">Source: pstack principle-attack-the-premise, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The new name is plainer. It stays apart from Fix root causes, because the hook gives it at its own moment, after failed repairs.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">The old text says &quot;gate&quot; for a check, but in sage a gate is a question for the owner. The failed-fixes hook moment gives it. No role loads it.</p>
+    <p class="uses"><span class="use">Hook: failed repairs</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Question the shared assumption">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-seal-the-lesson" data-old="encode-lessons-in-structure" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">22</span><div><h3>Encode lessons in structure</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> writing the same instruction a second time, or noticing a correction that keeps recurring.</p>
+    <details class="oldtext" open><summary>Old text · 197 words</summary><div class="md"><p>Encode a recurring fix in a mechanism (a check, a type, a script, a lint rule) instead of in more text. Every error, correction and unexpected outcome is a lesson: capture it, put it in the right place, and close the loop.</p><p><strong>Why.</strong> A written instruction needs the reader to notice, remember and comply. A mechanism enforces the rule without cooperation.</p><p><strong>What to do.</strong> When you catch yourself writing the same instruction a second time:</p><ol><li>Ask whether it can be a lint rule, a type, a runtime check or a script.</li><li>If yes, encode it and delete the instruction. The instruction was the symptom.</li><li>If it needs judgement, make the instruction prominent and add an example of the failure.</li></ol><p><strong>Pick the strongest mechanism</strong> the situation allows: a state that cannot be represented, then a check that fails the build, then a canonical helper, then a runtime check. Agents copy what the surrounding code does, so a weak guard becomes the next template.</p><p><strong>Close the loop.</strong> A one-off correction gets a note; a recurring fix gets a check or a rule; a systemic issue changes the vision or a flow. Acknowledging without recording changes nothing.</p></div>
+    <p class="src">Source: pstack principle-encode-lessons-in-structure, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: 77044c83a9ac6df7</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Seal the lesson</h3><p class="origin">New name · 150 words</p></div></div>
+      <p class="when"><span>Apply when</span> a correction comes back a second time, or you write the same instruction again.</p>
+      <div class="md"><p>Give a mistake that comes back twice a lasting fix. A written rule depends on an agent that notices and remembers. A check works without either.</p><p><strong>Do.</strong> Choose the strongest form that fits, in this order:</p><ol><li>a state that the code cannot represent;</li><li>a test or a check that stops the build;</li><li>a shared helper;</li><li>a hook or a runtime check;</li><li>a principle or a standing order, with an example of the failure, only when code cannot hold it.</li></ol><p>Delete the old instruction when the check holds it. Agents copy nearby code, so a weak guard spreads.</p><p><strong>Not when.</strong></p><ul><li>The mistake came once. Write a note.</li><li>The gap needs an agent to act against its brief on purpose. Record it as a known limit.</li></ul><p><strong>Stop</strong> when the lesson has one home. Keep the rules few: remove a rule that no longer catches anything.</p></div>
+      <p class="src">Source: pstack principle-encode-lessons-in-structure, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">Sage already calls this &quot;seal the lesson&quot;, so the principle takes that name. It adds the owner's limit: keep the rules few.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">The old text has no limit. Orders 48 and 49 say that a gap which needs an agent to act against its brief is a documented limit, not a new guard.</p>
+    <p class="uses"><span class="use">Roles: chief-of-staff</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Seal the lesson">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr></tbody><tbody role="rowgroup"><tr role="row" class="group"><th role="columnheader" colspan="4" scope="colgroup"><h2>Work with the owner and with context</h2></th></tr><tr role="row" id="row-ask-only-what-you-must" data-old="never-block-on-the-human" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">23</span><div><h3>Never block on the human</h3><p class="origin">pstack, adapted</p></div></div>
+    <p class="when"><span>Apply when</span> tempted to ask &quot;should I do X?&quot; about reversible work.</p>
+    <details class="oldtext" open><summary>Old text · 157 words</summary><div class="md"><p>The user supervises asynchronously. Stay unblocked: make a reasonable decision, proceed, and let the user correct course afterwards.</p><p><strong>Why.</strong> Every pause for permission stalls the pipeline and makes the user the bottleneck. Code changes are reversible and reviewable, so a wrong decision usually costs less than waiting.</p><p><strong>What to do.</strong></p><ul><li>Proceed, then present. Do the work and show the result with the reason, instead of asking &quot;should I do X?&quot;.</li><li>When you notice a problem, record it and fix it in the next round.</li></ul><p><strong>Boundaries.</strong></p><ul><li>Irreversible actions still need confirmation: deleting data, force-pushing, sending messages outside, spending money.</li><li>Reversible actions proceed: writing code, editing notes, splitting tasks.</li><li>Product direction comes from the user. Execution does not wait for them.</li></ul><p>Here, the user steers through the vision and the specs, and reviews results. Ask only when a decision changes what they asked for, and say what you decided and why in your output.</p></div>
+    <p class="src">Source: pstack principle-never-block-on-the-human, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted<br>Fingerprint: f2764bb9338cbfc7</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Ask only what you must</h3><p class="origin">New name · 131 words</p></div></div>
+      <p class="when"><span>Apply when</span> you want to ask &quot;should I do X?&quot; about work that you can undo.</p>
+      <div class="md"><p>The owner reviews results, not each action. For work that you can undo: decide, do it, and show what you did and why. A wrong choice that you can undo costs less than a wait.</p><p><strong>Do.</strong></p><ul><li>Go on with work that you can undo: code, notes and new tasks.</li><li>Record a problem when you see it, and repair it in the next round.</li><li>Give each question in the cheapest form: a choice, with a recommendation and a default.</li></ul><p><strong>Not when.</strong></p><ul><li>The action cannot be undone: deleted data, a force-push, a message to other people, money spent. Ask first.</li><li>The choice changes what the owner asked for, or the product direction. Open a gate.</li></ul><p><strong>Stop</strong> only the work that a gate holds. All other work goes on.</p></div>
+      <p class="src">Source: pstack principle-never-block-on-the-human, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The old name says &quot;never&quot;, but gates and actions that cannot be undone do wait. The new text uses owner, gate and default.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">The old text names &quot;the vision and the specs&quot;, which sage does not have now, and &quot;pipeline&quot;, a flagged word. The lead and chief roles load it.</p>
+    <p class="uses"><span class="use">Roles: chief-of-staff, lead</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Ask only what you must">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-write-for-the-reader" data-old="contextualize-and-write-for-the-reader" data-action="keep"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">24</span><div><h3>Contextualize and write for the reader</h3><p class="origin">sage's own</p></div></div>
+    <p class="when"><span>Apply when</span> writing anything someone else will read later: a design, a handoff, findings, a report, a verification, a brief, a reply.</p>
+    <details class="oldtext" open><summary>Old text · 173 words</summary><div class="md"><p>Put everything you write in context. The owner reads it later, without having watched you work, and should understand the problem, the decisions and what is left.</p><p><strong>Lead with the point.</strong> Open with what this is and what it concludes or asks for, in one or two sentences.</p><p><strong>Place it in the bigger picture.</strong> Say which goal or part of the vision it serves, what came before it and what comes next.</p><p><strong>State the problem and the decisions.</strong> Say what problem it addresses and why that matters. For each decision, give the choice, the options weighed and the reason.</p><p><strong>Say what is needed.</strong> If someone must decide, name the decision and the options. If nothing is needed, say so.</p><p><strong>Keep evidence close.</strong> Point to the file and line, the check or the screenshot behind each claim, and say what you did not verify.</p><p><strong>Use the reader's words.</strong> Name screens, files and features as a person knows them, not by internal ids.</p><p><strong>Stop</strong> when someone new could act on it from this text alone.</p></div>
+    <p class="src">Source: this kit's own, first written for Orchestrator (github.com/erickb336/orchestrator), from the owner's direction (2026-10-01): &quot;I should be able to come in and clearly understand problems decisions etc&quot;</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Write for the reader</h3><p class="origin">New name · 173 words · same text</p></div></div>
+      <p class="when"><span>Apply when</span> you write anything that someone else will read later: a design, findings, a report, a verification, a brief or a reply.</p>
+      <div class="md"><p>Put everything you write in context. The owner reads it later, without having watched you work, and should understand the problem, the decisions and what is left.</p><p><strong>Lead with the point.</strong> Open with what this is and what it concludes or asks for, in one or two sentences.</p><p><strong>Place it in the bigger picture.</strong> Say which goal or part of the vision it serves, what came before it and what comes next.</p><p><strong>State the problem and the decisions.</strong> Say what problem it addresses and why that matters. For each decision, give the choice, the options weighed and the reason.</p><p><strong>Say what is needed.</strong> If someone must decide, name the decision and the options. If nothing is needed, say so.</p><p><strong>Keep evidence close.</strong> Point to the file and line, the check or the screenshot behind each claim, and say what you did not verify.</p><p><strong>Use the reader's words.</strong> Name screens, files and features as a person knows them, not by internal ids.</p><p><strong>Stop</strong> when someone new could act on it from this text alone.</p></div>
+      <p class="src">Source: this kit's own, first written for Orchestrator (github.com/erickb336/orchestrator), from the owner's direction (2026-10-01): &quot;I should be able to come in and clearly understand problems decisions etc&quot;</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-keep">Keep</span></p>
+    <p class="reason">This is sage's own text, and it already fits. Only the name gets shorter, and &quot;handoff&quot;, a flagged word, leaves the apply-when line.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">It overlaps the preference to write for a reader who arrives cold, which loads in each session. This is the longer form, given at the document moment.</p>
+    <p class="uses"><span class="use">Hook: document edit, README edit</span><span class="use">Roles: chief-of-staff, designer</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Write for the reader">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr><tr role="row" id="row-guard-the-context" data-old="guard-the-context-window" data-action="rewrite"><td class="c-old" role="cell" data-label="Old">
+    <div class="head"><span class="num">25</span><div><h3>Guard the Context Window</h3><p class="origin">pstack, as it is</p></div></div>
+    <p class="when"><span>Apply when</span> context is filling up: large outputs, long files, repeated reads, fan-out planning.</p>
+    <details class="oldtext" open><summary>Old text · 96 words</summary><div class="md"><p>The context window is finite and non-renewable within a session. Every token should be worth its cost.</p><p><strong>Why:</strong> Context overflow degrades reasoning quality, creates compression artifacts, and halts progress.</p><p><strong>Pattern:</strong></p><ul><li><strong>Isolate large payloads.</strong> Route verbose outputs, screenshots, and large documents to subagents. The main context gets summaries, not raw data.</li><li><strong>Keep frequently used content inline.</strong> Templates and references used on every invocation belong in the skill file, not in separate files that cost a read each time.</li><li><strong>Size phases and cap scope.</strong> Limit files per phase, set turn budgets, account for mechanism costs.</li></ul></div>
+    <p class="src">Source: pstack principle-guard-the-context-window, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, as it is</p></details>
+  </td><td class="c-new" role="cell" data-label="New">
+      <div class="head"><div><h3>Guard the context</h3><p class="origin">New name · 128 words</p></div></div>
+      <p class="when"><span>Apply when</span> a run reads large files, gets long results, or plans work for many agents.</p>
+      <div class="md"><p>Each agent has limited context, and a full context makes it reason worse. Spend context only on what the work needs.</p><p><strong>Do.</strong></p><ul><li>Give bulk reads, screenshots and long logs to a helper agent. Take back the conclusion, not the raw data.</li><li>Read only the part of a file that you need, and do not read it twice.</li><li>Put text that each run needs inside the skill. A separate file costs a read each time.</li><li>Put long material in a file, and name the file in your report.</li><li>Size each task and brief so that one run can finish it.</li></ul><p><strong>Not when.</strong> A small lookup costs less to do yourself than to brief.</p><p><strong>Stop</strong> reading when more text will not change the next decision.</p></div>
+      <p class="src">Source: pstack principle-guard-the-context-window, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, rewritten in sage's words</p>
+    </td><td class="c-prop" role="cell" data-label="Proposal">
+    <p class="action"><span class="badge a-rewrite">Rewrite</span></p>
+    <p class="reason">The name gets shorter. The new text uses sage's forms: helper agents, and reports that name files.</p>
+    <p class="sub">Fit with sage today</p><p class="fit">Fits the report limit of about 2,000 tokens. The old words &quot;phases&quot; and &quot;invocation&quot; leave. On the skill listing only: see question Q3.</p>
+    <p class="uses"><span class="use none">Skill listing only</span></p>
+  </td><td class="c-mark" role="cell" data-label="Your mark"><div class="stick">
+    <div class="marks" role="group" aria-label="Your mark for Guard the context">
+      <button type="button" class="mark m-keep" data-mark="keep" aria-pressed="false">Keep</button>
+      <button type="button" class="mark m-change" data-mark="change" aria-pressed="false">Change</button>
+      <button type="button" class="mark m-drop" data-mark="drop" aria-pressed="false">Drop</button>
+    </div>
+    <p class="effect" aria-live="polite"></p>
+    <label class="note" hidden>What to change<textarea rows="4" placeholder="For example: keep it separate"></textarea></label>
+  </div></td></tr></tbody>
+  </table>
+  <section class="questions" aria-labelledby="qh">
+    <h2 id="qh">Three questions for you</h2>
+    <p>These cover the whole set, not one row. The copied text includes your answers.</p>
+    <fieldset class="q" data-q="Q1"><legend><span class="num">Q1</span> Do the new names also replace the skill names and ids?</legend><p class="why">The ids are in about 15 source files: the agent files, the hook moments, the Codex guidance and two test files. One later task can change all of them.</p><div class="opts"><button type="button" class="opt" data-opt="A" aria-pressed="false"><strong>A. Rename everything</strong> <span class="rec">Recommended</span><span class="optd">The skill becomes sage:principle-keep-it-small. Version 1 is the cheapest moment to do it.</span></button><button type="button" class="opt" data-opt="B" aria-pressed="false"><strong>B. Keep the old ids</strong><span class="optd">Only the display names change. Less work, but pstack's names stay in sage.</span></button></div></fieldset><fieldset class="q" data-q="Q2"><legend><span class="num">Q2</span> After the rewrite, does sage keep the file with pstack's MIT licence?</legend><p class="why">No pstack text stays, so MIT may not require the file. The ideas still come from pstack, and each principle keeps its credit line.</p><div class="opts"><button type="button" class="opt" data-opt="A" aria-pressed="false"><strong>A. Keep the licence file and the credit lines</strong> <span class="rec">Recommended</span><span class="optd">It costs nothing, and it needs no legal judgement.</span></button><button type="button" class="opt" data-opt="B" aria-pressed="false"><strong>B. Keep the credit lines only</strong><span class="optd">One file fewer.</span></button></div></fieldset><fieldset class="q" data-q="Q3"><legend><span class="num">Q3</span> Four new principles have no hook moment and no role. Do they get a role?</legend><p class="why">Script the work, Safe to run twice, One writer for each thing and Guard the context stay on the skill listing only. An agent must choose to load them. Each role that loads one pays up to about 300 tokens for each spawn (basis: 200 words).</p><div class="opts"><button type="button" class="opt" data-opt="A" aria-pressed="false"><strong>A. Add them to roles</strong> <span class="rec">Recommended</span><span class="optd">Script the work to the implementer. Safe to run twice and One writer to the PE. Guard the context to the chief and the lead. No new hook moment.</span></button><button type="button" class="opt" data-opt="B" aria-pressed="false"><strong>B. Leave them on the skill listing</strong><span class="optd">No extra context cost, but agents will often miss them.</span></button></div></fieldset>
+  </section>
+  <section class="finish" aria-labelledby="fh">
+    <h2 id="fh">Send your marks</h2>
+    <p id="finish-line">Copy the text, then paste it in the chat.</p>
+    <div class="finish-actions"><button type="button" class="primary" id="copy2">Copy my choices</button><button type="button" class="quiet" id="clear">Clear all marks</button></div>
+    <details id="preview"><summary>See the text that the button copies</summary><textarea id="copy-text" rows="14" readonly aria-label="The text to copy"></textarea></details>
+  </section>
+</main>
+<footer>
+  <p>The principles come from pstack by Lauren Tan (MIT), at github.com/cursor/plugins, and from the owner of sage. Thank you to Lauren Tan. The old texts on this page are copies, for review only.</p>
+  <details><summary>The pstack licence</summary><pre>MIT License
+
+Copyright (c) 2026 Lauren Tan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the &quot;Software&quot;), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre></details>
+</footer>
+<script id="data" type="application/json">{"version":"proposal v1","rows":[{"n":1,"old":"experience-first","id":"experience-first","name":"Experience first","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":2,"old":"exhaust-the-design-space","id":"compare-designs","name":"Compare two or three designs","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":3,"old":"foundational-thinking","id":"foundational-thinking","name":"Foundational thinking","action":"split","target":null,"targetName":null,"parts":["Model the domain","One writer for each thing","One checked change at a time","Keep it small"],"incoming":0},{"n":4,"old":"model-the-domain","id":"model-the-domain","name":"Model the domain","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":2},{"n":5,"old":"type-system-discipline","id":"type-system-discipline","name":"Type System Discipline","action":"merge","target":"model-the-domain","targetName":"Model the domain","parts":null,"incoming":0},{"n":6,"old":"migrate-callers-then-delete-legacy-apis","id":"build-for-the-end-state","name":"Build for the end state","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":2},{"n":7,"old":"outcome-oriented-execution","id":"outcome-oriented-execution","name":"Outcome-Oriented Execution","action":"merge","target":"build-for-the-end-state","targetName":"Build for the end state","parts":null,"incoming":0},{"n":8,"old":"redesign-from-first-principles","id":"redesign-from-first-principles","name":"Redesign From First Principles","action":"merge","target":"build-for-the-end-state","targetName":"Build for the end state","parts":null,"incoming":0},{"n":9,"old":"laziness-protocol","id":"keep-it-small","name":"Keep it small","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":2},{"n":10,"old":"subtract-before-you-add","id":"subtract-before-you-add","name":"Subtract before you add","action":"merge","target":"keep-it-small","targetName":"Keep it small","parts":null,"incoming":0},{"n":11,"old":"minimize-reader-load","id":"easy-to-read","name":"Keep code easy to read","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":12,"old":"boundary-discipline","id":"check-at-the-boundary","name":"Check at the boundary","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":13,"old":"make-operations-idempotent","id":"safe-to-run-twice","name":"Safe to run twice","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":14,"old":"separate-before-serializing-shared-state","id":"one-writer","name":"One writer for each thing","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":1},{"n":15,"old":"prove-it-works","id":"prove-it-works","name":"Prove it works","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":1},{"n":16,"old":"explain-the-number","id":"explain-the-number","name":"Explain the Number","action":"merge","target":"prove-it-works","targetName":"Prove it works","parts":null,"incoming":0},{"n":17,"old":"test-behavior-not-implementation","id":"test-behaviour","name":"Test behaviour, not implementation","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":18,"old":"sequence-verifiable-units","id":"one-checked-change","name":"One checked change at a time","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":1},{"n":19,"old":"build-the-lever","id":"script-the-work","name":"Script the work","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":20,"old":"fix-root-causes","id":"fix-root-causes","name":"Fix root causes","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":21,"old":"attack-the-premise","id":"question-the-assumption","name":"Question the shared assumption","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":22,"old":"encode-lessons-in-structure","id":"seal-the-lesson","name":"Seal the lesson","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":23,"old":"never-block-on-the-human","id":"ask-only-what-you-must","name":"Ask only what you must","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0},{"n":24,"old":"contextualize-and-write-for-the-reader","id":"write-for-the-reader","name":"Write for the reader","action":"keep","target":null,"targetName":null,"parts":null,"incoming":0},{"n":25,"old":"guard-the-context-window","id":"guard-the-context","name":"Guard the context","action":"rewrite","target":null,"targetName":null,"parts":null,"incoming":0}],"questions":[{"id":"Q1","text":"Do the new names also replace the skill names and ids?","options":{"A":"Rename everything","B":"Keep the old ids"}},{"id":"Q2","text":"After the rewrite, does sage keep the file with pstack's MIT licence?","options":{"A":"Keep the licence file and the credit lines","B":"Keep the credit lines only"}},{"id":"Q3","text":"Four new principles have no hook moment and no role. Do they get a role?","options":{"A":"Add them to roles","B":"Leave them on the skill listing"}}]}</script>
+<script>(function () {
+  "use strict";
+  var DATA = JSON.parse(document.getElementById("data").textContent);
+  var KEY = "sage-t573-principles-review-v1";
+  var state = { marks: {}, answers: {} };
+  var copiedText = null, undo = null, clearArmed = false;
+  var $ = function (id) { return document.getElementById(id); };
+  var byOld = {};
+  DATA.rows.forEach(function (r) { byOld[r.old] = r; });
+
+  // ---- Memory. Browser storage can be blocked; the page then still works, and says so.
+  function warnStorage() { $("storage-warning").hidden = false; }
+  function load() {
+    try {
+      var raw = localStorage.getItem(KEY);
+      if (!raw) return;
+      var s = JSON.parse(raw);
+      if (s && typeof s === "object") {
+        Object.keys(s.marks || {}).forEach(function (old) {
+          var m = s.marks[old];
+          if (byOld[old] && m && ["keep", "change", "drop"].indexOf(m.mark) >= 0) state.marks[old] = { mark: m.mark, note: String(m.note || "") };
+        });
+        DATA.questions.forEach(function (q) { var a = (s.answers || {})[q.id]; if (a && q.options[a]) state.answers[q.id] = a; });
+      }
+    } catch (e) { warnStorage(); }
+  }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { warnStorage(); }
+  }
+
+  // ---- What each mark means for this row.
+  function effect(r, mark) {
+    if (mark === "keep") {
+      if (r.action === "merge") return "It goes into " + r.targetName + ".";
+      if (r.action === "split") return "Its parts go to " + r.parts.join(", ") + ".";
+      if (r.action === "keep") return "The text stays as " + r.name + ".";
+      return "The new text goes in as " + r.name + ".";
+    }
+    if (mark === "change") return "Write what you want below.";
+    if (r.action === "merge" || r.action === "split") return "Its ideas do not move. The principle ends here.";
+    var more = r.incoming ? " " + r.incoming + (r.incoming === 1 ? " other row goes" : " other rows go") + " into this one, so the chief will ask where they go." : "";
+    return r.name + " leaves sage." + more;
+  }
+  function actionWords(r) {
+    if (r.action === "merge") return "merge into " + r.targetName;
+    if (r.action === "split") return "split into " + r.parts.join(", ");
+    if (r.action === "keep") return "keep as " + r.name;
+    return "rewrite as " + r.name;
+  }
+
+  // ---- The text to paste back.
+  function buildText() {
+    var c = { keep: 0, change: 0, drop: 0 }, marked = 0;
+    var lines = DATA.rows.map(function (r) {
+      var m = state.marks[r.old];
+      if (m) { c[m.mark]++; marked++; }
+      var line = r.n + " " + r.old + " (" + actionWords(r) + "): " + (m ? m.mark : "not marked");
+      if (m && m.mark === "change") line += m.note.trim() ? ": " + m.note.trim().replace(/\s*\n\s*/g, " / ") : ": no note";
+      return line;
+    });
+    var answers = DATA.questions.map(function (q) {
+      var a = state.answers[q.id];
+      return q.id + " " + q.text + " " + (a ? a + ". " + q.options[a] : "not answered");
+    });
+    return ["T573 principle review, " + DATA.version,
+      "Marked " + marked + " of " + DATA.rows.length + ": keep " + c.keep + ", change " + c.change + ", drop " + c.drop + ".",
+      ""].concat(lines, ["", "Questions"], answers).join("\n");
+  }
+
+  // ---- Show the state.
+  function paintRow(tr) {
+    var r = byOld[tr.dataset.old], m = state.marks[r.old], mark = m ? m.mark : "";
+    if (mark) tr.dataset.mark = mark; else delete tr.dataset.mark;
+    tr.querySelectorAll(".mark").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.mark === mark)); });
+    tr.querySelector(".effect").textContent = mark ? effect(r, mark) : "";
+    var note = tr.querySelector(".note"), ta = note.querySelector("textarea");
+    note.hidden = mark !== "change";
+    if (mark === "change" && document.activeElement !== ta) ta.value = m.note;
+  }
+  function paintQuestions() {
+    document.querySelectorAll(".q").forEach(function (f) {
+      f.querySelectorAll(".opt").forEach(function (b) { b.setAttribute("aria-pressed", String(state.answers[f.dataset.q] === b.dataset.opt)); });
+    });
+  }
+  function paintSummary() {
+    var marked = Object.keys(state.marks).length, total = DATA.rows.length;
+    var answered = Object.keys(state.answers).length, qs = DATA.questions.length;
+    var noNote = Object.keys(state.marks).filter(function (o) { var m = state.marks[o]; return m.mark === "change" && !m.note.trim(); }).length;
+    $("count").textContent = marked + " of " + total + " rows marked";
+    $("meter-fill").style.width = (100 * marked / total) + "%";
+    var text = buildText();
+    $("copy-text").value = text;
+    var line;
+    if (marked === 0 && answered === 0) line = "You have no marks yet. Start at row 1. The copied text shows each row as not marked.";
+    else if (marked < total || answered < qs) line = (total - marked) + " rows and " + (qs - answered) + " questions are still open. You can copy now and send the rest later.";
+    else line = "All rows and questions have your answer. Copy the text, then paste it in the chat.";
+    if (noNote) line += " " + noNote + (noNote === 1 ? " Change mark has" : " Change marks have") + " no note yet.";
+    $("finish-line").textContent = line;
+    if (copiedText !== null && copiedText !== text && !$("status").querySelector("button")) status("You changed a mark after the last copy. Copy again before you paste.", "");
+  }
+  function paintAll() {
+    document.querySelectorAll("tr[data-old]").forEach(paintRow);
+    paintQuestions();
+    paintSummary();
+  }
+  function status(text, kind, action) {
+    var s = $("status");
+    s.textContent = text;
+    s.className = "status" + (kind ? " " + kind : "");
+    if (action) {
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "linkish"; b.textContent = action.label;
+      b.addEventListener("click", action.run);
+      s.appendChild(b);
+    }
+  }
+
+  // ---- Filters.
+  var filter = "all";
+  function applyFilter() {
+    var shown = 0;
+    document.querySelectorAll("tbody").forEach(function (tb) {
+      var inGroup = 0;
+      tb.querySelectorAll("tr[data-old]").forEach(function (tr) {
+        var show = filter === "all" || (filter === "open" && !state.marks[tr.dataset.old]) || (filter === "moved" && (tr.dataset.action === "merge" || tr.dataset.action === "split"));
+        tr.hidden = !show;
+        if (show) inGroup++;
+      });
+      tb.querySelector(".group").hidden = !inGroup;
+      shown += inGroup;
+    });
+    var e = $("empty");
+    e.hidden = shown > 0;
+    e.textContent = "Each row has a mark. Choose All rows to see them, or copy your choices.";
+    document.querySelector("table").hidden = shown === 0;
+  }
+  document.querySelectorAll(".chip").forEach(function (c) {
+    c.addEventListener("click", function () {
+      filter = c.dataset.filter;
+      document.querySelectorAll(".chip").forEach(function (x) { x.setAttribute("aria-pressed", String(x === c)); });
+      applyFilter();
+    });
+  });
+
+  // ---- Marks, notes and answers.
+  document.querySelector("table").addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest(".mark") : null;
+    if (!b) return;
+    var tr = b.closest("tr"), old = tr.dataset.old, cur = state.marks[old];
+    if (cur && cur.mark === b.dataset.mark) delete state.marks[old];
+    else state.marks[old] = { mark: b.dataset.mark, note: cur ? cur.note : "" };
+    save(); paintRow(tr); paintSummary();
+    if (state.marks[old] && state.marks[old].mark === "change") tr.querySelector(".note textarea").focus();
+  });
+  document.querySelector("table").addEventListener("input", function (e) {
+    if (e.target.tagName !== "TEXTAREA") return;
+    var old = e.target.closest("tr").dataset.old;
+    if (state.marks[old]) { state.marks[old].note = e.target.value; save(); paintSummary(); }
+  });
+  document.querySelectorAll(".q").forEach(function (f) {
+    f.addEventListener("click", function (e) {
+      var b = e.target.closest ? e.target.closest(".opt") : null;
+      if (!b) return;
+      if (state.answers[f.dataset.q] === b.dataset.opt) delete state.answers[f.dataset.q];
+      else state.answers[f.dataset.q] = b.dataset.opt;
+      save(); paintQuestions(); paintSummary();
+    });
+  });
+
+  // ---- Copy. The clipboard can refuse a page that opens from a file, so the page has two fallbacks.
+  function copied(text) {
+    copiedText = text;
+    var marked = Object.keys(state.marks).length, open = DATA.rows.length - marked;
+    status("Copied " + marked + " marks." + (open ? " " + open + " rows have no mark." : "") + " Paste the text in the chat.", "good");
+  }
+  function byHand(text) {
+    var t = $("copy-text");
+    $("preview").open = true;
+    t.focus();
+    t.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    if (ok) copied(text);
+    else status("This browser refused the copy. The text below is selected: copy it by hand.", "bad");
+  }
+  function copy() {
+    var text = buildText();
+    $("copy-text").value = text;
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { copied(text); }, function () { byHand(text); });
+    else byHand(text);
+  }
+  $("copy").addEventListener("click", copy);
+  $("copy2").addEventListener("click", copy);
+
+  // ---- Clear, in two presses, with an undo.
+  $("clear").addEventListener("click", function () {
+    var b = $("clear");
+    if (!clearArmed) {
+      clearArmed = true;
+      b.textContent = "Press again to clear all";
+      b.classList.add("danger");
+      setTimeout(function () { clearArmed = false; b.textContent = "Clear all marks"; b.classList.remove("danger"); }, 4000);
+      return;
+    }
+    clearArmed = false;
+    b.textContent = "Clear all marks";
+    b.classList.remove("danger");
+    undo = JSON.stringify(state);
+    state = { marks: {}, answers: {} };
+    save(); paintAll(); applyFilter();
+    status("You cleared all marks.", "", { label: "Undo", run: function () {
+      state = JSON.parse(undo);
+      save(); status("", ""); paintAll(); applyFilter();
+    } });
+  });
+
+  // ---- At a narrow width the old text starts closed, so that the new text comes first.
+  var wide = window.matchMedia("(min-width:1000px)");
+  function setOld() { document.querySelectorAll(".oldtext").forEach(function (d) { d.open = wide.matches; }); }
+  if (wide.addEventListener) wide.addEventListener("change", setOld);
+  setOld();
+
+  // ---- The sticky bar height keeps the table header and the marks under it.
+  function setBar() { document.documentElement.style.setProperty("--bar-h", $("bar").offsetHeight + "px"); }
+  window.addEventListener("resize", setBar);
+  new MutationObserver(setBar).observe($("status"), { childList: true, characterData: true, subtree: true });
+  setBar();
+
+  load();
+  paintAll();
+  applyFilter();
+  setBar();
+})();
+</script>
+</body>
+</html>
